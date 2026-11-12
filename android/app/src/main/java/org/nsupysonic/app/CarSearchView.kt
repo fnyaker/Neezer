@@ -35,7 +35,9 @@ import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.text.Normalizer
 import java.util.Locale
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import javax.net.ssl.SSLException
 import kotlin.math.roundToInt
 
@@ -53,9 +55,12 @@ import kotlin.math.roundToInt
  *    rule, not a truncation of what was already typed.
  *
  * Search is one GET /api/search?q=…&limit=5 through [Net] with the WebView's
- * session cookie, debounced 300 ms; a new keystroke invalidates the answer of
- * the previous one, and only the last three hits are drawn. Tapping a row calls
- * the only playback door, [CarHost.launch]; this view never touches audio.
+ * session cookie, debounced 700 ms and sent only from two characters: the route
+ * fans out to five upstream searches, so a one-letter query is work without an
+ * answer. A new keystroke cancels the request already on the wire (the socket is
+ * disconnected, a late body is dropped), invalidates the answer of the previous
+ * one, and only the last three hits are drawn. Tapping a row calls the only
+ * playback door, [CarHost.launch]; this view never touches audio.
  *
  * Auto layout reads the current InputMethodManager subtype (`fr` -> AZERTY,
  * `de` -> QWERTZ, otherwise QWERTY; fr_CA is QWERTY and fr_CH QWERTZ because
@@ -76,9 +81,10 @@ class CarSearchView(
     private val keyHeightDp = if (compactScreen) 42 else 50
     private val suggestionHeightDp = if (compactScreen) 42 else 46
     private val handler = Handler(Looper.getMainLooper())
-    private val searchPool = Executors.newFixedThreadPool(2) { runnable ->
-        Thread(runnable, "car-search").apply { isDaemon = true }
-    }
+    // Created on the first search and stopped with the view: the service builds
+    // a new root for every attach, and two attaches must not leave four idle
+    // threads (nor a pool refused forever after a detach).
+    private var searchPool: ExecutorService? = null
 
     private var driving = host.isDriving()
     private var query = ""
@@ -87,6 +93,9 @@ class CarSearchView(
     private var spaceKey: TextView? = null
 
     @Volatile private var searchGeneration = 0
+    // The connection of the request on the wire, so the next keystroke or a
+    // detach closes it instead of letting it answer into the void.
+    @Volatile private var activeConnection: HttpURLConnection? = null
     private var searchRunnable: Runnable? = null
 
     private lateinit var queryView: TextView
@@ -287,10 +296,16 @@ class CarSearchView(
             isClickable = false
             isFocusable = false
         }
-        // Three 46 dp rows plus their 5 dp gaps: the height is reserved whether
-        // there are 0, 1 or 3 hits, so the keyboard never moves under a finger
-        // when an answer lands.
-        addView(suggestions, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(148)).apply { topMargin = dp(8) })
+        // Only the rows actually drawn take room (0–3 × 42/46 dp plus 5 dp
+        // gaps), and the whole panel is bottom-anchored in CarOverlayRoot: an
+        // answer grows the card upward, it never moves the keyboard under a
+        // finger. An empty area is GONE so its 8 dp gap is not reserved either.
+        addView(
+            suggestions,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(8)
+            },
+        )
     }
 
     private fun buildKeyboard() {
@@ -461,7 +476,7 @@ class CarSearchView(
         asPlaceholder: Boolean = query.isEmpty(),
     ) {
         queryView.text = withCaret(display)
-        queryView.setTextColor(if (asPlaceholder) CarStyle.DIM else CarStyle.TX)
+        queryView.setTextColor(if (asPlaceholder) CarStyle.SUB else CarStyle.TX)
         queryView.setTypeface(CarType.body(context), if (asPlaceholder) Typeface.NORMAL else Typeface.BOLD)
         queryView.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (asPlaceholder) 18f else 22f)
     }
@@ -630,13 +645,20 @@ class CarSearchView(
 
     private fun scheduleSearch(delayMs: Long) {
         searchGeneration++
+        // A new keystroke abandons the request already on the wire: the worker
+        // fails fast instead of holding a download slot for an answer nobody
+        // will read.
+        cancelRequest()
         searchRunnable?.let { handler.removeCallbacks(it) }
+        searchRunnable = null
         val q = query.trim()
-        if (q.isEmpty()) {
+        if (q.length < MIN_QUERY_CHARS) {
+            // Empty, or one letter: /api/search fans that out to five upstream
+            // searches for nothing. No request, and no spinner that no answer
+            // will ever end.
             clearSuggestions()
             return
         }
-        showLoading()
         val generation = searchGeneration
         val runnable = Runnable { requestSearch(q, generation) }
         searchRunnable = runnable
@@ -644,6 +666,8 @@ class CarSearchView(
     }
 
     private fun requestSearch(q: String, generation: Int) {
+        if (!isAttachedToWindow) return
+        if (generation != searchGeneration || q.length < MIN_QUERY_CHARS) return
         val base = server.baseUrl().trimEnd('/')
         if (base.isEmpty()) {
             showError("Serveur non configuré", session = false)
@@ -660,28 +684,58 @@ class CarSearchView(
         } catch (_: Exception) {
             null
         }
-        searchPool.execute {
-            if (generation == searchGeneration) {
-                val outcome = fetch(url, cookie, q)
-                handler.post {
-                    if (generation == searchGeneration && isAttachedToWindow) {
-                        when (outcome) {
-                            is SearchOutcome.Done -> showSuggestions(outcome.items)
-                            is SearchOutcome.Failed ->
-                                showError(outcome.message, outcome.session)
+        showLoading()
+        try {
+            searchExecutor().execute {
+                if (generation == searchGeneration) {
+                    val outcome = fetch(url, cookie, q, generation)
+                    handler.post {
+                        if (generation == searchGeneration && isAttachedToWindow) {
+                            when (outcome) {
+                                is SearchOutcome.Done -> showSuggestions(outcome.items)
+                                is SearchOutcome.Failed ->
+                                    showError(outcome.message, outcome.session)
+                            }
                         }
                     }
                 }
             }
+        } catch (_: RejectedExecutionException) {
+            // Detached between the handler and the pool: the window is gone.
         }
     }
 
-    private fun fetch(url: String, cookie: String?, q: String): SearchOutcome {
+    /** The pool of this view, recreated if a previous detach stopped it. */
+    private fun searchExecutor(): ExecutorService {
+        searchPool?.let { if (!it.isShutdown) return it }
+        return Executors.newFixedThreadPool(SEARCH_THREADS) { runnable ->
+            Thread(runnable, "car-search").apply { isDaemon = true }
+        }.also { searchPool = it }
+    }
+
+    /**
+     * Abandon the request on the wire. [HttpURLConnection.disconnect] is the
+     * documented way to close it from another thread; the reading worker then
+     * raises instead of waiting for a body, and its generation check keeps the
+     * failure off the screen.
+     */
+    private fun cancelRequest() {
+        val conn = activeConnection ?: return
+        activeConnection = null
+        runCatching { conn.disconnect() }
+    }
+
+    private fun fetch(url: String, cookie: String?, q: String, generation: Int): SearchOutcome {
         return try {
             val conn = Net.get(server, url, cookie, CONNECT_MS, READ_MS)
             val body = try {
+                activeConnection = conn
+                // A keystroke (or a detach) may have landed while Net.get was
+                // opening: do not download an answer the generation dropped.
+                if (generation != searchGeneration) throw IOException("cancelled")
                 readBounded(conn)
             } finally {
+                if (activeConnection === conn) activeConnection = null
                 conn.disconnect()
             }
             if (body.firstOrNull { !it.isWhitespace() } == '<') {
@@ -789,6 +843,7 @@ class CarSearchView(
             contentDescription = "Recherche en cours"
         }
         suggestions.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(suggestionHeightDp)))
+        suggestions.visibility = VISIBLE
     }
 
     private fun showSuggestions(items: List<Suggestion>) {
@@ -799,18 +854,20 @@ class CarSearchView(
                 contentDescription = "Aucun résultat"
             }
             suggestions.addView(empty, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(suggestionHeightDp)))
+            suggestions.visibility = VISIBLE
             return
         }
         items.forEachIndexed { index, item ->
             suggestions.addView(suggestionRow(item, index))
         }
+        suggestions.visibility = VISIBLE
     }
 
     private fun suggestionRow(
         item: Suggestion,
         index: Int,
         accent: Int = CarStyle.AC,
-        subColor: Int = CarStyle.DIM,
+        subColor: Int = CarStyle.SUB,
         onTap: (() -> Unit)? = null,
     ): LinearLayout {
         val row = LinearLayout(context).apply {
@@ -893,10 +950,14 @@ class CarSearchView(
         )
         row.contentDescription = "$message. Réessayer"
         suggestions.addView(row)
+        suggestions.visibility = VISIBLE
     }
 
     private fun clearSuggestions() {
         suggestions.removeAllViews()
+        // GONE, not INVISIBLE: an empty area takes no height AND no 8 dp gap,
+        // so the panel is exactly as tall as what it shows.
+        suggestions.visibility = GONE
     }
 
     private fun pick(item: Suggestion) {
@@ -971,6 +1032,7 @@ class CarSearchView(
         searchGeneration++
         searchRunnable?.let { handler.removeCallbacks(it) }
         searchRunnable = null
+        cancelRequest()
     }
 
     override fun onAttachedToWindow() {
@@ -983,8 +1045,12 @@ class CarSearchView(
 
     override fun onDetachedFromWindow() {
         interrupt()
+        // This handler is the view's own: nothing it queued (a late result, the
+        // speed ticker) may run after the service dropped the window.
+        handler.removeCallbacksAndMessages(null)
+        searchPool?.shutdownNow()
+        searchPool = null
         speech.destroy()
-        handler.removeCallbacks(chipTick)
         pulse?.cancel()
         pulse = null
         super.onDetachedFromWindow()
@@ -1075,7 +1141,15 @@ class CarSearchView(
     companion object {
         private const val SEARCH_LIMIT = 5
         private const val MAX_SUGGESTIONS = 3
-        private const val DEBOUNCE_MS = 300L
+        // /api/search is five upstream searches behind the route (artists,
+        // albums, tracks, playlists, podcasts). 700 ms is long enough that a
+        // typed name costs one request instead of one per letter, short enough
+        // that the pause after a word still feels like the answer is immediate.
+        private const val DEBOUNCE_MS = 700L
+        // One letter matches half a library and answers nothing worth five
+        // round trips; two is the first useful prefix.
+        private const val MIN_QUERY_CHARS = 2
+        private const val SEARCH_THREADS = 2
         private const val CONNECT_MS = 4000
         private const val READ_MS = 8000
         private const val MAX_RESPONSE_CHARS = 256 * 1024
