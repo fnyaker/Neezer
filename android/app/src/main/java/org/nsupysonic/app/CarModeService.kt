@@ -528,6 +528,19 @@ class CarModeService : Service(), CarHost {
             if (CarPermissions.hasLocation(this)) {
                 types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             }
+            if (CarPermissions.hasMicrophone(this)) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            return types
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            var types = 0
+            if (CarPermissions.hasLocation(this)) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+            if (CarPermissions.hasMicrophone(this)) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
             return types
         }
         if (Build.VERSION.SDK_INT >= 29) {

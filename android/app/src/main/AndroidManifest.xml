@@ -29,6 +29,7 @@
          type, otherwise Android 10+ stops delivering location once the
          activity is behind the navigation app. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Sideloaded personal app: offering the battery-optimization opt-out is
          what lets a paused player survive hours in the background. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -125,7 +126,7 @@
         <service
             android:name=".CarModeService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|location"
+            android:foregroundServiceType="specialUse|location|microphone"
             tools:targetApi="34">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
