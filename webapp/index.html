@@ -3,8 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f0d13" />
-    <title>Deezer · Neezer</title>
+    <meta name="theme-color" content="#0C0C0B" />
+    <title>Neezer</title>
+
+    <!-- The Sillon theme, applied BEFORE the first frame: a session in Papier
+         (or in Pochette, whose accent comes from the sleeve) must not flash the
+         dark default while the bundle loads. A classic script — no module, no
+         defer — so it blocks the parser and runs before <body> paints; it is a
+         file and not inline because the CSP is `script-src 'self'`. lib/theme.js
+         reads the same keys afterwards and owns the rest of the session. -->
+    <script src="/app/theme-boot.js"></script>
 
     <!-- PWA -->
     <link rel="manifest" href="/app/manifest.webmanifest" />

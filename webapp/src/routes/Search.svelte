@@ -1,4 +1,11 @@
 <script>
+  // Explorer (the screen the nav used to call "Rechercher"). DESIGN §6: a title, the
+  // sources a search reaches, the searches this device remembers, and the style
+  // families as tiles — never an empty page when nothing is typed yet.
+  //
+  // The search itself is unchanged: lib/searchrank.js decides the best result,
+  // the library answers first and the main provider joins it, and a pasted
+  // playlist link becomes an import offer (lib/linkimport.js).
   import { onDestroy } from "svelte";
   import { api } from "../lib/api.js";
   import { isAdmin } from "../lib/stores.js";
@@ -8,7 +15,8 @@
   import TrackList from "../components/TrackList.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
-  import { fallbackSources, iconOf } from "../lib/sources.js";
+  import GenreTiles from "../components/GenreTiles.svelte";
+  import { fallbackSources, mainSource, iconOf } from "../lib/sources.js";
   import { access } from "../lib/access.js";
   import { playlistLink, importRoute } from "../lib/linkimport.js";
   import { entityRef } from "../lib/entity.js";
@@ -29,15 +37,77 @@
   let results = saved?.results ?? EMPTY;
   let loading = false;
   let tab = saved?.tab ?? "all"; // all | tracks | artists | albums | playlists
+  // library = what a search always reaches (the library + the main source);
+  // podcasts = the shows only, for when that is what you are after.
+  let scope = saved?.scope ?? "library";
   let timer;
   let seq = 0;
+  let inputEl;
+  // The term the last request was actually sent for. On leaving the screen,
+  // only a term that WAS searched is remembered (never half a word typed).
+  let searchedFor = saved?.q ?? "";
   // Don't pop the soft keyboard over a restored screen: you came back to read
   // the results, not to retype the query.
   const autofocusBox = !q;
 
+  // -- recent searches --------------------------------------------------------
+  // The last five terms this device actually searched, newest first, in
+  // localStorage (`search.recent`, JSON) — a bare array of strings, deduped
+  // case-insensitively. Length is capped on read too, so a hand-edited or
+  // older value cannot flood the screen.
+  const RECENT_KEY = "search.recent";
+  const RECENT_MAX = 5;
+  function readRecent() {
+    try {
+      const v = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+      if (!Array.isArray(v)) return [];
+      const out = [];
+      for (const x of v) {
+        if (typeof x !== "string") continue;
+        const t = x.trim();
+        if (!t || out.some((y) => y.toLowerCase() === t.toLowerCase())) continue;
+        out.push(t);
+        if (out.length >= RECENT_MAX) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+  let recent = readRecent();
+  function noteSearch(term) {
+    const t = String(term || "").trim();
+    if (t.length < 2 || playlistLink(t)) return;
+    const next = [t, ...recent.filter((x) => x.toLowerCase() !== t.toLowerCase())].slice(0, RECENT_MAX);
+    recent = next;
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    } catch {
+      /* a convenience */
+    }
+  }
+  function clearRecent() {
+    recent = [];
+    try {
+      localStorage.removeItem(RECENT_KEY);
+    } catch {
+      /* a convenience */
+    }
+  }
+  function useRecent(term) {
+    clearTimeout(timer);
+    q = term;
+    scope = "library";
+    // A tile or a remembered term is a search this person chose: keep it at
+    // once, rather than only when they leave the screen.
+    noteSearch(term);
+    run(term);
+    inputEl?.focus();
+  }
+
   // The first fallback source that can be searched (Réglages → Sources, in
   // the admin's order): off unless ticked, on this screen only (a new search
-  // starts with it off again). Asked on Enter or when the box is ticked
+  // starts with it off again). Asked on Enter or when the chip is pressed
   // — never per keystroke: every partial word typed would be a request there,
   // and the server keeps each answer a day, so a search repeated costs nothing.
   let yt = saved?.yt ?? false;
@@ -80,6 +150,17 @@
     if (yt) runYoutube();
   }
 
+  // The library is what every search reaches; the fallback chip adds a source
+  // to it, the Podcasts chip narrows the screen to the shows. Pressing the
+  // library chip comes back to the full answer.
+  function resetScope() {
+    scope = "library";
+    inputEl?.focus();
+  }
+  function toggleShows() {
+    scope = scope === "podcasts" ? "library" : "podcasts";
+  }
+
   function onKey(e) {
     if (e.key !== "Enter") return;
     clearTimeout(timer);
@@ -87,11 +168,12 @@
     // Enter is "search now": the regular search at once, YouTube if ticked.
     run(term);
     runYoutube();
+    noteSearch(term);
     e.currentTarget.blur(); // drop the phone keyboard over the results
   }
 
   // Whatever the screen is showing, ready for the next time we come back to it.
-  $: rememberScreen({ q, tab, results, yt, ytTracks, ytFor });
+  $: rememberScreen({ q, tab, results, yt, ytTracks, ytFor, scope });
 
   // Deep link support (/search/:q from the sidebar).
   //
@@ -131,8 +213,10 @@
     if (!term || playlistLink(term)) {
       results = EMPTY;
       loading = false;
+      searchedFor = "";
       return;
     }
+    searchedFor = term;
     loading = true;
     try {
       const r = await api.search(term);
@@ -145,7 +229,17 @@
     }
   }
 
-  onDestroy(() => clearTimeout(timer));
+  onDestroy(() => {
+    clearTimeout(timer);
+    // A term the person actually searched is worth remembering; a half-typed
+    // word the box still holds is not.
+    if (searchedFor && searchedFor === q.trim()) noteSearch(searchedFor);
+  });
+
+  // A saved scope from an older session, or from an account that is no longer
+  // the admin: the shows are not served to it, so the filter has nothing to
+  // show — fall back to the library rather than an empty screen.
+  $: if (scope === "podcasts" && !$isAdmin) scope = "library";
 
   $: hasResults =
     results.artists?.length ||
@@ -165,7 +259,8 @@
   // saved "podcasts" tab lands on the albums, where the shows are now.
   $: if (tab === "podcasts") tab = "albums";
   $: podcasts = $isAdmin ? results.podcasts || [] : [];
-  $: top = tab === "all" ? topResult(q, results, $isAdmin) : null;
+  $: shows = scope === "podcasts" ? podcasts : [];
+  $: top = tab === "all" && scope === "library" ? topResult(q, results, $isAdmin) : null;
   $: shelfArtists = (results.artists || []).filter((a) => !(top?.kind === "artist" && a === top.item));
   $: albumsAndShows = mixPodcasts(
     results.albums || [],
@@ -178,31 +273,55 @@
   $: moreTracks = Math.max(0, (results.tracks?.length || 0) - TOP_TRACKS);
 </script>
 
-<div class="bar fade-in">
+<h1 class="page-title">Explorer</h1>
+
+<div class="sources" role="group" aria-label="Source de la recherche">
+  <button
+    class="chip"
+    class:chip-active={scope === "library"}
+    aria-pressed={scope === "library"}
+    on:click={resetScope}
+    title={$mainSource ? `La bibliothèque et ${$mainSource.name}` : "Toute ta bibliothèque"}
+  >
+    Ma bibliothèque
+  </button>
+  {#if ytAvailable}
+    <button
+      class="chip"
+      class:chip-active={yt}
+      aria-pressed={yt}
+      title="Chercher aussi sur {fb.name} (source de secours)"
+      on:click={toggleYoutube}
+    >
+      <Icon name={iconOf(fb.id)} size={15} /> {fb.name}
+    </button>
+  {/if}
+  {#if $isAdmin}
+    <button
+      class="chip"
+      class:chip-active={scope === "podcasts"}
+      aria-pressed={scope === "podcasts"}
+      on:click={toggleShows}
+      title="Ne montrer que les podcasts"
+    >
+      Podcasts
+    </button>
+  {/if}
+</div>
+
+<div class="bar">
   <!-- svelte-ignore a11y-autofocus -->
   <input
+    bind:this={inputEl}
     type="search"
     enterkeyhint="search"
     placeholder="Titres, artistes, albums, podcasts…"
+    aria-label="Rechercher un titre, un artiste, un album ou un podcast"
     bind:value={q}
     on:input={onInput}
     on:keydown={onKey}
     autofocus={autofocusBox}
   />
-  {#if ytAvailable}
-    <button
-      class="ytbox"
-      class:on={yt}
-      role="switch"
-      aria-checked={yt}
-      title="Chercher aussi sur {fb.name} (source de secours)"
-      on:click={toggleYoutube}
-    >
-      <span class="tick" aria-hidden="true">{#if yt}<Icon name="check" size={12} />{/if}</span>
-      <Icon name={iconOf(fb.id)} size={16} />
-      <span>{fb.name}</span>
-    </button>
-  {/if}
 </div>
 
 {#if shared}
@@ -210,24 +329,64 @@
     <span class="s-icon"><Icon name="link" size={20} /></span>
     <span class="s-text">
       <strong>Importer cette playlist {shared.label}</strong>
-      <span class="muted">Retrouver ses titres pour l'écouter ici, et la garder si tu veux.</span>
+      <span class="muted">Retrouver ses titres pour les écouter ici, et la garder si tu veux.</span>
     </span>
   </a>
 {/if}
 
-{#if q.trim() && !shared}
+{#if !q.trim() && !shared}
+  <div class="landing">
+    {#if recent.length}
+      <section class="recents">
+        <div class="section-head">
+          <h2 class="section-title">Récents</h2>
+          <button class="see-all" on:click={clearRecent}>Effacer</button>
+        </div>
+        <div class="recent-chips">
+          {#each recent as term (term)}
+            <button class="chip" on:click={() => useRecent(term)} title="Rechercher {term}">
+              <Icon name="search" size={14} /> {term}
+            </button>
+          {/each}
+        </div>
+      </section>
+    {:else}
+      <p class="muted lead">
+        Cherche un titre, un artiste, un album ou un podcast — les titres de ta bibliothèque
+        d'abord, puis le catalogue.
+      </p>
+    {/if}
+    <GenreTiles on:pick={(e) => useRecent(e.detail)} />
+  </div>
+{/if}
+
+{#if q.trim() && !shared && scope === "library"}
   <div class="tabs" role="tablist">
     {#each [["all", "Tout"], ["tracks", "Titres"], ["artists", "Artistes"], ["albums", "Albums"], ["playlists", "Playlists"]] as [id, label]}
-      <button role="tab" aria-selected={tab === id} class:active={tab === id} on:click={() => (tab = id)}>{label}</button>
+      <button role="tab" aria-selected={tab === id} class="chip" class:chip-active={tab === id} on:click={() => (tab = id)}>
+        {label}
+      </button>
     {/each}
   </div>
 {/if}
 
-{#if loading}
+{#if scope === "podcasts"}
+  {#if loading}
+    <Skeleton kind="shelf" />
+  {:else if q.trim() && !shared}
+    {#if shows.length}
+      <div class="grid">
+        {#each shows as p (entityRef(p))}<PodcastCard item={p} />{/each}
+      </div>
+    {:else}
+      <p class="muted hint">Aucun podcast pour « {q} ».</p>
+    {/if}
+  {/if}
+{:else if loading}
   <Skeleton kind="shelf" />
   <Skeleton kind="list" />
 {:else if !q.trim()}
-  <p class="muted hint">Commencez à taper pour rechercher.</p>
+  <!-- the recent searches and the style tiles are above: never an empty page -->
 {:else if !hasResults}
   {#if !(yt && ytAvailable) && !shared}
     <p class="muted hint">Aucun résultat pour « {q} ».</p>
@@ -256,7 +415,7 @@
   </div></div>
 {/if}
 
-{#if !loading && q.trim() && !shared && yt && ytAvailable && (tab === "all" || tab === "tracks")}
+{#if scope === "library" && !loading && q.trim() && !shared && yt && ytAvailable && (tab === "all" || tab === "tracks")}
   <h2 class="ythead"><Icon name={iconOf(fb.id)} size={20} /> Sur {fb.name}</h2>
   {#if ytTracks.length && !ytStale && !ytLoading}
     <p class="ytnote muted">Archivé à la première écoute{fb.quality ? `, en ${fb.quality} au mieux (ce que ${fb.name} propose de mieux)` : ""}.</p>
@@ -276,7 +435,7 @@
   {/if}
 {/if}
 
-{#if !loading && q.trim() && hasResults}
+{#if scope === "library" && !loading && q.trim() && hasResults}
 
   {#if (tab === "all" || tab === "artists") && shelfArtists.length}
     <div class="sechead">
@@ -318,6 +477,12 @@
 {/if}
 
 <style>
+  .sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 16px 0 14px;
+  }
   .bar {
     display: flex;
     align-items: center;
@@ -328,60 +493,58 @@
     flex: 1 1 180px;
     min-width: 0;
     max-width: 560px;
-    padding: 14px 18px;
+    height: 44px;
+    padding: 0 18px;
     border-radius: 999px;
-    border: 1px solid transparent;
-    background: var(--bg-card);
-    color: var(--text);
-    outline: none;
-    font-size: 1.05rem;
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
+    font-size: 15px;
   }
-  .bar input:focus {
-    border-color: var(--accent);
+  .bar input::placeholder {
+    color: var(--dim);
+    opacity: 1;
+  }
+  /* One ring, the app's: the accent outline from app.css, hugging the border
+     (a 2 px outline offset from a 1 px border read as a double ring). */
+  .bar input:focus-visible {
+    outline-offset: 0;
   }
   /* Hide the browser's own clear cross: the box is the same pill everywhere. */
   .bar input::-webkit-search-cancel-button {
     -webkit-appearance: none;
   }
-  /* A checkbox you can hit with a thumb, reading as one: a tick, the mark
-     and the word, lit when it is on. */
-  .ytbox {
-    display: inline-flex;
-    align-items: center;
+  .lead {
+    margin: 4px 0 0;
+    max-width: 62ch;
+    line-height: 1.45;
+  }
+  .landing {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    margin-top: 24px;
+  }
+  .recents {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .recent-chips {
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
-    flex: none;
-    min-height: 44px;
-    padding: 0 16px 0 12px;
-    border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    color: var(--text-dim);
-    font-weight: 700;
-    font-size: 0.9rem;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
   }
-  .ytbox:hover {
-    color: var(--text);
-    border-color: var(--text-dim);
+  .see-all {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--dim);
+    font-size: 13px;
+    font-weight: 600;
   }
-  .ytbox.on {
-    color: var(--text);
-    border-color: color-mix(in srgb, var(--accent) 70%, transparent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-  }
-  .tick {
-    display: grid;
-    place-items: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 1.5px solid currentColor;
-    opacity: 0.8;
-  }
-  .ytbox.on .tick {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    opacity: 1;
+  .see-all:hover {
+    color: var(--tx);
   }
   .ythead {
     display: flex;
@@ -401,13 +564,14 @@
     margin: 4px 0 8px;
     padding: 10px 18px;
     border-radius: 999px;
-    background: var(--bg-card);
-    color: var(--text);
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
     font-weight: 600;
     font-size: 0.9rem;
   }
   .ytgo:hover {
-    background: var(--bg-hover);
+    background: var(--s2);
   }
   .hint.small {
     margin-top: 6px;
@@ -419,13 +583,14 @@
     max-width: 560px;
     margin: 16px 0 4px;
     padding: 14px 18px;
-    border-radius: var(--radius);
-    background: var(--bg-card);
-    color: var(--text);
+    border-radius: var(--r-card);
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
     text-decoration: none;
   }
   .shared:hover {
-    background: var(--bg-hover);
+    background: var(--s2);
   }
   .s-icon {
     display: grid;
@@ -434,8 +599,8 @@
     height: 40px;
     flex: none;
     border-radius: 50%;
-    background: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    color: var(--onac);
   }
   .s-text {
     display: flex;
@@ -450,29 +615,16 @@
   .tabs {
     display: flex;
     gap: 8px;
-    margin: 18px -16px 4px;
-    padding: 0 16px;
+    margin: 18px 0 4px;
+    padding: 2px;
     overflow-x: auto;
     scrollbar-width: none;
   }
   .tabs::-webkit-scrollbar {
     display: none;
   }
-  .tabs button {
-    flex: none;
-    padding: 7px 16px;
-    border-radius: 999px;
-    background: var(--bg-card);
-    color: var(--text-dim);
-    font-weight: 600;
-    font-size: 0.9rem;
-  }
-  .tabs button.active {
-    background: #fff;
-    color: #111;
-  }
   .hint {
-    margin-top: 28px;
+    margin-top: 20px;
   }
   /* The best result beside the titles where there is room for both (the way
      Spotify and YouTube Music lay it out), above them on a phone. */
@@ -508,24 +660,41 @@
     gap: 7px;
     flex: none;
     padding: 0;
-    color: var(--text-dim);
-    font-size: 0.82rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    color: var(--dim);
+    font-size: 13px;
+    font-weight: 600;
   }
   .seeall:hover {
-    color: var(--text);
+    color: var(--tx);
   }
   .seeall .count {
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--text-dim);
-    background: var(--bg-card);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--dim);
+    background: var(--s2);
     border-radius: 999px;
     padding: 2px 7px;
   }
   .seeall:hover .count {
-    color: var(--text);
+    color: var(--tx);
+  }
+  @media (max-width: 640px) {
+    /* Two lines of source chips rather than a rail that cut YouTube off the
+       right edge with no sign it existed: a search source is a state, and a
+       hidden state is a state nobody turns off. At most four chips wrap onto
+       two rows on a 360 px screen. */
+    .sources {
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 14px 0 12px;
+    }
+    /* The field occupies the page width: at 640 the desktop's 560 px cap left
+       a 40 px hole beside the box. */
+    .bar input {
+      flex: 1 1 100%;
+      max-width: none;
+    }
   }
 </style>

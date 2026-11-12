@@ -15,7 +15,7 @@
   // while it is being dragged toward the end of a 4 000-track queue.
   import { trackRef } from "../lib/trackkey.js";
   import { onDestroy, tick } from "svelte";
-  import { player, toasts } from "../lib/stores.js";
+  import { player, toasts, openPlaylistPicker, openQueueSave } from "../lib/stores.js";
   import { atLeast } from "../lib/remote/mode.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
   import Cover from "./Cover.svelte";
@@ -156,8 +156,18 @@
 <div class="ql" bind:this={root}>
   {#if editable && upcoming > 0}
     <div class="qhead">
-      <span class="qcount">À suivre · {upcoming} titre{upcoming > 1 ? "s" : ""}</span>
-      <button class="qclear" on:click={clearAll}>Vider la file</button>
+      <div class="qbar">
+        <span class="qcount">À suivre · {upcoming} titre{upcoming > 1 ? "s" : ""}</span>
+        <button class="qclear" on:click={clearAll} aria-label="Vider la file" title="Vider la file">
+          <Icon name="trash" size={15} />
+        </button>
+      </div>
+      <!-- Sillon §7: what is left of the queue is a list one keeps — the same
+           sheet that saves a track saves the whole run. -->
+      <button class="qsave" on:click={openQueueSave}>
+        <Icon name="plus" size={14} />
+        Enregistrer en playlist
+      </button>
     </div>
   {/if}
 
@@ -173,15 +183,18 @@
       data-qi={index}
     >
       <button class="qrow" on:click={() => pick(index)}>
-        <Cover src={item.album?.cover} alt="" size={42} kind={item.podcast ? "podcast" : "track"} fallbackId={trackRef(item)} />
+        <Cover src={item.album?.cover} alt="" size={40} kind={item.podcast ? "podcast" : "track"} fallbackId={trackRef(item)} />
         <span class="qm">
           <span class="qt">{item.title}</span>
           <span class="qa">{artistLine(item)}</span>
         </span>
-        {#if showDuration}<span class="qd">{fmtDuration(item.duration)}</span>{/if}
+        {#if showDuration}<span class="qd mono">{fmtDuration(item.duration)}</span>{/if}
       </button>
       {#if editable && index > idx}
-        <button class="qx" on:click={() => player.removeAt(index)} aria-label="Retirer de la file" title="Retirer">
+        <button class="qadd" on:click={() => openPlaylistPicker(item)} aria-label="Ajouter « {item.title} » à une playlist" title="Ajouter à une playlist">
+          <Icon name="plus" size={15} />
+        </button>
+        <button class="qx" on:click={() => player.removeAt(index)} aria-label="Retirer « {item.title} » de la file" title="Retirer">
           <Icon name="close" size={15} />
         </button>
         <span
@@ -208,7 +221,7 @@
   <!-- The row as it is carried: a copy, so it survives the real one leaving the
        window when the list scrolls under the finger. -->
   <div class="ghost" style="top:{drag.y}px; left:{drag.left}px; width:{drag.width}px" aria-hidden="true">
-    <Cover src={drag.item.album?.cover} alt="" size={42} kind={drag.item.podcast ? "podcast" : "track"} fallbackId={trackRef(drag.item)} />
+    <Cover src={drag.item.album?.cover} alt="" size={40} kind={drag.item.podcast ? "podcast" : "track"} fallbackId={trackRef(drag.item)} />
     <span class="qm">
       <span class="qt">{drag.item.title}</span>
       <span class="qa">{artistLine(drag.item)}</span>
@@ -218,46 +231,72 @@
 
 <style>
   /* The parent sets the palette: --ql-dim (secondary text), --ql-hover (row
-     under the pointer), --ql-bg (the sticky header's ground) and --ql-ghost. */
+     under the pointer), --ql-bg (the sticky header's ground) and --ql-ghost.
+     Everything default to the theme's own tokens, so a panel that says nothing
+     is already in Sillon. */
   .ql {
     color: inherit;
-    --dim: var(--ql-dim, rgba(255, 255, 255, 0.6));
   }
   .qhead {
     position: sticky;
     top: 0;
     z-index: 2;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 6px 6px 8px;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 4px 8px;
     background: var(--ql-bg, transparent);
   }
+  .qbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
   .qcount {
-    font-size: 0.74rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--dim);
+    color: var(--ql-dim, var(--dim));
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* One line whatever the pane's width: the button keeps its pill. */
   .qclear {
     flex: none;
-    white-space: nowrap;
-    font-size: 0.8rem;
-    font-weight: 700;
-    color: inherit;
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: var(--ql-hover, rgba(255, 255, 255, 0.08));
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    color: var(--ql-dim, var(--dim));
   }
   .qclear:hover {
-    background: color-mix(in srgb, currentColor 16%, transparent);
+    color: var(--tx);
+    background: var(--ql-hover, var(--s2));
+  }
+  /* The accent action of the header: what a finished listen becomes. */
+  .qsave {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 999px;
+    background: var(--ac);
+    color: var(--onac);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+  .qsave:hover {
+    filter: brightness(1.06);
   }
 
   .qitem {
@@ -266,13 +305,20 @@
     align-items: center;
     box-sizing: border-box;
     height: 56px;
-    border-radius: 8px;
+    border-radius: 10px;
   }
   .qitem:hover {
-    background: var(--ql-hover, rgba(255, 255, 255, 0.08));
+    background: var(--ql-hover, var(--s2));
   }
+  .qitem.now {
+    background: color-mix(in srgb, var(--ac) 10%, transparent);
+  }
+  /* The playing row is told apart by its tinted ground and its weight, not by
+     the accent AS TEXT: on the light theme the accent is a fill, and lemon on
+     paper is unreadable (the theme pair rule in docs/agents/webapp.md). */
   .qitem.now .qt {
-    color: var(--accent);
+    color: var(--tx);
+    font-weight: 700;
   }
   .qitem.past {
     opacity: 0.5;
@@ -289,7 +335,7 @@
     right: 6px;
     height: 2px;
     border-radius: 2px;
-    background: var(--accent);
+    background: var(--ac-mark);
     z-index: 1;
   }
   .qitem.before::before {
@@ -302,12 +348,12 @@
   .qrow {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex: 1;
     min-width: 0;
     height: 100%;
-    padding: 0 7px;
-    border-radius: 8px;
+    padding: 0 5px;
+    border-radius: 10px;
     text-align: left;
     color: inherit;
   }
@@ -316,6 +362,7 @@
     flex-direction: column;
     min-width: 0;
     flex: 1;
+    gap: 1px;
   }
   .qt,
   .qa {
@@ -325,73 +372,67 @@
   }
   .qt {
     font-weight: 600;
-    font-size: 0.92rem;
+    font-size: 0.9rem;
+    line-height: 1.25;
   }
   .qa {
-    font-size: 0.78rem;
-    color: var(--dim);
+    font-size: 0.76rem;
+    color: var(--ql-dim, var(--dim));
+    line-height: 1.25;
   }
   .qd {
-    font-size: 0.78rem;
-    color: var(--dim);
+    font-size: 11px;
+    color: var(--ql-dim, var(--dim));
     font-variant-numeric: tabular-nums;
+    flex: none;
   }
 
+  .qadd,
   .qx,
   .grip {
     display: grid;
     place-items: center;
     flex: none;
-    width: 40px;
-    height: 100%;
-    color: var(--dim);
+    width: 28px;
+    height: 32px;
+    border-radius: 8px;
+    color: var(--ql-dim, var(--dim));
   }
+  .qadd:hover,
   .qx:hover,
-  .grip:hover,
-  .grip:focus-visible {
-    color: inherit;
+  .grip:hover {
+    color: var(--tx);
   }
-  /* The grip is the only part of a row that does not scroll it: a finger that
-     lands anywhere else is the list's, one that lands here is a drag. */
   .grip {
     cursor: grab;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
-    border-radius: 8px;
   }
   .grip:active {
     cursor: grabbing;
   }
   .grip:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--ac-text);
     outline-offset: -2px;
   }
-  /* Hover is the desktop's way of keeping a row calm until it is wanted; a
-     touch screen has no hover, so there the controls are simply always there. */
+  /* The empty column of the playing and played rows: three controls' width, so
+     every duration lands on the same x. */
   .qslot {
     flex: none;
-    width: 80px;
+    width: 84px;
   }
-  @media (hover: hover) {
-    /* The remove button takes the duration's place while the row is hovered,
-       instead of keeping a blank 40 px column on every row for it. */
-    .qx {
-      position: absolute;
-      top: 0;
-      right: 40px;
-      opacity: 0;
-    }
-    .qitem:hover .qx,
-    .qx:focus-visible {
-      opacity: 1;
-    }
-    .qitem.edit:hover .qd,
-    .qitem.edit:focus-within .qd {
-      visibility: hidden;
+  /* §10: a finger gets 44 px on each — but three of them on a 340 px panel would
+     leave the title a couple of letters, so the width stays, the height grows. */
+  @media (pointer: coarse) {
+    .qadd,
+    .qx,
+    .grip {
+      width: 36px;
+      height: 44px;
     }
     .qslot {
-      width: 40px;
+      width: 108px;
     }
   }
 
@@ -403,13 +444,13 @@
     gap: 10px;
     box-sizing: border-box;
     height: 56px;
-    padding: 0 7px;
+    padding: 0 6px;
     margin-top: -28px; /* centred on the pointer */
-    border-radius: 10px;
-    background: var(--ql-ghost, #2a2536);
-    color: #fff;
-    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+    border-radius: 12px;
+    background: var(--ql-ghost, var(--s2));
+    color: var(--tx);
+    border: 1px solid var(--ln);
+    box-shadow: 0 14px 40px color-mix(in srgb, var(--bg) 70%, transparent);
     pointer-events: none;
-    --dim: rgba(255, 255, 255, 0.6);
   }
 </style>

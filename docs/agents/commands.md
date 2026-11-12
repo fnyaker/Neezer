@@ -53,6 +53,9 @@ cd webapp && node test/ui/run.mjs                    # the lists' main-thread co
                                                      # open the favourites, type into them, sort, open a 4000-track playlist
 cd webapp && node test/queue/run.mjs [--phone]       # the queue's editing in headless Chromium on a 4000-track queue: drag a row (mouse, or real touch
                                                      # events), drag to the far end with the list scrolling under the finger, the keyboard, clear
+cd webapp && node test/mobile/run.mjs                # the phone shell at 360/390/639/640/641 px: no sideways overflow, tab bar 64 + mini
+                                                     # player 64 floating 8 above it, the library tab, the full-screen player, the theme kept
+                                                     # (needs npm run build; PLAYWRIGHT=/path/to/playwright-core CHROMIUM=/usr/bin/chromium)
 cd webapp && node test/player/run.mjs                # the sleep timer and the podcast speed on the audio elements the browser really plays (a fake page clock)
 cd webapp && node test/output/run.mjs                # the audio path: routed by the full-screen player, the fault simulated (the element's clock 8% fast): convicted
                                                      # in one window, DIRECT on a fresh element and a fresh context, retried at a track change, forgotten when clean

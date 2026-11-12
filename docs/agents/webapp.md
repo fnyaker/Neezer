@@ -2,6 +2,57 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
+**Sillon is the design system; Neezer is the product.** Its foundation is the tokens in
+`src/app.css`, `lib/theme.js`, the pure rules in `lib/sillon.js` and the fonts in `src/assets/fonts/` —
+build a screen from those, never from a literal colour. Rules that cost something to learn:
+
+- **A theme is an attribute on `<html>`** (`encre` the default, `papier`, `pochette`), never a class
+  or a component prop: `--bg --s1 --s2 --ln --tx --dim --ac --onac --btn --onbtn --hrt`. The old
+  names (`--text`, `--text-dim`, `--bg-elev`, `--bg-card`, `--bg-hover`) are aliases of them;
+  `--accent`/`--accent-2` alias `--ac-text`, not the lemon surface, so the screens not yet through
+  the rebrand stay readable on Papier.
+- **An accent used as TEXT or a MARK is `--ac-text` / `--ac-mark`; `--ac` is a SURFACE.** On
+  Papier the lemon is a highlighter, never ink (lemon on cream is 1.16:1): `--ac-text` is the ink
+  there, `--ac-mark` is too, and `--onac` stays the text colour on an `--ac` pill. The global
+  `:focus-visible` ring reads `--ac-text` for the same reason. `#fff` on `--ac`/`--accent` is a bug
+  in every theme (measured 1.16:1; the old purple made it 3.9:1 and hid it).
+- **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. `#fff` on
+  `var(--accent)` was right when the accent was purple and is 1.4:1 now that it is lemon (Home's
+  count badge, Library's still do it) — every such pair is a bug the rebrand exposes, not a taste.
+- **The theme is applied BEFORE the first frame** by `public/theme-boot.js`, a classic script
+  (blocking) loaded from `index.html`, because the CSP is `script-src 'self'`: an inline `<script>`
+  there is REFUSED by the browser (it said so in the console on every load). It sets `data-theme`,
+  the html background and `<meta name="theme-color">` from `ui.theme` / `ui.coverAc`;
+  `initTheme()` in `main.js` then owns the session. Change one, change the other.
+- **Typography is self-hosted** (OFL texts beside the files): Bricolage Grotesque 600–800 for titles
+  (`-0.03em` on big ones), Instrument Sans 400–700 for the interface, JetBrains Mono 400–500 for
+  metadata and the small capitals (`.label-mono`, `letter-spacing:.08em`). latin + latin-ext (French
+  `œ` lives in ext), `font-display: swap`, and the service worker stages all six with the shell.
+  Measured first screen at 1440, Encre: **51 requests / 279 kB → 57 / 369 kB**, 84 kB of it type.
+  Bricolage ships WITHOUT its optical-size axis: identical text width at 14–44 px, 47 kB cheaper.
+- **A missing sleeve is a groove, and a slow portrait is an initialled disc.** `Cover` paints the
+  deterministic rainure from the first frame (a queued image sits ON it); `Avatar` paints the tint
+  and initials UNDER the photo, so a 6 s cover request never leaves a blank `--s2` disc. A Deezer
+  md5 of all zeroes is ABSENCE, not art: the API returns no URL / a 404 (a 302 to the generic
+  `000…` JPEG made every fallback disappear behind the same lavender square).
+- **Pochette takes the sleeve's colour**: `dominantColor()` (the canvas that already fed the gradient
+  headers), lifted by `readableAccent()` until it carries 4.5:1 on `--onac` (232 colours tested,
+  worst 4.50:1; the lift SCALES, it does not blend white in, or a deep blue comes out grey-lilac).
+  The watcher is keyed on `currentId` — a STRING, because `current` re-emits its object on every
+  progress tick — and guarded on the sleeve URL it asked for, NOT a counter: replacing a queue emits
+  A, null, A, and a counter loses A's answer and leaves the fallback up forever (seen in the browser).
+- **Missing art is a record groove, never an empty square** (`lib/sillon.js`): DESIGN §4's repeating
+  radial grain, from eight dark pairs chosen by FNV-1a over `src|alt|fallbackId|kind` (Cover) or the
+  name (Avatar's initials). Deterministic: a placeholder that changes colour on reload reads as a
+  loading state.
+- **The page margin is a pair of tokens**, `--page-y` / `--page-x` (32/32, 20/20 ≤ 640 px). Anything
+  that bleeds to the screen's edge reads THEM (`components/GradientHeader.svelte` did not, and the
+  day the top padding moved it left a 4 px band of background above itself).
+- **Controls and surfaces**: `.btn` (+ `-primary`, `-ghost`, `-sm`, `-icon`), `.chip` (+ `-active`),
+  `.card`, `.field`, `.section-title`, `.page-title`, `.mono`, `.label-mono`, `.kbd`; `.pill` is now
+  a solid `--btn` pill (the purple gradient and its glow are gone). 40 px high on a mouse, 44 under a
+  finger (`@media (pointer: coarse)`) — §10's touch rule without changing the desktop rhythm.
+
 **Web app** (`webapp/`): Svelte 5 + Vite 7 SPA, hash routing (svelte-spa-router), consuming `/api`.
 Existing components still use the legacy `$:` / `export let` syntax; follow the file you edit.
 Builds into `neezer/webui/dist`. No emoji in the UI — all glyphs go through
@@ -44,6 +95,26 @@ played shortcuts, mixes. The library is one page of chips (`/library/<chip>`: Ti
 Podcasts, Téléchargés, Mes fichiers, Indisponibles), its adding actions one "+" menu. A track row is played by its
 title too (the whole row is the target), and without a number the play glyph sits on the cover. Starring an artist
 FOLLOWS it; archiving its discography (`on_fav_artist`) is off by default.
+
+**≤ 640 px is a different SHELL, not a narrower desktop** (`src/mobile.css`, `lib/viewport.js`,
+`components/MobileNav.svelte`, `PlayerBar.svelte`'s mobile block, `App.svelte`). One column sized to
+`100dvh` (a phone's URL bar makes `vh` lie), its bottom padded by `--mini-h + --tabbar-h + --safe-bottom`;
+the tab bar is EXACTLY 64 px of content (box-sizing content-box, the home indicator added as padding
+UNDER it, never folded into the height) and the mini player is a 64 px card floating 8 px above it, 12 px
+from each side. Tokens are structure only (`--mini-h --tabbar-h --player-h --safe-top --safe-bottom`,
+`--page-x` already 20) — the colours stay the theme's. ONE breakpoint: `MOBILE_MQ` in `lib/viewport.js`
+is what JavaScript reads, the `@media (max-width: 640px)` blocks are the same number in CSS; 641 px is
+a narrow DESKTOP (sidebar + 88 px bar). The mini card keeps the bench contract (`footer.player`,
+`.now`, `.info`, `.info .t`, `.pp`, `.next`) and carries only sleeve, names, play 44, next 36 and a 2 px
+progress line; everything else is hidden, the card itself opens the full-screen player. **A press on a
+control must not bubble into the card's tap target**: `player.toggle()` re-renders the icon, so by the time
+the event reaches `<footer>` its `target` is a DETACHED glyph and `closest("button")` finds nothing —
+read `composedPath()` (captured at dispatch) instead, or every press of play opened the player (seen in
+the bench). The Now-Playing column is a third column, so on a phone it is not mounted at all and a
+`ui.nowPlaying` left true on the desktop is closed on boot (it used to paint off-screen). Measured
+(`test/mobile/run.mjs`, 360/390/639/640/641): no sideways overflow at any width, bar 65 px with its
+border, card bottom exactly 8 px above the bar, play 44×44, `data-theme` kept across the player; 641 px
+still 88 px bar and the desktop panel mounted.
 
 **Search leads with the titles** (`routes/Search.svelte`, `lib/searchrank.js`, `components/TopResult.svelte`).
 Tabs Tout · Titres · Artistes · Albums · Playlists; there is no Podcasts tab (the user's ask): the shows are mixed
@@ -242,5 +313,16 @@ bytes. A reserve title asked 6 s into each track makes "suivant" instant and cov
 picks at once (its timers are throttled, and the app's own player must know the next). A feedback press after the
 pick picks again (`replaceUpcoming`). `ensureUpcoming` leaves the Flow alone. A Flow queue saved by an older SPA (no
 `context.id`) is adopted into a new session. The steering row costs the full-screen cover its height
-(`.main.steer .cover`; `test/fullscreen/run.mjs` sweeps 9 sizes WITH it); on a phone the cover carousel sits in a
-size container and shrinks instead of being cut (360x640: 194 px square, 109 with the Flow row).
+(`.main.steer .cover`; `test/fullscreen/run.mjs` sweeps 9 sizes WITH it).
+
+**The phone's full-screen player is a thumb column** (`MobileNowPlaying`, DESIGN §9). Header: reduce (44), then
+« En lecture »/Flow with the served genre and BPM in mono, then — right — the podcast speed chip, the sleep moon, the
+**quality badge** (`QualityMenu`, its small mono outline on a 44 px hit area) and ⋯ (the track menu: share, credits,
+artist, album, downloads). The sleeve is a square `min(78vw, 42vh)`, the title 30 px (one line, ellipsis), the artist
+15 px `--dim`, the seek a 6 px rail on a 44 px grip, the transport 44 px targets around a 68 px play. Under it, the
+thumb row: add to a playlist, listen party, remote, lyrics, « File · N » — 44 each, the queue button named exactly
+*File d'attente* because the benches click that name. **Whatever sits under the header shaves the sleeve** (the lyric
+line only exists when there is one, the strip and the Flow row give their height back) rather than pushing the
+transport off the screen: 360x640 measures 248 px square (269 without the strip, 212 with the Flow row too),
+390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
+`env(safe-area-inset-*)` fallback until G1's tokens land.

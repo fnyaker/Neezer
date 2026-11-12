@@ -14,11 +14,12 @@
   import { initPodcastProgress } from "./lib/podcastProgress.js";
   import { initVersionWatch } from "./lib/appversion.js";
   import { initNav } from "./lib/nav.js";
+  import { isMobile, onMobileChange } from "./lib/viewport.js";
   import { initDeezerHealth } from "./lib/deezerhealth.js";
   import { initVizHost } from "./lib/viz/host.js";
   import { location } from "./lib/router.js";
   import Sidebar from "./components/Sidebar.svelte";
-  import BackButton from "./components/BackButton.svelte";
+  import TopBar from "./components/TopBar.svelte";
   import MobileNav from "./components/MobileNav.svelte";
   import Player from "./components/Player.svelte";
   import NowPlaying from "./components/NowPlaying.svelte";
@@ -151,6 +152,17 @@
   const bootSaved = savedUser();
 
   let bootedOffline = false;
+
+  // A phone is a different shell, not a narrower desktop: the sidebar, the
+  // desktop player and the Now-Playing column all give way to the tab bar and
+  // the mini player (src/mobile.css). The one piece of STATE this changes is
+  // the queue panel: it is a third column on a wide screen, and on a phone it
+  // would be an off-screen column nobody can reach — so it is not mounted, and
+  // a panel left open on the desktop is closed when the window is narrowed to
+  // phone width (before mounting it, so nothing paints half off-screen).
+  let mobile = isMobile();
+  onMount(() => onMobileChange((v) => (mobile = v)));
+  $: if (mobile && $nowPlayingOpen) nowPlayingOpen.set(false);
 
   onMount(async () => {
     // A party guest needs none of the app's own machinery (the library, the
@@ -391,12 +403,15 @@
 {:else}
   <div class="layout" class:np-open={$nowPlayingOpen}>
     <Sidebar />
-    <BackButton />
     <main bind:this={mainEl}>
+      <!-- The shell's top bar scrolls with the page but stays at its top, and
+           the persistent notices then stick just under it (the offset is the
+           --topbar-h token below). -->
+      <TopBar />
       <Notices />
       <Router {routes} />
     </main>
-    {#if $nowPlayingOpen}
+    {#if $nowPlayingOpen && !mobile}
       <NowPlaying />
     {/if}
   </div>
@@ -428,6 +443,23 @@
 {/if}
 
 <style>
+  /* The shell's top bar height, ONE number read by the bar itself, by the
+     notices that stick under it, and by the network pill. On a phone the bar is
+     60 px instead of 68 (§9's tighter frame). */
+  :global(:root) {
+    --topbar-h: 68px;
+  }
+  main :global(.notices) {
+    top: var(--topbar-h);
+  }
+  /* The top bar brings the top margin itself, so the page's own top padding
+     would double it — and a sticky box cannot be pulled up by a negative
+     margin (its padding-edge position wins, see TopBar.svelte). Everything
+     else main sets stays. */
+  main {
+    padding-top: 0;
+  }
+
   .rq-wait {
     min-height: 100dvh;
     display: grid;
@@ -450,14 +482,24 @@
       grid-template-columns: var(--sidebar-w) 1fr var(--np-w);
     }
   }
-  /* Phone-sized only: collapse to a single column with the mini player +
-     bottom nav. Above this the desktop shell (sidebar + full player) stays,
-     so narrow PC windows look like the full desktop UI rather than a hybrid. */
+  /* Phone-sized only: one column — the tab bar and the mini player are the
+     navigation and the transport, so the sidebar and the Now-Playing column
+     are gone. `dvh` follows the phone's URL bar as it hides and shows; the
+     bottom padding is the room the two fixed bars take, home indicator
+     included, so the last row of a list is never parked under them. */
   @media (max-width: 640px) {
+    :global(:root) {
+      /* The PWA status bar sits above the content: the bar keeps 60 px of
+         controls and grows by the safe area, and every sticky page header
+         follows the same token. */
+      --topbar-h: calc(60px + var(--safe-top, 0px));
+    }
     .layout,
     .layout.np-open {
       grid-template-columns: 1fr;
-      padding-bottom: calc(60px + 56px); /* mini player + mobile nav */
+      grid-template-rows: minmax(0, 1fr);
+      height: 100dvh;
+      padding-bottom: calc(var(--mini-h) + var(--tabbar-h) + var(--safe-bottom));
     }
   }
 </style>

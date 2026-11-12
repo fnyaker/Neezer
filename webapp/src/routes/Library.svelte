@@ -1,5 +1,5 @@
 <script>
-  import { trackKey } from "../lib/trackkey.js";
+  import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onDestroy, onMount } from "svelte";
   import { push, replace } from "svelte-spa-router";
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
@@ -28,6 +28,8 @@
   import UnavailableList from "../components/UnavailableList.svelte";
   import ArtistTile from "../components/ArtistTile.svelte";
   import Podcasts from "./Podcasts.svelte";
+  import TrackList from "../components/TrackList.svelte";
+  import { SORTS, createProjector } from "../lib/tracklist.js";
   import { STEP, nearEnd } from "../lib/grow.js";
 
   // One library, filtered by chips (Spotify's "Your Library", 2021): what you
@@ -222,6 +224,50 @@
   function playFavorites() {
     if (favorites?.length) player.playQueue(favorites, 0, { kind: "favorites" });
   }
+  function shuffleFavorites() {
+    if (favorites?.length) player.shufflePlay(favorites, { kind: "favorites" });
+  }
+  // The Titres table owns its action bar AND its column headings, so it cannot
+  // be the shared TrackBrowser (which brings its own toolbar). Search and sort
+  // still run on the same index (lib/tracklist.js) — one pass over folded
+  // bytes, so a keystroke on 4 000 favourites stays cheap.
+  let fQuery = "";
+  let fSort = "default";
+  let fDir = 1;
+  const projectFavorites = createProjector();
+  onDestroy(() => projectFavorites.free());
+  $: shownFavorites = projectFavorites(favorites || [], fSort, fDir, fQuery);
+  let dlBusy = false;
+  async function archiveFavorites() {
+    if (dlBusy) return;
+    // Server-side pre-archive is for Deezer tracks: local/uploaded files are
+    // already on the disk, and YouTube keeps its own Opus.
+    const ids = (favorites || []).filter((t) => !t.local && !t.podcast && t.source !== "youtube").map(trackRef);
+    if (!ids.length) {
+      toasts.push("Rien à archiver (fichiers déjà locaux)");
+      return;
+    }
+    dlBusy = true;
+    try {
+      const r = await api.download(ids);
+      toasts.push(`Téléchargement de ${r.queued} titres lancé`);
+    } catch {
+      toasts.push("Téléchargement impossible", "error");
+    } finally {
+      dlBusy = false;
+    }
+  }
+  // Header counters: only what is already on the device (the favourites and the
+  // playlists are loaded on mount); a count nobody fetched is left out rather
+  // than asked for on every open of the library.
+  const plural = (n, one, many) => `${n} ${n > 1 ? many : one}`;
+  $: counts = [
+    favorites === null ? null : plural(favorites.length, "titre", "titres"),
+    artists === null ? null : plural(artists.length, "artiste", "artistes"),
+    myPlaylists === null ? null : plural(myPlaylists.length, "playlist", "playlists"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   function playLocal() {
     if (local?.length) player.playQueue(local, 0, { kind: "local" });
   }
@@ -261,12 +307,18 @@
 </script>
 
 <div class="head">
-  <h1>Bibliothèque</h1>
-  {#if CAN_KEEP || CAN_BROWSE}
-    <button class="add" on:click={addMenu} disabled={uploading || $syncing} aria-label="Ajouter à la bibliothèque" title="Ajouter">
-      {#if uploading || $syncing}<span class="spin"><Icon name="refresh" size={20} /></span>{:else}<Icon name="plus" size={22} />{/if}
+  <h1 class="page-title">Bibliothèque</h1>
+  {#if counts}<span class="counts mono">{counts}</span>{/if}
+  <span class="head-actions">
+    <a class="btn btn-icon" href="#/import" title="Importer une playlist partagée" aria-label="Importer une playlist partagée">
+      <Icon name="link" size={18} />
+    </a>
+    {#if CAN_KEEP || CAN_BROWSE}
+    <button class="btn btn-icon add" on:click={addMenu} disabled={uploading || $syncing} aria-label="Ajouter à la bibliothèque" title="Ajouter">
+      {#if uploading || $syncing}<span class="spin"><Icon name="refresh" size={20} /></span>{:else}<Icon name="plus" size={20} />{/if}
     </button>
-  {/if}
+    {/if}
+  </span>
   <input
     bind:this={fileInput}
     type="file"
@@ -280,51 +332,116 @@
 {#if usage && !usage.unlimited && usage.quota}
   <div class="quota">
     <div class="quota-bar"><span style={`width:${usagePct}%`} class:warn={usagePct > 90}></span></div>
-    <span class="muted quota-txt">{fmtBytes(usage.used)} / {fmtBytes(usage.quota)} d'espace d'upload utilisé</span>
+    <span class="muted quota-txt label-mono">{fmtBytes(usage.used)} / {fmtBytes(usage.quota)} d'espace d'upload utilisé</span>
   </div>
 {/if}
 
 <div class="tabs bleed-x" role="tablist" aria-label="Filtrer la bibliothèque">
-  {#each chips as c (c.id)}
-    <button role="tab" aria-selected={tab === c.id} class:active={tab === c.id} on:click={() => choose(c.id)}>
-      {c.label}{#if c.id === "gone" && gone?.length}<span class="badge">{gone.length}</span>{/if}
-    </button>
+  {#each chips.filter((c) => c.id !== "gone") as c (c.id)}
+    <button
+      class="chip"
+      class:chip-active={tab === c.id}
+      role="tab"
+      aria-selected={tab === c.id}
+      on:click={() => choose(c.id)}>{c.label}</button>
   {/each}
+  {#if chips.some((c) => c.id === "gone")}
+    <button
+      class="chip gone"
+      class:chip-active={tab === "gone"}
+      role="tab"
+      aria-selected={tab === "gone"}
+      on:click={() => choose("gone")}>
+      Indisponibles{#if gone?.length}<span class="badge">{gone.length}</span>{/if}
+    </button>
+  {/if}
 </div>
 
 {#if tab === "favorites"}
   {#if favorites === null}
     <Skeleton kind="list" />
   {:else if !favorites.length}
-    <p class="muted hint">Aucun titre favori. Touche le cœur d'un titre pour le garder ici.</p>
-  {:else}
-    <div class="row fav-head">
-      <button class="pill" on:click={playFavorites}><Icon name="play" size={18} /> Tout lire</button>
-      <button class="ghost-btn" on:click={() => openExport("favorites", "me", "Favoris")} title="Exporter : vers un service, en ZIP ou en liste">
-        <Icon name="archive" size={17} /> Exporter
-      </button>
-      <span class="muted">{favorites.length} titres</span>
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Rien ici pour l'instant</p>
+      <p class="empty-text">Touche le cœur d'un titre pour le garder ici.</p>
+      <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
     </div>
-    <TrackBrowser tracks={favorites} context={{ kind: "favorites" }} />
+  {:else}
+    <div class="bar">
+      <div class="bar-actions">
+        <button class="btn btn-primary" on:click={playFavorites}><Icon name="play" size={15} /> Tout lire</button>
+        <button class="btn btn-ghost" on:click={shuffleFavorites}><Icon name="shuffle" size={16} /> Mélanger</button>
+        <button
+          class="btn btn-ghost"
+          on:click={() => openExport("favorites", "me", "Favoris")}
+          title="Exporter : vers un service, en ZIP ou en liste"><Icon name="archive" size={16} /> Exporter</button>
+      </div>
+      <span class="spacer"></span>
+      <label class="field search">
+        <Icon name="search" size={16} />
+        <input placeholder="Rechercher dans cette liste…" bind:value={fQuery} aria-label="Filtrer dans cette liste" />
+      </label>
+      <span class="selwrap">
+        <select class="sortsel" bind:value={fSort} aria-label="Trier par">
+          {#each SORTS as s}<option value={s.key}>{s.label}</option>{/each}
+        </select>
+        <Icon name="chevronDown" size={15} />
+      </span>
+      <button
+        class="btn btn-icon"
+        class:rev={fDir === -1}
+        on:click={() => (fDir = -fDir)}
+        aria-label="Inverser l'ordre"
+        title="Inverser l'ordre"><Icon name="sort" size={17} /></button>
+      <button
+        class="btn btn-icon"
+        on:click={archiveFavorites}
+        disabled={dlBusy}
+        aria-label="Télécharger la liste"
+        title="Télécharger (archiver) toute la liste"><Icon name="download" size={17} /></button>
+    </div>
+    {#if fQuery.trim() && !shownFavorites.length}
+      <p class="muted hint">Aucun titre ne correspond à « {fQuery} ».</p>
+    {:else}
+      <TrackList tracks={shownFavorites} context={{ kind: "favorites" }} numbered headers />
+    {/if}
   {/if}
 {:else if tab === "artists"}
   {#if artists === null || (!artists.length && !arQuery)}
-    {#if artists === null}<Skeleton kind="shelf" />{:else}
-      <p class="muted hint">Aucun artiste favori. Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront sur l'accueil.</p>
+    {#if artists === null}
+      <Skeleton kind="shelf" />
+    {:else}
+      <div class="empty">
+        <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+          <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+        </svg>
+        <p class="empty-title">Aucun artiste suivi</p>
+        <p class="empty-text">
+          Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront
+          sur l'accueil.
+        </p>
+        <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+      </div>
     {/if}
   {:else}
-    <div class="row tools">
-      <div class="pl-search">
+    <div class="tools">
+      <label class="field search">
         <Icon name="search" size={16} />
-        <input placeholder="Rechercher un artiste…" bind:value={arQuery} />
-      </div>
-      <label class="sort">
-        <span class="muted">Trier</span>
-        <select bind:value={arSort} aria-label="Trier les artistes">
-          {#each AR_SORTS as o}<option value={o.id}>{o.label}</option>{/each}
-        </select>
+        <input placeholder="Rechercher un artiste…" bind:value={arQuery} aria-label="Rechercher un artiste" />
       </label>
-      <span class="muted count">{artists.length} artiste{artists.length > 1 ? "s" : ""}</span>
+      <label class="sort">
+        <span class="selwrap">
+          <select class="sortsel" bind:value={arSort} aria-label="Trier les artistes">
+            {#each AR_SORTS as o}<option value={o.id}>{o.label}</option>{/each}
+          </select>
+          <Icon name="chevronDown" size={15} />
+        </span>
+      </label>
+      <span class="spacer"></span>
+      <span class="count">{artists.length} artiste{artists.length > 1 ? "s" : ""}</span>
     </div>
     {#if !shownArtists.length}
       <p class="muted hint">Aucun artiste ne correspond à « {arQuery} ».</p>
@@ -339,7 +456,14 @@
   {#if albums === null}
     <Skeleton kind="shelf" />
   {:else if !albums.length}
-    <p class="muted hint">Aucun album favori. Touche le cœur sur la page d'un album pour le garder ici.</p>
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Aucun album gardé</p>
+      <p class="empty-text">Touche le cœur sur la page d'un album pour le garder ici.</p>
+      <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Parcourir les albums</button>
+    </div>
   {:else}
     <div class="grid">
       {#each albums.slice(0, alLimit) as a (a.id)}<Card item={a} kind="album" />{/each}
@@ -352,17 +476,34 @@
   {#if myPlaylists === null}
     <Skeleton kind="shelf" />
   {:else if !myPlaylists.length}
-    <p class="muted hint">Aucune playlist.</p>
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Aucune playlist</p>
+      <p class="empty-text">Une playlist pour un moment, une humeur, une route : crée la première.</p>
+      {#if CAN_KEEP && $isAdmin}
+        <button class="btn btn-primary" on:click={newPlaylist}><Icon name="plus" size={16} /> Nouvelle playlist</button>
+      {:else}
+        <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+      {/if}
+    </div>
   {:else}
-    <div class="pl-search">
-      <Icon name="search" size={16} />
-      <input placeholder="Rechercher dans mes playlists…" bind:value={plQuery} />
+    <div class="tools">
+      <label class="field search">
+        <Icon name="search" size={16} />
+        <input placeholder="Rechercher dans mes playlists…" bind:value={plQuery} aria-label="Rechercher une playlist" />
+      </label>
+      <span class="spacer"></span>
+      <span class="count">{myPlaylists.length} playlist{myPlaylists.length > 1 ? "s" : ""}</span>
     </div>
     {#if !shownPlaylists.length}
       <p class="muted hint">Aucune playlist ne correspond à « {plQuery} ».</p>
     {:else}
-      <div class="grid">
-        {#each shownPlaylists.slice(0, plLimit) as p (p.id)}<Card item={p} kind="playlist" />{/each}
+      <div class="pl-grid">
+        {#each shownPlaylists.slice(0, plLimit) as p (p.id)}
+          <Card item={{ ...p, subtitle: `${p.nb_tracks ?? 0} titre${p.nb_tracks > 1 ? "s" : ""}` }} kind="playlist" />
+        {/each}
       </div>
       {#if shownPlaylists.length > plLimit}<div class="grow" use:nearEnd={() => (plLimit += STEP)}></div>{/if}
     {/if}
@@ -371,11 +512,21 @@
   {#if offline === null}
     <Skeleton kind="list" />
   {:else if !offline.length}
-    <p class="muted hint">Aucun titre téléchargé. Utilisez le bouton de téléchargement sur un titre, un album ou une playlist pour les écouter hors-ligne (mode avion).</p>
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Rien hors-ligne</p>
+      <p class="empty-text">
+        Télécharge un titre, un album ou une playlist pour l'écouter sans réseau, en avion comme
+        dans le métro.
+      </p>
+      <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+    </div>
   {:else}
-    <div class="row fav-head">
-      <button class="pill" on:click={playOffline}><Icon name="play" size={18} /> Tout lire</button>
-      <span class="muted">{offline.length} titres · hors-ligne</span>
+    <div class="bar">
+      <button class="btn btn-primary" on:click={playOffline}><Icon name="play" size={15} /> Tout lire</button>
+      <span class="count-line label-mono">{offline.length} titres · hors-ligne</span>
     </div>
     <TrackBrowser tracks={offline} context={{ kind: "downloads" }} downloadable={false} />
   {/if}
@@ -383,12 +534,18 @@
   {#if gone === null}
     <Skeleton kind="list" />
   {:else if !gone.length}
-    <p class="muted hint">
-      Aucun titre indisponible. Quand Deezer retire un titre de son catalogue, il
-      apparaît ici pour que vous puissiez lui trouver un remplaçant. Les titres
-      que vous avez déjà écoutés sont archivés sur le serveur&nbsp;: ceux-là
-      restent lisibles quoi qu'il arrive.
-    </p>
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Aucun titre indisponible</p>
+      <p class="empty-text">
+        Quand Deezer retire un titre de son catalogue, il apparaît ici pour que tu puisses lui
+        trouver un remplaçant. Ceux que tu as déjà écoutés sont archivés sur le serveur&nbsp;:
+        ceux-là restent lisibles quoi qu'il arrive.
+      </p>
+      <button class="btn btn-primary" on:click={() => choose("favorites")}><Icon name="play" size={15} /> Écouter mes favoris</button>
+    </div>
   {:else}
     <p class="muted hint gone-hint">
       Ces titres ne peuvent plus être lus. Choisissez un remplaçant&nbsp;: il
@@ -401,11 +558,22 @@
   {#if local === null}
     <Skeleton kind="list" />
   {:else if !local.length}
-    <p class="muted hint">Aucun fichier à toi pour l'instant. Touche + en haut, puis « Importer des fichiers audio », pour ajouter ta propre musique (n'importe quel format).</p>
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Aucun fichier à toi</p>
+      <p class="empty-text">Ajoute ta propre musique : n'importe quel format, elle rejoint la bibliothèque.</p>
+      {#if CAN_KEEP}
+        <button class="btn btn-primary" on:click={() => fileInput.click()}><Icon name="upload" size={16} /> Importer des fichiers</button>
+      {:else}
+        <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+      {/if}
+    </div>
   {:else}
-    <div class="row fav-head">
-      <button class="pill" on:click={playLocal}><Icon name="play" size={18} /> Tout lire</button>
-      <span class="muted">{local.length} fichiers</span>
+    <div class="bar">
+      <button class="btn btn-primary" on:click={playLocal}><Icon name="play" size={15} /> Tout lire</button>
+      <span class="count-line label-mono">{local.length} fichiers</span>
     </div>
     <TrackBrowser tracks={local} context={{ kind: "local" }} downloadable={false} />
   {/if}
@@ -415,51 +583,86 @@
   .grow {
     height: 1px;
   }
-  .head {
+  .head-actions {
     display: flex;
     align-items: center;
+    gap: 8px;
+  }
+  .head {
+    display: flex;
+    align-items: flex-end;
     justify-content: space-between;
-    gap: 12px;
+    gap: 12px 20px;
     flex-wrap: wrap;
+  }
+  .head .page-title {
+    margin: 0;
+  }
+  .counts {
+    margin-left: auto;
+    padding-bottom: 4px;
+    font-size: 12px;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .add {
+    flex: none;
   }
   @keyframes spin {
     to {
       transform: rotate(360deg);
     }
   }
+  .add .spin {
+    display: grid;
+    animation: spin 1s linear infinite;
+  }
   .quota {
-    margin-top: 12px;
+    margin-top: 14px;
   }
   .quota-bar {
     height: 6px;
     border-radius: 3px;
-    background: var(--bg-hover);
+    background: var(--s2);
     overflow: hidden;
   }
   .quota-bar span {
     display: block;
     height: 100%;
-    background: var(--accent);
+    background: var(--ac);
     transition: width 0.25s ease;
   }
   .quota-bar span.warn {
-    background: var(--accent-2);
+    background: var(--tx);
   }
   .quota-txt {
     display: inline-block;
-    margin-top: 5px;
-    font-size: 0.8rem;
+    margin-top: 6px;
+    font-size: 11px;
   }
-  /* The tabs scroll on their own rather than wrapping onto a second line: on a
+  /* The chips scroll on their own rather than wrapping onto a second line: on a
      phone five pills don't fit, and a wrapped row pushes the content down and
      makes the page jump every time the set changes. `flex: none` on the buttons
      is what stops flex from squeezing them into unreadable slivers instead of
      overflowing, and the negative margin lets them run edge to edge while the
      page keeps its padding. */
+  /* With the File panel open the content column can be ~650 px while the
+     window is still wide: wrapping is the container-aware answer (a window
+     media query would miss it). */
+  :global(.layout.np-open) .tabs,
+  :global(.layout.np-open) .bar {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+  :global(.layout.np-open) .tabs::-webkit-scrollbar {
+    display: none;
+  }
   .tabs {
     display: flex;
     gap: 8px;
-    margin-block: 16px 20px;
+    margin-block: 6px 20px;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -470,140 +673,329 @@
   .tabs::-webkit-scrollbar {
     display: none;
   }
-  .tabs button {
-    flex: none;
+  .tabs .chip {
     scroll-snap-align: start;
-    white-space: nowrap;
-    padding: 8px 16px;
-    border-radius: 999px;
-    background: var(--bg-card);
-    color: var(--text-dim);
-    font-weight: 600;
   }
-  .tabs button.active {
-    background: #fff;
-    color: #111;
+  /* §6 puts the rare list on the right of the row, as a filter rather than a
+     destination: it keeps its `role=tab` and its place in the URL. */
+  .tabs .gone {
+    margin-left: auto;
+    color: var(--dim);
   }
-  .fav-head {
-    margin-bottom: 14px;
-    gap: 12px 16px;
-    flex-wrap: wrap;
+  .tabs .gone.chip-active {
+    color: var(--onac);
   }
-  .fav-head > * {
-    white-space: nowrap;
-  }
-  /* -- unavailable tracks ---------------------------------------------- */
   .badge {
     display: inline-block;
     margin-left: 7px;
     padding: 1px 7px;
     border-radius: 999px;
-    background: var(--accent-2);
-    color: #fff;
-    font-size: 0.72rem;
-    font-weight: 800;
+    background: var(--s2);
+    color: var(--tx);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
     vertical-align: 1px;
   }
-  .gone-hint {
-    margin-bottom: 14px;
+  .chip-active .badge {
+    background: var(--onac);
+    color: var(--ac-text);
   }
-  .ghost-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 9px 15px;
-    border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    color: var(--text-dim);
-    font-weight: 600;
-    font-size: 0.9rem;
-  }
-  .ghost-btn:hover {
-    color: var(--text);
-    border-color: var(--text-dim);
-  }
-  .pl-search {
+  /* One action bar above a table: the primary on the left, the list's own
+     tools on the right, everything on the 40 px rhythm (§6). */
+  .bar,
+  .tools {
     display: flex;
     align-items: center;
-    gap: 8px;
-    background: var(--bg-card);
-    border: 1px solid transparent;
-    border-radius: 999px;
-    padding: 10px 14px;
-    margin-bottom: 16px;
-    max-width: 380px;
-    color: var(--text-dim);
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 0 0 10px;
   }
-  .pl-search:focus-within {
-    border-color: var(--accent);
-    color: var(--text);
+  .bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
-  .pl-search input {
-    border: none;
+  .bar .spacer,
+  .tools .spacer {
+    flex: 1;
+  }
+  .field.search {
+    width: 260px;
+    flex: 0 1 260px;
+    min-width: 160px;
+  }
+  .field.search input {
+    border: 0;
     background: none;
     outline: none;
-    color: var(--text);
+    color: var(--tx);
+    font: inherit;
     width: 100%;
+    min-width: 0;
+    padding: 0;
   }
-  .hint {
-    margin-top: 24px;
+  .field:focus-within {
+    border-color: var(--ac-text);
+    color: var(--tx);
   }
-  .head h1 {
-    margin: 0;
+  /* A native select on Linux paints its own grey widget: the theme owns the
+     shape and the glyph instead (appearance:none + the chevron beside it). */
+  .selwrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
   }
-  .add {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    color: var(--text);
-    background: var(--bg-card);
-    flex: none;
+  .selwrap :global(svg) {
+    position: absolute;
+    right: 12px;
+    color: var(--dim);
+    pointer-events: none;
   }
-  .add:hover {
-    background: var(--bg-hover);
+  .sortsel {
+    height: 40px;
+    padding: 0 36px 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
   }
-  .add .spin {
-    display: grid;
-    animation: spin 1s linear infinite;
+  .sortsel:focus-visible,
+  .btn:focus-visible,
+  .chip:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
   }
-  .tools {
-    gap: 10px 14px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
+  .btn-icon.rev {
+    color: var(--ac-text);
+    border-color: var(--ac-text);
   }
-  .tools .pl-search {
-    margin-bottom: 0;
-    flex: 1 1 220px;
+  .count-line {
+    display: inline-block;
+    margin: 0 0 10px;
+    font-size: 11px;
+  }
+  .tools .search {
+    flex: 1 1 240px;
+    width: auto;
   }
   .sort {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.88rem;
   }
-  .sort select {
-    min-height: 40px;
-    padding: 0 12px;
-    border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    background: var(--bg-card);
-    color: var(--text);
-    font: inherit;
+  .sort .label-mono {
+    font-size: 11px;
   }
   .count {
-    font-size: 0.88rem;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--dim);
+    white-space: nowrap;
   }
+  /* §6: seven artist portraits across, the fallback disc capped so the name
+     stays the thing you read (ArtistTile's own tile is full width). */
   .artist-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 8px 12px;
+  }
+  .artist-grid :global(.pic) {
+    max-width: 104px;
+    margin-inline: auto;
+  }
+  .pl-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 16px;
+  }
+  /* An empty tab is a place with an action, not a grey sentence: rings (the
+     record), what happened, what to do now. */
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    text-align: center;
+    padding: 56px 24px;
+    border: 1px dashed var(--ln);
+    border-radius: var(--r-card);
+    margin-top: 4px;
+  }
+  .rings {
+    fill: none;
+    stroke: var(--dim);
+    stroke-width: 2;
+    opacity: 0.8;
+  }
+  .empty-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
+  .empty-text {
+    margin: 0;
+    max-width: 420px;
+    color: var(--dim);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .empty .btn {
+    margin-top: 4px;
+  }
+  .hint {
+    margin-top: 20px;
+  }
+  .gone-hint {
+    margin-bottom: 14px;
+  }
+  @media (max-width: 1200px) {
+    .artist-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+    .pl-grid {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 1000px) {
+    .artist-grid {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+    .pl-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 820px) {
+    .artist-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .pl-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  /* Tablets and narrow desktop windows: the sidebar leaves ~500 px, where the
+     title, the three counts and the + no longer share one line — the counts
+     take their own line instead of pushing the button onto a third. */
+  @media (max-width: 1024px) {
+    .head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 4px 12px;
+    }
+    .head .page-title {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .add {
+      grid-column: 2;
+      grid-row: 1;
+      margin-left: 0;
+    }
+    .counts {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      margin-left: 0;
+      padding: 0;
+      font-size: 11px;
+    }
+    /* The chips wrap here (all of them stay visible, the filter included)
+       instead of scrolling the last two out of reach. */
+    .tabs {
+      flex-wrap: wrap;
+      overflow: visible;
+    }
+    /* The three actions wrap rather than scrolling the last one out of
+       reach; the filter and the sort share the next row. */
+    .bar-actions {
+      width: 100%;
+      gap: 6px;
+      flex-wrap: wrap;
+      overflow: visible;
+      padding-bottom: 2px;
+    }
+    .field.search,
+    .tools .search {
+      flex: 1 1 200px;
+      width: auto;
+      max-width: none;
+      min-width: 150px;
+    }
+    .selwrap {
+      flex: 0 0 auto;
+    }
   }
   @media (max-width: 640px) {
+    .head {
+      align-items: flex-start;
+    }
+    /* The counters are a sentence, not a label: on a phone a big library
+       wraps them under the title instead of clipping them to "4000 titres · 3…"
+       (the ellipsis was the old one-line rule). */
+    .counts {
+      white-space: normal;
+      overflow: visible;
+      line-height: 1.4;
+    }
+    .tabs {
+      margin-block: 4px 16px;
+      row-gap: 6px;
+    }
+    .bar .spacer,
+    .tools .spacer {
+      display: none;
+    }
+    /* A phone cannot stack five rows of controls above the list: the three
+       actions wrap (never a clipped "Exporter"), the filter takes the next
+       row, and the sort shares the last with its two icons. */
+    .bar,
+    .tools {
+      gap: 8px;
+    }
+    .bar-actions {
+      width: 100%;
+      gap: 6px;
+      flex-wrap: wrap;
+      overflow: visible;
+      padding-bottom: 2px;
+    }
+    .field.search,
+    .tools .search {
+      flex: 1 1 100%;
+      width: auto;
+      max-width: none;
+    }
+    .selwrap {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .selwrap .sortsel {
+      width: 100%;
+      min-width: 0;
+    }
     .artist-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 2px;
+      gap: 4px;
+    }
+    .artist-grid :global(.pic) {
+      max-width: 88px;
+    }
+    .pl-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .empty {
+      padding: 40px 18px;
+    }
+    .empty-title {
+      font-size: 20px;
     }
   }
 </style>

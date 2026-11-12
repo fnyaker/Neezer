@@ -35,6 +35,7 @@
   import Cover from "../components/Cover.svelte";
   import AudioEffects from "../components/AudioEffects.svelte";
   import VisualizerSettings from "../components/VisualizerSettings.svelte";
+  import AppearanceSettings from "../components/AppearanceSettings.svelte";
   import AccessSettings from "../components/AccessSettings.svelte";
   import SourceOrder from "../components/SourceOrder.svelte";
   import MyAccounts from "../components/MyAccounts.svelte";
@@ -76,7 +77,11 @@
   // shown there at all — it is not the one playing.
   const ADMIN = () => !REMOTE && CAN_ADMIN && $user?.admin;
   $: SECTIONS = [
-    ...(CAN_KEEP ? [{ id: "playback", label: "Lecture", icon: "speaker", hint: "Sortie audio, volume, égaliseur, transitions" }] : []),
+    ...(CAN_KEEP ? [{ id: "playback", label: "Lecture & son", icon: "speaker", hint: "Sortie audio, volume, égaliseur, transitions" }] : []),
+    // The theme is THIS device's preference (`ui.theme`, lib/theme.js), so it
+    // is not offered while driving somebody else's player — like the storage
+    // and the accounts below, it would speak about the wrong machine.
+    ...(REMOTE ? [] : [{ id: "appearance", label: "Apparence", icon: "moon", hint: "Thème Encre, Papier ou Pochette" }]),
     { id: "viz", label: "Animations", icon: "sparkles", hint: "Ce qui s'anime pendant la lecture" },
     ...(REMOTE ? [] : [{ id: "downloads", label: "Téléchargements", icon: "download", hint: "Qualité, hors-ligne, préchargement" }]),
     { id: "discovery", label: "Découverte", icon: "compass", hint: "Flow, titres que vous n'aimez pas, nouveautés" },
@@ -85,8 +90,42 @@
     ...($user?.admin && ADMIN() ? [{ id: "server", label: "Serveur", icon: "archive", hint: "Archive, nettoyage, stockage, quotas" }] : []),
     { id: "help", label: "Assistance", icon: "info", hint: "Recharger l'application, journal de diagnostic" },
   ];
+  // The menu, grouped (DESIGN §6): Écoute, Bibliothèque, Comptes & serveur. A
+  // group and its items come from SECTIONS, so the conditions above (REMOTE,
+  // admin, CAN_KEEP) still decide what exists — a group with nothing left in
+  // it is not drawn.
+  const GROUPS = [
+    { id: "listen", label: "Écoute" },
+    { id: "library", label: "Bibliothèque" },
+    { id: "accounts", label: "Comptes & serveur" },
+  ];
+  const IN_GROUP = {
+    listen: ["playback", "appearance", "viz"],
+    library: ["downloads", "discovery"],
+    accounts: ["sources", "account", "server", "help"],
+  };
+
+  // -- the menu's own filter -------------------------------------------------
+  // "Chercher un réglage…" narrows the MENU, not the page: no route, no
+  // request, no state beyond this field. Matching is accent- and case-blind
+  // ("decouverte" finds "Découverte"), which is what a thumb on a phone types.
+  const fold = (s) =>
+    (s || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim();
+  let query = "";
+  $: needle = fold(query);
+  $: found = needle ? SECTIONS.filter((c) => fold(c.label).includes(needle)) : SECTIONS;
+  // Built from SECTIONS (not IN_GROUP) so an item always shows in the group
+  // it belongs to, in the order declared above.
+  $: groups = GROUPS.map((g) => ({
+    ...g,
+    items: found.filter((c) => IN_GROUP[g.id].includes(c.id)),
+  })).filter((g) => g.items.length);
   // Old links and older builds name the tabs this page used to have.
-  const OLD = { fx: "playback", quality: "downloads" };
+  const OLD = { fx: "playback", quality: "downloads", theme: "appearance", apparence: "appearance" };
   // Back from Spotify's consent page (?svc=…): the services live in "Compte".
   $: wanted = /[?&]svc=/.test(window.location.hash) && !REMOTE ? "account" : OLD[params?.section] || params?.section || null;
   $: section = SECTIONS.find((x) => x.id === wanted) ? wanted : null;
@@ -596,19 +635,43 @@
 {:else}
 <div class="settings" class:wide>
 {#if wide || !tab}
-<nav class="cats" aria-label="Catégories des réglages">
-  <h1>Réglages</h1>
-  {#each SECTIONS as c (c.id)}
-    <button class="cat" class:sel={tab === c.id} aria-current={tab === c.id ? "page" : undefined} on:click={() => open(c.id)}>
-      <span class="cat-ico"><Icon name={c.icon} size={19} /></span>
-      <span class="cat-txt">
-        <span class="cat-title">{c.label}</span>
-        {#if !wide}<span class="cat-hint muted">{c.hint}</span>{/if}
-      </span>
-      {#if !wide}<Icon name="chevronRight" size={18} />{/if}
-    </button>
-  {/each}
-</nav>
+<div class="side">
+  <h1 class="side-title">Réglages</h1>
+  <div class="field setsearch">
+    <Icon name="search" size={16} />
+    <input
+      type="search"
+      placeholder="Chercher un réglage…"
+      aria-label="Chercher un réglage"
+      autocomplete="off"
+      spellcheck="false"
+      bind:value={query}
+    />
+    {#if query}
+      <button class="setsearch-clear" on:click={() => (query = "")} aria-label="Effacer la recherche">
+        <Icon name="close" size={14} />
+      </button>
+    {/if}
+  </div>
+  <nav class="cats" aria-label="Catégories des réglages">
+    {#each groups as g (g.id)}
+      <div class="cat-group label-mono">{g.label}</div>
+      {#each g.items as c (c.id)}
+        <button class="cat" class:sel={tab === c.id} aria-current={tab === c.id ? "page" : undefined} on:click={() => open(c.id)}>
+          <span class="cat-ico"><Icon name={c.icon} size={19} /></span>
+          <span class="cat-txt">
+            <span class="cat-title">{c.label}</span>
+            {#if !wide}<span class="cat-hint muted">{c.hint}</span>{/if}
+          </span>
+          {#if !wide}<Icon name="chevronRight" size={18} />{/if}
+        </button>
+      {/each}
+    {/each}
+    {#if !groups.length}
+      <p class="no-hit muted">Aucun réglage ne porte ce nom.</p>
+    {/if}
+  </nav>
+</div>
 {/if}
 {#if tab}
 <div class="pane">
@@ -620,10 +683,14 @@
     <h1>{current?.label || ""}</h1>
   </div>
 {:else}
-  <h1 class="pane-title">{current?.label || SECTIONS.find((x) => x.id === tab)?.label || ""}</h1>
+  <h2 class="pane-title">{current?.label || SECTIONS.find((x) => x.id === tab)?.label || ""}</h2>
 {/if}
 {#if tab === "playback"}
   <AudioEffects />
+{/if}
+
+{#if tab === "appearance"}
+  <AppearanceSettings />
 {/if}
 
 {#if tab === "viz"}
@@ -1336,14 +1403,15 @@
     width: 100%;
     text-align: left;
     padding: 15px 18px;
-    margin-bottom: 18px;
-    border-radius: var(--radius);
-    background: var(--bg-card);
-    color: var(--text-dim);
+    margin-bottom: 16px;
+    border-radius: var(--r-card);
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--dim);
   }
   .subnav:hover {
-    background: var(--bg-hover);
-    color: var(--text);
+    background: var(--s2);
+    color: var(--tx);
   }
   .sub-txt {
     display: flex;
@@ -1355,38 +1423,124 @@
   .sub-title {
     font-weight: 700;
     font-size: 1.05rem;
-    color: var(--text);
+    color: var(--tx);
   }
   .sub-hint {
     font-size: 0.83rem;
   }
-  /* -- categories ------------------------------------------------------ */
+  /* -- the menu --------------------------------------------------------- */
   /* A phone: the list IS the screen, one row per category with what it holds
      said under its name (rows of at least 56 px, Material's list item). A
-     desktop: a column of names beside the open category. */
-  .cats h1 {
-    margin-bottom: 18px;
+     desktop: a 200 px column of names, sticky, beside the open category —
+     DESIGN §6, the prototype's grid is 200px | contenu (760 max). */
+  .side {
+    min-width: 0;
+  }
+  .wide .side {
+    position: sticky;
+    /* 16 px from the scrollport's top edge: close enough to the page's own
+       margin that the title does not look like it is sliding away. */
+    top: 16px;
+    /* A sticky column taller than the window would hide its last rows for
+       good (the footer's 88 px are not part of <main>'s scrollport, so take
+       them off the height): nine rows and three group labels reach ~560 px. */
+    max-height: calc(100vh - var(--player-h) - 32px);
+    overflow-y: auto;
+    /* the scrollbar sits beside the content, not over it */
+    padding-right: 2px;
+  }
+  /* On a short window the menu would only be reachable through its own
+     scrollbar (a wheel trapped in the column): let it scroll with the page. */
+  @media (max-height: 660px) {
+    .wide .side {
+      position: static;
+      max-height: none;
+      overflow: visible;
+    }
+  }
+  .side-title {
+    font-size: 36px;
+    letter-spacing: -0.03em;
+    margin: 0 0 12px;
+  }
+  .setsearch {
+    width: 100%;
+    height: 40px;
+    margin-bottom: 14px;
+    color: var(--dim);
+  }
+  .setsearch:focus-within {
+    border-color: var(--btn);
+  }
+  .setsearch input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--tx);
+    font-size: 14px;
+  }
+  .setsearch input:focus-visible {
+    /* the pill is the focus ring (border above): a second outline inside it
+       drew a doubled box around the caret. */
+    outline: none;
+  }
+  .setsearch input::placeholder {
+    color: var(--dim);
+    opacity: 1;
+  }
+  /* Chrome draws its own × in a search field, in a colour no theme owns. */
+  .setsearch input::-webkit-search-cancel-button {
+    display: none;
+  }
+  .setsearch-clear {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--s2);
+    color: var(--dim);
+  }
+  .setsearch-clear:hover {
+    color: var(--tx);
   }
   .cats {
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
+  .cat-group {
+    padding: 16px 12px 4px;
+  }
+  .cat-group:first-child {
+    padding-top: 2px;
+  }
+  .no-hit {
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
   .cat {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
     width: 100%;
-    min-height: 64px;
+    min-height: 56px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: 10px;
     text-align: left;
-    color: var(--text-dim);
+    color: var(--tx);
   }
   .cat:hover {
-    background: var(--bg-hover);
-    color: var(--text);
+    background: var(--s2);
   }
+  /* --btn, not --ac: on Papier the accent is lemon, and a lemon glyph on a
+     lemon-tinted chip was a 1.2:1 outline. --btn is the accent's ink in every
+     theme (Encre lemon, Papier ink, Pochette the sleeve's colour). */
   .cat-ico {
     flex: none;
     display: grid;
@@ -1394,8 +1548,8 @@
     width: 38px;
     height: 38px;
     border-radius: 11px;
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
-    color: var(--accent);
+    background: color-mix(in srgb, var(--btn) 16%, transparent);
+    color: var(--btn);
   }
   .cat-txt {
     display: flex;
@@ -1407,44 +1561,80 @@
   .cat-title {
     font-weight: 700;
     font-size: 1rem;
-    color: var(--text);
+    color: var(--tx);
   }
   .cat-hint {
     font-size: 0.82rem;
     line-height: 1.3;
   }
+  /* The desktop menu is the prototype's: names only, 38 px rows, the open one
+     on the accent pill. At 200 px an icon chip plus a label left ~110 px for
+     the words ("Téléchargements" wrapped). */
   .wide {
     display: grid;
-    grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
     gap: 32px;
     align-items: start;
   }
-  .wide .cats {
-    position: sticky;
-    top: 16px;
-  }
   .wide .cat {
-    min-height: 44px;
-    padding: 6px 10px;
-    gap: 12px;
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 14px;
+    font-weight: 500;
   }
   .wide .cat-ico {
-    width: 32px;
-    height: 32px;
-    border-radius: 9px;
+    display: none;
   }
   .wide .cat.sel {
-    background: var(--bg-card);
+    background: var(--ac);
+    color: var(--onac);
   }
   .wide .cat.sel .cat-title {
-    color: var(--accent);
+    color: var(--onac);
+    font-weight: 700;
   }
   .pane {
     min-width: 0;
-    max-width: 860px;
+    max-width: 760px;
   }
   .pane-title {
-    margin-bottom: 18px;
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin: 0 0 16px;
+  }
+  /* Below the desktop grid the title is the phone's 32 px on both screens —
+     the list and the category it opens (the global h1 is 44 between 641 and
+     899, which made the two screens disagree). */
+  @media (max-width: 899px) {
+    .side-title,
+    .head h1 {
+      font-size: 32px;
+    }
+    /* A category's own header on a phone: the back circle and the title share
+       one baseline. The 18 px margin under .back (it aligns the button with a
+       title set at 44) pulled the circle 9 px above the 32 px title. */
+    .sub-head {
+      gap: 8px;
+    }
+    .sub-head .back {
+      margin-bottom: 0;
+    }
+    .sub-head h1 {
+      margin: 0;
+    }
+  }
+  /* A finger needs 44 px on the search field too (DESIGN §10). */
+  @media (pointer: coarse) {
+    .setsearch {
+      height: 44px;
+    }
+    .back {
+      width: 44px;
+      height: 44px;
+    }
   }
   .acct {
     display: flex;
@@ -1475,20 +1665,27 @@
     font-size: 0.9rem;
   }
   .logout:hover {
-    border-color: var(--accent-2);
-    color: var(--accent-2);
+    border-color: var(--btn);
+    color: var(--btn);
   }
   .card {
-    background: var(--bg-card);
-    border-radius: var(--radius);
-    padding: 20px;
-    margin-bottom: 18px;
+    background: var(--s1);
+    border: 1px solid var(--ln);
+    border-radius: var(--r-card);
+    padding: 22px;
+    margin-bottom: 16px;
   }
+  /* A card's title is interface text (16 px / 600), not the display face:
+     inside a 22 px card a 24 px masthead shouted over the setting it named. */
   .card h2 {
-    /* The page's h2 margin (1.7em above) doubled the card's own padding over
-       the title: 46 px above it against 20 at the sides. */
-    margin-top: 0;
-    font-size: 1.05rem;
+    /* The page's h2 margin (1.5em above) doubled the card's own padding over
+       the title: 36 px above it against 22 at the sides. */
+    margin: 0 0 8px;
+    font-family: var(--font-body);
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 1.3;
   }
   .quota-row {
     display: flex;
@@ -1509,8 +1706,8 @@
   .save {
     padding: 9px 16px;
     border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
     font-weight: 600;
     font-size: 0.9rem;
   }
@@ -1606,10 +1803,10 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    color: var(--accent-2, #e8a33d);
+    color: var(--btn);
   }
   .card.danger {
-    border: 1px solid color-mix(in srgb, var(--accent-2, #e8a33d) 30%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-2) 30%, transparent);
   }
   .clean-foot {
     display: flex;
@@ -1716,7 +1913,7 @@
     font-size: 1.4rem;
     font-weight: 800;
     line-height: 1;
-    color: var(--accent);
+    color: var(--btn);
     font-variant-numeric: tabular-nums;
   }
   .ahead .tg-hint {
@@ -1745,7 +1942,7 @@
     border-color: var(--text-dim);
   }
   .step.sel {
-    border-color: var(--accent);
+    border-color: var(--btn);
     background: color-mix(in srgb, var(--accent) 18%, var(--bg));
     color: var(--text);
   }
@@ -1836,14 +2033,14 @@
   }
   .arl-input:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--btn);
   }
   .ghost.danger {
     margin-top: 12px;
   }
   .ghost.danger:hover:not(:disabled) {
-    color: var(--accent-2);
-    border-color: var(--accent-2);
+    color: var(--btn);
+    border-color: var(--btn);
   }
   .dbg-toggle {
     display: inline-flex;
@@ -1907,7 +2104,7 @@
     text-align: left;
   }
   .q.sel {
-    border-color: var(--accent);
+    border-color: var(--btn);
   }
   .qn {
     font-weight: 700;
@@ -1919,7 +2116,7 @@
     position: absolute;
     top: 10px;
     right: 10px;
-    color: var(--accent);
+    color: var(--btn);
   }
   .gauge {
     margin-bottom: 14px;
@@ -1979,9 +2176,9 @@
     font-size: 0.85rem;
   }
   .lim.sel {
-    background: #fff;
-    color: #111;
-    border-color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
+    border-color: transparent;
   }
   .toggle {
     display: flex;
@@ -2022,8 +2219,13 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #fff;
+    background: var(--tx);
     transition: transform 0.15s ease;
+  }
+  /* On the accent, the knob is the accent's own ink (DESIGN §1: --onac is the
+     colour that reads on --ac in every theme). */
+  .sw.on .knob {
+    background: var(--onac);
   }
   .sw.on .knob {
     transform: translateX(18px);
@@ -2049,7 +2251,7 @@
     font-size: 0.85rem;
   }
   .wipe:hover {
-    color: var(--accent-2);
+    color: var(--btn);
   }
   .hint {
     margin-top: 8px;
@@ -2107,7 +2309,7 @@
     justify-content: center;
   }
   .rm:hover {
-    color: var(--accent-2);
+    color: var(--btn);
   }
   .rel-grid {
     display: grid;

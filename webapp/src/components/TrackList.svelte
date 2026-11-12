@@ -12,6 +12,11 @@
   // Titles that stand on their own (the home, search results, suggestions):
   // a tap plays THAT title and then its radio, not the rows under it.
   export let radio = false;
+  // Optional column headings (`# · Titre · Album · Qualité · [actions] · Durée`),
+  // rendered once ABOVE the window — never per row — so they cost nothing to
+  // scroll and cannot drift out of alignment with the virtual list. Additive:
+  // only the library's table asks for them.
+  export let headers = false;
 
   // Windowed rendering (virtual list): only the rows actually on screen (plus a
   // small buffer) are mounted, no matter how long the playlist is. The list
@@ -19,7 +24,7 @@
   // positioned, so scrolling a 5000-track favorites list keeps ~20 rows in the
   // DOM instead of thousands — the difference between smooth and janky.
   const BUFFER = 8; // extra rows above/below the viewport (smooth fast scroll)
-  const FALLBACK_H = 52; // row height until measured
+  const FALLBACK_H = 56; // row height until measured (44 px cover + padding)
 
   let listEl;
   let scroller = null; // nearest scrolling ancestor (the app's <main>)
@@ -142,36 +147,122 @@
     if (scroller) measure();
   }
 
+  // A row without a number but with a cover drops its first column (the play
+  // glyph sits on the cover): the headings must drop it too, or every label
+  // shifts one column left of its value.
+  $: over = !numbered && showCover;
+
   function playFrom(i) {
     if (radio) return playThenRadio(tracks[i]);
     player.playQueue(tracks, i, context);
   }
 </script>
 
-<div class="list" bind:this={listEl} style="height:{total * rowH}px">
-  <div class="win" style="transform:translateY({topPad}px)">
-    <!-- Keyed by POSITION, not by track: a search, a sort or a new window
-         hands the same ~30 row components new tracks instead of destroying
-         and rebuilding them — measured, that churn (DOM built and torn down,
-         a store subscription set per row, a cover per row) was most of what a
-         keystroke cost on a 4000-track list. Rows and covers are written for
-         it: Cover.svelte resets on a new source, TrackRow drops a gesture in
-         progress when its track changes. -->
-    {#each visible as track, i (start + i)}
-      <div class="vrow">
-        <TrackRow
-          {track}
-          index={numbered ? start + i + 1 : null}
-          {showAlbum}
-          {showCover}
-          onplay={() => playFrom(start + i)}
-        />
-      </div>
-    {/each}
+<div class="tl">
+  {#if headers}
+    <div class="heads" class:noalbum={!showAlbum} class:over aria-hidden="true">
+      {#if !over}<span class="h-num">#</span>{/if}
+      <span class="h-title">Titre</span>
+      {#if showAlbum}<span class="h-alb">Album</span>{/if}
+      <span class="h-q">Qualité</span>
+      <span class="h-acts"></span>
+      <span class="h-dur">Durée</span>
+    </div>
+  {/if}
+  <div class="list" bind:this={listEl} style="height:{total * rowH}px">
+    <div class="win" style="transform:translateY({topPad}px)">
+      <!-- Keyed by POSITION, not by track: a search, a sort or a new window
+           hands the same ~30 row components new tracks instead of destroying
+           and rebuilding them — measured, that churn (DOM built and torn down,
+           a store subscription set per row, a cover per row) was most of what a
+           keystroke cost on a 4000-track list. Rows and covers are written for
+           it: Cover.svelte resets on a new source, TrackRow drops a gesture in
+           progress when its track changes. -->
+      {#each visible as track, i (start + i)}
+        <div class="vrow">
+          <TrackRow
+            {track}
+            index={numbered ? start + i + 1 : null}
+            {showAlbum}
+            {showCover}
+            onplay={() => playFrom(start + i)}
+          />
+        </div>
+      {/each}
+    </div>
   </div>
 </div>
 
 <style>
+  /* The headings lay themselves out on the LIST's width, not the screen's —
+     the player's side panel is phone-narrow on a desktop. */
+  .tl {
+    container: tracklist / inline-size;
+  }
+  .heads {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) minmax(0, 0.8fr) 64px 76px 56px;
+    align-items: center;
+    gap: 12px;
+    padding: 0 8px 8px;
+    border-bottom: 1px solid var(--ln);
+    margin-bottom: 4px;
+  }
+  .heads.noalbum {
+    grid-template-columns: 36px minmax(0, 1fr) 64px 76px 56px;
+  }
+  .heads.over {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) 64px 76px 56px;
+  }
+  .heads.over.noalbum {
+    grid-template-columns: minmax(0, 1fr) 64px 76px 56px;
+  }
+  .heads span {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .h-dur {
+    text-align: right;
+  }
+  @media (max-width: 640px) {
+    .heads,
+    .heads.noalbum {
+      grid-template-columns: 36px minmax(0, 1fr) 68px;
+      gap: 8px;
+    }
+    .heads.over,
+    .heads.over.noalbum {
+      grid-template-columns: minmax(0, 1fr) 68px;
+    }
+    .h-alb,
+    .h-q,
+    .h-dur {
+      display: none;
+    }
+  }
+  @container tracklist (max-width: 520px) {
+    .heads,
+    .heads.noalbum {
+      grid-template-columns: 36px minmax(0, 1fr) 68px;
+      gap: 8px;
+    }
+    .heads.over,
+    .heads.over.noalbum {
+      grid-template-columns: minmax(0, 1fr) 68px;
+    }
+    .h-alb,
+    .h-q,
+    .h-dur {
+      display: none;
+    }
+  }
   .list {
     position: relative;
     width: 100%;

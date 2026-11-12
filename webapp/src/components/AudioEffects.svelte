@@ -712,9 +712,9 @@
     font-size: 0.85rem;
   }
   .seg-btn.sel {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    border-color: var(--ac);
+    color: var(--onac);
   }
   .slider-row {
     display: flex;
@@ -1043,6 +1043,11 @@
     input.vert::-moz-range-thumb {
       width: 26px;
       height: 26px;
+    }
+  }
+  @media (pointer: coarse) {
+    .seg-btn {
+      min-height: 44px;
     }
   }
 </style>

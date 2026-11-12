@@ -69,28 +69,33 @@
 </div>
 
 <style>
+  /* Sillon's card grammar: a raised surface with a hairline, a 24 px corner,
+     the name in the display face, one accent control. */
   .top {
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: 12px;
     padding: 20px;
-    border-radius: var(--radius);
-    background: var(--bg-card);
+    border-radius: 24px;
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease;
     min-width: 0;
   }
   .top:hover {
-    background: var(--bg-hover);
+    background: var(--s2);
+    border-color: var(--s2);
   }
   .art {
-    width: 104px;
-    height: 104px;
-    border-radius: 10px;
+    width: 128px;
+    border-radius: var(--r-cover);
     overflow: hidden;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   }
   .art.round {
     border-radius: 50%;
@@ -99,30 +104,29 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: 8px;
     min-width: 0;
     max-width: 100%;
     padding-right: 64px;
   }
   .name {
     max-width: 100%;
-    margin-top: 6px;
-    font-size: 1.85rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    line-height: 1.15;
+    font-family: var(--font-display);
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .label {
-    padding: 3px 10px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    color: var(--text);
-    font-size: 0.76rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
   }
   .play {
     position: absolute;
@@ -133,13 +137,27 @@
     border-radius: 50%;
     display: grid;
     place-items: center;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    color: #fff;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+    background: var(--btn);
+    color: var(--onbtn);
     transition: transform 0.15s ease;
   }
   .play:hover {
     transform: scale(1.05);
+  }
+  .play.spin :global(.icon) {
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .play,
+    .play.spin :global(.icon) {
+      animation: none;
+      transition: none;
+    }
   }
   /* A phone: the card is the row it sits in, not a poster. */
   @media (max-width: 640px) {
@@ -148,20 +166,19 @@
       align-items: center;
       gap: 14px;
       padding: 12px;
+      border-radius: var(--r-card);
     }
     .art {
       width: 64px;
-      height: 64px;
       flex: none;
     }
     .text {
       flex: 1 1 0;
-      gap: 6px;
+      gap: 4px;
       padding-right: 0;
     }
     .name {
-      margin: 0;
-      font-size: 1.25rem;
+      font-size: 20px;
     }
     .play {
       position: static;

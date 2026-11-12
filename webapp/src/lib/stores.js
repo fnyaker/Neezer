@@ -478,10 +478,18 @@ export const notices = createNotices();
 export const lastPlaylist = persisted("playlist.lastUsed", null);
 
 // Playlist picker sheet: pick (or search, or create) a playlist for a track.
-// { track } | null — mounted once in App.svelte, opened from anywhere.
+// { track } | { mode: "new" } | { mode: "queue" } | null — mounted once in
+// App.svelte, opened from anywhere. The three entry points share one sheet:
+// a track's "+", the sidebar's new-playlist button, and "save the queue".
 export const playlistPicker = writable(null);
 export function openPlaylistPicker(track) {
   playlistPicker.set({ track });
+}
+export function openNewPlaylist() {
+  playlistPicker.set({ mode: "new" });
+}
+export function openQueueSave() {
+  playlistPicker.set({ mode: "queue" });
 }
 export function closePlaylistPicker() {
   playlistPicker.set(null);

@@ -3,11 +3,20 @@
 import "./lib/linkrescue.js";
 import "./app.css";
 import "./lib/studio.css";
+// After the design sheet, on purpose: the phone frame's structure tokens and
+// safe areas (mini player + tab bar heights) must win over the desktop ones.
+import "./mobile.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
 import { dropFreshMarker } from "./lib/hardreload.js";
+import { initTheme } from "./lib/theme.js";
 
 dropFreshMarker();
+// The theme (Encre / Papier / Pochette) before the first screen is built:
+// index.html has already put the attribute on <html> to avoid a flash, this
+// re-reads it, keeps <meta name="theme-color"> honest and starts the sleeve
+// colour watch Pochette needs.
+initTheme();
 
 // Note: the Android app (android/) needs no webapp-side bridge — it injects a
 // navigator.mediaSession shim into its WebView and feeds off the mediaSession

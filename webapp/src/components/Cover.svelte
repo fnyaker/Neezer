@@ -8,6 +8,7 @@
   import { forgetCachedCover } from "../lib/playcache.js";
   import { forgetDownloadedCover } from "../lib/offline.js";
   import { requestCover } from "../lib/coverqueue.js";
+  import { grooveBackground } from "../lib/sillon.js";
   export let src = null;
   export let alt = "";
   export let round = false;
@@ -294,13 +295,17 @@
     track: "music",
   };
   $: phIcon = PLACEHOLDER[kind] || "music";
+  // …and behind that glyph, a record groove rather than an empty square
+  // (DESIGN §4): a pair from Sillon's eight, chosen by what the art WOULD have
+  // been, so the same album is the same disc on every screen and every launch.
+  $: phGroove = grooveBackground(`${src || ""}|${alt || ""}|${fallbackId || ""}|${kind}`);
 </script>
 
 <div
   bind:this={tile}
   class="cover"
   class:round
-  style={size ? `width:${size}px;height:${size}px` : ""}
+  style={`${size ? `width:${size}px;height:${size}px` : ""};--groove:${phGroove}`}
 >
   {#if shown && !failed && admitted}
     {#if low && !loaded}
@@ -343,9 +348,13 @@
     <!-- Named only when there's something to say; an unnamed role="img" is
          worse for a screen reader than a decorative, hidden tile. -->
     {#if alt}
-      <div class="ph" role="img" aria-label={alt}><Icon name={phIcon} size={24} /></div>
+      <div class="ph" role="img" aria-label={alt} style={`--groove:${phGroove}`}>
+        <Icon name={phIcon} size={24} />
+      </div>
     {:else}
-      <div class="ph" aria-hidden="true"><Icon name={phIcon} size={24} /></div>
+      <div class="ph" aria-hidden="true" style={`--groove:${phGroove}`}>
+        <Icon name={phIcon} size={24} />
+      </div>
     {/if}
   {/if}
 </div>
@@ -355,9 +364,13 @@
     position: relative;
     aspect-ratio: 1 / 1;
     width: 100%;
-    border-radius: var(--radius);
+    border-radius: var(--r-cover);
     overflow: hidden;
-    background: var(--bg-hover);
+    background-color: var(--s2);
+    /* The groove paints from the first frame: a queued or loading cover is a
+       record sleeve waiting for its art, never an empty tile. The image and
+       the low-res blur sit on top of it. */
+    background-image: var(--groove);
   }
   .cover.round {
     border-radius: 50%;
@@ -384,18 +397,21 @@
     filter: blur(8px);
     transform: scale(1.08);
   }
-  /* Default art. Deliberately not a flat grey square: a soft tinted tile with a
-     glyph that SCALES with the tile, so it reads as considered at 40px in a
-     track row and at 400px in the full-screen player alike. */
+  /* Default art. Deliberately not a flat grey square: the sleeve we don't have
+     is a record groove (DESIGN §4), deterministic from the art that would have
+     been there, with a soft scrim behind the glyph so it reads on the lighter
+     rings too. The glyph SCALES with the tile, so it reads as considered at
+     40px in a track row and at 400px in the full-screen player alike. */
   .ph {
     width: 100%;
     height: 100%;
     display: grid;
     place-items: center;
-    background:
-      radial-gradient(115% 115% at 28% 0%, rgba(162, 56, 255, 0.22), transparent 62%),
-      linear-gradient(155deg, var(--bg-hover), var(--bg-card));
-    color: var(--text-dim);
+    background-color: var(--s2);
+    background-image:
+      radial-gradient(closest-side, rgba(12, 12, 11, 0.46), rgba(12, 12, 11, 0) 78%),
+      var(--groove);
+    color: #f1efe8;
   }
   .ph :global(svg) {
     width: 36%;
@@ -405,6 +421,6 @@
     max-width: 64px;
     max-height: 64px;
     stroke-width: 1.5;
-    opacity: 0.6;
+    opacity: 0.8;
   }
 </style>

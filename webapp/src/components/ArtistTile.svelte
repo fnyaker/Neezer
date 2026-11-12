@@ -6,7 +6,7 @@
   import { openMenu } from "../lib/stores.js";
   import { buildEntityMenu } from "../lib/actions.js";
   import { entityRef } from "../lib/entity.js";
-  import Cover from "./Cover.svelte";
+  import Avatar from "./Avatar.svelte";
 
   export let artist;
   // An optional second line ("12 titres"); the name alone says enough on the home.
@@ -22,9 +22,9 @@
 </script>
 
 <button class="tile" on:click={open} on:contextmenu={menu} title={artist.name}>
-  <span class="pic"><Cover src={artist.picture} alt={artist.name} kind="artist" round /></span>
+  <span class="pic"><Avatar src={artist.picture} name={artist.name} size="100%" /></span>
   <span class="name">{artist.name}</span>
-  {#if detail}<span class="detail muted">{detail}</span>{/if}
+  {#if detail}<span class="detail">{detail}</span>{/if}
 </button>
 
 <style>
@@ -32,19 +32,19 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
     padding: 10px 6px 12px;
-    border-radius: var(--radius);
+    border-radius: var(--r-card);
     text-align: center;
-    color: var(--text);
-    transition: background 0.12s ease;
+    color: var(--tx);
+    transition: background-color 0.14s ease;
     content-visibility: auto;
     contain-intrinsic-size: auto 170px;
   }
   .tile:hover,
   .tile:focus-visible {
-    background: var(--bg-hover);
+    background: var(--s2);
   }
   .pic {
     display: block;
@@ -53,17 +53,25 @@
     border-radius: 50%;
     overflow: hidden;
   }
+  .pic :global(.av) {
+    width: 100%;
+    height: 100%;
+  }
   .name {
     max-width: 100%;
+    font-family: var(--font-display);
     font-weight: 600;
-    font-size: 0.92rem;
+    font-size: 13.5px;
+    letter-spacing: -0.005em;
     line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .detail {
-    margin-top: -4px;
-    font-size: 0.8rem;
+    margin-top: -6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--dim);
   }
 </style>

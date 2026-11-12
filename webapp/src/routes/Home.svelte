@@ -1,41 +1,32 @@
 <script>
-  // The home, rebuilt from the design in /mnt/project-files/ui/refonte-navigation.md.
+  // The home, rebuilt from the design in /mnt/project-files/ui/refonte-navigation.md
+  // and the Sillon prototype (DESIGN §6).
   //
-  // Every row answers "what can I play right now?" in ONE tap: new titles and
-  // suggestions are rows of titles (a tap plays that title, then its radio),
-  // the artists are portraits that open their page, and only collections
-  // (recently played, mixes) are tiles to open. Each section paints from the
-  // last copy this device saw, then quietly corrects itself; none waits on a
+  // It opens on ONE decision — today's energy — and then feeds it: the styles
+  // the Flow rests on, the newest titles of the artists this person follows,
+  // those artists, and titles picked for them. Every section paints from the
+  // last copy this device saw and corrects itself quietly; none waits on a
   // provider (every route here reads the server's database).
   import { onMount } from "svelte";
   import { get } from "svelte/store";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
   import { entityRef, trackEntityRef } from "../lib/entity.js";
-  import { player, recent, toasts } from "../lib/stores.js";
+  import { player, recent, openMenu } from "../lib/stores.js";
+  import { buildEntityMenu } from "../lib/actions.js";
   import Card from "../components/Card.svelte";
   import Cover from "../components/Cover.svelte";
+  import Avatar from "../components/Avatar.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
   import TrackList from "../components/TrackList.svelte";
-  import ArtistTile from "../components/ArtistTile.svelte";
-  import DiscoverySlider from "../components/DiscoverySlider.svelte";
-  import EnergyPicker from "../components/EnergyPicker.svelte";
+  import HomeHero from "../components/HomeHero.svelte";
   import StylePicker from "../components/StylePicker.svelte";
-  import { startFlow } from "../lib/flow.js";
-  import { discoveryLevel, loadDiscovery, onDiscoverySettled, stepOf } from "../lib/discovery.js";
+  import { discoveryLevel, loadDiscovery, onDiscoverySettled } from "../lib/discovery.js";
 
   const NEW_ROWS = 6;
   const RECO_ROWS = 6;
-  const ARTISTS_SHOWN = 16;
-
-  $: greeting = (() => {
-    const h = new Date().getHours();
-    if (h < 6) return "Bonne nuit";
-    if (h < 12) return "Bonjour";
-    if (h < 18) return "Bon après-midi";
-    return "Bonsoir";
-  })();
+  const ARTISTS_SHOWN = 12;
 
   // -- new releases: their TITLES --------------------------------------------
   let newTracks = [];
@@ -46,10 +37,10 @@
     unseen = d.unseen || 0;
     releasesLoaded = true;
   }
-  // On the home, one title per release (its first: the single itself, an
-  // album's opener), newest release first: six releases at a glance rather
-  // than six titles of the same album. The page behind "Tout afficher" lists
-  // every title.
+  // On the home, one card per release (its first title: the single itself, an
+  // album's opener), newest release first: six sleeves at a glance rather than
+  // six titles of the same album. The page behind "Tout afficher" lists every
+  // title.
   $: newShown = (() => {
     const seen = new Set();
     const out = [];
@@ -62,8 +53,16 @@
     }
     return out;
   })();
+  const releaseTitle = (t) => t.release?.title || t.album?.title || t.title || "";
+  const releaseCover = (t) => t.release?.cover || t.album?.cover || null;
   function playAllNew() {
     if (newTracks.length) player.playQueue(newTracks, 0, { kind: "releases" });
+  }
+  // A card is a RELEASE: tapping it plays that release from its first title,
+  // in the whole new-titles list (the same queue "Tout lire" uses).
+  function playRelease(t) {
+    const i = newTracks.indexOf(t);
+    if (i >= 0) player.playQueue(newTracks, i, { kind: "releases" });
   }
 
   // -- favourite artists ------------------------------------------------------
@@ -72,6 +71,7 @@
 
   // -- for you ----------------------------------------------------------------
   let reco = null;
+  let recoLoaded = false;
   let recoLoading = false;
   async function loadReco(level, seed = "") {
     recoLoading = true;
@@ -81,6 +81,7 @@
       /* the rows simply stay as they were */
     } finally {
       recoLoading = false;
+      recoLoaded = true;
     }
   }
   function refreshReco() {
@@ -106,43 +107,53 @@
   let mixes = [];
   let homeLoaded = false;
 
-  // The discovery level is set once in a while, not on every visit: the
-  // control is one chip that opens it (progressive disclosure, NN/g), not a
-  // panel taking the top of the home.
-  let tuneOpen = false;
-  $: step = stepOf($discoveryLevel);
-
-  let flowLoading = false;
-  async function playFlow() {
-    flowLoading = true;
-    try {
-      await startFlow();
-    } catch {
-      toasts.push("Le Flow ne répond pas, réessayez", "error");
-    } finally {
-      flowLoading = false;
-    }
+  // -- what could not be loaded ----------------------------------------------
+  let failures = 0;
+  function loadAll() {
+    releasesLoaded = artistsLoaded = homeLoaded = recoLoaded = false;
+    failures = 0;
+    api.swr("/releases", takeReleases).catch(() => {
+      failures += 1;
+      releasesLoaded = true;
+    });
+    api
+      .swr("/me/artists", (d) => {
+        artists = d.artists || [];
+        artistsLoaded = true;
+      })
+      .catch(() => {
+        failures += 1;
+        artistsLoaded = true;
+      });
+    api
+      .swr("/home", (d) => {
+        mixes = d.mixes || [];
+        homeLoaded = true;
+      })
+      .catch(() => {
+        failures += 1;
+        homeLoaded = true;
+      });
+    loadDiscovery()
+      .then((lv) => {
+        const path = "/recommend?d=" + encodeURIComponent(Number(lv).toFixed(2));
+        return api.swr(path, (d) => {
+          reco = d;
+          recoLoaded = true;
+        });
+      })
+      .catch(() => {
+        failures += 1;
+        recoLoaded = true;
+      });
   }
 
   onMount(() => {
-    // All four at once, each painting from its cached copy first.
-    api
-      .swr("/releases", takeReleases)
-      .catch(() => (releasesLoaded = true));
-    api
-      .swr("/me/artists", (d) => ((artists = d.artists || []), (artistsLoaded = true)))
-      .catch(() => (artistsLoaded = true));
-    api
-      .swr("/home", (d) => ((mixes = d.mixes || []), (homeLoaded = true)))
-      .catch(() => (homeLoaded = true));
-    loadDiscovery().then((lv) => {
-      const path = "/recommend?d=" + encodeURIComponent(Number(lv).toFixed(2));
-      api.swr(path, (d) => (reco = d)).catch(() => {});
-    });
+    loadAll();
     return onDiscoverySettled((lv) => loadReco(lv));
   });
 
-  $: everythingLoaded = releasesLoaded && artistsLoaded && homeLoaded;
+  $: everythingLoaded = releasesLoaded && artistsLoaded && homeLoaded && recoLoaded;
   $: empty =
     everythingLoaded &&
     !newShown.length &&
@@ -150,240 +161,272 @@
     !reco?.tracks?.length &&
     !recentAlbums.length &&
     !mixes.length;
+  $: allFailed = empty && failures >= 4;
+
+  function artistMenu(e, artist) {
+    openMenu(e, buildEntityMenu("artist", artist, push));
+  }
 </script>
 
-<header class="hero fade-in">
-  <h1>{greeting}</h1>
-  <div class="flow">
-    <button class="pill" on:click={playFlow} disabled={flowLoading}>
-      <Icon name="play" size={18} /> Lancer mon Flow
-    </button>
-    <button
-      class="tune"
-      class:open={tuneOpen}
-      aria-expanded={tuneOpen}
-      on:click={() => (tuneOpen = !tuneOpen)}
-      title="Régler la découverte du Flow et des suggestions"
-    >
-      <Icon name="sliders" size={15} /> {step.name}
-    </button>
-  </div>
-</header>
-<div class="energy-row fade-in">
-  <span class="energy-label">Énergie</span>
-  <EnergyPicker />
-</div>
-<StylePicker />
-{#if tuneOpen}
-  <div class="flow-tune">
-    <DiscoverySlider />
-  </div>
-{/if}
+<div class="home">
+  <HomeHero />
+  <StylePicker />
 
-{#if newShown.length}
-  <section>
-    <div class="row-head">
-      <h2>
-        Nouveautés
-        {#if unseen}<span class="badge" aria-label="{unseen} nouvelles sorties">{unseen}</span>{/if}
-      </h2>
-      <div class="actions">
-        <button class="ghost-btn" on:click={playAllNew} aria-label="Lire toutes les nouveautés">
-          <Icon name="play" size={15} /> <span class="lbl">Tout lire</span>
-        </button>
-        <a class="more" href="#/releases">Tout afficher</a>
+  {#if newShown.length}
+    <section class="releases">
+      <div class="section-head">
+        <h2 class="section-title">
+          Nouveautés
+          <span class="mono count">{newTracks.length} titre{newTracks.length > 1 ? "s" : ""}</span>
+          {#if unseen}
+            <span class="mono fresh" aria-label="{unseen} nouvelles sorties">{unseen}</span>
+          {/if}
+        </h2>
+        <div class="actions">
+          <button class="btn btn-ghost btn-sm" on:click={playAllNew} aria-label="Tout lire">
+            <Icon name="play" size={14} /> <span class="lbl">Tout lire</span>
+          </button>
+          <a class="see-all" href="#/releases">Tout afficher</a>
+        </div>
       </div>
-    </div>
-    <TrackList tracks={newShown} radio context={{ kind: "releases" }} />
-  </section>
-{:else if !releasesLoaded}
-  <Skeleton kind="list" />
-{/if}
+      <div class="rel-grid">
+        {#each newShown as t, i (t.deezer_id || i)}
+          <button class="rel" on:click={() => playRelease(t)} title={releaseTitle(t)}>
+            <span class="rel-art">
+              <Cover src={releaseCover(t)} alt={releaseTitle(t)} kind="album" />
+            </span>
+            <span class="rel-title">{releaseTitle(t)}</span>
+            <span class="rel-sub">{t.artist?.name}</span>
+          </button>
+        {/each}
+      </div>
+    </section>
+  {:else if !releasesLoaded}
+    <Skeleton kind="shelf" count={NEW_ROWS} />
+  {/if}
 
-{#if artists.length}
-  <section>
-    <div class="row-head">
-      <h2>Tes artistes</h2>
-      <a class="more" href="#/library/artists">Tout afficher</a>
-    </div>
-    <div class="shelf artists">
-      {#each artists.slice(0, ARTISTS_SHOWN) as a (a.id)}<ArtistTile artist={a} />{/each}
-    </div>
-  </section>
-{/if}
+  {#if artists.length}
+    <section>
+      <div class="section-head">
+        <h2 class="section-title">Tes artistes</h2>
+        <a class="see-all" href="#/library/artists">Tout afficher</a>
+      </div>
+      <div class="artists bleed-x">
+        {#each artists.slice(0, ARTISTS_SHOWN) as a (a.id || a.name)}
+          <a
+            class="artist"
+            href={"#/artist/" + entityRef(a)}
+            title={a.name}
+            on:contextmenu={(e) => artistMenu(e, a)}
+          >
+            <Avatar name={a.name} src={a.picture} size={104} />
+            <span class="artist-name">{a.name}</span>
+          </a>
+        {/each}
+      </div>
+    </section>
+  {/if}
 
-{#if reco?.tracks?.length}
-  <section>
-    <div class="row-head">
-      <h2>Pour toi</h2>
-      <button class="ghost-btn" on:click={refreshReco} disabled={recoLoading} aria-label="Autres suggestions">
-        <Icon name="refresh" size={15} /> Autres suggestions
-      </button>
-    </div>
-    <div class="reco" class:dim={recoLoading}>
-      <TrackList tracks={reco.tracks.slice(0, RECO_ROWS)} radio context={{ kind: "reco" }} />
-    </div>
-  </section>
-{/if}
-
-{#if recentAlbums.length}
-  <section>
-    <h2>Écoutés récemment</h2>
-    <div class="shortcuts">
-      {#each recentAlbums as a (a.ref)}
-        <button class="shortcut" on:click={() => push("/album/" + a.ref)} title={a.title}>
-          <span class="sc-cover"><Cover src={a.cover} alt={a.title} kind="album" /></span>
-          <span class="sc-txt">
-            <span class="sc-title">{a.title}</span>
-            <span class="sc-sub muted">{a.artist}</span>
-          </span>
+  {#if reco?.tracks?.length}
+    <section>
+      <div class="section-head">
+        <h2 class="section-title">Pour toi</h2>
+        <button
+          class="btn btn-ghost btn-sm"
+          on:click={refreshReco}
+          disabled={recoLoading}
+          aria-label="Autres suggestions"
+        >
+          <Icon name="refresh" size={14} /> Autres suggestions
         </button>
-      {/each}
-    </div>
-  </section>
-{/if}
+      </div>
+      <div class="reco" class:dim={recoLoading}>
+        <TrackList tracks={reco.tracks.slice(0, RECO_ROWS)} radio context={{ kind: "reco" }} />
+      </div>
+    </section>
+  {:else if !recoLoaded}
+    <Skeleton kind="list" count={RECO_ROWS} />
+  {/if}
 
-{#if mixes.length}
-  <section>
-    <h2>Tes mixes</h2>
-    <div class="shelf">
-      {#each mixes as m (m.id)}<Card item={{ ...m, deezer_id: m.id }} kind="mix" />{/each}
-    </div>
-  </section>
-{:else if !homeLoaded}
-  <Skeleton kind="shelf" />
-{/if}
+  {#if recentAlbums.length}
+    <section>
+      <div class="section-head">
+        <h2 class="section-title">Écoutés récemment</h2>
+      </div>
+      <div class="shortcuts">
+        {#each recentAlbums as a (a.ref)}
+          <button class="shortcut" on:click={() => push("/album/" + a.ref)} title={a.title}>
+            <span class="sc-cover"><Cover src={a.cover} alt={a.title} kind="album" /></span>
+            <span class="sc-txt">
+              <span class="sc-title">{a.title}</span>
+              <span class="sc-sub">{a.artist}</span>
+            </span>
+          </button>
+        {/each}
+      </div>
+    </section>
+  {/if}
 
-{#if empty}
-  <p class="muted guest-hint">
-    Ta bibliothèque est vide pour l'instant : cherche un titre ou un artiste et lance la lecture.
-    Ajoute des artistes à tes favoris pour voir ici leurs nouveautés.
-  </p>
-{/if}
+  {#if mixes.length}
+    <section>
+      <div class="section-head">
+        <h2 class="section-title">Tes mixes</h2>
+      </div>
+      <div class="shelf">
+        {#each mixes as m (m.id)}<Card item={{ ...m, deezer_id: m.id }} kind="mix" />{/each}
+      </div>
+    </section>
+  {:else if !homeLoaded}
+    <Skeleton kind="shelf" />
+  {/if}
+
+  {#if empty}
+    <section class="empty card">
+      <span class="empty-icon"><Icon name={allFailed ? "server" : "compass"} size={26} /></span>
+      {#if allFailed}
+        <h2>L'accueil n'a pas pu se charger</h2>
+        <p class="muted">
+          Le serveur n'a pas répondu. Ta musique reste sur l'appareil : la bibliothèque et tes
+          téléchargements s'ouvrent normalement.
+        </p>
+        <button class="btn btn-primary" on:click={loadAll}><Icon name="refresh" size={15} /> Réessayer</button>
+      {:else}
+        <h2>Ta bibliothèque est vide pour l'instant</h2>
+        <p class="muted">
+          Cherche un titre ou un artiste et lance la lecture. Ajoute des artistes à tes favoris
+          pour voir ici leurs nouveautés.
+        </p>
+        <a class="btn btn-primary" href="#/search"><Icon name="search" size={15} /> Explorer</a>
+      {/if}
+    </section>
+  {/if}
+</div>
 
 <style>
-  .hero {
+  .home {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .hero h1 {
-    margin: 0;
-  }
-  .pill {
-    gap: 8px;
-  }
-  .flow {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .tune {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-height: 44px;
-    padding: 0 16px;
-    border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    color: var(--text-dim);
-    font-weight: 600;
-    font-size: 0.88rem;
-  }
-  .tune:hover,
-  .tune.open {
-    color: var(--text);
-    border-color: var(--text-dim);
-  }
-  .energy-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 14px;
-    min-width: 0;
-  }
-  .energy-label {
-    flex: none;
-    font-size: 0.78rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    font-weight: 600;
-  }
-  .energy-row :global(.energy) {
-    min-width: 0;
-  }
-  .flow-tune {
-    margin: 14px 0 4px;
-    display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
+    gap: 34px;
   }
   section {
-    margin-top: 28px;
+    min-width: 0;
   }
-  section h2 {
-    margin: 0 0 10px;
+  .section-title {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
   }
-  .row-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 6px;
+  .count {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--dim);
   }
-  .row-head h2 {
+  .fresh {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    margin: 0;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--ac);
+    color: var(--onac);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0;
   }
   .actions {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 10px;
     flex: none;
   }
-  .badge {
-    min-width: 22px;
-    height: 22px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 0.75rem;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  /* New releases: sleeves, not rows — six at a glance. Container queries, not
+     media ones: the now-playing panel and the sidebar narrow the CONTENT, and
+     six columns of 110 px in that width was a squashed row. */
+  .releases {
+    container-type: inline-size;
   }
-  .more {
-    color: var(--text-dim);
-    font-size: 0.86rem;
-    font-weight: 700;
-    padding: 10px 6px;
+  .rel-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .rel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    padding: 0;
+    color: var(--tx);
+    text-align: left;
+  }
+  .rel-art {
+    display: block;
+    width: 100%;
+    transition: transform 0.14s ease;
+  }
+  .rel:hover .rel-art {
+    transform: translateY(-2px);
+  }
+  .rel-title,
+  .rel-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .more:hover {
-    color: var(--text);
-  }
-  .ghost-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 40px;
-    padding: 8px 14px;
-    border-radius: 999px;
-    background: var(--bg-hover);
-    color: var(--text);
-    font-size: 0.85rem;
+  .rel-title {
+    font-family: var(--font-display);
     font-weight: 600;
-    white-space: nowrap;
+    font-size: 14px;
+    letter-spacing: -0.005em;
   }
-  .ghost-btn:disabled {
-    opacity: 0.6;
+  .rel-sub {
+    margin-top: -8px;
+    color: var(--dim);
+    font-size: 13px;
+  }
+  /* Artists: the portrait is the subject, the name the caption (Avatar 104). */
+  .artists {
+    display: flex;
+    gap: 22px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-block: 2px 6px;
+  }
+  .artists::-webkit-scrollbar {
+    display: none;
+  }
+  .artist {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+    width: 116px;
+    padding: 6px 6px 10px;
+    border-radius: var(--r-card);
+    color: var(--tx);
+    text-align: center;
+    transition: background-color 0.14s ease;
+  }
+  .artist:hover,
+  .artist:focus-visible {
+    background: var(--s2);
+  }
+  .artist-name {
+    max-width: 104px;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 13.5px;
+    letter-spacing: -0.005em;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .reco {
     transition: opacity 0.2s ease;
@@ -391,15 +434,10 @@
   .reco.dim {
     opacity: 0.55;
   }
-  .shelf.artists {
-    grid-auto-columns: 132px;
-    gap: 6px;
-  }
-  /* Recently played: compact shortcuts, two columns on a phone, four on a
-     desktop — a cover and a name, the whole tile the target. */
+  /* Recently played: compact shortcuts, the whole tile the target. */
   .shortcuts {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 8px;
   }
   .shortcut {
@@ -407,22 +445,23 @@
     align-items: center;
     gap: 12px;
     min-width: 0;
-    padding: 0 12px 0 0;
-    border-radius: 8px;
-    background: var(--bg-card);
-    color: var(--text);
+    padding: 6px 12px 6px 6px;
+    border-radius: 12px;
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
     text-align: left;
     overflow: hidden;
-    transition: background 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
   }
   .shortcut:hover,
   .shortcut:focus-visible {
-    background: var(--bg-hover);
+    background: var(--s2);
+    border-color: var(--s2);
   }
   .sc-cover {
     flex: none;
-    width: 56px;
-    height: 56px;
+    width: 48px;
   }
   .sc-txt {
     display: flex;
@@ -437,42 +476,133 @@
     white-space: nowrap;
   }
   .sc-title {
-    font-weight: 700;
-    font-size: 0.9rem;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: -0.005em;
   }
   .sc-sub {
-    font-size: 0.8rem;
+    font-size: 12.5px;
+    color: var(--dim);
   }
-  .guest-hint {
-    margin-top: 28px;
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 28px;
+    max-width: 620px;
+  }
+  .empty h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+  .empty p {
+    margin: 0;
+    max-width: 54ch;
+    line-height: 1.45;
+  }
+  .empty-icon {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    margin-bottom: 2px;
+    border-radius: 50%;
+    background: var(--s2);
+    color: var(--dim);
+  }
+  .empty .btn {
+    margin-top: 6px;
+  }
+  @container (max-width: 900px) {
+    .rel-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  @container (max-width: 640px) {
+    .rel-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    /* Three sleeves across a phone leave ~100 px beside each caption: 13/12
+       keeps the title one line where 14/13 clipped it. */
+    .rel-title {
+      font-size: 13px;
+    }
+    .rel-sub {
+      font-size: 12px;
+    }
+  }
+  @container (max-width: 440px) {
+    .rel-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    /* Two columns leave the sleeve ~150 px and the caption the whole width
+       under it: the 13/12 px sizes that suit a 3-up row read as fine print
+       here. */
+    .rel-title {
+      font-size: 14px;
+    }
+    .rel-sub {
+      font-size: 13px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rel-art {
+      transition: none;
+    }
+    .rel:hover .rel-art {
+      transform: none;
+    }
   }
   @media (max-width: 640px) {
-    .actions .ghost-btn {
-      padding: 8px 12px;
+    .home {
+      gap: 28px;
+    }
+    .count {
+      font-size: 12px;
     }
     .actions .lbl {
       display: none;
     }
-    .energy-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 14px;
-    min-width: 0;
-  }
-  .energy-label {
-    flex: none;
-    font-size: 0.78rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    font-weight: 600;
-  }
-  .energy-row :global(.energy) {
-    min-width: 0;
-  }
-  .flow-tune {
-      justify-content: stretch;
+    /* §10: an action is 44 px under a finger — .btn-sm's 40 is the desktop
+       rhythm, and "Tout lire" / "Autres suggestions" sit alone on the row. */
+    .actions .btn-sm,
+    .section-head .btn-sm {
+      min-height: 44px;
+    }
+    /* Caption sizes follow the column count, not the window (the container
+       queries above); the gap is the only window rule. */
+    .rel-grid {
+      gap: 12px;
+    }
+    /* §6's artists were a rail on a phone, and a rail hides most of them
+       behind a cut edge. A 3-up grid shows nine at a glance, all on the page
+       margin, and no sideways scroller competes with the tab bar's swipe.
+       The avatar is 104 px inline (Avatar's `size`); on a 360 px screen the
+       cells are ~100 px, so the route makes it fluid rather than letting it
+       overhang the last column. */
+    .artists {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px 8px;
+      overflow: visible;
+      padding-block: 0;
+    }
+    .artist {
+      width: 100%;
+      gap: 8px;
+      padding: 4px 2px 8px;
+    }
+    .artist :global(.av) {
+      width: 100% !important;
+      height: auto !important;
+      aspect-ratio: 1;
+      font-size: 26px !important;
+    }
+    .artist-name {
+      max-width: 100%;
+      font-size: 13px;
     }
     .shortcuts {
       grid-template-columns: 1fr 1fr;
@@ -482,11 +612,12 @@
       padding-right: 8px;
     }
     .sc-cover {
-      width: 48px;
-      height: 48px;
+      width: 40px;
     }
-    .shelf.artists {
-      grid-auto-columns: 112px;
+  }
+  @media (max-width: 380px) {
+    .shortcuts {
+      grid-template-columns: 1fr;
     }
   }
 </style>

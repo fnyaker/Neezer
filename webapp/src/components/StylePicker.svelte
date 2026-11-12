@@ -1,3 +1,42 @@
+<script context="module">
+  import { api } from "../lib/api.js";
+
+  // What counts as a "style family": the widest roots, with Electronics split
+  // into its children (it is too wide to be one chip). One rule, read by the
+  // home's chips and by Explorer's tiles, so both screens name the same styles.
+  // The rows come from /flow/styles (GET).
+  export function styleFamilies(rows) {
+    const byParent = {};
+    for (const r of rows || []) (byParent[r.parent || ""] ||= []).push(r);
+    return [
+      ...(byParent[""] || []).filter((r) => r.name !== "Électronique"),
+      ...(byParent["Électronique"] || []),
+    ]
+      .filter((r) => r.branch > 0)
+      .sort((a, b) => b.branch - a.branch)
+      .slice(0, 16);
+  }
+
+  // The list itself, asked ONCE per session and shared: the home's chips and
+  // Explorer's tiles mount on different screens, and a second screen must not
+  // cost a second request on the link this app is built for. A failed load is
+  // forgotten so the next visit tries again. The list moves slowly; a reload
+  // is what refreshes it.
+  let rowsPromise = null;
+  export function loadStyleRows() {
+    if (!rowsPromise) {
+      rowsPromise = api.swr("/flow/styles", () => {}).then(
+        (d) => d.styles || [],
+        () => {
+          rowsPromise = null;
+          return [];
+        }
+      );
+    }
+    return rowsPromise;
+  }
+</script>
+
 <script>
   // The style the Flow plays around: one family, several, or none ("Tout" = the
   // whole taste). Picking a family means ALL of it; its sub-genres open under the
@@ -5,7 +44,6 @@
   // the style, and the discovery slider decides how far from it the rest strays
   // (neezer/discover.py#style_taste). Kept on the device, like the energy notch.
   import { onMount } from "svelte";
-  import { api } from "../lib/api.js";
   import { startStyles, setStartStyles, STYLES_MAX } from "../lib/flow.js";
   import Icon from "./Icon.svelte";
 
@@ -14,11 +52,8 @@
   let failed = false;
 
   $: byParent = rows.reduce((m, r) => ((m[r.parent || ""] ||= []).push(r), m), {});
-  // Families: the roots, and the children of the electronic root (too wide to be one).
-  $: families = [...(byParent[""] || []).filter((r) => r.name !== "Électronique"), ...(byParent["Électronique"] || [])]
-    .filter((r) => r.branch > 0)
-    .sort((a, b) => b.branch - a.branch)
-    .slice(0, 16);
+  $: families = styleFamilies(rows);
+  $: visibleFamilies = families.length ? families : STYLE_FALLBACK.map((name) => ({ name }));
   $: subs = open ? flat(open) : [];
 
   function flat(name, depth = 0) {
@@ -37,42 +72,77 @@
     setStartStyles(cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name].slice(-STYLES_MAX));
   }
 
+  // One tap on a chip IS the choice (that is what a filter chip promises):
+  // selecting a family also opens its sub-genres to refine it. A second tap
+  // removes it, as the old row did for its sub-chips.
+  function pick(name) {
+    if ($startStyles.includes(name)) {
+      toggle(name);
+      if (open === name) open = null;
+    } else {
+      toggle(name);
+      open = name;
+    }
+  }
+
   onMount(async () => {
     try {
-      // The cached copy first, the fresh one right after (the list moves slowly).
-      await api.swr("/flow/styles", (d) => (rows = d.styles || []));
+      rows = await loadStyleRows();
     } catch {
       failed = true;
     }
   });
 </script>
 
-{#if families.length}
-  <div class="style-block fade-in">
-    <div class="style-row">
-      <span class="label">Style</span>
-      <div class="chips" role="group" aria-label="Style du Flow">
-        <button type="button" class:on={!$startStyles.length} on:click={() => setStartStyles([])}>Tout</button>
-        {#each families as f (f.name)}
-          <button
-            type="button"
-            class:on={$startStyles.includes(f.name)}
-            class:open={open === f.name}
-            on:click={() => (open = open === f.name ? null : f.name)}
-            aria-expanded={open === f.name}
-          >
-            {f.name}
-          </button>
-        {/each}
-      </div>
+{#if visibleFamilies.length}
+  <section class="style-block fade-in">
+    <div class="section-head">
+      <h2 class="section-title">Par style</h2>
+      <span class="hint">filtre Nouveautés et Pour toi</span>
+    </div>
+    <div class="chips" role="group" aria-label="Style du Flow">
+      <button
+        type="button"
+        class="chip"
+        class:chip-active={!$startStyles.length}
+        aria-pressed={!$startStyles.length}
+        on:click={() => setStartStyles([])}
+      >
+        {#if !$startStyles.length}<Icon name="check" size={13} />{/if}
+        Tout
+      </button>
+      {#each visibleFamilies as f (f.name)}
+        <button
+          type="button"
+          class="chip"
+          class:chip-active={$startStyles.includes(f.name)}
+          class:open={open === f.name}
+          aria-pressed={$startStyles.includes(f.name)}
+          aria-expanded={open === f.name}
+          on:click={() => pick(f.name)}
+        >
+          {#if $startStyles.includes(f.name)}<Icon name="check" size={13} />{/if}
+          {f.name}
+        </button>
+      {/each}
     </div>
     {#if open}
       <div class="subs">
-        <button type="button" class="sub all" class:on={$startStyles.includes(open)} on:click={() => toggle(open)}>
+        <button
+          type="button"
+          class="chip sub all"
+          class:chip-active={$startStyles.includes(open)}
+          on:click={() => toggle(open)}
+        >
           <Icon name={$startStyles.includes(open) ? "check" : "play"} size={13} /> Tout {open}
         </button>
         {#each subs as g (g.name)}
-          <button type="button" class="sub" class:on={$startStyles.includes(g.name)} on:click={() => toggle(g.name)}>
+          <button
+            type="button"
+            class="chip sub"
+            class:chip-active={$startStyles.includes(g.name)}
+            on:click={() => toggle(g.name)}
+          >
             {g.name}<span class="n">{g.tracks || g.branch}</span>
           </button>
         {/each}
@@ -80,32 +150,100 @@
     {/if}
     {#if $startStyles.length}
       <p class="chosen">
-        Flow autour de
-        {#each $startStyles as s}<button type="button" class="tag" on:click={() => toggle(s)}>{s} <Icon name="close" size={11} /></button>{/each}
+        <span class="chosen-label">Flow autour de</span>
+        {#each $startStyles as s}
+          <button type="button" class="tag" on:click={() => pick(s)} title="Retirer {s}">
+            {s} <Icon name="close" size={11} />
+          </button>
+        {/each}
       </p>
     {/if}
-  </div>
+  </section>
 {/if}
 
 <style>
-  .style-block { margin-top: 10px; min-width: 0; }
-  .style-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
-  .label { flex: none; font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
-  .chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px 0; min-width: 0;
-    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
-  .chips::-webkit-scrollbar { display: none; }
-  .chips button, .sub, .tag {
-    flex: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 999px;
-    background: var(--bg-card); color: var(--text); font: inherit; font-size: 0.86rem; font-weight: 600; cursor: pointer;
-    padding: 0 14px; min-height: 36px;
+  .style-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
   }
-  .chips button.on, .sub.on { background: var(--accent); color: #fff; }
-  .chips button.open:not(.on) { border-color: var(--accent); }
-  .subs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding: 12px; background: var(--bg-card); border-radius: 16px; }
-  .sub { background: var(--bg-elev); font-weight: 500; min-height: 34px; }
-  .sub.all { font-weight: 700; }
-  .sub .n { font-size: 0.72rem; opacity: 0.65; font-variant-numeric: tabular-nums; }
-  .chosen { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 0.84rem; color: var(--text-dim); }
-  .tag { background: var(--bg-hover); font-size: 0.8rem; font-weight: 500; min-height: 28px; padding: 0 10px; }
+  .hint {
+    color: var(--dim);
+    font-size: 13px;
+  }
+  /* A phone: one scrolling row, the standard chip rail of the app. A wide
+     window gets the prototype's wrap: the whole vocabulary is worth seeing. */
+  .chips {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 3px;
+    margin: -3px;
+  }
+  .chips::-webkit-scrollbar {
+    display: none;
+  }
+  @media (min-width: 900px) {
+    .chips {
+      flex-wrap: wrap;
+      overflow: visible;
+    }
+  }
+  .chip.open:not(.chip-active) {
+    border-color: var(--ac-text);
+  }
+  .subs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--ln);
+    border-radius: 16px;
+    background: var(--s1);
+  }
+  .sub {
+    height: 36px;
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+  .sub.all {
+    font-weight: 700;
+  }
+  .sub .n {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    opacity: 0.65;
+    font-variant-numeric: tabular-nums;
+  }
+  .chosen {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: 13px;
+    color: var(--dim);
+  }
+  .chosen-label {
+    margin-right: 2px;
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--ln);
+    background: var(--s2);
+    color: var(--tx);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+  .tag:hover {
+    border-color: var(--dim);
+  }
 </style>

@@ -29,9 +29,13 @@
 </div>
 
 <style>
+  /* The header bleeds the page's own margins away, so it takes them from <main>
+     (--page-y / --page-x, app.css) instead of repeating the numbers: they were
+     written twice, and the day the page padding moved the header left a band
+     of background above itself. */
   .gh {
-    margin: -28px -32px 8px;
-    padding: 56px 32px 24px;
+    margin: calc(-1 * var(--page-y, 28px)) calc(-1 * var(--page-x, 32px)) 8px;
+    padding: 56px var(--page-x, 32px) 24px;
     transition: background 0.4s ease;
   }
   .gh-inner {
@@ -41,8 +45,7 @@
   }
   @media (max-width: 640px) {
     .gh {
-      margin: -20px -20px 8px;
-      padding: 40px 20px 18px;
+      padding: 40px var(--page-x, 20px) 18px;
     }
     .gh-inner {
       flex-direction: column;

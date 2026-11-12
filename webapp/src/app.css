@@ -1,17 +1,104 @@
-:root {
-  --bg: #0f0d13;
-  --bg-elev: #1b1822;
-  --bg-card: #1f1b29;
-  --bg-hover: #2a2538;
-  --text: #f3f0f7;
-  --text-dim: #a39db5;
-  --accent: #a238ff;
-  --accent-2: #ff0092;
-  --radius: 10px;
-  --player-h: 88px;
-  --sidebar-w: 240px;
-  --np-w: 360px;
+/* ============================================================================
+   Sillon — the design system's tokens and base sheet.
+   ----------------------------------------------------------------------------
+   Three themes, one accent: `encre` (dark, lemon accent — the default),
+   `papier` (warm light, ink accent) and `pochette` (dark, the accent follows
+   the playing cover's dominant colour). The theme is an attribute on <html>,
+   set before the first paint by the inline script in index.html and driven
+   afterwards by lib/theme.js. Everything below reads the tokens, never a
+   literal colour, so a theme switch repaints without touching a component.
+
+   Old names (--bg-elev, --bg-card, --text, --accent…) are kept as aliases at
+   the bottom of the token block: ~600 call sites in the untouched screens
+   still speak them, and they must follow the theme.
+   ============================================================================ */
+
+:root,
+[data-theme="encre"] {
+  --bg: #0c0c0b;
+  --s1: #151513;
+  --s2: #1e1e1b;
+  --ln: #2a2a26;
+  --tx: #f1efe8;
+  --dim: #a09d92;
+  --ac: #d2ff3c;
+  --onac: #0c0c0b;
+  /* The accent used as TEXT/MARK, distinct from the accent used as a
+     SURFACE: on Papier the lemon is a highlighter, never ink (1.16:1). */
+  --ac-text: #d2ff3c;
+  --ac-mark: #d2ff3c;
+  --btn: #d2ff3c;
+  --onbtn: #0c0c0b;
+  --hrt: #d2ff3c;
+  --cover-ac: #ff6b4a;
   color-scheme: dark;
+}
+
+[data-theme="papier"] {
+  --bg: #f3f0e8;
+  --s1: #fbf9f4;
+  --s2: #e8e4d9;
+  --ln: #d6d1c3;
+  --tx: #14130f;
+  --dim: #5f5b4f;
+  --ac: #d2ff3c;
+  --onac: #14130f;
+  --ac-text: #14130f;
+  --ac-mark: #14130f;
+  --btn: #14130f;
+  --onbtn: #f3f0e8;
+  --hrt: #14130f;
+  --cover-ac: #ff6b4a;
+  color-scheme: light;
+}
+
+/* The accent is the cover's own colour (lib/theme.js paints --cover-ac on
+   <html> as the track changes); #FF6B4A is the designed fallback. */
+[data-theme="pochette"] {
+  --bg: #0f0e10;
+  --s1: #18171a;
+  --s2: #222024;
+  --ln: #2e2c31;
+  --tx: #f4f1f5;
+  --dim: #a8a3ad;
+  --ac: var(--cover-ac, #ff6b4a);
+  --onac: #0c0c0b;
+  --ac-text: var(--tx);
+  --ac-mark: var(--ac);
+  --btn: var(--ac);
+  --onbtn: #0c0c0b;
+  --hrt: var(--ac);
+  color-scheme: dark;
+}
+
+/* Aliases for the screens that have not been through the rebrand yet. Declared
+   once: the theme variables live on <html>, so these resolve against whichever
+   theme is on. */
+:root {
+  --text: var(--tx);
+  --text-dim: var(--dim);
+  /* The legacy alias is the accent used as ink/mark, not the lemon surface:
+     on Papier that is the ink, so old panels stop drawing lemon text on cream
+     (1.16:1) while their solid accent buttons stay readable with white text. */
+  --accent: var(--ac-text);
+  --accent-2: var(--ac-text);
+  --bg-elev: var(--s1);
+  --bg-card: var(--s2);
+  --bg-hover: var(--s2);
+  /* Sillon's own scale, for the zones that are being rebuilt: cards 20–24 px,
+     covers 8–14 px, controls a pill. --radius stays the old 10 px so the
+     untouched panels keep the corner they were laid out with. */
+  --radius: 10px;
+  --r-card: 20px;
+  --r-cover: 12px;
+  --player-h: 88px;
+  --sidebar-w: 232px;
+  --np-w: 340px;
+  --font-display:
+    "Bricolage Grotesque", "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body:
+    "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* Narrow desktop windows: trim the sidebar so the main content keeps room
@@ -20,6 +107,89 @@
   :root {
     --sidebar-w: 200px;
   }
+}
+
+/* fonts ---------------------------------------------------------------------
+   Self-hosted (assets/fonts, OFL — licence texts beside them): the app is an
+   install that must paint its own type offline, and a Google Fonts request on
+   every cold launch is 3 blocking round-trips on the mobile link this is built
+   for. Variable faces, latin + latin-ext only (French accents and œ live in
+   the ext subset), `swap` so the system stack draws the first frame instead of
+   nothing, and the service worker stages all six with the shell.
+
+   Bricolage ships WITHOUT its optical-size axis: at the sizes this app sets
+   (14–44 px) the two builds are the same text width to the tenth of a pixel
+   and indistinguishable on screen, and the axis costs 47 kB — 77 kB against
+   41 kB for the latin subset. Measured before choosing. */
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 600 800;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/bricolage-grotesque-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 600 800;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/bricolage-grotesque-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/instrument-sans-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("./assets/fonts/instrument-sans-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("./assets/fonts/jetbrains-mono-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url("./assets/fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
 }
 
 * {
@@ -34,13 +204,10 @@ body {
      mobile player's swipe-down-to-dismiss and on list overscroll) */
   overscroll-behavior-y: none;
   background: var(--bg);
-  color: var(--text);
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  color: var(--tx);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -58,7 +225,8 @@ button {
   transition:
     transform 0.12s ease,
     color 0.12s ease,
-    background 0.12s ease,
+    background-color 0.12s ease,
+    border-color 0.12s ease,
     opacity 0.12s ease;
 }
 
@@ -70,18 +238,21 @@ img {
   display: block;
 }
 
-input {
+input,
+select,
+textarea {
   font: inherit;
+  color: inherit;
 }
 
 ::selection {
-  background: var(--accent);
-  color: #fff;
+  background: var(--ac);
+  color: var(--onac);
 }
 
 /* Keyboard users get a clear ring; mouse/touch get nothing (no ugly blue box). */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ac-text);
   outline-offset: 2px;
 }
 :focus:not(:focus-visible) {
@@ -91,7 +262,7 @@ input {
 /* scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3a3448 transparent;
+  scrollbar-color: var(--ln) transparent;
   /* kill the blue/grey tap flash on mobile */
   -webkit-tap-highlight-color: transparent;
 }
@@ -100,13 +271,13 @@ input {
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #322c42;
+  background: var(--ln);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #443c5a;
+  background: var(--dim);
   background-clip: content-box;
 }
 
@@ -115,10 +286,13 @@ input {
 main {
   /* The page's side margin, as a variable: what scrolls sideways (a shelf, a
      row of tabs) bleeds to the screen's edges by exactly this much and keeps
-     its first and last item on the page's margin (.bleed-x below). */
+     its first and last item on the page's margin (.bleed-x below). The top
+     margin is its own token because a page header bleeds UP by it
+     (components/GradientHeader.svelte). */
   --page-x: 32px;
+  --page-y: 32px;
   overflow-y: auto;
-  padding: 28px var(--page-x) 48px;
+  padding: var(--page-y) var(--page-x) 48px;
   scroll-behavior: smooth;
 }
 
@@ -126,22 +300,84 @@ main {
   display: grid;
   place-items: center;
   height: 100vh;
-  color: var(--text-dim);
+  color: var(--dim);
   font-size: 2rem;
 }
 
-/* typographic helpers ----------------------------------------------------- */
+/* typography --------------------------------------------------------------
+   Bricolage Grotesque carries the titles and the names; Instrument Sans the
+   interface; JetBrains Mono the metadata (quality, duration, counters) and the
+   small capitalised labels. Titles are set tight (-0.03em) — that is what makes
+   the display face read as a masthead instead of a bold paragraph. */
+
+h1,
+h2,
+.display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.06;
+}
 
 h1 {
-  font-size: 2rem;
-  margin: 0 0 0.2em;
-  letter-spacing: -0.01em;
+  font-size: 44px;
+  margin: 0 0 0.25em;
 }
 
 h2 {
-  font-size: 1.35rem;
-  margin: 1.7em 0 0.7em;
-  letter-spacing: -0.01em;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  margin: 1.5em 0 0.6em;
+}
+
+.page-title {
+  font-family: var(--font-display);
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.06;
+  margin: 0 0 8px;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.label-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 3px 6px;
+  border: 1px solid var(--ln);
+  border-radius: 6px;
+  color: var(--dim);
+}
+
+.muted {
+  color: var(--dim);
 }
 
 .section-head {
@@ -152,16 +388,12 @@ h2 {
 }
 
 .section-head .see-all {
-  color: var(--text-dim);
+  color: var(--dim);
   font-size: 0.8rem;
   font-weight: 600;
 }
 .section-head .see-all:hover {
-  color: var(--text);
-}
-
-.muted {
-  color: var(--text-dim);
+  color: var(--tx);
 }
 
 .row {
@@ -196,14 +428,11 @@ h2 {
 }
 main:has(> .notices) .gh {
   margin-top: 0;
-  padding-top: 28px;
+  padding-top: var(--page-y);
 }
 @media (max-width: 640px) {
   .layout:has(> .back) .notices {
     padding-left: 36px;
-  }
-  main:has(> .notices) .gh {
-    padding-top: 20px;
   }
 }
 
@@ -227,30 +456,169 @@ main:has(> .notices) .gh {
   gap: 16px;
 }
 
+/* controls ----------------------------------------------------------------
+   One pill shape for every control: 40 px high (a thumb's 44 px on a touch
+   screen, see below), 999 px radius, 600 weight. Surfaces rather than
+   gradients — the accent is a colour, not a lighting effect. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  /* A control never gets squeezed by the row it sits in (a 40 px icon button
+     was collapsing to 30 px inside a flex row). */
+  flex: none;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--tx);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn:disabled:active {
+  transform: none;
+}
+
+.btn-primary {
+  background: var(--btn);
+  color: var(--onbtn);
+  border-color: transparent;
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--ln);
+  color: var(--tx);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--s2);
+}
+
+.btn-sm {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.btn-icon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  border-color: var(--ln);
+  background: var(--s1);
+  color: var(--tx);
+}
+.btn-icon:hover:not(:disabled) {
+  background: var(--s2);
+}
+
+/* §10: a control is 44 px under a finger. Kept to coarse pointers so the
+   desktop keeps the designed 40 px rhythm. */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+  }
+  .btn-sm {
+    min-height: 40px;
+  }
+  .btn-icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  flex: none;
+  border-radius: 999px;
+  border: 1px solid var(--ln);
+  background: none;
+  color: var(--tx);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.chip:hover {
+  background: var(--s2);
+}
+
+.chip-active {
+  background: var(--ac);
+  border-color: transparent;
+  color: var(--onac);
+}
+.chip-active:hover {
+  background: var(--ac);
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--ln);
+  background: var(--s1);
+  color: var(--dim);
+  font-size: 14px;
+}
+.field::placeholder {
+  color: var(--dim);
+  opacity: 1;
+}
+
+.card {
+  background: var(--s1);
+  border: 1px solid var(--ln);
+  border-radius: var(--r-card);
+}
+
+/* the primary pill the older screens still use (Lire, Créer…). Solid accent:
+   the purple→pink gradient and its glow are gone. */
 .pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 10px 20px;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  color: #fff;
+  background: var(--btn);
+  color: var(--onbtn);
   font-weight: 700;
   white-space: nowrap;
-  box-shadow: 0 6px 20px rgba(162, 56, 255, 0.3);
 }
 .pill:hover {
-  transform: scale(1.04);
+  transform: scale(1.03);
 }
 .pill.ghost {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--s2);
+  color: var(--tx);
   box-shadow: none;
 }
 
 .explicit {
   font-size: 0.6rem;
-  background: var(--text-dim);
+  background: var(--dim);
   color: var(--bg);
   border-radius: 3px;
   padding: 0 3px;
@@ -275,9 +643,48 @@ main:has(> .notices) .gh {
 @media (max-width: 640px) {
   main {
     --page-x: 20px;
-    padding: 20px var(--page-x) 40px;
+    --page-y: 20px;
+    padding: var(--page-y) var(--page-x) 40px;
   }
-  h1 {
-    font-size: 1.6rem;
+  h1,
+  .page-title {
+    font-size: 32px;
+  }
+  h2,
+  .section-title {
+    font-size: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main {
+    scroll-behavior: auto;
+  }
+  .fade-in {
+    animation: none;
+  }
+  .btn,
+  .chip,
+  .card,
+  .pill {
+    transition: none;
+  }
+  .pill:hover {
+    transform: none;
+  }
+}
+
+/* Touch targets (§10): a finger, not a mouse. Controls that already fit their
+   row grow to 44 px of hit area; the compact list rows keep their measured
+   geometry and get their own coarse rules in the component. */
+@media (pointer: coarse) {
+  .btn,
+  .chip,
+  .field {
+    min-height: 44px;
+  }
+  .btn-icon {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

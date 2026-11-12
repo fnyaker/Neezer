@@ -448,7 +448,8 @@ export async function startTrackRadio(track) {
 // background, and only a failure surfaces afterwards.
 export function addTrackToPlaylist(playlistId, trackId, playlistTitle) {
   lastPlaylist.set({ id: String(playlistId), title: playlistTitle });
-  toasts.push(`Ajouté à « ${playlistTitle} »`);
+  // 2,4 s: the duration the design system gives a confirmation pill.
+  toasts.push(`Ajouté à « ${playlistTitle} »`, "info", 2400);
   bumpPlaylistCount(playlistId, 1);
   return api
     .addToPlaylist(playlistId, [String(trackId)])
@@ -459,9 +460,79 @@ export function addTrackToPlaylist(playlistId, trackId, playlistTitle) {
     })
     .catch(() => {
       bumpPlaylistCount(playlistId, -1); // the optimistic count was wrong
-      toasts.push(`Échec de l'ajout à « ${playlistTitle} »`, "error");
+      // A mutation that failed can be retried from the toast itself: the
+      // person does not have to reopen the sheet and find the playlist again.
+      toasts.push(`Échec de l'ajout à « ${playlistTitle} »`, "error", 6000, {
+        label: "Réessayer",
+        run: () => addTrackToPlaylist(playlistId, trackId, playlistTitle),
+      });
       return false;
     });
+}
+
+// -- playlist creation (one place, so every form says the same thing) --------
+
+// POST the new playlist, then show it EVERYWHERE at once (sidebar, library,
+// the picker that is currently open over a screen that will not remount), and
+// let the debounced refetch confirm the server's copy. Throws on failure: the
+// caller owns the toast, because only it knows what the playlist was for.
+async function postNewPlaylist(title, refs) {
+  const r = await api.createPlaylist(title, refs);
+  const list = refs || [];
+  if (r?.id) {
+    upsertPlaylistLocal({
+      id: String(r.id),
+      title,
+      deezer_id: r.deezer_id,
+      nb_tracks: list.length,
+    });
+    if (list.length) lastPlaylist.set({ id: String(r.id), title });
+  }
+  invalidatePlaylists();
+  return r || null;
+}
+
+const countLabel = (n) => `${n} titre${n > 1 ? "s" : ""}`;
+
+// Create a playlist from the picker (a title, or a title + the track being
+// added). Optimistic on the LIST, not on the tracks: the server is the one
+// that decides the rows, and the answer is what closes the form.
+export async function createPlaylistFrom(title, refs = []) {
+  const name = (title || "").trim();
+  const list = (refs || []).filter(Boolean);
+  if (!name) return null;
+  try {
+    const r = await postNewPlaylist(name, list);
+    if (list.length === 1) toasts.push(`Ajouté à « ${name} »`, "info", 2400);
+    else if (list.length > 1) toasts.push(`${countLabel(list.length)} ajoutés à « ${name} »`, "info", 2400);
+    else toasts.push(`Playlist « ${name} » créée`, "info", 2400);
+    return r;
+  } catch {
+    toasts.push(`Impossible de créer « ${name} »`, "error", 6000, {
+      label: "Réessayer",
+      run: () => createPlaylistFrom(name, list),
+    });
+    return null;
+  }
+}
+
+// "Enregistrer la file en playlist": the queue's titles, IN ORDER, become a
+// new playlist. One request, no new route — api.createPlaylist takes the refs.
+export async function saveQueueAsPlaylist(title, refs = []) {
+  const name = (title || "").trim();
+  const list = (refs || []).filter(Boolean);
+  if (!name) return null;
+  try {
+    const r = await postNewPlaylist(name, list);
+    toasts.push(`File enregistrée dans « ${name} » · ${countLabel(list.length)}`, "info", 2400);
+    return r;
+  } catch {
+    toasts.push(`Impossible d'enregistrer la file dans « ${name} »`, "error", 6000, {
+      label: "Réessayer",
+      run: () => saveQueueAsPlaylist(name, list),
+    });
+    return null;
+  }
 }
 
 // -- offline downloads (device-local; available to every user) --------------
