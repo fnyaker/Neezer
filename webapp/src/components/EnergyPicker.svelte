@@ -2,22 +2,17 @@
   // The Flow's starting energy, in notches (Deezer's Flow moods are chosen the
   // same way, before the Flow starts: arXiv 2207.11229). One tap; the choice
   // is the person's, kept by the server and on the device (lib/flow.js).
-  import { onMount } from "svelte";
+  //
+  // Drawn as Sillon chips ON the accent hero (DESIGN §6): an unselected notch
+  // is an outline in --onac, the chosen one is filled with --onac and set in
+  // --ac. That is the one colour pair the themes guarantee readable — a
+  // --chip-active accent fill would vanish on the accent panel.
   import { ENERGY_STEPS, startEnergy, setStartEnergy } from "../lib/flow.js";
-
-  let row;
-  // On a phone the row scrolls: the chosen notch is brought into view.
-  onMount(() => {
-    const on = row && row.querySelector("button.on");
-    if (on && on.offsetLeft + on.offsetWidth > row.clientWidth) row.scrollLeft = on.offsetLeft - 16;
-  });
-
-  // The level each notch draws as bars (Libre: none).
-  const BARS = [0, 1, 2, 3, 4, 5];
+  import Icon from "./Icon.svelte";
 </script>
 
-<div class="energy" bind:this={row} role="radiogroup" aria-label="Énergie du Flow">
-  {#each ENERGY_STEPS as s, i}
+<div class="energy" role="radiogroup" aria-label="Énergie du Flow">
+  {#each ENERGY_STEPS as s}
     <button
       type="button"
       role="radio"
@@ -26,70 +21,76 @@
       title={s.hint}
       on:click={() => setStartEnergy(s.value)}
     >
-      {#if BARS[i]}
-        <span class="bars" aria-hidden="true">
-          {#each [1, 2, 3, 4, 5] as b}<i class:lit={b <= BARS[i]} style="height: {4 + b * 2}px"></i>{/each}
-        </span>
-      {/if}
+      {#if $startEnergy === s.value}<Icon name="check" size={13} />{/if}
       {s.name}
     </button>
   {/each}
 </div>
 
 <style>
+  /* All six are a decision, so all six are visible: a rail hid the loud half
+     behind a cut edge (a phone showed three and looked complete). Compact on
+     the narrowest screens so the six still take two rows, not three. */
   .energy {
     display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    padding: 2px 0;
-    /* the row runs to the screen's edge on a phone, not into a hard cut */
-    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    padding: 2px;
+    margin: -2px;
   }
-  .energy::-webkit-scrollbar {
-    display: none;
+  @media (max-width: 460px) {
+    /* Six equal cells, two rows: the row-by-row wrap left one chip alone on a
+       third line and pushed the Flow button under the fold. */
+    .energy {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    button {
+      justify-content: center;
+      height: 40px;
+      padding: 0 8px;
+      font-size: 12.5px;
+      gap: 5px;
+    }
   }
   button {
-    flex: none;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    min-height: 40px;
-    padding: 0 15px;
+    gap: 7px;
+    flex: none;
+    height: 38px;
+    padding: 0 16px;
     border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    color: var(--text-dim);
+    border: 1.5px solid var(--onac);
+    background: none;
+    color: var(--onac);
+    font-size: 14px;
     font-weight: 600;
-    font-size: 0.86rem;
     white-space: nowrap;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
-  }
-  button:last-child {
-    margin-right: 24px;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
   }
   button:hover {
-    color: var(--text);
-    border-color: var(--text-dim);
+    background: color-mix(in srgb, var(--onac) 12%, transparent);
   }
   button.on {
-    background: var(--text);
-    border-color: var(--text);
-    color: var(--bg, #0b0a10);
+    background: var(--onac);
+    color: var(--ac);
   }
-  .bars {
-    display: inline-flex;
-    align-items: flex-end;
-    gap: 2px;
-    height: 14px;
+  button.on:hover {
+    background: var(--onac);
   }
-  .bars i {
-    width: 3px;
-    border-radius: 1px;
-    background: currentColor;
-    opacity: 0.25;
+  /* The global ring is --ac, which is the surface this row sits on: on the
+     hero the ring has to be the ink colour or it is invisible. */
+  button:focus-visible {
+    outline-color: var(--onac);
+    outline-offset: 2px;
   }
-  .bars i.lit {
-    opacity: 1;
+  @media (pointer: coarse) {
+    button {
+      height: 44px;
+    }
   }
 </style>
