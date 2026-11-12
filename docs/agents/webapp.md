@@ -126,6 +126,18 @@ tapped here plays and then its radio (`TrackList radio`). With Deezer out (or no
 the library answers alone: titles, and the artists and albums by NAME that hold a title on disk
 (`webui._local_search_entities`, two statements). Each section carries a "Tout afficher" that switches to its tab.
 
+**The YouTube fallback is ON by default and inside the same list** (`lib/searchrank.js#matchScore`,
+`rankSearchResults`). It is asked once the query settles — 800 ms after the last keystroke, at once on Enter, a
+recent term or a deep link, and never when the account lacks `youtube:search` or the source is off: one request
+per search, not one per letter. Its hits are woven into the Titres list (no second section): the catalogue's order
+is kept and library rows stay first; an identical recording (same id, or same title+artist once cosmetic
+decorations such as "Clip officiel" are stripped) is dropped; a video only LEADS when its match is strictly closer
+than the best catalogue answer (`YOUTUBE_MIN` 0.75 > `CATALOGUE_MIN` 0.5 — a different artist, live, remix or cover
+falls under the bar and is not shown), otherwise it follows the catalogue. Every YouTube row says `YT` and its Opus
+rate (`OPUS 133` before archiving, the file's real bitrate after) — in the quality cell, or on the artist line
+(`.qinline`) where a narrow row hides that cell. A failed search says why and offers "Réessayer"; an empty one is a
+single quiet line, never an empty section.
+
 **Réglages is two levels** (`routes/Settings.svelte`): a list of categories (Lecture, Animations, Téléchargements,
 Découverte, Sources, Compte, Serveur for an admin, Assistance), each a page — the iOS/Android settings pattern. ONE route
 `/settings/:section?`, so switching category updates `params` instead of remounting the page and refetching every card. A

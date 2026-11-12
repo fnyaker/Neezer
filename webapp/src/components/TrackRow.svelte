@@ -35,6 +35,12 @@
   // anything else would be the quality the user ASKED for, not the file they
   // hear. An empty tag keeps the cell silent rather than inventing "FLAC".
   $: quality = qualityTag(track);
+  $: qualityHint =
+    track?.source === "youtube" && !track.bitrate
+      ? "Qualité YouTube : Opus ~133 kbit/s, le meilleur que YouTube propose. Le fichier arrive à la première écoute."
+      : `Qualité du fichier : ${quality}`;
+  const YT_TITLE =
+    "Trouvé sur YouTube, absent du catalogue : qualité Opus, plus basse. Archivé sur ce serveur à la première écoute.";
   $: fav = $favorites.has(trackKey(track));
   $: downloaded = $downloads.has(trackKey(track));
   // Flagged by the API when the list was fetched, or discovered mid-session by
@@ -47,8 +53,9 @@
   function qualityTag(t) {
     const q = t?.quality;
     if (q) return String(q).replace(/^OPUS[_-](\d+)$/i, "OPUS $1");
-    // YouTube's file really is Opus at the archived bitrate (lib/youtube.js).
-    if (t?.source === "youtube" && t.bitrate) return `YT ${t.bitrate}k`;
+    // YouTube keeps its own Opus file (itag 251, ~133 kbit/s): the search hit
+    // knows the offer before the first play, the archived row its real rate.
+    if (t?.source === "youtube") return t.bitrate ? `OPUS ${t.bitrate}` : "OPUS 133";
     return "";
   }
 
@@ -249,12 +256,19 @@
               aria-label="Titre indisponible, remplacer"
               on:click|stopPropagation={() => openReplace(track)}><Icon name="alert" size={13} /></button>
           {/if}
-          {#if offMain(track.source)}<span class="local" title={sourceTitle(track.source)}><Icon name={iconOf(track.source)} size={13} /></span>{:else if track.local}<span class="local" title={sourceTitle("local")}><Icon name="cloudOff" size={13} /></span>{/if}
+          {#if track.source === "youtube"}
+            <span class="ytbadge" title={YT_TITLE}>YT</span>
+          {:else if offMain(track.source)}<span class="local" title={sourceTitle(track.source)}><Icon name={iconOf(track.source)} size={13} /></span>{:else if track.local}<span class="local" title={sourceTitle("local")}><Icon name="cloudOff" size={13} /></span>{/if}
           {#if downloaded}<span class="dlbadge" title="Disponible hors-ligne"><Icon name="downloaded" size={13} /></span>{/if}
           {track.title}
           {#if track.explicit}<span class="explicit">E</span>{/if}
         </div>
-        <span class="a muted"><ArtistLine {track} /></span>
+        <span class="a muted">
+          <span class="anames"><ArtistLine {track} /></span>
+          {#if quality && track.source === "youtube"}
+            <span class="qinline" title={qualityHint}>{quality}</span>
+          {/if}
+        </span>
       </div>
     </div>
 
@@ -270,7 +284,7 @@
     {/if}
 
     <span class="qcell">
-      {#if quality}<span class="qbadge" title={`Qualité du fichier : ${quality}`}>{quality}</span>{/if}
+      {#if quality}<span class="qbadge" title={qualityHint}>{quality}</span>{/if}
     </span>
 
     <span class="acts">
@@ -452,6 +466,25 @@
     color: var(--dim);
     margin-right: 3px;
   }
+  /* Where a title comes from, in letters: the icon alone left "why is this
+     quality lower?" unanswered. The tooltip carries the rest. */
+  .ytbadge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: 1px;
+    height: 16px;
+    padding: 0 4px;
+    margin-right: 5px;
+    border: 1px solid var(--ln);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    color: var(--dim);
+  }
   /* A dead track stays readable but visibly demoted, and its badge is the way
      in to replacing it — the icon IS the button, so there's no hunting. */
   .t.gone {
@@ -482,6 +515,31 @@
     text-overflow: ellipsis;
     max-width: 100%;
     font-size: 13px;
+    color: var(--dim);
+  }
+  /* The artist line may carry the YouTube quality at its end on a narrow row,
+     where the quality column is hidden. The names keep their ellipsis. */
+  .a {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .anames {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .qinline {
+    display: none;
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    line-height: 1.4;
+    padding: 0 5px;
+    border: 1px solid var(--ln);
+    border-radius: 5px;
     color: var(--dim);
   }
   /* `.a` holds one hoverable button per credited artist (ArtistLine), so the
@@ -655,6 +713,9 @@
     .more {
       display: none;
     }
+    .qinline {
+      display: inline-flex;
+    }
     .add,
     .fav {
       opacity: 1;
@@ -685,6 +746,9 @@
     .acts {
       flex-direction: row-reverse;
       justify-content: flex-end;
+    }
+    .qinline {
+      display: inline-flex;
     }
     .add,
     .fav {
