@@ -185,6 +185,30 @@ later process's connection by accident. The name is reduced to printable charact
 reaches a page. An older APK reports nothing: verdicts are then per page's own guess of the output
 (the latency its context reports) and live until their retry.
 
+**The car mode's triggers** (`CarTrigger`, `CarMotion`; lot E, native only — no bridge change).
+The overlay's visibility is ONE formula, in `CarTrigger`: `(gpsTrigger && a listed navigation app
+is in front) || (bluetoothTrigger && an A2DP/BLE output is connected)`. No AccessibilityService:
+foreground apps come from `UsageStatsManager.queryEvents(now - 5 s, now)` on a worker every second,
+the LAST `ACTIVITY_RESUMED` winning and staying sticky across polls (a navigation app that has been
+guiding for ten minutes emits no new event, and a 5 s window alone would call it gone), plus a
+one-off 6 h seed at start for the app already in front. `queryEvents` returns null while locked
+(the previous state is kept) and needs usage access (without it the trigger stays off, no crash).
+The screen being off skips the query; Bluetooth sinks are `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` and
+`registerAudioDeviceCallback` (no permission; a headset counts like a car radio, hence the switch).
+Speed: fused location 1 Hz high accuracy plus `lastLocation` only when younger than 30 s; after 3 s
+without a live fused callback the platform GPS takes over for good. `Location.getSpeed() * 3.6`;
+5 km/h and above is moving at once, below it the answer stays "moving" for 5 s (the red light), and
+an UNKNOWN speed — no fix, a fix without speed, 5 s of silence, no location permission — is always
+"moving" (no crash, keyboard stays restricted). Listener on the main thread, `start`/`stop`
+idempotent; `CarMotionTest` (JVM) holds the 5 km/h / 5 s thresholds. Android 10+ requires a
+foreground service reading location while its activity is not
+visible to declare the `location` type (`developer.android.com/develop/sensors-and-location/location/permissions`):
+the car service (lot A) must add `FOREGROUND_SERVICE_LOCATION`, `specialUse|location` and start it
+with both, or the speed stays unknown while Maps is in front. The `location` type is while-in-use:
+on Android 14 the service must be created from a visible app or an exempt start (tile, notification),
+so the permission is granted before the service starts. This lot adds no dependency:
+`play-services-location` is lot A's.
+
 **Linking the Deezer account from the app** (`DeezerLoginActivity`): there is no email/password
 endpoint left that a server could call — Deezer's web one (`ajax/action.php` + reCAPTCHA) answers
 403 since 2024, and the mobile gateway (`mobile_userAuth`, which *does* return an ARL) needs keys
