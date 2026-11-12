@@ -18,7 +18,7 @@
   import { initVizHost } from "./lib/viz/host.js";
   import { location } from "./lib/router.js";
   import Sidebar from "./components/Sidebar.svelte";
-  import BackButton from "./components/BackButton.svelte";
+  import TopBar from "./components/TopBar.svelte";
   import MobileNav from "./components/MobileNav.svelte";
   import Player from "./components/Player.svelte";
   import NowPlaying from "./components/NowPlaying.svelte";
@@ -391,8 +391,11 @@
 {:else}
   <div class="layout" class:np-open={$nowPlayingOpen}>
     <Sidebar />
-    <BackButton />
     <main bind:this={mainEl}>
+      <!-- The shell's top bar scrolls with the page but stays at its top, and
+           the persistent notices then stick just under it (the offset is the
+           --topbar-h token below). -->
+      <TopBar />
       <Notices />
       <Router {routes} />
     </main>
@@ -428,6 +431,23 @@
 {/if}
 
 <style>
+  /* The shell's top bar height, ONE number read by the bar itself, by the
+     notices that stick under it, and by the network pill. On a phone the bar is
+     60 px instead of 68 (§9's tighter frame). */
+  :global(:root) {
+    --topbar-h: 68px;
+  }
+  main :global(.notices) {
+    top: var(--topbar-h);
+  }
+  /* The top bar brings the top margin itself, so the page's own top padding
+     would double it — and a sticky box cannot be pulled up by a negative
+     margin (its padding-edge position wins, see TopBar.svelte). Everything
+     else main sets stays. */
+  main {
+    padding-top: 0;
+  }
+
   .rq-wait {
     min-height: 100dvh;
     display: grid;
@@ -454,6 +474,9 @@
      bottom nav. Above this the desktop shell (sidebar + full player) stays,
      so narrow PC windows look like the full desktop UI rather than a hybrid. */
   @media (max-width: 640px) {
+    :global(:root) {
+      --topbar-h: 60px;
+    }
     .layout,
     .layout.np-open {
       grid-template-columns: 1fr;

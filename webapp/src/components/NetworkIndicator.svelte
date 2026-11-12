@@ -3,9 +3,21 @@
   // few seconds, then it fades away — the app keeps working offline (downloads,
   // cached pages), so a permanent alarming banner is wrong; state is conveyed
   // contextually (toasts, offline queue filtering). Recovery flashes briefly.
+  //
+  // Sillon's pill: --s2 on --tx, one glyph and the sentence. The glyph carries
+  // the meaning as much as the words do — nothing here is said by colour alone.
   import { fly } from "svelte/transition";
   import { online, reconnectedAt } from "../lib/net.js";
   import { REMOTE } from "../lib/remote/mode.js";
+  import Icon from "./Icon.svelte";
+
+  // Read once: §10 asks the pill not to animate itself for someone who asked
+  // for less motion, and a change of system setting lands with the next launch
+  // anyway. (Svelte 5's prefersReducedMotion is a MediaQuery, not a store — the
+  // `$…` auto-subscription threw "e.subscribe is not a function".)
+  const reduced =
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const slide = { y: -16, duration: reduced ? 0 : 200 };
 
   let showOffline = false;
   let offTimer = null;
@@ -30,58 +42,44 @@
 </script>
 
 {#if !$online && showOffline}
-  <div class="net off" role="status" aria-live="polite" transition:fly={{ y: -16, duration: 200 }}>
-    <span class="dot"></span>
+  <div class="net chip" role="status" aria-live="polite" transition:fly={slide}>
+    <Icon name="cloudOff" size={15} />
     <!-- A remote control plays nothing here: what it can promise is to pick
          the player back up by itself. -->
     {REMOTE ? "Hors ligne — reprise automatique" : "Hors ligne — lecture locale disponible"}
   </div>
 {:else if justReconnected}
-  <div class="net back" role="status" transition:fly={{ y: -16, duration: 200 }}>
-    <span class="dot ok"></span>
+  <div class="net chip" role="status" aria-live="polite" transition:fly={slide}>
+    <Icon name="check" size={15} />
     Reconnecté
   </div>
 {/if}
 
 <style>
+  /* Centred by the box, not by a transform: the fly transition animates
+     `transform` itself and would drop a translateX(-50%) for its duration —
+     the pill used to jump to the middle-left while it appeared. */
   .net {
     position: fixed;
-    top: 14px;
-    left: 50%;
-    transform: translateX(-50%);
+    top: calc(var(--topbar-h, 68px) + 12px);
+    left: 0;
+    right: 0;
     z-index: 250;
-    display: flex;
-    align-items: center;
+    width: max-content;
+    margin-inline: auto;
+    height: auto;
+    min-height: 34px;
+    padding: 7px 16px;
     gap: 8px;
-    padding: 7px 14px;
-    border-radius: 999px;
-    font-size: 0.8rem;
+    background: var(--s2);
+    color: var(--tx);
+    border: 1px solid var(--ln);
+    font-size: 13px;
     font-weight: 600;
-    color: var(--text, #fff);
-    background: var(--bg-elev, #221f29);
-    border: 1px solid var(--bg-hover, #322e3c);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-    pointer-events: none;
+    max-width: calc(100vw - 32px);
     white-space: nowrap;
-  }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #e0a83e;
-    animation: pulse 1.1s ease-in-out infinite;
-  }
-  .dot.ok {
-    background: #3fbf6a;
-    animation: none;
-  }
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 0.35;
-    }
-    50% {
-      opacity: 1;
-    }
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
   }
 </style>
