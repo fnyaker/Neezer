@@ -918,8 +918,17 @@
     .head {
       align-items: flex-start;
     }
+    /* The counters are a sentence, not a label: on a phone a big library
+       wraps them under the title instead of clipping them to "4000 titres · 3…"
+       (the ellipsis was the old one-line rule). */
+    .counts {
+      white-space: normal;
+      overflow: visible;
+      line-height: 1.4;
+    }
     .tabs {
       margin-block: 4px 16px;
+      row-gap: 6px;
     }
     .bar .spacer,
     .tools .spacer {

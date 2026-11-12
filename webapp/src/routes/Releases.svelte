@@ -344,18 +344,61 @@
     line-height: 1.5;
   }
   @media (max-width: 640px) {
+    /* "Tout lire" and the "Groupé par sortie" caption share one row at 360:
+       the default gap plus the chip's 16 px inset overflowed the line by a
+       pixel and wrapped the caption for nothing. */
+    .bar {
+      gap: 8px;
+    }
+    .bar .chip.static {
+      padding-inline: 13px;
+    }
+    /* §9: a release card is a short band — a 96 px sleeve with the label,
+       title and artist beside it, then the actions on ONE row across the full
+       card. As a flex row the actions stayed inside the text column, so their
+       scroller started halfway across the card with 180 px of empty card
+       beside it. `display: contents` moves the body's children into the
+       card's grid without touching the desktop markup. */
     .rel {
-      gap: 14px;
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      column-gap: 12px;
+      row-gap: 4px;
       padding: 12px;
+      align-items: start;
     }
     .rel-cover {
-      width: 92px;
+      grid-column: 1;
+      grid-row: 1 / span 3;
+      width: 96px;
+    }
+    .rel-body {
+      display: contents;
+    }
+    .rel-body > * {
+      min-width: 0;
     }
     .rel-title {
       font-size: 22px;
     }
     .rel-actions {
+      grid-column: 1 / -1;
       gap: 6px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      margin-top: 6px;
+      padding-bottom: 2px;
+    }
+    .rel-actions::-webkit-scrollbar {
+      display: none;
+    }
+    .rel-actions .btn {
+      flex: none;
+      min-height: 44px;
+    }
+    .rel-tracks {
+      grid-column: 1 / -1;
     }
   }
 </style>

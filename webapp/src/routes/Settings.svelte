@@ -1613,10 +1613,26 @@
     .head h1 {
       font-size: 32px;
     }
+    /* A category's own header on a phone: the back circle and the title share
+       one baseline. The 18 px margin under .back (it aligns the button with a
+       title set at 44) pulled the circle 9 px above the 32 px title. */
+    .sub-head {
+      gap: 8px;
+    }
+    .sub-head .back {
+      margin-bottom: 0;
+    }
+    .sub-head h1 {
+      margin: 0;
+    }
   }
   /* A finger needs 44 px on the search field too (DESIGN §10). */
   @media (pointer: coarse) {
     .setsearch {
+      height: 44px;
+    }
+    .back {
+      width: 44px;
       height: 44px;
     }
   }

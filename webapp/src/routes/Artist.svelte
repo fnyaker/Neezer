@@ -390,14 +390,26 @@
     .actions::-webkit-scrollbar {
       display: none;
     }
+    /* §9: a short band, like the album's and the playlist's — a 104 px disc
+       and the name beside it, not a portrait stacked above three lines of
+       chrome. The name is 32–40 at a finger, the actions scroll on one row. */
     .banner {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 16px;
-      padding: 24px var(--page-x) 20px;
+      flex-direction: row;
+      align-items: center;
+      gap: 14px;
+      padding: 16px var(--page-x);
     }
     .art {
-      width: 108px;
+      width: 104px;
+    }
+    .meta {
+      gap: 6px;
+    }
+    h1 {
+      font-size: clamp(32px, 8.5vw, 40px);
+    }
+    .kind {
+      line-height: 1.5;
     }
     .latest {
       display: flex;
