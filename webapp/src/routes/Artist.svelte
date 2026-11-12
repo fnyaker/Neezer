@@ -8,7 +8,6 @@
   import Card from "../components/Card.svelte";
   import TrackList from "../components/TrackList.svelte";
   import PersonCredits from "../components/PersonCredits.svelte";
-  import GradientHeader from "../components/GradientHeader.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
@@ -148,6 +147,20 @@
   $: latest = ((disco?.all && disco.all.length ? disco.all : albums) || [])
     .slice(0, 5)
     .map((r) => ({ ...r, subtitle: releaseSubtitle(r) }));
+  // One string, not a sentence split around {#if}s (the compiler trims the
+  // spaces at a block's edges).
+  $: facts = data?.artist
+    ? [
+        "Artiste",
+        allTracks !== null
+          ? `${allTracks.length} titre${allTracks.length > 1 ? "s" : ""}`
+          : data.artist.nb_fan
+            ? `${data.artist.nb_fan.toLocaleString("fr-FR")} fans`
+            : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
 </script>
 
 {#if loading}
@@ -157,38 +170,58 @@
   <LoadFailed error={loadError} notFound="Artiste introuvable." on:retry={() => load(id)} />
 {:else}
   <div class="fade-in">
-    <GradientHeader cover={data.artist.picture}>
+    <!-- §6: a plain `--s2` band under a hairline, not a gradient. The photo is
+         round and 168 px, the name set at 88 in Bricolage 800. -->
+    <header class="banner gh">
       <div class="art"><Cover src={data.artist.picture} alt={data.artist.name} kind="artist" round eager /></div>
       <div class="meta">
-        <span class="kind">Artiste</span>
+        <span class="kind">{facts}</span>
         <h1>{data.artist.name}</h1>
-        {#if data.artist.nb_fan}<span class="muted">{data.artist.nb_fan.toLocaleString("fr-FR")} fans</span>{/if}
+        <div class="actions">
+          <button class="btn btn-primary" on:click={playTop}><Icon name="play" size={15} /> Lire</button>
+          <button class="btn btn-ghost" on:click={startRadio}><Icon name="radio" size={16} /> Radio</button>
+          {#if CAN_KEEP}
+            <button
+              class="btn btn-icon"
+              class:on={fav}
+              on:click={toggleFav}
+              aria-label="Suivre"
+              title={fav ? "Ne plus suivre" : "Suivre"}><Icon name={fav ? "heartFilled" : "heart"} size={20} /></button>
+          {/if}
+          {#if $isAdmin && CAN_KEEP}
+            <!-- Every track of this artist the library holds, reviewed first. -->
+            <button
+              class="btn btn-icon"
+              on:click={() => openGenreBulk({ kind: "artist", artist: id, title: data.artist.name, cover: data.artist.picture })}
+              aria-label="Donner un genre à l'artiste"
+              title="Donner un genre à tous ses titres de la bibliothèque"><Icon name="tag" size={20} /></button>
+          {/if}
+        </div>
       </div>
-    </GradientHeader>
+    </header>
 
-    <div class="row actions">
-      <button class="pill" on:click={playTop}><Icon name="play" size={18} /> Lire</button>
-      <button class="pill ghost" on:click={startRadio}><Icon name="radio" size={18} /> Radio</button>
-      {#if CAN_KEEP}
-        <button class="icon-btn" class:on={fav} on:click={toggleFav} aria-label="Suivre"><Icon name={fav ? "heartFilled" : "heart"} size={22} /></button>
-      {/if}
-      {#if $isAdmin && CAN_KEEP}
-        <!-- Every track of this artist the library holds, reviewed first. -->
-        <button
-          class="icon-btn"
-          on:click={() => openGenreBulk({ kind: "artist", artist: id, title: data.artist.name, cover: data.artist.picture })}
-          aria-label="Donner un genre à l'artiste"
-          title="Donner un genre à tous ses titres de la bibliothèque"><Icon name="tag" size={21} /></button>
-      {/if}
-    </div>
-
-    <div class="tabs">
-      <button class:active={tab === "overview"} on:click={() => (tab = "overview")}>Aperçu</button>
-      <button class:active={tab === "tracks"} on:click={() => (tab = "tracks")}>Titres</button>
+    <div class="tabs" role="tablist" aria-label="Sections de l'artiste">
+      <button
+        class="chip"
+        class:chip-active={tab === "overview"}
+        role="tab"
+        aria-selected={tab === "overview"}
+        on:click={() => (tab = "overview")}>Aperçu</button>
+      <button
+        class="chip"
+        class:chip-active={tab === "tracks"}
+        role="tab"
+        aria-selected={tab === "tracks"}
+        on:click={() => (tab = "tracks")}>Titres</button>
       <!-- What this artist wrote, composed or produced for other titles of the
            library: shown only when there is some. -->
       {#if data.credited}
-        <button class:active={tab === "credits"} on:click={() => (tab = "credits")}>Crédits</button>
+        <button
+          class="chip"
+          class:chip-active={tab === "credits"}
+          role="tab"
+          aria-selected={tab === "credits"}
+          on:click={() => (tab = "credits")}>Crédits</button>
       {/if}
     </div>
 
@@ -200,115 +233,133 @@
       {:else if !allTracks?.length}
         <p class="muted">Aucun titre trouvé pour cet artiste.</p>
       {:else}
-        <div class="row tracks-head">
-          <button class="pill" on:click={playAllTracks}><Icon name="play" size={18} /> Tout lire</button>
-          <span class="muted">{allTracks.length} titres</span>
+        <div class="bar">
+          <button class="btn btn-primary" on:click={playAllTracks}><Icon name="play" size={15} /> Tout lire</button>
+          <span class="count label-mono">{allTracks.length} titres</span>
         </div>
         <TrackList tracks={allTracks} context={{ kind: "artist", id }} numbered />
       {/if}
     {:else}
-    {#if latest.length}
-      <h2>Dernières sorties</h2>
-      <div class="shelf">{#each latest as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
-    {/if}
+      {#if latest.length}
+        <h2 class="section-title">Dernières sorties</h2>
+        <div class="latest">{#each latest as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
+      {/if}
 
-    {#if data.top?.length}
-      <h2>Titres populaires</h2>
-      <TrackList tracks={data.top.slice(0, 10)} numbered showAlbum={false} />
-    {/if}
+      {#if data.top?.length}
+        <h2 class="section-title">Titres populaires</h2>
+        <TrackList tracks={data.top.slice(0, 10)} numbered showAlbum={false} />
+      {/if}
 
-    {#if albums.length}
-      <h2>Albums</h2>
-      <div class="grid">{#each albums as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
-    {/if}
+      {#if albums.length}
+        <h2 class="section-title">Albums</h2>
+        <div class="grid">{#each albums as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
+      {/if}
 
-    {#if data.library && onDeezer === null}
-      <h2>Disponible sur Deezer</h2>
-      <Skeleton kind="shelf" count={5} />
-    {:else if onDeezer?.length}
-      <h2>Disponible sur Deezer</h2>
-      <div class="grid">{#each onDeezer as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
-    {:else if deezerDown}
-      <p class="muted down">Deezer est injoignable : le reste du catalogue n'est pas affiché.</p>
-    {/if}
+      {#if data.library && onDeezer === null}
+        <h2 class="section-title">Disponible sur Deezer</h2>
+        <Skeleton kind="shelf" count={5} />
+      {:else if onDeezer?.length}
+        <h2 class="section-title">Disponible sur Deezer</h2>
+        <div class="grid">{#each onDeezer as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
+      {:else if deezerDown}
+        <p class="muted down">Deezer est injoignable : le reste du catalogue n'est pas affiché.</p>
+      {/if}
 
-    {#if singles.length}
-      <h2>Singles &amp; EP</h2>
-      <div class="grid">{#each singles as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
-    {/if}
+      {#if singles.length}
+        <h2 class="section-title">Singles &amp; EP</h2>
+        <div class="grid">{#each singles as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
+      {/if}
 
-    {#if featured.length}
-      <h2>Apparaît dans</h2>
-      <div class="grid">{#each featured as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
-    {/if}
+      {#if featured.length}
+        <h2 class="section-title">Apparaît dans</h2>
+        <div class="grid">{#each featured as a (entityRef(a))}<Card item={a} kind="album" />{/each}</div>
+      {/if}
 
-    {#if data.related?.length}
-      <h2>Artistes similaires</h2>
-      <div class="shelf">{#each data.related as a (entityRef(a))}<Card item={a} kind="artist" />{/each}</div>
-    {/if}
+      {#if data.related?.length}
+        <h2 class="section-title">Artistes similaires</h2>
+        <div class="shelf">{#each data.related as a (entityRef(a))}<Card item={a} kind="artist" />{/each}</div>
+      {/if}
 
-    {#if data.bio}
-      <h2>Biographie</h2>
-      <p class="bio muted">{data.bio}</p>
-    {/if}
+      {#if data.bio}
+        <h2 class="section-title">Biographie</h2>
+        <p class="bio muted">{data.bio}</p>
+      {/if}
     {/if}
   </div>
 {/if}
 
 <style>
+  /* The band bleeds the page's own margins away (--page-y / --page-x), exactly
+     as the old gradient header did, so the colour reaches both edges. */
+  .banner {
+    display: flex;
+    align-items: flex-end;
+    gap: 28px;
+    margin: calc(-1 * var(--page-y)) calc(-1 * var(--page-x)) 20px;
+    padding: 40px var(--page-x) 28px;
+    background: var(--s2);
+    border-bottom: 1px solid var(--ln);
+  }
   .art {
-    width: 180px;
+    width: 168px;
     flex: none;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
     border-radius: 50%;
+    overflow: hidden;
   }
   .meta {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
+    min-width: 0;
   }
   .kind {
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--dim);
   }
   h1 {
-    font-size: clamp(2rem, 6vw, 3.4rem);
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 800;
+    text-wrap: balance;
+    font-size: clamp(40px, 7.5vw, 88px);
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+    overflow-wrap: anywhere;
   }
   .actions {
-    margin: 16px 0 18px;
-    gap: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+  }
+  .btn-icon.on {
+    color: var(--hrt);
+    border-color: var(--hrt);
   }
   .tabs {
     display: flex;
-    gap: 8px;
-    margin: 4px 0 20px;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 4px 0 24px;
   }
-  .tabs button {
-    padding: 8px 16px;
-    border-radius: 999px;
-    background: var(--bg-card);
-    color: var(--text-dim);
-    font-weight: 600;
-  }
-  .tabs button.active {
-    background: #fff;
-    color: #111;
-  }
-  .tracks-head {
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
     margin-bottom: 14px;
+  }
+  .count {
+    font-size: 11px;
+  }
+  /* §6's "Dernières sorties" rail: six across, the caption under the sleeve. */
+  .latest {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 16px;
-  }
-  .icon-btn {
-    font-size: 1.4rem;
-    color: var(--text-dim);
-  }
-  .icon-btn:hover {
-    color: var(--text);
-  }
-  .icon-btn.on {
-    color: var(--accent-2);
   }
   .down {
     margin: 18px 0 0;
@@ -319,9 +370,46 @@
     max-width: 70ch;
     white-space: pre-line;
   }
+  @media (max-width: 1100px) {
+    .latest {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 820px) {
+    .latest {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
   @media (max-width: 640px) {
+    .actions {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      padding-bottom: 2px;
+    }
+    .actions::-webkit-scrollbar {
+      display: none;
+    }
+    .banner {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 24px var(--page-x) 20px;
+    }
     .art {
-      width: 130px;
+      width: 108px;
+    }
+    .latest {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scroll-snap-type: x proximity;
+    }
+    .latest :global(.card) {
+      flex: none;
+      width: 148px;
+      scroll-snap-align: start;
     }
   }
 </style>
