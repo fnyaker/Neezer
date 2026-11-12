@@ -28,6 +28,7 @@
     nativeDeezerLogin,
     nativeDeezerLoginAvailable,
   } from "../lib/nativeDeezer.js";
+  import { carAvailable, openCarSettings } from "../lib/car.js";
   import Icon from "../components/Icon.svelte";
   import HardReload from "../components/HardReload.svelte";
   import EnrichBackfill from "../components/EnrichBackfill.svelte";
@@ -205,6 +206,12 @@
   // there is nothing to paste there. Constant for the life of the page: the
   // bridge is injected before any of it runs.
   const canLinkDeezer = nativeDeezerLoginAvailable();
+  // The car mode lives in the installed APK, never in this page: a browser (and
+  // an older APK without the bridge method) sees no card at all.
+  const canCar = !REMOTE && carAvailable();
+  function openCar() {
+    if (!openCarSettings()) toasts.push("Réglages du mode voiture indisponibles", "error");
+  }
   let arlLinking = false;
   onMount(async () => {
     if (!$user?.admin || !CAN_ADMIN) return;
@@ -691,6 +698,20 @@
 
 {#if tab === "appearance"}
   <AppearanceSettings />
+  {#if canCar}
+    <section class="card">
+      <h2>Mode voiture</h2>
+      <p class="muted sub">
+        Une barre flottante par-dessus le GPS, sans quitter la route&nbsp;: lecture,
+        playlists épinglées et recherche. Elle apparaît quand une app GPS passe
+        devant ou que la voiture se connecte, et se règle depuis l'application.
+      </p>
+      <button class="save car-open" on:click={openCar}>
+        <Icon name="settings" size={16} />
+        Ouvrir les réglages du mode voiture
+      </button>
+    </section>
+  {/if}
 {/if}
 
 {#if tab === "viz"}
@@ -1714,6 +1735,11 @@
   .save:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+  .car-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
   }
   .sub {
     font-size: 0.85rem;

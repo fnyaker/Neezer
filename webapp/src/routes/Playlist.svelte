@@ -14,6 +14,7 @@
     downloadTracks,
   } from "../lib/actions.js";
   import { duration as fmtDuration, isLocalId } from "../lib/format.js";
+  import { carAvailable, carPin } from "../lib/car.js";
   import { SORTS, createProjector } from "../lib/tracklist.js";
   import { reconcilePayload } from "../lib/reconcile.js";
   import Cover from "../components/Cover.svelte";
@@ -268,11 +269,23 @@
 
   // Everything that is not the two or three gestures a playlist is for goes
   // behind the ⋯ (DESIGN §6: deleting a playlist is not a bare icon any more).
+  // The car entry only exists in an APK that carries the mode (lib/car.js),
+  // and never on a remote control: those pins are this device's car, not the
+  // driven player's.
+  const canPinToCar = !REMOTE && carAvailable();
+  function pinToCar() {
+    if (!data?.playlist) return;
+    if (carPin(id, data.playlist.title))
+      toasts.push(`« ${data.playlist.title} » épinglée pour la voiture`);
+    else toasts.push("Impossible d'épingler cette playlist", "error");
+  }
   $: menuItems = data?.playlist ? playlistMenu() : [];
   function playlistMenu() {
     const items = [];
     if (CAN_KEEP)
       items.push({ label: "Exporter", icon: "archive", action: () => openExport("playlist", id, data.playlist.title) });
+    if (canPinToCar)
+      items.push({ label: "Épingler pour la voiture", icon: "pin", action: pinToCar });
     if ($isAdmin && CAN_KEEP && data.tracks.length)
       items.push({
         label: "Donner un genre",

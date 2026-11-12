@@ -150,6 +150,9 @@ avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@qa`
   parallèle du travail d'écriture.
 - Jusqu'à **10 `batch` en parallèle**, sur des fichiers **disjoints** uniquement (un seul écrivain
   par fichier) ; les autres sous-agents restent séquentiels dès qu'ils partagent une zone.
+- **Toute commande de plus de quelques secondes et tout sous-agent se lancent en arrière-plan**
+  (`background`), jamais en bloquant la session : le primary continue sur une zone disjointe et
+  reprend à la notification de fin. Ne jamais attendre une commande ou un agent en dormant.
 - Contrat d'abord : `api` définit la route/le payload/le schéma, `audio` le frame/la latence,
   `android` la version du bridge ; `frontend` et `animation` consomment, sans inventer un contrat
   parallèle.

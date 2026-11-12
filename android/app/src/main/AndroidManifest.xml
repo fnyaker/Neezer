@@ -8,6 +8,28 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Car mode: a window over the navigation app, the usage-access grant
+         that says which app is in front (no AccessibilityService), location
+         for the speed, the microphone for the voice search, and the special
+         foreground type that keeps the overlay alive while the map is up. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The overlay needs the specialUse type; the speed needs the location
+         type, otherwise Android 10+ stops delivering location once the
+         activity is behind the navigation app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Sideloaded personal app: offering the battery-optimization opt-out is
          what lets a paused player survive hours in the background. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -15,6 +37,14 @@
          (Updater): Android still asks the user, and refuses an APK not signed
          with this app's key. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Android 11 package visibility: SpeechRecognizer.isRecognitionAvailable
+         only sees a recognizer the app declares. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:label="@string/app_name"
@@ -53,6 +83,16 @@
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
 
+        <!-- The car mode's full-screen settings (lot D). Reached from the
+             overlay's gear, the notification's Réglages action and the SPA's
+             Settings card; never exported, so no other app can point the user
+             at a NATIVE screen that writes car preferences. -->
+        <activity
+            android:name=".CarSettingsActivity"
+            android:exported="false"
+            android:label="@string/car_mode"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+
         <!-- Deezer's own login page in a throwaway WebView, opened from the
              player's settings to capture the ARL. No JS bridge is attached to
              it, and it is never exported. -->
@@ -79,6 +119,33 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- Car mode overlay: specialUse is the only Android 14 type that fits
+             "draw a player over the navigation app". The subtype property is
+             what the platform asks for to justify it. -->
+        <service
+            android:name=".CarModeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|location|microphone"
+            tools:targetApi="34">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Car mode overlay controlling this app's own playback while driving." />
+        </service>
+
+        <!-- Quick-settings tile: toggles the car mode, or opens the overlay
+             permission when it cannot draw yet. BIND_QUICK_SETTINGS_TILE is a
+             system-held signature permission, so exported=true is safe. -->
+        <service
+            android:name=".CarTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_car"
+            android:label="@string/car_tile"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <!-- Lets the share sheet hand a downloaded audio file to the OS
              Intent.ACTION_SEND chooser as a content:// Uri (required since
