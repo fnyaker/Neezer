@@ -77,7 +77,7 @@
   }
   button.on {
     background: var(--onac);
-    color: var(--ac-text);
+    color: var(--ac);
   }
   button.on:hover {
     background: var(--onac);

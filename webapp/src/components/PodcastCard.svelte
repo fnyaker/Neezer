@@ -71,8 +71,8 @@
     width: 44px;
     height: 44px;
     border-radius: 50%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
     display: grid;
     place-items: center;
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);

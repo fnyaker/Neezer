@@ -36,7 +36,12 @@
 
 <style>
   .sk {
-    background: linear-gradient(90deg, #221e2c 25%, #2c2738 37%, #221e2c 63%);
+    background: linear-gradient(
+      90deg,
+      var(--s2) 25%,
+      color-mix(in srgb, var(--s2) 82%, var(--tx)) 37%,
+      var(--s2) 63%
+    );
     background-size: 400% 100%;
     animation: shimmer 1.4s ease infinite;
     border-radius: 8px;

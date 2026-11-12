@@ -28,6 +28,7 @@
     nativeDeezerLogin,
     nativeDeezerLoginAvailable,
   } from "../lib/nativeDeezer.js";
+  import { carAvailable, openCarSettings } from "../lib/car.js";
   import Icon from "../components/Icon.svelte";
   import HardReload from "../components/HardReload.svelte";
   import EnrichBackfill from "../components/EnrichBackfill.svelte";
@@ -205,6 +206,12 @@
   // there is nothing to paste there. Constant for the life of the page: the
   // bridge is injected before any of it runs.
   const canLinkDeezer = nativeDeezerLoginAvailable();
+  // The car mode lives in the installed APK, never in this page: a browser (and
+  // an older APK without the bridge method) sees no card at all.
+  const canCar = !REMOTE && carAvailable();
+  function openCar() {
+    if (!openCarSettings()) toasts.push("Réglages du mode voiture indisponibles", "error");
+  }
   let arlLinking = false;
   onMount(async () => {
     if (!$user?.admin || !CAN_ADMIN) return;
@@ -691,6 +698,20 @@
 
 {#if tab === "appearance"}
   <AppearanceSettings />
+  {#if canCar}
+    <section class="card">
+      <h2>Mode voiture</h2>
+      <p class="muted sub">
+        Une barre flottante par-dessus le GPS, sans quitter la route&nbsp;: lecture,
+        playlists épinglées et recherche. Elle apparaît quand une app GPS passe
+        devant ou que la voiture se connecte, et se règle depuis l'application.
+      </p>
+      <button class="save car-open" on:click={openCar}>
+        <Icon name="settings" size={16} />
+        Ouvrir les réglages du mode voiture
+      </button>
+    </section>
+  {/if}
 {/if}
 
 {#if tab === "viz"}
@@ -1715,6 +1736,11 @@
     opacity: 0.6;
     cursor: default;
   }
+  .car-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
   .sub {
     font-size: 0.85rem;
     margin: 4px 0 14px;
@@ -1963,6 +1989,9 @@
     border-radius: 999px;
     background: var(--bg);
     border: 1px solid var(--bg-hover);
+    /* The local surface is the page, not the global .pill's --btn; without
+       this it inherited --onbtn and painted ink on ink. */
+    color: var(--tx);
     font-size: 0.85rem;
     font-weight: 600;
   }
@@ -2205,12 +2234,16 @@
     width: 44px;
     height: 26px;
     border-radius: 999px;
-    background: var(--bg-hover);
+    background: var(--s2);
+    /* The off track sat 1.2:1 from its card: the ring is what makes the
+       switch a control before its knob is read. */
+    border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
   .sw.on {
-    background: var(--accent);
+    background: var(--btn);
+    border-color: var(--btn);
   }
   .knob {
     position: absolute;
@@ -2220,15 +2253,13 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease, background 0.15s ease;
   }
-  /* On the accent, the knob is the accent's own ink (DESIGN §1: --onac is the
-     colour that reads on --ac in every theme). */
+  /* --btn/--onbtn is the one accent pair guaranteed in every theme: Papier's
+     ink track needs its cream knob, not --onac (ink on ink). */
   .sw.on .knob {
-    background: var(--onac);
-  }
-  .sw.on .knob {
-    transform: translateX(18px);
+    background: var(--onbtn);
+    transform: translateX(16px);
   }
   .dl-head {
     display: flex;

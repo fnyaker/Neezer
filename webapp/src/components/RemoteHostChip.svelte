@@ -135,7 +135,7 @@
     padding: 0 14px 0 11px;
     font-weight: 800;
     font-size: 0.84rem;
-    color: #fff;
+    color: #06140f;
     background: linear-gradient(90deg, #ff5c7a, #ff3b6b);
     box-shadow: 0 6px 16px rgba(255, 59, 107, 0.3);
   }

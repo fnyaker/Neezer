@@ -10,13 +10,16 @@
   import { initGainCache } from "./lib/gaincache.js";
   import { migrateKeysOnce } from "./lib/keymigrate.js";
   import { initQueueFilter } from "./lib/playfilter.js";
-  import { loadFavorites } from "./lib/actions.js";
+  import { loadFavorites, playEntity, toggleFavorite, isFavorite } from "./lib/actions.js";
   import { initPodcastProgress } from "./lib/podcastProgress.js";
   import { initVersionWatch } from "./lib/appversion.js";
   import { initNav } from "./lib/nav.js";
   import { isMobile, onMobileChange } from "./lib/viewport.js";
   import { initDeezerHealth } from "./lib/deezerhealth.js";
   import { initVizHost } from "./lib/viz/host.js";
+  import { installCarBridge } from "./lib/car.js";
+  import { startFlow } from "./lib/flow.js";
+  import { trackKey } from "./lib/trackkey.js";
   import { location } from "./lib/router.js";
   import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
@@ -175,6 +178,13 @@
       await bootRemote();
       return;
     }
+    // The Android car overlay launches Flow/playlists/tracks through the
+    // SPA's own functions, and toggles the current favourite. Installed once,
+    // on the one page that owns the queue; a browser has no bridge and the
+    // hooks are simply never called (lib/car.js). The projector is a display,
+    // not a player: it must not be able to start a queue.
+    if (!isDisplay)
+      installCarBridge({ player, current, user, isFavorite, toggleFavorite, playEntity, startFlow, trackKey });
     initConnectivity();
     initQueueFilter();
     initNav(() => mainEl);

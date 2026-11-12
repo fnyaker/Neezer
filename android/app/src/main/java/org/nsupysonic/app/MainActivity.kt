@@ -71,9 +71,10 @@ class MainActivity : AppCompatActivity() {
          * to the next track by itself (op `next`) and seeks in a stream with
          * no length, 8 it keeps that list while the page is shown, follows it
          * only while the activity is stopped, cuts a trimmed track there itself
-         * and says `bg` in every state).
+         * and says `bg` in every state, 9 the car mode: carAvailable /
+         * openCarSettings / carPin, and the overlay's launch hook).
          */
-        private const val BRIDGE_VERSION = 8
+        private const val BRIDGE_VERSION = 9
         /** Upper bound on one analyser command (the family table is ~16 kB). */
         private const val MAX_ANALYSIS_CMD = 64 * 1024
         /** Upper bound on one piece of a download moved into the app (base64 chars). */
@@ -82,6 +83,8 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_AUDIO_CMD = 32 * 1024
         /** Upper bound on a single Bridge.saveText payload (16 MB of chars). */
         private const val MAX_SAVE_TEXT = 16 * 1024 * 1024
+        /** Upper bound on one car-mode JS expression (`__nsCarPlay` + a payload). */
+        private const val MAX_CAR_JS = 16 * 1024
         /** How long away counts as "long enough that the page may be gone". */
         private const val PING_AFTER_MS = 45_000L
         /** How long the page gets to answer that ping before we rebuild it. */
@@ -137,6 +140,11 @@ class MainActivity : AppCompatActivity() {
             service = (binder as PlayerService.LocalBinder).service
             service?.commandSink = { cmd, value -> runOnUiThread { runJsCommand(cmd, value) } }
             service?.nativeSkip = { forward -> nativeAudio?.skip(forward) == true }
+            // The car overlay runs in CarModeService, which binds the same
+            // PlayerService: this is its only way back into the SPA.
+            service?.jsSink = { js, onResult ->
+                runOnUiThread { evalCarJs(js, onResult) }
+            }
             pendingState?.let { service?.update(it) }
         }
 
@@ -145,6 +153,7 @@ class MainActivity : AppCompatActivity() {
             // back (onServiceConnected) installs a fresh one.
             service?.commandSink = null
             service?.nativeSkip = null
+            service?.jsSink = null
             service = null
         }
     }
@@ -570,6 +579,13 @@ class MainActivity : AppCompatActivity() {
         // Back from "allow installs from this app": install what was waiting.
         updater?.resume()
 
+        // Start the car mode only once the person's settings say it has
+        // something to watch and the base permissions are there; the call is
+        // idempotent and also re-reads triggers after a permission dialog.
+        // onResume (not onCreate): the notification permission result lands
+        // here, and the first run would otherwise start nothing.
+        if (prefs.configured) CarModeService.startIfEnabled(this)
+
         // The login screen can go away without ever delivering a result — the
         // launcher icon re-entering this singleTask activity clears it off the
         // top, and so does a low-memory kill. Answer the SPA anyway, or its
@@ -927,6 +943,41 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * One car-mode expression, from CarModeService through PlayerService's
+     * jsSink. Only our own origin's page qualifies: the overlay reads the
+     * page's `__nsCarPlay` / `__nsCarFav`, never a foreign page the WebView
+     * might be showing after a redirect.
+     *
+     * [onResult] gets the page's answer (`__nsCarPlay` returns a boolean), and
+     * false when this page cannot evaluate at all, so the service never turns
+     * "no page" into "Lecture : X".
+     */
+    private fun evalCarJs(js: String, onResult: ((Boolean) -> Unit)? = null) {
+        if (webViewDead || !::webView.isInitialized || !onServerPage) {
+            onResult?.invoke(false)
+            return
+        }
+        if (isFinishing || isDestroyed) {
+            onResult?.invoke(false)
+            return
+        }
+        if (js.isEmpty() || js.length > MAX_CAR_JS) {
+            onResult?.invoke(false)
+            return
+        }
+        try {
+            webView.evaluateJavascript(js) { result ->
+                // evaluateJavascript answers with a JSON value: a boolean hook
+                // is the literal "true"/"false", a missing hook is "null".
+                onResult?.invoke(result == "true")
+            }
+        } catch (_: Exception) {
+            /* WebView torn down under us */
+            onResult?.invoke(false)
+        }
+    }
+
     private fun runJsCommand(cmd: String, value: Double?) {
         // A media-button command is posted to the main looper, so it can land
         // AFTER the activity tore its WebView down (or after the renderer died).
@@ -1152,6 +1203,51 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { handleState(state) }
         }
 
+        /**
+         * Whether this APK has the car mode. The SPA shows its "Mode voiture"
+         * card only when this returns true; an older APK answers nothing,
+         * which the page reads as false and simply hides the card.
+         */
+        @JavascriptInterface
+        fun carAvailable(): Boolean = allowed()
+
+        /** Open the native car settings (trigger, keyboard, pins, opacity). */
+        @JavascriptInterface
+        fun openCarSettings() {
+            if (!allowed()) return
+            runOnUiThread {
+                // ONE door: CarModeService detaches the overlay first, then
+                // launches the full-screen activity. Launching it here would
+                // leave the card on top, eating every touch. With no service
+                // alive there is no overlay, so the helper opens it directly.
+                CarModeService.openSettings(this@MainActivity)
+            }
+        }
+
+        /**
+         * Pin a playlist for the car overlay. Idempotent: the page's action
+         * says "Épingler", never "désépingler" (the native settings screen owns
+         * unpinning and the order). The id is a server id, not a path.
+         *
+         * Two arities on purpose (the WebView bridge resolves an overload by
+         * argument count): an older SPA calls `carPin(id, title)` and keeps
+         * working, a newer one passes the track count so the tile says
+         * "42 titres" instead of "playlist" before the first list read.
+         */
+        @JavascriptInterface
+        fun carPin(id: String?, title: String?): Boolean = carPin(id, title, -1)
+
+        @JavascriptInterface
+        fun carPin(id: String?, title: String?, nbTracks: Int): Boolean {
+            if (!allowed()) return false
+            val cleanId = id?.trim() ?: return false
+            if (cleanId.isEmpty() || cleanId.length > 200) return false
+            val cleanTitle = title?.trim().orEmpty().take(200).ifBlank { cleanId }
+            val count = nbTracks.coerceAtLeast(0)
+            CarPrefs(this@MainActivity).pin(PinnedPlaylist(cleanId, cleanTitle, count))
+            return true
+        }
+
         @JavascriptInterface
         fun openServerSettings() {
             if (!allowed()) return
@@ -1226,6 +1322,7 @@ class MainActivity : AppCompatActivity() {
         audioRoute = null
         service?.commandSink = null
         service?.nativeSkip = null
+        service?.jsSink = null
         if (bound) {
             try {
                 unbindService(connection)
@@ -1233,8 +1330,13 @@ class MainActivity : AppCompatActivity() {
             }
             bound = false
         }
-        // The WebView (the actual audio) dies with us — take the service down.
-        if (isFinishing) stopService(Intent(this, PlayerService::class.java))
+        // The WebView (the actual audio) dies with us — take both services
+        // down. The car service goes first: it is bound to PlayerService, and
+        // a stopService on a still-bound player would otherwise be ignored.
+        if (isFinishing) {
+            CarModeService.stop(this)
+            stopService(Intent(this, PlayerService::class.java))
+        }
         shareExecutor.shutdownNow()
         updater?.shutdown()
         disposeWebView()

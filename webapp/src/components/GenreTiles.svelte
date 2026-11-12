@@ -48,7 +48,6 @@
           <span class="art" aria-hidden="true"></span>
           <span class="cap">
             <span class="name">{g.name}</span>
-            {#if g.tracks}<span class="n">{g.tracks} titre{g.tracks > 1 ? "s" : ""}</span>{/if}
           </span>
         </button>
       {/each}
@@ -113,12 +112,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .n {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--dim);
   }
   .tile:hover {
     border-color: var(--s2);

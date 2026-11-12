@@ -275,10 +275,10 @@
     border: 1px solid var(--bg-hover);
   }
   .badge.live {
-    color: #fff;
+    color: var(--onac);
     border-color: transparent;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 8px 24px rgba(162, 56, 255, 0.35);
+    background: var(--ac);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--ac) 35%, transparent);
   }
   .txt {
     display: flex;
@@ -473,8 +473,8 @@
     place-items: center;
     font-weight: 800;
     font-size: 0.85rem;
-    color: #fff;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--onac);
+    background: var(--ac);
   }
   .name {
     font-weight: 600;
@@ -535,8 +535,8 @@
     min-height: 42px;
   }
   .primary {
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
   }
   .primary:hover:not(:disabled) {
     filter: brightness(1.1);

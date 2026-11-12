@@ -16,9 +16,15 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   there, `--ac-mark` is too, and `--onac` stays the text colour on an `--ac` pill. The global
   `:focus-visible` ring reads `--ac-text` for the same reason. `#fff` on `--ac`/`--accent` is a bug
   in every theme (measured 1.16:1; the old purple made it 3.9:1 and hid it).
-- **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. `#fff` on
+- **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. Text on the
+  ink surface `--onac` is `--ac` (Papier's `--onac` and `--ac-text` are both #14130f, so
+  `--ac-text` on `--onac` is 1:1 — HomeHero's Flow button and the energy notches). `#fff` on
   `var(--accent)` was right when the accent was purple and is 1.4:1 now that it is lemon (Home's
-  count badge, Library's still do it) — every such pair is a bug the rebrand exposes, not a taste.
+  count badge, Library's badge) — every such pair is a bug the rebrand exposes, not a taste.
+- **A switch is a `--btn` track with an `--onbtn` knob when on**, and an `--s2` track ringed by
+  `--dim` with a `--tx` knob when off: the off track was 1.2:1 from its card, and an `--accent`
+  track put a white knob on the lemon (1.16:1). The old `--accent` surfaces belong in `--btn`;
+  selections (chips, segmented buttons, checkboxes) use `--ac`/`--onac`.
 - **The theme is applied BEFORE the first frame** by `public/theme-boot.js`, a classic script
   (blocking) loaded from `index.html`, because the CSP is `script-src 'self'`: an inline `<script>`
   there is REFUSED by the browser (it said so in the console on every load). It sets `data-theme`,
@@ -125,6 +131,18 @@ phone; a title search gets no artist on top. Then the artists, the albums with t
 tapped here plays and then its radio (`TrackList radio`). With Deezer out (or nobody's account serving the search)
 the library answers alone: titles, and the artists and albums by NAME that hold a title on disk
 (`webui._local_search_entities`, two statements). Each section carries a "Tout afficher" that switches to its tab.
+
+**The YouTube fallback is ON by default and inside the same list** (`lib/searchrank.js#matchScore`,
+`rankSearchResults`). It is asked once the query settles — 800 ms after the last keystroke, at once on Enter, a
+recent term or a deep link, and never when the account lacks `youtube:search` or the source is off: one request
+per search, not one per letter. Its hits are woven into the Titres list (no second section): the catalogue's order
+is kept and library rows stay first; an identical recording (same id, or same title+artist once cosmetic
+decorations such as "Clip officiel" are stripped) is dropped; a video only LEADS when its match is strictly closer
+than the best catalogue answer (`YOUTUBE_MIN` 0.75 > `CATALOGUE_MIN` 0.5 — a different artist, live, remix or cover
+falls under the bar and is not shown), otherwise it follows the catalogue. Every YouTube row says `YT` and its Opus
+rate (`OPUS 133` before archiving, the file's real bitrate after) — in the quality cell, or on the artist line
+(`.qinline`) where a narrow row hides that cell. A failed search says why and offers "Réessayer"; an empty one is a
+single quiet line, never an empty section.
 
 **Réglages is two levels** (`routes/Settings.svelte`): a list of categories (Lecture, Animations, Téléchargements,
 Découverte, Sources, Compte, Serveur for an admin, Assistance), each a page — the iOS/Android settings pattern. ONE route

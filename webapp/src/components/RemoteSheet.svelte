@@ -367,7 +367,7 @@
     border: 1px solid var(--bg-hover);
   }
   .badge.live {
-    color: #fff;
+    color: #06140f;
     border-color: transparent;
     background: linear-gradient(135deg, #2bd4a4, #1fa3ff);
     box-shadow: 0 8px 24px rgba(31, 163, 255, 0.3);
@@ -679,7 +679,7 @@
     border: 1px solid var(--bg-hover);
   }
   .av.on {
-    color: #fff;
+    color: #06140f;
     border-color: transparent;
     background: linear-gradient(135deg, #2bd4a4, #1fa3ff);
   }

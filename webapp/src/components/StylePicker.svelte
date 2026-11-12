@@ -45,6 +45,7 @@
   // (neezer/discover.py#style_taste). Kept on the device, like the energy notch.
   import { onMount } from "svelte";
   import { startStyles, setStartStyles, STYLES_MAX } from "../lib/flow.js";
+  import { STYLE_FALLBACK } from "../lib/sillon.js";
   import Icon from "./Icon.svelte";
 
   let rows = [];
@@ -143,7 +144,7 @@
             class:chip-active={$startStyles.includes(g.name)}
             on:click={() => toggle(g.name)}
           >
-            {g.name}<span class="n">{g.tracks || g.branch}</span>
+            {g.name}
           </button>
         {/each}
       </div>
@@ -211,12 +212,6 @@
   }
   .sub.all {
     font-weight: 700;
-  }
-  .sub .n {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    opacity: 0.65;
-    font-variant-numeric: tabular-nums;
   }
   .chosen {
     display: flex;

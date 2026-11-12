@@ -786,12 +786,14 @@
     width: 44px;
     height: 26px;
     border-radius: 999px;
-    background: var(--bg-hover);
+    background: var(--s2);
+    border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
   .sw.on {
-    background: var(--accent);
+    background: var(--btn);
+    border-color: var(--btn);
   }
   .knob {
     position: absolute;
@@ -800,11 +802,12 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #fff;
-    transition: transform 0.15s ease;
+    background: var(--tx);
+    transition: transform 0.15s ease, background 0.15s ease;
   }
   .sw.on .knob {
-    transform: translateX(18px);
+    background: var(--onbtn);
+    transform: translateX(16px);
   }
   .presets {
     display: flex;

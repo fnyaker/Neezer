@@ -144,7 +144,9 @@
     padding: 0 24px;
     border-radius: 24px;
     background: var(--onac);
-    color: var(--ac-text);
+    /* --onac is the ink in every theme; the colour that reads on it is the
+       accent surface, not --ac-text (which is the same ink on Papier). */
+    color: var(--ac);
     font-size: 15px;
     font-weight: 700;
     white-space: nowrap;
@@ -180,7 +182,7 @@
   }
   .tune[aria-expanded="true"] {
     background: var(--onac);
-    color: var(--ac-text);
+    color: var(--ac);
   }
   .tune:focus-visible {
     outline-color: var(--onac);

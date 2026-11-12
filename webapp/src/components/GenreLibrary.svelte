@@ -376,7 +376,7 @@
   .steps li { display: flex; gap: 14px; align-items: flex-start; }
   .steps li.off { opacity: 0.5; }
   .idx { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 0.85rem; background: var(--surface-2, #1b1d21); }
-  .steps li.active .idx { background: var(--accent, #22d3ee); color: #05171b; }
+  .steps li.active .idx { background: var(--ac); color: var(--onac); }
   .body { flex: 1; min-width: 0; }
   .line2 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .line2 .cnt { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 0.86rem; display: inline-flex; align-items: center; gap: 4px; }
@@ -384,9 +384,9 @@
   .mini i { display: block; height: 100%; background: var(--accent, #22d3ee); transition: width 0.4s; }
   .foot { margin-top: 16px; }
 
-  .where { display: flex; width: 100%; max-width: 420px; gap: 4px; padding: 4px; margin: 4px 0 14px; border-radius: 12px; background: rgba(255,255,255,0.06); }
+  .where { display: flex; width: 100%; max-width: 420px; gap: 4px; padding: 4px; margin: 4px 0 14px; border-radius: 12px; background: color-mix(in srgb, var(--tx) 6%, transparent); }
   .where button { flex: 1; justify-content: center; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-  .where button.on { background: var(--accent, #22d3ee); color: #04141a; font-weight: 600; }
+  .where button.on { background: var(--ac); color: var(--onac); font-weight: 600; }
   .where button:disabled { cursor: default; opacity: 0.6; }
   .sched { display: flex; align-items: center; gap: 14px 22px; flex-wrap: wrap; }
   .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; min-height: 40px; }

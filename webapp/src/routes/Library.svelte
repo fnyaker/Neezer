@@ -699,7 +699,7 @@
   }
   .chip-active .badge {
     background: var(--onac);
-    color: var(--ac-text);
+    color: var(--ac);
   }
   /* One action bar above a table: the primary on the left, the list's own
      tools on the right, everything on the 40 px rhythm (§6). */

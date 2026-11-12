@@ -75,6 +75,8 @@ class PlayerService : Service() {
         const val ART_MAX = 1024
         /** Ceiling on the encoded cover we're willing to buffer (8 MB). */
         const val ART_BYTES_MAX = 8 * 1024 * 1024
+        /** Ceiling on one JS expression handed to the page (car mode). */
+        const val JS_MAX = 16 * 1024
     }
 
     inner class LocalBinder : Binder() {
@@ -91,9 +93,27 @@ class PlayerService : Service() {
     /** Transport commands back to the WebView; set by MainActivity on bind. */
     var commandSink: ((String, Double?) -> Unit)? = null
 
+    /**
+     * A JS expression for the page, set by MainActivity while its WebView is
+     * alive. The car mode's own service binds this service without owning a
+     * WebView: this is how it reaches the SPA hooks (`__nsCarPlay`,
+     * `__nsCarFav`) without a second player or a second origin.
+     *
+     * The optional callback carries the page's ANSWER (`__nsCarPlay` returns a
+     * boolean): a null callback keeps the old fire-and-forget path. A sink that
+     * cannot evaluate at all must call it with false, so the car mode never
+     * announces a launch the page never made.
+     */
+    var jsSink: ((String, ((Boolean) -> Unit)?) -> Unit)? = null
+
+    /** Last state published by the page (or by the native player), for a late binder. */
+    private var lastState: State? = null
+
+    /** One observer (the car mode service); called on the main thread. */
+    private var stateListener: ((State) -> Unit)? = null
+
     private val binder = LocalBinder()
     private lateinit var session: MediaSessionCompat
-    private var state: State? = null
     private var foregrounded = false
     private var hasClient = false // the activity (WebView owner) is bound
     private var notifKey = "" // last (title|artist|playing|art) actually rendered
@@ -176,7 +196,7 @@ class PlayerService : Service() {
         // and no playback state — e.g. the process was gone. Satisfy the FGS
         // contract (a startForegroundService MUST call startForeground) and then
         // stop, instead of parking a dead notification with useless controls.
-        if (!hasClient && state == null) {
+        if (!hasClient && lastState == null) {
             goForeground()
             stopForeground(STOP_FOREGROUND_REMOVE)
             foregrounded = false
@@ -211,10 +231,89 @@ class PlayerService : Service() {
         commandSink?.invoke(cmd, value)
     }
 
+    /**
+     * The state the page last published, or null before the first publish.
+     * A service that binds late (the car mode) reads this instead of waiting
+     * for the page's next update.
+     */
+    fun state(): State? = lastState
+
+    /**
+     * Observe every state update, on the main thread. Passing null detaches.
+     * The current state is delivered immediately, so a binder never renders a
+     * blank player until the page happens to publish again.
+     */
+    fun onState(listener: ((State) -> Unit)?) {
+        stateListener = listener
+        val s = lastState
+        if (listener != null && s != null) notifyState(listener, s)
+    }
+
+    private fun notifyState(listener: (State) -> Unit, s: State) {
+        if (released) return
+        try {
+            listener(s)
+        } catch (_: Exception) {
+            // An observer must never take the player down; the next update
+            // still reaches the others.
+        }
+    }
+
+    /**
+     * Run one transport command with the same routing as the MediaSession:
+     * next/previous first ask the native player that owns the playlist, then
+     * fall back to the page. Only the commands the car UI can produce are
+     * accepted; values are clamped so a malformed one cannot seek past a day.
+     */
+    fun transport(cmd: String, value: Double? = null) {
+        when (cmd) {
+            "play" -> send("play")
+            "pause" -> send("pause")
+            "toggle" -> send(if (lastState?.playing == true) "pause" else "play")
+            "next" -> if (nativeSkip?.invoke(true) != true) send("next")
+            "prev" -> if (nativeSkip?.invoke(false) != true) send("prev")
+            "seek" -> {
+                val t = value?.takeIf { it.isFinite() } ?: return
+                send("seek", t.coerceIn(0.0, 24.0 * 60 * 60))
+            }
+            else -> return
+        }
+    }
+
+    /**
+     * Evaluate one JS expression in the page, when a WebView is bound. False
+     * when no page is there to run it (the car mode then says why instead of
+     * pretending the tap did something). MainActivity owns the origin check.
+     *
+     * [onResult] is the page's boolean answer, and is also called with false
+     * when there is no sink or the sink throws, so a caller can trust it as
+     * "the hook ran and said yes". It runs on whichever thread the sink uses
+     * (MainActivity answers on the main thread).
+     */
+    fun evalJs(js: String, onResult: ((Boolean) -> Unit)? = null): Boolean {
+        if (js.isEmpty() || js.length > JS_MAX) {
+            onResult?.invoke(false)
+            return false
+        }
+        val sink = jsSink
+        if (sink == null) {
+            onResult?.invoke(false)
+            return false
+        }
+        return try {
+            sink(js, onResult)
+            true
+        } catch (_: Exception) {
+            onResult?.invoke(false)
+            false
+        }
+    }
+
     /** Called from MainActivity (main thread) with each bridge state. */
     fun update(s: State) {
         if (released) return // a late art callback after onDestroy
-        state = s
+        lastState = s
+        stateListener?.let { notifyState(it, s) }
         if (!s.active) {
             // Playback wound down (queue emptied / logged out): drop the
             // notification and locks rather than leaving a stale card up.
@@ -294,7 +393,7 @@ class PlayerService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val s = state
+        val s = lastState
         val contentIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
@@ -397,7 +496,7 @@ class PlayerService : Service() {
                 main.post {
                     if (!released && url == artUrl) {
                         artBitmap = art
-                        state?.let { update(it) } // re-render metadata + notification
+                        lastState?.let { update(it) } // re-render metadata + notification
                     }
                 }
             }
@@ -473,6 +572,8 @@ class PlayerService : Service() {
         // Set BEFORE releasing the session: a queued art callback runs update(),
         // and setMetadata on a released MediaSession throws.
         released = true
+        jsSink = null
+        stateListener = null
         main.removeCallbacksAndMessages(null)
         releaseLocks()
         session.isActive = false

@@ -24,8 +24,19 @@
   import { genreTagSheet, closeGenreTag, toasts } from "../lib/stores.js";
   import { putAnalysis, verdictId } from "../lib/analysis.js";
   import { rankTags, searchTags, noteRecent } from "../lib/genre/rank.js";
+  import { contrast, fromHex } from "../lib/sillon.js";
   import Icon from "./Icon.svelte";
   import Cover from "./Cover.svelte";
+
+  // A tag can carry a colour from the server's palette. Its ink cannot be the
+  // theme's --bg-card: that pair is readable only while the colour and the
+  // theme sit on the same side (Papier's cream text on #eab308 was 1.9:1).
+  const CHIP_INK_DARK = [12, 12, 11];
+  const CHIP_INK_LIGHT = [244, 241, 245];
+  function chipInk(hex) {
+    const rgb = fromHex(hex);
+    return contrast(rgb, CHIP_INK_DARK) >= contrast(rgb, CHIP_INK_LIGHT) ? "#0c0c0b" : "#f4f1f5";
+  }
 
   let tags = [];
   let counts = {};
@@ -199,7 +210,7 @@
                 class:top={i === 0 && (scored || query)}
                 class:busy={busy === r.tag.id}
                 disabled={!!busy}
-                style={r.tag.color ? `--chip:${r.tag.color}` : ""}
+                style={r.tag.color ? `--chip:${r.tag.color};--chip-ink:${chipInk(r.tag.color)}` : ""}
                 on:click={() => apply(r.tag)}>
                 {#if i < 9 && !query}<kbd>{i + 1}</kbd>{/if}
                 <span>{r.tag.name}</span>
@@ -349,14 +360,14 @@
   .chip.on {
     background: var(--chip, var(--accent));
     border-color: var(--chip, var(--accent));
-    color: var(--bg-card);
+    color: var(--chip-ink, var(--onbtn));
   }
   .chip.top:not(.on) {
     border-color: var(--chip, var(--accent));
     background: color-mix(in srgb, var(--chip, var(--accent)) 12%, var(--bg-elev));
   }
   .chip kbd {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--tx) 8%, transparent);
     border-radius: 5px;
     padding: 0 5px;
     font: inherit;

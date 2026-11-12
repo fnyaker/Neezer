@@ -112,11 +112,12 @@
     min-width: 220px;
     max-height: 70vh;
     overflow-y: auto;
-    background: #282433;
-    border: 1px solid #3a3448;
+    background: var(--s1);
+    border: 1px solid var(--ln);
     border-radius: 10px;
     padding: 6px;
-    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.55);
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.4);
+    color: var(--tx);
     font-size: 0.9rem;
   }
   .item {
@@ -164,7 +165,7 @@
   }
   .divider {
     height: 1px;
-    background: #3a3448;
+    background: var(--ln);
     margin: 5px 8px;
   }
   /* Submenu expands inline (accordion) so it works the same with a mouse or a
