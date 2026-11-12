@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -16,9 +16,9 @@ import subprocess
 import unittest
 from unittest import mock
 
-from supysonic.db import Meta, Track, TrackAnalysis
-from supysonic.deezer import analysis as ana
-from supysonic.managers.user import UserManager
+from neezer.db import Meta, Track, TrackAnalysis
+from neezer.deezer import analysis as ana
+from neezer.managers.user import UserManager
 
 from .test_discover import _Library
 
@@ -178,7 +178,7 @@ class TodoTestCase(_Library):
 
 
     def test_vector_only_lags_are_listed_for_a_client_that_can_embed(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         t = self.made[0]
         self.assertEqual(self.client.post(f"/api/analysis/{t.id}/measures", json=GOOD).status_code, 200)
@@ -205,7 +205,7 @@ class WhereTestCase(_Archived):
         self.assertEqual(self.client.get("/api/analysis/plan").json["where"], "client")
 
     def test_in_client_mode_the_servers_job_does_not_measure(self):
-        from supysonic.webui import analysis as wa
+        from neezer.webui import analysis as wa
 
         Meta.create(key="analysis_where", value="client")
         with mock.patch.object(ana, "backfill", side_effect=AssertionError("the server measured")):
@@ -222,8 +222,8 @@ if __name__ == "__main__":
 
 class ClientEmbeddingTestCase(_Archived):
     def test_a_client_that_can_embed_makes_the_vector_step_due_without_onnxruntime(self):
-        from supysonic.deezer import embedding as emb
-        from supysonic.webui import analysis as web
+        from neezer.deezer import embedding as emb
+        from neezer.webui import analysis as web
 
         self.post()
         with mock.patch.object(emb, "why_unavailable", return_value="no onnxruntime"), \
@@ -245,13 +245,13 @@ class ClientEmbeddingTestCase(_Archived):
         import base64
         import struct
 
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         vals = kw.pop("values", None) or [((i % 7) - 3) / 10.0 for i in range(emb.EMBED_DIM)]
         return {"version": emb.EMBED_VERSION, "data": base64.b64encode(struct.pack(f"<{len(vals)}e", *vals)).decode(), **kw}
 
     def test_a_vector_sent_with_the_measures_is_stored_as_the_sidecar_and_stamped(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         r = self.post({**GOOD, "embedding": self.vec()})
         self.assertEqual(r.status_code, 200, r.data)
@@ -261,7 +261,7 @@ class ClientEmbeddingTestCase(_Archived):
         self.assertEqual(TrackAnalysis.get(TrackAnalysis.track == self.track).embed_version, emb.EMBED_VERSION)
 
     def test_a_vector_alone_completes_a_track_measured_before(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self.post()
         self.assertEqual(TrackAnalysis.get(TrackAnalysis.track == self.track).embed_version, 0)
@@ -275,7 +275,7 @@ class ClientEmbeddingTestCase(_Archived):
         self.assertEqual(r.status_code, 422)  # not 409: that one means "wrong version" and stops a client run
 
     def test_hostile_vectors_are_refused_and_nothing_is_written(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         nan = [float("nan")] + [0.0] * (emb.EMBED_DIM - 1)
         bad = [
@@ -298,7 +298,7 @@ class ClientEmbeddingTestCase(_Archived):
     def test_the_model_is_served_to_the_admin_unmodified_and_to_nobody_else(self):
         import tempfile
 
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self.assertEqual(self.client.get("/api/analysis/extractor/model").status_code, 404)
         with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as fp:

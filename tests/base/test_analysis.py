@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -14,7 +14,7 @@ family rather than on the wrong side of the archetype.
 
 import unittest
 
-from supysonic.deezer import analysis as ana
+from neezer.deezer import analysis as ana
 
 
 def feats(**kw):

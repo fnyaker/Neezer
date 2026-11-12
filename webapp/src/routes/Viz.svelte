@@ -147,7 +147,7 @@
   });
 </script>
 
-<svelte:head><title>NSupySonic — Animation</title></svelte:head>
+<svelte:head><title>Neezer — Animation</title></svelte:head>
 
 <div
   class="screen"
@@ -184,7 +184,7 @@
     <div class="notice">
       <h1>En attente du lecteur</h1>
       <p>
-        Gardez NSupySonic ouvert dans un autre onglet et lancez la lecture : cette
+        Gardez Neezer ouvert dans un autre onglet et lancez la lecture : cette
         page s'anime toute seule. Rien n'est lu ici, c'est le même morceau, la
         même analyse, la même seconde.
       </p>

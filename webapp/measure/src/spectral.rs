@@ -1,6 +1,6 @@
 //! The per-frame spectral descriptors `analysis._spectral` takes from ffmpeg's
 //! `aspectralstats`, written out. Definitions and what does NOT match ffmpeg
-//! (flatness on band-limited lossy material) are in supysonic/deezer/measure.py.
+//! (flatness on band-limited lossy material) are in neezer/deezer/measure.py.
 
 use crate::fft::Fft;
 

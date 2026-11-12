@@ -1,4 +1,4 @@
-//! NSupySonic's native audio core, for the Android app (`android/app`, `NsCore.kt`).
+//! Neezer's native audio core, for the Android app (`android/app`, `NsCore.kt`).
 //!
 //! Two objects, each a HANDLE the Kotlin side holds (a boxed pointer as a `long`):
 //!

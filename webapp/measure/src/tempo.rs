@@ -1,4 +1,4 @@
-//! The whole-file beat tracker, a port of `supysonic/deezer/beats.py` (itself a port of
+//! The whole-file beat tracker, a port of `neezer/deezer/beats.py` (itself a port of
 //! Mixxx's default analyser: qm-dsp's DetectionFunction + TempoTrackV2, then Mixxx's
 //! BeatUtils; GPL-2.0-or-later, credited there). Same constants, same order of operations,
 //! so the tempo the client measures is the tempo the server serves; `tests/test_measure.py`

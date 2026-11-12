@@ -136,6 +136,24 @@
           "explore": "allow"
         }
       }
+    },
+    "batch": {
+      "description": "Exécutant batch pour les tâches répétitives et mécaniques : renommage ou remplacement de masse, même édition sur une liste de fichiers, refactor mécanique, table/liste générée à resynchroniser, commande connue à lancer et à rapporter. À utiliser pour une tâche courte, scriptable et vérifiable par une commande ; pas pour du design, de l'architecture, un contrat ou un vrai correctif. Jusqu'à 10 en parallèle sur des fichiers disjoints.",
+      "mode": "subagent",
+      "model": "opencode-go/deepseek-v4.1-flash#low",
+      "prompt": "{file:./.opencode/prompts/batch.md}",
+      "temperature": 0.1,
+      "color": "#94A3B8",
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "task": {
+          "*": "deny",
+          "explore": "allow"
+        }
+      }
     }
   }
 }

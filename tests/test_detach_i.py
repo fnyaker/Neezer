@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -17,12 +17,12 @@ import shutil
 import tempfile
 import unittest
 
-from supysonic.config import DefaultConfig, IniConfig
-from supysonic.db import Playlist, User, init_database, release_database
-from supysonic.deezer import ids, importer
-from supysonic.deezer.provider import DeezerProvider
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.config import DefaultConfig, IniConfig
+from neezer.db import Playlist, User, init_database, release_database
+from neezer.deezer import ids, importer
+from neezer.deezer.provider import DeezerProvider
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from .test_deezer import MockDz
 from .testbase import TestBase
@@ -67,7 +67,7 @@ class ConfigTestCase(unittest.TestCase):
 
     def test_the_sample_files_no_longer_name_them(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("config.sample", "config/supysonic.conf.example", ".env.example",
+        for name in ("config.sample", "config/neezer.conf.example", ".env.example",
                      "docker/entrypoint.sh", "docker-compose.yml"):
             with open(os.path.join(root, name), encoding="utf-8") as fh:
                 text = fh.read()
@@ -85,7 +85,7 @@ class UpgradeTestCase(TestBase):
         self.provider = DeezerProvider("dummy-arl", self.archive_dir, "FLAC")
         self.provider._dz = MockDz()
         self.dir = tempfile.mkdtemp()
-        self.conf = os.path.join(self.dir, "supysonic.conf")
+        self.conf = os.path.join(self.dir, "neezer.conf")
         with open(self.conf, "w", encoding="utf-8") as fh:
             fh.write(OLD_CONF.format(archive=self.archive_dir))
         self.addCleanup(shutil.rmtree, self.dir, True)

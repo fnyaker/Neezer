@@ -60,7 +60,7 @@ def no_deezer(dirpath):
     deezer/analysis.py), so the first column is what those tracks get. The
     witness only ever settles the octave (``_reconcile_tracked``).
     """
-    from supysonic.deezer.analysis import _measure_tempo, _reconcile_tracked
+    from neezer.deezer.analysis import _measure_tempo, _reconcile_tracked
 
     truth = json.load(open(os.path.join(dirpath, "truth.json")))
     print(f"{'record':32s} {'truth':>7s} {'alone':>8s}  {'verdict':10s} {'witnessed':>9s}  verdict")
@@ -98,7 +98,7 @@ def main():
         return no_deezer(a.dir)
     if a.render:
         render(a.dir)
-    from supysonic.deezer.analysis import _measure_tempo
+    from neezer.deezer.analysis import _measure_tempo
 
     rows = []
     truth = json.load(open(os.path.join(a.dir, "truth.json")))

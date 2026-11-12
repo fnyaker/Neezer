@@ -69,7 +69,7 @@ class Prefs(context: Context) {
      */
     fun baseUrl(): String = buildBaseUrl(host, port)
 
-    /** The SPA entry point served by supysonic/webui/spa.py. */
+    /** The SPA entry point served by neezer/webui/spa.py. */
     fun appUrl(): String = appUrlFor(host, port)
 
     companion object {

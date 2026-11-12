@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -14,8 +14,8 @@ import tempfile
 import unittest
 
 from deezerpy._circuit import breaker
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer.config import DefaultConfig
+from neezer.db import (
     Album,
     Artist,
     Folder,
@@ -27,10 +27,10 @@ from supysonic.db import (
     init_database,
     release_database,
 )
-from supysonic.deezer import ids, library
-from supysonic.deezer.provider import DeezerProvider
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.deezer import ids, library
+from neezer.deezer.provider import DeezerProvider
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from .test_deezer import count_statements
 from .test_webui import MockDz, MockPrefetch

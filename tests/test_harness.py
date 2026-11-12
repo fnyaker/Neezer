@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -22,8 +22,8 @@ import uuid
 from flask import url_for
 from werkzeug.routing.rules import Rule
 
-from supysonic.db import release_database
-from supysonic.web import create_application
+from neezer.db import release_database
+from neezer.web import create_application
 
 from .testbase import TestConfig
 

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -9,14 +9,14 @@ re-fetches a stream for a seek (a first play is generated as it is sent: no leng
 import os
 import unittest
 
-from supysonic.db import Track
+from neezer.db import Track
 
 from .test_discover import _Library
 
 
 class StreamReadyTestCase(_Library):
     def _track(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         return library.upsert_track(

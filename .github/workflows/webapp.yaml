@@ -5,7 +5,7 @@ name: Web app
 # catalogue and drivers, the listen-party scheduler, the genre trainers...) and
 # its production build. It used to run nowhere but on a developer's machine.
 #
-# viz.test.mjs reads the genre vocabulary out of supysonic/deezer/analysis.py,
+# viz.test.mjs reads the genre vocabulary out of neezer/deezer/analysis.py,
 # so that file is a dependency of this suite too.
 
 on:
@@ -14,12 +14,12 @@ on:
       - master
     paths:
       - webapp/**
-      - supysonic/deezer/analysis.py
+      - neezer/deezer/analysis.py
       - .github/workflows/webapp.yaml
   pull_request:
     paths:
       - webapp/**
-      - supysonic/deezer/analysis.py
+      - neezer/deezer/analysis.py
       - .github/workflows/webapp.yaml
   workflow_dispatch:
 

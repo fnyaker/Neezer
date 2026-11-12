@@ -18,7 +18,7 @@ tools
 venv
 env
 
-# Not needed to build/run the image (only supysonic* and deezerpy* are packaged).
+# Not needed to build/run the image (only neezer* and deezerpy* are packaged).
 # Every file sent here is hashed on every build, and a COPY of a directory is
 # invalidated by any change inside it.
 sourceproj
@@ -41,7 +41,7 @@ dist
 # Node / SPA build artifacts (rebuilt in the webbuilder stage)
 webapp/node_modules
 webapp/dist
-supysonic/webui/dist
+neezer/webui/dist
 # The rhythm analyser's Rust build output (rebuilt in the wasmbuilder stage)
 # and the eval's cache of rendered test audio (hundreds of megabytes).
 webapp/rhythm/target

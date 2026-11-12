@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""The server's beat tracker (supysonic/deezer/beats.py, Mixxx's analyser
+"""The server's beat tracker (neezer/deezer/beats.py, Mixxx's analyser
 ported) and what analysis.py serves from it.
 
 The signal tests run the real ffmpeg on lavfi-generated material whose answer
@@ -59,7 +59,7 @@ class TrackerTestCase(unittest.TestCase):
         return path
 
     def test_a_kick_reads_at_its_exact_tempo(self):
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         # Measured 90.0 / 128.0 / 150.0 / 174.0 exactly, coverage 0.90-0.98.
         # The envelope estimator read these to the nearest whole BPM at best.
@@ -72,7 +72,7 @@ class TrackerTestCase(unittest.TestCase):
     def test_a_tempo_between_whole_numbers_is_kept(self):
         # 140.5 is not a whole BPM: Mixxx's rounding only snaps to a simpler
         # value that the measurement's own error bars allow. Measured 140.5.
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         r = beats.analyse(self.file("k1405", _kick_expr(140.5), seconds=60))
         self.assertAlmostEqual(r["bpm"], 140.5, delta=0.05)
@@ -82,7 +82,7 @@ class TrackerTestCase(unittest.TestCase):
         tracked on every other beat (Mixxx's own hardcore failure); the half
         beats striking as hard as the beats doubles it back. Measured 200.0,
         doubled; a limitered tail (-2.5 dB) changes nothing."""
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         for name, expr in (("fc", _kick_expr(200)), ("fcl", _kick_expr(200, 0.9, 0.75))):
             with self.subTest(name):
@@ -94,7 +94,7 @@ class TrackerTestCase(unittest.TestCase):
         kick. The tracker's phase may sit on the donk, the kicks then read 13.7
         times the 'beats' in the bass — that is not a doubled tempo (DOUBLE_MAX).
         Measured 128.0."""
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         p = 60.0 / 128
         donk = f"0.5*sin(2*PI*300*t)*exp(-25*mod(t+{p / 2}\\,{p}))"
@@ -107,7 +107,7 @@ class TrackerTestCase(unittest.TestCase):
         84 times a minute (the attack gate lets it through) but no onset lands
         where a beat would. Salience measured 1.01 against a floor of 1.12; a
         kick reads 3+."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         pad = "0.3*(2*mod(110*t\\,1)-1)+0.3*(2*mod(110.7*t\\,1)-1)+0.3*(2*mod(109.4*t\\,1)-1)"
         self.assertEqual(ana._measure_tempo(self.file("pad", pad, 30)), (None, 0.0, 0.0))
@@ -115,8 +115,8 @@ class TrackerTestCase(unittest.TestCase):
         self.assertEqual(bpm, 128.0)
 
     def test_without_numpy_the_envelope_estimator_still_answers(self):
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import beats
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import beats
 
         path = self.file("k", _kick_expr(128))
         saved = beats.np
@@ -136,7 +136,7 @@ class ConstantTempoTestCase(unittest.TestCase):
 
     def test_a_jittered_click_comes_out_exact(self):
         # 120 BPM at 44.1 kHz with the QM tracker's own ±256-sample quantisation.
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         sr = 44100
         period = 60 * sr / 120
@@ -150,7 +150,7 @@ class ConstantTempoTestCase(unittest.TestCase):
         # 64 beats, a stretch where the beats float off the grid, 64 more on the
         # SAME grid: the tempo is the grid's, and the regions either side
         # are joined across the bridge.
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         sr = 44100
         period = 60 * sr / 128
@@ -161,7 +161,7 @@ class ConstantTempoTestCase(unittest.TestCase):
         self.assertEqual(bpm, 128.0)
 
     def test_rounding_takes_the_simplest_value_the_error_allows(self):
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         self.assertEqual(beats.round_bpm(127.9, 128.04, 128.2), 128.0)
         # No whole BPM inside: halves are only tried under 85 BPM...
@@ -178,7 +178,7 @@ class ReconcileTestCase(unittest.TestCase):
     """The tracker's tempo against Deezer's figure (analysis._reconcile_tracked)."""
 
     def r(self, published, measured, conf=0.9, alternation=None):
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         return ana._reconcile_tracked(published, measured, conf, alternation)
 

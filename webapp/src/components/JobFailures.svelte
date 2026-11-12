@@ -29,7 +29,7 @@
   $: hidden = Math.max(0, failed - items.length);
 
   function asText() {
-    const head = `NSupySonic — ${label} : ${failed} en échec`;
+    const head = `Neezer — ${label} : ${failed} en échec`;
     const tally = reasons.map(([r, n]) => `  ${n}x ${r}`);
     const rows = items.map((f) => `  ${f.track || "?"} — ${f.reason}`);
     const more = hidden ? [`  … et ${hidden} autre${hidden > 1 ? "s" : ""}`] : [];

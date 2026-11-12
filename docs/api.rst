@@ -3,7 +3,7 @@ Subsonic API breakdown
 
 This page lists all the API methods and their parameters up to the version
 1.16.0 (Subsonic 6.1.2). Here you'll find details about which API features
-Supysonic support, plan on supporting, or won't.
+Neezer support, plan on supporting, or won't.
 
 At the moment, the current target API version is 1.12.0.
 

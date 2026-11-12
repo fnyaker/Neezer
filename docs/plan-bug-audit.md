@@ -33,7 +33,7 @@
 
 > **Statut initial : audit terminé, corrections à faire.**
 > Deux passes : (1) relecture complète de `webapp/src` (SPA Svelte),
-> `webapp/public/sw.js` (PWA), `supysonic/webui/` (backend `/api` + SPA serving)
+> `webapp/public/sw.js` (PWA), `neezer/webui/` (backend `/api` + SPA serving)
 > et `android/` (app native + `nsshim.js`) ; (2) **tests dynamiques en
 > conditions réelles** — serveur lancé, SPA buildée, pistes locales uploadées,
 > Chromium piloté par Playwright avec simulation de flux `/api/stream` lents,
@@ -229,7 +229,7 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
   sans vérifier `res.ok`). `Cache.put` stocke volontiers les 404/5xx.
 - **Correctif** : ne mettre en cache que si `res.ok` (voire `res.status === 200`
   pour exclure les réponses partielles) dans **les trois** branches fetch
-  (assets, navigations, autres GET). Bump `CACHE` en `nsupysonic-shell-v4` pour
+  (assets, navigations, autres GET). Bump `CACHE` en `neezer-shell-v4` pour
   purger les caches empoisonnés existants.
 
 ### 1.3 [web] Impossible de se déconnecter sur mobile
@@ -277,7 +277,7 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
   de connaître ou corriger l'état réel.
 - **Cause** : `webapp/src/routes/Album.svelte:17` et `Artist.svelte:17` —
   `fav = false` en dur ; le backend ne renvoie pas `is_favorite` pour ces
-  entités (`supysonic/webui/__init__.py:_album/_artist/_album_api/_artist_api`),
+  entités (`neezer/webui/__init__.py:_album/_artist/_album_api/_artist_api`),
   contrairement aux playlists (`_playlist` lit `IS_FAVORITE`).
 - **Correctif** : backend — exposer `is_favorite` sur `/api/album` (la page gw
   `pageAlbum` renvoie `FAVORITE`/`IS_FAVORITE` dans DATA ; sinon croiser avec
@@ -294,7 +294,7 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
   `deezer_id` UUID que ces endpoints ne connaissent pas.
 - **Cause** : `webapp/src/lib/actions.js:buildTrackMenu` ne distingue pas les
   épisodes (le backend les marque pourtant `podcast: true`,
-  `supysonic/webui/__init__.py:1388`).
+  `neezer/webui/__init__.py:1388`).
 - **Correctif** : dans `buildTrackMenu` (et `Player.trackMenu`), si
   `track.podcast` → menu réduit : Lire ensuite / Ajouter à la file /
   Télécharger / Ouvrir le podcast (`/podcast/<channel_id>`).
@@ -326,7 +326,7 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
   contrairement à toutes les routes voisines) → 500 HTML Flask au lieu d'un
   JSON d'erreur propre ; le front (autoplay/radio, `ensureUpcoming`) encaisse,
   mais les logs serveur se remplissent de stacktraces non maîtrisées.
-- **Cause** : `supysonic/webui/__init__.py:1110` (`provider.get_flow()`) et
+- **Cause** : `neezer/webui/__init__.py:1110` (`provider.get_flow()`) et
   `:1195` (`provider.get_track_mix(track_id)`).
 - **Correctif** : try/except → `502 {"error": ...}` (ou `{"tracks": []}` pour
   flow). Tests MockGW en erreur.
@@ -337,8 +337,8 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
   ou 04:00) → **deux** `DeezerImporter.sync` concurrents (doublons de travail,
   risques d'écritures concurrentes) ; et `/api/sync/status` répond
   `running: false` pendant une sync auto (spinner UI incohérent).
-- **Cause** : le verrou de `supysonic/webui/__init__.py:1848-1881` ne couvre
-  que le thread manuel ; `supysonic/deezer/scheduler.py:_run_sync/_loop` n'a
+- **Cause** : le verrou de `neezer/webui/__init__.py:1848-1881` ne couvre
+  que le thread manuel ; `neezer/deezer/scheduler.py:_run_sync/_loop` n'a
   aucun verrou partagé.
 - **Correctif** : un `threading.Lock` (ou flag) module-level dans
   `scheduler.py` acquis par `_run_sync` (non bloquant : skip si déjà en cours),
@@ -351,7 +351,7 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
   `/me/favorite-ids` + `/me/favorites` ne lisent que Deezer quand il répond —
   une étoile locale dont le push a échoué (ou désactivé) disparaît des cœurs
   et de la bibliothèque.
-- **Cause** : `supysonic/webui/__init__.py:1583-1591` (pas de check config) ;
+- **Cause** : `neezer/webui/__init__.py:1583-1591` (pas de check config) ;
   `:1280-1293` et `:1323-1338` (la branche live ignore les `StarredTrack`
   Deezer de l'admin).
 - **Correctif** : honorer `push_to_deezer` dans `/api/favorite` ; côté lecture,
@@ -470,7 +470,7 @@ s'inversent alors (pause toujours effective < 500 ms, aucun skip sur lenteur
 - **3.17 Notification zombie sur bouton média parasite** — casque/BT « play »
   alors que l'app est fermée → `MediaButtonReceiver` démarre `PlayerService`,
   `onStartCommand` fait `goForeground()` (`PlayerService.kt:144-147`) →
-  notification « NSupySonic » inerte (commandSink null, WebView morte).
+  notification « Neezer » inerte (commandSink null, WebView morte).
   Correctif : si `state == null && commandSink == null`, satisfaire le contrat
   (`startForeground`) puis `stopSelf()` immédiatement.
 - **3.18 `shouldOverrideUrlLoading` : préfixe trop permissif** —

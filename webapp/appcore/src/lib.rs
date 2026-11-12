@@ -1,4 +1,4 @@
-//! NSupySonic's APP CORE, compiled to WebAssembly for the page: the logic the
+//! Neezer's APP CORE, compiled to WebAssembly for the page: the logic the
 //! interface runs many times a second or over thousands of rows, where the
 //! JavaScript it replaced allocated as it went.
 //!

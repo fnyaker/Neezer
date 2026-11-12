@@ -2,7 +2,7 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
-**Providers (multi-provider plan, lot A)** (`supysonic/providers/`, `supysonic/sources.py`, plan `docs/multi-provider.md`).
+**Providers (multi-provider plan, lot A)** (`neezer/providers/`, `neezer/sources.py`, plan `docs/multi-provider.md`).
 Deezer and YouTube are meant to become two instances of one interface. Lot A lays the ground and
 wires nothing to the hot paths yet:
 
@@ -10,7 +10,7 @@ wires nothing to the hot paths yet:
   main|fallback, `capabilities`, `available()` with no network, `health()`, `config_schema()`; values are plain
   dicts), `errors.py` carries the rule "a failure is never a verdict" (only `NotFound`/`Gone` may mark a
   SOURCE unavailable), `registry.py` is `app.providers` (order and switches in `Meta` `prov.order` /
-  `prov.<id>.on`, third parties through the `supysonic.providers` entry points, a broken one is logged and
+  `prov.<id>.on`, third parties through the `neezer.providers` entry points, a broken one is logged and
   skipped), `fake.py` is the test provider (real 0.2 s WAV, `gone`, outages, a per-method call counter;
   `tests/multi_helpers.py`). `app.deezer` is untouched.
 - Schema `20261020`: `track_source` (PK `(provider, ref)`, index on `track`), `entity_ref` (`(kind, provider,
@@ -47,8 +47,8 @@ what exists; nothing moved and no route reads them yet (lot E wires `/stream`).
   `register_builtin(registry, getter)`. `tests/test_detach_guard.py` has a list of allowed calls per provider and
   fails if the interface grows a write verb.
 
-**Who may use a provider, for what (multi-provider §15, lot P1)** (`supysonic/providers/features.py`,
-`supysonic/access.py`, `webui/accessapi.py`, `components/AccessSettings.svelte` + `WhoPicker.svelte`, Réglages →
+**Who may use a provider, for what (multi-provider §15, lot P1)** (`neezer/providers/features.py`,
+`neezer/access.py`, `webui/accessapi.py`, `components/AccessSettings.svelte` + `WhoPicker.svelte`, Réglages →
 *Sources*). A provider declares FEATURES (`features.CATALOGUE`: shared ones such as search, stream, browse, track_info,
 artist_info…, and PERSONAL ones, my_tracks / my_artists / my_playlists…), what each needs (`none` / `account`), the
 fields an info feature gives, its login modes (`auth_modes`) and whether it runs without an account. Info providers
@@ -63,7 +63,7 @@ and YouTube's anonymous use to `all`, so an upgrade changes nothing. Enforcement
 `X-NS-Error: deezer-denied`), `webui/youtube.allowed`, and Subsonic's stream (`api/media._may_use`). `/api/me` carries
 `access` and the SPA hides what would be refused (`lib/access.js`). `tests/test_access.py`.
 
-**Each person's own account and their library (lot P2)** (`supysonic/libraryimport.py`, `webui/myaccounts.py`,
+**Each person's own account and their library (lot P2)** (`neezer/libraryimport.py`, `webui/myaccounts.py`,
 `components/MyAccounts.svelte` + `AccountPicker.svelte`, Réglages → Sources → *Mes comptes*). A person links their own
 Deezer (an ARL typed, or read off Deezer's login page by the Android app; checked by signing in, stored encrypted in
 `provider_account.secret`, refused when it IS the server's account) or their YouTube Music (the export's pasted headers:
@@ -89,7 +89,7 @@ removed favourite back; `test/dupkeys.test.mjs` refuses a key named twice in any
 `deezer import-account` runs this import on the server account. Options and the last report live in `provider_account.options` (schema
 `20261027`). Every route is the holder's own and `NEVER` for a remote session. `tests/test_library_import.py`.
 
-**Which Deezer serves a person (lot P3)** (`supysonic/deezer/accounts.py`, `access.Snapshot.serving`,
+**Which Deezer serves a person (lot P3)** (`neezer/deezer/accounts.py`, `access.Snapshot.serving`,
 `webui._provider`, `api/media._deezer_for`). Per request and per feature, the first account that can: the person's
 OWN, then the server's (held or granted), then a personal one lent to them, then the ANONYMOUS use — the public API
 alone (`accounts.public_api`, signed in as nobody), only for a feature the provider declares `auth: none`. An

@@ -286,7 +286,7 @@ const UPDATE_ERRORS = {
   signature:
     "Cette mise à jour n'est pas signée avec la même clé que l'application installée : Android refusera de l'installer par-dessus. Désinstallez l'application puis installez la nouvelle version.",
   permission:
-    "L'installation n'a pas été autorisée. Autorisez « Installer des applis inconnues » pour NSupySonic puis réessayez.",
+    "L'installation n'a pas été autorisée. Autorisez « Installer des applis inconnues » pour Neezer puis réessayez.",
 };
 
 // The notice that tells where the update stands, from one Updater message
@@ -303,7 +303,7 @@ export function updateNotice(msg, version, url, retry) {
   if (state === "permission")
     return {
       ...base,
-      message: "Autorisez NSupySonic à installer des applications, puis revenez : l'installation reprendra.",
+      message: "Autorisez Neezer à installer des applications, puis revenez : l'installation reprendra.",
     };
   if (state === "uptodate") return null;
   const why = UPDATE_ERRORS[msg && msg.reason] || UPDATE_ERRORS.network;

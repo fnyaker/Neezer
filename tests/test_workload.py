@@ -1,11 +1,11 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
 """A person waiting in front of the app outranks every background job.
 
-supysonic/deezer/workload.py and the download queue in prefetch.py are how
+neezer/deezer/workload.py and the download queue in prefetch.py are how
 that rule is kept, and until now only the request admission (503 +
 Retry-After) was tested. The rest — the priority order of the queue, bulk work
 standing down while a foreground download runs, the outage wait, the queue's
@@ -22,8 +22,8 @@ from unittest import mock
 
 from deezerpy.errors import DeezerUnavailable
 
-from supysonic.deezer import prefetch, workload
-from supysonic.deezer.workload import Priority
+from neezer.deezer import prefetch, workload
+from neezer.deezer.workload import Priority
 
 # How long a test waits for a worker before calling it stuck. Never reached by
 # a passing test; generous so a loaded CI machine costs nothing.
@@ -150,7 +150,7 @@ class DownloadQueueTestCase(unittest.TestCase):
             ("ensure_archived", ensure_archived),
             ("find_local_track", lambda did: None),
         ):
-            p = mock.patch(f"supysonic.deezer.archive.{name}", fake)
+            p = mock.patch(f"neezer.deezer.archive.{name}", fake)
             p.start()
             self.addCleanup(p.stop)
         # prefetch's OWN clock: patching time.sleep itself would also turn the
@@ -278,7 +278,7 @@ class AnalysisThreadNiceTest(unittest.TestCase):
         import threading
         import uuid as _uuid
 
-        from supysonic.deezer import analysis, workload
+        from neezer.deezer import analysis, workload
 
         order = []
         done = threading.Event()

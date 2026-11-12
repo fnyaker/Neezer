@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -12,14 +12,14 @@ the web app."""
 import unittest
 from unittest import mock
 
-from supysonic.db import Track, now
-from supysonic.providers import base
-from supysonic.providers.deezer import DeezerAdapter
-from supysonic.providers.fake import FakeProvider
-from supysonic.providers.info import MusicBrainzProvider
-from supysonic.providers.local import LocalProvider
-from supysonic.providers.registry import MemoryStore, Registry
-from supysonic.providers.youtube import YoutubeAdapter
+from neezer.db import Track, now
+from neezer.providers import base
+from neezer.providers.deezer import DeezerAdapter
+from neezer.providers.fake import FakeProvider
+from neezer.providers.info import MusicBrainzProvider
+from neezer.providers.local import LocalProvider
+from neezer.providers.registry import MemoryStore, Registry
+from neezer.providers.youtube import YoutubeAdapter
 
 from . import test_webui
 from .test_access import _Case
@@ -127,7 +127,7 @@ class SourcesApiTestCase(_Case):
         yt = by["youtube"]
         if not yt["configured"]:  # the optional extra is not installed here
             self.assertEqual(yt["place"], "off")
-            self.assertIn("supysonic[youtube]", yt["setup"])
+            self.assertIn("neezer[youtube]", yt["setup"])
         # Every screen gets the same, with the person: no request of its own.
         me = self.client.get("/api/me").get_json()["user"]["sources"]
         self.assertEqual([(s["id"], s["place"]) for s in me], [(s["id"], s["place"]) for s in j["sources"]])
@@ -189,7 +189,7 @@ class FallbackOrderTestCase(_Case):
             return search
 
         p = mock.patch(
-            "supysonic.webui.availability.FALLBACK_SEARCH",
+            "neezer.webui.availability.FALLBACK_SEARCH",
             {"fba": searcher("fba"), "fbb": searcher("fbb")},
         )
         p.start()

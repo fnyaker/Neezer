@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NSupySonic</string>
+    <string name="app_name">Neezer</string>
 
     <string name="channel_playback">Lecture</string>
     <string name="action_play">Lecture</string>
@@ -9,7 +9,7 @@
     <string name="action_next">Suivant</string>
 
     <string name="setup_title">Connexion au serveur</string>
-    <string name="setup_subtitle">Renseigne l\'adresse de ton instance NSupySonic.</string>
+    <string name="setup_subtitle">Renseigne l\'adresse de ton instance Neezer.</string>
     <string name="setup_host_hint">Adresse du serveur</string>
     <string name="setup_host_helper">ex. musique.mondomaine.fr ou http://192.168.1.10</string>
     <string name="setup_port_hint">Port (optionnel)</string>
@@ -30,7 +30,7 @@
     <string name="setup_battery_helper">Recommandé : évite qu\'Android tue le lecteur après une longue pause.</string>
     <string name="setup_battery_already">L\'optimisation batterie est déjà désactivée pour cette application.</string>
 
-    <string name="notifications_hint">Autorise les notifications pour afficher les contrôles de lecture (paramètres Android > Applications > NSupySonic).</string>
+    <string name="notifications_hint">Autorise les notifications pour afficher les contrôles de lecture (paramètres Android > Applications > Neezer).</string>
 
     <string name="download_started">Téléchargement de %1$s…</string>
     <string name="download_failed">Échec du téléchargement</string>

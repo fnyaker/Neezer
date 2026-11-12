@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2024 Alban 'spl0k' Féron
 #
@@ -23,7 +23,7 @@ class ApiTestBase(TestBase):
 
     def setUp(self, apiVersion="1.12.0"):
         super().setUp()
-        logging.getLogger("supysonic.api").addHandler(logging.NullHandler())
+        logging.getLogger("neezer.api").addHandler(logging.NullHandler())
         self.apiVersion = apiVersion
         xsd = etree.parse(f"tests/assets/subsonic-rest-api-{self.apiVersion}.xsd")
         self.schema = etree.XMLSchema(xsd)

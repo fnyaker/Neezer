@@ -20,11 +20,11 @@ NS_REQUIRE_FFMPEG=1 python tools/partest.py          # fail, don't skip, if ffmp
 pip install -e . && pip install lxml coverage        # == ci-requirements.txt
 
 # Run the server
-supysonic-server                                     # serves on :5722
-export FLASK_APP="supysonic.web:create_application()"; flask run   # backend dev server
+neezer-server                                     # serves on :5722
+export FLASK_APP="neezer.web:create_application()"; flask run   # backend dev server
 
 # Web UI (Svelte SPA)
-cd webapp && npm install && npm run build            # -> supysonic/webui/dist (gitignored)
+cd webapp && npm install && npm run build            # -> neezer/webui/dist (gitignored)
 cd webapp && npm run dev                             # hot reload; proxies /api -> localhost:5000
 cd webapp && npm test                                # node --test: the shipped rhythm analyser on real audio, the animation core against
                                                      # its JavaScript oracles, the catalogue/skins/drivers, the genre trainers, the cover loader.
@@ -80,21 +80,21 @@ cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen pl
                                                      # (the four browser tests above start tools/perf_api.py --serve; PYTHON=<venv python>, SHOTS=<dir> keeps pictures)
 
 # Deezer CLI
-supysonic-cli deezer login-test                      # check the ARL works
-supysonic-cli deezer import <deezer-url|track|album|playlist <id>>
-supysonic-cli deezer sync                            # import playlists/favorites/new releases
-supysonic-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for archived tracks
-supysonic-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo + style for archived tracks
-supysonic-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
+neezer-cli deezer login-test                      # check the ARL works
+neezer-cli deezer import <deezer-url|track|album|playlist <id>>
+neezer-cli deezer sync                            # import playlists/favorites/new releases
+neezer-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for archived tracks
+neezer-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo + style for archived tracks
+neezer-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
 python tools/tempo_eval.py --render /tmp/tempo          # the server's file tempo on the 28 arranged records + beatless tones
 python tools/perf_api.py [--tracks 20000] [--serve]     # every screen's /api route timed on a big synthetic library (Deezer off):
                                                      # median ms, SQL statement count, bytes and gzip bytes per route
-supysonic-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
-supysonic-cli deezer embed --self-test                 # check the mel front-end without a reference
+neezer-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
+neezer-cli deezer embed --self-test                 # check the mel front-end without a reference
 
 # Docker (full stack: builds SPA + python image, runs entrypoint that creates admin + auto-sync)
 docker compose up --build                            # web player at :5722/app, Subsonic at :5722/rest
-docker build -t nsupysonic:dev . && docker/smoke.sh nsupysonic:dev   # what CI checks before pushing
+docker build -t neezer:dev . && docker/smoke.sh neezer:dev   # what CI checks before pushing
 ```
 
 The project's subagents are declared in `opencode.json`, with their prompts under

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -41,9 +41,9 @@ class DockerRequirementsTestCase(unittest.TestCase):
 
     def test_it_lists_what_the_package_declares(self):
         try:
-            declared = requires("supysonic") or []
+            declared = requires("neezer") or []
         except PackageNotFoundError:  # pragma: no cover - not pip-installed
-            self.skipTest("supysonic is not installed (pip install -e .)")
+            self.skipTest("neezer is not installed (pip install -e .)")
         wanted = set()
         for req in declared:
             marker = re.search(r"""extra\s*==\s*["']([^"']+)["']""", req)

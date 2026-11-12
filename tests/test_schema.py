@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -17,8 +17,8 @@ import unittest
 
 from peewee import SqliteDatabase
 
-from supysonic import db as dbmod
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer.db import (
     SCHEMA_VERSION,
     PodcastChannel,
     Track,
@@ -252,7 +252,7 @@ class MigrationRepairTestCase(unittest.TestCase):
         nothing rather than fail the boot."""
         import importlib
 
-        _mod = importlib.import_module("supysonic.schema.migration.sqlite.20260808")
+        _mod = importlib.import_module("neezer.schema.migration.sqlite.20260808")
 
         init_database(self.uri)
         release_database()
@@ -283,8 +283,8 @@ class ShowArchiveSwitchUpgradeTestCase(unittest.TestCase):
     def test_an_upgraded_server_keeps_archiving_every_show(self):
         import sqlite3
 
-        from supysonic.db import User
-        from supysonic.managers.user import UserManager
+        from neezer.db import User
+        from neezer.managers.user import UserManager
 
         init_database(self.uri)
         UserManager.add("alice", "Alic3", admin=True)
@@ -338,7 +338,7 @@ class SkippedMigrationRepairTestCase(unittest.TestCase):
         return out
 
     def test_a_skipped_column_and_table_are_put_back(self):
-        from supysonic.db import ProviderAccount
+        from neezer.db import ProviderAccount
 
         init_database(self.uri)
         release_database()
@@ -359,8 +359,8 @@ class SkippedMigrationRepairTestCase(unittest.TestCase):
     def test_the_data_migrations_are_not_replayed(self):
         """20261029 switches every show on. Replayed on a server that only
         missed another migration, it would undo each show a person switched off."""
-        from supysonic.db import User
-        from supysonic.managers.user import UserManager
+        from neezer.db import User
+        from neezer.managers.user import UserManager
 
         init_database(self.uri)
         UserManager.add("alice", "Alic3", admin=True)
@@ -376,8 +376,8 @@ class SkippedMigrationRepairTestCase(unittest.TestCase):
         self.assertEqual(dbmod._missing_columns(), [])
 
     def test_a_skipped_data_migration_runs_with_its_column(self):
-        from supysonic.db import User
-        from supysonic.managers.user import UserManager
+        from neezer.db import User
+        from neezer.managers.user import UserManager
 
         init_database(self.uri)
         UserManager.add("alice", "Alic3", admin=True)
@@ -392,7 +392,7 @@ class SkippedMigrationRepairTestCase(unittest.TestCase):
 
     def test_a_complete_database_is_left_alone(self):
         init_database(self.uri)
-        with self.assertNoLogs("supysonic.db", level="WARNING"):
+        with self.assertNoLogs("neezer.db", level="WARNING"):
             release_database()
             init_database(self.uri)
 

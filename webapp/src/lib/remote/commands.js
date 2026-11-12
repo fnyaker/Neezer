@@ -12,7 +12,7 @@ import { migrateKey, trackKey } from "../trackkey.js";
 import { settingLevel } from "./settings.js";
 
 // Each command and the lowest level that may send it — the server's table
-// (supysonic/webui/remote.py#OPS), which is the one that is enforced. The
+// (neezer/webui/remote.py#OPS), which is the one that is enforced. The
 // client keeps its own copy only to not offer what it would be refused.
 export const OPS = {
   play: "queue",

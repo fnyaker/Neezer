@@ -1,10 +1,12 @@
 [base]
 ; A database URI. See the 'schema' folder for schema creation scripts. Note that
 ; you don't have to run these scripts yourself.
-; Default: sqlite:////tmp/supysonic/supysonic.db
-;database_uri = sqlite:////var/supysonic/supysonic.db
-;database_uri = mysql://supysonic:supysonic@localhost/supysonic
-;database_uri = postgres://supysonic:supysonic@localhost/supysonic
+; Default: sqlite:////tmp/neezer/neezer.db
+; With no config at all and an existing /tmp/supysonic/supysonic.db from
+; before the rebrand, that database is still used instead of a fresh one.
+;database_uri = sqlite:////var/neezer/neezer.db
+;database_uri = mysql://neezer:neezer@localhost/neezer
+;database_uri = postgres://neezer:neezer@localhost/neezer
 
 ; Optional, restrict scanner to these extensions. Default: none
 ;scanner_extensions = mp3 ogg
@@ -13,8 +15,8 @@
 follow_symlinks = no
 
 [webapp]
-; Optional cache directory. Default: /tmp/supysonic
-cache_dir = /var/supysonic/cache
+; Optional cache directory. Default: /tmp/neezer
+cache_dir = /var/neezer/cache
 
 ; Main cache max size in MB. Default: 512
 cache_size = 1024
@@ -23,7 +25,7 @@ cache_size = 1024
 transcode_cache_size = 1024
 
 ; Optional rotating log file. Default: none
-log_file = /var/supysonic/supysonic.log
+log_file = /var/neezer/neezer.log
 
 ; Log level. Possible values: DEBUG, INFO, WARNING, ERROR, CRITICAL.
 ; Default: WARNING
@@ -89,17 +91,17 @@ online_lyrics = off
 ; claimed. The Docker image fills this in from ANDROID_VERSION_NAME/APP_VERSION.
 ;android_version =
 ; Where that update is downloaded from. Default: the project's releases page.
-;android_url = https://github.com/fnyaker/NSupySonic/releases/latest
+;android_url = https://github.com/fnyaker/Neezer/releases/latest
 ; The app installs that update itself, from this server (/api/android/apk): by
-; default the server fetches nsupysonic.apk from the GitHub release named
+; default the server fetches neezer.apk from the GitHub release named
 ; android_version on the repository android_url points at, once, and keeps it
 ; in cache_dir. Set a path here to serve your own build instead.
-;android_apk = /srv/nsupysonic/nsupysonic.apk
+;android_apk = /srv/neezer/neezer.apk
 
 [daemon]
 ; Socket file the daemon will listen on for incoming management commands
-; Default: /tmp/supysonic/supysonic.sock
-socket = /var/run/supysonic.sock
+; Default: /tmp/neezer/neezer.sock
+socket = /var/run/neezer.sock
 
 ; Defines if the file watcher should be started. Default: yes
 run_watcher = yes
@@ -114,7 +116,7 @@ wait_delay = 5
 jukebox_command = mplayer -ss %offset %path
 
 ; Optional rotating log file for the scanner daemon. Logs to stderr if empty
-log_file = /var/supysonic/supysonic-daemon.log
+log_file = /var/neezer/neezer-daemon.log
 log_level = INFO
 log_rotate = yes
 
@@ -223,17 +225,17 @@ enabled = no
 
 ; Folder where fetched FLAC files are permanently archived. Required when
 ; enabled. Registered as an additional "Deezer" root library folder.
-;archive_dir = /var/supysonic/deezer-archive
+;archive_dir = /var/neezer/deezer-archive
 
 ; Optional: the frozen ONNX feature extractor used by the genre studio (needs
-; onnxruntime, i.e. supysonic[embedding]). It is a third-party artefact with its
+; onnxruntime, i.e. neezer[embedding]). It is a third-party artefact with its
 ; own licence, so it is NEVER downloaded for you: either import a copy from the
 ; genre studio's "Extracteur" card in the web UI, or point this at one you
 ; obtained yourself. Get the DYNAMIC-batch export (the "-bs64" one has a fixed
 ; batch of 64 and the extractor will refuse it):
 ; https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bsdynamic-1.onnx
 ; Leave unset when you used the web UI.
-;embed_model = /var/supysonic/models/discogs-effnet-bsdynamic-1.onnx
+;embed_model = /var/neezer/models/discogs-effnet-bsdynamic-1.onnx
 
 ; Quality fetched from Deezer and archived. FLAC | MP3_320 | MP3_128.
 ; Lower qualities requested by clients are produced by the existing transcoder
@@ -241,13 +243,13 @@ enabled = no
 ; Default: FLAC
 default_quality = FLAC
 
-; supysonic username that owns imported Deezer playlists/favorites. Required
+; neezer username that owns imported Deezer playlists/favorites. Required
 ; for sync. Imported playlists appear under this user.
 ;sync_user = MyUserName
 
 ; Refresh subscribed podcasts (shows) on each sync, and how many recent episodes
 ; to import per show. Subscribe via the Subsonic getPodcasts/createPodcastChannel
-; endpoints or `supysonic-cli deezer import <deezer show url>`. Episode audio is
+; endpoints or `neezer-cli deezer import <deezer show url>`. Episode audio is
 ; archived on first play (MP3, from the podcast host — no FLAC/transcode-from-FLAC).
 sync_podcasts = yes
 podcast_episodes = 30
@@ -288,15 +290,18 @@ sync_interval = 0
 ;
 ; On anything reachable from the internet, supply them out of band instead:
 ;
-;   SUPYSONIC_SECRET_PASSWORD_SECRET=<long random string>
-;   SUPYSONIC_SECRET_COOKIES_SECRET=<long random string>
-;   SUPYSONIC_SECRET_DAEMON_KEY=<long random string>
-;   SUPYSONIC_SECRETS_ENV_ONLY=1
+;   NEEZER_SECRET_PASSWORD_SECRET=<long random string>
+;   NEEZER_SECRET_COOKIES_SECRET=<long random string>
+;   NEEZER_SECRET_DAEMON_KEY=<long random string>
+;   NEEZER_SECRETS_ENV_ONLY=1
 ;
-; With SUPYSONIC_SECRETS_ENV_ONLY set, the server refuses to start rather than
+; (The pre-rebrand SUPYSONIC_SECRET_* / SUPYSONIC_SECRETS_ENV_ONLY /
+; SUPYSONIC_MIN_PASSWORD_LENGTH names are still read as a fallback.)
+;
+; With NEEZER_SECRETS_ENV_ONLY set, the server refuses to start rather than
 ; fall back to the database. Changing password_secret invalidates the stored
 ; recoverable passwords (token auth stops working until each user logs in once
 ; with a password); changing cookies_secret logs everyone out.
 ;
-; SUPYSONIC_MIN_PASSWORD_LENGTH=12 additionally enforces a minimum password
+; NEEZER_MIN_PASSWORD_LENGTH=12 additionally enforces a minimum password
 ; length on account creation and password changes (off by default).

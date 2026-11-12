@@ -18,7 +18,7 @@ function buildStamp() {
   let outDir = "dist";
   let assets = [];
   return {
-    name: "nsupysonic-build-stamp",
+    name: "neezer-build-stamp",
     configResolved(config) {
       outDir = config.build.outDir;
     },
@@ -62,7 +62,7 @@ function precompress() {
   const EXT = /\.(js|mjs|css|html|wasm|svg|json|webmanifest|txt)$/;
   let outDir = "dist";
   return {
-    name: "nsupysonic-precompress",
+    name: "neezer-precompress",
     apply: "build",
     configResolved(config) {
       outDir = config.build.outDir;
@@ -106,11 +106,11 @@ export default defineConfig({
   // that imports lazily needs code-splitting, which the default "iife" cannot do.
   worker: { format: "es" },
   build: {
-    outDir: "../supysonic/webui/dist",
+    outDir: "../neezer/webui/dist",
     emptyOutDir: true,
   },
   server: {
-    // `npm run dev` proxies API calls to a locally running supysonic.
+    // `npm run dev` proxies API calls to a locally running neezer.
     proxy: {
       "/api": "http://localhost:5000",
     },

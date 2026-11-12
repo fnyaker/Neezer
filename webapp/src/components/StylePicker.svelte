@@ -3,7 +3,7 @@
   // whole taste). Picking a family means ALL of it; its sub-genres open under the
   // row for a finer choice. The Flow then rests on what this person likes inside
   // the style, and the discovery slider decides how far from it the rest strays
-  // (supysonic/discover.py#style_taste). Kept on the device, like the energy notch.
+  // (neezer/discover.py#style_taste). Kept on the device, like the energy notch.
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
   import { startStyles, setStartStyles, STYLES_MAX } from "../lib/flow.js";

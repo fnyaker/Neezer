@@ -1,4 +1,4 @@
-# NSupySonic — application Android
+# Neezer — application Android
 
 Application Android native (Kotlin) qui embarque le lecteur web (`webapp/`)
 dans une WebView plein écran et lui donne ce qui manque au navigateur :
@@ -26,7 +26,7 @@ dans une WebView plein écran et lui donne ce qui manque au navigateur :
 ## Build
 
 L'APK est construit par le workflow CI `.github/workflows/android.yaml` :
-artefact `nsupysonic-apk` sur chaque build, et fichier attaché à la release
+artefact `neezer-apk` sur chaque build, et fichier attaché à la release
 GitHub sur les tags `v*`. Sans secrets configurés, la signature change à
 chaque run (il faut désinstaller pour mettre à jour) ; pour une signature
 stable, définir `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,

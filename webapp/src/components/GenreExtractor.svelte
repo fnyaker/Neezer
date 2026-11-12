@@ -124,7 +124,7 @@
   {#if !extractor.onnxruntime}
     <div class="st-note bad">
       <Icon name="alert" size={16} />
-      <span><code>onnxruntime</code> n'est pas installé sur le serveur (<code>supysonic[embedding]</code>).</span>
+      <span><code>onnxruntime</code> n'est pas installé sur le serveur (<code>neezer[embedding]</code>).</span>
     </div>
   {/if}
   {#if extractor.session_error}

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2022 Alban 'spl0k' Féron
 #
@@ -10,7 +10,7 @@ import os.path
 import requests
 import unittest
 
-from supysonic.db import Folder, Artist, Album, Track
+from neezer.db import Folder, Artist, Album, Track
 
 from ..api.apitestbase import ApiTestBase
 

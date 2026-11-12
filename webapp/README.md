@@ -1,13 +1,13 @@
-# NSupySonic — Deezer discovery web UI
+# Neezer — Deezer discovery web UI
 
 A Svelte + Vite single-page app that talks to the Deezer-native JSON backend
-(`/api`, see `supysonic/webui/`). It's the "own app" front end: home / Flow /
+(`/api`, see `neezer/webui/`). It's the "own app" front end: home / Flow /
 search / artist / album / playlist / library, with a persistent player and
 synchronized lyrics.
 
 ## Develop
 
-Run a supysonic server locally (it serves `/api`), then:
+Run a neezer server locally (it serves `/api`), then:
 
 ```sh
 cd webapp
@@ -15,14 +15,14 @@ npm install
 npm run dev      # http://localhost:5173, proxies /api -> http://localhost:5000
 ```
 
-Log in with a supysonic user (the same credentials as the Subsonic API).
+Log in with a neezer user (the same credentials as the Subsonic API).
 
 ## Build
 
 ```sh
 cd webapp
 npm install
-npm run build    # outputs to ../supysonic/webui/dist
+npm run build    # outputs to ../neezer/webui/dist
 ```
 
 The Flask server then serves it at **`/app/`** (e.g. `http://localhost:5000/app/`).
@@ -44,7 +44,7 @@ installed to deploy.
   rendering), `Cover`, `Sidebar`, `MobileNav`, `GradientHeader`.
 - `src/routes/*` — pages, wired in `src/App.svelte` via `svelte-spa-router` (hash mode).
 
-## Backend data sources (`supysonic/webui/__init__.py`)
+## Backend data sources (`neezer/webui/__init__.py`)
 
 The `/api` endpoints mix two Deezer backends, chosen for reliability:
 

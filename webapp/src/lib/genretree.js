@@ -1,6 +1,6 @@
 // The genre hierarchy, as the player needs it: "this genre has no picture of its
 // own, which one above it does?". The tree itself is the server's
-// (`supysonic/genretree.py`, served by GET /api/genre/tree); this is a small
+// (`neezer/genretree.py`, served by GET /api/genre/tree); this is a small
 // mirror of it that answers without a request.
 //
 // Three sources, best first: the tree the server last sent (kept on the device,
@@ -14,7 +14,7 @@
 // both reach for it, and a cycle here would be a cycle in the main bundle.
 
 /** The links of the default tree that name a genre the player has no table
- *  row for (the shelves). Kept in step with supysonic/deezer/genre_tree.py by
+ *  row for (the shelves). Kept in step with neezer/deezer/genre_tree.py by
  *  tests/test_multi_o.py. */
 export const DEFAULT_EDGES = /*edges*/ [["Hard dance","Électronique",1]] /*end*/;
 

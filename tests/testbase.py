@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2022 Alban 'spl0k' Féron
 #
@@ -13,10 +13,10 @@ import sys
 import tempfile
 import unittest
 
-from supysonic.db import release_database
-from supysonic.config import DefaultConfig
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.db import release_database
+from neezer.config import DefaultConfig
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 
 class TestConfig(DefaultConfig):
@@ -94,7 +94,7 @@ class TestBase(unittest.TestCase):
     def setUp(self):
         # Process memory a previous test's first-play lyrics may have left
         # (deezer/lyrics.remember_cold is keyed by a track id tests reuse).
-        from supysonic.deezer import lyrics as _lyrics
+        from neezer.deezer import lyrics as _lyrics
 
         _lyrics._cold.clear()
         self.__db = tempfile.mkstemp()

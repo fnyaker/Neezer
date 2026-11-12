@@ -3,7 +3,7 @@
 # worth publishing. The Docker workflow runs it on every build; it runs just as
 # well locally:
 #
-#   docker build -t nsupysonic:dev . && docker/smoke.sh nsupysonic:dev
+#   docker build -t neezer:dev . && docker/smoke.sh neezer:dev
 #
 # A build that succeeds proves the Dockerfile ran. It says nothing about whether
 # ffmpeg still has the filters the analysis drives, whether the SPA made it into
@@ -59,18 +59,18 @@ import importlib.util
 import os
 
 import gunicorn, numpy, onnxruntime, psycopg2  # noqa: F401 - the extras
-import supysonic.web  # noqa: F401 - the app itself
-import supysonic.webui as webui
+import neezer.web  # noqa: F401 - the app itself
+import neezer.webui as webui
 
 dist = os.path.join(os.path.dirname(webui.__file__), "dist")
 assert os.path.isfile(os.path.join(dist, "index.html")), "the SPA is not installed"
 wasm = [n for _r, _d, files in os.walk(dist) for n in files if n.endswith(".wasm")]
 assert any(n.startswith("rhythm") for n in wasm), f"no rhythm analyser in {wasm}"
 
-from supysonic.deezer import embedding
+from neezer.deezer import embedding
 assert embedding.available(), "the embedding extractor reports itself unavailable"
 
-from supysonic.deezer import youtube
+from neezer.deezer import youtube
 assert youtube.installed(), "the YouTube fallback reports itself unavailable"
 
 for tool in ("pip", "setuptools", "wheel"):
@@ -82,8 +82,8 @@ step "boots, bootstraps the admin, serves the SPA and the Subsonic API"
 password="smoke-$RANDOM$RANDOM$RANDOM"
 cid="$(docker run -d -p 127.0.0.1::5722 \
     -e DATABASE_URI=sqlite:////data/db/smoke.db \
-    -e SUPYSONIC_ADMIN_USER=smoke \
-    -e SUPYSONIC_ADMIN_PASSWORD="$password" \
+    -e NEEZER_ADMIN_USER=smoke \
+    -e NEEZER_ADMIN_PASSWORD="$password" \
     "$IMAGE")"
 cleanup() {
     status=$?

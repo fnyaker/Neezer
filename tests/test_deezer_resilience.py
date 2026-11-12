@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -28,7 +28,7 @@ import requests
 from deezerpy import DEFAULT_TIMEOUT, Deezer
 from deezerpy._circuit import CircuitBreaker, breaker
 from deezerpy.errors import DeezerUnavailable, GWAPIError, WrongLicense, is_transport_failure
-from supysonic.deezer.provider import (
+from neezer.deezer.provider import (
     DeezerError,
     DeezerProvider,
     ShowUnavailable,
@@ -614,7 +614,7 @@ class PodcastDnsTestCase(unittest.TestCase):
     """
 
     def setUp(self):
-        from supysonic.deezer import provider as provider_mod
+        from neezer.deezer import provider as provider_mod
 
         self.mod = provider_mod
         provider_mod._resolve_cache.clear()
@@ -755,7 +755,7 @@ class AddressPinningTestCase(unittest.TestCase):
     """
 
     def setUp(self):
-        from supysonic.deezer import provider as provider_mod
+        from neezer.deezer import provider as provider_mod
 
         self.mod = provider_mod
         provider_mod._resolve_cache.clear()

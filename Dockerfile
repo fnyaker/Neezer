@@ -36,14 +36,14 @@ COPY webapp/measure/ ./
 RUN cargo build --release --target wasm32-unknown-unknown --target-dir /out/measure
 
 # ---------------------------------------------------------------------------
-# Web builder: compile the Svelte discovery SPA (vite -> supysonic/webui/dist)
+# Web builder: compile the Svelte discovery SPA (vite -> neezer/webui/dist)
 # ---------------------------------------------------------------------------
 # JavaScript out, like the WebAssembly above: build it natively once. Node 22:
 # 20 left maintenance in April 2026, and Vite 7 wants 20.19+/22.12+ anyway.
 FROM --platform=$BUILDPLATFORM node:22-slim AS webbuilder
 
 WORKDIR /web/webapp
-# Install deps first for layer caching, then build (outDir is ../supysonic/...).
+# Install deps first for layer caching, then build (outDir is ../neezer/...).
 # `npm ci`, not `npm install`: exactly the committed lockfile, and a lockfile
 # that disagrees with package.json fails here instead of resolving something
 # nobody tested. The cache mount only helps local rebuilds (CI builders start
@@ -60,7 +60,7 @@ COPY --from=wasmbuilder /out/appcore/wasm32-unknown-unknown/release/appcore.wasm
 COPY --from=wasmbuilder /out/trainer/wasm32-unknown-unknown/release/trainer.wasm src/lib/genre/trainer.wasm
 COPY --from=wasmbuilder /out/trainer-simd/wasm32-unknown-unknown/release/trainer.wasm src/lib/genre/trainer-simd.wasm
 COPY --from=wasmbuilder /out/measure/wasm32-unknown-unknown/release/measure.wasm src/lib/measure/measure.wasm
-RUN npm run build   # writes /web/supysonic/webui/dist
+RUN npm run build   # writes /web/neezer/webui/dist
 
 # ---------------------------------------------------------------------------
 # ffmpeg: one static binary, no shared library anywhere
@@ -81,12 +81,12 @@ RUN npm run build   # writes /web/supysonic/webui/dist
 FROM mwader/static-ffmpeg:9.0.2@sha256:7d9bdaaf887f7e6ce6151f67325c344074b5ff1fb75316011c3376503e449a7b AS ffmpeg
 
 # The JavaScript runtime yt-dlp needs to solve YouTube's player challenges, for
-# the YouTube fallback (supysonic/deezer/youtube.py). One static binary, glibc,
+# the YouTube fallback (neezer/deezer/youtube.py). One static binary, glibc,
 # both architectures; pinned to the multi-arch index digest like ffmpeg.
 FROM denoland/deno:bin-2.9.7@sha256:bc5aa4466e21b6d3021226a85ba2e1911f7c386254d97b9d797903ab74edace2 AS deno
 
 # ---------------------------------------------------------------------------
-# Builder: install supysonic (+ vendored deezerpy) and gunicorn into a venv
+# Builder: install neezer (+ vendored deezerpy) and gunicorn into a venv
 # ---------------------------------------------------------------------------
 FROM python:3.13-slim AS builder
 
@@ -113,9 +113,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 #    change does not rebuild this either (the SPA arrives from webbuilder).
 COPY setup.py pyproject.toml MANIFEST.in LICENSE README.md config.sample ./
 COPY deezerpy/ deezerpy/
-COPY supysonic/ supysonic/
+COPY neezer/ neezer/
 # Bundle the built SPA into the package tree so package_data installs it.
-COPY --from=webbuilder /web/supysonic/webui/dist /src/supysonic/webui/dist
+COPY --from=webbuilder /web/neezer/webui/dist /src/neezer/webui/dist
 
 # --no-deps: step 1 installed them, and `pip check` fails the build if it
 # missed one. The copy block puts the built SPA next to the installed package
@@ -125,10 +125,10 @@ COPY --from=webbuilder /web/supysonic/webui/dist /src/supysonic/webui/dist
 # who needs one), and numpy's bundled test suite is another ~10 MB.
 RUN pip install --no-deps --no-build-isolation . \
  && pip check \
- && DEST="$(cd / && python -c 'import os, supysonic.webui as w; print(os.path.dirname(w.__file__))')" \
- && if [ "$DEST" != "/src/supysonic/webui" ]; then \
+ && DEST="$(cd / && python -c 'import os, neezer.webui as w; print(os.path.dirname(w.__file__))')" \
+ && if [ "$DEST" != "/src/neezer/webui" ]; then \
         mkdir -p "$DEST/dist" \
-     && cp -r /src/supysonic/webui/dist/. "$DEST/dist/"; \
+     && cp -r /src/neezer/webui/dist/. "$DEST/dist/"; \
     fi \
  && test -f "$DEST/dist/index.html" \
  && pip uninstall -y -q setuptools wheel \
@@ -141,9 +141,9 @@ RUN pip install --no-deps --no-build-isolation . \
 # ---------------------------------------------------------------------------
 FROM python:3.13-slim AS runtime
 
-LABEL org.opencontainers.image.title="NSupySonic" \
-      org.opencontainers.image.description="Supysonic Subsonic server with a Deezer proxy (archive + on-the-fly transcoding, two-way playlist/favorite sync)" \
-      org.opencontainers.image.source="https://github.com/fnyaker/NSupySonic" \
+LABEL org.opencontainers.image.title="Neezer" \
+      org.opencontainers.image.description="Neezer Subsonic server with a Deezer proxy (archive + on-the-fly transcoding, two-way playlist/favorite sync)" \
+      org.opencontainers.image.source="https://github.com/fnyaker/Neezer" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 # The codec-specific command-line tools behind config.sample's lame / mpg123 /
@@ -167,19 +167,24 @@ ENV PATH="/opt/venv/bin:$PATH" \
     APP_VERSION="$APP_VERSION"
 
 # Non-root user; all mutable state lives under /data (a volume).
-RUN useradd --system --create-home --uid 1000 supysonic \
+RUN useradd --system --create-home --uid 1000 neezer \
  && mkdir -p /data/db /data/cache /data/archive /data/music \
- && chown -R supysonic:supysonic /data
+ && chown -R neezer:neezer /data
 
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Baked default config so the container boots without a mounted config; a
-# bind-mounted /etc/supysonic overrides it entirely.
+# bind-mounted /etc/neezer overrides it entirely.
+COPY docker/default.conf /etc/neezer
+# Pre-rebrand path, still baked for the same reason: an existing deployment
+# bind-mounts its own file at /etc/supysonic, and Docker needs that path to be a
+# file (not a fresh directory) for the mount to work. Config discovery reads
+# /etc/supysonic after /etc/neezer, so the mounted file still wins.
 COPY docker/default.conf /etc/supysonic
 # Gunicorn config (workers/threads/timeout are env-tunable; see the file).
 COPY docker/gunicorn.conf.py /etc/gunicorn.conf.py
 
-USER supysonic
+USER neezer
 WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 5722
@@ -193,4 +198,4 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # (env-tunable). One worker keeps the per-process archive lock / single Deezer
 # session effective; threads give concurrency.
 CMD ["gunicorn", "-c", "/etc/gunicorn.conf.py", \
-     "supysonic.web:create_application()"]
+     "neezer.web:create_application()"]

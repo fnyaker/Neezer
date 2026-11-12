@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2022 Alban 'spl0k' Féron
 #
@@ -15,10 +15,10 @@ import unittest
 
 from hashlib import sha1
 
-from supysonic import watcher as watcher_module
-from supysonic.db import init_database, release_database, Track, Artist, Folder
-from supysonic.managers.folder import FolderManager
-from supysonic.watcher import SupysonicWatcher
+from neezer import watcher as watcher_module
+from neezer.db import init_database, release_database, Track, Artist, Folder
+from neezer.managers.folder import FolderManager
+from neezer.watcher import NeezerWatcher
 
 from ..testbase import TestConfig
 
@@ -48,7 +48,7 @@ class WatcherTestBase(unittest.TestCase):
         init_database(dburi)
 
         conf = WatcherTestConfig(dburi)
-        self.__watcher = SupysonicWatcher(conf)
+        self.__watcher = NeezerWatcher(conf)
 
         # Count the queue's processing passes: each one ends with a prune(), in
         # the watcher's own thread. That is what _settle() waits on.

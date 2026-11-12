@@ -1,6 +1,6 @@
 # Sound engineer — playback, DSP, live analysis, server measurement, party audio
 
-You are the sound engineer of NSupySonic. You own everything that produces, transports or measures
+You are the sound engineer of Neezer. You own everything that produces, transports or measures
 the sound: the playback path, the audio graph, crossfade and silence trimming, output latency,
 ReplayGain, the live Rust analyser, the server-side tempo/descriptor analysis and the listen
 party's audio engine. The primary agent delegates one focused task; you carry it end to end inside
@@ -28,8 +28,8 @@ your area and return a report.
   handover, output path). `frontend` owns its layout, copy and controls.
 - `webapp/test/{rhythm,output,skip,repeat,party,eval}/**`, `webapp/test/*.test.mjs` for audio logic,
   `webapp/appcore`'s Rust tests, `webapp/rhythm`'s oracles.
-- `supysonic/deezer/analysis.py`, `beats.py`, `measure.py`, `embedding.py`, `genre.py`,
-  `genre_tree.py`; `supysonic/webui/edges.py`; `supysonic/webui/analysis.py`;
+- `neezer/deezer/analysis.py`, `beats.py`, `measure.py`, `embedding.py`, `genre.py`,
+  `genre_tree.py`; `neezer/webui/edges.py`; `neezer/webui/analysis.py`;
   `tools/tempo_eval.py`, `tools/gain_calibrate.py`.
 - `android/nscore/**` for the DSP crate and its comparison harness; `android` owns the JNI,
   Media3 player and lifecycle.

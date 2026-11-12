@@ -2,7 +2,7 @@
 //
 // The server used to answer the Flow with forty titles, and what the person
 // then did reached only the next forty. Now (design and sources:
-// /mnt/project-files/algos/flow-personnalise.md, supysonic/discover.py
+// /mnt/project-files/algos/flow-personnalise.md, neezer/discover.py
 // #flow_next) the queue holds the playing title and AT MOST the next one, and
 // that next one is chosen about PICK_AHEAD seconds before the end of the
 // playing title — after everything the session said: what was heard and for

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -13,9 +13,9 @@ import tempfile
 import unittest
 import uuid
 
-from supysonic import db as dbmod
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer.config import DefaultConfig
+from neezer.db import (
     Album,
     Meta,
     Playlist,
@@ -26,9 +26,9 @@ from supysonic.db import (
     init_database,
     release_database,
 )
-from supysonic.deezer import ids
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.deezer import ids
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from .detach_helpers import assert_no_deezer_writes, record_deezer_writes
 from .test_deezer import count_statements
@@ -58,7 +58,7 @@ class _AppCase(unittest.TestCase):
         self.boot()
 
     def boot(self):
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         self.app = create_application(self.Config())
         if not User.select().where(User.name == "alice").exists():
@@ -80,7 +80,7 @@ class _AppCase(unittest.TestCase):
         os.remove(self._db[1])
 
     def make_track(self, sng_id="1", title="Song"):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         return library.upsert_track(
@@ -189,7 +189,7 @@ class LocalCycleTestCase(_AppCase):
 
 class RefsTestCase(_AppCase):
     def resolve(self, *raws, **kw):
-        from supysonic.webui import refs
+        from neezer.webui import refs
 
         with self.app.test_request_context():
             from flask import request
@@ -212,7 +212,7 @@ class RefsTestCase(_AppCase):
         self.assertEqual(self.resolve("1")[0].id, row.id)
 
     def test_another_users_upload_is_hidden(self):
-        from supysonic.webui import refs
+        from neezer.webui import refs
 
         t = self.make_track("1")
         UserManager.add("bob", "B0b")
@@ -232,7 +232,7 @@ class RefsTestCase(_AppCase):
         raws = [str(i + 1) for i in range(5)] + [str(uuid.uuid4()) for _ in range(95)] + [str(9000 + i) for i in range(100)]
         with self.app.test_request_context():
             from flask import request
-            from supysonic.webui import refs
+            from neezer.webui import refs
 
             request.webuser = User.get(name="alice")
             with count_statements() as n:
@@ -241,7 +241,7 @@ class RefsTestCase(_AppCase):
         self.assertLessEqual(sum(n.values()), 2, n)
 
     def test_a_remembered_youtube_hit_is_materialized_on_request(self):
-        from supysonic.webui import refs, youtube
+        from neezer.webui import refs, youtube
 
         tid = uuid.uuid4()
         row = self.make_track("1")

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "nsupysonic-android"
+rootProject.name = "neezer-android"
 include(":app")

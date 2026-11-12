@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2022 Alban 'spl0k' Féron
 #
@@ -12,8 +12,8 @@ import unittest
 
 from click.testing import CliRunner
 
-from supysonic.db import Folder, User, init_database, release_database
-from supysonic.cli import cli
+from neezer.db import Folder, User, init_database, release_database
+from neezer.cli import cli
 
 from ..testbase import TestConfig
 
@@ -97,7 +97,7 @@ class CLITestCase(unittest.TestCase):
         prompt, the confirmation hit EOF, and "Aborted!" went to the
         entrypoint's /dev/null — so a fresh container never got its admin.
         """
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         rv = self.__runner.invoke(
             cli,
@@ -110,7 +110,7 @@ class CLITestCase(unittest.TestCase):
         self.assertIsNotNone(UserManager.try_auth("alice", "S3cr3t-pw"))
 
     def test_user_add_prompts_when_given_no_password(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         rv = self.__runner.invoke(
             cli, ["user", "add", "bob"], input="B0b-pass\nB0b-pass\n", obj=self.__conf

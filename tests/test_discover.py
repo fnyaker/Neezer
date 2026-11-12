@@ -1,10 +1,10 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
 """Recommendations, the Flow's discovery level and the releases of favourite
-artists (supysonic/discover.py, supysonic/releases.py, webui/discover.py).
+artists (neezer/discover.py, neezer/releases.py, webui/discover.py).
 
 A small library with a known shape: a loved frenchcore artist, an uptempo
 artist the provider lists as close to it, a hardcore artist next to it by sound,
@@ -20,15 +20,15 @@ import random
 import sqlite3
 import unittest
 
-from supysonic import db as dbmod
-from supysonic import discover, releases
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer import discover, releases
+from neezer.db import (
     Album, Artist, ArtistLink, ArtistRelease, ArtistTop, ArtistWatch, Meta,
     StarredArtist, StarredTrack, Track, TrackAnalysis, TrackNeighbor, User,
     UserTaste, init_database, release_database,
 )
-from supysonic.providers.errors import ProviderUnavailable
-from supysonic.providers.fake import FakeProvider
+from neezer.providers.errors import ProviderUnavailable
+from neezer.providers.fake import FakeProvider
 
 from .test_detach_a import _AppCase
 
@@ -54,7 +54,7 @@ def count_statements(fn):
 class _Library(_AppCase):
     def setUp(self):
         super().setUp()
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         self.root = library.get_root_folder(self.archive)
         self.user = User.get(User.name == "alice")
@@ -224,7 +224,7 @@ class RoutesTestCase(_Library):
         self.assertNotIn("Fav LP", album_titles)  # played: not a recommendation
 
     def test_my_artists_lists_the_stars_with_what_the_library_holds(self):
-        from supysonic.db import ListenEvent
+        from neezer.db import ListenEvent
 
         other = Artist.get(Artist.name == "Other")
         StarredArtist.create(user=self.user, starred=other)
@@ -241,7 +241,7 @@ class RoutesTestCase(_Library):
         self.assertEqual(got[1]["deezer_id"], DEEZER_IDS["Fav"])
         self.assertEqual(got[1]["picture"], "/api/cover/" + got[1]["id"])
         # Somebody else's stars are theirs.
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.add("bob", "B0bpass", admin=False)
         bob = self.app.test_client()
@@ -270,7 +270,7 @@ class RoutesTestCase(_Library):
         self.assertEqual(sum(fake.calls.values()), 0)
 
     def test_a_guest_sees_only_what_they_may_read(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.add("bob", "B0bpass", admin=False)
         private = self.tracks["Far"][0]
@@ -282,7 +282,7 @@ class RoutesTestCase(_Library):
         self.assertNotIn(str(private.deezer_id), ids)
 
     def test_the_admin_routes_are_the_admin_s(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.add("bob", "B0bpass", admin=False)
         guest = self.app.test_client()
@@ -403,7 +403,7 @@ class ReleasesTestCase(_Library):
         self.assertEqual(sum(self.fake.calls.values()), 0)
 
     def test_a_person_sees_only_their_favourites_releases(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         self.run_job()
         UserManager.add("bob", "B0bpass", admin=False)
@@ -543,8 +543,8 @@ class FamilyIdsTestCase(unittest.TestCase):
     """The analysis stores the engine's family ids; the tree is made of labels."""
 
     def test_every_engine_family_id_is_a_node_of_the_tree(self):
-        from supysonic import genretree
-        from supysonic.deezer.analysis import FAMILIES
+        from neezer import genretree
+        from neezer.deezer.analysis import FAMILIES
 
         tree = genretree.Tree(genretree.default_edges())
         unknown = [fid for fid, label, _a, _w in FAMILIES
@@ -556,7 +556,7 @@ class FamilyIdsTestCase(unittest.TestCase):
         self.assertEqual(tree.node("hiphop"), "Hip-hop")
 
     def test_a_family_id_is_as_close_to_its_label_as_the_label_is(self):
-        from supysonic import genretree
+        from neezer import genretree
 
         tree = genretree.Tree(genretree.default_edges())
         with unittest.mock.patch.object(genretree, "get", lambda: tree):

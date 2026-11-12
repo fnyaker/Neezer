@@ -848,7 +848,7 @@ test("a world cannot see wall-clock time, because the engine gives it none", () 
 // --- the skins -----------------------------------------------------------------
 
 const EXTRA = (() => {
-  const py = readFileSync(new URL("../../supysonic/deezer/analysis.py", import.meta.url), "utf8");
+  const py = readFileSync(new URL("../../neezer/deezer/analysis.py", import.meta.url), "utf8");
   const block = py.match(/EXTRA_GENRES = \[([\s\S]*?)\n\]/);
   assert.ok(block, "EXTRA_GENRES is no longer where this test looks for it");
   return [...block[1].matchAll(/\("([^"]+)",\s*"([a-z]+)"\)/g)].map((m) => [m[1], m[2]]);

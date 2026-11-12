@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -20,11 +20,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-from supysonic.config import DefaultConfig
-from supysonic.db import StarredTrack, Track, now, release_database
-from supysonic.deezer import youtube as yt
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.config import DefaultConfig
+from neezer.db import StarredTrack, Track, now, release_database
+from neezer.deezer import youtube as yt
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 
@@ -115,7 +115,7 @@ class YoutubeTestCase(unittest.TestCase):
         self.addCleanup(p.stop)
         # The whole-track analysis a new archive queues runs on a thread of its
         # own, past the end of the test; it has its own tests.
-        p = mock.patch("supysonic.deezer.analysis.queue_analysis", lambda *a, **k: None)
+        p = mock.patch("neezer.deezer.analysis.queue_analysis", lambda *a, **k: None)
         p.start()
         self.addCleanup(p.stop)
         self.downloads = []
@@ -349,7 +349,7 @@ class YoutubeTestCase(unittest.TestCase):
         rv = self.client.post("/api/favorite", json={"deezer_id": tid, "on": True})
         self.assertEqual(rv.status_code, 200)
         # What every playlist edit resolves its track ids through.
-        from supysonic import webui
+        from neezer import webui
 
         with self.app.test_request_context():
             from flask import request
@@ -365,13 +365,13 @@ class YoutubeTestCase(unittest.TestCase):
         self.assertEqual([(f["deezer_id"], f["source"]) for f in favs], [(tid, "youtube")])
 
     def test_the_two_serializers_agree_on_a_youtube_row(self):
-        from supysonic import webui
+        from neezer import webui
 
         self._login()
         tid = self._search()[0]["deezer_id"]
         self.client.post("/api/favorite", json={"deezer_id": tid, "on": True})
         with self.app.test_request_context():
-            from supysonic.db import Album, Artist
+            from neezer.db import Album, Artist
 
             q = (
                 Track.select(Track, Album, Artist).join(Album).switch(Track).join(Artist)
@@ -391,7 +391,7 @@ class YoutubeTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/api/me/local").get_json()["tracks"], [])
 
     def test_the_local_scan_keeps_unarchived_rows_and_skips_the_staging(self):
-        from supysonic.deezer import local
+        from neezer.deezer import local
 
         self._login()
         tid = self._search()[0]["deezer_id"]
@@ -446,7 +446,7 @@ class YoutubeTestCase(unittest.TestCase):
         tid = self._dead_hit()
         found = {"deezer_id": "777", "title": "One More Time", "duration": 321,
                  "artists": [{"name": "Daft Punk"}], "album": {"title": "Discovery"}}
-        with mock.patch("supysonic.webui.availability._local_search_tracks", lambda q, n: [found]):
+        with mock.patch("neezer.webui.availability._local_search_tracks", lambda q, n: [found]):
             body = self.client.get(f"/api/replace/candidates/{tid}").get_json()
             self.assertEqual(self.fake.calls, [])
             self.assertFalse(body["youtube_auto"])
@@ -460,7 +460,7 @@ class YoutubeTestCase(unittest.TestCase):
         tid = self._dead_hit()
         other = {"deezer_id": "778", "title": "Harder Better Faster Stronger", "duration": 224,
                  "artists": [{"name": "Daft Punk"}], "album": {"title": "Discovery"}}
-        with mock.patch("supysonic.webui.availability._local_search_tracks", lambda q, n: [other]):
+        with mock.patch("neezer.webui.availability._local_search_tracks", lambda q, n: [other]):
             body = self.client.get(f"/api/replace/candidates/{tid}").get_json()
         self.assertTrue(body["youtube_auto"])
         self.assertEqual(len(self.fake.calls), 1)

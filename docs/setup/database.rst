@@ -1,7 +1,7 @@
 Database setup
 ==============
 
-Supysonic needs a database to run. It can either be a SQLite, MySQL-compatible
+Neezer needs a database to run. It can either be a SQLite, MySQL-compatible
 or PostgreSQL database.
 
 If you absolutely have no clue about databases, you can go with SQLite as it
@@ -17,7 +17,7 @@ doesn't need any setup other than specifying a path for the database in the
    drop, or even errors.
 
 Please refer to the documentation of the DBMS you've chosen on how to create a
-database. Once it has a database, Supysonic will automatically create the
+database. Once it has a database, Neezer will automatically create the
 tables it needs and keep the schema up-to-date.
 
 The PostgreSQL case
@@ -31,9 +31,9 @@ known as *root* on Linux systems).
 
 On a Debian-based system you can connect as a superuser by invoking
 :command:`psql` while being logged in as the *postgres* user. The following
-commands will install the ``citext`` extension on the database named *supysonic*
+commands will install the ``citext`` extension on the database named *neezer*
 assuming you are currently logged as *root*. ::
 
    # su - postgres
-   $ psql supysonic
-   supysonic=# CREATE EXTENSION citext;
+   $ psql neezer
+   neezer=# CREATE EXTENSION citext;

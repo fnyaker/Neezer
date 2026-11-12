@@ -1,4 +1,4 @@
-Using Supysonic
+Using Neezer
 ===============
 
 Now that everything is :doc:`set up <setup/index>`, there's actually some more
@@ -12,26 +12,26 @@ Adding users
 ------------
 
 One of the first thing you want to do is to create the user(s) that will be
-allowed to access Supysonic. The first user has to be created with the
-:abbr:`CLI (command-line interface)` (:doc:`manpage here <man/supysonic-cli>`),
+allowed to access Neezer. The first user has to be created with the
+:abbr:`CLI (command-line interface)` (:doc:`manpage here <man/neezer-cli>`),
 if you set them as an admin this new user will then be able to add more users
 through :ref:`usage-web`.
 
 Creating a new user and giving them administrative rights is done with the
 following two commands::
 
-   $ supysonic-cli user add TheUserName
-   $ supysonic-cli user setroles --admin TheUserName
+   $ neezer-cli user add TheUserName
+   $ neezer-cli user setroles --admin TheUserName
 
 The first command will ask for a password but you can also provide it on the
 command-line::
 
-   $ supysonic-cli user add TheUserName --password ThePassword
+   $ neezer-cli user add TheUserName --password ThePassword
 
 If you don't want to set the user as an admin but still want them to be able to
 use the :doc:`jukebox`, you can give them the right like so::
 
-   $ supysonic-cli user setroles --jukebox TheUserName
+   $ neezer-cli user setroles --jukebox TheUserName
 
 This last one isn't needed for admins as they have full control over the
 installation.
@@ -41,16 +41,16 @@ installation.
 Defining and scanning folders
 -----------------------------
 
-Supysonic will be pretty useless if you don't tell it where your music is
+Neezer will be pretty useless if you don't tell it where your music is
 located. This can once again be done with the CLI or the web interface.
 
 Using the CLI::
 
-   $ supysonic-cli folder add SomeFolderName /path/where/the/music/is
+   $ neezer-cli folder add SomeFolderName /path/where/the/music/is
 
 The next step is now to scan the folder to find all the media files it holds::
 
-   $ supysonic-cli folder scan SomeFolderName
+   $ neezer-cli folder scan SomeFolderName
 
 If :doc:`setup/daemon` is running, this will start scanning in the background,
 otherwise you'll have to wait for the scan to end. This can take some time if
@@ -62,14 +62,14 @@ The web interface
 -----------------
 
 Once you have created a user, you can access the web interface at the root URL
-where the application is deployed. As Supysonic is mostly a server and not a
+where the application is deployed. As Neezer is mostly a server and not a
 media player this interface won't provide much. It is mainly used for
 administrative purposes but also provides some features for regular users that
 are only available through this interface.
 
 Once logged, users can click on their username in the top bar to access some
 settings. These include the ability to link their Last.fm__ account provided
-Supysonic was :ref:`configured <conf-lastfm>` with Last.fm API keys. Once linked
+Neezer was :ref:`configured <conf-lastfm>` with Last.fm API keys. Once linked
 clients will then be able to send *scrobbles*.
 
 .. note::
@@ -99,19 +99,19 @@ options here.
 
 One good start would be looking at the list on `Subsonic website`__ but that
 list *could* be a bit out of date and there's also some players that don't
-appear here. Also disregard the trial notice there, Supysonic doesn't include
+appear here. Also disregard the trial notice there, Neezer doesn't include
 such nonsense.
 
 Here are some hand-picked clients:
 
 * in your browser:
 
-  * SubPlayer__ (source__, especially designed to work with Supysonic)
-  * Jamstash__ (source__, whose maintainer contributed to Supysonic)
+  * SubPlayer__ (source__, especially designed to work with Neezer)
+  * Jamstash__ (source__, whose maintainer contributed to Neezer)
 
 * on Android:
 
-  * Ultrasonic__ (source__, whose maintainer contributed to Supysonic)
+  * Ultrasonic__ (source__, whose maintainer contributed to Neezer)
   * DSub__ (source__)
 
 * on iOS device:
@@ -126,7 +126,7 @@ Here are some hand-picked clients:
 .. note::
 
    The Subsonic API provides several authentication methods. One of them, known
-   as *token authentication* was added with API version 1.13.0. As Supysonic
+   as *token authentication* was added with API version 1.13.0. As Neezer
    currently targets API version 1.9.0, the token based method isn't supported.
    So if your client offers you the option, you'll have to disable the token
    based authentication for it to work.

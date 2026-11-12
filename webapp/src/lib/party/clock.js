@@ -1,6 +1,6 @@
 // The shared clock of a listen party: how far this device's performance.now()
 // is from the server's clock, NTP-style (the approach beatsync uses, over plain
-// HTTP here — see supysonic/webui/party.py for why there is no socket).
+// HTTP here — see neezer/webui/party.py for why there is no socket).
 //
 // One probe gives four times: t0 (sent, local), t1 (received, server), t2
 // (answered, server), t3 (answer arrived, local). If the two legs of the trip

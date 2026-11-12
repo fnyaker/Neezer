@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2019 Alban 'spl0k' Féron
 #               2017 Óscar García Amor
@@ -20,13 +20,13 @@ def _use_fast_password_hashing():
     Cheap parameters take it from ~60 ms per hash to ~0.03 ms.
 
     This is TEST-ONLY and deliberately lives here rather than in the
-    application: nothing under ``supysonic/`` reads it, production keeps
+    application: nothing under ``neezer/`` reads it, production keeps
     argon2's real defaults, and ``tests.managers.test_manager_user`` pins those
     defaults so this can never quietly become the shipped configuration.
     """
     from argon2 import PasswordHasher
 
-    from supysonic.managers import user as _user
+    from neezer.managers import user as _user
 
     _user._hasher = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 

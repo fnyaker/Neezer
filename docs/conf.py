@@ -1,22 +1,22 @@
 import os.path
 
-# Simulate import of the "supysonic" package
+# Simulate import of the "neezer" package
 supy_module_path = os.path.join(
-    os.path.dirname(__file__), "..", "supysonic", "__init__.py"
+    os.path.dirname(__file__), "..", "neezer", "__init__.py"
 )
 with open(supy_module_path, "rt", encoding="utf-8") as f:
-    supysonic = type("", (), {})()
-    exec(f.read(), supysonic.__dict__)
+    neezer = type("", (), {})()
+    exec(f.read(), neezer.__dict__)
 
 
 # -- Project information -----------------------------------------------------
 
-project = supysonic.NAME
-author = supysonic.AUTHOR
+project = neezer.NAME
+author = neezer.AUTHOR
 copyright = "2013-2023, " + author
 
-version = supysonic.VERSION
-release = supysonic.VERSION
+version = neezer.VERSION
+release = neezer.VERSION
 
 
 # -- General configuration ---------------------------------------------------
@@ -38,9 +38,9 @@ language = "en"
 
 html_theme = "alabaster"
 html_theme_options = {
-    "description": supysonic.DESCRIPTION,
+    "description": neezer.DESCRIPTION,
     "github_user": "spl0k",
-    "github_repo": "supysonic",
+    "github_repo": "neezer",
     "github_type": "star",
 }
 html_static_path = ["_static"]
@@ -73,36 +73,36 @@ _man_authors = ["Louis-Philippe Véronneau", author]
 # (source start file, name, description, authors, manual section).
 man_pages = [
     (
-        "man/supysonic-cli",
-        "supysonic-cli",
-        "Supysonic management command line interface",
+        "man/neezer-cli",
+        "neezer-cli",
+        "Neezer management command line interface",
         _man_authors,
         1,
     ),
     (
-        "man/supysonic-cli-user",
-        "supysonic-cli-user",
-        "Supysonic user management commands",
+        "man/neezer-cli-user",
+        "neezer-cli-user",
+        "Neezer user management commands",
         _man_authors,
         1,
     ),
     (
-        "man/supysonic-cli-folder",
-        "supysonic-cli-folder",
-        "Supysonic folder management commands",
+        "man/neezer-cli-folder",
+        "neezer-cli-folder",
+        "Neezer folder management commands",
         _man_authors,
         1,
     ),
     (
-        "man/supysonic-daemon",
-        "supysonic-daemon",
-        "Supysonic background daemon",
+        "man/neezer-daemon",
+        "neezer-daemon",
+        "Neezer background daemon",
         _man_authors,
         1,
     ),
     (
-        "man/supysonic-server",
-        "supysonic-server",
+        "man/neezer-server",
+        "neezer-server",
         "Python implementation of the Subsonic server API",
         [author],
         1,

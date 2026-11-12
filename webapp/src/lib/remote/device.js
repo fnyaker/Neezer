@@ -3,7 +3,7 @@
 // A link drives ONE device — the one it was made on — so every tab of the app
 // needs a stable name for its device: a random id kept in localStorage (the
 // same one after a reload, a restart, an app update), plus a human label the
-// owner recognises in the list of links ("Android · app NSupySonic").
+// owner recognises in the list of links ("Android · app Neezer").
 
 const KEY = "remote.device";
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
@@ -46,8 +46,10 @@ export function deviceName(ua = typeof navigator === "undefined" ? "" : navigato
             : /Linux/.test(ua)
               ? "Linux"
               : "Appareil";
-  const app = /NSupySonicApp/.test(ua)
-    ? "app NSupySonic"
+  // NeezerApp is the renamed app; NSupySonicApp is the token an APK built
+  // before the rebrand still sends, and an older install must stay recognisable.
+  const app = /NeezerApp|NSupySonicApp/.test(ua)
+    ? "app Neezer"
     : /Edg\//.test(ua)
       ? "Edge"
       : /Firefox\//.test(ua)

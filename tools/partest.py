@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -13,14 +13,14 @@
 
 Two decisions shape this:
 
-**Processes, not threads.** ``supysonic.db`` keeps the peewee database on a
+**Processes, not threads.** ``neezer.db`` keeps the peewee database on a
 module global and every test case rebinds it to its own temporary SQLite file in
 setUp, so two test cases sharing an interpreter would fight over it. One
 interpreter per batch is the only safe split — and it also means a segfault
 takes out one batch instead of the whole run.
 
 **Exactly `-j` processes, each given a pre-balanced batch** — not one process
-per test class. Importing Flask, peewee and supysonic costs a second or two of
+per test class. Importing Flask, peewee and neezer costs a second or two of
 CPU *per interpreter*, and the suite has ~40 test classes: a process each burned
 more CPU on imports than it saved in parallelism (measured: 310s of CPU for a
 185s suite, and barely 1.8x). Paying that cost `-j` times instead is what makes

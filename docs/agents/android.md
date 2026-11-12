@@ -46,9 +46,9 @@ rebuilt page comes back on the same track at the same position. Having actually 
 doing it is also the only moment the app offers the battery-optimization exemption
 (`offerBatteryExemptionOnce`, once ever) — the setup screen keeps the same button.
 
-**Updating itself from the server** (`Updater.kt`, `supysonic/webui/androidapk.py`, `lib/appversion.js`). The app
+**Updating itself from the server** (`Updater.kt`, `neezer/webui/androidapk.py`, `lib/appversion.js`). The app
 fetches its update from ITS server, never from a page it sends the user to: `GET /api/android/apk` (login) serves
-`[webapp] android_apk` (an operator's own build) or the GitHub release asset `nsupysonic.apk` of the declared
+`[webapp] android_apk` (an operator's own build) or the GitHub release asset `neezer.apk` of the declared
 `android_version` on the repository `android_url` points at, downloaded once into `<cache_dir>/android/` (only
 https to GitHub's hosts, a zip or nothing, 200 MB cap). `/api/version`'s `android.apk` says it can. The native side
 checks the APK BEFORE asking Android — same package, higher versionCode, signed with the installed key (lineage

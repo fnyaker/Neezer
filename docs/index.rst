@@ -1,7 +1,7 @@
-Welcome to Supysonic's documentation!
+Welcome to Neezer's documentation!
 =====================================
 
-Supysonic is a Python implementation of the `Subsonic`__ server API.
+Neezer is a Python implementation of the `Subsonic`__ server API.
 
 Current supported features are:
 

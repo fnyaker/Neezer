@@ -1,4 +1,4 @@
-//! NSupySonic's whole-track measures, for analysis on the client PC.
+//! Neezer's whole-track measures, for analysis on the client PC.
 //!
 //! WIP (preparation): the spectral descriptors and loudness are here and agree with
 //! ffmpeg's (docs/agents/analysis-genre.md, "Analysis on the client PC"); the beat

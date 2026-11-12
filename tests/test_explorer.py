@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -13,10 +13,10 @@ import json
 import random
 import unittest
 
-from supysonic import discover
-from supysonic.db import Discovery, Track, TrackAnalysis, now
-from supysonic.deezer import analysis as ana
-from supysonic.deezer import explorer as X
+from neezer import discover
+from neezer.db import Discovery, Track, TrackAnalysis, now
+from neezer.deezer import analysis as ana
+from neezer.deezer import explorer as X
 
 from .test_discover import _Library
 
@@ -178,7 +178,7 @@ class ExploreTestCase(_Library):
         self.assertTrue(c.why.startswith("Une découverte"))
         self.assertEqual(c.info["title"], "T1")
         # a guest (content-only) is never offered one
-        from supysonic.db import User
+        from neezer.db import User
 
         guest = User.create(name="guest", password="x", salt="x", admin=False)
         gp = discover.track_candidates(guest, discover.profile(guest, fresh=True), random.Random(1))

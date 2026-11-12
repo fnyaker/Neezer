@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""A genre model handed from one server to another (supysonic/webui/genreshare.py).
+"""A genre model handed from one server to another (neezer/webui/genreshare.py).
 
 What matters: what goes out comes back the same (labels on the same tracks, a
 head that classifies as before), a file never overwrites a tag this server
@@ -15,7 +15,7 @@ import base64
 import struct
 import unittest
 
-from supysonic.db import GenreModel, GenreTag, Track, TrackTag
+from neezer.db import GenreModel, GenreTag, Track, TrackTag
 
 from . import test_webui as _studio
 
@@ -82,6 +82,7 @@ class GenreShareTestCase(unittest.TestCase):
         weights = GenreModel.get(GenreModel.active == True).weights  # noqa: E712
 
         f = self._export()
+        self.assertEqual(f["format"], "neezer-genre")
         self.assertEqual({t["deezer_id"]: t["genre"] for t in f["tags"]}, {"1001": "Zaag", "1002": "Deutscher Krach"})
         self.assertEqual(f["head"]["labels"], ["Zaag", "Deutscher Krach"])
         self.assertEqual({g["name"]: g["archetype"] for g in f["genres"]}["Zaag"], "hard")
@@ -226,7 +227,7 @@ class GenreShareTestCase(unittest.TestCase):
         self.assertEqual(TrackTag.select().count(), 0)
 
     def test_the_self_training_pool_is_untagged_tracks_with_a_vector(self):
-        """/genre/pool (supysonic/webui/genre.py): what the studio's
+        """/genre/pool (neezer/webui/genre.py): what the studio's
         self-training learns from. A tagged track is an example already, and a
         track without a vector has nothing to learn from."""
         self._login()

@@ -14,7 +14,7 @@
 //                inverted back to the id it was hashed from).
 //   migrateKey   an old stored key (a Deezer id) -> its UUID; anything else as is.
 
-// `ids.NS_TRACK` in Python (a namespace derived from "deezer.com/supysonic" and "track").
+// `ids.NS_TRACK` in Python (a namespace derived from "deezer.com/neezer" and "track").
 const NS_TRACK = "349c6f7c-1d1f-508d-8539-9180c66e5ef7";
 
 /** A namespace UUID as 16 bytes. */

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -16,10 +16,10 @@ import unittest
 from datetime import timedelta
 from unittest import mock
 
-from supysonic import db as dbmod
-from supysonic import libraryimport as li
-from supysonic import releases
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer import libraryimport as li
+from neezer import releases
+from neezer.db import (
     Artist,
     EntityRef,
     LibraryItem,
@@ -36,10 +36,10 @@ from supysonic.db import (
     now,
     release_database,
 )
-from supysonic.deezer import ids
-from supysonic.deezer.provider import DeezerProvider
-from supysonic.managers.user import encrypt_password
-from supysonic.providers.errors import ProviderAuth
+from neezer.deezer import ids
+from neezer.deezer.provider import DeezerProvider
+from neezer.managers.user import encrypt_password
+from neezer.providers.errors import ProviderAuth
 
 from .test_access import _Case
 from .test_deezer import count_statements
@@ -232,7 +232,7 @@ class UnreadableAccountTestCase(_ImportCase):
             raise RuntimeError("boom")
 
         with mock.patch.object(li, "status", status), self.assertLogs(
-            "supysonic.webui.myaccounts", "ERROR"
+            "neezer.webui.myaccounts", "ERROR"
         ):
             rv = self.client.get("/api/me/accounts")
         self.assertEqual(rv.status_code, 200)
@@ -306,7 +306,7 @@ class PersonalDeezerTestCase(_ImportCase):
     def link_bob(self, provider=None):
         provider = provider or personal_provider(self.archive)
         with mock.patch(
-            "supysonic.webui.myaccounts._deezer_login", return_value={"id": "77", "name": "bob-dz"}
+            "neezer.webui.myaccounts._deezer_login", return_value={"id": "77", "name": "bob-dz"}
         ), mock.patch.object(li, "_deezer_client", return_value=provider):
             rv = self.client.post("/api/me/accounts/deezer", json={"arl": "ab12" * 48})
         self.assertEqual(rv.status_code, 200, rv.get_data(as_text=True))
@@ -329,7 +329,7 @@ class PersonalDeezerTestCase(_ImportCase):
     def test_an_arl_deezer_refuses_is_not_kept(self):
         self.as_bob()
         with mock.patch(
-            "supysonic.webui.myaccounts._deezer_login", side_effect=ProviderAuth("no", provider="deezer")
+            "neezer.webui.myaccounts._deezer_login", side_effect=ProviderAuth("no", provider="deezer")
         ):
             rv = self.client.post("/api/me/accounts/deezer", json={"arl": "ab12" * 48})
         self.assertEqual(rv.status_code, 400)
@@ -340,7 +340,7 @@ class PersonalDeezerTestCase(_ImportCase):
     def test_the_servers_own_account_cannot_be_linked_as_a_personal_one(self):
         self.as_bob()
         with mock.patch(
-            "supysonic.webui.myaccounts._deezer_login", return_value={"id": "42", "name": "tester"}
+            "neezer.webui.myaccounts._deezer_login", return_value={"id": "42", "name": "tester"}
         ):
             rv = self.client.post("/api/me/accounts/deezer", json={"arl": "ab12" * 48})
         self.assertEqual(rv.status_code, 409)
@@ -488,7 +488,7 @@ class UpgradeBaselineTestCase(_ImportCase):
     them)."""
 
     def mirrored_library(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         # The old sync had starred 1 and 2 and followed 9 and 8; the holder
@@ -534,7 +534,7 @@ class UpgradeBaselineTestCase(_ImportCase):
     def test_a_personal_account_is_never_a_baseline(self):
         # bob starred Deezer titles here by hand, then links his own account:
         # its favourites are new to this library, and come in.
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         StarredTrack.create(user=self.bob, starred=library.upsert_track(raw_track(5, "T5"), root, "FLAC").id)
@@ -645,7 +645,7 @@ class ProgressTestCase(_ImportCase):
         self.assertEqual(yielded.call_count, 2)
 
     def test_between_two_batches_the_import_waits_for_a_person(self):
-        from supysonic.deezer import workload
+        from neezer.deezer import workload
 
         with mock.patch.object(workload, "quiet_wait") as wait, mock.patch.object(li.time, "sleep") as sleep:
             li._yield()
@@ -660,10 +660,10 @@ class FavouritesCompleteTestCase(_ImportCase):
     def test_every_star_is_listed_and_a_replacement_keeps_its_place(self):
         from datetime import datetime
 
-        from supysonic.deezer import library
-        from supysonic.deezer import youtube as yt
-        from supysonic.providers.youtube import youtube_from_hit
-        from supysonic.webui.availability import replace_everywhere
+        from neezer.deezer import library
+        from neezer.deezer import youtube as yt
+        from neezer.providers.youtube import youtube_from_hit
+        from neezer.webui.availability import replace_everywhere
 
         root = library.get_root_folder(self.archive)
         dead = library.upsert_track(raw_track(1, "Dead"), root, "FLAC")
@@ -688,7 +688,7 @@ class CliTestCase(_ImportCase):
     def test_the_cli_import_is_the_same_remembering_import(self):
         from click.testing import CliRunner
 
-        from supysonic import cli as cli_mod
+        from neezer import cli as cli_mod
 
         class Conf:
             DEEZER = {"sync_user": "alice", "archive_dir": self.archive}

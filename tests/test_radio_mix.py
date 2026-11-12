@@ -1,10 +1,10 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
 """The rebuilt radios, the Flow refills, the listening history and the
-releases of listened artists (supysonic/radio.py, mix.py, listening.py,
+releases of listened artists (neezer/radio.py, mix.py, listening.py,
 releases.py; design: /mnt/project-files/algos/refonte-decouverte.md).
 
 The library has the shape that made the old radio drift: a cluster X around
@@ -18,13 +18,13 @@ import os
 import random
 import unittest
 
-from supysonic import db as dbmod
-from supysonic import listening, mix, radio, releases
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer import listening, mix, radio, releases
+from neezer.db import (
     Album, Artist, ArtistRelease, ArtistWatch, ListenEvent, Track, TrackAnalysis,
     TrackNeighbor, User,
 )
-from supysonic.providers.fake import FakeProvider
+from neezer.providers.fake import FakeProvider
 
 from .test_detach_a import _AppCase
 
@@ -35,7 +35,7 @@ class _Graph(_AppCase):
 
     def setUp(self):
         super().setUp()
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         self.root = library.get_root_folder(self.archive)
         self.user = User.get(User.name == "alice")
@@ -186,7 +186,7 @@ class RadioRoutesTestCase(_Graph):
         self.assertEqual(r.status_code, 200)
 
     def test_a_guest_never_gets_another_person_s_upload(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.add("bob", "B0bpass", admin=False)
         alice = User.get(User.name == "alice")
@@ -279,8 +279,8 @@ class ListeningTestCase(_Graph):
         self.assertGreater(h.track[a.id], h.track[b.id])
 
     def test_two_people_have_two_profiles(self):
-        from supysonic import discover
-        from supysonic.managers.user import UserManager
+        from neezer import discover
+        from neezer.managers.user import UserManager
 
         UserManager.add("bob", "B0bpass", admin=False)
         bob = User.get(User.name == "bob")
@@ -306,7 +306,7 @@ class FlowRefillTestCase(_Graph):
         self.assertFalse(set(again) & set(queue))
 
     def test_the_genre_pool_changes_from_one_draw_to_the_next(self):
-        from supysonic import discover
+        from neezer import discover
 
         taste = discover.profile(self.user, fresh=True)
 
@@ -352,7 +352,7 @@ class ListenedReleasesTestCase(_Graph):
         self.assertFalse(ArtistWatch.select().where(ArtistWatch.ref == "42").exists())
 
     def test_a_guest_with_no_history_does_not_see_the_owner_s(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         releases.run_once(self.app, stats={"pause": 0})
         UserManager.add("bob", "B0bpass", admin=False)
@@ -370,7 +370,7 @@ class UpgradeTestCase(unittest.TestCase):
         import sqlite3
         import tempfile
 
-        from supysonic.db import init_database, release_database
+        from neezer.db import init_database, release_database
 
         fd, path = tempfile.mkstemp()
         os.close(fd)

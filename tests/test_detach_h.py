@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -22,9 +22,9 @@ from unittest import mock
 
 import requests
 
-from supysonic import db as dbmod
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer.config import DefaultConfig
+from neezer.db import (
     Artist,
     Track,
     TrackEnrichment,
@@ -32,12 +32,12 @@ from supysonic.db import (
     release_database,
     init_database,
 )
-from supysonic.deezer import library
-from supysonic.enrich import backfill, cover, musicbrainz as mb, search
-from supysonic.enrich import queue as eq
-from supysonic.enrich.http import Http, HttpError, Unavailable
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.deezer import library
+from neezer.enrich import backfill, cover, musicbrainz as mb, search
+from neezer.enrich import queue as eq
+from neezer.enrich.http import Http, HttpError, Unavailable
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from . import test_detach_a as _ta
 from . import test_webui as _tw
@@ -166,7 +166,7 @@ class HttpTest(unittest.TestCase):
         http = self.make()
         http.get_json("https://musicbrainz.org/ws/2/x")
         _, _, headers, timeout = self.session.calls[0]
-        self.assertRegex(headers["User-Agent"], r"^NSupySonic/\S+ \( me@example\.org \)$")
+        self.assertRegex(headers["User-Agent"], r"^Neezer/\S+ \( me@example\.org \)$")
         self.assertIsInstance(timeout, tuple)
 
     def test_musicbrainz_is_asked_once_a_second(self):
@@ -366,7 +366,7 @@ class EnrichTest(Base):
     def test_the_user_agent_goes_out_on_every_request(self):
         eq.enrich_track(self.track(isrc=ISRC), http=self.http)
         self.assertTrue(self.srv.hits)
-        self.assertTrue(all(ua.startswith("NSupySonic/") for _, ua in self.srv.hits))
+        self.assertTrue(all(ua.startswith("Neezer/") for _, ua in self.srv.hits))
 
     def test_a_track_not_on_disk_is_left_alone(self):
         t = self.track(isrc=ISRC)
@@ -455,7 +455,7 @@ class NeverOnTheClickTest(Base):
             w.assert_not_called()
 
     def test_an_upload_queues_the_track(self):
-        from supysonic.deezer import local
+        from neezer.deezer import local
 
         class FakeTag:
             artist, albumartist, album, genre = "Up Artist", None, "Up Album", "Pop"
@@ -681,7 +681,7 @@ class UpgradeTest(unittest.TestCase):
         p = os.path.join(self.dir, "s.conf")
         with open(p, "w") as fh:
             fh.write("[base]\ndatabase_uri = sqlite:///x.db\n[enrich]\nenabled = no\nacoustid_key = k\n")
-        from supysonic.config import IniConfig
+        from neezer.config import IniConfig
 
         cfg = IniConfig(p)
         self.assertEqual(cfg.ENRICH["acoustid_key"], "k")

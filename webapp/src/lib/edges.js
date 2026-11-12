@@ -1,7 +1,7 @@
 // Where each track's audio really starts and stops, cached on the device.
 //
 // The server measures it once per (file, threshold) with ffmpeg and caches the
-// answer (supysonic/webui/edges.py); this keeps a copy here so a track played
+// answer (neezer/webui/edges.py); this keeps a copy here so a track played
 // twice never asks again, and so a relaunch starts with what it already knew.
 //
 // Everything about this is best-effort. A track with no answer plays whole,

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2022 Alban 'spl0k' Féron
 #
@@ -8,7 +8,7 @@
 import unittest
 import uuid
 
-from supysonic.db import Folder, Artist, Album, Track, User, ClientPrefs
+from neezer.db import Folder, Artist, Album, Track, User, ClientPrefs
 
 from .apitestbase import ApiTestBase
 
@@ -77,7 +77,7 @@ class AnnotationTestCase(ApiTestBase):
     def test_starring_an_artist_archives_its_discography(self):
         """Same promise as the web app: a favourited artist means the whole
         catalogue lands on disk, listed through the Deezer provider."""
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         calls = []
         original = backfill.archive_entity

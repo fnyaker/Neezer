@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2024 Alban 'spl0k' Féron
 #
@@ -7,7 +7,7 @@
 
 import logging
 
-from supysonic.frontend import CSRF_FIELD, CSRF_SESSION_KEY
+from neezer.frontend import CSRF_FIELD, CSRF_SESSION_KEY
 
 from ..testbase import TestBase
 
@@ -17,7 +17,7 @@ class FrontendTestBase(TestBase):
 
     def setUp(self):
         super().setUp()
-        logging.getLogger("supysonic.frontend.user").addHandler(logging.NullHandler())
+        logging.getLogger("neezer.frontend.user").addHandler(logging.NullHandler())
         self._patch_client()
         self._patch_csrf()
 

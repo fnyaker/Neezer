@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from supysonic.db import (
+from neezer.db import (
     Album,
     Artist,
     Folder,
@@ -21,7 +21,7 @@ from supysonic.db import (
     migrate_database,
     release_database,
 )
-from supysonic.managers.user import UserManager
+from neezer.managers.user import UserManager
 
 
 class DbMigrateTestCase(unittest.TestCase):

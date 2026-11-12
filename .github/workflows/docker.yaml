@@ -7,7 +7,7 @@ on:
     tags:
       - "v*"
     paths:
-      - supysonic/**
+      - neezer/**
       - deezerpy/**
       - webapp/**
       - Dockerfile
@@ -19,7 +19,7 @@ on:
       - .github/workflows/docker.yaml
   pull_request:
     paths:
-      - supysonic/**
+      - neezer/**
       - deezerpy/**
       - webapp/**
       - Dockerfile
@@ -82,7 +82,12 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # The pre-rebrand image name is published too: a deployment that still
+          # pulls ghcr.io/fnyaker/nsupysonic must keep receiving updates after
+          # the repository was renamed.
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY }}/fnyaker/nsupysonic
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -100,7 +105,7 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
-          tags: nsupysonic:smoke
+          tags: neezer:smoke
           # On a v* tag both this image and the Android APK are built from the
           # same ref, so the tag names the Android release the server should
           # expect its native clients to run.
@@ -109,11 +114,11 @@ jobs:
           cache-from: type=gha
 
       - name: Smoke test
-        run: docker/smoke.sh nsupysonic:smoke
+        run: docker/smoke.sh neezer:smoke
 
       - name: Image size
         run: |
-          docker image inspect nsupysonic:smoke --format '{{.Size}}' \
+          docker image inspect neezer:smoke --format '{{.Size}}' \
             | awk '{printf "Uncompressed image size: %.0f MB\n", $1 / 1e6}' \
             | tee -a "$GITHUB_STEP_SUMMARY"
 

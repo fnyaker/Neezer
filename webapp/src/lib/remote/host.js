@@ -1,6 +1,6 @@
 // The controlled side of a remote control: THIS device's player, lent.
 //
-// Two loops, both polling (supysonic/webui/remote.py says why): one PUBLISHES
+// Two loops, both polling (neezer/webui/remote.py says why): one PUBLISHES
 // what the player is doing when it changes, one ASKS for commands and runs
 // them. Commands run through the player store's own methods — a remote "next"
 // is `player.next()` here, exactly what the owner's own button calls — so the

@@ -25,7 +25,7 @@ Three code layers, from low to high:
      Always fetch the full list via `get_album_tracks` (`song.getListByAlbum` nb:-1) /
      `get_playlist_tracks` (`playlist.getSongs` nb:-1).
 
-2. **`supysonic/deezer/`** — the proxy logic:
+2. **`neezer/deezer/`** — the proxy logic:
    - `provider.py` — ARL login + stream decryption; the single object the rest of the app talks to.
    - `archive.py` — `ensure_archived` (first-play fetch → Blowfish-CBC decrypt → tag → store under
      `archive_dir`) and import helpers.
@@ -117,15 +117,15 @@ unreachable, and the parts that do need Deezer must fail *fast* and *without a v
   (`lib/deezerhealth.js`) — an actionable one for the credential, an explanatory one ("your
   downloaded library is still there") for an outage, re-checked when the server says it will retry.
 
-3. **`supysonic/webui/`** — the custom `/api` blueprint (`__init__.py`, all routes `@login_required`,
+3. **`neezer/webui/`** — the custom `/api` blueprint (`__init__.py`, all routes `@login_required`,
    numeric-id validation on stream/favorite), `share.py` (waveform peaks + full-file/ffmpeg-clip
    downloads for the SPA's share sheet, all cached), `edges.py` (where a file's audio starts and
    stops, for the crossfade), `analysis.py` (serving the whole-track verdict) and `spa.py`, which serves the built Svelte SPA at
    **`/app/`** (hash-routed). Admin UI stays at `/`, Subsonic at `/rest`.
 
-**Streaming interception** lives in `supysonic/api/media.py` (`_ensure_deezer_archived`): first play
+**Streaming interception** lives in `neezer/api/media.py` (`_ensure_deezer_archived`): first play
 archives the FLAC, then the existing transcode/cache/`send_file` path runs unchanged. The permanent
-FLAC archive is separate from supysonic's capped `transcode_cache`.
+FLAC archive is separate from neezer's capped `transcode_cache`.
 
 **Decrypting a stream** (`provider.decrypt_blocks` / `iter_decrypted`). Deezer encrypts the 2048-byte
 blocks at FILE offsets 0, 6144, 12288… — every third one, each its own CBC chain (IV `00..07`), never
@@ -150,7 +150,7 @@ empty body (`looks_like_a_page`) — instead of listing formats it would one day
 (`deezer.pageShow`, `show.add/deleteFavorite`, `episode.bookmarkSet`) were confirmed from a HAR capture;
 see `docs/plan-podcasts.md`. Episodes stream as **plain MP3 straight from the podcast host** (no FLAC,
 no Blowfish — `provider.download_episode_to` just follows redirects), archived under
-`archive_dir/Podcasts/<Show>/` on first play. Subsonic endpoints live in `supysonic/api/podcast.py`
+`archive_dir/Podcasts/<Show>/` on first play. Subsonic endpoints live in `neezer/api/podcast.py`
 (`getPodcasts`, `getNewestPodcasts`, `createPodcastChannel`, `refreshPodcasts`, `delete*`,
 `downloadPodcastEpisode`); `media.py` resolves a stream/download id to a Track **or** a `PodcastEpisode`.
 The local channel rows are the source of truth for subscriptions; `importer.sync_podcasts` refreshes them.
@@ -158,7 +158,7 @@ Per-user playback state is server-side: `PodcastProgress` (auto-saved position, 
 `PodcastMarker` (manual bookmarks) via `/api/podcast/progress` + marker CRUD; the SPA merges them with
 its localStorage copy newest-wins (`webapp/src/lib/podcastProgress.js`); nothing is sent to Deezer.
 
-**Unavailable tracks** (`supysonic/webui/availability.py`): Deezer drops tracks from its catalogue,
+**Unavailable tracks** (`neezer/webui/availability.py`): Deezer drops tracks from its catalogue,
 and `Track.unavailable` (a timestamp, so a verdict expires and is re-tested) records the ones we
 have confirmed dead. The verdict is only ever set from `TrackUnavailable` — the dedicated exception
 `provider._resolve_once` raises when Deezer *answers* that there is no source — never from a network
@@ -176,8 +176,8 @@ SPA mirrors that timing: the work is a worker thread, so the list is dropped opt
 (`resolvedUnavailable`) and refetched only once the job reports done (`unavailableVersion`) —
 refetching on sheet-close re-read the old state and the row flickered back.
 
-**YouTube is a FALLBACK, never a second catalogue** (`supysonic/deezer/youtube.py`,
-`supysonic/webui/youtube.py`, `webapp/src/lib/youtube.js`; optional extra `supysonic[youtube]`:
+**YouTube is a FALLBACK, never a second catalogue** (`neezer/deezer/youtube.py`,
+`neezer/webui/youtube.py`, `webapp/src/lib/youtube.js`; optional extra `neezer[youtube]`:
 `ytmusicapi` + `yt-dlp` + `yt-dlp-ejs`, with Deno in the image for yt-dlp's challenge solver). It
 is reached in exactly two ways, both a person asking: the search screen's **YouTube** box (unticked
 by default, asked on Enter or when ticked — never per keystroke) and the replacement sheet's
@@ -212,7 +212,7 @@ by default, asked on Enter or when ticked — never per keystroke) and the repla
   is asked. The admin switch (Réglages → *Source de secours : YouTube*, `Meta yt.enabled`) turns
   it off for everyone; what is archived keeps playing. `tests/test_youtube.py` counts the requests.
 
-**Importing a shared playlist** (`supysonic/linkimport.py` reads the link, `webui/playlist_import.py`
+**Importing a shared playlist** (`neezer/linkimport.py` reads the link, `webui/playlist_import.py`
 matches and keeps it, `routes/Import.svelte`; reached from a link pasted into the search box and from
 the library). Deezer, Spotify (its public embed page), YouTube (`ytmusicapi`) and Apple Music (the
 share page's own JSON): no account, no token. **The pasted text is only ever parsed** — every request
@@ -225,8 +225,8 @@ since a wrong song is worse than a hole. A worker job (4 searches in flight), po
 TEMPORARY (process memory, 3 h) and plays as it is. *Enregistrer* (admin) makes a LOCAL playlist —
 not created on the Deezer account — and queues its tracks for archiving.
 
-**One rule for "is it the same recording" and one scale for quality** (multi-provider lot C, `supysonic/matching.py`,
-`supysonic/providers/quality.py`). `match_score`, `closeness`, `_core_title`, `PLAUSIBLE` moved out of
+**One rule for "is it the same recording" and one scale for quality** (multi-provider lot C, `neezer/matching.py`,
+`neezer/providers/quality.py`). `match_score`, `closeness`, `_core_title`, `PLAUSIBLE` moved out of
 `webui/availability.py` unchanged (it and `playlist_import` re-import the same objects) and gained
 `same_recording(a, b)` -> `sure|maybe|no` (equal ISRC, else core title + main artist + length within 3 s + same
 version words; a cut's label such as "Radio Edit" is `maybe`, never `sure`) and `match_key` (one dict pass to group a
@@ -293,7 +293,7 @@ contributor roles and ISRC that no audio tag can hold. That sidecar is a **white
 the raw payload also carries stream tokens and signed URLs, which must never be written to a file
 that outlives the session.
 
-**Archive completeness** (`supysonic/deezer/backfill.py`, `supysonic/webui/storage.py`) is
+**Archive completeness** (`neezer/deezer/backfill.py`, `neezer/webui/storage.py`) is
 **event-driven, never polled**. Archiving happens the moment something becomes yours:
 
 - *playing* it (the FLAC stream is teed to disk by `archive.open_live_stream`, `on_abort` re-queues
@@ -331,7 +331,7 @@ switched off under it. **Do not add a periodic archive loop** — the app knows 
 happens, so re-asking on a timer is work for nothing.
 
 **A person waiting in front of the app outranks every background job**
-(`supysonic/deezer/workload.py`, `webapp/src/lib/ladder.js`, `webapp/src/lib/coverqueue.js`). That
+(`neezer/deezer/workload.py`, `webapp/src/lib/ladder.js`, `webapp/src/lib/coverqueue.js`). That
 rule needs a mechanism per kind of contention, and all of them exist because the app once queued a
 user's own requests for thirty seconds behind work they never asked for:
 
@@ -392,7 +392,7 @@ running twice at once. All of it is gated by `[deezer] archive_library` (default
 those caches (expiring the protection first, or the button would silently do nothing) and cannot
 touch `archive_dir`.
 
-**Archive rules** (`supysonic/deezer/rules.py`, `/api/archive/rules`, Réglages → Archive) make all of
+**Archive rules** (`neezer/deezer/rules.py`, `/api/archive/rules`, Réglages → Archive) make all of
 the above configurable at runtime: one boolean per event (`rules.EVENTS`), the artist scope
 (`all` / `releases` / `top` + `artist_limit`), and the cleanup policy. Values live one-per-row in
 `Meta` under the `dz.` prefix (`Meta.key` is `CharField(32)` — keep names short) and override the
@@ -436,14 +436,14 @@ database only and take UUIDs or Deezer ids; `regain_from_analyses` re-derives it
 ffmpeg at the start of a backfill). Lyrics are LRCLIB only (`lyrics.ensure_lyrics`, hits more than 3 s off the
 track's duration refused, synced replaces plain, `facts.lyrics_tried` in the sidecar stops repeat searches;
 the route searches after answering). Shared building blocks: `library.update_track_facts` (sidecar `facts`),
-`supysonic/libjob.py` (resumable library job), `supysonic/filetags.py` (facts read from file tags).
+`neezer/libjob.py` (resumable library job), `neezer/filetags.py` (facts read from file tags).
 
 **Local play counts.** `/api/listen` writes `Track.play_count` / `last_play` (≥20 s counts, a skip
 doesn't). Before that only Subsonic's `scrobble` did, so a library played entirely through the web
 app looked untouched — and the cleanup decides what to drop from exactly this data.
 
-**Recommendations, the radio, the Flow and the releases** (`supysonic/listening.py`, `supysonic/mix.py`,
-`supysonic/radio.py`, `supysonic/discover.py`, `supysonic/releases.py`, `webui/discover.py`; design and sources in
+**Recommendations, the radio, the Flow and the releases** (`neezer/listening.py`, `neezer/mix.py`,
+`neezer/radio.py`, `neezer/discover.py`, `neezer/releases.py`, `webui/discover.py`; design and sources in
 `/mnt/project-files/algos/refonte-decouverte.md`). Every screen READS the database: no click asks a provider.
 - **Taste is PER PERSON** (`listen_event`, schema `20261026`): every track change the player reports (and Subsonic's
   scrobble) is one row, judged by published rules — a listen is half the track or 240 s (Last.fm), a skip is under
@@ -472,7 +472,7 @@ app looked untouched — and the cleanup decides what to drop from exactly this 
   heard through ends the streak. "Plus comme ça" also adds its own neighbours. Cost on 8 000 titles
   (`tools/perf_api.py --archived`): the first pick of a session 284 ms cold (pool + energy map), then 18-22 ms,
   11 statements, ~400 B gzip; the old `/api/flow` (kept for older apps) was 220 ms and 4.7 KB every refill.
-- **The explorer** (`supysonic/deezer/explorer.py`, table `discovery` schema `20261102`, `GET|PUT /api/explorer`, the *Exploration
+- **The explorer** (`neezer/deezer/explorer.py`, table `discovery` schema `20261102`, `GET|PUT /api/explorer`, the *Exploration
   automatique* card of the studio's Bibliothèque tab): finds music for genres the library lacks, quietly. It only searches genres
   the ENGINE knows (`analysis.known_genres()`, resolved through the tree), weighted by tree closeness to what is played and by how
   little the library holds of them; looks a genre up as Deezer playlists named after it first, then a plain search (all
@@ -495,13 +495,13 @@ app looked untouched — and the cleanup decides what to drop from exactly this 
   hold, family ids included). At most 6 styles, names resolved by the tree (an unknown name is a 400, not "everything");
   a style the person never played has no taste and rests on the library's titles of that genre. The choice lives on the
   device (`flow.styles`) and rides in the session body.
-- **Energy** (`supysonic/energy.py`, `user_taste.energy`): a 0..1 RANK in the library from the analysis (LUFS,
+- **Energy** (`neezer/energy.py`, `user_taste.energy`): a 0..1 RANK in the library from the analysis (LUFS,
   −LRA, centroid, flux peak, entropy, the tempo only when its confidence >= 0.3 — Spotify's energy, re-built from
   what we measure), cached 10 min and rebuilt on a background thread. The notch (Très calme 0.1 … Intense 0.9, or
   Libre) is a Gaussian fit of width 0.12 with the distance band widened ×2, so it HOLDS (measured 100 % of 40 picks
   in the right cluster) instead of nudging; an unmeasured title weighs 0.3. With Libre, four titles heard through
   set a soft aim.
-- **"Je n'aime pas"** (`supysonic/dislikes.py`, `track_dislike`, schema `20261031`, `POST /api/dislike`) is about
+- **"Je n'aime pas"** (`neezer/dislikes.py`, `track_dislike`, schema `20261031`, `POST /api/dislike`) is about
   RECOMMENDATIONS only (Deezer's "Ne pas recommander", Spotify's taste-profile exclusion): the title, its other rows
   (`match_key`) and the neighbours at >= 0.9 among the first 3 of EITHER list leave the radios, the Flow and the
   genre mixes; its first 20 neighbours are pushed by RANK (x0.3 for the nearest up to x1 at rank 20 — by rank
@@ -517,7 +517,7 @@ app looked untouched — and the cleanup decides what to drop from exactly this 
   keyed by the PROVIDER's ref (`artist_watch`, `artist_release`, `artist_link`, `artist_top`); catalogue
   suggestions are never downloaded to be proposed.
 
-**Cleanup** (`supysonic/deezer/cleanup.py`) is the **only** code in the project that deletes archived
+**Cleanup** (`neezer/deezer/cleanup.py`) is the **only** code in the project that deletes archived
 audio. It is off by default, needs a free-space floor (`clean_min_free_gb`) to do anything, and is
 event-driven like the rest — `prefetch._check_space` looks right after a download, the one moment the
 archive can have crossed the floor. Guarantees that are **not** configurable: only rows with a

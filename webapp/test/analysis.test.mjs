@@ -2,7 +2,7 @@
 //
 // The server measures the archived file, and the first play is what archives
 // it, so until then all it can serve is Deezer's published tempo, flagged
-// `provisional` (supysonic/deezer/analysis.py#tempo_hints). The rules this pins
+// `provisional` (neezer/deezer/analysis.py#tempo_hints). The rules this pins
 // are the ones that decide whether that tempo reaches the tracker at all, and
 // whether the measured verdict still replaces it:
 //
@@ -31,7 +31,7 @@ globalThis.window = { addEventListener() {}, removeEventListener() {}, location:
 // id -> (nth time this id is asked about) -> { verdict?, pending? }
 const script = new Map();
 const asked = new Map();
-// The server's verdict generation (supysonic/deezer/analysis.py).
+// The server's verdict generation (neezer/deezer/analysis.py).
 let serverGen = 0;
 globalThis.fetch = async (_url, opts) => {
   const { ids } = JSON.parse(opts.body);

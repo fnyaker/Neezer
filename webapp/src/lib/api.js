@@ -326,7 +326,7 @@ export const api = {
     req("/gains", { method: "POST", body: body({ ids: (ids || []).map(String) }) }),
 
   // Tempo + style for a whole run of tracks, measured server-side once per
-  // file — see supysonic/deezer/analysis.py and lib/analysis.js.
+  // file — see neezer/deezer/analysis.py and lib/analysis.js.
   trackAnalyses: (ids) =>
     req("/analyses", { method: "POST", body: body({ ids: (ids || []).map(String) }) }),
   // The same verdict for ONE track, plus `pending` when the server has just put
@@ -358,12 +358,12 @@ export const api = {
 
   // Where the audio actually starts and stops inside the archived file, for
   // the crossfade's silence trimming. Answers {ready:false} rather than an
-  // error when the file isn't archived — see supysonic/webui/edges.py.
+  // error when the file isn't archived — see neezer/webui/edges.py.
   audioEdges: (id, db) => req("/audio/edges/" + id + "?db=" + encodeURIComponent(db)),
 
   // -- the genre studio (admin) ----------------------------------------------
   // Your own genre vocabulary, your labels, and the small head trained from
-  // them in the browser. See supysonic/webui/genre.py.
+  // them in the browser. See neezer/webui/genre.py.
   genreStatus: () => req("/genre/status"),
   genreTagCreate: (name, color, archetype) =>
     req("/genre/tags", { method: "POST", body: body({ name, color, archetype }) }),
@@ -400,7 +400,7 @@ export const api = {
   genreModelPut: (payload) =>
     req("/genre/model", { method: "PUT", body: body(payload) }),
   genreModelDelete: () => req("/genre/model", { method: "DELETE" }),
-  // A model as a file (supysonic/webui/genreshare.py): what it would do, then do it.
+  // A model as a file (neezer/webui/genreshare.py): what it would do, then do it.
   genreSharePreview: (file) => req("/genre/share/preview", { method: "POST", body: body(file) }),
   genreShareImport: (file, opts) =>
     req("/genre/share/import", { method: "POST", body: body({ file, ...opts }) }),
@@ -496,7 +496,7 @@ export const api = {
   youtubeSearch: (q) => req("/youtube/search?q=" + encodeURIComponent(q)),
 
   // A playlist somebody shared (Deezer, Spotify, YouTube, Apple Music): read
-  // and matched on the server as a job — see supysonic/webui/playlist_import.py.
+  // and matched on the server as a job — see neezer/webui/playlist_import.py.
   importPlaylist: (url) => req("/import/playlist", { method: "POST", body: body({ url }) }),
   importStatus: (id) => req("/import/playlist/" + encodeURIComponent(id)),
   importSave: (id, title, keep) =>
@@ -569,7 +569,7 @@ export const api = {
   exportUrl: (kind, id, fmt) =>
     BASE + "/export/" + kind + "/" + encodeURIComponent(id) + "?fmt=" + encodeURIComponent(fmt),
 
-  // export to another streaming service (supysonic/webui/services.py): the
+  // export to another streaming service (neezer/webui/services.py): the
   // user's own linked accounts, the job that matches and creates, and the
   // list file for every service there is no door to (Apple Music…).
   services: () => req("/services"),

@@ -1,7 +1,7 @@
 Apache and mod_wsgi
 ===================
 
-If you are using the `Apache`__ webserver, you can use it to run Supysonic with
+If you are using the `Apache`__ webserver, you can use it to run Neezer with
 the help of `mod_wsgi`__.
 
 __ https://httpd.apache.org/
@@ -19,16 +19,16 @@ first as follows::
 Creating a `.wsgi` file
 -----------------------
 
-To run Supysonic within Apache you need a :file:`supysonic.wsgi` file. Create
+To run Neezer within Apache you need a :file:`neezer.wsgi` file. Create
 one somewhere and fill it with the following content:
 
 .. code-block:: python3
 
-   from supysonic.web import create_application
+   from neezer.web import create_application
    application = create_application()
 
 Store that file somewhere that you will find it again (e.g.:
-:file:`/var/www/supysonic/supysonic.wsgi`).
+:file:`/var/www/neezer/neezer.wsgi`).
 
 Configuring Apache
 ------------------
@@ -38,15 +38,15 @@ load the application. Here's a basic example of what it looks like:
 
 .. code-block:: apache
 
-   WSGIScriptAlias /supysonic /var/www/supysonic/supysonic.wsgi
-   <Directory /var/www/supysonic>
+   WSGIScriptAlias /neezer /var/www/neezer/neezer.wsgi
+   <Directory /var/www/neezer>
       WSGIApplicationGroup %{GLOBAL}
       WSGIPassAuthorization On
       Require all granted
    </Directory>
 
 With that kind of configuration, the server address will look like
-`http://server/supysonic/`.
+`http://server/neezer/`.
 
 For more information consult the `mod_wsgi documentation`__. Note that the
 ``WSGIPassAuthorization`` directive is required for some clients as they provide

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -18,8 +18,8 @@ import re
 import unittest
 from unittest import mock
 
-from supysonic.db import Track
-from supysonic.deezer.provider import DeezerProvider
+from neezer.db import Track
+from neezer.deezer.provider import DeezerProvider
 
 from .test_detach_a import _AppCase
 
@@ -180,8 +180,8 @@ class DeezerGuardTestCase(_AppCase):
     def test_the_account_import_is_the_only_reader_of_the_account(self):
         # Mes comptes (libraryimport) on the server's account: what it may read
         # of the account is its lists, and the records of what it imports.
-        from supysonic import access, libraryimport
-        from supysonic.db import ProviderAccount, User
+        from neezer import access, libraryimport
+        from neezer.db import ProviderAccount, User
 
         row = access.ensure_server_account(owner=User.select().first().id)
         ProviderAccount.update(user=User.select().first().id).where(ProviderAccount.id == row.id).execute()
@@ -221,7 +221,7 @@ class ProviderGuardTestCase(unittest.TestCase):
     method, only makes the calls its list allows."""
 
     def test_the_interface_has_no_way_to_write_to_an_account(self):
-        from supysonic.providers import base
+        from neezer.providers import base
 
         names = [n for n in dir(base.Provider) if not n.startswith("_")]
         self.assertEqual([n for n in names if WRITE_WORDS.search(n)], [])
@@ -230,7 +230,7 @@ class ProviderGuardTestCase(unittest.TestCase):
 
     def _drive(self, adapter):
         """Call every method of every capability the adapter declares."""
-        from supysonic.providers import base
+        from neezer.providers import base
 
         calls = []
         for cap in adapter.capabilities:
@@ -260,7 +260,7 @@ class ProviderGuardTestCase(unittest.TestCase):
                     pass  # the spy answers nothing useful; only the calls matter
 
     def test_the_deezer_adapter_only_makes_allowed_calls(self):
-        from supysonic.providers.deezer import DeezerAdapter
+        from neezer.providers.deezer import DeezerAdapter
 
         calls = []
         spy = Spy(calls)
@@ -280,8 +280,8 @@ class ProviderGuardTestCase(unittest.TestCase):
         self.assertIn("gw.get_user_profile_page", heard)
 
     def test_the_youtube_adapter_only_makes_allowed_calls(self):
-        from supysonic.deezer import youtube as yt
-        from supysonic.providers.youtube import YoutubeAdapter
+        from neezer.deezer import youtube as yt
+        from neezer.providers.youtube import YoutubeAdapter
 
         heard = []
 

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -13,8 +13,8 @@ import tempfile
 import time
 import unittest
 
-from supysonic.cache import Cache
-from supysonic.ratelimit import RateLimiter
+from neezer.cache import Cache
+from neezer.ratelimit import RateLimiter
 
 
 class CacheKeyTraversalTestCase(unittest.TestCase):
@@ -71,7 +71,7 @@ class RateLimiterTestCase(unittest.TestCase):
 
 class SafeRedirectTestCase(unittest.TestCase):
     def test_only_local_paths_allowed(self):
-        from supysonic.frontend.user import safe_redirect_target
+        from neezer.frontend.user import safe_redirect_target
 
         fallback = "/home"
         self.assertEqual(safe_redirect_target("/playlists", fallback), "/playlists")
@@ -91,7 +91,7 @@ class SafeRedirectTestCase(unittest.TestCase):
         """Browsers fold "\\" into "/", so /\\evil.com reaches the network as
         //evil.com — a protocol-relative URL — even though urlsplit() reports no
         netloc for it."""
-        from supysonic.frontend.user import safe_redirect_target
+        from neezer.frontend.user import safe_redirect_target
 
         fallback = "/home"
         for bad in (
@@ -109,7 +109,7 @@ class SafeRedirectTestCase(unittest.TestCase):
     def test_rejects_breaks_inside_the_url(self):
         """Browsers drop tab/CR/LF ANYWHERE in a URL, so "/\\t/evil" is
         "//evil" — decided here, not by whatever urlsplit this Python has."""
-        from supysonic.frontend.user import safe_redirect_target
+        from neezer.frontend.user import safe_redirect_target
 
         for bad in ("/\t/evil.example", "/\n/evil.example", "/\r\n/evil.example"):
             self.assertEqual(
@@ -122,7 +122,7 @@ class LogInjectionTestCase(unittest.TestCase):
         import io
         import logging
 
-        from supysonic import logsafe
+        from neezer import logsafe
 
         logsafe.install()
         buf = io.StringIO()
@@ -140,19 +140,19 @@ class LogInjectionTestCase(unittest.TestCase):
 
     def test_a_logged_argument_cannot_start_a_line(self):
         out = self._log(
-            "supysonic.webui", "login %s from %s", "bob\nERROR forged ", "x"
+            "neezer.webui", "login %s from %s", "bob\nERROR forged ", "x"
         )
         self.assertEqual(out, "login bob\\nERROR forged\\u2028 from x\n")
-        out = self._log("supysonic", "%s", ValueError("a\r\nb"))
+        out = self._log("neezer", "%s", ValueError("a\r\nb"))
         self.assertEqual(out, "a\\r\\nb\n")
 
     def test_other_packages_are_left_alone(self):
-        self.assertEqual(self._log("not.supysonic", "%s", "a\nb"), "a\nb\n")
+        self.assertEqual(self._log("not.neezer", "%s", "a\nb"), "a\nb\n")
 
 
 class ValidIdTestCase(unittest.TestCase):
     def test_rejects_unicode_digits_and_negatives(self):
-        from supysonic.webui import _valid_id
+        from neezer.webui import _valid_id
 
         for good in ("0", "1", "123456789", "9" * 20):
             self.assertTrue(_valid_id(good), good)
@@ -162,7 +162,7 @@ class ValidIdTestCase(unittest.TestCase):
 
 class LikeTermTestCase(unittest.TestCase):
     def test_strips_the_multi_character_wildcard(self):
-        from supysonic.utils import like_term
+        from neezer.utils import like_term
 
         # A bare "%" matched the whole library through peewee's `contains`.
         self.assertIsNone(like_term("%"))
@@ -176,10 +176,10 @@ class LikeTermTestCase(unittest.TestCase):
 
 class JsonpCallbackTestCase(unittest.TestCase):
     def test_callback_must_be_an_identifier(self):
-        from supysonic.api.formatters import JSONPFormatter
+        from neezer.api.formatters import JSONPFormatter
 
         from tests.testbase import TestConfig
-        from supysonic.web import create_application
+        from neezer.web import create_application
 
         cfg = TestConfig(False, True)
         cfg.BASE["database_uri"] = "sqlite:///" + tempfile.mkstemp()[1]
@@ -200,19 +200,19 @@ class JsonpCallbackTestCase(unittest.TestCase):
 
 class PasswordEncryptionTestCase(unittest.TestCase):
     def setUp(self):
-        os.environ["SUPYSONIC_SECRET_PASSWORD_SECRET"] = "unit-test-secret"
-        import supysonic.utils as utils
+        os.environ["NEEZER_SECRET_PASSWORD_SECRET"] = "unit-test-secret"
+        import neezer.utils as utils
 
         utils.__dict__["_utils__key_cache"] = {}
 
     def tearDown(self):
-        os.environ.pop("SUPYSONIC_SECRET_PASSWORD_SECRET", None)
-        import supysonic.utils as utils
+        os.environ.pop("NEEZER_SECRET_PASSWORD_SECRET", None)
+        import neezer.utils as utils
 
         utils.__dict__["_utils__key_cache"] = {}
 
     def test_roundtrip_and_tamper_detection(self):
-        from supysonic.managers.user import decrypt_password, encrypt_password
+        from neezer.managers.user import decrypt_password, encrypt_password
 
         blob = encrypt_password("Sup3rSecret#42")
         self.assertTrue(blob.startswith("gcm:"))
@@ -238,7 +238,7 @@ class PasswordEncryptionTestCase(unittest.TestCase):
             from Cryptodome.Cipher import AES
             from Cryptodome.Random import get_random_bytes
 
-        from supysonic.managers.user import _password_key, decrypt_password
+        from neezer.managers.user import _password_key, decrypt_password
 
         iv = get_random_bytes(16)
         cipher = AES.new(_password_key(), AES.MODE_CFB, iv)
@@ -248,25 +248,35 @@ class PasswordEncryptionTestCase(unittest.TestCase):
 
 class PasswordPolicyTestCase(unittest.TestCase):
     def test_rejects_the_documented_placeholders(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
-        for bad in ("", "changeme", "CHANGEME", " supysonic ", "password", "123456"):
+        for bad in ("", "changeme", "CHANGEME", " neezer ", "password", "123456"):
             with self.assertRaises(ValueError, msg=bad):
                 UserManager.check_password_policy(bad)
 
     def test_accepts_an_ordinary_password(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.check_password_policy("B0b")  # no length floor by default
 
     def test_length_floor_is_opt_in(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
+
+        os.environ["NEEZER_MIN_PASSWORD_LENGTH"] = "12"
+        try:
+            with self.assertRaises(ValueError):
+                UserManager.check_password_policy("short")
+            UserManager.check_password_policy("long-enough-password")
+        finally:
+            del os.environ["NEEZER_MIN_PASSWORD_LENGTH"]
+
+    def test_the_pre_rebrand_length_variable_is_still_honoured(self):
+        from neezer.managers.user import UserManager
 
         os.environ["SUPYSONIC_MIN_PASSWORD_LENGTH"] = "12"
         try:
             with self.assertRaises(ValueError):
                 UserManager.check_password_policy("short")
-            UserManager.check_password_policy("long-enough-password")
         finally:
             del os.environ["SUPYSONIC_MIN_PASSWORD_LENGTH"]
 
@@ -298,7 +308,7 @@ class RateLimiterCompositeKeyTestCase(unittest.TestCase):
 
 class SsrfGuardTestCase(unittest.TestCase):
     def test_refuses_private_and_non_http_targets(self):
-        from supysonic.deezer.provider import DeezerError, check_public_url
+        from neezer.deezer.provider import DeezerError, check_public_url
 
         for bad in (
             "http://127.0.0.1:5722/rest/ping",
@@ -312,28 +322,39 @@ class SsrfGuardTestCase(unittest.TestCase):
                 check_public_url(bad)
 
     def test_allows_a_public_host(self):
-        from supysonic.deezer.provider import check_public_url
+        from neezer.deezer.provider import check_public_url
 
         check_public_url("https://93.184.216.34/episode.mp3")
 
 
 class SecretFromEnvTestCase(unittest.TestCase):
     def test_env_secret_takes_precedence_and_avoids_db(self):
-        from supysonic.utils import get_secret_key
+        from neezer.utils import get_secret_key
 
-        os.environ["SUPYSONIC_SECRET_UNITTESTKEY"] = "hunter2"
+        os.environ["NEEZER_SECRET_UNITTESTKEY"] = "hunter2"
         try:
             key = get_secret_key("unittestkey")  # unique name -> no cache clash
         finally:
-            del os.environ["SUPYSONIC_SECRET_UNITTESTKEY"]
+            del os.environ["NEEZER_SECRET_UNITTESTKEY"]
         # Derived purely from the env value (sha256), never touching the DB.
+        self.assertEqual(key, hashlib.sha256(b"hunter2").digest())
+
+    def test_the_pre_rebrand_env_name_still_supplies_the_secret(self):
+        """An upgraded deployment exports SUPYSONIC_SECRET_* — same key."""
+        from neezer.utils import get_secret_key
+
+        os.environ["SUPYSONIC_SECRET_UNITTESTKEY2"] = "hunter2"
+        try:
+            key = get_secret_key("unittestkey2")
+        finally:
+            del os.environ["SUPYSONIC_SECRET_UNITTESTKEY2"]
         self.assertEqual(key, hashlib.sha256(b"hunter2").digest())
 
 
 class ProxyFixTestCase(unittest.TestCase):
     def _make_app(self, hops):
         from tests.testbase import TestConfig
-        from supysonic.web import create_application
+        from neezer.web import create_application
 
         cfg = TestConfig(True, True)
         cfg.BASE["database_uri"] = "sqlite:///" + tempfile.mkstemp()[1]
@@ -376,8 +397,8 @@ class WebHardeningTestCase(unittest.TestCase):
 
     def setUp(self):
         from tests.testbase import TestConfig
-        from supysonic.managers.user import UserManager
-        from supysonic.web import create_application
+        from neezer.managers.user import UserManager
+        from neezer.web import create_application
 
         self.__db = tempfile.mkstemp()
         self.__dir = tempfile.mkdtemp()
@@ -391,7 +412,7 @@ class WebHardeningTestCase(unittest.TestCase):
         self.client = self.app.test_client()
 
     def tearDown(self):
-        from supysonic.db import release_database
+        from neezer.db import release_database
 
         release_database()
         shutil.rmtree(self.__dir, ignore_errors=True)
@@ -456,7 +477,7 @@ class WebHardeningTestCase(unittest.TestCase):
     # -- NS-02: CSRF and GET mutations ------------------------------------
 
     def _frontend_login(self):
-        from supysonic.frontend import CSRF_FIELD
+        from neezer.frontend import CSRF_FIELD
 
         page = self.client.get("/user/login").get_data(as_text=True)
         token = re.search(r'name="_csrf" value="([^"]+)"', page).group(1)
@@ -468,7 +489,7 @@ class WebHardeningTestCase(unittest.TestCase):
         return re.search(r'name="csrf-token" content="([^"]+)"', home).group(1)
 
     def test_admin_mutations_reject_get(self):
-        from supysonic.db import User
+        from neezer.db import User
 
         self._frontend_login()
         bob = str(User.get(name="bob").id)
@@ -492,7 +513,7 @@ class WebHardeningTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/user").status_code, 200)
 
     def test_post_without_csrf_token_is_rejected(self):
-        from supysonic.db import User
+        from neezer.db import User
 
         token = self._frontend_login()
         bob = str(User.get(name="bob").id)
@@ -529,7 +550,7 @@ class WebHardeningTestCase(unittest.TestCase):
     # -- NS-05: mass assignment -------------------------------------------
 
     def test_user_add_ignores_unknown_fields(self):
-        from supysonic.db import User
+        from neezer.db import User
 
         token = self._frontend_login()
         rv = self.client.post(
@@ -550,7 +571,7 @@ class WebHardeningTestCase(unittest.TestCase):
         self.assertNotEqual(mallory.password_clear, "pwned")
 
     def test_user_manager_add_refuses_unknown_kwargs(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         with self.assertRaises(ValueError):
             UserManager.add("eve", "s3cret-enough", password_clear="pwned")
@@ -558,7 +579,7 @@ class WebHardeningTestCase(unittest.TestCase):
     # -- NS-12: sessions --------------------------------------------------
 
     def test_password_change_revokes_other_sessions(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         self.client.post("/api/login", json={"username": "bob", "password": "B0b"})
         self.assertEqual(self.client.get("/api/me").status_code, 200)
@@ -579,9 +600,9 @@ class UploadIsolationTestCase(unittest.TestCase):
 
     def setUp(self):
         from tests.testbase import TestConfig
-        from supysonic.deezer import library, local
-        from supysonic.managers.user import UserManager
-        from supysonic.web import create_application
+        from neezer.deezer import library, local
+        from neezer.managers.user import UserManager
+        from neezer.web import create_application
 
         self.__db = tempfile.mkstemp()
         self.__dir = tempfile.mkdtemp()
@@ -639,7 +660,7 @@ class UploadIsolationTestCase(unittest.TestCase):
         self.client = self.app.test_client()
 
     def tearDown(self):
-        from supysonic.db import release_database
+        from neezer.db import release_database
 
         release_database()
         for d in (self.__dir, self.archive):
@@ -697,7 +718,7 @@ class UploadIsolationTestCase(unittest.TestCase):
         import io
         import zipfile
 
-        from supysonic.db import ClientPrefs, User
+        from neezer.db import ClientPrefs, User
 
         mallory = User.get(name="mallory")
         ClientPrefs.get_or_create(user=mallory, client_name="tests")

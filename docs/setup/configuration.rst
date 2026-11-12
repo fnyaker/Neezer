@@ -1,19 +1,22 @@
 Configuration
 =============
 
-Supysonic looks for four files for its configuration: :file:`/etc/supysonic`,
+Neezer looks for four files for its configuration: :file:`/etc/neezer`,
+:file:`~/.neezer`, :file:`~/.config/neezer/neezer.conf` and
+:file:`neezer.conf` in the current working directory, in this order, merging
+values from all files. The pre-rebrand locations (:file:`/etc/supysonic`,
 :file:`~/.supysonic`, :file:`~/.config/supysonic/supysonic.conf` and
-:file:`supysonic.conf` in the current working directory, in this order, merging
-values from all files.
+:file:`supysonic.conf`) are still read, so an existing installation keeps its
+configuration after the upgrade.
 
 Configuration files must respect a structure similar to Windows INI file, with
 ``[section]`` headers and using a ``KEY = VALUE`` or ``KEY: VALUE`` syntax.
 
-If you cloned Supysonic from its `GitHub repository`__ you'll find a roughly
+If you cloned Neezer from its `GitHub repository`__ you'll find a roughly
 documented configuration sample file at the root of the project, file
 conveniently named :file:`config.sample`. More details below.
 
-__ https://github.com/spl0k/supysonic
+__ https://github.com/fnyaker/Neezer
 
 ``[base]`` section
 ------------------
@@ -22,7 +25,7 @@ This sections defines the database and additional scanning config.
 
 ``database_uri``
    The most important configuration, defines the type and
-   parameters of the database Supysonic should connect to. It usually includes
+   parameters of the database Neezer should connect to. It usually includes
    username, password, hostname and database name. The typical form of a
    database URI is::
 
@@ -48,9 +51,9 @@ This sections defines the database and additional scanning config.
       ; Relative path
       database_uri = sqlite:///relative-file.db
       ; Absolute path on Unix-based systems
-      database_uri = sqlite:////home/user/supysonic.db
+      database_uri = sqlite:////home/user/neezer.db
       ; Absolute path on Windows
-      database_uri = sqlite:///C:\Users\user\supysonic.db
+      database_uri = sqlite:///C:\Users\user\neezer.db
 
    A MySQL-compatible database requires either ``MySQLdb`` or ``pymysql`` to be
    installed. PostgreSQL needs ``psycopg2``.
@@ -61,7 +64,7 @@ This sections defines the database and additional scanning config.
       ``utf8mb4`` regardless of what's set on your MySQL installation.
 
    If ``database_uri`` isn't provided, it defaults to a SQLite database stored
-   in :file:`/tmp/supysonic/supysonic.db`.
+   in :file:`/tmp/neezer/neezer.db`.
 
 ``scanner_extensions``
    A space separated list of file extensions the scanner is restricted to.
@@ -77,10 +80,10 @@ This sections defines the database and additional scanning config.
 Sample configuration::
 
    [base]
-   ; A database URI. Default: sqlite:////tmp/supysonic/supysonic.db
-   database_uri = sqlite:////var/supysonic/supysonic.db
-   ;database_uri = mysql://supysonic:supysonic@localhost/supysonic
-   ;database_uri = postgres://supysonic:supysonic@localhost/supysonic
+   ; A database URI. Default: sqlite:////tmp/neezer/neezer.db
+   database_uri = sqlite:////var/neezer/neezer.db
+   ;database_uri = mysql://neezer:neezer@localhost/neezer
+   ;database_uri = postgres://neezer:neezer@localhost/neezer
 
    ; Optional, restrict scanner to these extensions. Default: none
    scanner_extensions = mp3 ogg
@@ -95,7 +98,7 @@ Configuration relative to the HTTP server.
 
 ``cache_dir``
    Directory used to store generated files, such as resized cover art or
-   transcoded files. Defaults to :file:`/tmp/supysonic`.
+   transcoded files. Defaults to :file:`/tmp/neezer`.
 
 ``cache_size``
    Maximum size (in megabytes) of the cache (except for trancodes).
@@ -127,7 +130,7 @@ Configuration relative to the HTTP server.
    utilities such as :command:`logrotate`. Defaults to ``yes``.
 
 ``mount_api`` (``on`` or ``off``)
-   Enable or disable the Subsonic REST API. Should be kept on or Supysonic would
+   Enable or disable the Subsonic REST API. Should be kept on or Neezer would
    be quite useless. Exists mostly for testing purposes.
    Defaults to ``on``.
 
@@ -155,8 +158,8 @@ Configuration relative to the HTTP server.
 Sample configuration::
 
    [webapp]
-   ; Optional cache directory. Default: /tmp/supysonic
-   cache_dir = /var/supysonic/cache
+   ; Optional cache directory. Default: /tmp/neezer
+   cache_dir = /var/neezer/cache
 
    ; Main cache max size in MB. Default: 512
    cache_size = 512
@@ -165,7 +168,7 @@ Sample configuration::
    transcode_cache_size = 1024
 
    ; Optional rotating log file. Default: none
-   log_file = /var/supysonic/supysonic.log
+   log_file = /var/neezer/neezer.log
 
    ; Log level. Possible values: DEBUG, INFO, WARNING, ERROR, CRITICAL.
    ; Default: WARNING
@@ -200,7 +203,7 @@ library folders and providing the jukebox feature.
    Unix domain socket file (or named pipe on Windows) used to communicate
    between the daemon and clients that rely on it (eg. CLI, folder admin web
    page, etc.). Note that using an IP address here isn't supported.
-   Default: :file:`/tmp/supysonic/supysonic.sock`
+   Default: :file:`/tmp/neezer/neezer.sock`
 
 ``run_watcher``
    Whether or not to start the watcher that will listen for library changes.
@@ -241,10 +244,10 @@ Sample configuration::
 
    [daemon]
    ; Socket file the daemon will listen on for incoming management commands
-   ; Default: /tmp/supysonic/supysonic.sock
-   socket = /var/run/supysonic.sock
+   ; Default: /tmp/neezer/neezer.sock
+   socket = /var/run/neezer.sock
    ; Syntax for windows named pipe:
-   ;socket = \\.\pipe\supysonic.sock
+   ;socket = \\.\pipe\neezer.sock
 
    ; Defines if the file watcher should be started. Default: yes
    run_watcher = yes
@@ -259,7 +262,7 @@ Sample configuration::
    jukebox_command = mplayer -ss %offset %path
 
    ; Optional rotating log file for the scanner daemon. Logs to stderr if empty
-   log_file = /var/supysonic/supysonic-daemon.log
+   log_file = /var/neezer/neezer-daemon.log
    log_level = INFO
 
    ; Enable log rotation. Default: yes
@@ -271,13 +274,13 @@ Sample configuration::
 --------------------
 
 This section allow defining API keys to enable Last.FM integration in
-Supysonic. Currently it is only used to *scrobble* played tracks and update
+Neezer. Currently it is only used to *scrobble* played tracks and update
 the *now playing* information.
 
 See https://www.last.fm/api to obtain such keys.
 
 Once keys are set, users have to link their account by visiting their profile
-page on Supysonic's administrative UI.
+page on Neezer's administrative UI.
 
 ``api_key``
    Last.FM API key
@@ -301,7 +304,7 @@ Sample configuration::
 This section allows a custom ListenBrainz instance to be configured
 for scrobbling. ListenBrainz is a music scrobbling service with social
 features, similar to LastFM, but it is open source and
-self-hostable. Supysonic can configured with any ListenBrainz
+self-hostable. Neezer can configured with any ListenBrainz
 instance, but it connects to the official instance by default.
 
 In order to connect to ListenBrainz, each user requires an user token
@@ -348,7 +351,7 @@ For more details, please refer to the
 ``[mimetypes]`` section
 -----------------------
 
-Use this section if the system Supysonic is installed on has trouble guessing
+Use this section if the system Neezer is installed on has trouble guessing
 the mimetype of some files. This might only be useful in some rare cases.
 
 See the following links for a list of examples:

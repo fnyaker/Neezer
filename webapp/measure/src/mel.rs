@@ -1,4 +1,4 @@
-//! The extractor's front-end and aggregation, a port of `supysonic/deezer/embedding.py`
+//! The extractor's front-end and aggregation, a port of `neezer/deezer/embedding.py`
 //! (`patch_offsets`, `_log_mel_patches`, `patch_loudness`, `loud_half`, `_aggregate`).
 //!
 //! The network itself (discogs-effnet, ONNX) runs in the page through onnxruntime-web; what

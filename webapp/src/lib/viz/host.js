@@ -135,7 +135,7 @@ export function stopVizHost() {
 export function openProjector() {
   const url = new URL(window.location.href);
   url.hash = "#/viz";
-  const w = window.open(url.toString(), "nsupysonic-viz");
+  const w = window.open(url.toString(), "neezer-viz");
   w?.focus();
   return !!w;
 }

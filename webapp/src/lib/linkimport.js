@@ -2,7 +2,7 @@
 //
 // Only RECOGNISES a link, to offer the import where one was pasted (the search
 // box). The server parses it again and is the only judge of what it reads —
-// see supysonic/linkimport.py.
+// see neezer/linkimport.py.
 
 const SERVICES = [
   { id: "deezer", label: "Deezer", host: /(^|\.)deezer\.com$/, path: /\/(playlist|album)\/\d+/ },

@@ -1,8 +1,8 @@
 {
   "id": "/app/",
-  "name": "NSupySonic · Deezer",
-  "short_name": "NSupySonic",
-  "description": "Lecteur Deezer-natif pour NSupySonic",
+  "name": "Neezer · Deezer",
+  "short_name": "Neezer",
+  "description": "Lecteur Deezer-natif pour Neezer",
   "lang": "fr",
   "start_url": "/app/",
   "scope": "/app/",

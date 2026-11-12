@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -81,7 +81,7 @@ class FfmpegTestCase(unittest.TestCase):
 
 class SpectralPassTestCase(FfmpegTestCase):
     def test_a_sine_is_tonal_and_where_it_should_be(self):
-        from supysonic.deezer.analysis import _spectral
+        from neezer.deezer.analysis import _spectral
 
         # lavfi's sine is 1/8 of full scale; volume 0.1 more: 0.0125 peak.
         f = _spectral(self.file(
@@ -100,7 +100,7 @@ class SpectralPassTestCase(FfmpegTestCase):
         self.assertGreater(f["frames"], 500)
 
     def test_white_noise_is_flat_and_bright(self):
-        from supysonic.deezer.analysis import _spectral
+        from neezer.deezer.analysis import _spectral
 
         f = _spectral(self.file(
             "noise", "-f", "lavfi", "-i",
@@ -115,7 +115,7 @@ class SpectralPassTestCase(FfmpegTestCase):
 
     def test_a_few_noisy_frames_do_not_make_a_tone_flat(self):
         """The descriptors describe the TYPICAL frame (a median), not the worst."""
-        from supysonic.deezer.analysis import _spectral
+        from neezer.deezer.analysis import _spectral
 
         # A tone with a 0.15 s burst of noise every 2 s: 7.5% of the frames.
         f = _spectral(self.file(
@@ -130,7 +130,7 @@ class SpectralPassTestCase(FfmpegTestCase):
 
     def test_the_loudness_range_tells_squashed_from_dynamic(self):
         """LRA is the classifier's "how limitered is this" axis."""
-        from supysonic.deezer.analysis import _spectral
+        from neezer.deezer.analysis import _spectral
 
         steady = _spectral(self.file("kick128", *_kick(128)))
         dynamic = _spectral(self.file(
@@ -144,7 +144,7 @@ class SpectralPassTestCase(FfmpegTestCase):
         self.assertGreater(dynamic["lra"], 15)
 
     def test_an_undecodable_file_says_why(self):
-        from supysonic.deezer.analysis import _spectral
+        from neezer.deezer.analysis import _spectral
 
         bogus = os.path.join(self.dir, "bogus.flac")
         with open(bogus, "wb") as fh:
@@ -158,7 +158,7 @@ class SpectralPassTestCase(FfmpegTestCase):
 
 class TempoTestCase(FfmpegTestCase):
     def test_kicks_read_at_their_tempo(self):
-        from supysonic.deezer.analysis import _measure_tempo
+        from neezer.deezer.analysis import _measure_tempo
 
         # 174 is the trap case: 34.5 slots of the 100 Hz grid per beat, so a
         # tracker that only tries whole lags reads it as its own half or double.
@@ -176,7 +176,7 @@ class TempoTestCase(FfmpegTestCase):
         removes everything above 500 Hz — so the band the low-pass guards is
         170-500 Hz, which is exactly where an offbeat bass stab sits.
         """
-        from supysonic.deezer.analysis import _measure_tempo
+        from neezer.deezer.analysis import _measure_tempo
 
         p = 60.0 / 128
         kick = (
@@ -191,7 +191,7 @@ class TempoTestCase(FfmpegTestCase):
         self.assertAlmostEqual(bpm, 128, delta=1.0)
 
     def test_kicks_over_a_held_bass_keep_their_tempo(self):
-        from supysonic.deezer.analysis import _measure_tempo
+        from neezer.deezer.analysis import _measure_tempo
 
         p = 60.0 / 128
         kick = (
@@ -220,7 +220,7 @@ class TempoTestCase(FfmpegTestCase):
         smoothed POWER now has to rise before there is anything to measure
         (_attack_rate): on all of these it never does (0 attacks a minute).
         """
-        from supysonic.deezer.analysis import _measure_tempo
+        from neezer.deezer.analysis import _measure_tempo
 
         chord = "0.25*sin(2*PI*55*t)+0.2*sin(2*PI*82.4*t)+0.15*sin(2*PI*110*t)"
         cases = {f"tone{f}": ("-f", "lavfi", "-i", f"sine=frequency={f}:sample_rate=44100:duration=30")
@@ -240,7 +240,7 @@ class TempoTestCase(FfmpegTestCase):
         a 3 dB rise requirement found neither. Measured 150.0 (0.62) and
         200.0 (0.55).
         """
-        from supysonic.deezer.analysis import _measure_tempo
+        from neezer.deezer.analysis import _measure_tempo
 
         for bpm, tail in ((150, 0.78), (200, 0.75)):
             p = 60.0 / bpm
@@ -258,7 +258,7 @@ class TempoTestCase(FfmpegTestCase):
     def test_a_kick_every_two_seconds_is_not_a_beat(self):
         # 28 attacks a minute, under the 40 a beat needs; 30 BPM is below the
         # slowest tempo read anyway (55).
-        from supysonic.deezer.analysis import _measure_tempo
+        from neezer.deezer.analysis import _measure_tempo
 
         kick = "0.6*sin(2*PI*(45+160*exp(-35*mod(t\\,2)))*mod(t\\,2))*exp(-9*mod(t\\,2))"
         path = self.file("sparse", "-f", "lavfi", "-i", f"aevalsrc='{kick}':s=44100:d=30")
@@ -267,7 +267,7 @@ class TempoTestCase(FfmpegTestCase):
 
 class SilenceBoundsTestCase(FfmpegTestCase):
     def _bounds(self, path, threshold=-45.0):
-        from supysonic.webui import edges
+        from neezer.webui import edges
 
         return edges._edges(*edges._detect(path, threshold))
 

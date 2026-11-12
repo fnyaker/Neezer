@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -14,8 +14,8 @@ import json
 import random
 import unittest
 
-from supysonic import discover, energy, listening
-from supysonic.db import TrackAnalysis, UserTaste
+from neezer import discover, energy, listening
+from neezer.db import TrackAnalysis, UserTaste
 
 from .test_discover import count_statements
 from .test_radio_mix import _Graph
@@ -145,7 +145,7 @@ class FlowNextTestCase(_Session):
         self.assertIsNone(discover._energy_aim(discover.Session(heard=ys[:2]), energy.energies())[0])
 
     def test_a_disliked_title_is_never_the_next(self):
-        from supysonic import dislikes
+        from neezer import dislikes
 
         bad = self.rows["X"][4]
         dislikes.set_disliked(self.user, bad, True)

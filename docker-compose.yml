@@ -1,21 +1,22 @@
 services:
-  supysonic:
+  neezer:
     # Prebuilt multi-arch image from GHCR (default — no local build needed):
-    image: ghcr.io/fnyaker/nsupysonic:latest
+    image: ghcr.io/fnyaker/neezer:latest
     # …or build locally instead (also builds the Svelte web UI) by commenting
     # out `image:` above and uncommenting this:
     # build: .
-    container_name: supysonic
+    container_name: neezer
     restart: unless-stopped
     ports:
       - "5722:5722"
     environment:
       # First-run admin, auto-created on boot (also the Subsonic/web UI login).
-      SUPYSONIC_ADMIN_USER: ${SUPYSONIC_ADMIN_USER:-admin}
-      SUPYSONIC_ADMIN_PASSWORD: ${SUPYSONIC_ADMIN_PASSWORD:-changeme}
+      # The pre-rebrand SUPYSONIC_* names are still read (entrypoint fallback).
+      NEEZER_ADMIN_USER: ${NEEZER_ADMIN_USER:-${SUPYSONIC_ADMIN_USER:-admin}}
+      NEEZER_ADMIN_PASSWORD: ${NEEZER_ADMIN_PASSWORD:-${SUPYSONIC_ADMIN_PASSWORD:-changeme}}
       # Deezer proxy: set DEEZER_ARL to enable it (empty = Deezer disabled).
       DEEZER_ARL: ${DEEZER_ARL:-}
-      DEEZER_SYNC_USER: ${SUPYSONIC_ADMIN_USER:-admin}
+      DEEZER_SYNC_USER: ${NEEZER_ADMIN_USER:-${SUPYSONIC_ADMIN_USER:-admin}}
       DEEZER_QUALITY: ${DEEZER_QUALITY:-FLAC}
       # Auto-sync runs on startup + daily at 04:00 by default; override the time here.
       DEEZER_SYNC_AT: ${DEEZER_SYNC_AT:-}
@@ -25,6 +26,9 @@ services:
       # POSTGRES_PASSWORD (set it in .env) is the single source of truth — this
       # URI reuses it, so there's nothing to keep in sync by hand. Override
       # DATABASE_URI in .env only if you point at an external Postgres.
+      # The database/user names stay `supysonic`: they are the identity of a
+      # database that already exists on the volume, and renaming them would make
+      # an upgraded stack fail to log in. They are internal, not the brand.
       # If a legacy SQLite database is still on the /data volume, its data is
       # migrated across automatically on first boot (one-shot, transparent).
       DATABASE_URI: ${DATABASE_URI:-postgresql://supysonic:${POSTGRES_PASSWORD:-supysonic}@db:5432/supysonic}
@@ -37,18 +41,19 @@ services:
       #     rate-limiting and logs see the real client IP). Only set it if a
       #     proxy you control is really in front.
       #   - COOKIE_SECURE = yes  -> session cookie only sent over HTTPS.
-      # SUPYSONIC_PROXY_HOPS: ${SUPYSONIC_PROXY_HOPS:-}
-      # SUPYSONIC_SESSION_COOKIE_SECURE: ${SUPYSONIC_SESSION_COOKIE_SECURE:-}
+      # NEEZER_PROXY_HOPS: ${NEEZER_PROXY_HOPS:-${SUPYSONIC_PROXY_HOPS:-}}
+      # NEEZER_SESSION_COOKIE_SECURE: ${NEEZER_SESSION_COOKIE_SECURE:-${SUPYSONIC_SESSION_COOKIE_SECURE:-}}
     volumes:
       # Persistent state: caches and the Deezer FLAC archive (the database
-      # lives in the `db` service's own volume).
+      # lives in the `db` service's own volume). The volume key keeps its
+      # pre-rebrand name so an existing stack reuses the same data.
       - supysonic-data:/data
       # Optional: an existing local music library (hybrid with Deezer).
       # - /path/to/your/music:/data/music:ro
       # Optional: a full hand-written config instead of the env vars above.
-      # Copy config/supysonic.conf.example to config/supysonic.conf, edit it
+      # Copy config/neezer.conf.example to config/neezer.conf, edit it
       # (it's gitignored — it holds your ARL), then uncomment:
-      # - ./config/supysonic.conf:/etc/supysonic:ro
+      # - ./config/neezer.conf:/etc/neezer:ro
     # Wait for PostgreSQL to be ready before starting the app.
     depends_on:
       db:
@@ -62,9 +67,12 @@ services:
   # ---------------------------------------------------------------------------
   db:
     image: postgres:16-alpine
-    container_name: supysonic-db
+    container_name: neezer-db
     restart: unless-stopped
     environment:
+      # Internal names kept from the pre-rebrand stack: an existing PostgreSQL
+      # volume is initialised with them, and changing them would lock the app
+      # out of its own data. A fresh volume simply gets the same names.
       POSTGRES_DB: supysonic
       POSTGRES_USER: supysonic
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supysonic}
@@ -78,15 +86,15 @@ services:
 
   # Optional background daemon: folder watcher + jukebox. Shares the same env,
   # config and /data volume. Uncomment to enable.
-  # supysonic-daemon:
-  #   image: ghcr.io/fnyaker/nsupysonic:latest
+  # neezer-daemon:
+  #   image: ghcr.io/fnyaker/neezer:latest
   #   # build: .
-  #   container_name: supysonic-daemon
+  #   container_name: neezer-daemon
   #   restart: unless-stopped
-  #   command: ["supysonic-daemon"]
+  #   command: ["neezer-daemon"]
   #   environment:
   #     DEEZER_ARL: ${DEEZER_ARL:-}
-  #     DEEZER_SYNC_USER: ${SUPYSONIC_ADMIN_USER:-admin}
+  #     DEEZER_SYNC_USER: ${NEEZER_ADMIN_USER:-${SUPYSONIC_ADMIN_USER:-admin}}
   #     DATABASE_URI: ${DATABASE_URI:-postgresql://supysonic:${POSTGRES_PASSWORD:-supysonic}@db:5432/supysonic}
   #   volumes:
   #     - supysonic-data:/data
@@ -95,6 +103,8 @@ services:
   #       condition: service_healthy
 
 volumes:
+  # Kept from the pre-rebrand compose file on purpose: an existing stack must
+  # mount the same volumes after the upgrade, not fresh empty ones.
   supysonic-data:
   # PostgreSQL data.
   supysonic-db:

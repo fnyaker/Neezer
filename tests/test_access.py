@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -14,9 +14,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from supysonic import access
-from supysonic import db as dbmod
-from supysonic.db import (
+from neezer import access
+from neezer import db as dbmod
+from neezer.db import (
     Meta,
     ProviderAccount,
     ProviderGrant,
@@ -26,11 +26,11 @@ from supysonic.db import (
     init_database,
     release_database,
 )
-from supysonic.managers.user import UserManager
-from supysonic.providers import base
-from supysonic.providers import features as F
-from supysonic.providers.deezer import DeezerAdapter
-from supysonic.providers.info import LrclibProvider, MusicBrainzProvider
+from neezer.managers.user import UserManager
+from neezer.providers import base
+from neezer.providers import features as F
+from neezer.providers.deezer import DeezerAdapter
+from neezer.providers.info import LrclibProvider, MusicBrainzProvider
 
 from .test_deezer import count_statements
 from . import test_webui
@@ -268,7 +268,7 @@ class GrantsTestCase(_Case):
         group = self.make_group("Famille", [self.carol])
         self.grant("*", ["g:" + group["id"]], account="", provider="youtube")
         self.as_bob()
-        from supysonic.deezer import youtube as yt
+        from neezer.deezer import youtube as yt
 
         with mock.patch.object(yt, "installed", return_value=True):
             rv = self.client.get("/api/youtube/search?q=x")
@@ -334,7 +334,7 @@ class GroupsTestCase(_Case):
 
 class SubsonicStreamTestCase(_Case):
     def test_the_subsonic_stream_asks_the_same_question(self):
-        from supysonic.api import media
+        from neezer.api import media
 
         self.as_alice()
         self.grant("*", [])

@@ -1,9 +1,9 @@
 {
-  "name": "nsupysonic-webapp",
+  "name": "neezer-webapp",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Deezer-native discovery SPA for NSupySonic",
+  "description": "Deezer-native discovery SPA for Neezer",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

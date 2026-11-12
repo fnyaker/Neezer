@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -24,9 +24,9 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3, TXXX
 from mutagen.mp3 import MP3
 
-from supysonic import filetags
-from supysonic.db import Album, Meta, Track
-from supysonic.deezer import analysis, diskmigrate, library, local, metadata
+from neezer import filetags
+from neezer.db import Album, Meta, Track
+from neezer.deezer import analysis, diskmigrate, library, local, metadata
 
 from . import test_detach_c as _c
 from . import test_webui as _tw
@@ -232,7 +232,7 @@ class BpmTest(_c.LyricsTestCase):
 
 class StudioAndGenreTest(_c.WebUITestCase):
     def test_the_studio_rows_carry_deezer_bpm(self):
-        from supysonic.webui import genre as wg
+        from neezer.webui import genre as wg
 
         with self.app.app_context():
             t = Track.select().first()
@@ -496,7 +496,7 @@ class MigrationTest(_c.LyricsTestCase):
 
 class MigrationRouteTest(_c.WebUITestCase):
     def test_admin_only_and_classified(self):
-        from supysonic.webui import remote
+        from neezer.webui import remote
 
         self.assertEqual(remote.POLICY["archive_migrate_start"], "admin")
         self.assertEqual(remote.POLICY["archive_migrate_status"], "admin")

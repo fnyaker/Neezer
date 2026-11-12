@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -16,9 +16,9 @@ import tempfile
 import unittest
 import uuid
 
-from supysonic import db as dbmod
-from supysonic import sources
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer import sources
+from neezer.db import (
     Album,
     Artist,
     EntityRef,
@@ -34,17 +34,17 @@ from supysonic.db import (
     init_database,
     release_database,
 )
-from supysonic.deezer import ids, library, youtube
-from supysonic.providers import (
+from neezer.deezer import ids, library, youtube
+from neezer.providers import (
     CapabilityMissing,
     Gone,
     Provider,
     ProviderUnavailable,
     Registry,
 )
-from supysonic.providers import base
-from supysonic.providers.fake import FakeProvider
-from supysonic.providers.registry import MemoryStore
+from neezer.providers import base
+from neezer.providers.fake import FakeProvider
+from neezer.providers.registry import MemoryStore
 
 from .multi_helpers import assert_calls, hit, registry_with
 from .test_deezer import count_statements
@@ -186,8 +186,8 @@ class UpgradeTestCase(_DbCase):
         self.assertEqual(TrackSource.select().count(), n)
 
     def test_the_old_config_and_the_app_still_boot(self):
-        from supysonic.config import DefaultConfig
-        from supysonic.web import create_application
+        from neezer.config import DefaultConfig
+        from neezer.web import create_application
 
         self.deezer_track("1")
         self.rewind()
@@ -334,14 +334,14 @@ class RegistryTestCase(_DbCase):
         ]
         reg = Registry(store=MemoryStore())
         with mock.patch.object(metadata, "entry_points", return_value=points):
-            with self.assertLogs("supysonic.providers.registry", "ERROR"):
+            with self.assertLogs("neezer.providers.registry", "ERROR"):
                 loaded = reg.load_entry_points()
         self.assertEqual([p.id for p in loaded], ["good"])
         self.assertEqual([p.id for p in reg.all()], ["good"])
 
     def test_the_app_builds_a_registry(self):
-        from supysonic.config import DefaultConfig
-        from supysonic.web import create_application
+        from neezer.config import DefaultConfig
+        from neezer.web import create_application
 
         path, cache = os.path.join(self.dir, "app.db"), self.dir
 
@@ -428,7 +428,7 @@ class SourcesTestCase(_DbCase):
         self.assertEqual([(r["provider"], r["ref"]) for r in sources.for_track(t)], [("youtube", "abcdefghijk")])
 
     def test_dropping_an_entity_forgets_its_refs(self):
-        from supysonic.webui import refs
+        from neezer.webui import refs
 
         t = self.deezer_track("1")
         refs.drop_entity("album", t.album_id)
@@ -455,7 +455,7 @@ class IdentityTestCase(_DbCase):
         self.assertEqual(str(a), "5fa27a36-c3e9-57ef-8c28-ee54f48b659f")
 
     def test_resolve_ref_prefers_what_the_database_knows(self):
-        from supysonic.webui import refs
+        from neezer.webui import refs
 
         t = self.deezer_track("1")
         sources.attach(t, "jamendo", "J1")
@@ -468,7 +468,7 @@ class IdentityTestCase(_DbCase):
         self.assertEqual(refs.resolve_ref("deezer", "album", "601"), ids.album_uuid("601"))
 
     def test_the_id_of_a_title_found_under_another_provider_is_the_existing_one(self):
-        from supysonic.webui import refs
+        from neezer.webui import refs
 
         t = self.deezer_track("1")
         sources.attach(t, "jamendo", "J1")
@@ -479,8 +479,8 @@ class IdentityTestCase(_DbCase):
 class ResolveTracksTestCase(_DbCase):
     def setUp(self):
         super().setUp()
-        from supysonic.config import DefaultConfig
-        from supysonic.web import create_application
+        from neezer.config import DefaultConfig
+        from neezer.web import create_application
 
         release_database()
         path, cache = os.path.join(self.dir, "r.db"), self.dir
@@ -494,12 +494,12 @@ class ResolveTracksTestCase(_DbCase):
                 self.WEBAPP = dict(self.WEBAPP, cache_dir=cache)
 
         self.app = create_application(Config())
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.add("alice", "Alic3", admin=True)
 
     def resolve(self, raws, counting=None):
-        from supysonic.webui import refs
+        from neezer.webui import refs
 
         with self.app.test_request_context():
             from flask import request

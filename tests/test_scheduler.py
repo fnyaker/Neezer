@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""The auto-sync scheduler (supysonic/deezer/scheduler.py).
+"""The auto-sync scheduler (neezer/deezer/scheduler.py).
 
 What it must guarantee, from the resilience rules in docs/agents/server.md: a sync is
 POSTPONED while Deezer is unreachable instead of failing on every entity, the
@@ -18,7 +18,7 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
-from supysonic.deezer import scheduler
+from neezer.deezer import scheduler
 
 from .testbase import TestBase
 
@@ -136,13 +136,13 @@ class RunSyncTestCase(TestBase):
                 return {"tracks": 1}
 
         patches = [
-            mock.patch("supysonic.deezer.importer.DeezerImporter", Importer),
+            mock.patch("neezer.deezer.importer.DeezerImporter", Importer),
             mock.patch(
-                "supysonic.deezer.local.scan_local",
+                "neezer.deezer.local.scan_local",
                 lambda d: self.scans.append(d) or {"added": 0, "removed": 0},
             ),
             mock.patch(
-                "supysonic.deezer.backfill.sweep_for",
+                "neezer.deezer.backfill.sweep_for",
                 lambda provider, user, **kw: self.sweeps.append(user.name) or {},
             ),
         ]

@@ -2,7 +2,7 @@
 name = "measure"
 version = "0.1.0"
 edition = "2021"
-description = "NSupySonic's whole-track measures (spectral descriptors, EBU R128 loudness) for analysis on the client PC. WIP: see docs/claude/client-analysis.md."
+description = "Neezer's whole-track measures (spectral descriptors, EBU R128 loudness) for analysis on the client PC. WIP: see docs/claude/client-analysis.md."
 license = "AGPL-3.0-only"
 publish = false
 build = "build.rs"
