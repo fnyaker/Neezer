@@ -200,3 +200,24 @@ scoped to `deezer.com`, never `removeAllCookies()`, which would log the user out
 server. Cookie arrival is polled (~600 ms, only while the screen is up): Deezer's login is an XHR,
 so no navigation fires and there is no cookie-change callback to hook. Google/Apple SSO is refused
 inside any WebView — email + password is the supported route. SPA side: `lib/nativeDeezer.js`.
+
+**Car mode, the page side and the pinned playlists** (bridge 9, lots A–E; SPA: `lib/car.js`,
+`CarPlaylistsView.kt`, `CarSettingsActivity.kt`). The overlay is native and the WebView still owns
+the queue, so the two sides meet at exactly two hooks, installed once by `App.svelte` (never on a
+party/remote page): `window.__nsCarPlay(kind, id, title, payload)` launches a Flow (`startFlow`), a
+track from its JSON (`player.playQueue`, context `track`), or an entity (`playEntity(kind, id)`) —
+never a second playback path — and returns a boolean the service can report. `window.__nsCarFav()`
+exists only while a track is current: it toggles that track's favourite and returns the optimistic
+new state synchronously. `NSNative.carAvailable()` gates the SPA's settings card and the playlist
+page's “Épingler pour la voiture” action (`NSNative.carPin`); an older APK has neither method and the
+entries simply do not exist, while a newer APK facing an older SPA finds no hook and must say so.
+The playlist panel shows Flow + `CarPrefs.pins`, six 84 dp tiles to a page; its catalogue is
+`/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
+(401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
+device remembers. `CarSettingsActivity` is the full-screen Réglages → Mode voiture (manifest
+`android:exported="false"`; the service must hide the overlay before starting it), asks overlay,
+usage-access, location, Bluetooth and microphone through `CarPermissions`, and never shows a
+confirmation dialog. `webapp/test/car.test.mjs` drives the hooks with injected player functions
+(launch kinds, no session, remote, the favourite hook appearing/disappearing); `npm test` 439 and
+`npm run build` pass. The Kotlin side is not measured on a device here: CI's `android` workflow
+builds it.
