@@ -67,6 +67,14 @@ class CarSearchView(
     private val prefs: CarPrefs = host.prefs,
 ) : LinearLayout(context) {
     private val server = Prefs(context.applicationContext)
+    // A 640 dp car screen with the 92 dp bottom margin cannot fit 50 dp keys
+    // in the ABC + passenger layout; 42 dp rows still leave a 44 dp target
+    // after the touch slop, and keep the whole panel on screen.
+    private val compactScreen = context.resources.displayMetrics.run {
+        heightPixels / density < 700f
+    }
+    private val keyHeightDp = if (compactScreen) 42 else 50
+    private val suggestionHeightDp = if (compactScreen) 42 else 46
     private val handler = Handler(Looper.getMainLooper())
     private val searchPool = Executors.newFixedThreadPool(2) { runnable ->
         Thread(runnable, "car-search").apply { isDaemon = true }
@@ -333,7 +341,7 @@ class CarSearchView(
             }
             keyboard.addView(
                 row,
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)).apply {
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(keyHeightDp)).apply {
                     if (index > 0) topMargin = dp(5)
                 },
             )
@@ -347,7 +355,7 @@ class CarSearchView(
         }
         keyboard.addView(
             space,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(50)).apply { topMargin = dp(5) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(keyHeightDp)).apply { topMargin = dp(5) },
         )
         updateMode()
     }
@@ -387,7 +395,7 @@ class CarSearchView(
     }
 
     private fun keyParams(weight: Float, marginStart: Int = 0): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(0, dp(50), weight).apply {
+        LinearLayout.LayoutParams(0, dp(keyHeightDp), weight).apply {
             this.marginStart = dp(marginStart)
         }
 
@@ -780,7 +788,7 @@ class CarSearchView(
             setPadding(dp(14), 0, dp(14), 0)
             contentDescription = "Recherche en cours"
         }
-        suggestions.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
+        suggestions.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(suggestionHeightDp)))
     }
 
     private fun showSuggestions(items: List<Suggestion>) {
@@ -790,7 +798,7 @@ class CarSearchView(
                 setPadding(dp(14), 0, dp(14), 0)
                 contentDescription = "Aucun résultat"
             }
-            suggestions.addView(empty, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
+            suggestions.addView(empty, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(suggestionHeightDp)))
             return
         }
         items.forEachIndexed { index, item ->
@@ -814,7 +822,7 @@ class CarSearchView(
                 .filter { it.isNotBlank() }
                 .joinToString(", ")
         }
-        row.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply {
+        row.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(suggestionHeightDp)).apply {
             if (index > 0) topMargin = dp(5)
         }
 
