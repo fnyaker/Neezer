@@ -490,7 +490,7 @@ class CarPlaylistsView @JvmOverloads constructor(
         }
         val glyph = CarIconView(context).apply {
             name = icon
-            sizeDp = if (sizeDp >= 56) 24 else 22
+            this.sizeDp = if (sizeDp >= 56) 24 else 22
             color = CarStyle.TX
         }
         box.addView(
