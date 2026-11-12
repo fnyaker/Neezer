@@ -185,6 +185,22 @@ later process's connection by accident. The name is reduced to printable charact
 reaches a page. An older APK reports nothing: verdicts are then per page's own guess of the output
 (the latency its context reports) and live until their retry.
 
+**The car overlay is a foreground service, not a second player** (bridge version 9, `CarModeService`,
+`CarOverlayRoot`, `CarTileService`). It binds the same `PlayerService` (BIND_AUTO_CREATE), reads
+`state()` and registers `onState`, and sends `transport(cmd, value)` — the MediaSession's own routing,
+native skip first. The overlay is `TYPE_APPLICATION_OVERLAY` with the window alpha kept in 40–80 %
+(Android 12's untrusted-touch rule is evaluated on the window, not on a drawable), `FLAG_NOT_FOCUSABLE
+| FLAG_NOT_TOUCH_MODAL`, 8 dp sides, bottom 92 dp, and cross-window blur only where the WindowManager
+reports it enabled. The service is `specialUse|location`: `specialUse` keeps the overlay above the
+navigation app, `location` keeps the speed updates coming once the activity is behind Maps; the
+`location` bit is only requested when a location grant exists, and a refused union falls back to
+`specialUse` rather than dropping the overlay. Auto-start needs a configured server, a trigger on,
+overlay access and usable notifications; the tile or the settings screen starts it by hand. The
+Settings activity is launched only after the overlay is detached, and MainActivity's next `onResume`
+sends `ACTION_REFRESH`, which re-reads `CarTrigger.refresh()` and reattaches if a trigger (or a manual
+start) still wants it. `MainActivity` owns the `jsSink` into the SPA (`__nsCarPlay` / `__nsCarFav`);
+with no bound WebView the overlay says "Ouvre Neezer" instead of pretending the tap worked.
+
 **Linking the Deezer account from the app** (`DeezerLoginActivity`): there is no email/password
 endpoint left that a server could call — Deezer's web one (`ajax/action.php` + reCAPTCHA) answers
 403 since 2024, and the mobile gateway (`mobile_userAuth`, which *does* return an ARL) needs keys
