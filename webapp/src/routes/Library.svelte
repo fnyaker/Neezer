@@ -912,17 +912,14 @@
       flex-wrap: wrap;
       overflow: visible;
     }
-    /* The actions scroll on one line, then the filter and the sort share the
-       next: no button is left alone on a third row. */
+    /* The three actions wrap rather than scrolling the last one out of
+       reach; the filter and the sort share the next row. */
     .bar-actions {
       width: 100%;
       gap: 6px;
-      overflow-x: auto;
-      scrollbar-width: none;
+      flex-wrap: wrap;
+      overflow: visible;
       padding-bottom: 2px;
-    }
-    .bar-actions::-webkit-scrollbar {
-      display: none;
     }
     .field.search,
     .tools .search {
@@ -955,9 +952,9 @@
     .tools .spacer {
       display: none;
     }
-    /* A phone cannot stack five rows of controls above the list: the actions
-       scroll on one line (the Spotify/Apple pattern), the filter takes the
-       next, and the sort shares the last with its two icons. */
+    /* A phone cannot stack five rows of controls above the list: the three
+       actions wrap (never a clipped "Exporter"), the filter takes the next
+       row, and the sort shares the last with its two icons. */
     .bar,
     .tools {
       gap: 8px;
@@ -965,12 +962,9 @@
     .bar-actions {
       width: 100%;
       gap: 6px;
-      overflow-x: auto;
-      scrollbar-width: none;
+      flex-wrap: wrap;
+      overflow: visible;
       padding-bottom: 2px;
-    }
-    .bar-actions::-webkit-scrollbar {
-      display: none;
     }
     .field.search,
     .tools .search {
