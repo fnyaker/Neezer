@@ -45,6 +45,7 @@
   // (neezer/discover.py#style_taste). Kept on the device, like the energy notch.
   import { onMount } from "svelte";
   import { startStyles, setStartStyles, STYLES_MAX } from "../lib/flow.js";
+  import { STYLE_FALLBACK } from "../lib/sillon.js";
   import Icon from "./Icon.svelte";
 
   let rows = [];
