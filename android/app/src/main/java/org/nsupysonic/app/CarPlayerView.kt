@@ -43,7 +43,7 @@ import kotlin.math.roundToInt
  * Everything the view knows comes from [render]; every action leaves through
  * [CarHost]. It owns no playback state, no audio and no network.
  *
- * Placement: add it with MATCH_PARENT width and WRAP_CONTENT height for
+ * Placement: add it with ViewGroup.LayoutParams.MATCH_PARENT width and ViewGroup.LayoutParams.WRAP_CONTENT height for
  * FULL/MINI. In ULTRA it measures itself 76 x 76 dp, so the overlay should put
  * it at gravity END|BOTTOM (the prototype's right 14 / bottom 104) and let the
  * window shrink to it: a transparent full-width strip would eat the GPS app's
@@ -118,24 +118,24 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     )
 
     private val miniPanel = LinearLayout(context).apply {
-        orientation = HORIZONTAL
+        orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
 
         val textColumn = LinearLayout(context).apply {
-            orientation = VERTICAL
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        textColumn.addView(miniTitle, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        textColumn.addView(miniTitle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         textColumn.addView(
             miniArtist,
-            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(1f) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(1f) },
         )
 
         addView(miniCover, LinearLayout.LayoutParams(dp(48f), dp(48f)))
         addView(
             textColumn,
-            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = dp(12f)
                 marginEnd = dp(12f)
             },
@@ -170,23 +170,23 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     )
 
     private val fullHeader = LinearLayout(context).apply {
-        orientation = HORIZONTAL
+        orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
 
         val textColumn = LinearLayout(context).apply {
-            orientation = VERTICAL
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        textColumn.addView(fullTitle, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        textColumn.addView(fullTitle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         textColumn.addView(
             fullArtist,
-            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(2f) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2f) },
         )
 
         addView(fullCover, LinearLayout.LayoutParams(dp(72f), dp(72f)))
         addView(
             textColumn,
-            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = dp(14f)
                 marginEnd = dp(14f)
             },
@@ -272,7 +272,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     )
 
     private val fullScreens = LinearLayout(context).apply {
-        orientation = HORIZONTAL
+        orientation = LinearLayout.HORIZONTAL
         addView(playlistsButton, LinearLayout.LayoutParams(0, dp(64f), 1f))
         addView(
             searchButton,
@@ -281,16 +281,16 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     }
 
     private val fullPanel = LinearLayout(context).apply {
-        orientation = VERTICAL
+        orientation = LinearLayout.VERTICAL
         setPadding(dp(14f), dp(14f), dp(14f), dp(16f))
-        addView(fullHeader, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        addView(fullHeader, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(
             fullControls,
-            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14f) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14f) },
         )
         addView(
             fullScreens,
-            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14f) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14f) },
         )
     }
 
@@ -332,17 +332,17 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         elevation = dp(4f).toFloat()
 
         addView(ultraCover, FrameLayout.LayoutParams(dp(ULTRA_DP.toFloat()), dp(ULTRA_DP.toFloat())))
-        addView(ultraScrim, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        addView(ultraScrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addView(
             ultraIcon,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
         )
-        addView(ultraBorder, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        addView(ultraBorder, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     init {
-        addView(miniPanel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        addView(fullPanel, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        addView(miniPanel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(fullPanel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(
             ultraPanel,
             FrameLayout.LayoutParams(
@@ -468,7 +468,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         if (size == CarSize.ULTRA) {
-            // Ignore a MATCH_PARENT spec: the round button is 76 dp, not the
+            // Ignore a ViewGroup.LayoutParams.MATCH_PARENT spec: the round button is 76 dp, not the
             // width of the overlay. The parent positions it (END|BOTTOM).
             val side = dp(ULTRA_DP.toFloat())
             ultraPanel.measure(
@@ -726,7 +726,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
             setOnClickListener { onClick() }
         }
         val row = LinearLayout(context).apply {
-            orientation = HORIZONTAL
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
