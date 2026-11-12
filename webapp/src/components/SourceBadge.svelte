@@ -1,12 +1,10 @@
 <script>
-  // What a YouTube track REALLY plays at, next to the quality chip, when the
-  // chip asks for more than YouTube has (FLAC, Opus 320…). The chip stays the
+  // What a YouTube track REALLY plays at, next to the quality badge, when the
+  // badge asks for more than YouTube has (FLAC, Opus 320…). The badge stays the
   // setting; this says the truth about the one track that cannot honour it.
   import { trackKey } from "../lib/trackkey.js";
   import { current, player, quality } from "../lib/stores.js";
   import { isYoutube, realBitrate, realBitrateBadge } from "../lib/youtube.js";
-
-  export let tone = "bar"; // bar | immersive
 
   let real = 0;
   // Keyed on the id as a STRING: `current` is handed over again on every
@@ -31,7 +29,7 @@
 </script>
 
 {#if badge}
-  <span class="src" class:immersive={tone === "immersive"} title={badge.title}>{badge.short}</span>
+  <span class="src mono" title={badge.title}>{badge.short}</span>
 {/if}
 
 <style>
@@ -39,20 +37,15 @@
     display: inline-flex;
     align-items: center;
     flex: none;
-    font-size: 0.68rem;
-    font-weight: 800;
-    letter-spacing: 0.03em;
-    font-variant-numeric: tabular-nums;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
     line-height: 1;
-    padding: 5px 8px;
-    border-radius: 999px;
-    color: var(--text-dim);
-    border: 1px solid color-mix(in srgb, var(--text-dim) 45%, transparent);
+    padding: 5px 7px;
+    border-radius: 6px;
+    color: var(--dim);
+    border: 1px solid var(--ln);
     white-space: nowrap;
     cursor: help;
-  }
-  .src.immersive {
-    color: rgba(255, 255, 255, 0.72);
-    border-color: rgba(255, 255, 255, 0.28);
   }
 </style>

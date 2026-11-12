@@ -19,6 +19,8 @@
   // Which edge the menu hangs from: a button at the left of a footer opens
   // rightwards, one at the right opens leftwards.
   export let align = "right";
+  // "up" from a footer, "down" from a header.
+  export let placement = "up";
 
   let open = false;
   let now = Date.now();
@@ -72,7 +74,7 @@
     {#if $sleepTimer}<span class="badge">{label}</span>{/if}
   </button>
   {#if open}
-    <div class="menu {align}" role="menu" on:click|stopPropagation>
+    <div class="menu {placement} {align}" role="menu" on:click|stopPropagation>
       <div class="mh">Minuteur de sommeil</div>
       {#if $sleepTimer}
         <button role="menuitem" class="off" on:click={off}>
@@ -105,18 +107,18 @@
     min-width: 34px;
     padding: 0 7px;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--dim);
     background: none;
     border: none;
     border-radius: 999px;
     cursor: pointer;
   }
   .trigger:hover {
-    color: #fff;
+    color: var(--tx);
   }
   .trigger.on {
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--ac);
+    background: color-mix(in srgb, var(--ac) 16%, transparent);
     padding: 0 11px 0 9px;
   }
   .badge {
@@ -127,14 +129,19 @@
   }
   .menu {
     position: absolute;
-    bottom: calc(100% + 8px);
     min-width: 214px;
     padding: 6px;
-    background: #282433;
-    border: 1px solid #3a3448;
-    border-radius: 12px;
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
-    z-index: 30;
+    background: var(--s2);
+    border: 1px solid var(--ln);
+    border-radius: 16px;
+    box-shadow: 0 16px 44px color-mix(in srgb, var(--bg) 65%, transparent);
+    z-index: 40;
+  }
+  .menu.up {
+    bottom: calc(100% + 8px);
+  }
+  .menu.down {
+    top: calc(100% + 8px);
   }
   .menu.right {
     right: 0;
@@ -148,7 +155,7 @@
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--dim);
   }
   .menu button {
     display: flex;
@@ -159,19 +166,19 @@
     padding: 9px 10px;
     border-radius: 8px;
     font-size: 0.88rem;
-    color: #fff;
+    color: var(--tx);
     text-align: left;
   }
   .menu button:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--s1);
   }
   .menu button.sel {
-    color: var(--accent);
+    color: var(--ac);
   }
   .menu .off {
-    color: var(--accent);
+    color: var(--ac);
     margin-bottom: 4px;
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    background: color-mix(in srgb, var(--ac) 12%, transparent);
   }
   .left {
     font-variant-numeric: tabular-nums;

@@ -39,14 +39,14 @@
     background: none;
     border: none;
     padding: 4px;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--dim);
     cursor: pointer;
     transition: color 0.16s ease;
   }
   .eco:hover {
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--tx);
   }
   .eco.on {
-    color: #5fd39b;
+    color: var(--ac);
   }
 </style>

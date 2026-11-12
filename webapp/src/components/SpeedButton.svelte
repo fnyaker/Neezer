@@ -7,6 +7,8 @@
   import Icon from "./Icon.svelte";
 
   export let align = "right";
+  // Where the list hangs from: "up" from a footer, "down" from a header.
+  export let placement = "up";
 
   let open = false;
 
@@ -45,7 +47,7 @@
       <span>{speedLabel(locked ? 1 : $currentSpeed)}</span>
     </button>
     {#if open}
-      <ul class="menu {align}" role="listbox" on:click|stopPropagation>
+      <ul class="menu {placement} {align}" role="listbox" on:click|stopPropagation>
         <li class="mh">Vitesse de lecture</li>
         {#each SPEEDS as r}
           <li>
@@ -75,34 +77,39 @@
     font-size: 0.78rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
-    color: rgba(255, 255, 255, 0.78);
-    background: rgba(255, 255, 255, 0.12);
-    border: none;
+    color: var(--tx);
+    background: var(--s2);
+    border: 1px solid var(--ln);
     border-radius: 999px;
     cursor: pointer;
   }
   .trigger:hover {
-    color: #fff;
+    background: var(--ln);
   }
   .trigger.on {
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--ac);
+    border-color: var(--ac);
   }
   .trigger.locked {
     opacity: 0.5;
   }
   .menu {
     position: absolute;
-    bottom: calc(100% + 8px);
     min-width: 176px;
     list-style: none;
     margin: 0;
     padding: 6px;
-    background: #282433;
-    border: 1px solid #3a3448;
-    border-radius: 12px;
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
-    z-index: 30;
+    background: var(--s2);
+    border: 1px solid var(--ln);
+    border-radius: 16px;
+    box-shadow: 0 16px 44px color-mix(in srgb, var(--bg) 65%, transparent);
+    z-index: 40;
+  }
+  .menu.up {
+    bottom: calc(100% + 8px);
+  }
+  .menu.down {
+    top: calc(100% + 8px);
   }
   .menu.right {
     right: 0;
@@ -116,7 +123,7 @@
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--dim);
   }
   .menu button {
     display: flex;
@@ -127,14 +134,14 @@
     padding: 9px 10px;
     border-radius: 8px;
     font-size: 0.88rem;
-    color: #fff;
+    color: var(--tx);
     text-align: left;
   }
   .menu button:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--s1);
   }
   .menu button.sel {
-    color: var(--accent);
+    color: var(--ac);
   }
   @media (max-width: 640px) {
     .menu {

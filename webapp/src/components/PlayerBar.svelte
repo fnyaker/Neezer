@@ -5,6 +5,10 @@
   // over somebody else's player, which is what "same app, another player"
   // means: every control here goes through the player store and `seekTo`,
   // never through an <audio> element.
+  //
+  // Sillon §7: three columns — what is playing (open the full-screen view),
+  // the transport over a 4 px bar, and the room's controls with the quality
+  // badge at their head.
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { push } from "svelte-spa-router";
   import {
@@ -15,9 +19,8 @@
     immersiveOpen,
     seekTo,
     buffered,
-    quality,
     openMenu,
-    openShare,
+    openPlaylistPicker,
   } from "../lib/stores.js";
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
   import { toggleFavorite, buildTrackMenu } from "../lib/actions.js";
@@ -30,30 +33,7 @@
   import RemoteButton from "./RemoteButton.svelte";
   import SleepButton from "./SleepButton.svelte";
   import SpeedButton from "./SpeedButton.svelte";
-  import SourceBadge from "./SourceBadge.svelte";
-
-  const QUALITIES = ["FLAC", "OPUS_320", "OPUS_256", "OPUS_192", "OPUS_128", "OPUS_64"];
-  const QUALITY_LABEL = {
-    FLAC: "FLAC",
-    OPUS_320: "Opus 320",
-    OPUS_256: "Opus 256",
-    OPUS_192: "Opus 192",
-    OPUS_128: "Opus 128",
-    OPUS_64: "Opus 64",
-  };
-  const QUALITY_HINT = {
-    FLAC: "Sans perte",
-    OPUS_320: "Haute qualité",
-    OPUS_256: "Haute qualité",
-    OPUS_192: "Bon compromis",
-    OPUS_128: "Standard",
-    OPUS_64: "Données réduites",
-  };
-  let qOpen = false;
-  function selectQuality(q) {
-    quality.set(q);
-    qOpen = false;
-  }
+  import QualityMenu from "./QualityMenu.svelte";
 
   $: fav = $current && $favorites.has(trackKey($current));
 
@@ -84,95 +64,71 @@
   $: repeatIconName = $player.repeat === "one" ? "repeat1" : "repeat";
 </script>
 
-<svelte:window on:click={() => (qOpen = false)} />
-
 <!-- the <audio> elements are created and managed in JS (see makeEl/switchQuality) -->
 
 <footer class="player">
   <!-- now playing (left / tap to open the immersive view) -->
-  <button class="now" on:click={() => immersiveOpen.set(true)}>
-    {#if $current}
-      <Cover src={$current.album?.cover} alt={$current.title} size={56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
-      <span class="info">
-        <span class="t">{$current.title}</span>
-        <!-- While the player is working toward playback, the subtitle line says
-             WHAT is happening (Chargement…, Nouvel essai…) instead of the artist,
-             so silence under a "playing" icon is never unexplained. -->
-        <span class="a muted" class:status={$playbackLabel}>{$playbackLabel || artistLine($current)}</span>
-      </span>
-    {:else}
-      <span class="muted ph">Rien en lecture</span>
-    {/if}
-  </button>
-
-  {#if $current && canKeep}
-    <button class="fav desk" class:on={fav} on:click={() => toggleFavorite($current)} aria-label="Favori">
-      <Icon name={fav ? "heartFilled" : "heart"} size={18} />
+  <div class="left">
+    <button class="now" on:click={() => immersiveOpen.set(true)} aria-label="Ouvrir le lecteur plein écran">
+      {#if $current}
+        <Cover src={$current.album?.cover} alt={$current.title} size={56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
+        <span class="info">
+          <span class="t">{$current.title}</span>
+          <!-- While the player is working toward playback, the subtitle line says
+               WHAT is happening (Chargement…, Nouvel essai…) instead of the artist,
+               so silence under a "playing" icon is never unexplained. -->
+          <span class="a" class:status={$playbackLabel}>{$playbackLabel || artistLine($current)}</span>
+        </span>
+      {:else}
+        <span class="ph">Rien en lecture</span>
+      {/if}
     </button>
-  {/if}
 
-  <!-- transport (flat children so the grid can reflow shuffle/repeat to a 2nd
-       row at narrow-desktop widths instead of squeezing the play button) -->
-  <div class="controls">
-    {#if canQueue}
-      <button class="sm shuf" class:on={$player.shuffle} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={18} /></button>
-    {/if}
-    <button class="prev" on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={20} /></button>
-    <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause">
-      <Icon name={$player.playing ? "pause" : "play"} size={18} />
-    </button>
-    <button class="next" on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={20} /></button>
-    {#if canQueue}
-      <button class="sm rep" class:on={$player.repeat !== "off"} on:click={() => player.cycleRepeat()} aria-label="Répéter">
-        <Icon name={repeatIconName} size={18} />
+    {#if $current && canKeep}
+      <button class="fav desk" class:on={fav} on:click={() => toggleFavorite($current)} aria-label="Favori" title="Favori">
+        <Icon name={fav ? "heartFilled" : "heart"} size={18} />
+      </button>
+      <button class="sm add" on:click={() => openPlaylistPicker($current)} aria-label="Ajouter à une playlist" title="Ajouter à une playlist">
+        <Icon name="plus" size={18} />
       </button>
     {/if}
+  </div>
+
+  <!-- transport, over its own 4 px bar (the prototype's one line, centred) -->
+  <div class="controls">
+    <div class="transport">
+      {#if canQueue}
+        <button class="sm shuf" class:on={$player.shuffle} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={18} /></button>
+      {/if}
+      <button class="prev" on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={22} /></button>
+      <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause">
+        <Icon name={$player.playing ? "pause" : "play"} size={18} />
+      </button>
+      <button class="next" on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={22} /></button>
+      {#if canQueue}
+        <button class="sm rep" class:on={$player.repeat !== "off"} on:click={() => player.cycleRepeat()} aria-label="Répéter">
+          <Icon name={repeatIconName} size={18} />
+        </button>
+      {/if}
+    </div>
     <div class="seek">
       <span class="time">{fmtDuration($player.currentTime)}</span>
-      <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} style={`--p:${progress}%; --b:${bufferedPct}%`} />
+      <input
+        type="range"
+        min="0"
+        max={$player.duration || 0}
+        value={$player.currentTime}
+        on:input={seek}
+        style={`--p:${progress}%; --b:${bufferedPct}%`}
+        aria-label="Position dans le titre"
+      />
       <span class="time">{fmtDuration($player.duration)}</span>
     </div>
   </div>
 
-  <!-- extras -->
+  <!-- the room: quality, the devices, the queue, the level, then the views -->
   <div class="extra">
-    <SourceBadge />
-    {#if canKeep}
-      <div class="q-wrap">
-        <button
-          class="q"
-          class:hifi={$quality === "FLAC"}
-          class:open={qOpen}
-          on:click|stopPropagation={() => (qOpen = !qOpen)}
-          title="Qualité de streaming"
-          aria-haspopup="listbox"
-          aria-expanded={qOpen}
-        >
-          {QUALITY_LABEL[$quality]}
-          <Icon name="chevronUp" size={12} />
-        </button>
-        {#if qOpen}
-          <ul class="q-menu" role="listbox">
-            {#each QUALITIES as qq}
-              <li>
-                <button
-                  role="option"
-                  aria-selected={$quality === qq}
-                  class:sel={$quality === qq}
-                  on:click|stopPropagation={() => selectQuality(qq)}
-                >
-                  <span class="ql">
-                    <span class="qn">{QUALITY_LABEL[qq]}</span>
-                    <span class="qh muted">{QUALITY_HINT[qq]}</span>
-                  </span>
-                  {#if $quality === qq}<Icon name="check" size={15} />{/if}
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-    {/if}
+    {#if canKeep}<QualityMenu />{/if}
     {#if canKeep}<SpeedButton />{/if}
     <!-- A remote control lends neither: the party plays from THIS device's
          engine, and links are the owner's to make (and the sleep timer runs
@@ -182,16 +138,29 @@
       <PartyButton size={17} />
       <RemoteButton size={17} />
     {/if}
-    {#if $current && canKeep}
-      <button class="sm" on:click={() => openShare($current)} title="Partager" aria-label="Partager"><Icon name="share" size={17} /></button>
-    {/if}
     {#if canQueue}
-      <button class="sm" on:click={trackMenu} title="Plus d'options" aria-label="Plus d'options"><Icon name="moreVertical" size={18} /></button>
+      <button class="sm" class:on={$nowPlayingOpen} on:click={() => nowPlayingOpen.update((v) => !v)} title="File d'attente" aria-label="File d'attente">
+        <Icon name="queue" size={18} />
+      </button>
+    {/if}
+    <button class="sm vol-ic" on:click={() => player.toggleMute()} aria-label={$player.muted || $player.volume === 0 ? "Rétablir le son" : "Couper le son"}>
+      <Icon name={$player.muted || $player.volume === 0 ? "mute" : "volume"} size={18} />
+    </button>
+    <input
+      class="vol"
+      type="range"
+      min="0"
+      max="1"
+      step="0.01"
+      value={$player.muted ? 0 : $player.volume}
+      on:input={(e) => player.setVolume(+e.target.value)}
+      aria-label="Volume"
+      style={`--p:${($player.muted ? 0 : $player.volume) * 100}%`}
+    />
+    {#if canQueue}
+      <button class="sm" on:click={trackMenu} title="Plus d'options" aria-label="Plus d'options"><Icon name="more" size={18} /></button>
     {/if}
     <button class="sm max" on:click={() => immersiveOpen.set(true)} title="Plein écran" aria-label="Plein écran"><Icon name="maximize" size={17} /></button>
-    <button class="sm" class:on={$nowPlayingOpen} on:click={() => nowPlayingOpen.update((v) => !v)} title="File / Paroles" aria-label="File d'attente"><Icon name="queue" size={18} /></button>
-    <button class="sm vol-ic" on:click={() => player.toggleMute()} aria-label="Muet"><Icon name={$player.muted || $player.volume === 0 ? "mute" : "volume"} size={18} /></button>
-    <input class="vol" type="range" min="0" max="1" step="0.01" value={$player.muted ? 0 : $player.volume} on:input={(e) => player.setVolume(+e.target.value)} />
   </div>
 </footer>
 
@@ -206,100 +175,132 @@
     right: 0;
     height: var(--player-h);
     display: grid;
-    grid-template-columns: 1fr auto 2fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
     align-items: center;
-    gap: 12px;
-    padding: 0 16px;
-    background: var(--bg-elev);
-    border-top: 1px solid var(--bg-hover);
+    gap: 16px;
+    padding: 0 20px;
+    background: var(--s1);
+    border-top: 1px solid var(--ln);
     z-index: 50;
+  }
+
+  /* left: the sleeve, the names, and the two quiet actions */
+  .left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
   }
   .now {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     min-width: 0;
+    padding: 0;
     text-align: left;
+    color: var(--tx);
+    border-radius: 10px;
+  }
+  .now:hover .t {
+    text-decoration: underline;
   }
   .now .info {
     min-width: 0;
     display: flex;
     flex-direction: column;
+    gap: 2px;
   }
   .t,
   .a {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 22vw;
   }
   .t {
-    font-weight: 700;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.2;
   }
   .a {
-    font-size: 0.85rem;
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.2;
+  }
+  .a.status {
+    color: var(--ac);
   }
   .ph {
+    color: var(--dim);
     padding-left: 4px;
   }
   .fav {
-    color: var(--text-dim);
-    font-size: 1.2rem;
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    color: var(--dim);
+  }
+  .fav:hover {
+    color: var(--tx);
   }
   .fav.on {
-    color: var(--accent-2);
+    color: var(--hrt);
   }
-  .controls {
+  .add {
+    flex: none;
     display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    color: var(--dim);
+  }
+  .add:hover {
+    color: var(--tx);
+    background: var(--s2);
+  }
+
+  /* centre: transport over the bar */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .transport {
+    display: flex;
     align-items: center;
     justify-content: center;
-    column-gap: 16px;
-    row-gap: 6px;
-    grid-template-areas:
-      "shuf prev pp next rep"
-      "seek seek seek seek seek";
+    gap: 16px;
   }
-  .controls .shuf {
-    grid-area: shuf;
+  .transport button {
+    color: var(--tx);
   }
-  .controls .prev {
-    grid-area: prev;
+  .transport .sm {
+    color: var(--dim);
   }
-  .controls .pp {
-    grid-area: pp;
+  .transport .sm:hover {
+    color: var(--tx);
   }
-  .controls .next {
-    grid-area: next;
-  }
-  .controls .rep {
-    grid-area: rep;
-  }
-  .controls > button {
-    color: var(--text-dim);
-    font-size: 1.05rem;
-    justify-self: center;
-  }
-  .controls > button:hover {
-    color: var(--text);
-  }
-  .sm {
-    font-size: 0.95rem !important;
-  }
-  .sm.on {
-    color: var(--accent) !important;
+  .transport .sm.on {
+    color: var(--ac);
   }
   .pp {
-    width: 40px;
-    height: 40px;
+    width: 46px;
+    height: 46px;
     border-radius: 50%;
-    background: var(--text);
-    color: var(--bg) !important;
+    background: var(--btn);
+    color: var(--onbtn);
     display: grid;
     place-items: center;
     position: relative;
+    flex: none;
   }
   .pp:hover {
-    transform: scale(1.06);
+    filter: brightness(1.06);
   }
   /* Discreet spinner ring around the play/pause button while the player is
      working toward playback (loading / buffering / archiving / retrying). */
@@ -309,7 +310,7 @@
     inset: -4px;
     border-radius: 50%;
     border: 2px solid transparent;
-    border-top-color: var(--accent);
+    border-top-color: var(--tx);
     animation: pp-spin 0.8s linear infinite;
   }
   @keyframes pp-spin {
@@ -317,203 +318,151 @@
       transform: rotate(360deg);
     }
   }
-  .a.status {
-    color: var(--accent);
-  }
   .seek {
-    grid-area: seek;
     display: flex;
     align-items: center;
     gap: 10px;
-    width: min(100%, 540px);
-    justify-self: center;
+    width: 100%;
+    max-width: 520px;
   }
   .time {
-    font-size: 0.72rem;
-    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
-    width: 36px;
+    color: var(--dim);
+    min-width: 34px;
     text-align: center;
   }
   input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
+    flex: 1;
     height: 4px;
     border-radius: 2px;
-    background: var(--bg-hover);
-    flex: 1;
+    background: var(--ln);
     cursor: pointer;
   }
   .seek input[type="range"] {
     background: linear-gradient(
       90deg,
-      var(--accent) var(--p, 0%),
-      rgba(255, 255, 255, 0.28) var(--p, 0%),
-      rgba(255, 255, 255, 0.28) var(--b, 0%),
-      var(--bg-hover) var(--b, 0%)
+      var(--ac) var(--p, 0%),
+      color-mix(in srgb, var(--tx) 32%, transparent) var(--p, 0%),
+      color-mix(in srgb, var(--tx) 32%, transparent) var(--b, 0%),
+      var(--ln) var(--b, 0%)
     );
+  }
+  .vol {
+    background: linear-gradient(90deg, var(--ac) var(--p, 0%), var(--ln) var(--p, 0%));
   }
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: #fff;
+    background: var(--tx);
   }
+  input[type="range"]::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border: none;
+    border-radius: 50%;
+    background: var(--tx);
+  }
+  input.vol {
+    width: 84px;
+    flex: none;
+  }
+
+  /* right: the room's controls */
   .extra {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 10px;
+    gap: 4px;
+    min-width: 0;
   }
   .extra .sm {
-    color: var(--text-dim);
-  }
-  .extra .sm:hover {
-    color: var(--text);
-  }
-  /* input.vol, or `input[type="range"]`'s flex: 1 wins and the slider eats
-     whatever the column has spare. */
-  input.vol {
-    width: 90px;
+    color: var(--dim);
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
     flex: none;
   }
-  .q-wrap {
-    position: relative;
+  .extra .sm:hover {
+    color: var(--tx);
+    background: var(--s2);
   }
-  .q {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--text-dim);
-    border: 1px solid var(--bg-hover);
-    border-radius: 6px;
-    padding: 3px 7px;
-    white-space: nowrap;
+  .extra .sm.on {
+    color: var(--ac);
   }
-  .q :global(svg) {
-    transition: transform 0.15s ease;
-  }
-  .q.open :global(svg) {
-    transform: rotate(180deg);
-  }
-  .q:hover {
-    color: var(--text);
-  }
-  .q.hifi {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  .q-menu {
-    position: absolute;
-    bottom: calc(100% + 8px);
-    right: 0;
-    min-width: 188px;
-    list-style: none;
-    margin: 0;
-    padding: 6px;
-    background: var(--bg-elev);
-    border: 1px solid var(--bg-hover);
-    border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-    z-index: 60;
-  }
-  .q-menu button {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    width: 100%;
-    padding: 8px 10px;
-    border-radius: 7px;
-    color: var(--text);
-    text-align: left;
-  }
-  .q-menu button:hover {
-    background: var(--bg-hover);
-  }
-  .q-menu button.sel {
-    color: var(--accent);
-  }
-  .ql {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .qn {
-    font-size: 0.82rem;
-    font-weight: 600;
-  }
-  .qh {
-    font-size: 0.68rem;
+  .extra .max {
+    color: var(--tx);
   }
 
-  /* The heart is not always there (nothing playing, a remote control that
-     keeps nothing), and without it every later child slid one column left:
-     the transport off-centre, the extras in the 2fr column. Pin the columns. */
-  @media (min-width: 641px) {
-    .controls {
-      grid-column: 3;
-    }
+  /* Not every right-hand column has the room for nine controls: the level
+     goes first (it is also in the full-screen view), then the slider. */
+  @media (max-width: 1440px) {
     .extra {
-      grid-column: 4;
+      gap: 2px;
+    }
+    input.vol {
+      width: 72px;
+    }
+  }
+  @media (max-width: 1180px) {
+    input.vol {
+      display: none;
     }
   }
 
-  /* narrow desktop: drop shuffle/repeat to a 2nd row flanking the seek bar
-     instead of cramming everything on one line and squeezing the play button. */
+  /* narrow desktop: drop shuffle/repeat to the second row flanking the seek
+     bar instead of cramming everything on one line and squeezing the play
+     button. */
   @media (min-width: 641px) and (max-width: 1024px) {
     .player {
-      grid-template-columns: 1fr auto 1.6fr auto;
-      gap: 10px;
+      gap: 12px;
+      padding: 0 16px;
     }
-    .controls {
-      grid-template-columns: auto 1fr auto;
-      grid-template-areas:
-        "prev pp next"
-        "shuf seek rep";
-      column-gap: 12px;
+    .transport {
+      gap: 12px;
     }
     .extra {
-      gap: 8px;
+      gap: 0;
     }
     .extra .max {
       display: none; /* tap the track to open the full-screen player */
-    }
-    .vol {
-      width: 72px;
     }
   }
 
   /* mobile (phone-sized): just the now-playing + play/next, tap to expand */
   @media (max-width: 640px) {
     .player {
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       height: 60px;
       gap: 8px;
+      padding: 0 12px;
     }
     .controls .seek,
-    .fav.desk {
+    .fav.desk,
+    .add {
       display: none;
     }
     /* Keep only the fullscreen toggle from the extras cluster — the quality
-       menu, volume, etc. don't fit a narrow bar, but the fullscreen button
-       (class "max") must stay reachable. */
+       badge, the volume, etc. don't fit a narrow bar, but the fullscreen
+       button (class "max") must stay reachable. */
     .extra > :not(.max) {
       display: none;
     }
     .extra {
       gap: 0;
     }
-    .controls {
-      display: flex;
-      gap: 14px;
+    .transport {
+      gap: 10px;
     }
-    .controls .shuf,
-    .controls .rep,
-    .controls .prev {
+    .transport .shuf,
+    .transport .rep {
       display: none;
     }
     .t,
@@ -522,4 +471,3 @@
     }
   }
 </style>
-
