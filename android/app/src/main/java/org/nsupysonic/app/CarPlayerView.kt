@@ -335,7 +335,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         addView(ultraScrim, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         addView(
             ultraIcon,
-            FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER),
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
         )
         addView(ultraBorder, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }
@@ -702,7 +702,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         isClickable = true
         isFocusable = true
         contentDescription = description
-        addView(icon, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER))
+        addView(icon, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         onClick?.let { action ->
             setOnClickListener { action() }
             pressFeedback(this)
@@ -734,10 +734,10 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         val text = label(title, 19f, contentColor, bold = true)
         row.addView(
             glyph,
-            LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginEnd = dp(10f) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10f) },
         )
-        row.addView(text, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
-        button.addView(row, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER))
+        row.addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        button.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         pressFeedback(button)
         return button
     }
@@ -852,7 +852,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         }
 
         override fun generateDefaultLayoutParams(): ViewGroup.LayoutParams =
-            ViewGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
+            ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
         private fun visibleChildren(): List<View> {
             val out = ArrayList<View>(childCount)
