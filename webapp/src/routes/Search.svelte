@@ -681,15 +681,20 @@
     color: var(--tx);
   }
   @media (max-width: 640px) {
+    /* Two lines of source chips rather than a rail that cut YouTube off the
+       right edge with no sign it existed: a search source is a state, and a
+       hidden state is a state nobody turns off. At most four chips wrap onto
+       two rows on a 360 px screen. */
     .sources {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
-      margin-right: calc(-1 * var(--page-x, 20px));
-      padding-right: var(--page-x, 20px);
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 14px 0 12px;
     }
-    .sources::-webkit-scrollbar {
-      display: none;
+    /* The field occupies the page width: at 640 the desktop's 560 px cap left
+       a 40 px hole beside the box. */
+    .bar input {
+      flex: 1 1 100%;
+      max-width: none;
     }
   }
 </style>

@@ -578,7 +578,8 @@
       gap: 6px;
     }
     h1 {
-      font-size: clamp(24px, 7vw, 34px);
+      /* Same rule as the album's band (§9): 32–40 under a finger, not 25–27. */
+      font-size: clamp(32px, 8.5vw, 40px);
     }
     .kind {
       line-height: 1.5;

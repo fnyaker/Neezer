@@ -254,7 +254,11 @@
       gap: 6px;
     }
     h1 {
-      font-size: clamp(24px, 7vw, 34px);
+      /* §9: the entity title is 32–40 under a finger. It was 25–27 (a 7vw
+         clamp), which read as a caption beside the 96 px sleeve. The band
+         stays short because the sleeve is; a long title wraps to two or three
+         lines and grows the band by its own line-height, never sideways. */
+      font-size: clamp(32px, 8.5vw, 40px);
     }
     .kind {
       line-height: 1.5;

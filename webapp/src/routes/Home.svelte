@@ -524,10 +524,27 @@
     .rel-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
+    /* Three sleeves across a phone leave ~100 px beside each caption: 13/12
+       keeps the title one line where 14/13 clipped it. */
+    .rel-title {
+      font-size: 13px;
+    }
+    .rel-sub {
+      font-size: 12px;
+    }
   }
   @container (max-width: 440px) {
     .rel-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    /* Two columns leave the sleeve ~150 px and the caption the whole width
+       under it: the 13/12 px sizes that suit a 3-up row read as fine print
+       here. */
+    .rel-title {
+      font-size: 14px;
+    }
+    .rel-sub {
+      font-size: 13px;
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -548,20 +565,44 @@
     .actions .lbl {
       display: none;
     }
+    /* §10: an action is 44 px under a finger — .btn-sm's 40 is the desktop
+       rhythm, and "Tout lire" / "Autres suggestions" sit alone on the row. */
+    .actions .btn-sm,
+    .section-head .btn-sm {
+      min-height: 44px;
+    }
+    /* Caption sizes follow the column count, not the window (the container
+       queries above); the gap is the only window rule. */
     .rel-grid {
       gap: 12px;
     }
-    .rel-title {
-      font-size: 13px;
-    }
-    .rel-sub {
-      font-size: 12px;
-    }
+    /* §6's artists were a rail on a phone, and a rail hides most of them
+       behind a cut edge. A 3-up grid shows nine at a glance, all on the page
+       margin, and no sideways scroller competes with the tab bar's swipe.
+       The avatar is 104 px inline (Avatar's `size`); on a 360 px screen the
+       cells are ~100 px, so the route makes it fluid rather than letting it
+       overhang the last column. */
     .artists {
-      gap: 10px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px 8px;
+      overflow: visible;
+      padding-block: 0;
     }
     .artist {
-      width: 100px;
+      width: 100%;
+      gap: 8px;
+      padding: 4px 2px 8px;
+    }
+    .artist :global(.av) {
+      width: 100% !important;
+      height: auto !important;
+      aspect-ratio: 1;
+      font-size: 26px !important;
+    }
+    .artist-name {
+      max-width: 100%;
+      font-size: 13px;
     }
     .shortcuts {
       grid-template-columns: 1fr 1fr;
