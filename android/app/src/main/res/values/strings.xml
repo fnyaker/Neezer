@@ -61,7 +61,7 @@
     <string name="car_notification_stop">Arrêter</string>
     <string name="car_tile">Mode voiture</string>
     <string name="car_overlay_blocked">Autorise « Afficher par-dessus les autres applis » pour le mode voiture.</string>
-    <string name="car_usage_blocked">Autorise l'accès à l'historique d'utilisation pour détecter l'app GPS.</string>
+    <string name="car_usage_blocked">Autorise l\'accès à l\'historique d\'utilisation pour détecter l\'app GPS.</string>
 
     <string name="shortcut_server">Serveur</string>
     <string name="shortcut_server_long">Paramètres du serveur</string>
