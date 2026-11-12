@@ -20,7 +20,7 @@
   import { access } from "../lib/access.js";
   import { playlistLink, importRoute } from "../lib/linkimport.js";
   import { entityRef } from "../lib/entity.js";
-  import { topResult, mixPodcasts } from "../lib/searchrank.js";
+  import { topResult, mixPodcasts, rankSearchResults } from "../lib/searchrank.js";
   import TopResult from "../components/TopResult.svelte";
 
   export let params = {};
@@ -99,37 +99,59 @@
     q = term;
     scope = "library";
     // A tile or a remembered term is a search this person chose: keep it at
-    // once, rather than only when they leave the screen.
+    // once, rather than only when they leave the screen, and ask the fallback
+    // without waiting for the settle beat.
     noteSearch(term);
     run(term);
+    runYoutube();
     inputEl?.focus();
   }
 
   // The first fallback source that can be searched (Réglages → Sources, in
-  // the admin's order): off unless ticked, on this screen only (a new search
-  // starts with it off again). Asked on Enter or when the chip is pressed
-  // — never per keystroke: every partial word typed would be a request there,
-  // and the server keeps each answer a day, so a search repeated costs nothing.
-  let yt = saved?.yt ?? false;
+  // the admin's order): ON by default, because a search that silently leaves
+  // out what the server can find is not searching. The chip turns it off for
+  // this screen, and Réglages → Sources turns the source itself off for good;
+  // an account without `youtube:search` sees no chip and no request.
+  //
+  // Asked once the query stops moving (a longer beat than the library's
+  // 280 ms) — never per keystroke: every partial word typed would be a
+  // request there, and the server keeps each answer a day, so a search
+  // repeated costs nothing. Enter, a recent term and a deep link ask at once.
+  let yt = saved?.yt ?? true;
   let ytTracks = saved?.ytTracks ?? [];
   let ytFor = saved?.ytFor ?? "";
   let ytLoading = false;
-  let ytError = "";
+  let ytError = saved?.ytError ?? "";
+  let ytErrorFor = saved?.ytErrorFor ?? "";
+  // The term a request was last SENT for. A failure is answered too: it must
+  // not rearm the timer every time the error line changes (a retry storm).
+  let ytAttemptFor = "";
   let ytSeq = 0;
+  let ytTimer;
+  const YT_DELAY = 800;
   // How each fallback source is searched from here; one without an entry is
   // not offered.
   const SEARCHERS = { youtube: (term) => api.youtubeSearch(term) };
   $: fb = $fallbackSources.find((f) => SEARCHERS[f.id] && $access.can(f.id, "search")) || null;
   $: ytAvailable = !!fb;
-  $: ytStale = yt && ytAvailable && q.trim() !== ytFor;
+  $: ytTerm = q.trim();
+  $: ytErrorHere = !!ytError && ytErrorFor === ytTerm;
+  $: ytAnswerHere = !!ytTerm && ytFor === ytTerm;
+  // Waiting for the fallback: the query is ahead of what it answered, or the
+  // request is in flight. Both are states the screen says out loud.
+  $: ytWaiting =
+    !!yt && ytAvailable && !!ytTerm && !playlistLink(ytTerm) && !ytAnswerHere && !ytErrorHere;
 
-  async function runYoutube() {
+  async function runYoutube(force = false) {
     const term = q.trim();
     // A pasted playlist link is an import, not something to search YouTube for.
-    if (!yt || !ytAvailable || !term || term === ytFor || playlistLink(term)) return;
+    if (!yt || !ytAvailable || !term || playlistLink(term)) return;
+    if (!force && (term === ytFor || (term === ytAttemptFor && ytLoading))) return;
     const mine = ++ytSeq;
+    ytAttemptFor = term;
     ytLoading = true;
     ytError = "";
+    ytErrorFor = "";
     try {
       const r = await SEARCHERS[fb.id](term);
       if (mine !== ytSeq) return;
@@ -138,16 +160,47 @@
     } catch (e) {
       if (mine !== ytSeq) return;
       ytTracks = [];
+      // The term is answered (with a failure): the same query must not ask
+      // again on its own, but the Retry button below can.
+      ytFor = term;
+      ytErrorFor = term;
       ytError =
-        e?.status === 503 ? `${fb.name} ne répond pas pour le moment.` : `La recherche sur ${fb.name} a échoué.`;
+        e?.status === 403
+          ? `Vous n'avez pas accès à ${fb.name} sur ce serveur.`
+          : e?.status === 503
+            ? `${fb.name} ne répond pas pour le moment.`
+            : `La recherche sur ${fb.name} a échoué.`;
     } finally {
       if (mine === ytSeq) ytLoading = false;
     }
   }
 
+  // One settled query, one fallback request. The timer is cleared on every
+  // change (including the query going empty), and a term already answered or
+  // attempted is never re-asked here. The dependency on `ytAnswerHere` keeps
+  // a late response from resetting a timer that is already armed for the
+  // query now in the box.
+  $: {
+    clearTimeout(ytTimer);
+    if (
+      scope === "library" &&
+      yt &&
+      ytAvailable &&
+      ytTerm &&
+      !playlistLink(ytTerm) &&
+      !ytAnswerHere &&
+      !ytErrorHere &&
+      ytTerm !== ytAttemptFor
+    ) {
+      ytTimer = setTimeout(() => runYoutube(), YT_DELAY);
+    }
+  }
+
   function toggleYoutube() {
     yt = !yt;
-    if (yt) runYoutube();
+    // Turning it back on retries a failed term rather than showing the error
+    // again; an already answered term is not re-requested.
+    if (yt) runYoutube(ytErrorHere);
   }
 
   // The library is what every search reaches; the fallback chip adds a source
@@ -165,7 +218,7 @@
     if (e.key !== "Enter") return;
     clearTimeout(timer);
     const term = q.trim();
-    // Enter is "search now": the regular search at once, YouTube if ticked.
+    // Enter is "search now": the regular search at once, YouTube too.
     run(term);
     runYoutube();
     noteSearch(term);
@@ -173,7 +226,7 @@
   }
 
   // Whatever the screen is showing, ready for the next time we come back to it.
-  $: rememberScreen({ q, tab, results, yt, ytTracks, ytFor, scope });
+  $: rememberScreen({ q, tab, results, yt, ytTracks, ytFor, ytError, ytErrorFor, scope });
 
   // Deep link support (/search/:q from the sidebar).
   //
@@ -198,6 +251,8 @@
     }
     q = decoded;
     run(q.trim());
+    // A deep link is a search already chosen: ask the fallback at once too.
+    runYoutube();
   }
 
   // Live search as you type, debounced. We deliberately do NOT change the route
@@ -231,6 +286,7 @@
 
   onDestroy(() => {
     clearTimeout(timer);
+    clearTimeout(ytTimer);
     // A term the person actually searched is worth remembering; a half-typed
     // word the box still holds is not.
     if (searchedFor && searchedFor === q.trim()) noteSearch(searchedFor);
@@ -241,15 +297,24 @@
   // show — fall back to the library rather than an empty screen.
   $: if (scope === "podcasts" && !$isAdmin) scope = "library";
 
+  // A pasted playlist link is not a search: offer to import it instead.
+  $: shared = playlistLink(q);
+
+  // The list the screen shows: the catalogue's order kept, library rows
+  // first, and the fallback's hits woven in only where they belong
+  // (lib/searchrank.js — a video leads only when it matches the query better
+  // than the best catalogue answer; an identical one is dropped). `ytFor`
+  // gates them: a late answer to the previous query never lands under this one.
+  $: mixed = rankSearchResults(ytTerm, results.tracks || [], yt && ytAnswerHere ? ytTracks : []);
+  $: allTracks = mixed.tracks;
+  $: mixedYt = allTracks.filter((t) => t.source === "youtube").length;
+
   $: hasResults =
     results.artists?.length ||
     results.albums?.length ||
-    results.tracks?.length ||
+    allTracks.length ||
     results.playlists?.length ||
     (results.podcasts?.length && $isAdmin);
-
-  // A pasted playlist link is not a search: offer to import it instead.
-  $: shared = playlistLink(q);
 
   // "Tout" leads with what a search is usually for: the artist the query
   // plainly names (only then — lib/searchrank.js), the titles, then the
@@ -268,9 +333,8 @@
   );
 
   const TOP_TRACKS = 10;
-  $: topTracks =
-    tab === "all" ? (results.tracks || []).slice(0, TOP_TRACKS) : results.tracks || [];
-  $: moreTracks = Math.max(0, (results.tracks?.length || 0) - TOP_TRACKS);
+  $: topTracks = tab === "all" ? allTracks.slice(0, TOP_TRACKS) : allTracks;
+  $: moreTracks = Math.max(0, allTracks.length - TOP_TRACKS);
 </script>
 
 <h1 class="page-title">Explorer</h1>
@@ -290,7 +354,9 @@
       class="chip"
       class:chip-active={yt}
       aria-pressed={yt}
-      title="Chercher aussi sur {fb.name} (source de secours)"
+      title={yt
+        ? `Interroger aussi ${fb.name} (décocher pour l'ignorer dans cette recherche)`
+        : `Chercher aussi sur ${fb.name} (qualité Opus, plus basse que le catalogue)`}
       on:click={toggleYoutube}
     >
       <Icon name={iconOf(fb.id)} size={15} /> {fb.name}
@@ -353,7 +419,7 @@
     {:else}
       <p class="muted lead">
         Cherche un titre, un artiste, un album ou un podcast — les titres de ta bibliothèque
-        d'abord, puis le catalogue.
+        d'abord, puis le catalogue, et YouTube quand il a ce que le catalogue n'a pas.
       </p>
     {/if}
     <GenreTiles on:pick={(e) => useRecent(e.detail)} />
@@ -388,7 +454,7 @@
 {:else if !q.trim()}
   <!-- the recent searches and the style tiles are above: never an empty page -->
 {:else if !hasResults}
-  {#if !(yt && ytAvailable) && !shared}
+  {#if !(yt && ytAvailable && ytWaiting) && !shared}
     <p class="muted hint">Aucun résultat pour « {q} ».</p>
   {/if}
 {:else}
@@ -399,13 +465,13 @@
         <TopResult kind={top.kind} item={top.item} />
       </section>
     {/if}
-    {#if (tab === "all" || tab === "tracks") && results.tracks?.length}
+    {#if (tab === "all" || tab === "tracks") && topTracks.length}
       <section class="trackcol">
         <div class="sechead">
           <h2>Titres</h2>
           {#if tab === "all" && moreTracks}
             <button class="seeall" on:click={() => (tab = "tracks")}>
-              Tout afficher<span class="count">{results.tracks.length}</span>
+              Tout afficher<span class="count">{allTracks.length}</span>
             </button>
           {/if}
         </div>
@@ -415,23 +481,21 @@
   </div></div>
 {/if}
 
-{#if scope === "library" && !loading && q.trim() && !shared && yt && ytAvailable && (tab === "all" || tab === "tracks")}
-  <h2 class="ythead"><Icon name={iconOf(fb.id)} size={20} /> Sur {fb.name}</h2>
-  {#if ytTracks.length && !ytStale && !ytLoading}
-    <p class="ytnote muted">Archivé à la première écoute{fb.quality ? `, en ${fb.quality} au mieux (ce que ${fb.name} propose de mieux)` : ""}.</p>
-  {/if}
-  {#if ytLoading}
-    <Skeleton kind="list" />
-  {:else if ytStale}
-    <button class="ytgo" on:click={runYoutube}>
-      <Icon name="search" size={15} /> Chercher « {q.trim()} » sur {fb.name}
-    </button>
-  {:else if ytError}
-    <p class="muted hint small">{ytError}</p>
-  {:else if !ytTracks.length}
-    <p class="muted hint small">Rien sur {fb.name} pour « {ytFor} ».</p>
-  {:else}
-    <TrackList tracks={ytTracks} />
+<!-- The fallback is part of the SAME list above; this line only says what it
+     is doing when it has nothing to add — searching, failed, or no closer
+     match. It never becomes a second section of results. -->
+{#if scope === "library" && !loading && !shared && yt && ytAvailable && ytTerm && (tab === "all" || tab === "tracks")}
+  {#if ytErrorHere}
+    <p class="ytstatus" role="alert">
+      {ytError}
+      <button class="ytretry" on:click={() => runYoutube(true)}>Réessayer</button>
+    </p>
+  {:else if ytWaiting}
+    <p class="ytstatus" role="status" aria-live="polite">
+      <span class="ytspin" aria-hidden="true"></span> Recherche sur {fb.name}…
+    </p>
+  {:else if ytAnswerHere && !mixedYt && allTracks.length}
+    <p class="ytstatus muted">Rien de plus sur {fb.name} pour « {ytTerm} ».</p>
   {/if}
 {/if}
 
@@ -546,35 +610,56 @@
   .see-all:hover {
     color: var(--tx);
   }
-  .ythead {
+  /* What the fallback is doing when it has nothing to add. One quiet line
+     under the SAME list, never a section of its own; the retry button is the
+     only control, because a failed source is a state with a way out. */
+  .ytstatus {
     display: flex;
     align-items: center;
-    gap: 9px;
-  }
-  /* The note sits under the heading, not beside it: beside it, a phone broke
-     "Sur YouTube" over two lines to make room. */
-  .ytnote {
-    margin: 0 0 10px;
-    font-size: 0.8rem;
-  }
-  .ytgo {
-    display: inline-flex;
-    align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
-    margin: 4px 0 8px;
-    padding: 10px 18px;
+    margin: 10px 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--dim);
+  }
+  .ytretry {
+    padding: 4px 12px;
+    min-height: 32px;
     border-radius: 999px;
     border: 1px solid var(--ln);
     background: var(--s1);
     color: var(--tx);
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.78rem;
   }
-  .ytgo:hover {
+  .ytretry:hover {
     background: var(--s2);
   }
-  .hint.small {
-    margin-top: 6px;
+  @media (pointer: coarse) {
+    .ytretry {
+      min-height: 44px;
+      padding: 0 16px;
+    }
+  }
+  .ytspin {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid var(--s2);
+    border-top-color: var(--ac-text);
+    animation: ytspin 0.8s linear infinite;
+  }
+  @keyframes ytspin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ytspin {
+      animation: none;
+    }
   }
   .shared {
     display: flex;
