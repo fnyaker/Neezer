@@ -336,8 +336,8 @@
     border-radius: 20px;
     display: grid;
     place-items: center;
-    color: #fff;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--onac);
+    background: var(--ac);
   }
 
   .stage {
@@ -475,9 +475,9 @@
     padding: 12px 22px;
     border-radius: 999px;
     font-weight: 800;
-    color: #fff;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    box-shadow: 0 12px 30px rgba(162, 56, 255, 0.35);
+    color: var(--onac);
+    background: var(--ac);
+    box-shadow: 0 12px 30px color-mix(in srgb, var(--ac) 35%, transparent);
   }
   .primary.big {
     min-height: 54px;

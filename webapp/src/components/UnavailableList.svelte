@@ -455,7 +455,7 @@
   }
   .danger.armed {
     background: #e5484d;
-    color: #fff;
+    color: #0c0c0b;
   }
 
   /* -- the checkbox: a 40px target around an 18px mark ------------------- */
@@ -487,12 +487,12 @@
   }
   .box.on,
   .box.some {
-    color: #fff;
+    color: var(--onac);
   }
   .box.on::before,
   .box.some::before {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--ac);
+    border-color: var(--ac);
   }
   .box:disabled {
     opacity: 0.5;
@@ -685,8 +685,8 @@
   }
   .sug-main:hover .sug-go,
   .sug-main:focus-visible .sug-go {
-    background: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    color: var(--onac);
   }
   /* A narrow chip keeps the words that tell two pressings apart (album,
      length) and lets the action shrink to its mark; the tooltip names it. */

@@ -386,8 +386,8 @@
     background: rgba(255, 255, 255, 0.08);
   }
   .bar button.sel {
-    background: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    color: var(--onac);
   }
   .bar .world {
     appearance: none;

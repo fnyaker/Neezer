@@ -526,9 +526,9 @@
     cursor: default;
   }
   .btn.primary {
-    background: var(--accent, #8b5cf6);
+    background: var(--btn);
     border-color: transparent;
-    color: #fff;
+    color: var(--onbtn);
   }
   .tree input,
   .tree select {

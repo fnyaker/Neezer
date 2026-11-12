@@ -64,8 +64,8 @@
   .steps button {
     height: 44px;
     border-radius: 12px;
-    background: var(--trim-btn, rgba(255, 255, 255, 0.08));
-    border: 1px solid var(--trim-line, transparent);
+    background: var(--trim-btn, color-mix(in srgb, var(--tx) 8%, transparent));
+    border: 1px solid var(--trim-line, var(--ln));
     color: var(--text);
     font: inherit;
     font-weight: 700;
@@ -74,7 +74,7 @@
     cursor: pointer;
   }
   .steps button:hover {
-    background: var(--trim-btn-hover, rgba(255, 255, 255, 0.14));
+    background: var(--trim-btn-hover, color-mix(in srgb, var(--tx) 14%, transparent));
   }
   .val {
     text-align: center;
@@ -94,7 +94,7 @@
     font-size: 0.8rem;
     color: var(--text-dim);
     background: transparent;
-    border: 1px solid var(--trim-line, rgba(255, 255, 255, 0.12));
+    border: 1px solid var(--trim-line, var(--ln));
     cursor: pointer;
   }
   .presets button:hover:not(:disabled) {

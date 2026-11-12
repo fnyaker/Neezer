@@ -1963,6 +1963,9 @@
     border-radius: 999px;
     background: var(--bg);
     border: 1px solid var(--bg-hover);
+    /* The local surface is the page, not the global .pill's --btn; without
+       this it inherited --onbtn and painted ink on ink. */
+    color: var(--tx);
     font-size: 0.85rem;
     font-weight: 600;
   }
@@ -2205,12 +2208,16 @@
     width: 44px;
     height: 26px;
     border-radius: 999px;
-    background: var(--bg-hover);
+    background: var(--s2);
+    /* The off track sat 1.2:1 from its card: the ring is what makes the
+       switch a control before its knob is read. */
+    border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
   .sw.on {
-    background: var(--accent);
+    background: var(--btn);
+    border-color: var(--btn);
   }
   .knob {
     position: absolute;
@@ -2220,15 +2227,13 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease;
+    transition: transform 0.15s ease, background 0.15s ease;
   }
-  /* On the accent, the knob is the accent's own ink (DESIGN §1: --onac is the
-     colour that reads on --ac in every theme). */
+  /* --btn/--onbtn is the one accent pair guaranteed in every theme: Papier's
+     ink track needs its cream knob, not --onac (ink on ink). */
   .sw.on .knob {
-    background: var(--onac);
-  }
-  .sw.on .knob {
-    transform: translateX(18px);
+    background: var(--onbtn);
+    transform: translateX(16px);
   }
   .dl-head {
     display: flex;

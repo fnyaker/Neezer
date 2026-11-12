@@ -221,8 +221,8 @@
     border-color: var(--accent-2);
   }
   .chip.sel {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    border-color: var(--ac);
+    color: var(--onac);
   }
 </style>

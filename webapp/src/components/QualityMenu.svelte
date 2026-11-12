@@ -93,7 +93,7 @@
     gap: 4px;
     height: 26px;
     padding: 0 8px;
-    border: 1px solid var(--ac);
+    border: 1px solid var(--ac-text);
     border-radius: 6px;
     background: none;
     color: var(--tx);

@@ -443,8 +443,8 @@
     font-size: 0.82rem;
   }
   .go:hover:not(:disabled) {
-    background: var(--accent);
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
   }
   .go:disabled {
     opacity: 0.5;
@@ -523,8 +523,8 @@
   .pick {
     padding: 7px 13px;
     border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
     font-weight: 700;
     font-size: 0.82rem;
     white-space: nowrap;

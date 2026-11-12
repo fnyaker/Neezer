@@ -487,7 +487,7 @@
   .chip {
     padding: 3px 10px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
+    background: color-mix(in srgb, var(--tx) 10%, transparent);
     font-size: 0.8rem;
   }
   .chip.warn {

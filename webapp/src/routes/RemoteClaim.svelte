@@ -83,7 +83,7 @@
     transition: background 0.2s ease;
   }
   .badge.ok {
-    color: #fff;
+    color: #06140f;
     border-color: transparent;
     background: linear-gradient(135deg, #2bd4a4, #1fa3ff);
     box-shadow: 0 10px 30px rgba(31, 163, 255, 0.3);
