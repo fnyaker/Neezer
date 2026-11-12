@@ -15,6 +15,9 @@ object CarStyle {
     val LN = Color.parseColor("#2A2A26")
     val TX = Color.parseColor("#F1EFE8")
     val DIM = Color.parseColor("#A09D92")
+
+    /** The prototype's secondary text (#D5D2C8): placeholders and subtitles, one step above [DIM]. */
+    val SUB = Color.parseColor("#D5D2C8")
     val AC = Color.parseColor("#D2FF3C")
     val ONAC = Color.parseColor("#0C0C0B")
     val WARN = Color.parseColor("#FF8A65")
