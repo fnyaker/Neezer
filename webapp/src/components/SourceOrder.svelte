@@ -248,9 +248,9 @@
     font-size: 0.85rem;
   }
   .opt.sel {
-    background: #fff;
-    color: #111;
-    border-color: #fff;
+    background: var(--ac);
+    color: var(--onac);
+    border-color: var(--ac-text);
   }
   .rows {
     list-style: none;
@@ -357,12 +357,14 @@
     width: 44px;
     height: 26px;
     border-radius: 999px;
-    background: var(--bg-hover);
+    background: var(--s2);
+    border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
   .sw.on {
-    background: var(--accent);
+    background: var(--btn);
+    border-color: var(--btn);
   }
   .sw:disabled {
     opacity: 0.45;
@@ -374,11 +376,12 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #fff;
-    transition: transform 0.15s ease;
+    background: var(--tx);
+    transition: transform 0.15s ease, background 0.15s ease;
   }
   .sw.on .knob {
-    transform: translateX(18px);
+    background: var(--onbtn);
+    transform: translateX(16px);
   }
   .ghost-btn {
     display: inline-flex;

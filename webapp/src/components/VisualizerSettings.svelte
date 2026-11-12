@@ -945,7 +945,7 @@
     flex-wrap: wrap;
     margin-top: 14px;
     padding: 14px 16px;
-    border: 1px solid var(--border, #2a2d33);
+    border: 1px solid var(--ln);
     border-radius: 14px;
   }
   .studio p {
@@ -958,10 +958,10 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    background: var(--surface-2, #1b1d21);
-    border: 1px solid var(--border, #2a2d33);
+    background: var(--s2);
+    border: 1px solid var(--ln);
     border-radius: 11px;
-    color: inherit;
+    color: var(--tx);
     font: inherit;
     font-weight: 600;
     padding: 9px 15px;
@@ -969,7 +969,7 @@
     flex: none;
   }
   .studio-btn:hover {
-    background: var(--surface-3, #24262b);
+    background: var(--s1);
   }
 
   .readout {
@@ -1052,17 +1052,17 @@
     gap: 7px;
     padding: 10px 14px;
     border-radius: 11px;
-    border: 1px solid var(--line, rgba(255, 255, 255, 0.14));
+    border: 1px solid var(--ln);
     background: transparent;
-    color: var(--fg, #e8e4f0);
+    color: var(--tx);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
   .ghost:hover {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.24);
+    background: var(--s2);
+    border-color: var(--dim);
   }
   .primary {
     display: inline-flex;

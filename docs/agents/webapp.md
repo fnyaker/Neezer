@@ -16,9 +16,15 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   there, `--ac-mark` is too, and `--onac` stays the text colour on an `--ac` pill. The global
   `:focus-visible` ring reads `--ac-text` for the same reason. `#fff` on `--ac`/`--accent` is a bug
   in every theme (measured 1.16:1; the old purple made it 3.9:1 and hid it).
-- **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. `#fff` on
+- **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. Text on the
+  ink surface `--onac` is `--ac` (Papier's `--onac` and `--ac-text` are both #14130f, so
+  `--ac-text` on `--onac` is 1:1 — HomeHero's Flow button and the energy notches). `#fff` on
   `var(--accent)` was right when the accent was purple and is 1.4:1 now that it is lemon (Home's
-  count badge, Library's still do it) — every such pair is a bug the rebrand exposes, not a taste.
+  count badge, Library's badge) — every such pair is a bug the rebrand exposes, not a taste.
+- **A switch is a `--btn` track with an `--onbtn` knob when on**, and an `--s2` track ringed by
+  `--dim` with a `--tx` knob when off: the off track was 1.2:1 from its card, and an `--accent`
+  track put a white knob on the lemon (1.16:1). The old `--accent` surfaces belong in `--btn`;
+  selections (chips, segmented buttons, checkboxes) use `--ac`/`--onac`.
 - **The theme is applied BEFORE the first frame** by `public/theme-boot.js`, a classic script
   (blocking) loaded from `index.html`, because the CSP is `script-src 'self'`: an inline `<script>`
   there is REFUSED by the browser (it said so in the console on every load). It sets `data-theme`,

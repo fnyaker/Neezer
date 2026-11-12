@@ -306,7 +306,10 @@
     justify-content: center;
     gap: 16px;
   }
-  .transport button {
+  /* The transport's other buttons inherit the text colour; play/pause is a
+     solid --btn disc and keeps its --onbtn glyph (this rule used to win on
+     specificity and painted a white icon on the lemon). */
+  .transport button:not(.pp) {
     color: var(--tx);
   }
   .transport .sm {

@@ -1023,8 +1023,8 @@
     font-size: 0.85rem;
   }
   .modes button.on {
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    color: #fff;
+    background: var(--ac);
+    color: var(--onac);
   }
 
   .wave-wrap {
@@ -1192,8 +1192,8 @@
     background: var(--bg-hover);
   }
   .primary {
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
   }
   .primary:hover:not(:disabled) {
     filter: brightness(1.1);

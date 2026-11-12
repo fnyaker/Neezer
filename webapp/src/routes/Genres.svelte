@@ -1846,6 +1846,12 @@
     max-width: 920px;
     margin: 0 auto;
     padding: 0 16px 120px;
+    /* The studio's surfaces speak the old token names; declare them here so
+       they follow the theme instead of falling back to the dark originals
+       (Papier painted ink text on a #1b1d21 card). */
+    --surface: var(--s1);
+    --surface-2: var(--s2);
+    --border: var(--ln);
   }
   .head {
     display: flex;
@@ -2272,8 +2278,8 @@
     background: rgba(8, 8, 10, 0.88);
   }
   .play-badge.on {
-    background: var(--accent, #22d3ee);
-    color: #05171b;
+    background: var(--ac);
+    color: var(--onac);
   }
   .meta {
     min-width: 0;
@@ -2364,7 +2370,7 @@
   }
 
   kbd {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--tx) 8%, transparent);
     border-radius: 5px;
     padding: 1px 6px;
     font: inherit;
@@ -2868,9 +2874,9 @@
     border: 1px solid var(--border, #2a2d33);
   }
   .primary {
-    background: var(--accent, #22d3ee);
+    background: var(--btn);
     border-color: transparent;
-    color: #05171b;
+    color: var(--onbtn);
   }
   .primary.big {
     padding: 11px 20px;

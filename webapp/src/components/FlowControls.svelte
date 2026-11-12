@@ -50,8 +50,8 @@
     gap: 6px;
     min-height: 40px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.88);
+    background: color-mix(in srgb, var(--tx) 8%, transparent);
+    color: var(--tx);
     font-weight: 600;
     font-size: 0.84rem;
     white-space: nowrap;
@@ -66,8 +66,8 @@
   }
   .steer:hover,
   .step:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.16);
-    color: #fff;
+    background: color-mix(in srgb, var(--tx) 16%, transparent);
+    color: var(--tx);
   }
   .steer:active,
   .step:active:not(:disabled) {
@@ -93,12 +93,12 @@
     font-size: 0.66rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--dim);
     font-weight: 600;
   }
   .v {
     font-size: 0.86rem;
     font-weight: 700;
-    color: #fff;
+    color: var(--tx);
   }
 </style>

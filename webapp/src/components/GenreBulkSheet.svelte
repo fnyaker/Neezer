@@ -492,8 +492,8 @@
     font-size: 0.88rem;
   }
   .primary {
-    background: var(--accent);
-    color: var(--bg-card);
+    background: var(--btn);
+    color: var(--onbtn);
   }
   .primary:disabled {
     opacity: 0.5;

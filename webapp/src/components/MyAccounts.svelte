@@ -519,11 +519,11 @@
     display: grid;
     place-items: center;
     border: 1.5px solid var(--text-dim);
-    color: #fff;
+    color: var(--onac);
   }
   .kind.on .box {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--ac);
+    border-color: var(--ac);
   }
   .default {
     display: flex;

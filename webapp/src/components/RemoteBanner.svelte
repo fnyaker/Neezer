@@ -201,7 +201,7 @@
     border-radius: 18px;
     display: grid;
     place-items: center;
-    color: #fff;
+    color: #06140f;
     background: linear-gradient(135deg, #2bd4a4, #1fa3ff);
   }
   h2 {
