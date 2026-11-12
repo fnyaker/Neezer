@@ -146,11 +146,12 @@
       min-height: 40px;
     }
   }
-  /* Phone: the player is the mini bar (60) over the tab bar (56); the toast
-     clears both. */
+  /* Phone: the mini player (64, floating 8 above the tab bar) and the tab bar
+     (64) below it — a toast clears both, plus the home indicator, so it never
+     covers the transport or the destinations it is talking about. */
   @media (max-width: 640px) {
     .toasts {
-      bottom: calc(60px + 56px + 16px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(var(--mini-h) + var(--tabbar-h) + var(--safe-bottom) + 16px);
       max-width: calc(100vw - 24px);
     }
     .toast {

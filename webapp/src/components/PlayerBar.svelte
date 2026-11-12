@@ -11,6 +11,7 @@
   // badge at their head.
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { push } from "svelte-spa-router";
+  import { onMount } from "svelte";
   import {
     player,
     current,
@@ -26,6 +27,7 @@
   import { toggleFavorite, buildTrackMenu } from "../lib/actions.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
   import { REMOTE, atLeast } from "../lib/remote/mode.js";
+  import { isMobile, onMobileChange } from "../lib/viewport.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
   import ImmersivePlayer from "./ImmersivePlayer.svelte";
@@ -37,12 +39,34 @@
 
   $: fav = $current && $favorites.has(trackKey($current));
 
+  // The mini player's sleeve is 44 px, the desktop bar's 56: one number given
+  // to <Cover> (it sizes its tile inline), so it is read from the viewport and
+  // not fought with a CSS override.
+  let mobile = isMobile();
+  onMount(() => onMobileChange((v) => (mobile = v)));
+
   function trackMenu(e) {
     e.preventDefault();
     e.stopPropagation();
     if (!$current) return;
     const coords = { clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} };
     openMenu(coords, buildTrackMenu($current, push));
+  }
+
+  // On a phone the card IS the door to the full-screen player: a tap anywhere
+  // on it (its padding, the gap around the sleeve) opens it, not just the
+  // sleeve+title button. Buttons answer for themselves, and the keyboard/AT
+  // path stays the labelled `.now` button.
+  function cardTap(e) {
+    if (!mobile) return;
+    // The PATH as dispatched, not the current ancestors: pressing play
+    // re-renders the icon (play ⇄ pause), so by the time the event reaches the
+    // footer the glyph under the finger is a detached node and `closest()` on
+    // it finds nothing — the card used to open the full-screen player on every
+    // press of the play button. composedPath() is captured at dispatch.
+    const path = e.composedPath ? e.composedPath() : [];
+    if (path.some((n) => n && n.tagName === "BUTTON")) return;
+    immersiveOpen.set(true);
   }
 
   // Through `seekTo`, like every other view: the engine chases it on a live
@@ -66,12 +90,15 @@
 
 <!-- the <audio> elements are created and managed in JS (see makeEl/switchQuality) -->
 
-<footer class="player">
+<!-- The phone card's whole surface opens the player; `.now` remains the
+     keyboard and screen-reader control (this handler only widens the target). -->
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<footer class="player" class:empty={!$current} on:click={cardTap}>
   <!-- now playing (left / tap to open the immersive view) -->
   <div class="left">
     <button class="now" on:click={() => immersiveOpen.set(true)} aria-label="Ouvrir le lecteur plein écran">
       {#if $current}
-        <Cover src={$current.album?.cover} alt={$current.title} size={56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
+        <Cover src={$current.album?.cover} alt={$current.title} size={mobile ? 44 : 56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
         <span class="info">
           <span class="t">{$current.title}</span>
           <!-- While the player is working toward playback, the subtitle line says
@@ -162,6 +189,9 @@
     {/if}
     <button class="sm max" on:click={() => immersiveOpen.set(true)} title="Plein écran" aria-label="Plein écran"><Icon name="maximize" size={17} /></button>
   </div>
+
+  <!-- phone only: the 2 px progress line along the mini card's bottom edge -->
+  <div class="mini-progress" style={`--p:${progress}%`} aria-hidden="true"></div>
 </footer>
 
 <!-- mobile full-screen now playing -->
@@ -436,38 +466,123 @@
     }
   }
 
+  /* phone only (drawn in the mobile block below) */
+  .mini-progress {
+    display: none;
+  }
+
   /* mobile (phone-sized): just the now-playing + play/next, tap to expand */
   @media (max-width: 640px) {
     .player {
-      grid-template-columns: minmax(0, 1fr) auto auto;
-      height: 60px;
-      gap: 8px;
-      padding: 0 12px;
+      /* A floating card above the tab bar, not a strip welded to the bottom:
+         12 px on each side, 8 px of air over the bar, the home indicator's
+         inset added to the bar below it. */
+      left: 12px;
+      right: 12px;
+      bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 8px);
+      height: var(--mini-h, 64px);
+      padding: 0 8px 0 10px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--ln);
+      border-radius: 16px;
+      background: var(--s2);
+      box-shadow: 0 10px 28px color-mix(in srgb, var(--onac) 24%, transparent);
+      overflow: hidden;
     }
+    /* Everything the desktop bar carries is gone; the card is the sleeve, the
+       names and two controls. */
     .controls .seek,
     .fav.desk,
-    .add {
-      display: none;
-    }
-    /* Keep only the fullscreen toggle from the extras cluster — the quality
-       badge, the volume, etc. don't fit a narrow bar, but the fullscreen
-       button (class "max") must stay reachable. */
-    .extra > :not(.max) {
-      display: none;
-    }
+    .add,
     .extra {
+      display: none;
+    }
+    .left {
+      min-width: 0;
       gap: 0;
     }
-    .transport {
+    .now {
+      width: 100%;
       gap: 10px;
+      padding: 2px 0;
+      border-radius: 12px;
     }
-    .transport .shuf,
-    .transport .rep {
-      display: none;
+    .now .info {
+      gap: 1px;
+    }
+    .t {
+      font-size: 14px;
+      line-height: 1.2;
+    }
+    .a {
+      font-size: 12px;
+      line-height: 1.2;
     }
     .t,
     .a {
-      max-width: 46vw;
+      max-width: none; /* the card already bounds its own width */
+    }
+    .ph {
+      font-size: 13px;
+      padding-left: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .controls {
+      flex-direction: row;
+      gap: 0;
+    }
+    .transport {
+      gap: 2px;
+    }
+    .transport .shuf,
+    .transport .prev,
+    .transport .rep {
+      display: none;
+    }
+    .pp {
+      width: 44px;
+      height: 44px;
+    }
+    .next {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      color: var(--tx);
+    }
+    /* Nothing playing: the card keeps its shape and its words, without a
+       transport that would do nothing. */
+    .player.empty .controls {
+      display: none;
+    }
+    .mini-progress {
+      display: block;
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 0;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      overflow: hidden;
+      background: var(--ln);
+    }
+    .mini-progress::after {
+      content: "";
+      display: block;
+      height: 100%;
+      width: var(--p, 0%);
+      background: var(--ac);
+    }
+    /* The two targets keep 44 px of finger room: the card is 64 high and the
+       play button sits in its middle. */
+    .player .now,
+    .player .pp,
+    .player .next {
+      -webkit-tap-highlight-color: transparent;
     }
   }
 </style>

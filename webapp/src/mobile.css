@@ -1,0 +1,33 @@
+/* ============================================================================
+   Mobile structure — imported AFTER app.css (and studio.css) in main.js.
+   ----------------------------------------------------------------------------
+   ≤ 640 px the shell is a different frame: one column, a fixed tab bar at the
+   bottom and the mini player floating above it (DESIGN §9). What changes here
+   is STRUCTURE only — sizes, safe areas, the page margin. The colours are the
+   theme's and are never redefined in this file: every one of these surfaces
+   reads --bg / --s1 / --s2 / --ln / --ac through the component that draws it.
+
+   The heights are tokens because more than one surface reserves the space:
+   below 640 the page pads its bottom by mini + tab bar (+ the home indicator),
+   the toast pill clears the same two bars, and the mini player positions
+   itself against --tabbar-h. One number, one place.
+   ============================================================================ */
+
+@media (max-width: 640px) {
+  :root {
+    /* The two fixed bars of the phone shell. They stay 64 px ABOVE the inset:
+       --safe-bottom is added around them (the tab bar grows its padding, the
+       mini player lifts its offset), never folded into the height, so a phone
+       with a home indicator keeps the same comfortable controls. */
+    --mini-h: 64px;
+    --tabbar-h: 64px;
+    /* The player's own height token, read by the page's bottom padding, the
+       remote-control wait screen and the toast anchor. Desktop keeps 88. */
+    --player-h: 64px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    /* app.css already lays the page out on this margin; exposing it as a token
+       lets a bleeding element (a shelf, a header) stay aligned to it. */
+    --page-x: 20px;
+  }
+}
