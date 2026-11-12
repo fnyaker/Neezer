@@ -20,12 +20,11 @@
     buffered,
     openMenu,
     offlineCovers,
-    openShare,
+    openPlaylistPicker,
     isAdmin,
     openGenreTag,
   } from "../lib/stores.js";
   import { toggleFavorite, toggleDislike, buildTrackMenu } from "../lib/actions.js";
-  import { addMarkerAt } from "../lib/markers.js";
   import { duration as fmtDuration, hiResCover, resolveCover, cssUrl } from "../lib/format.js";
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
   import { createBackdrop } from "../lib/backdrop.js";
@@ -49,7 +48,6 @@
   import { readout } from "../lib/audio/engine.js";
   import { servedStyleLabel } from "../lib/trackverdict.js";
   import Visualizer from "./Visualizer.svelte";
-  import EcoToggle from "./EcoToggle.svelte";
   import { currentLyricLine } from "../lib/lyrics.js";
   import Cover from "./Cover.svelte";
   import PartyButton from "./PartyButton.svelte";
@@ -64,8 +62,10 @@
   import SleepButton from "./SleepButton.svelte";
   import SpeedButton from "./SpeedButton.svelte";
   import NowPlayingMore from "./NowPlayingMore.svelte";
+  import Lyrics from "./Lyrics.svelte";
 
   let showQueue = false;
+  let showLyrics = false;
 
   function trackMenu(e) {
     e.preventDefault();
@@ -128,6 +128,8 @@
 
   $: q = $player.queue;
   $: idx = $player.index;
+  // The queue button says how much is left, in the thumb's own words.
+  $: upcoming = Math.max(0, q.length - idx - 1);
   $: prevT = idx > 0 ? q[idx - 1] : null;
   $: nextT = idx >= 0 && idx < q.length - 1 ? q[idx + 1] : null;
   $: fav = $current && $favorites.has(trackKey($current));
@@ -854,7 +856,14 @@
       {$player.context?.kind === "flow" ? "Flow" : "En lecture"}
       {#if styleLabel}<em>{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</em>{/if}
     </span>
-    <button class="ic" on:click={() => (showQueue = true)} aria-label="File d'attente"><Icon name="queue" size={22} /></button>
+    <span class="hdr-actions">
+      {#if $current?.podcast && CAN_KEEP}<SpeedButton align="right" placement="down" />{/if}
+      {#if !REMOTE}<SleepButton size={21} align="right" placement="down" />{/if}
+      {#if CAN_BROWSE}
+        <button class="ic" on:click={trackMenu} aria-label="Plus d'options"><Icon name="more" size={22} /></button>
+      {/if}
+      <button class="ic" on:click={() => (showQueue = true)} aria-label="File d'attente"><Icon name="queue" size={22} /></button>
+    </span>
   </header>
 
   <div class="body">
@@ -942,31 +951,27 @@
       </div>
     {/if}
 
+    <!-- Sillon §9: one thumb row — the quality, adding it to a playlist, the
+         devices, the lyrics, and what is left of the queue. Everything rarer
+         (share, marker, éco) lives in the ⋯ menu or in Réglages. -->
     <div class="footer">
-      {#if CAN_BROWSE}
-        <button class="sm more" on:click={trackMenu} aria-label="Plus d'options"><Icon name="moreVertical" size={22} /></button>
-      {/if}
-      {#if $current.podcast && CAN_KEEP}
-        <button
-          class="sm"
-          on:click={() => addMarkerAt($current, $player.currentTime)}
-          aria-label="Marquer cette position"
-        >
-          <Icon name="bookmarkPlus" size={21} />
+      {#if CAN_KEEP}<QualityMenu align="left" />{/if}
+      {#if CAN_KEEP}
+        <button class="fb" on:click={() => openPlaylistPicker($current)} aria-label="Ajouter à une playlist" title="Ajouter à une playlist">
+          <Icon name="plus" size={22} />
         </button>
       {/if}
-      {#if CAN_KEEP}
-        <button class="sm" on:click={() => openShare($current)} aria-label="Partager"><Icon name="share" size={20} /></button>
-      {/if}
       {#if !REMOTE}
-        <PartyButton size={20} />
-        <RemoteButton size={20} />
-        <SleepButton size={20} align="left" />
+        <PartyButton size={21} />
+        <RemoteButton size={21} />
       {/if}
-      {#if !REMOTE || CAN_KEEP}<SpeedButton align="left" />{/if}
-      <span class="grow"></span>
-      {#if CAN_BROWSE}<EcoToggle />{/if}
-      {#if CAN_KEEP}<QualityMenu />{/if}
+      <button class="fb" on:click={() => (showLyrics = true)} aria-label="Paroles" title="Paroles">
+        <Icon name="music" size={21} />
+      </button>
+      <button class="fb file" on:click={() => (showQueue = true)} aria-label="File d'attente · {upcoming} titre{upcoming > 1 ? 's' : ''}">
+        <span>File</span>
+        <span class="n mono">{upcoming}</span>
+      </button>
     </div>
     {#if moreAvailable}
       <button class="peek" on:click={openMore} aria-label="Crédits, artiste et titres similaires">
@@ -1019,6 +1024,18 @@
       </div>
     </div>
   {/if}
+
+  {#if showLyrics}
+    <div class="sheet" transition:fade={{ duration: 120 }}>
+      <div class="sheet-h">
+        <span>Paroles</span>
+        <button class="ic" on:click={() => (showLyrics = false)} aria-label="Fermer"><Icon name="chevronDown" size={22} /></button>
+      </div>
+      <div class="lyrics-sheet">
+        <Lyrics />
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1031,11 +1048,14 @@
     position: fixed;
     inset: 0;
     z-index: 200;
-    color: #fff;
+    color: var(--tx);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: #0b0910; /* opaque base: the page behind never shows through */
+    /* opaque base: the page behind never shows through, and it follows the
+       theme — Papier's player reads as paper, not as a dark screen with ink
+       text on it. */
+    background: var(--bg);
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .m.dragging {
@@ -1046,13 +1066,17 @@
     inset: 0;
     background-size: cover;
     background-position: center;
-    filter: blur(60px) saturate(1.4) brightness(0.55);
+    filter: blur(60px) saturate(1.25);
     transform: scale(1.3);
   }
   .scrim {
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, rgba(8, 6, 12, 0.4) 0%, rgba(8, 6, 12, 0.85) 100%);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg) 68%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 92%, transparent) 100%
+    );
   }
   header,
   .body {
@@ -1069,21 +1093,32 @@
   .ctx em {
     display: block;
     font-style: normal;
-    font-size: 0.66rem;
-    letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.5);
+    font-family: var(--font-display);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--tx);
     margin-top: 2px;
   }
   .ctx {
-    font-size: 0.76rem;
+    font-size: 0.7rem;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: rgba(255, 255, 255, 0.7);
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    font-family: var(--font-mono);
   }
   .ic {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--tx);
     display: grid;
     place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .hdr-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
 
   .body {
@@ -1108,18 +1143,15 @@
   .cur-lyric span {
     grid-area: 1 / 1;
     text-align: center;
+    font-family: var(--font-display);
     font-size: 1.02rem;
     line-height: 1.3;
-    font-weight: 800;
+    font-weight: 700;
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
     overflow: hidden;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
+    color: var(--ac);
   }
 
   /* The carousel's box: as tall as a full-width cover when the screen has the
@@ -1181,7 +1213,7 @@
     aspect-ratio: 1 / 1;
   }
   .slide :global(.cover) {
-    box-shadow: 0 22px 55px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 22px 55px color-mix(in srgb, var(--bg) 65%, transparent);
   }
 
   .info {
@@ -1202,8 +1234,11 @@
     gap: 3px;
   }
   .t {
-    font-size: 1.35rem;
+    font-family: var(--font-display);
+    font-size: 1.5rem;
     font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
@@ -1215,34 +1250,41 @@
     display: block;
     font-size: 1rem;
     text-align: left;
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--dim);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .fav {
-    color: rgba(255, 255, 255, 0.8);
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    color: var(--dim);
     flex: none;
   }
+  .fav:hover {
+    color: var(--tx);
+  }
   .fav.on {
-    color: var(--accent-2);
+    color: var(--hrt);
   }
   .fav.no {
-    color: rgba(255, 255, 255, 0.5);
-  }
-  .fav.no:hover {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--dim);
   }
   .fav.no.on {
-    color: #fff;
+    color: var(--tx);
   }
   /* Dimmer than the heart: present for the admin, invisible to everyone else's
      attention. */
   .fav.tag {
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--dim);
+    opacity: 0.7;
   }
   .fav.tag:hover {
-    color: var(--accent);
+    color: var(--ac);
+    opacity: 1;
   }
 
   .seek {
@@ -1252,28 +1294,30 @@
     padding: 6px 22px;
   }
   .time {
-    font-size: 0.72rem;
-    color: rgba(255, 255, 255, 0.7);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--dim);
     width: 38px;
     text-align: center;
     font-variant-numeric: tabular-nums;
+    flex: none;
   }
   input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
-    height: 5px;
+    height: 6px;
     border-radius: 3px;
     flex: 1;
-    background: linear-gradient(90deg, #fff var(--p, 0%), rgba(255, 255, 255, 0.25) var(--p, 0%));
+    background: var(--ln);
   }
   /* Buffered region as a lighter fill behind the played part. */
   .seek input[type="range"] {
     background: linear-gradient(
       90deg,
-      #fff var(--p, 0%),
-      rgba(255, 255, 255, 0.5) var(--p, 0%),
-      rgba(255, 255, 255, 0.5) var(--b, 0%),
-      rgba(255, 255, 255, 0.25) var(--b, 0%)
+      var(--ac) var(--p, 0%),
+      color-mix(in srgb, var(--tx) 42%, transparent) var(--p, 0%),
+      color-mix(in srgb, var(--tx) 42%, transparent) var(--b, 0%),
+      var(--ln) var(--b, 0%)
     );
   }
   input[type="range"]::-webkit-slider-thumb {
@@ -1281,7 +1325,7 @@
     width: 15px;
     height: 15px;
     border-radius: 50%;
-    background: #fff;
+    background: var(--tx);
   }
 
   .flow-steer {
@@ -1295,20 +1339,20 @@
     padding: 8px 0 4px;
   }
   .controls button {
-    color: #fff;
+    color: var(--tx);
   }
   .controls .sm {
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--dim);
   }
   .controls .sm.on {
-    color: var(--accent);
+    color: var(--ac);
   }
   .controls .pp {
-    width: 64px;
-    height: 64px;
+    width: 68px;
+    height: 68px;
     border-radius: 50%;
-    background: #fff;
-    color: #111;
+    background: var(--btn);
+    color: var(--onbtn);
     display: grid;
     place-items: center;
     position: relative;
@@ -1319,7 +1363,7 @@
     inset: -5px;
     border-radius: 50%;
     border: 2px solid transparent;
-    border-top-color: var(--accent);
+    border-top-color: var(--tx);
     animation: pp-spin 0.8s linear infinite;
   }
   @keyframes pp-spin {
@@ -1328,7 +1372,7 @@
     }
   }
   .a.status {
-    color: var(--accent) !important;
+    color: var(--ac) !important;
   }
 
   .viz {
@@ -1344,18 +1388,49 @@
     inset: 0;
     pointer-events: none;
   }
+  /* The thumb row: a control is 44 px under a finger, and on a 360 px phone
+     seven of them is the budget — the spacing gives way, never the target. */
   .footer {
     display: flex;
     align-items: center;
-    /* eight controls: on a 360 px phone the spacing gives way, not the edge */
-    gap: clamp(6px, 3.6vw - 4px, 14px);
-    padding: 6px clamp(12px, 5.6vw, 22px) 26px;
+    justify-content: space-between;
+    gap: clamp(2px, 1vw, 8px);
+    padding: 4px clamp(10px, 3vw, 20px) calc(14px + env(safe-area-inset-bottom, 0px));
+    min-height: 52px;
   }
-  .footer .sm {
-    color: rgba(255, 255, 255, 0.7);
+  /* The devices' and the app's own buttons keep their designed shape at
+    36 px; the TARGET is 44 whatever the glyph (§10). */
+  .footer :global(button) {
+    min-width: 44px;
+    min-height: 44px;
   }
-  .footer .grow {
-    flex: 1;
+  .fb {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 8px;
+    border-radius: 12px;
+    color: var(--dim);
+    flex: none;
+  }
+  .fb:hover {
+    color: var(--tx);
+    background: var(--s2);
+  }
+  .fb.file {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--tx);
+    padding: 0 10px;
+  }
+  .fb.file .n {
+    font-size: 11px;
+    color: var(--dim);
+    min-width: 16px;
+    text-align: right;
   }
 
   /* queue bottom sheet */
@@ -1363,7 +1438,7 @@
     position: absolute;
     inset: 0;
     z-index: 3;
-    background: rgba(16, 12, 22, 0.97);
+    background: color-mix(in srgb, var(--s1) 97%, transparent);
     backdrop-filter: blur(16px);
     display: flex;
     flex-direction: column;
@@ -1372,20 +1447,28 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 18px;
+    padding: 12px 10px 8px 18px;
+    font-family: var(--font-display);
+    font-size: 1.15rem;
     font-weight: 700;
-    color: #fff;
+    color: var(--tx);
   }
   .queue {
     margin: 0;
-    padding: 0 10px 24px;
+    padding: 0 10px calc(24px + env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
     flex: 1;
     min-height: 0;
-    --ql-dim: rgba(255, 255, 255, 0.6);
-    --ql-hover: rgba(255, 255, 255, 0.08);
-    --ql-bg: rgba(16, 12, 22, 0.97);
-    color: #fff;
+    --ql-hover: var(--s2);
+    --ql-bg: transparent;
+    color: var(--tx);
+  }
+  .lyrics-sheet {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 18px calc(24px + env(safe-area-inset-bottom, 0px));
+    color: var(--tx);
   }
 
   /* The swipe-up panel: what is under the player. */
@@ -1395,16 +1478,17 @@
     justify-content: center;
     gap: 6px;
     align-self: center;
+    min-height: 44px;
     padding: 6px 14px;
     margin-top: 2px;
     border-radius: 999px;
     font-size: 0.74rem;
     font-weight: 700;
     letter-spacing: 0.02em;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--dim);
   }
   .peek:hover {
-    color: #fff;
+    color: var(--tx);
   }
   .under {
     position: absolute;
@@ -1412,10 +1496,10 @@
     z-index: 4;
     display: flex;
     flex-direction: column;
-    background: rgba(16, 12, 22, 0.98);
+    background: color-mix(in srgb, var(--s1) 98%, transparent);
     backdrop-filter: blur(18px);
     border-radius: 18px 18px 0 0;
-    box-shadow: 0 -14px 44px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 -14px 44px color-mix(in srgb, var(--bg) 70%, transparent);
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     will-change: transform;
   }
@@ -1433,14 +1517,16 @@
     height: 4px;
     margin: 2px auto 6px;
     border-radius: 4px;
-    background: rgba(255, 255, 255, 0.28);
+    background: var(--ln);
   }
   .under-t {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    font-family: var(--font-display);
+    font-size: 1.15rem;
     font-weight: 700;
-    color: #fff;
+    color: var(--tx);
   }
   .under-b {
     flex: 1;

@@ -27,19 +27,18 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    color: var(--text-dim);
+    color: var(--dim);
     padding: 4px;
     border-radius: 999px;
     line-height: 1;
   }
   .rb:hover {
-    color: var(--text);
+    color: var(--tx);
   }
   .rb.live {
-    color: #fff;
+    color: var(--onac);
     padding: 4px 9px 4px 7px;
-    background: linear-gradient(90deg, #2bd4a4, #1fa3ff);
-    box-shadow: 0 4px 14px rgba(31, 163, 255, 0.3);
+    background: var(--ac);
   }
   .n {
     font-size: 0.78rem;

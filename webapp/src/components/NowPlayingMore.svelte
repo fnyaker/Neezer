@@ -179,12 +179,13 @@
 </div>
 
 <style>
+  /* The surface hands its own colours down (the desktop side card is --s1,
+     the phone's panel is the same theme surface): nothing here is literal. */
   .more {
-    padding: 4px 0 24px;
-    color: #fff;
-    /* the credits on the player's dark glass */
-    --tc-dim: rgba(255, 255, 255, 0.55);
-    --tc-line: rgba(255, 255, 255, 0.12);
+    padding: 0 0 24px;
+    color: var(--tx);
+    --tc-dim: var(--dim);
+    --tc-line: var(--ln);
   }
   .head {
     display: flex;
@@ -195,13 +196,15 @@
   }
   h3 {
     margin: 12px 0 8px;
-    font-size: 1.05rem;
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    letter-spacing: -0.01em;
   }
   .head h3 {
     margin: 0;
   }
   .sec {
-    margin-top: 28px;
+    margin-top: 24px;
   }
   .head.sec {
     margin-bottom: 6px;
@@ -211,10 +214,12 @@
   }
   h4 {
     margin: 18px 0 8px;
-    font-size: 0.78rem;
-    letter-spacing: 0.06em;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--dim);
   }
   .acts {
     display: flex;
@@ -229,8 +234,8 @@
     font-size: 0.82rem;
     font-weight: 700;
     border-radius: 999px;
-    color: #fff;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    color: var(--onbtn);
+    background: var(--btn);
   }
   .ghost {
     display: grid;
@@ -238,8 +243,8 @@
     width: 36px;
     height: 36px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.12);
-    color: #fff;
+    background: var(--s2);
+    color: var(--tx);
   }
   .status,
   .empty {
@@ -248,7 +253,7 @@
   }
   .link {
     margin-left: 6px;
-    color: var(--accent);
+    color: var(--ac);
     font-weight: 700;
   }
   .artist {
@@ -260,10 +265,10 @@
     border-radius: 14px;
     text-align: left;
     color: inherit;
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--s2);
   }
   .artist:hover {
-    background: rgba(255, 255, 255, 0.11);
+    background: color-mix(in srgb, var(--s2) 70%, var(--ln));
   }
   .pic {
     width: 64px;

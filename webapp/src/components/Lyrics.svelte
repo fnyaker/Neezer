@@ -43,6 +43,7 @@
     height: 100%;
     overflow-y: auto;
     padding: 8px 4px;
+    color: var(--tx);
   }
   .synced {
     list-style: none;
@@ -53,19 +54,25 @@
     gap: 10px;
   }
   .synced li {
-    color: var(--text-dim);
+    color: var(--dim);
+    font-family: var(--font-display);
     font-size: 1.1rem;
     font-weight: 600;
+    line-height: 1.35;
     transition: color 0.2s;
   }
   .synced li.active {
-    color: var(--text);
+    color: var(--ac);
     font-size: 1.3rem;
+  }
+  .lyrics > p {
+    margin: 28px 8px;
+    text-align: center;
   }
   .plain {
     white-space: pre-wrap;
     font-family: inherit;
-    color: var(--text-dim);
+    color: var(--dim);
     line-height: 1.6;
   }
 </style>
