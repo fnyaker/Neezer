@@ -943,15 +943,16 @@ class CarSearchView(
 
     private fun subtypeLocale(subtype: InputMethodSubtype): Locale? {
         val tag = subtype.languageTag
-        val locale = if (tag.isNotBlank()) {
-            Locale.forLanguageTag(tag)
-        } else {
-            @Suppress("DEPRECATION")
-            val raw = subtype.locale
-            if (raw.isBlank()) return null
-            Locale.forLanguageTag(raw.replace('_', '-'))
+        if (tag.isNotBlank()) {
+            val fromTag = Locale.forLanguageTag(tag)
+            if (fromTag.language.isNotBlank() && fromTag.language != "und") return fromTag
         }
-        return locale.takeIf { it.language.isNotBlank() && it.language != "und" }
+        // Older/custom IMEs only fill the deprecated locale field ("fr_FR").
+        @Suppress("DEPRECATION")
+        val raw = subtype.locale
+        if (raw.isBlank()) return null
+        return Locale.forLanguageTag(raw.replace('_', '-'))
+            .takeIf { it.language.isNotBlank() && it.language != "und" }
     }
 
     // -- lifecycle ------------------------------------------------------------
