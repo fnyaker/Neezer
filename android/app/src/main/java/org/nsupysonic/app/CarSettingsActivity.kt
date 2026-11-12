@@ -832,7 +832,7 @@ class CarSettingsActivity : AppCompatActivity() {
         }
         val glyph = CarIconView(this).apply {
             name = icon
-            sizeDp = iconDp
+            this.sizeDp = iconDp
             color = tint
         }
         box.addView(
