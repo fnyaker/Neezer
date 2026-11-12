@@ -282,5 +282,16 @@ bytes. A reserve title asked 6 s into each track makes "suivant" instant and cov
 picks at once (its timers are throttled, and the app's own player must know the next). A feedback press after the
 pick picks again (`replaceUpcoming`). `ensureUpcoming` leaves the Flow alone. A Flow queue saved by an older SPA (no
 `context.id`) is adopted into a new session. The steering row costs the full-screen cover its height
-(`.main.steer .cover`; `test/fullscreen/run.mjs` sweeps 9 sizes WITH it); on a phone the cover carousel sits in a
-size container and shrinks instead of being cut (360x640: 194 px square, 109 with the Flow row).
+(`.main.steer .cover`; `test/fullscreen/run.mjs` sweeps 9 sizes WITH it).
+
+**The phone's full-screen player is a thumb column** (`MobileNowPlaying`, DESIGN §9). Header: reduce (44), then
+« En lecture »/Flow with the served genre and BPM in mono, then — right — the podcast speed chip, the sleep moon, the
+**quality badge** (`QualityMenu`, its small mono outline on a 44 px hit area) and ⋯ (the track menu: share, credits,
+artist, album, downloads). The sleeve is a square `min(78vw, 42vh)`, the title 30 px (one line, ellipsis), the artist
+15 px `--dim`, the seek a 6 px rail on a 44 px grip, the transport 44 px targets around a 68 px play. Under it, the
+thumb row: add to a playlist, listen party, remote, lyrics, « File · N » — 44 each, the queue button named exactly
+*File d'attente* because the benches click that name. **Whatever sits under the header shaves the sleeve** (the lyric
+line only exists when there is one, the strip and the Flow row give their height back) rather than pushing the
+transport off the screen: 360x640 measures 248 px square (269 without the strip, 212 with the Flow row too),
+390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
+`env(safe-area-inset-*)` fallback until G1's tokens land.

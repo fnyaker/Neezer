@@ -6,7 +6,7 @@
   // advance the queue and re-centre, so the cover they swiped to stays put.
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { tick, onMount, onDestroy } from "svelte";
-  import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
+  import { REMOTE, CAN_KEEP, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
   import { fade } from "svelte/transition";
   import {
@@ -14,17 +14,14 @@
     current,
     playing,
     favorites,
-    disliked,
     immersiveOpen,
     seekTo,
     buffered,
     openMenu,
     offlineCovers,
     openPlaylistPicker,
-    isAdmin,
-    openGenreTag,
   } from "../lib/stores.js";
-  import { toggleFavorite, toggleDislike, buildTrackMenu } from "../lib/actions.js";
+  import { toggleFavorite, buildTrackMenu } from "../lib/actions.js";
   import { duration as fmtDuration, hiResCover, resolveCover, cssUrl } from "../lib/format.js";
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
   import { createBackdrop } from "../lib/backdrop.js";
@@ -133,7 +130,6 @@
   $: prevT = idx > 0 ? q[idx - 1] : null;
   $: nextT = idx >= 0 && idx < q.length - 1 ? q[idx + 1] : null;
   $: fav = $current && $favorites.has(trackKey($current));
-  $: no = !!($current && $disliked.has(trackKey($current)));
   $: progress = $player.duration ? ($player.currentTime / $player.duration) * 100 : 0;
   $: bufferedPct = $player.duration
     ? Math.min(100, Math.max(progress, ($buffered / $player.duration) * 100))
@@ -853,109 +849,102 @@
       <span class="ic" aria-hidden="true"></span>
     {/if}
     <span class="ctx">
-      {$player.context?.kind === "flow" ? "Flow" : "En lecture"}
-      {#if styleLabel}<em>{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</em>{/if}
+      <span class="ctx-k">{$player.context?.kind === "flow" ? "Flow" : "En lecture"}</span>
+      {#if styleLabel}<span class="ctx-s">{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</span>{/if}
     </span>
-    <span class="hdr-actions">
+    <span class="hdr-r">
       {#if $current?.podcast && CAN_KEEP}<SpeedButton align="right" placement="down" />{/if}
       {#if !REMOTE}<SleepButton size={21} align="right" placement="down" />{/if}
+      {#if CAN_KEEP}
+        <!-- Sillon §7: the quality is one clickable mono badge, and the header
+             is where the full-screen player says how it streams. Its box is 44
+             even though the badge keeps its small outline (§10). -->
+        <span class="hdr-q"><QualityMenu align="right" placement="down" /></span>
+      {/if}
       {#if CAN_BROWSE}
         <button class="ic" on:click={trackMenu} aria-label="Plus d'options"><Icon name="more" size={22} /></button>
       {/if}
-      <button class="ic" on:click={() => (showQueue = true)} aria-label="File d'attente"><Icon name="queue" size={22} /></button>
     </span>
   </header>
 
   <div class="body">
-    <div class="cur-lyric" aria-hidden="true">
-      {#if $currentLyricLine && !$ecoMode}
-        {#key $currentLyricLine}
-          <span in:fade={{ duration: 220 }}>{$currentLyricLine}</span>
-        {/key}
-      {/if}
-    </div>
-
-    <div class="stagebox">
-    <div
-      class="scroller"
-      bind:this={scroller}
-      on:scroll|passive={onScroll}
-      on:scrollend={onScrollEnd}
-      on:touchstart|passive={onCoverStart}
-      on:touchmove|passive={onCoverMove}
-      on:touchend={onCoverEnd}
-      on:touchcancel={onCoverCancel}
-    >
-      {#each slots as s (s.key)}
-        <div class="slide"><Cover src={hiResCover(s.track.album?.cover, 1000)} alt={s.track.title} kind={s.track.podcast ? "podcast" : "album"} fallbackId={trackRef(s.track)} eager /></div>
-      {/each}
-    </div>
-    </div>
-
-    <div class="info">
-      <div class="txt">
-        <button class="t" on:click={() => trackEntityRef($current, "album", $current.album) && go("/album/" + trackEntityRef($current, "album", $current.album))}>{$current.title}</button>
-        <span class="a" class:status={$playbackLabel}>{#if $playbackLabel}{$playbackLabel}{:else}<ArtistLine track={$current} navigate={go} />{/if}</span>
+    <div class="mid">
+      <div class="cur-lyric" class:on={!!$currentLyricLine && !$ecoMode} aria-hidden="true">
+        {#if $currentLyricLine && !$ecoMode}
+          {#key $currentLyricLine}
+            <span in:fade={{ duration: 220 }}>{$currentLyricLine}</span>
+          {/key}
+        {/if}
       </div>
-      {#if CAN_KEEP && !$current.podcast}
-        <!-- Beside the heart, quieter: "not this one" is said less often than
-             "more of this", and must never be hit for the other. -->
-        <button class="fav no" class:on={no} on:click={() => toggleDislike($current)} aria-label={no ? "Retirer de « Je n'aime pas »" : "Je n'aime pas"} aria-pressed={no} title={no ? "Retirer de « Je n'aime pas »" : "Je n'aime pas"}>
-          <Icon name={no ? "thumbsDownFilled" : "thumbsDown"} size={21} />
-        </button>
-      {/if}
-      {#if CAN_KEEP}
-        <button class="fav" class:on={fav} on:click={() => toggleFavorite($current)} aria-label="Favori">
-          <Icon name={fav ? "heartFilled" : "heart"} size={24} />
-        </button>
-      {/if}
-      {#if $isAdmin && CAN_KEEP && trackKey($current)}
-        <!-- Deliberately quiet, and next to the heart rather than in the header
-             where it would fight the queue button for the thumb: tagging is
-             something you reach for when the genre is wrong, not a call to
-             action. -->
-        <button class="fav tag" on:click={() => openGenreTag($current)} aria-label="Étiqueter le genre">
-          <Icon name="tag" size={22} />
-        </button>
-      {/if}
-    </div>
 
-    <div class="seek">
-      <span class="time">{fmtDuration($player.currentTime)}</span>
-      <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} style={`--p:${progress}%; --b:${bufferedPct}%`} />
-      <span class="time">{fmtDuration($player.duration)}</span>
-    </div>
-
-    <div class="controls">
-      <button class="sm" class:on={$player.shuffle} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={22} /></button>
-      <button on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={30} /></button>
-      <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
-      <button on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={30} /></button>
-      <button class="sm" class:on={$player.repeat !== "off"} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.cycleRepeat()} aria-label="Répéter"><Icon name={repeatIcon} size={22} /></button>
-    </div>
-
-    {#if CAN_KEEP && $flowLive}<div class="flow-steer"><FlowControls /></div>{/if}
-
-    {#if stripViz}
-      <div class="viz">
-        <Visualizer
-          mode="bars"
-          quality={$vizQuality}
-          palette={$vizPalette}
-          intensity={$vizIntensity}
-          fps={$vizFps}
-          layout="strip"
-          active={$immersiveOpen}
-          paused={!$playing}
-        />
+      <div class="stagebox">
+      <div
+        class="scroller"
+        bind:this={scroller}
+        on:scroll|passive={onScroll}
+        on:scrollend={onScrollEnd}
+        on:touchstart|passive={onCoverStart}
+        on:touchmove|passive={onCoverMove}
+        on:touchend={onCoverEnd}
+        on:touchcancel={onCoverCancel}
+      >
+        {#each slots as s (s.key)}
+          <div class="slide"><Cover src={hiResCover(s.track.album?.cover, 1000)} alt={s.track.title} kind={s.track.podcast ? "podcast" : "album"} fallbackId={trackRef(s.track)} eager /></div>
+        {/each}
       </div>
-    {/if}
+      </div>
 
-    <!-- Sillon §9: one thumb row — the quality, adding it to a playlist, the
-         devices, the lyrics, and what is left of the queue. Everything rarer
-         (share, marker, éco) lives in the ⋯ menu or in Réglages. -->
+      <div class="info">
+        <div class="txt">
+          <button class="t" on:click={() => trackEntityRef($current, "album", $current.album) && go("/album/" + trackEntityRef($current, "album", $current.album))}>{$current.title}</button>
+          <span class="a" class:status={$playbackLabel}>{#if $playbackLabel}{$playbackLabel}{:else}<ArtistLine track={$current} navigate={go} />{/if}</span>
+        </div>
+        {#if CAN_KEEP}
+          <!-- The heart is the only action beside the title: "je n'aime pas" and
+               the genre tag are one tap away in the ⋯ menu, and the room the
+               thumb needs is the title's. -->
+          <button class="fav" class:on={fav} on:click={() => toggleFavorite($current)} aria-label="Favori" aria-pressed={fav}>
+            <Icon name={fav ? "heartFilled" : "heart"} size={24} />
+          </button>
+        {/if}
+      </div>
+
+      <div class="seek">
+        <span class="time">{fmtDuration($player.currentTime)}</span>
+        <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} aria-label="Progression" style={`--p:${progress}%; --b:${bufferedPct}%`} />
+        <span class="time">{fmtDuration($player.duration)}</span>
+      </div>
+
+      <div class="controls">
+        <button class="sm" class:on={$player.shuffle} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={22} /></button>
+        <button on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={30} /></button>
+        <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
+        <button on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={30} /></button>
+        <button class="sm" class:on={$player.repeat !== "off"} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.cycleRepeat()} aria-label="Répéter"><Icon name={repeatIcon} size={22} /></button>
+      </div>
+
+      {#if CAN_KEEP && $flowLive}<div class="flow-steer"><FlowControls /></div>{/if}
+
+      {#if stripViz}
+        <div class="viz">
+          <Visualizer
+            mode="bars"
+            quality={$vizQuality}
+            palette={$vizPalette}
+            intensity={$vizIntensity}
+            fps={$vizFps}
+            layout="strip"
+            active={$immersiveOpen}
+            paused={!$playing}
+          />
+        </div>
+      {/if}
+    </div>
+
+    <!-- Sillon §9: one thumb row under the transport — adding it to a playlist,
+         the devices, the lyrics, and what is left of the queue. Everything rarer
+         (share, download, credits, artist…) lives in the ⋯ menu. -->
     <div class="footer">
-      {#if CAN_KEEP}<QualityMenu align="left" />{/if}
       {#if CAN_KEEP}
         <button class="fb" on:click={() => openPlaylistPicker($current)} aria-label="Ajouter à une playlist" title="Ajouter à une playlist">
           <Icon name="plus" size={22} />
@@ -968,14 +957,16 @@
       <button class="fb" on:click={() => (showLyrics = true)} aria-label="Paroles" title="Paroles">
         <Icon name="music" size={21} />
       </button>
-      <button class="fb file" on:click={() => (showQueue = true)} aria-label="File d'attente · {upcoming} titre{upcoming > 1 ? 's' : ''}">
-        <span>File</span>
+      <!-- The name is exactly "File d'attente": it is the queue's own door (the
+           benches click it by that label), the count is what the eye reads. -->
+      <button class="fb file" on:click={() => (showQueue = true)} aria-label="File d'attente" title={`File d'attente · ${upcoming} titre${upcoming > 1 ? "s" : ""}`}>
+        <span class="fl">File</span>
         <span class="n mono">{upcoming}</span>
       </button>
     </div>
     {#if moreAvailable}
-      <button class="peek" on:click={openMore} aria-label="Crédits, artiste et titres similaires">
-        <Icon name="chevronUp" size={16} /> Crédits, artiste et similaires
+      <button class="peek" on:click={openMore} aria-label="À propos du titre">
+        <Icon name="chevronUp" size={16} /> À propos
       </button>
     {/if}
   </div>
@@ -1086,59 +1077,125 @@
   header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 14px 16px;
+    gap: 4px;
+    /* Sillon §9: the notch/status bar is the header's own — the full-screen
+       player is a screen, not a page. G1's --safe-top when it lands, the
+       platform's inset otherwise. */
+    padding: calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 4px) 8px 4px;
     flex: none;
-  }
-  .ctx em {
-    display: block;
-    font-style: normal;
-    font-family: var(--font-display);
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--tx);
-    margin-top: 2px;
+    /* Above the body: the quality badge and the sleep chip open a list that
+       hangs DOWN over it, and a body painted later would cover it. */
+    z-index: 2;
   }
   .ctx {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--dim);
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 0 4px;
     font-family: var(--font-mono);
+    line-height: 1.25;
+  }
+  .ctx-k {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .ctx-s {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: var(--tx);
   }
   .ic {
     color: var(--tx);
     display: grid;
     place-items: center;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
     flex: none;
   }
-  .hdr-actions {
+  .ic:focus-visible {
+    outline: 2px solid var(--ac);
+    outline-offset: 2px;
+  }
+  .ic:active {
+    background: var(--s2);
+  }
+  .hdr-r {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 0;
+    flex: none;
+  }
+  /* The speed chip and the sleep moon keep their designed shape; the TARGET is
+     44 whatever the glyph (§10). */
+  .hdr-r :global(.sp .trigger),
+  .hdr-r :global(.sl .trigger) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* The quality badge keeps its 26 px mono outline; this grows its hit area to
+     44 without drawing a bigger badge. */
+  .hdr-q {
+    display: grid;
+    place-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    flex: none;
+  }
+  .hdr-q :global(.trigger) {
+    position: relative;
+  }
+  .hdr-q :global(.trigger)::after {
+    content: "";
+    position: absolute;
+    /* Vertically only: the badge is already 66 px wide, and growing it
+       sideways would steal the sleep chip's taps. */
+    inset: -9px 0;
+    border-radius: 12px;
   }
 
   .body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    gap: 6px;
     min-height: 0;
+    /* G1's --safe-bottom when it lands; the platform's inset otherwise. */
+    padding-bottom: calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 2px);
+  }
+  /* Everything above the thumb row: the stack the person reads and reaches
+     for, centred in whatever the footer leaves. The cover shrinks here rather
+     than pushing the transport off a 360x640 screen. */
+  .mid {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
 
   /* current synced lyric line, above the cover carousel (up to 3 lines) */
   .cur-lyric {
-    min-height: 26px;
     margin: 0 22px 2px;
     /* grid stack: crossfading lines share one cell so the box grows to fit
        the tallest line instead of clipping long lyrics to a single row */
     display: grid;
     justify-items: center;
     align-items: center;
+  }
+  /* No line, no box: the cover and the transport take the room instead of a
+     26 px empty band on a 640 px screen. */
+  .cur-lyric:not(.on) {
+    display: none;
   }
   .cur-lyric span {
     grid-area: 1 / 1;
@@ -1154,12 +1211,15 @@
     color: var(--ac);
   }
 
-  /* The carousel's box: as tall as a full-width cover when the screen has the
-     room, shorter when it has not (a 360x640 phone, or the Flow's steering row
-     below), and then the covers shrink to fit it instead of being cut. */
+  /* The carousel's box: a square sleeve up to 78 % of the width or 42 % of the
+     height, whichever is smaller — the thumb's centre — and it GIVES that
+     height back when the screen has less (a 360x640 phone, the Flow's steering
+     row, the lyric line), the covers shrinking with it instead of being cut. */
   .stagebox {
-    flex: 0 1 calc(72vw + 20px);
-    min-height: 120px;
+    height: calc(min(78vw, 42vh) + 20px);
+    height: calc(min(78vw, 42dvh) + 20px);
+    flex: 0 1 auto;
+    min-height: 96px;
     container-type: size;
   }
 
@@ -1170,7 +1230,7 @@
     /* Sized off the box above (container units) so the slide width and the
        side padding share one base and total exactly 100 (see the padding
        below); the slide is also never taller than the box. */
-    --slide-w: min(72cqw, 100cqh - 20px);
+    --slide-w: min(78cqw, 100cqh - 20px);
     --slide-pad: calc((100cqw - var(--slide-w)) / 2);
     display: flex;
     gap: 14px;
@@ -1219,36 +1279,32 @@
   .info {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 16px 22px 4px;
-  }
-  /* Three quiet buttons after the title: the room is the title's. */
-  .info .fav + .fav {
-    margin-left: -2px;
+    gap: 10px;
+    padding: 10px 18px 0;
   }
   .txt {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
   }
   .t {
     font-family: var(--font-display);
-    font-size: 1.5rem;
+    font-size: 1.875rem;
     font-weight: 800;
-    letter-spacing: -0.02em;
-    line-height: 1.15;
+    letter-spacing: -0.03em;
+    line-height: 1.12;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* `display: block` is load-bearing: this used to be a <button> and now wraps
-     one button per credited artist, and ellipsis doesn't apply to an inline. */
+  /* `display: block` is load-bearing: this wraps one button per credited
+     artist, and ellipsis doesn't apply to an inline. */
   .a {
     display: block;
-    font-size: 1rem;
+    font-size: 0.9375rem;
     text-align: left;
     color: var(--dim);
     white-space: nowrap;
@@ -1270,48 +1326,42 @@
   .fav.on {
     color: var(--hrt);
   }
-  .fav.no {
-    color: var(--dim);
-  }
-  .fav.no.on {
-    color: var(--tx);
-  }
-  /* Dimmer than the heart: present for the admin, invisible to everyone else's
-     attention. */
-  .fav.tag {
-    color: var(--dim);
-    opacity: 0.7;
-  }
-  .fav.tag:hover {
-    color: var(--ac);
-    opacity: 1;
-  }
 
+  /* A 44 px grip on a 6 px rail: the finger gets the target, the eye the line. */
   .seek {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 6px 22px;
+    gap: 10px;
+    padding: 0 18px;
   }
   .time {
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--dim);
-    width: 38px;
+    width: 40px;
     text-align: center;
     font-variant-numeric: tabular-nums;
     flex: none;
   }
-  input[type="range"] {
+  .seek input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
-    height: 6px;
-    border-radius: 3px;
+    height: 44px;
     flex: 1;
-    background: var(--ln);
+    min-width: 0;
+    background: transparent;
+    cursor: pointer;
   }
-  /* Buffered region as a lighter fill behind the played part. */
-  .seek input[type="range"] {
+  .seek input[type="range"]:focus-visible {
+    outline: 2px solid var(--ac);
+    outline-offset: 2px;
+    border-radius: 999px;
+  }
+  /* Played (accent), buffered (a lighter ink), rest (the line token) — the same
+     three bands as before, drawn on the rail itself. */
+  .seek input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
     background: linear-gradient(
       90deg,
       var(--ac) var(--p, 0%),
@@ -1320,10 +1370,29 @@
       var(--ln) var(--b, 0%)
     );
   }
-  input[type="range"]::-webkit-slider-thumb {
+  .seek input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 15px;
     height: 15px;
+    margin-top: -4.5px;
+    border-radius: 50%;
+    background: var(--tx);
+  }
+  .seek input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      var(--ac) var(--p, 0%),
+      color-mix(in srgb, var(--tx) 42%, transparent) var(--p, 0%),
+      color-mix(in srgb, var(--tx) 42%, transparent) var(--b, 0%),
+      var(--ln) var(--b, 0%)
+    );
+  }
+  .seek input[type="range"]::-moz-range-thumb {
+    width: 15px;
+    height: 15px;
+    border: 0;
     border-radius: 50%;
     background: var(--tx);
   }
@@ -1335,11 +1404,29 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 26px;
-    padding: 8px 0 4px;
+    gap: clamp(8px, 5vw, 26px);
+    padding: 4px 0 0;
   }
   .controls button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 50%;
     color: var(--tx);
+    flex: none;
+  }
+  .controls button:focus-visible {
+    outline: 2px solid var(--ac);
+    outline-offset: 2px;
+  }
+  .controls button:not(.pp):active {
+    background: color-mix(in srgb, var(--tx) 12%, transparent);
+  }
+  .controls .pp:active {
+    transform: scale(0.96);
   }
   .controls .sm {
     color: var(--dim);
@@ -1390,19 +1477,26 @@
   }
   /* The thumb row: a control is 44 px under a finger, and on a 360 px phone
      seven of them is the budget — the spacing gives way, never the target. */
+  /* The thumb row (§9): adding it to a playlist, the devices, the lyrics and
+     what is left of the queue. Five targets of 44 on a 360 px phone — the
+     spacing gives way, never the target. The quality badge is in the header. */
   .footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: clamp(2px, 1vw, 8px);
-    padding: 4px clamp(10px, 3vw, 20px) calc(14px + env(safe-area-inset-bottom, 0px));
-    min-height: 52px;
+    gap: clamp(2px, 1.5vw, 10px);
+    padding: 2px clamp(10px, 3vw, 18px) 0;
+    min-height: 48px;
   }
   /* The devices' and the app's own buttons keep their designed shape at
     36 px; the TARGET is 44 whatever the glyph (§10). */
   .footer :global(button) {
     min-width: 44px;
     min-height: 44px;
+  }
+  .footer :global(.pb),
+  .footer :global(.rb) {
+    justify-content: center;
   }
   .fb {
     display: inline-flex;
@@ -1420,6 +1514,14 @@
     color: var(--tx);
     background: var(--s2);
   }
+  .fb:focus-visible {
+    outline: 2px solid var(--ac);
+    outline-offset: 2px;
+  }
+  .fb:active {
+    color: var(--tx);
+    background: var(--s2);
+  }
   .fb.file {
     font-size: 13px;
     font-weight: 700;
@@ -1427,10 +1529,12 @@
     padding: 0 10px;
   }
   .fb.file .n {
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--dim);
     min-width: 16px;
     text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
   /* queue bottom sheet */
@@ -1447,7 +1551,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 10px 8px 18px;
+    padding: calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 6px) 10px 8px 18px;
     font-family: var(--font-display);
     font-size: 1.15rem;
     font-weight: 700;
@@ -1455,7 +1559,7 @@
   }
   .queue {
     margin: 0;
-    padding: 0 10px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 0 10px calc(24px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -1467,11 +1571,11 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 18px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 0 18px calc(24px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
     color: var(--tx);
   }
 
-  /* The swipe-up panel: what is under the player. */
+  /* The swipe-up panel's door: a quiet hint, still a 44 px target. */
   .peek {
     display: flex;
     align-items: center;
@@ -1479,16 +1583,21 @@
     gap: 6px;
     align-self: center;
     min-height: 44px;
-    padding: 6px 14px;
-    margin-top: 2px;
+    padding: 2px 14px;
     border-radius: 999px;
-    font-size: 0.74rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--dim);
   }
   .peek:hover {
     color: var(--tx);
+  }
+  .peek:focus-visible {
+    outline: 2px solid var(--ac);
+    outline-offset: 2px;
   }
   .under {
     position: absolute;
@@ -1509,7 +1618,7 @@
   .under-h {
     flex: none;
     touch-action: none;
-    padding: 8px 10px 4px 18px;
+    padding: calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 4px) 10px 4px 18px;
   }
   .grab {
     display: block;
@@ -1533,6 +1642,6 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 0 14px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 0 14px calc(24px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
   }
 </style>
