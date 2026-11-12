@@ -98,8 +98,13 @@ class PlayerService : Service() {
      * alive. The car mode's own service binds this service without owning a
      * WebView: this is how it reaches the SPA hooks (`__nsCarPlay`,
      * `__nsCarFav`) without a second player or a second origin.
+     *
+     * The optional callback carries the page's ANSWER (`__nsCarPlay` returns a
+     * boolean): a null callback keeps the old fire-and-forget path. A sink that
+     * cannot evaluate at all must call it with false, so the car mode never
+     * announces a launch the page never made.
      */
-    var jsSink: ((String) -> Unit)? = null
+    var jsSink: ((String, ((Boolean) -> Unit)?) -> Unit)? = null
 
     /** Last state published by the page (or by the native player), for a late binder. */
     private var lastState: State? = null
@@ -279,14 +284,27 @@ class PlayerService : Service() {
      * Evaluate one JS expression in the page, when a WebView is bound. False
      * when no page is there to run it (the car mode then says why instead of
      * pretending the tap did something). MainActivity owns the origin check.
+     *
+     * [onResult] is the page's boolean answer, and is also called with false
+     * when there is no sink or the sink throws, so a caller can trust it as
+     * "the hook ran and said yes". It runs on whichever thread the sink uses
+     * (MainActivity answers on the main thread).
      */
-    fun evalJs(js: String): Boolean {
-        if (js.isEmpty() || js.length > JS_MAX) return false
-        val sink = jsSink ?: return false
+    fun evalJs(js: String, onResult: ((Boolean) -> Unit)? = null): Boolean {
+        if (js.isEmpty() || js.length > JS_MAX) {
+            onResult?.invoke(false)
+            return false
+        }
+        val sink = jsSink
+        if (sink == null) {
+            onResult?.invoke(false)
+            return false
+        }
         return try {
-            sink(js)
+            sink(js, onResult)
             true
         } catch (_: Exception) {
+            onResult?.invoke(false)
             false
         }
     }

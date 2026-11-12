@@ -2,29 +2,38 @@ package org.nsupysonic.app
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import kotlin.math.roundToInt
 
 /**
  * The overlay's own view tree: the player, the pinned playlists and the search
  * keyboard, plus the one toast the car mode shows. It owns no playback and no
  * network: everything goes through [CarHost] (see CarModeContract.kt).
  *
- * The window itself belongs to CarModeService (type, position, alpha, blur).
- * This root only paints the rounded card and swaps the panel, so a size or a
- * screen change is a visibility change here, never a new window.
+ * The card window itself belongs to CarModeService (type, position, size,
+ * blur). This root paints the rounded card and swaps the panel, so a size or a
+ * screen change is a visibility change here.
  *
- * Sizes: FULL and MINI show the player in its rounded card. ULTRA is the lone
- * 76 dp button the prototype puts at the bottom right, outside the card — the
- * card background is dropped and the player view's own END/BOTTOM gravity is
- * left to place it.
+ * Sizes: FULL and MINI show the player in its rounded card, which fills the
+ * window exactly (the service gives it screen − 16 dp). ULTRA is the lone
+ * 76 dp button the prototype puts at the bottom right; the service gives the
+ * window exactly 76 × 76 dp, so there is no transparent band around the disc.
+ *
+ * The toast is NOT inside that window: the prototype floats it at top 206 dp,
+ * and a strip added inside a bottom-anchored window would either move the card
+ * or intercept the GPS app's touches. It gets its own non-touchable overlay
+ * window instead.
  */
 class CarOverlayRoot(
     context: Context,
@@ -38,12 +47,19 @@ class CarOverlayRoot(
 
     private val column = LinearLayout(context)
     private val card = FrameLayout(context)
+    private val windowManager =
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+    /**
+     * The prototype's toast: citron pill, 18 sp bold, left/right 16 dp, top
+     * 206 dp. It lives in its own non-touchable window so it can sit high on
+     * the screen without widening the card window or eating GPS taps.
+     */
     private val toast = CarStyle.text(context, "", 18f, CarStyle.ONAC).apply {
         gravity = Gravity.CENTER
         setTypeface(CarType.body(context), Typeface.BOLD)
         setPadding(dp(18), dp(14), dp(18), dp(14))
         background = CarStyle.roundRect(context, CarStyle.AC, radiusDp = 18f)
-        visibility = View.GONE
         isClickable = false
         isFocusable = false
         accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -52,10 +68,12 @@ class CarOverlayRoot(
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val hideToast = Runnable { toast.visibility = View.GONE }
+    private val hideToast = Runnable { hideToastNow() }
 
     private var size = CarSize.FULL
     private var screen = CarScreen.PLAYER
+    private var cardOpacity = DEFAULT_CARD_OPACITY
+    private var toastAttached = false
 
     init {
         setClipChildren(false)
@@ -69,14 +87,6 @@ class CarOverlayRoot(
         addView(
             column,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        )
-
-        column.addView(
-            toast,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(10) }
         )
 
         card.clipChildren = false
@@ -131,41 +141,52 @@ class CarOverlayRoot(
         val ultra = size == CarSize.ULTRA
         player.setSize(size)
 
-        val inset = if (ultra) 0 else dp(8)
-        setPadding(inset, 0, inset, 0)
-
+        // The window is already exactly the card (or the 76 dp disc), so the
+        // content fills it: no side padding, no transparent band inside the
+        // window that would swallow a touch meant for the navigation app.
+        setPadding(0, 0, 0, 0)
         (column.layoutParams as? LayoutParams)?.let { lp ->
-            lp.width = if (ultra) LayoutParams.WRAP_CONTENT else LayoutParams.MATCH_PARENT
+            lp.width = LayoutParams.MATCH_PARENT
             column.layoutParams = lp
         }
         (card.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
-            lp.width = if (ultra) LinearLayout.LayoutParams.WRAP_CONTENT
-            else LinearLayout.LayoutParams.MATCH_PARENT
+            lp.width = LinearLayout.LayoutParams.MATCH_PARENT
             card.layoutParams = lp
         }
-        // CarPlayerView measures itself 76 dp square in ULTRA and expects its
-        // parent to place it; the prototype puts it 14 dp from the right and
-        // 104 dp from the bottom, outside the rounded card.
         (player.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
             if (ultra) {
-                lp.width = FrameLayout.LayoutParams.WRAP_CONTENT
-                lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
-                lp.gravity = Gravity.END or Gravity.BOTTOM
-                lp.marginEnd = dp(14)
-                lp.bottomMargin = dp(104)
+                // The service already places the window at 14/104 with a
+                // 76 × 76 dp size; the disc fills it.
+                lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+                lp.height = FrameLayout.LayoutParams.MATCH_PARENT
+                lp.gravity = Gravity.CENTER
             } else {
                 lp.width = FrameLayout.LayoutParams.MATCH_PARENT
                 lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
                 lp.gravity = Gravity.TOP or Gravity.START
-                lp.marginEnd = 0
-                lp.bottomMargin = 0
             }
+            lp.marginEnd = 0
+            lp.bottomMargin = 0
+            lp.topMargin = 0
             player.layoutParams = lp
         }
 
         card.background = if (ultra) null else cardBackground()
         card.clipToOutline = !ultra
         applyVisibility()
+    }
+
+    /**
+     * The person's 40–80 % setting fills the CARD, not the window: text, the
+     * white levels and the lemon play button stay at 100 %, exactly like the
+     * prototype's `rgba(14,14,12,glass)`. Clamped here too because the value
+     * also comes from prefs changed on another screen.
+     */
+    fun setCardOpacity(percent: Int) {
+        val next = percent.coerceIn(MIN_CARD_OPACITY, MAX_CARD_OPACITY)
+        if (next == cardOpacity) return
+        cardOpacity = next
+        card.background = if (size == CarSize.ULTRA) null else cardBackground()
     }
 
     fun setScreen(screen: CarScreen) {
@@ -179,7 +200,7 @@ class CarOverlayRoot(
         applyVisibility()
     }
 
-    /** The prototype's large citron pill: 2.2 s, then it takes no more room. */
+    /** The prototype's large citron pill: 2.2 s at top 206 dp, in its own window. */
     fun showToast(text: String) {
         val message = text.trim().take(200)
         if (message.isEmpty()) {
@@ -190,25 +211,60 @@ class CarOverlayRoot(
             post { showToast(message) }
             return
         }
+        if (!isAttachedToWindow) {
+            systemToast(message)
+            return
+        }
         toast.text = message
-        toast.visibility = View.VISIBLE
+        if (toastAttached) {
+            try {
+                windowManager.updateViewLayout(toast, toastParams())
+            } catch (_: Exception) {
+                // The window manager dropped it (permission revoked): fall
+                // back rather than leaving a toast that never appears.
+                toastAttached = false
+                systemToast(message)
+            }
+        } else {
+            try {
+                windowManager.addView(toast, toastParams())
+                toastAttached = true
+            } catch (_: Exception) {
+                systemToast(message)
+                return
+            }
+        }
         main.removeCallbacks(hideToast)
         main.postDelayed(hideToast, TOAST_MS)
     }
 
     fun hideToastNow() {
         main.removeCallbacks(hideToast)
-        toast.visibility = View.GONE
+        if (!toastAttached) return
+        toastAttached = false
+        try {
+            windowManager.removeViewImmediate(toast)
+        } catch (_: Exception) {
+        }
     }
 
     /**
      * Re-read the card style after the settings screen changed the opacity or
-     * the palette. The window alpha is CarModeService's (Android 12's touch
-     * rule is checked on the window, not on a drawable), so only the card is
-     * repainted here.
+     * the palette. The window itself stays at alpha 1: only the card's fill
+     * carries the 40–80 % setting (CarModeService.buildParams explains why the
+     * Android 12 touch cap does not apply to a window that handles its own
+     * touches).
      */
     fun refreshStyle() {
+        setCardOpacity((carPrefs.overlayAlpha * 100f).roundToInt())
         card.background = if (size == CarSize.ULTRA) null else cardBackground()
+        if (toastAttached) {
+            try {
+                windowManager.updateViewLayout(toast, toastParams())
+            } catch (_: Exception) {
+                hideToastNow()
+            }
+        }
     }
 
     private fun applyVisibility() {
@@ -219,22 +275,73 @@ class CarOverlayRoot(
         search.visibility = if (!ultra && screen == CarScreen.SEARCH) View.VISIBLE else View.GONE
     }
 
-    private fun cardBackground(): GradientDrawable = CarStyle.roundRect(
-        context,
-        Color.rgb(14, 14, 12),
-        Color.argb(46, 255, 255, 255),
-        radiusDp = 26f,
-        strokeDp = 1f
-    )
+    private fun cardBackground(): GradientDrawable {
+        // Direct mapping: 40–80 % is the card's own opacity, as the prototype's
+        // rgba(14,14,12,glass). Rounding is the nearest 8-bit alpha.
+        val alpha = (cardOpacity * 255f / 100f).roundToInt().coerceIn(0, 255)
+        return CarStyle.roundRect(
+            context,
+            Color.argb(alpha, 14, 14, 12),
+            Color.argb(46, 255, 255, 255),
+            radiusDp = 26f,
+            strokeDp = 1f
+        )
+    }
+
+    /**
+     * The toast window: 16 dp in from each side, top 206 dp, no touch at all.
+     * NOT_TOUCHABLE is the point — a status pill must never eat a map tap.
+     */
+    private fun toastParams(): WindowManager.LayoutParams {
+        val width = (screenWidthPx() - dp(32)).coerceAtLeast(dp(1))
+        return WindowManager.LayoutParams(
+            width,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(16)
+            y = dp(206)
+            // This window passes touches through (NOT_TOUCHABLE), so Android
+            // 12's untrusted-touch rule applies: above 0.8 the map under the
+            // pill would stop receiving taps for 2.2 s. 0.8 is the highest
+            // allowed value and keeps the citron pill readable.
+            alpha = 0.8f
+        }
+    }
+
+    private fun screenWidthPx(): Int {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            return windowManager.currentWindowMetrics.bounds.width()
+        }
+        val point = android.graphics.Point()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealSize(point)
+        return point.x
+    }
+
+    private fun systemToast(message: String) {
+        try {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
 
     private fun dp(value: Int): Int = CarStyle.dp(context, value.toFloat())
 
     override fun onDetachedFromWindow() {
-        main.removeCallbacks(hideToast)
+        hideToastNow()
         super.onDetachedFromWindow()
     }
 
     private companion object {
         const val TOAST_MS = 2_200L
+        const val MIN_CARD_OPACITY = 40
+        const val MAX_CARD_OPACITY = 80
+        const val DEFAULT_CARD_OPACITY = 62
     }
 }

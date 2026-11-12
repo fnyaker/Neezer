@@ -142,7 +142,9 @@ class MainActivity : AppCompatActivity() {
             service?.nativeSkip = { forward -> nativeAudio?.skip(forward) == true }
             // The car overlay runs in CarModeService, which binds the same
             // PlayerService: this is its only way back into the SPA.
-            service?.jsSink = { js -> runOnUiThread { evalCarJs(js) } }
+            service?.jsSink = { js, onResult ->
+                runOnUiThread { evalCarJs(js, onResult) }
+            }
             pendingState?.let { service?.update(it) }
         }
 
@@ -946,15 +948,33 @@ class MainActivity : AppCompatActivity() {
      * jsSink. Only our own origin's page qualifies: the overlay reads the
      * page's `__nsCarPlay` / `__nsCarFav`, never a foreign page the WebView
      * might be showing after a redirect.
+     *
+     * [onResult] gets the page's answer (`__nsCarPlay` returns a boolean), and
+     * false when this page cannot evaluate at all, so the service never turns
+     * "no page" into "Lecture : X".
      */
-    private fun evalCarJs(js: String) {
-        if (webViewDead || !::webView.isInitialized || !onServerPage) return
-        if (isFinishing || isDestroyed) return
-        if (js.isEmpty() || js.length > MAX_CAR_JS) return
+    private fun evalCarJs(js: String, onResult: ((Boolean) -> Unit)? = null) {
+        if (webViewDead || !::webView.isInitialized || !onServerPage) {
+            onResult?.invoke(false)
+            return
+        }
+        if (isFinishing || isDestroyed) {
+            onResult?.invoke(false)
+            return
+        }
+        if (js.isEmpty() || js.length > MAX_CAR_JS) {
+            onResult?.invoke(false)
+            return
+        }
         try {
-            webView.evaluateJavascript(js, null)
+            webView.evaluateJavascript(js) { result ->
+                // evaluateJavascript answers with a JSON value: a boolean hook
+                // is the literal "true"/"false", a missing hook is "null".
+                onResult?.invoke(result == "true")
+            }
         } catch (_: Exception) {
             /* WebView torn down under us */
+            onResult?.invoke(false)
         }
     }
 
@@ -1196,13 +1216,11 @@ class MainActivity : AppCompatActivity() {
         fun openCarSettings() {
             if (!allowed()) return
             runOnUiThread {
-                try {
-                    startActivity(Intent(this@MainActivity, CarSettingsActivity::class.java))
-                } catch (_: Exception) {
-                    Toast.makeText(
-                        this@MainActivity, R.string.car_settings_missing, Toast.LENGTH_SHORT
-                    ).show()
-                }
+                // ONE door: CarModeService detaches the overlay first, then
+                // launches the full-screen activity. Launching it here would
+                // leave the card on top, eating every touch. With no service
+                // alive there is no overlay, so the helper opens it directly.
+                CarModeService.openSettings(this@MainActivity)
             }
         }
 
@@ -1210,14 +1228,23 @@ class MainActivity : AppCompatActivity() {
          * Pin a playlist for the car overlay. Idempotent: the page's action
          * says "Épingler", never "désépingler" (the native settings screen owns
          * unpinning and the order). The id is a server id, not a path.
+         *
+         * Two arities on purpose (the WebView bridge resolves an overload by
+         * argument count): an older SPA calls `carPin(id, title)` and keeps
+         * working, a newer one passes the track count so the tile says
+         * "42 titres" instead of "playlist" before the first list read.
          */
         @JavascriptInterface
-        fun carPin(id: String?, title: String?): Boolean {
+        fun carPin(id: String?, title: String?): Boolean = carPin(id, title, -1)
+
+        @JavascriptInterface
+        fun carPin(id: String?, title: String?, nbTracks: Int): Boolean {
             if (!allowed()) return false
             val cleanId = id?.trim() ?: return false
             if (cleanId.isEmpty() || cleanId.length > 200) return false
             val cleanTitle = title?.trim().orEmpty().take(200).ifBlank { cleanId }
-            CarPrefs(this@MainActivity).pin(PinnedPlaylist(cleanId, cleanTitle))
+            val count = nbTracks.coerceAtLeast(0)
+            CarPrefs(this@MainActivity).pin(PinnedPlaylist(cleanId, cleanTitle, count))
             return true
         }
 

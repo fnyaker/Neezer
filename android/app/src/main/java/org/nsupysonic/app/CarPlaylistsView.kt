@@ -353,14 +353,14 @@ class CarPlaylistsView @JvmOverloads constructor(
             host.toast("Connecte-toi dans l'app pour lancer une playlist")
             return
         }
+        // One toast, and only after the page said it started: CarHost.launch
+        // changes the screen and announces "Lecture : X". A failed launch
+        // leaves the panel where it is.
         if (cell.flow) {
             host.launch("flow", "", "Mon Flow")
-            host.toast("Flow lancé")
         } else {
             host.launch("playlist", cell.id, cell.title)
-            host.toast("Playlist lancée : ${cell.title}")
         }
-        host.setScreen(CarScreen.PLAYER)
     }
 
     private fun turn(delta: Int) {
@@ -385,6 +385,20 @@ class CarPlaylistsView @JvmOverloads constructor(
         if (!force && state == Load.READY && lastSuccessAt != 0L && now - lastSuccessAt < 60_000L) {
             render()
             return
+        }
+        // The overlay is detached and recreated each time the settings screen
+        // or a size change drops it: this instance's fields start empty, but
+        // the process-wide read may still be fresh. Reuse it instead of
+        // asking /api/me/playlists on every attach.
+        if (!force && state == Load.IDLE) {
+            val cached = CarPlaylistSource.fresh(now)
+            if (cached != null) {
+                items = cached
+                state = Load.READY
+                lastSuccessAt = now
+                render()
+                return
+            }
         }
         lastRefreshAt = now
         val seq = ++loadSeq
@@ -417,9 +431,11 @@ class CarPlaylistsView @JvmOverloads constructor(
             main.post {
                 if (seq != loadSeq || !isAttachedToWindow) return@post
                 if (expired) {
+                    CarPlaylistSource.forget()
                     state = Load.NO_SESSION
                 } else if (fetched != null) {
                     items = fetched
+                    CarPlaylistSource.remember(fetched)
                     remember(fetched)
                     lastSuccessAt = SystemClock.elapsedRealtime()
                     state = Load.READY
@@ -543,6 +559,32 @@ internal object CarPlaylistSource {
     private const val MAX_ITEMS = 500
 
     data class Item(val id: String, val title: String, val nbTracks: Int)
+
+    /** How long a successful read serves every panel without a new request. */
+    private const val CACHE_MS = 60_000L
+    private var cached: List<Item>? = null
+    private var cachedAt = 0L
+
+    /** The last good list if it is younger than a minute, else null. */
+    @Synchronized
+    fun fresh(now: Long): List<Item>? {
+        val list = cached ?: return null
+        return if (now - cachedAt in 0 until CACHE_MS) list else null
+    }
+
+    /** Keep a successful read for the next panel instance (attach/reattach). */
+    @Synchronized
+    fun remember(items: List<Item>) {
+        cached = items
+        cachedAt = SystemClock.elapsedRealtime()
+    }
+
+    /** The session is gone: never serve that list to a reattached panel. */
+    @Synchronized
+    fun forget() {
+        cached = null
+        cachedAt = 0L
+    }
 
     /** The cookie was absent, expired or refused: the page must log in again. */
     class SessionExpired : Exception()

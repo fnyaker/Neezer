@@ -203,26 +203,46 @@ an UNKNOWN speed — no fix, a fix without speed, 5 s of silence, no location pe
 idempotent; `CarMotionTest` (JVM) holds the 5 km/h / 5 s thresholds. Android 10+ requires a
 foreground service reading location while its activity is not
 visible to declare the `location` type (`developer.android.com/develop/sensors-and-location/location/permissions`):
-the car service (lot A) must add `FOREGROUND_SERVICE_LOCATION`, `specialUse|location` and start it
-with both, or the speed stays unknown while Maps is in front. The `location` type is while-in-use:
+the car service (lot A) must add `FOREGROUND_SERVICE_LOCATION`, `specialUse|location`
+(plus `microphone` once the mic grant exists) and start it with all of them, or the speed stays
+unknown while Maps is in front. The `location` type is while-in-use:
 on Android 14 the service must be created from a visible app or an exempt start (tile, notification),
 so the permission is granted before the service starts. This lot adds no dependency:
 `play-services-location` is lot A's.
 **The car overlay is a foreground service, not a second player** (bridge version 9, `CarModeService`,
 `CarOverlayRoot`, `CarTileService`). It binds the same `PlayerService` (BIND_AUTO_CREATE), reads
 `state()` and registers `onState`, and sends `transport(cmd, value)` — the MediaSession's own routing,
-native skip first. The overlay is `TYPE_APPLICATION_OVERLAY` with the window alpha kept in 40–80 %
-(Android 12's untrusted-touch rule is evaluated on the window, not on a drawable), `FLAG_NOT_FOCUSABLE
-| FLAG_NOT_TOUCH_MODAL`, 8 dp sides, bottom 92 dp, and cross-window blur only where the WindowManager
-reports it enabled. The service is `specialUse|location`: `specialUse` keeps the overlay above the
-navigation app, `location` keeps the speed updates coming once the activity is behind Maps; the
-`location` bit is only requested when a location grant exists, and a refused union falls back to
-`specialUse` rather than dropping the overlay. Auto-start needs a configured server, a trigger on,
-overlay access and usable notifications; the tile or the settings screen starts it by hand. The
-Settings activity is launched only after the overlay is detached, and MainActivity's next `onResume`
-sends `ACTION_REFRESH`, which re-reads `CarTrigger.refresh()` and reattaches if a trigger (or a manual
-start) still wants it. `MainActivity` owns the `jsSink` into the SPA (`__nsCarPlay` / `__nsCarFav`);
-with no bound WebView the overlay says "Ouvre Neezer" instead of pretending the tap worked.
+native skip first. The overlay is `TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_FOCUSABLE
+| FLAG_NOT_TOUCH_MODAL`. **The window is exactly the painted surface**: FULL/MINI are
+`screen − 16 dp` wide at `x=8 dp`, bottom 92 dp; ULTRA is exactly 76 × 76 dp at `x=14 dp`,
+bottom 104 dp (`WindowManager` interprets positive x/y under `END`/`BOTTOM` as distance from that
+edge). No transparent side padding and no margin inside the window: those bands still receive
+touches and used to swallow the GPS app's taps (a 90 × 180 dp window for a 76 dp button). Cross-window
+blur is requested only for FULL/MINI and only where the WindowManager reports it enabled (a square
+of frost around the round ULTRA disc would be visible). The window alpha is 1: Android 12's
+untrusted-touch cap applies to a window that lets a touch PASS THROUGH it, and this one is touchable
+and sized to the card, so nothing passes. The person's 40–80 % opacity (default 62) is the card
+FILL's alpha, `CarOverlayRoot.setCardOpacity`, as in the prototype's `rgba(14,14,12,glass)`:
+titles (26 sp), labels (19 sp) and the lemon play button stay at 100 %. The toast is a separate
+`FLAG_NOT_TOUCHABLE` overlay window at top 206 dp, 16 dp sides, alpha 0.8 (the highest value Android
+12 lets a pass-through window use), so it never moves or widens the card. The service is
+`specialUse|location|microphone`: `specialUse` keeps the overlay above the navigation app,
+`location` keeps the speed updates coming once the activity is behind Maps, `microphone` keeps the
+search keyboard's voice input alive; each bit is only requested when its grant exists, and a refused
+union falls back to `specialUse` rather than dropping the overlay. Auto-start needs a configured
+server, a trigger on, overlay access and usable notifications; the tile or the settings screen starts
+it by hand. **There is one door to the settings**: the notification's Réglages action is a
+`PendingIntent.getService` with `ACTION_OPEN_SETTINGS`, the SPA bridge calls
+`CarModeService.openSettings(context)`, and the playlist ghost tile goes through
+`CarHost.openSettings()`; all three lead to the same `openSettingsNow()`, which detaches the overlay
+before launching the activity (with no service alive the helper launches it directly, since nothing
+draws). MainActivity's next `onResume` sends `ACTION_REFRESH` — and a navigation app becoming visible
+again clears the suppression — so `CarTrigger.refresh()` re-reads the state and the overlay
+reattaches once (guarded by `overlayAttached` and `!dismissed`). `MainActivity` owns the `jsSink` into
+the SPA (`__nsCarPlay` / `__nsCarFav`). `PlayerService.evalJs(js, onResult)` carries the page's
+boolean answer back (false when no WebView/never our origin): `launch()` changes the screen and toasts
+"Lecture : X" (or "Playlist lancée : X" for a playlist) only on true, and otherwise shows "Ouvre Neezer pour lancer la musique" on the current
+screen — no bridge change, the callbacks are the existing hooks' return values.
 
 **Linking the Deezer account from the app** (`DeezerLoginActivity`): there is no email/password
 endpoint left that a server could call — Deezer's web one (`ajax/action.php` + reCAPTCHA) answers
@@ -250,13 +270,23 @@ exists only while a track is current: it toggles that track's favourite and retu
 new state synchronously. `NSNative.carAvailable()` gates the SPA's settings card and the playlist
 page's “Épingler pour la voiture” action (`NSNative.carPin`); an older APK has neither method and the
 entries simply do not exist, while a newer APK facing an older SPA finds no hook and must say so.
+`carPin` accepts two arities (the WebView bridge resolves an overload by argument count): the old
+`(id, title)` and `(id, title, nbTracks)`, so a newer SPA can hand the count over at pin time. Today's
+`lib/car.js` still calls the two-argument form, so the tile keeps the title-only pin until the first
+`/api/me/playlists` read fills the count.
 The playlist panel shows Flow + `CarPrefs.pins`, six 84 dp tiles to a page; its catalogue is
 `/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
 (401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
-device remembers. `CarSettingsActivity` is the full-screen Réglages → Mode voiture (manifest
-`android:exported="false"`; the service must hide the overlay before starting it), asks overlay,
-usage-access, location, Bluetooth and microphone through `CarPermissions`, and never shows a
-confirmation dialog. `webapp/test/car.test.mjs` drives the hooks with injected player functions
+device remembers. A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`): the
+overlay is destroyed and recreated on every drop/reattach, and a fresh cache means returning from
+the settings does not cost a second request; only a 401 forgets it. Tapping a tile calls
+`CarHost.launch` only — the service changes to the player and shows the single "Lecture : X" / "Playlist lancée : X" toast
+when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée".
+`CarSettingsActivity` is the full-screen Réglages → Mode voiture (manifest
+`android:exported="false"`; reached only through `CarModeService.openSettings`, which hides the
+overlay first), asks overlay, usage-access, location, Bluetooth and microphone through
+`CarPermissions`, and never shows a confirmation dialog. `webapp/test/car.test.mjs` drives the hooks
+with injected player functions
 (launch kinds, no session, remote, the favourite hook appearing/disappearing); `npm test` 439 and
-`npm run build` pass. The Kotlin side is not measured on a device here: CI's `android` workflow
-builds it.
+`npm run build` pass. The Kotlin side is built by CI's `android` workflow; `assembleDebug`,
+`lintDebug` and `testDebugUnitTest` also pass locally with JDK 17/SDK 34.

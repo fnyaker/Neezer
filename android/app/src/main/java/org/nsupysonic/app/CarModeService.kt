@@ -32,9 +32,10 @@ import org.json.JSONObject
  *
  * The page still owns the queue and the sound (PlayerService/MediaSession are
  * untouched); this service is a remote control that also happens to draw on
- * top of the navigation app. It is a `specialUse` foreground service because
- * the overlay must outlive the activity while a GPS app is in front — that is
- * exactly the use Android has no narrower type for.
+ * top of the navigation app. It is a `specialUse|location|microphone`
+ * foreground service because the overlay must outlive the activity while a GPS
+ * app is in front — that is exactly the use Android has no narrower type for;
+ * the two permission-guarded bits are added only while their grant exists.
  *
  * Auto-start is deliberately narrow: triggers on, overlay granted, the
  * configured server present, notifications usable. A quick-settings tile or
@@ -47,6 +48,13 @@ class CarModeService : Service(), CarHost {
         private const val ACTION_START = "org.nsupysonic.app.action.CAR_START"
         private const val ACTION_STOP = "org.nsupysonic.app.action.CAR_STOP"
         private const val ACTION_REFRESH = "org.nsupysonic.app.action.CAR_REFRESH"
+
+        /**
+         * The only door to the car settings: the notification action, the SPA
+         * bridge and the overlay's ghost tile all end up here, so the service
+         * can detach the overlay before the full-screen activity appears.
+         */
+        private const val ACTION_OPEN_SETTINGS = "org.nsupysonic.app.action.CAR_OPEN_SETTINGS"
         private const val EXTRA_MANUAL = "manual"
 
         const val NOTIFICATION_ID = 2
@@ -61,7 +69,13 @@ class CarModeService : Service(), CarHost {
 
         private const val TICK_MS = 1_000L
         private const val REBIND_MS = 1_000L
+        /** The card's sides and its distance from the bottom (prototype). */
         private const val BOTTOM_DP = 92
+        private const val SIDE_DP = 8
+        /** ULTRA is a lone 76 dp button, 14 dp from the right, 104 dp from the bottom. */
+        private const val ULTRA_SIZE_DP = 76
+        private const val ULTRA_END_DP = 14
+        private const val ULTRA_BOTTOM_DP = 104
         private const val BLUR_DP = 18
         private const val MAX_SPEED = 400.0
         private const val MAX_SEEK = 24.0 * 60 * 60
@@ -92,6 +106,51 @@ class CarModeService : Service(), CarHost {
         fun stop(context: Context) {
             try {
                 context.stopService(Intent(context, CarModeService::class.java))
+            } catch (_: Exception) {
+            }
+        }
+
+        /**
+         * The one door to the car settings, from anywhere: the notification's
+         * Réglages action goes through the service, the SPA bridge and the
+         * overlay's ghost tile come through [CarHost.openSettings], and both
+         * end in the same place.
+         *
+         * Running: ask the service to detach the overlay and launch the
+         * activity itself, so no card is left above the settings eating
+         * touches. Not running: nothing is drawing, launch directly.
+         */
+        fun openSettings(context: Context) {
+            if (!running) {
+                if (!launchSettingsActivity(context)) settingsMissingToast(context)
+                return
+            }
+            try {
+                context.startService(
+                    Intent(context, CarModeService::class.java).setAction(ACTION_OPEN_SETTINGS)
+                )
+            } catch (_: Exception) {
+                // The service died between isRunning() and here, or an OEM
+                // refuses background starts: there is no overlay left to
+                // detach, so opening the activity is still correct.
+                if (!launchSettingsActivity(context)) settingsMissingToast(context)
+            }
+        }
+
+        /** Start the full-screen car settings; false when no activity answers. */
+        private fun launchSettingsActivity(context: Context): Boolean = try {
+            context.startActivity(
+                Intent(context, CarSettingsActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
+
+        private fun settingsMissingToast(context: Context) {
+            try {
+                Toast.makeText(context, R.string.car_settings_missing, Toast.LENGTH_SHORT).show()
             } catch (_: Exception) {
             }
         }
@@ -268,6 +327,26 @@ class CarModeService : Service(), CarHost {
                 stopEverything()
                 return START_NOT_STICKY
             }
+            ACTION_OPEN_SETTINGS -> {
+                // The notification's Réglages action and the SPA bridge. The
+                // service may have been restarted by this very intent: make it
+                // foreground first (a notification action is an allowed start),
+                // then detach and open. openSettingsNow is idempotent.
+                val wasForegrounded = foregrounded
+                if (!goForeground()) {
+                    if (!launchSettingsActivity(this)) {
+                        toast(R.string.car_settings_missing)
+                    }
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                openSettingsNow()
+                // This intent created the service (stale notification): do not
+                // park a foreground notification with no overlay behind the
+                // settings screen. A running mode keeps its service.
+                if (!wasForegrounded) stopEverything()
+                return START_NOT_STICKY
+            }
             ACTION_REFRESH -> {
                 if (!goForeground()) {
                     stopSelf()
@@ -314,23 +393,41 @@ class CarModeService : Service(), CarHost {
 
     private fun buildParams(size: CarSize): WindowManager.LayoutParams {
         val ultra = size == CarSize.ULTRA
+        // The window is EXACTLY the painted surface, never a full-width strip:
+        // a transparent band inside the window still receives the touch and
+        // eats the GPS app's taps underneath.
+        val width = if (ultra) {
+            dp(ULTRA_SIZE_DP)
+        } else {
+            (screenWidthPx() - dp(SIDE_DP * 2)).coerceAtLeast(dp(1))
+        }
+        val height = if (ultra) dp(ULTRA_SIZE_DP) else WindowManager.LayoutParams.WRAP_CONTENT
         val params = WindowManager.LayoutParams(
-            if (ultra) WindowManager.LayoutParams.WRAP_CONTENT
-            else WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            width,
+            height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         )
+        // With BOTTOM, y is the distance from the bottom edge (AOSP
+        // Gravity.apply: bottom - height - y); with END, x is the distance
+        // from the right edge. So the prototype's 14 dp right / 104 dp bottom
+        // is x=14, y=104, not a margin inside the content.
         params.gravity =
             if (ultra) Gravity.BOTTOM or Gravity.END else Gravity.BOTTOM or Gravity.START
-        params.x = 0
-        params.y = if (ultra) 0 else dp(BOTTOM_DP)
-        // Android 12's untrusted-touch rule is evaluated on the WINDOW's alpha:
-        // keeping it inside 40–80 % is what lets the map behind stay usable.
-        params.alpha = carPrefs.overlayAlpha.coerceIn(0.40f, 0.80f)
-        if (Build.VERSION.SDK_INT >= 31) {
+        params.x = if (ultra) dp(ULTRA_END_DP) else dp(SIDE_DP)
+        params.y = if (ultra) dp(ULTRA_BOTTOM_DP) else dp(BOTTOM_DP)
+        // The window is fully opaque and its content does the transparency:
+        // the 40–80 % setting only fills the card (CarOverlayRoot), so text
+        // and the lemon play button stay at 100 %. Android 12's untrusted-touch
+        // rule caps passing a touch THROUGH a window at 0.8; this window now
+        // covers exactly the card/button and handles its own touches, so it
+        // passes nothing and alpha 1 does not block the map next to it.
+        params.alpha = 1f
+        // ULTRA is a round button with transparent corners: blurring a 76 dp
+        // square behind it would paint a frosted square around the disc.
+        if (!ultra && Build.VERSION.SDK_INT >= 31) {
             try {
                 if (windowManager.isCrossWindowBlurEnabled) {
                     params.flags = params.flags or
@@ -343,6 +440,21 @@ class CarModeService : Service(), CarHost {
             }
         }
         return params
+    }
+
+    /**
+     * Full display width in pixels. The overlay is laid out against the
+     * display frame, not this service's (empty) window, so the card can use
+     * "screen − 16 dp" even when no activity is alive.
+     */
+    private fun screenWidthPx(): Int {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return windowManager.currentWindowMetrics.bounds.width()
+        }
+        val size = android.graphics.Point()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealSize(size)
+        return size.x
     }
 
     private fun attachOverlay() {
@@ -448,7 +560,13 @@ class CarModeService : Service(), CarHost {
         if (visible) {
             // A new arrival clears a manual close; a repeated "still visible"
             // tick does not reopen what the person deliberately closed.
-            if (!triggerVisible) dismissed = false
+            if (!triggerVisible) {
+                dismissed = false
+                // The settings screen was on top and a navigation app is in
+                // front again: whatever Activity resumed (MainActivity sends
+                // ACTION_REFRESH too), the overlay may come back now.
+                suppressOverlay = false
+            }
             triggerVisible = true
             if (!suppressOverlay && !dismissed && !overlayAttached) attachOverlay()
         } else if (becameHidden) {
@@ -518,9 +636,11 @@ class CarModeService : Service(), CarHost {
      * `specialUse` is what lets the overlay stay up over the navigation app;
      * `location` is what keeps the speed updates coming once Android 10+ sees
      * the activity behind Maps (without it, a location update is refused or
-     * the location indicator disappears). Android 14 needs both permissions
-     * and accepts the union; below 34 only `location` exists, and only when
-     * the runtime grant is actually there.
+     * the location indicator disappears); `microphone` is added only while the
+     * mic grant exists, so the search keyboard's voice input is not cut off by
+     * the overlay's own foreground service. Android 14 needs every permission
+     * and accepts the union; below 34 only `location`/`microphone` exist, and
+     * only when the runtime grant is actually there.
      */
     private fun foregroundTypes(): Int {
         if (Build.VERSION.SDK_INT >= 34) {
@@ -630,8 +750,10 @@ class CarModeService : Service(), CarHost {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             flags
         )
-        val settingsIntent = PendingIntent.getActivity(
-            this, 11, Intent(this, CarSettingsActivity::class.java), flags
+        val settingsIntent = PendingIntent.getService(
+            this, 11,
+            Intent(this, CarModeService::class.java).setAction(ACTION_OPEN_SETTINGS),
+            flags
         )
         val stopIntent = PendingIntent.getService(
             this, 12,
@@ -739,8 +861,15 @@ class CarModeService : Service(), CarHost {
 
     override fun toggleFavorite() {
         runMain {
-            val sent = player?.evalJs("window.__nsCarFav && window.__nsCarFav()") == true
-            if (!sent) toast(R.string.car_favorites_unavailable)
+            val service = player ?: run {
+                toast(R.string.car_favorites_unavailable)
+                return@runMain
+            }
+            // __nsCarFav returns the new state, or is absent: only claim a
+            // favourite changed when the page actually said so.
+            service.evalJs("window.__nsCarFav && window.__nsCarFav()") { ok ->
+                runMain { if (!ok) toast(R.string.car_favorites_unavailable) }
+            }
         }
     }
 
@@ -773,12 +902,16 @@ class CarModeService : Service(), CarHost {
     }
 
     override fun launch(kind: String, id: String, title: String, payload: String?) {
-        runMain {
+        runMain started@{
             if (kind !in LAUNCH_KINDS || id.length > MAX_LAUNCH_ID ||
                 title.length > MAX_LAUNCH_TITLE
             ) {
                 toast(R.string.car_no_player)
-                return@runMain
+                return@started
+            }
+            val service = player ?: run {
+                toast(R.string.car_no_player)
+                return@started
             }
             val payloadJs = payload
                 ?.takeIf { it.isNotBlank() && it.length <= MAX_LAUNCH_PAYLOAD }
@@ -789,35 +922,52 @@ class CarModeService : Service(), CarHost {
             val js = "window.__nsCarPlay && window.__nsCarPlay(" +
                 "${JSONObject.quote(kind)}, ${JSONObject.quote(id)}, " +
                 "${JSONObject.quote(title)}, $payloadJs)"
-            if (player?.evalJs(js) != true) {
-                toast(R.string.car_no_player)
-                return@runMain
+            val label = title.ifBlank { id }.ifBlank { getString(R.string.car_mode) }
+            // __nsCarPlay answers a boolean: the screen changes and the toast
+            // appears only when the page really started something. On false (or
+            // no hook at all) the overlay stays where it is and says why.
+            var answered = false
+            service.evalJs(js) { ok ->
+                runMain answer@{
+                    if (answered) return@answer
+                    answered = true
+                    if (!ok) {
+                        toast(R.string.car_no_player)
+                        return@answer
+                    }
+                    desiredScreen = CarScreen.PLAYER
+                    overlay?.setScreen(CarScreen.PLAYER)
+                    // One toast, worded for what was launched: the playlist
+                    // panel no longer adds its own "Playlist lancée".
+                    toast(
+                        if (kind == "playlist") {
+                            getString(R.string.car_playlist_launched, label)
+                        } else {
+                            getString(R.string.car_launched, label)
+                        }
+                    )
+                }
             }
-            desiredScreen = CarScreen.PLAYER
-            overlay?.setScreen(CarScreen.PLAYER)
-            toast(getString(R.string.car_launched, title.ifBlank { id }.ifBlank {
-                getString(R.string.car_mode)
-            }))
         }
     }
 
     override fun openSettings() {
-        runMain {
-            // A full-screen activity under an overlay would be unusable;
-            // MainActivity's next onResume sends ACTION_REFRESH and reattaches
-            // it if a trigger (or the manual start) still wants it.
-            suppressOverlay = true
-            dismissed = false
-            detachOverlay()
-            try {
-                startActivity(
-                    Intent(this, CarSettingsActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            } catch (_: Exception) {
-                suppressOverlay = false
-                toast(R.string.car_settings_missing)
-            }
+        runMain { openSettingsNow() }
+    }
+
+    /**
+     * One implementation for every entry point (notification, bridge, ghost
+     * tile): hide the card first, then open the full-screen settings. A
+     * failure puts the overlay back under the trigger's control instead of
+     * leaving the person with a blank tap.
+     */
+    private fun openSettingsNow() {
+        suppressOverlay = true
+        dismissed = false
+        detachOverlay()
+        if (!launchSettingsActivity(this)) {
+            suppressOverlay = false
+            toast(R.string.car_settings_missing)
         }
     }
 
