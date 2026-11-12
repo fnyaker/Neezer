@@ -282,6 +282,11 @@ overlay is destroyed and recreated on every drop/reattach, and a fresh cache mea
 the settings does not cost a second request; only a 401 forgets it. Tapping a tile calls
 `CarHost.launch` only — the service changes to the player and shows the single "Lecture : X" / "Playlist lancée : X" toast
 when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée".
+The native search (`CarSearchView`) waits **700 ms** after the last key and needs **2 characters**
+before calling `/api/search` (one call fans out to five provider searches), cancels the previous
+`HttpURLConnection` on a new keypress or detach, and lets a late answer from an older generation be
+dropped. Its suggestion strip is `WRAP_CONTENT` (GONE when empty), so a 640 dp screen fits the ABC +
+passenger keyboard: 532 dp panel + 92 dp bottom margin with three results, 16 dp of headroom.
 `CarSettingsActivity` is the full-screen Réglages → Mode voiture (manifest
 `android:exported="false"`; reached only through `CarModeService.openSettings`, which hides the
 overlay first), asks overlay, usage-access, location, Bluetooth and microphone through
