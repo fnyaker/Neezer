@@ -2,6 +2,46 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
+**Sillon is the design system; Neezer is the product.** Its foundation is the tokens in
+`src/app.css`, `lib/theme.js`, the pure rules in `lib/sillon.js` and the fonts in `src/assets/fonts/` —
+build a screen from those, never from a literal colour. Rules that cost something to learn:
+
+- **A theme is an attribute on `<html>`** (`encre` the default, `papier`, `pochette`), never a class
+  or a component prop: `--bg --s1 --s2 --ln --tx --dim --ac --onac --btn --onbtn --hrt`. The old
+  names (`--text`, `--text-dim`, `--accent`, `--accent-2`, `--bg-elev`, `--bg-card`, `--bg-hover`)
+  are aliases of them, so the screens not yet through the rebrand follow the theme for free.
+- **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. `#fff` on
+  `var(--accent)` was right when the accent was purple and is 1.4:1 now that it is lemon (Home's
+  count badge, Library's still do it) — every such pair is a bug the rebrand exposes, not a taste.
+- **The theme is applied BEFORE the first frame** by `public/theme-boot.js`, a classic script
+  (blocking) loaded from `index.html`, because the CSP is `script-src 'self'`: an inline `<script>`
+  there is REFUSED by the browser (it said so in the console on every load). It sets `data-theme`,
+  the html background and `<meta name="theme-color">` from `ui.theme` / `ui.coverAc`;
+  `initTheme()` in `main.js` then owns the session. Change one, change the other.
+- **Typography is self-hosted** (OFL texts beside the files): Bricolage Grotesque 600–800 for titles
+  (`-0.03em` on big ones), Instrument Sans 400–700 for the interface, JetBrains Mono 400–500 for
+  metadata and the small capitals (`.label-mono`, `letter-spacing:.08em`). latin + latin-ext (French
+  `œ` lives in ext), `font-display: swap`, and the service worker stages all six with the shell.
+  Measured first screen at 1440, Encre: **51 requests / 279 kB → 57 / 369 kB**, 84 kB of it type.
+  Bricolage ships WITHOUT its optical-size axis: identical text width at 14–44 px, 47 kB cheaper.
+- **Pochette takes the sleeve's colour**: `dominantColor()` (the canvas that already fed the gradient
+  headers), lifted by `readableAccent()` until it carries 4.5:1 on `--onac` (232 colours tested,
+  worst 4.50:1; the lift SCALES, it does not blend white in, or a deep blue comes out grey-lilac).
+  The watcher is keyed on `currentId` — a STRING, because `current` re-emits its object on every
+  progress tick — and guarded on the sleeve URL it asked for, NOT a counter: replacing a queue emits
+  A, null, A, and a counter loses A's answer and leaves the fallback up forever (seen in the browser).
+- **Missing art is a record groove, never an empty square** (`lib/sillon.js`): DESIGN §4's repeating
+  radial grain, from eight dark pairs chosen by FNV-1a over `src|alt|fallbackId|kind` (Cover) or the
+  name (Avatar's initials). Deterministic: a placeholder that changes colour on reload reads as a
+  loading state.
+- **The page margin is a pair of tokens**, `--page-y` / `--page-x` (32/32, 20/20 ≤ 640 px). Anything
+  that bleeds to the screen's edge reads THEM (`components/GradientHeader.svelte` did not, and the
+  day the top padding moved it left a 4 px band of background above itself).
+- **Controls and surfaces**: `.btn` (+ `-primary`, `-ghost`, `-sm`, `-icon`), `.chip` (+ `-active`),
+  `.card`, `.field`, `.section-title`, `.page-title`, `.mono`, `.label-mono`, `.kbd`; `.pill` is now
+  a solid `--btn` pill (the purple gradient and its glow are gone). 40 px high on a mouse, 44 under a
+  finger (`@media (pointer: coarse)`) — §10's touch rule without changing the desktop rhythm.
+
 **Web app** (`webapp/`): Svelte 5 + Vite 7 SPA, hash routing (svelte-spa-router), consuming `/api`.
 Existing components still use the legacy `$:` / `export let` syntax; follow the file you edit.
 Builds into `neezer/webui/dist`. No emoji in the UI — all glyphs go through

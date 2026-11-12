@@ -54,18 +54,25 @@
   </div>
   <div class="meta">
     <div class="title">{title}</div>
-    {#if subtitle}<div class="sub muted">{subtitle}</div>{/if}
+    {#if subtitle}<div class="sub">{subtitle}</div>{/if}
   </div>
 </div>
 
 <style>
+  /* Sillon's card: a raised surface with a hairline, a 20 px corner, and the
+     title set in the display face. `content-visibility` stays — it is what
+     keeps a 300-card grid cheap (webapp.md, test/clicks/run.mjs). */
   .card {
     display: block;
     text-align: left;
     padding: 12px;
-    border-radius: var(--radius);
-    background: var(--bg-card);
-    transition: background 0.12s ease;
+    border-radius: var(--r-card);
+    border: 1px solid var(--ln);
+    background: var(--s1);
+    color: var(--tx);
+    transition:
+      background-color 0.14s ease,
+      border-color 0.14s ease;
     width: 100%;
     cursor: pointer;
     /* Skip rendering off-screen cards, but with `auto` on the placeholder size:
@@ -77,8 +84,10 @@
     contain-intrinsic-size: 232px; /* fallback: engines without the `auto` keyword */
     contain-intrinsic-size: auto 232px;
   }
-  .card:hover {
-    background: var(--bg-hover);
+  .card:hover,
+  .card:focus-visible {
+    background: var(--s2);
+    border-color: var(--s2);
   }
   .cv {
     position: relative;
@@ -87,39 +96,56 @@
     position: absolute;
     right: 8px;
     bottom: 8px;
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    color: #fff;
+    background: var(--btn);
+    color: var(--onbtn);
     display: grid;
     place-items: center;
-    font-size: 1.1rem;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
     opacity: 0;
     transform: translateY(8px);
+    transition:
+      opacity 0.14s ease,
+      transform 0.14s ease;
   }
-  .card:hover .play {
+  .card:hover .play,
+  .card:focus-within .play {
     opacity: 1;
     transform: none;
   }
   .play:hover {
-    transform: scale(1.07);
+    transform: scale(1.06);
+  }
+  /* A finger has no hover: the only way to discover the play button is to see
+     it, so on a touch screen it is simply there. */
+  @media (hover: none) {
+    .play {
+      opacity: 1;
+      transform: none;
+    }
   }
   .meta {
     margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
   .title {
-    font-weight: 700;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 14.5px;
+    letter-spacing: -0.01em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .sub {
-    font-size: 0.85rem;
+    font-size: 13px;
+    color: var(--dim);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: 2px;
   }
 </style>

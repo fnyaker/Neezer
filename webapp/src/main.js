@@ -6,8 +6,14 @@ import "./lib/studio.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
 import { dropFreshMarker } from "./lib/hardreload.js";
+import { initTheme } from "./lib/theme.js";
 
 dropFreshMarker();
+// The theme (Encre / Papier / Pochette) before the first screen is built:
+// index.html has already put the attribute on <html> to avoid a flash, this
+// re-reads it, keeps <meta name="theme-color"> honest and starts the sleeve
+// colour watch Pochette needs.
+initTheme();
 
 // Note: the Android app (android/) needs no webapp-side bridge — it injects a
 // navigator.mediaSession shim into its WebView and feeds off the mediaSession
