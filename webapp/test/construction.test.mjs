@@ -2,7 +2,7 @@
 // the meter the player and the studio's measurer share, run over arranged
 // records through the SHIPPED analyser exactly as measure.worker.js runs it,
 // and the extras block the server has to rebuild number for number
-// (supysonic/deezer/genre.py#assemble — tests/test_webui.py holds it to the
+// (neezer/deezer/genre.py#assemble — tests/test_webui.py holds it to the
 // same literals).
 
 import test from "node:test";

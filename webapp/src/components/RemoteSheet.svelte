@@ -4,7 +4,7 @@
   // sheet for everyone else), see who is on which link, and cut any of them.
   //
   // A link drives the device it was made on. Four levels, each a superset of
-  // the one before — the server holds the line (supysonic/webui/remote.py);
+  // the one before — the server holds the line (neezer/webui/remote.py);
   // this sheet only says plainly what each one lends.
   import { onDestroy } from "svelte";
   import { remoteSheet, closeRemoteSheet, isAdmin, toasts } from "../lib/stores.js";

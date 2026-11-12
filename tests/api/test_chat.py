@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017 Alban 'spl0k' Féron
 #
@@ -7,8 +7,8 @@
 
 import unittest
 
-from supysonic.api import chat
-from supysonic.db import ChatMessage
+from neezer.api import chat
+from neezer.db import ChatMessage
 
 from .apitestbase import ApiTestBase
 
@@ -55,7 +55,7 @@ class ChatTestCase(ApiTestBase):
 
         self._make_request("getChatMessages", {"since": "invalid timestamp"}, error=0)
 
-    # -- the abuse limits (supysonic/api/chat.py) ---------------------------
+    # -- the abuse limits (neezer/api/chat.py) ---------------------------
 
     def _post(self, message, user=("alice", "Alic3"), error=None):
         args = {"message": message, "u": user[0], "p": user[1]}

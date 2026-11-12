@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -13,11 +13,11 @@ import time
 import unittest
 from unittest import mock
 
-from supysonic import webui as _webui
-from supysonic.config import DefaultConfig
-from supysonic.db import Meta, Playlist, StarredTrack, Track, User, now, release_database
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer import webui as _webui
+from neezer.config import DefaultConfig
+from neezer.db import Meta, Playlist, StarredTrack, Track, User, now, release_database
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 
 def _numpy():
@@ -293,7 +293,7 @@ class MockDz:
 class WebUITestCase(unittest.TestCase):
     def setUp(self):
         # Process memory a previous test's first-play lyrics may have left.
-        from supysonic.deezer import lyrics as _lyrics
+        from neezer.deezer import lyrics as _lyrics
 
         _lyrics._cold.clear()
         self.__db = tempfile.mkstemp()
@@ -314,7 +314,7 @@ class WebUITestCase(unittest.TestCase):
         self.app = create_application(Config())
         UserManager.add("alice", "Alic3", admin=True)
 
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         provider = DeezerProvider("arl", self.archive, "FLAC")
         provider._dz = MockDz()
@@ -445,7 +445,7 @@ class WebUITestCase(unittest.TestCase):
     # -- credits ---------------------------------------------------------
 
     def _credits_setup(self, payload=None, fail=False):
-        from supysonic.webui import credits
+        from neezer.webui import credits
 
         with credits._lock:
             credits._cache.clear()
@@ -500,8 +500,8 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(gw.credit_calls, ["3135556"], "the second visit costs Deezer nothing")
 
     def test_an_archived_track_keeps_its_credits_on_disk(self):
-        from supysonic.deezer import library
-        from supysonic.webui import credits
+        from neezer.deezer import library
+        from neezer.webui import credits
 
         gw = self._credits_setup()
         self._login()
@@ -542,7 +542,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(gw.credit_calls, ["3135556"])
 
     def test_credits_of_an_import_without_them_still_name_the_performers(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         self._credits_setup(fail=True)
         self._login()
@@ -595,7 +595,7 @@ class WebUITestCase(unittest.TestCase):
     def test_lyrics_archived_sidecar(self):
         # An archived track with a .lrc sidecar is served from disk (source
         # "archive"), not re-fetched live from Deezer.
-        from supysonic.deezer import library, lyrics as dz_lyrics
+        from neezer.deezer import library, lyrics as dz_lyrics
 
         self._login()
         with self.app.app_context():
@@ -615,7 +615,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(data["lyrics"]["synced"][0]["text"], "archived line")
 
     def _row_with_gain(self, sid, gain):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         with self.app.app_context():
             root = library.get_root_folder(self.archive)
@@ -657,7 +657,7 @@ class WebUITestCase(unittest.TestCase):
     def test_track_gains_batch_prefers_the_db_row(self):
         # A known gain is answered from the database — no Deezer call at all, so
         # an outage costs nothing and a primed window is free.
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         self._login()
         gw = self.app.deezer.dz.gw
@@ -775,7 +775,7 @@ class WebUITestCase(unittest.TestCase):
     # -- local (non-Deezer) tracks --------------------------------------------
 
     def _make_local_track(self, title="My Local Song"):
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(self.archive)
         d = os.path.join(self.archive, "Local Band", "Demo")
@@ -820,7 +820,7 @@ class WebUITestCase(unittest.TestCase):
     def test_backfill_archives_what_playback_never_touched(self):
         """Favorites and playlist tracks must not stay hostage to Deezer until
         someone happens to press play on them."""
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         fav = self._make_deezer_track(sng_id="70", title="Fav", archived=False)
         inpl = self._make_deezer_track(sng_id="71", title="In playlist", archived=False)
@@ -829,7 +829,7 @@ class WebUITestCase(unittest.TestCase):
         StarredTrack.create(user=user, starred=fav)
         StarredTrack.create(user=user, starred=already)
         pl = Playlist.create(user=user, name="Mix")
-        from supysonic.db import PlaylistTrack
+        from neezer.db import PlaylistTrack
 
         PlaylistTrack.create(playlist=pl, track=inpl, index=0)
 
@@ -841,7 +841,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertNotIn("72", ids)
 
         archived = []
-        from supysonic.deezer import archive as archive_mod
+        from neezer.deezer import archive as archive_mod
 
         orig = archive_mod.ensure_archived
         archive_mod.ensure_archived = lambda prov, t: archived.append(t.deezer_id)
@@ -853,9 +853,9 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(stats["archived"], len(tracks))
 
     def test_backfill_counts_dead_tracks_apart_from_failures(self):
-        from supysonic.deezer import archive as archive_mod
-        from supysonic.deezer import backfill
-        from supysonic.deezer.provider import TrackUnavailable
+        from neezer.deezer import archive as archive_mod
+        from neezer.deezer import backfill
+        from neezer.deezer.provider import TrackUnavailable
 
         gone = self._make_deezer_track(sng_id="73", title="Gone", archived=False)
         orig = archive_mod.ensure_archived
@@ -874,7 +874,7 @@ class WebUITestCase(unittest.TestCase):
     def test_only_one_sweep_runs_at_a_time(self):
         """The nightly sync and the button share one lock. Two sweeps would
         fetch the same missing tracks twice and fight over one Deezer session."""
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         user = User.get(User.name == "alice")
         self.assertFalse(backfill.is_sweeping())
@@ -928,7 +928,7 @@ class WebUITestCase(unittest.TestCase):
         """The whole point of archiving: once the audio is on disk, the track is
         ours. Deezer can delist it and it still plays — so the probe must never
         even ask, and must clear any earlier verdict."""
-        from supysonic.db import Track
+        from neezer.db import Track
 
         t = self._make_deezer_track(sng_id="42", title="Kept", archived=True)
         Track.update(unavailable=now()).where(Track.id == t.id).execute()
@@ -939,8 +939,8 @@ class WebUITestCase(unittest.TestCase):
         self.assertIsNone(Track.get(Track.id == t.id).unavailable)
 
     def test_probe_marks_a_dead_track_and_lists_it(self):
-        from supysonic.db import Track
-        from supysonic.deezer.provider import TrackUnavailable
+        from neezer.db import Track
+        from neezer.deezer.provider import TrackUnavailable
 
         t = self._make_deezer_track(sng_id="43", title="Gone", archived=False)
         provider = self.app.deezer
@@ -965,8 +965,8 @@ class WebUITestCase(unittest.TestCase):
     def test_probe_stays_neutral_when_deezer_is_merely_unreachable(self):
         """A network failure says nothing about the track. Reporting it as dead
         would condemn a whole library during one bad minute."""
-        from supysonic.db import Track
-        from supysonic.deezer.provider import DeezerError
+        from neezer.db import Track
+        from neezer.deezer.provider import DeezerError
 
         t = self._make_deezer_track(sng_id="44", title="Fine", archived=False)
         provider = self.app.deezer
@@ -983,7 +983,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertIsNone(Track.get(Track.id == t.id).unavailable)
 
     def test_track_lists_carry_the_unavailable_flag(self):
-        from supysonic.db import Track
+        from neezer.db import Track
 
         t = self._make_deezer_track(sng_id="45", title="Dead", archived=False)
         Track.update(unavailable=now()).where(Track.id == t.id).execute()
@@ -997,7 +997,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertIsNone(flagged[1].get("unavailable"))
 
     def test_replace_rewrites_playlists_and_favorites(self):
-        from supysonic.db import Playlist, PlaylistTrack, StarredTrack, Track
+        from neezer.db import Playlist, PlaylistTrack, StarredTrack, Track
 
         dead = self._make_deezer_track(sng_id="50", title="Dead One", archived=False)
         alive = self._make_deezer_track(sng_id="51", title="Live One", archived=True)
@@ -1035,7 +1035,7 @@ class WebUITestCase(unittest.TestCase):
         database, still flagged — so it sat in "Titres indisponibles" for ever,
         with nothing left to replace. The user did the work and the app kept
         asking."""
-        from supysonic.db import Playlist, PlaylistTrack, Track
+        from neezer.db import Playlist, PlaylistTrack, Track
 
         dead = self._make_deezer_track(sng_id="52", title="Dead Two", archived=False)
         alive = self._make_deezer_track(sng_id="53", title="Live Two", archived=True)
@@ -1063,7 +1063,7 @@ class WebUITestCase(unittest.TestCase):
     def test_replacing_a_live_track_keeps_it(self):
         """/api/replace takes ANY source, not only dead ones. Swapping a track
         you simply prefer differently must not delete the original."""
-        from supysonic.db import Playlist, PlaylistTrack, Track
+        from neezer.db import Playlist, PlaylistTrack, Track
 
         old = self._make_deezer_track(sng_id="54", title="Fine One", archived=True)
         new = self._make_deezer_track(sng_id="55", title="Other One", archived=True)
@@ -1081,7 +1081,7 @@ class WebUITestCase(unittest.TestCase):
     def test_a_dead_track_someone_else_still_uses_is_kept(self):
         """A guest's replacement only rewrites their own lists. Dropping the row
         would empty a playlist belonging to somebody who never asked."""
-        from supysonic.db import Playlist, PlaylistTrack, Track
+        from neezer.db import Playlist, PlaylistTrack, Track
 
         dead = self._make_deezer_track(sng_id="56", title="Shared Dead", archived=False)
         alive = self._make_deezer_track(sng_id="57", title="Stand In", archived=True)
@@ -1127,12 +1127,12 @@ class WebUITestCase(unittest.TestCase):
         return status
 
     def _dead(self, provider):
-        from supysonic.deezer.provider import TrackUnavailable
+        from neezer.deezer.provider import TrackUnavailable
 
         return lambda *a, **k: (_ for _ in ()).throw(TrackUnavailable("no source"))
 
     def test_deleting_a_truly_gone_track_removes_it_everywhere(self):
-        from supysonic.db import Playlist, PlaylistTrack, StarredTrack, Track
+        from neezer.db import Playlist, PlaylistTrack, StarredTrack, Track
 
         dead = self._make_deezer_track(sng_id="60", title="Gone", archived=False)
         keep = self._make_deezer_track(sng_id="61", title="Kept", archived=True)
@@ -1163,7 +1163,7 @@ class WebUITestCase(unittest.TestCase):
     def test_an_archived_track_is_never_deletable(self):
         """The whole promise of archiving: it plays forever, whatever Deezer
         does. Deezer saying "gone" must not be enough to erase it."""
-        from supysonic.db import Track
+        from neezer.db import Track
 
         track = self._make_deezer_track(sng_id="62", title="Safe", archived=True)
         Track.update(unavailable=now()).where(Track.id == track.id).execute()
@@ -1184,7 +1184,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertIsNone(Track.get(Track.id == track.id).unavailable)
 
     def test_a_playable_track_is_never_deletable(self):
-        from supysonic.db import Track
+        from neezer.db import Track
 
         track = self._make_deezer_track(sng_id="63", title="Alive", archived=False)
         Track.update(unavailable=now()).where(Track.id == track.id).execute()
@@ -1207,8 +1207,8 @@ class WebUITestCase(unittest.TestCase):
     def test_an_inconclusive_answer_never_authorises_a_deletion(self):
         """A network blip is not a verdict. Deleting on one would turn a bad
         minute into permanent data loss."""
-        from supysonic.db import Track
-        from supysonic.deezer.provider import DeezerError
+        from neezer.db import Track
+        from neezer.deezer.provider import DeezerError
 
         track = self._make_deezer_track(sng_id="64", title="Maybe", archived=False)
         provider = self.app.deezer
@@ -1226,7 +1226,7 @@ class WebUITestCase(unittest.TestCase):
     def test_a_local_upload_with_no_file_left_is_deletable(self):
         """Nothing else in the world has a copy, and there is no file: it is
         genuinely gone, and no Deezer call can say otherwise."""
-        from supysonic.db import Track
+        from neezer.db import Track
 
         track = self._make_deezer_track(sng_id="65", title="Lost", archived=False)
         Track.update(deezer_id=None).where(Track.id == track.id).execute()
@@ -1245,8 +1245,8 @@ class WebUITestCase(unittest.TestCase):
         """Ticking several tracks is not a way round the re-check: the one that
         is gone goes, the archived one and the playable one stay — each with
         its reason — in one job."""
-        from supysonic.db import Track
-        from supysonic.deezer.provider import TrackUnavailable
+        from neezer.db import Track
+        from neezer.deezer.provider import TrackUnavailable
 
         gone = self._make_deezer_track(sng_id="80", title="Gone", archived=False)
         safe = self._make_deezer_track(sng_id="81", title="Safe", archived=True)
@@ -1289,7 +1289,7 @@ class WebUITestCase(unittest.TestCase):
         route is hundreds of threads hammering Deezer."""
         import threading as th
 
-        from supysonic.db import Track
+        from neezer.db import Track
 
         self._make_deezer_track(sng_id="90", title="Gone", archived=False)
         Track.update(unavailable=now()).execute()
@@ -1336,7 +1336,7 @@ class WebUITestCase(unittest.TestCase):
 
     def _automatch(self, verdict_for):
         """Patch the listening; returns the module and the tracks it was asked about."""
-        from supysonic.webui import automatch as wam
+        from neezer.webui import automatch as wam
 
         asked = []
         orig_decide, orig_avail = wam.am.decide, wam.audiomatch.available
@@ -1353,14 +1353,14 @@ class WebUITestCase(unittest.TestCase):
         return wam, asked
 
     def _match(self, target):
-        from supysonic.deezer.automatch import Candidate, Verdict
+        from neezer.deezer.automatch import Candidate, Verdict
 
         c = Candidate("local", str(target.id), target.title, "Archived Artist", 200, "Best of")
         return Verdict("match", best=c, score=0.9993)
 
     def test_a_track_found_dead_is_matched_once_and_replaced_everywhere(self):
-        from supysonic.db import Playlist, PlaylistTrack, StarredTrack, Track
-        from supysonic.deezer import library
+        from neezer.db import Playlist, PlaylistTrack, StarredTrack, Track
+        from neezer.deezer import library
 
         dead = self._make_deezer_track(sng_id="95", title="Song", archived=False)
         alive = self._make_deezer_track(sng_id="96", title="Song", archived=True)
@@ -1392,9 +1392,9 @@ class WebUITestCase(unittest.TestCase):
     def test_a_renewed_verdict_is_not_listened_to_again(self):
         """The probe re-confirms a dead track every week; each one is not a
         fresh reason to download candidates (the admin's run is the retry)."""
-        from supysonic.db import Track
-        from supysonic.deezer import library
-        from supysonic.deezer.automatch import Verdict
+        from neezer.db import Track
+        from neezer.deezer import library
+        from neezer.deezer.automatch import Verdict
 
         dead = self._make_deezer_track(sng_id="104", title="Song", archived=False)
         wam, asked = self._automatch(lambda t: Verdict("no_match", "closest 90.0 %"))
@@ -1406,8 +1406,8 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(asked, ["104"])
 
     def test_switched_off_the_auto_match_listens_to_nothing(self):
-        from supysonic.db import Track
-        from supysonic.deezer import library
+        from neezer.db import Track
+        from neezer.deezer import library
 
         dead = self._make_deezer_track(sng_id="97", title="Song", archived=False)
         wam, asked = self._automatch(lambda t: self.fail("must not be asked"))
@@ -1428,8 +1428,8 @@ class WebUITestCase(unittest.TestCase):
             self.assertEqual(rv.status_code, 403, url)
 
     def test_the_admins_run_reports_every_track_by_cause(self):
-        from supysonic.db import Track
-        from supysonic.deezer.automatch import Verdict
+        from neezer.db import Track
+        from neezer.deezer.automatch import Verdict
 
         alive = self._make_deezer_track(sng_id="98", title="Song", archived=True)
         self._make_deezer_track(sng_id="99", title="Song", archived=False)
@@ -1455,7 +1455,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(sorted(f["track"]["id"] for f in last["failures"]), ["100", "101"])
 
     def test_deezer_unreachable_stops_the_run_without_deciding(self):
-        from supysonic.db import Track
+        from neezer.db import Track
         from deezerpy.errors import DeezerUnavailable
 
         for sid in ("102", "103"):
@@ -1486,7 +1486,7 @@ class WebUITestCase(unittest.TestCase):
         click without listening: same song, same artist, same version, same
         length. A remix, a cover or a live take is left to the sheet."""
         from types import SimpleNamespace as NS
-        from supysonic.webui.availability import match_score
+        from neezer.webui.availability import match_score
 
         dead = NS(title="Halo (Remastered)", duration=261, artist=NS(name="Beyoncé"))
 
@@ -1516,7 +1516,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertGreater(match_score(dead, cand("Halo", local=True)), same)
 
     def test_best_candidates_keep_only_safe_matches(self):
-        from supysonic.db import Track
+        from neezer.db import Track
 
         dead = self._make_deezer_track(sng_id="60", title="Song", archived=False)
         Track.update(unavailable=now()).where(Track.id == dead.id).execute()
@@ -1550,7 +1550,7 @@ class WebUITestCase(unittest.TestCase):
     # these calls ran in no test: a wrong id here edits somebody's playlists.
 
     def _dead_everywhere(self, sng_id, deezer_playlist="777"):
-        from supysonic.db import Playlist, PlaylistTrack, StarredTrack
+        from neezer.db import Playlist, PlaylistTrack, StarredTrack
 
         dead = self._make_deezer_track(sng_id=sng_id, title="Gone", archived=False)
         alice = User.get(User.name == "alice")
@@ -1573,7 +1573,7 @@ class WebUITestCase(unittest.TestCase):
             provider.resolve = orig
 
     def test_an_admins_deletion_stays_on_the_server(self):
-        from supysonic.db import Track
+        from neezer.db import Track
 
         gw = self.app.deezer._dz.gw
         dead = self._dead_everywhere("70")
@@ -1585,7 +1585,7 @@ class WebUITestCase(unittest.TestCase):
         """Anyone may clear a dead track out of their own lists; the shared
         library row, other people's lists and the admin's Deezer account are
         not theirs."""
-        from supysonic.db import Playlist, PlaylistTrack, StarredTrack, Track
+        from neezer.db import Playlist, PlaylistTrack, StarredTrack, Track
 
         gw = self.app.deezer._dz.gw
         dead = self._dead_everywhere("73")
@@ -1635,7 +1635,7 @@ class WebUITestCase(unittest.TestCase):
         )
 
     def test_replacement_candidates_exclude_the_dead_ones(self):
-        from supysonic.db import Track
+        from neezer.db import Track
 
         dead = self._make_deezer_track(sng_id="60", title="Song", archived=False)
         other = self._make_deezer_track(sng_id="61", title="Song", archived=True)
@@ -1650,7 +1650,7 @@ class WebUITestCase(unittest.TestCase):
     def _make_deezer_track(self, sng_id="1", title="Archived Song", archived=True):
         """Create a DB row for a Deezer track (deezer_id set). When `archived`,
         also drop a file at its archive path so it's playable without Deezer."""
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         t = library.upsert_track(
@@ -1732,7 +1732,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertIn("1", [t["deezer_id"] for t in data["tracks"]])
 
     def test_a_dead_track_is_flagged_in_the_search_results(self):
-        from supysonic.deezer import ids
+        from neezer.deezer import ids
 
         self._login()
         t = self._make_deezer_track(sng_id="1", title="Gone Song", archived=False)
@@ -1743,7 +1743,7 @@ class WebUITestCase(unittest.TestCase):
 
     def _make_feat_track(self, sng_id="7", title="Feat Song"):
         """An archived DB track credited to a main artist plus a guest."""
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         t = library.upsert_track(
@@ -1799,7 +1799,7 @@ class WebUITestCase(unittest.TestCase):
         # Serializing a LIST must resolve every credit in one batched query.
         # A per-row lookup is what turns a 4000-track favourites page into a
         # multi-second wait, so guard it with a test rather than a comment.
-        from supysonic import webui
+        from neezer import webui
 
         self._login()
         for i in range(6):
@@ -2071,7 +2071,7 @@ class WebUITestCase(unittest.TestCase):
     def test_upload_imports_audio(self):
         from io import BytesIO
 
-        from supysonic.deezer import local
+        from neezer.deezer import local
 
         self._login()
 
@@ -2088,7 +2088,7 @@ class WebUITestCase(unittest.TestCase):
             bitrate = 256000
             images = []
 
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         queued = []
         orig = local._load_tag
@@ -2123,7 +2123,7 @@ class WebUITestCase(unittest.TestCase):
         import os
         from io import BytesIO
 
-        from supysonic.deezer import local
+        from neezer.deezer import local
 
         self._login()
 
@@ -2190,7 +2190,7 @@ class WebUITestCase(unittest.TestCase):
         """POST N files whose import always succeeds (patched tag reader)."""
         from io import BytesIO
 
-        from supysonic.deezer import local
+        from neezer.deezer import local
 
         class FakeTag:
             artist = "Up"
@@ -2259,7 +2259,7 @@ class WebUITestCase(unittest.TestCase):
                          .replace("arl_source", ""))
 
     def test_set_arl_rejects_malformed(self):
-        from supysonic.db import Meta
+        from neezer.db import Meta
 
         self._login()
         for bad in ["short", "x" * 40 + "\nCookie: evil", "with space " * 5]:
@@ -2269,8 +2269,8 @@ class WebUITestCase(unittest.TestCase):
 
     def test_set_arl_rejects_one_deezer_refuses(self):
         """A dead credential must never be stored: it would take the proxy out."""
-        import supysonic.deezer as dzmod
-        from supysonic.db import Meta
+        import neezer.deezer as dzmod
+        from neezer.db import Meta
 
         class Refusing(dzmod.DeezerProvider):
             def check_login(self, force=False):
@@ -2288,8 +2288,8 @@ class WebUITestCase(unittest.TestCase):
         self.assertIsNone(Meta.get_or_none(Meta.key == "deezer_arl"))
 
     def test_set_arl_stores_and_overrides_the_config(self):
-        import supysonic.deezer as dzmod
-        from supysonic.db import Meta
+        import neezer.deezer as dzmod
+        from neezer.db import Meta
 
         class Accepting(dzmod.DeezerProvider):
             def check_login(self, force=False):
@@ -2365,7 +2365,7 @@ class WebUITestCase(unittest.TestCase):
         import zipfile
         from unittest import mock
 
-        from supysonic.webui import androidapk
+        from neezer.webui import androidapk
 
         cfg = self.app.config["WEBAPP"]
         self.assertEqual(self.client.get("/api/android/apk").status_code, 401)
@@ -2410,7 +2410,7 @@ class WebUITestCase(unittest.TestCase):
                 self.assertEqual(self.client.get("/api/android/apk").status_code, 502)
             self.assertEqual(
                 get.call_args[0][0],
-                "https://github.com/fnyaker/NSupySonic/releases/download/v1.4.0/nsupysonic.apk",
+                "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/neezer.apk",
             )
             # A redirect off GitHub is refused too.
             with mock.patch.object(androidapk.requests, "get",
@@ -2449,6 +2449,44 @@ class WebUITestCase(unittest.TestCase):
             cfg["android_url"] = None
             cfg["android_apk"] = None
             os.remove(apk)
+
+    def test_android_apk_falls_back_to_the_pre_rebrand_asset(self):
+        """A release published before the rename only has nsupysonic.apk; a 404
+        on the new name must offer that one instead of a dead update link."""
+        from neezer.webui import androidapk
+
+        cache = tempfile.mkdtemp()
+        cfg = {
+            "cache_dir": cache,
+            "android_version": "v1.4.0",
+            "android_url": None,
+            "android_apk": None,
+        }
+        calls = []
+
+        def fake(url, dest):
+            calls.append(url)
+            if url.endswith("/neezer.apk"):
+                response = androidapk.requests.Response()
+                response.status_code = 404
+                raise androidapk.requests.HTTPError("404", response=response)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as fh:
+                fh.write(b"PK\x03\x04")
+
+        try:
+            with mock.patch.object(androidapk, "_download", side_effect=fake):
+                path = androidapk.ensure_apk(cfg)
+            self.assertTrue(os.path.isfile(path))
+            self.assertEqual(
+                calls,
+                [
+                    "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/neezer.apk",
+                    "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/nsupysonic.apk",
+                ],
+            )
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
 
     def test_upload_quota_blocks_guest(self):
         # ~250 byte budget for non-admins.
@@ -2491,7 +2529,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertTrue(usage["unlimited"])
 
     def test_favorite_local_track_stars_locally(self):
-        from supysonic.db import StarredTrack
+        from neezer.db import StarredTrack
 
         self._login()
         t = self._make_local_track()
@@ -2635,7 +2673,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(self.app.deezer_prefetch.ids, [])
 
     def test_favoriting_an_album_archives_the_whole_album(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         thread = backfill.archive_entity(self.app, self.app.deezer, "album", "10")
         thread.join(timeout=5)
@@ -2645,7 +2683,7 @@ class WebUITestCase(unittest.TestCase):
         )
 
     def test_favoriting_a_playlist_archives_the_whole_playlist(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         thread = backfill.archive_entity(self.app, self.app.deezer, "playlist", "77")
         thread.join(timeout=5)
@@ -2654,7 +2692,7 @@ class WebUITestCase(unittest.TestCase):
     def test_favoriting_an_artist_archives_nothing_by_default(self):
         """A whole discography per heart is the person's choice (an imported
         account follows dozens of artists at once), not a default."""
-        from supysonic.deezer import backfill, rules
+        from neezer.deezer import backfill, rules
 
         rules.invalidate()
         self.assertFalse(rules.load(self.app)["on_fav_artist"])
@@ -2665,7 +2703,7 @@ class WebUITestCase(unittest.TestCase):
         """Every track of every official release — and each one only once, even
         though gw lists the same record under several tabs/editions. (Off by
         default since starring an artist means following it: switched on.)"""
-        from supysonic.deezer import backfill, rules
+        from neezer.deezer import backfill, rules
 
         rules.save({"on_fav_artist": True})
         thread = backfill.archive_entity(self.app, self.app.deezer, "artist", "9")
@@ -2674,7 +2712,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(self.app.deezer_prefetch.ids, ["1", "2", "3", "4", "5"])
 
     def test_an_unreadable_release_does_not_abort_the_discography(self):
-        from supysonic.deezer import backfill, rules
+        from neezer.deezer import backfill, rules
 
         rules.save({"on_fav_artist": True})
         real = self.app.deezer.get_album_tracks
@@ -2685,7 +2723,7 @@ class WebUITestCase(unittest.TestCase):
             return real(alb_id)
 
         self.app.deezer.get_album_tracks = flaky
-        from supysonic.deezer import rules
+        from neezer.deezer import rules
 
         rules.save({"on_fav_artist": True})
         thread = backfill.archive_entity(self.app, self.app.deezer, "artist", "9")
@@ -2696,7 +2734,7 @@ class WebUITestCase(unittest.TestCase):
     def test_a_full_queue_is_waited_out_not_dropped(self):
         """The queue holds a few thousand entries and a discography can be
         larger. The overflow must wait for room, never vanish."""
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         accepted = []
         room = [2]  # the queue takes 2 ids, then 2 more, …
@@ -2719,7 +2757,7 @@ class WebUITestCase(unittest.TestCase):
     def test_a_full_queue_stops_waiting_when_archiving_is_turned_off(self):
         """Otherwise the feeder thread would spin forever on a switch its owner
         has already flipped."""
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         self.app.deezer_prefetch.download_ids = lambda ids, priority=None: 0
         self.app.config["DEEZER"]["archive_library"] = False
@@ -2729,7 +2767,7 @@ class WebUITestCase(unittest.TestCase):
             self.app.config["DEEZER"]["archive_library"] = True
 
     def test_the_favorite_endpoint_triggers_the_entity_archive(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         calls = []
         original = backfill.archive_entity
@@ -2853,7 +2891,7 @@ class WebUITestCase(unittest.TestCase):
         body = self._create_playlist("PL", ["1"])
         rv = self.client.delete(f"/api/playlist/{body['id']}")
         self.assertEqual(rv.status_code, 200)
-        from supysonic.db import Playlist
+        from neezer.db import Playlist
 
         self.assertEqual(Playlist.select().count(), 0)
 
@@ -2871,7 +2909,7 @@ class WebUITestCase(unittest.TestCase):
     # -- podcast progress & markers --------------------------------------
 
     def _make_episode(self, duration=1800, with_file=False, deezer_id="555"):
-        from supysonic.db import PodcastChannel, PodcastEpisode
+        from neezer.db import PodcastChannel, PodcastEpisode
 
         alice = User.get(name="alice")
         channel = PodcastChannel.create(
@@ -2895,7 +2933,7 @@ class WebUITestCase(unittest.TestCase):
         return channel, episode
 
     def test_podcast_progress_roundtrip(self):
-        from supysonic.db import PodcastEpisode
+        from neezer.db import PodcastEpisode
 
         self._login()
         _, ep = self._make_episode()
@@ -2923,7 +2961,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(data[str(ep.id)]["position"], 400)
 
     def test_podcast_progress_finish_near_end(self):
-        from supysonic.db import PodcastEpisode
+        from neezer.db import PodcastEpisode
 
         self._login()
         _, ep = self._make_episode(duration=1000)
@@ -3044,7 +3082,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(rv.status_code, 404)
 
     def test_share_waveform(self):
-        from supysonic.webui import share
+        from neezer.webui import share
 
         self._login()
         t = self._make_local_track("Wave Song")
@@ -3086,7 +3124,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(self.client.get(base + "?start=500&end=520").status_code, 400)
 
     def test_share_clip(self):
-        from supysonic.webui import share
+        from neezer.webui import share
 
         self._login()
         t = self._make_local_track("Clip Song")
@@ -3135,7 +3173,7 @@ class WebUITestCase(unittest.TestCase):
         # Without a build -> friendly 503 notice, not a 404. With one (a
         # developer who ran `npm run build`, or the Docker image) -> the shell,
         # uncached so a redeploy is picked up.
-        from supysonic.webui import spa
+        from neezer.webui import spa
 
         rv = self.client.get("/app/")
         if spa._has_build():
@@ -3151,7 +3189,7 @@ class WebUITestCase(unittest.TestCase):
         """secure_filename ASCII-folds, which erased a whole non-Latin name and
         took the extension with it — the file was then rejected as an
         unsupported format. Names must survive; paths must still be safe."""
-        from supysonic.webui import _safe_upload_name
+        from neezer.webui import _safe_upload_name
 
         self.assertEqual(_safe_upload_name("Песня.mp3"), ("Песня.mp3", "mp3"))
         self.assertEqual(_safe_upload_name("曲.flac"), ("曲.flac", "flac"))
@@ -3170,7 +3208,7 @@ class WebUITestCase(unittest.TestCase):
     def test_archive_path_sanitizer_is_filesystem_safe(self):
         """Path components come from Deezer metadata and from uploaded files'
         own tags, so they must survive a NUL and an over-long name."""
-        from supysonic.deezer.library import sanitize
+        from neezer.deezer.library import sanitize
 
         self.assertEqual(sanitize("a\x00b"), "ab")  # NUL would raise on every fs call
         self.assertEqual(sanitize(".."), "untitled")
@@ -3185,7 +3223,7 @@ class WebUITestCase(unittest.TestCase):
         long_cjk.encode("utf-8").decode("utf-8")
 
     def test_download_batch_is_capped_and_deduped(self):
-        from supysonic.webui import _DOWNLOAD_BATCH_MAX
+        from neezer.webui import _DOWNLOAD_BATCH_MAX
 
         self._login()
         queued = []
@@ -3220,7 +3258,7 @@ class WebUITestCase(unittest.TestCase):
 
     def test_download_reason_decides_the_queue_priority(self):
         """The client says WHY it wants a track, never how urgent it is."""
-        from supysonic.deezer.workload import Priority
+        from neezer.deezer.workload import Priority
 
         self._login()
         pf = self.app.deezer_prefetch
@@ -3237,7 +3275,7 @@ class WebUITestCase(unittest.TestCase):
         """Over its share of the pool a background request is refused, not
         queued — one that waits is still holding the thread it was meant not to
         hold."""
-        from supysonic.deezer import workload
+        from neezer.deezer import workload
 
         self._login()
         held = []
@@ -3262,7 +3300,7 @@ class WebUITestCase(unittest.TestCase):
     def test_a_prefetch_stream_queues_instead_of_downloading_inline(self):
         """A prefetch of a not-yet-archived track must never be what downloads a
         FLAC on a request thread: nobody is waiting for those bytes."""
-        from supysonic.deezer.workload import Priority
+        from neezer.deezer.workload import Priority
 
         self._login()
         pf = self.app.deezer_prefetch
@@ -3281,7 +3319,7 @@ class WebUITestCase(unittest.TestCase):
         import shutil
         from unittest import mock
 
-        from supysonic.deezer import archive
+        from neezer.deezer import archive
 
         if not shutil.which("ffmpeg"):
             if os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
@@ -3310,7 +3348,7 @@ class WebUITestCase(unittest.TestCase):
             body = rv.get_data()
         self.assertEqual(opened, ["1"])
         self.assertTrue(body.startswith(b"OggS"))
-        from supysonic.deezer import ids
+        from neezer.deezer import ids
 
         key = f"deezer-{ids.track_uuid('1')}-opus64.ogg"
         self.assertTrue(self.app.transcode_cache.has(key), "a complete transcode is kept")
@@ -3318,10 +3356,10 @@ class WebUITestCase(unittest.TestCase):
     # -- bulk ZIP export -------------------------------------------------
 
     def _playlist_with_local_track(self, title="Export Me"):
-        from supysonic.db import Playlist
+        from neezer.db import Playlist
 
         t = self._make_local_track(title)
-        from supysonic.db import User
+        from neezer.db import User
 
         pl = Playlist.create(user=User.get(name="alice"), name="Ma sélection")
         pl.add(t)
@@ -3333,7 +3371,7 @@ class WebUITestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/api/export/formats").status_code, 401)
 
     def test_export_formats_lists_flac_without_ffmpeg(self):
-        from supysonic.webui import export
+        from neezer.webui import export
 
         self._login()
         orig = export._ffmpeg_available
@@ -3390,7 +3428,7 @@ class WebUITestCase(unittest.TestCase):
         )
 
     def test_export_filename_is_sanitised(self):
-        from supysonic.webui.export import _safe
+        from neezer.webui.export import _safe
 
         # path separators, traversal, and the trailing dot Windows drops
         self.assertEqual(_safe("../../etc/passwd"), "_.._etc_passwd")
@@ -3403,7 +3441,7 @@ class WebUITestCase(unittest.TestCase):
         import io
         import zipfile
 
-        from supysonic.webui import export
+        from neezer.webui import export
 
         self._login()
         pl, _t = self._playlist_with_local_track("Export Me")
@@ -3454,7 +3492,7 @@ class WebUIGuestTestCase(unittest.TestCase):
         self.app = create_application(Config())
         UserManager.add("bob", "B0bbb", admin=False)
 
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         provider = DeezerProvider("arl", self.archive, "FLAC")
         provider._dz = MockDz()
@@ -3547,7 +3585,7 @@ class MultiArtistTestCase(unittest.TestCase):
     """Multi-artist ("feat.") credits, from the three serializers to the wire."""
 
     def test_credit_list_from_gateway(self):
-        from supysonic.webui import _credit_list
+        from neezer.webui import _credit_list
 
         # No ARTISTS (the trimmed favourites payload): the primary artist alone.
         # A serializer must ALWAYS hand the UI something to render, which is why
@@ -3570,7 +3608,7 @@ class MultiArtistTestCase(unittest.TestCase):
         self.assertEqual(_credit_list({"ARTISTS": [None, 5, {"ART_NAME": "no id"}]}), [])
 
     def test_display_artist_line(self):
-        from supysonic.webui import _display_artist
+        from neezer.webui import _display_artist
 
         main = {"deezer_id": "1", "name": "A", "role": "Main"}
         feat = {"deezer_id": "2", "name": "B", "role": "Featured"}
@@ -3585,7 +3623,7 @@ class MultiArtistTestCase(unittest.TestCase):
         self.assertEqual(_display_artist([], "Fallback"), "Fallback")
 
     def test_gateway_track_carries_credits(self):
-        from supysonic.webui import _track
+        from neezer.webui import _track
 
         raw = raw_track(1)
         raw["ARTISTS"] = [
@@ -3600,7 +3638,7 @@ class MultiArtistTestCase(unittest.TestCase):
         self.assertEqual(out["display_artist"], "A feat. B")
 
     def test_public_api_track_maps_contributors(self):
-        from supysonic.webui import _track_api
+        from neezer.webui import _track_api
 
         out = _track_api(api_track(1))
         self.assertEqual([a["name"] for a in out["artists"]], ["Artist", "Guest"])
@@ -3614,7 +3652,7 @@ class MultiArtistTestCase(unittest.TestCase):
 
 
 class AudioEdgesTestCase(unittest.TestCase):
-    """Where a file's audio starts and stops (supysonic/webui/edges.py).
+    """Where a file's audio starts and stops (neezer/webui/edges.py).
 
     The detection itself is ffmpeg's; what is worth pinning here is everything
     around it — that a missing file is an answer rather than an error, that the
@@ -3657,7 +3695,7 @@ class AudioEdgesTestCase(unittest.TestCase):
         )
 
     def _track(self, name="song.flac", write=True):
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(self.archive)
         d = os.path.join(self.archive, "Band", "Album")
@@ -3690,7 +3728,7 @@ class AudioEdgesTestCase(unittest.TestCase):
     # -- the pure helpers ------------------------------------------------
 
     def test_edges_from_intervals(self):
-        from supysonic.webui.edges import _edges
+        from neezer.webui.edges import _edges
 
         # Silence at the head that ends, and a silence with no end (EOF).
         self.assertEqual(_edges([[0.0, 1.6], [4.6, None]], 7.0), (1.6, 4.6))
@@ -3701,7 +3739,7 @@ class AudioEdgesTestCase(unittest.TestCase):
         self.assertEqual(_edges([[30.0, 32.0]], 210.0), (0.0, 210.0))
 
     def test_edges_never_trim_more_than_the_cap(self):
-        from supysonic.webui.edges import _edges
+        from neezer.webui.edges import _edges
 
         # A track opening on 90 s of near-silence is a hidden-track arrangement:
         # jumping into it is not a trim, so it plays whole.
@@ -3714,7 +3752,7 @@ class AudioEdgesTestCase(unittest.TestCase):
         """A trim was heard as a skip in the middle of a song: a quiet outro
         of a quarter of a minute is part of it. Past 10 s, at either end, the
         whole file plays; and a gap inside the track never moves either bound."""
-        from supysonic.webui.edges import _edges
+        from neezer.webui.edges import _edges
 
         self.assertEqual(_edges([[0.0, 11.0]], 300.0), (0.0, 300.0))
         self.assertEqual(_edges([[285.0, None]], 300.0), (0.0, 300.0))
@@ -3722,12 +3760,12 @@ class AudioEdgesTestCase(unittest.TestCase):
         self.assertEqual(_edges([[120.0, 135.0], [296.0, 300.0]], 300.0), (0.0, 296.0))
 
     def test_edges_all_silence_is_not_a_zero_length_track(self):
-        from supysonic.webui.edges import _edges
+        from neezer.webui.edges import _edges
 
         self.assertEqual(_edges([[0.0, None]], 210.0), (0.0, 210.0))
 
     def test_threshold_is_clamped(self):
-        from supysonic.webui.edges import (
+        from neezer.webui.edges import (
             DEFAULT_THRESHOLD,
             MAX_THRESHOLD,
             MIN_THRESHOLD,
@@ -3761,7 +3799,7 @@ class AudioEdgesTestCase(unittest.TestCase):
         self.assertFalse(rv.get_json()["ready"])
 
     def test_measures_and_caches(self):
-        from supysonic.webui import edges
+        from neezer.webui import edges
 
         self._login()
         t = self._track()
@@ -3795,7 +3833,7 @@ class AudioEdgesTestCase(unittest.TestCase):
             edges._detect, edges._ffmpeg_available = orig_detect, orig_have
 
     def test_detection_failure_is_not_ready(self):
-        from supysonic.webui import edges
+        from neezer.webui import edges
 
         self._login()
         t = self._track()
@@ -3814,7 +3852,7 @@ class AudioEdgesTestCase(unittest.TestCase):
             edges._detect, edges._ffmpeg_available = orig_detect, orig_have
 
     def test_without_ffmpeg_is_not_ready(self):
-        from supysonic.webui import edges
+        from neezer.webui import edges
 
         self._login()
         t = self._track()
@@ -3834,7 +3872,7 @@ class AudioEdgesTestCase(unittest.TestCase):
         archive the answer would arrive long after it was needed and the request
         would hold an HTTP thread the whole time.
         """
-        from supysonic.deezer import archive
+        from neezer.deezer import archive
 
         self._login()
         called = []
@@ -3850,7 +3888,7 @@ class AudioEdgesTestCase(unittest.TestCase):
 
 
 class TrackAnalysisTestCase(unittest.TestCase):
-    """Whole-track analysis (supysonic/deezer/analysis.py + /api/analyses).
+    """Whole-track analysis (neezer/deezer/analysis.py + /api/analyses).
 
     The ffmpeg passes are not exercised here — that is what an integration run
     is for. What is pinned is everything AROUND them: that a verdict is served
@@ -3894,7 +3932,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         )
 
     def _deezer_track(self, sid="424242"):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         return library.upsert_track(raw_track(sid), root)
@@ -3911,7 +3949,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         return base
 
     def test_classify_stays_on_the_simplex(self):
-        from supysonic.deezer.analysis import ARCHETYPES, classify
+        from neezer.deezer.analysis import ARCHETYPES, classify
 
         _style, conf, _arch, weights = classify(self._features(bpm=128, bpm_confidence=0.9,
                                                               pulse=0.8))
@@ -3920,7 +3958,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertAlmostEqual(sum(weights.values()), 1.0, places=3)
 
     def test_classify_fast_squashed_and_noisy_reads_as_hard(self):
-        from supysonic.deezer.analysis import classify
+        from neezer.deezer.analysis import classify
 
         style, conf, arch, weights = classify(
             self._features(bpm=200, bpm_confidence=0.9, pulse=0.9, flatness=0.5,
@@ -3930,7 +3968,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertGreater(conf, 0.2)
 
     def test_classify_tonal_dynamic_and_pulseless_reads_as_sustained(self):
-        from supysonic.deezer.analysis import classify
+        from neezer.deezer.analysis import classify
 
         style, _conf, arch, weights = classify(
             self._features(bpm=0, bpm_confidence=0.0, pulse=0.02, flatness=0.12,
@@ -3940,7 +3978,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_classify_survives_a_missing_measure(self):
         """A descriptor ffmpeg did not report must not break the verdict."""
-        from supysonic.deezer.analysis import classify
+        from neezer.deezer.analysis import classify
 
         broken = self._features(bpm=130, bpm_confidence=0.8, pulse=0.7)
         del broken["rolloff"]
@@ -3952,7 +3990,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_tempo_prior_is_a_plateau_not_a_bell(self):
         """The roll-off must not quietly halve the fast genres."""
-        from supysonic.deezer.analysis import _prior
+        from neezer.deezer.analysis import _prior
 
         self.assertEqual(_prior(120), 1.0)
         self.assertEqual(_prior(195), 1.0)
@@ -3977,7 +4015,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertEqual(rv.get_json()["analyses"], {})
 
     def test_serves_a_stored_verdict(self):
-        from supysonic.db import TrackAnalysis
+        from neezer.db import TrackAnalysis
 
         self._login()
         t = self._deezer_track()
@@ -4004,8 +4042,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
     # -- local files: the same road as Deezer's, by their UUID ---------------
 
     def _local_track(self, genre=None, owner=None):
-        from supysonic.db import Album, Artist, Track
-        from supysonic.deezer import library
+        from neezer.db import Album, Artist, Track
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         artist = Artist.create(name="Me")
@@ -4022,7 +4060,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         """An upload's id is its row's UUID. The batch used to accept Deezer's
         numeric ids only, so a local file never had a verdict — measured,
         tagged in the studio, or carrying its own genre tag."""
-        from supysonic.db import TrackAnalysis
+        from neezer.db import TrackAnalysis
 
         self._login()
         t = self._local_track()
@@ -4041,7 +4079,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertEqual(rv.get_json()["analyses"], {})
 
     def test_a_studio_tag_on_an_upload_is_served(self):
-        from supysonic.db import GenreTag, TrackTag
+        from neezer.db import GenreTag, TrackTag
 
         self._login()
         t = self._local_track(genre="Techno")
@@ -4075,14 +4113,14 @@ class TrackAnalysisTestCase(unittest.TestCase):
     def test_a_genre_written_into_an_archive_is_served(self):
         """An archive is no longer tagged with Deezer's broad album genre
         ("Dance"), so a genre in a Deezer row's tags is somebody's own."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
         t.genre = "Dance"
         self.assertIsNotNone(ana.file_genre(t))  # served, not refused as Deezer's
 
     def test_someone_elses_upload_is_not_answered(self):
-        from supysonic.db import User
+        from neezer.db import User
 
         UserManager.add("bob", "B0b", admin=False)
         bob = User.get(name="bob")
@@ -4096,7 +4134,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertIsNotNone(bob)
 
     def _other_owner(self):
-        from supysonic.db import User
+        from neezer.db import User
 
         UserManager.add("carol", "C4rol", admin=False)
         return User.get(name="carol")
@@ -4116,8 +4154,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
         thread, and with nothing to gain by measuring (no head, no extractor) it
         is not queued at all.
         """
-        import supysonic.webui.analysis as web_ana  # noqa: F401
-        from supysonic.deezer import analysis as ana
+        import neezer.webui.analysis as web_ana  # noqa: F401
+        from neezer.deezer import analysis as ana
 
         self._login()
         t = self._deezer_track()
@@ -4142,7 +4180,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_a_measurable_track_is_queued_and_named_pending(self):
         """The server says "ask again", without measuring during the request."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._login()
         t = self._deezer_track()
@@ -4164,7 +4202,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         """The player runs no classifier of its own any more, so the server's
         measurement is the only genre and tempo a track gets: a client's ask is
         accepted with no head and no extractor — only ffmpeg and a file count."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
         t.path = __file__
@@ -4187,7 +4225,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
     def test_request_analysis_dedupes_and_reports_acceptance(self):
         """Two asks while the first is in flight start ONE job, and both are
         told yes — the client's second poll is not a reason to redo the work."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
         t.path = __file__
@@ -4226,13 +4264,13 @@ class TrackAnalysisTestCase(unittest.TestCase):
             ana._inflight.discard(str(t.id))
 
     def test_analysis_skips_a_track_with_no_file(self):
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
         self.assertIsNone(ana.analyze_track(t))
 
     def test_deezer_bpm_is_used_and_bounded(self):
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
 
@@ -4268,7 +4306,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_deezer_bpm_survives_an_outage(self):
         """A Deezer failure means "measure it yourself", never an exception."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
 
@@ -4300,7 +4338,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
             return {"bpm": self.bpm}
 
     def _fresh_hints(self):
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._drain()
         with ana._hint_lock:
@@ -4310,7 +4348,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def _drain(self):
         """Wait for the background lookup to finish (it is one daemon thread)."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         deadline = time.monotonic() + 5
         while ana._hint_worker is not None and time.monotonic() < deadline:
@@ -4357,7 +4395,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
             self._fresh_hints()
 
     def test_a_measured_verdict_outranks_the_published_tempo(self):
-        from supysonic.db import TrackAnalysis
+        from neezer.db import TrackAnalysis
 
         self._fresh_hints()
         self._login()
@@ -4385,7 +4423,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         Deezer has no figure for is not looked up again on the next poll; one
         it could not be asked about is, once the retry window has passed.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._fresh_hints()
         self._login()
@@ -4420,7 +4458,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_published_tempo_only_for_known_tracks_and_a_few_at_a_time(self):
         """Not a way to make the server fetch arbitrary ids, nor many at once."""
-        from supysonic.webui import analysis as web_ana
+        from neezer.webui import analysis as web_ana
 
         self._fresh_hints()
         self._login()
@@ -4441,7 +4479,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_the_measurement_reuses_the_first_plays_lookup(self):
         """The archive's analysis takes the figure the first play already got."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._fresh_hints()
         self._login()
@@ -4469,7 +4507,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         such, a file too unsure to judge is counted apart rather than as a
         disagreement, and a track Deezer has no figure for is neither.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         cases = {
             # deezer id: (Deezer's figure, the file's reading, its confidence)
@@ -4515,7 +4553,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
             [(87.0, "half"), (100.0, "half"), (150.0, "triplet")],
         )
         # Nothing written: an audit is not a re-measure.
-        from supysonic.db import TrackAnalysis
+        from neezer.db import TrackAnalysis
 
         self.assertEqual(TrackAnalysis.select().count(), 0)
         # ...and without Deezer there is nothing to audit, which it says.
@@ -4528,7 +4566,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         with no head and no extractor would refuse to START a job for a client,
         but one already running is still the verdict that client is waiting on.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track()
         orig_ff = ana.ffmpeg_available
@@ -4549,9 +4587,9 @@ class TrackAnalysisTestCase(unittest.TestCase):
         )
 
     def test_analysis_workers_are_clamped_and_persisted(self):
-        from supysonic.webui import analysis as wa
+        from neezer.webui import analysis as wa
 
-        from supysonic.deezer.analysis import auto_workers
+        from neezer.deezer.analysis import auto_workers
 
         self._login()
         # 0 is the default and it MEANS something: "size it from the machine".
@@ -4571,8 +4609,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
     def test_backfill_runs_several_workers(self):
         """The parallel loop: several tracks analysed at once, each thread using
         the database on its own."""
-        from supysonic.db import Track
-        from supysonic.deezer import analysis as ana
+        from neezer.db import Track
+        from neezer.deezer import analysis as ana
 
         for i in range(3):
             t = self._deezer_track(str(500 + i))
@@ -4616,8 +4654,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
         the reason existed was the container log. The run must carry the cause
         of every failure and the name of every track it happened to.
         """
-        from supysonic.db import Track
-        from supysonic.deezer import analysis as ana
+        from neezer.db import Track
+        from neezer.deezer import analysis as ana
 
         for i in range(3):
             t = self._deezer_track(str(900 + i))
@@ -4665,7 +4703,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_the_failure_sample_is_bounded(self):
         """A library-wide breakage must not make the status payload unbounded."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         stats = {"failed": 0, "failures": [], "failure_reasons": {}}
 
@@ -4691,7 +4729,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         It is the one failure that is not about the audio at all, and reporting
         it as "analysis failed" sent the operator hunting for a decoder bug.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track("950")
         row, reason = ana.analyze_track_verbose(t)
@@ -4709,7 +4747,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         and the job turned None into "<file>: analysis failed". Four layers,
         each dropping a little more, and nothing left at the end to act on.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         stderr = (
             b"ffmpeg version 6.1.1 Copyright (c) 2000-2023\n"
@@ -4787,7 +4825,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         judging the run by its exit code threw a COMPLETE measurement away and
         called the track broken.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         class Aborted:
             returncode = -6  # SIGABRT
@@ -4814,7 +4852,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_a_crash_with_nothing_measured_retries_without_the_loudness_meter(self):
         """Keep the filter there is no verdict without; drop the one with a default."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         class Aborted:
             returncode = -6
@@ -4855,7 +4893,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         Two frames is an intro, and medians taken over it would describe
         nothing. A verdict built from that is worse than no verdict.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         class Aborted:
             returncode = -6
@@ -4877,7 +4915,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_a_clean_run_reads_the_summary_not_the_running_line(self):
         """The Summary block is authoritative where it exists."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         class Ok:
             returncode = 0
@@ -4910,7 +4948,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         """`-t` before `-i` ends the input cleanly instead of trimming after
         the filter graph — less decoding, and an ordinary end of stream for
         the filters to flush from."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         cmd = ana._spectral_cmd("/archive/x/y.flac")
         self.assertLess(cmd.index("-t"), cmd.index("-i"))
@@ -4918,7 +4956,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
     def test_ffmpeg_tail_keeps_the_error_and_drops_the_banner(self):
         """ffmpeg always says what went wrong; the banner never does."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         err = (
             "ffmpeg version 6.1 Copyright (c) 2000-2023\n"
@@ -4949,8 +4987,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
         """A library job runs for hours on a thread inside the web server. A
         restart, a worker recycle or an OOM must cost the page it was on, not
         the hundred thousand tracks it had already measured."""
-        from supysonic.db import Meta, Track
-        from supysonic.deezer import analysis as ana
+        from neezer.db import Meta, Track
+        from neezer.deezer import analysis as ana
 
         for i in range(6):
             t = self._deezer_track(str(600 + i))
@@ -5015,7 +5053,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
         """"Re-measure everything" and "measure what is missing" are different
         runs: resuming one from the other's cursor would silently skip the front
         of the library."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self.assertIsNone(ana._checkpoint_read(ana.ANALYSIS_CURSOR_KEY, force=False))
         marker = self._deezer_track("777")
@@ -5028,8 +5066,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertIsNone(ana._checkpoint_read(ana.ANALYSIS_CURSOR_KEY, force=True))
 
     def test_the_analysis_worker_reports_progress_and_finishes(self):
-        from supysonic.deezer import analysis as ana
-        from supysonic.webui import analysis as wa
+        from neezer.deezer import analysis as ana
+        from neezer.webui import analysis as wa
 
         self._login()
 
@@ -5066,8 +5104,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
     # -- versions per track, the plan, the nightly window ------------------
 
     def _stamped(self, n, **row):
-        from supysonic.db import TrackAnalysis
-        from supysonic.deezer import analysis as ana
+        from neezer.db import TrackAnalysis
+        from neezer.deezer import analysis as ana
 
         t = self._deezer_track(str(n))
         t.last_modification = 1
@@ -5078,9 +5116,9 @@ class TrackAnalysisTestCase(unittest.TestCase):
         return t
 
     def test_the_plan_counts_what_is_out_of_date_at_each_step(self):
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import embedding as emb
-        from supysonic.webui import analysis as wa
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import embedding as emb
+        from neezer.webui import analysis as wa
 
         self._login()
         head = ana.current_head_id()
@@ -5103,8 +5141,8 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertIn("schedule", body)
 
     def test_a_row_says_which_head_decided_it_and_a_new_head_restamps(self):
-        from supysonic.db import TrackAnalysis
-        from supysonic.deezer import analysis as ana
+        from neezer.db import TrackAnalysis
+        from neezer.deezer import analysis as ana
 
         t = self._stamped(5)
         ana.reapply_head()
@@ -5115,7 +5153,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
     def test_the_nightly_window_runs_once_a_day_and_joins_a_restart(self):
         from datetime import datetime
 
-        from supysonic.webui import analysis as wa
+        from neezer.webui import analysis as wa
 
         s = {"enabled": True, "at": "03:00", "hours": 6}
         day = lambda h, m=0, d=1: datetime(2026, 11, d, h, m)
@@ -5143,9 +5181,9 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/api/analysis/plan").json["schedule"], got)
 
     def test_stop_cancels_the_running_job_and_a_stopped_walk_keeps_its_cursor(self):
-        from supysonic.db import Meta
-        from supysonic.deezer import analysis as ana
-        from supysonic.webui import analysis as wa
+        from neezer.db import Meta
+        from neezer.deezer import analysis as ana
+        from neezer.webui import analysis as wa
 
         self._login()
         with wa._analysis_lock:
@@ -5187,7 +5225,7 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
 
 class GenreStudioTestCase(unittest.TestCase):
-    """The tagging studio's API (supysonic/webui/genre.py + deezer/genre.py).
+    """The tagging studio's API (neezer/webui/genre.py + deezer/genre.py).
 
     The extractor itself is not exercised — it needs onnxruntime and a
     third-party model this repository deliberately does not ship. What is pinned
@@ -5221,8 +5259,8 @@ class GenreStudioTestCase(unittest.TestCase):
         UserManager.add("alice", "Alic3", admin=True)
         UserManager.add("bob", "B0bbb", admin=False)
         self.client = self.app.test_client()
-        from supysonic.deezer import genre as gen
-        from supysonic.webui import genre as wg
+        from neezer.deezer import genre as gen
+        from neezer.webui import genre as wg
 
         gen.invalidate()
         # The prototype is cached module-globally too, and it reads embeddings
@@ -5253,8 +5291,8 @@ class GenreStudioTestCase(unittest.TestCase):
         Meta.create(key=gen.SEED_META_KEY, value=gen.seed_signature())
 
     def tearDown(self):
-        from supysonic.deezer import genre as gen
-        from supysonic.webui import genre as wg
+        from neezer.deezer import genre as gen
+        from neezer.webui import genre as wg
 
         wg._spawn = self._spawn
         with wg._relabel_lock:
@@ -5271,7 +5309,7 @@ class GenreStudioTestCase(unittest.TestCase):
         return self.client.post("/api/login", json={"username": who, "password": pw})
 
     def _track(self, sid="424242", archived=True):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
         t = library.upsert_track(raw_track(sid, title="T" + sid), root)
@@ -5291,7 +5329,7 @@ class GenreStudioTestCase(unittest.TestCase):
         return r.json
 
     def _store_embedding(self, track, vec):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         os.makedirs(os.path.dirname(track.path), exist_ok=True)
         with open(track.path, "wb") as fp:
@@ -5354,12 +5392,12 @@ class GenreStudioTestCase(unittest.TestCase):
         )
 
     def _clear_seed_flag(self):
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         Meta.delete().where(Meta.key == gen.SEED_META_KEY).execute()
 
     def test_the_engine_s_genres_are_seeded_on_first_visit(self):
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._clear_seed_flag()
         self._login()
@@ -5406,8 +5444,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_a_grown_engine_vocabulary_is_re_seeded(self):
         """A release that adds families must reach an existing install without
         the admin having to retype anything."""
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import genre as gen
 
         # Pretend the last seed ran when the engine knew one genre fewer.
         row = Meta.get(Meta.key == gen.SEED_META_KEY)
@@ -5426,7 +5464,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertTrue(self.client.get("/api/genre/status").json["tags"])
 
     def test_deleting_a_tag_takes_its_labels_with_it(self):
-        from supysonic.db import TrackTag
+        from neezer.db import TrackTag
 
         self._login()
         tag = self._tag("zaag")
@@ -5445,7 +5483,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_one_tag_per_track(self):
         """Re-labelling REPLACES. A track that is two genres at once teaches the
         head that the two describe the same sound."""
-        from supysonic.db import TrackTag
+        from neezer.db import TrackTag
 
         self._login()
         a = self._tag("frenchcore")
@@ -5474,7 +5512,7 @@ class GenreStudioTestCase(unittest.TestCase):
         is served even when nothing has measured the track — the player gets the
         right genre at the first request rather than after the next backfill.
         """
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._login()
         tag = self._tag("techno", "groove")
@@ -5498,8 +5536,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_a_tag_also_wins_inside_the_stored_verdict(self):
         """Tagging a track rewrites the verdict the analysis stores, so the two
         paths never disagree about the same track."""
-        from supysonic.db import TrackAnalysis
-        from supysonic.deezer import analysis as ana
+        from neezer.db import TrackAnalysis
+        from neezer.deezer import analysis as ana
 
         self._login()
         tag = self._tag("tekk", "hard")
@@ -5579,7 +5617,7 @@ class GenreStudioTestCase(unittest.TestCase):
         turn an old one into an unreadable file. It is simply not what a current
         head expects, which `vector_is_current` is what says.
         """
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         track = self._track("1030")
         os.makedirs(os.path.dirname(track.path), exist_ok=True)
@@ -5616,7 +5654,7 @@ class GenreStudioTestCase(unittest.TestCase):
         sixty patches of output. A library has hour-long sets in it and this
         runs alongside a music server.
         """
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         one_minute = emb.patch_offsets(emb.SAMPLE_RATE * 60)
         one_hour = emb.patch_offsets(emb.SAMPLE_RATE * 3600)
@@ -5639,7 +5677,7 @@ class GenreStudioTestCase(unittest.TestCase):
         load that did not come off and every track from then on reported "the
         model could not be loaded", with nothing wrong any more. A run that has
         already measured ten thousand tracks must not end on a bad second."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         emb.reset_session()
         try:
@@ -5668,7 +5706,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """A head is trained on ONE flat matrix. Mixing a 1280-wide row into a
         2560-wide set would misalign every column after the first half and
         silently train on noise — so the stale row is counted, not padded."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         fresh = self._track("1031")
@@ -5697,7 +5735,7 @@ class GenreStudioTestCase(unittest.TestCase):
         numpy = _numpy()
         if numpy is None:
             self.skipTest("numpy is not installed (it comes with the extractor)")
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         dim = emb.MODEL_DIM
         steady = emb._aggregate(
@@ -5724,7 +5762,7 @@ class GenreStudioTestCase(unittest.TestCase):
         numpy = _numpy()
         if numpy is None:
             self.skipTest("numpy is not installed (it comes with the extractor)")
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         rng = numpy.random.default_rng(7)
         d = emb.MODEL_DIM
@@ -5745,7 +5783,7 @@ class GenreStudioTestCase(unittest.TestCase):
         numpy = _numpy()
         if numpy is None:
             self.skipTest("numpy is not installed (it comes with the extractor)")
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         d = emb.MODEL_DIM
         e0, e1 = numpy.zeros(d), numpy.zeros(d)
@@ -5782,7 +5820,7 @@ class GenreStudioTestCase(unittest.TestCase):
         numpy = _numpy()
         if numpy is None:
             self.skipTest("numpy is not installed (it comes with the extractor)")
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         sr = emb.SAMPLE_RATE
         beat = 60.0 / 128
@@ -5875,7 +5913,7 @@ class GenreStudioTestCase(unittest.TestCase):
         An archive copied from a server that had onnxruntime is still a perfectly
         good training set on one that does not.
         """
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         track = self._track("1004")
         vec = [((i % 19) - 9) / 9 for i in range(emb.EMBED_DIM)]
@@ -5887,7 +5925,7 @@ class GenreStudioTestCase(unittest.TestCase):
             self.assertAlmostEqual(got, want, places=2)
 
     def test_a_truncated_sidecar_is_no_vector_at_all(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         track = self._track("1005")
         self._store_embedding(track, [0.5] * emb.EMBED_DIM)
@@ -5898,7 +5936,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_embeddings_endpoint_never_extracts(self):
         """It hands over what is already measured, and nothing else. A call that
         could start forty ffmpeg passes would answer tomorrow."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         have = self._track("1006")
@@ -5913,7 +5951,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertIsNone(emb.load_embedding(missing))
 
     def test_embeddings_batch_is_capped(self):
-        from supysonic.webui.genre import EMBED_BATCH_MAX
+        from neezer.webui.genre import EMBED_BATCH_MAX
 
         self._login()
         r = self.client.post(
@@ -5932,7 +5970,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """On Postgres a bad UUID in a WHERE is a DataError that poisons the
         whole transaction, not a query that returns nothing. SQLite is forgiving
         enough to hide that, so the guard is pinned here rather than trusted."""
-        from supysonic.webui.genre import _resolve
+        from neezer.webui.genre import _resolve
 
         self._login()
         for bad in ("", "not-a-uuid", "../../etc/passwd", "'; DROP TABLE track;--",
@@ -5948,7 +5986,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_candidates_are_bounded(self):
         """Whether a track has a vector is a file on disk, so every row looked
         at costs a stat. The scan must stop on its own."""
-        from supysonic.webui import genre as gweb
+        from neezer.webui import genre as gweb
 
         self._login()
         self._track("1012")
@@ -5965,7 +6003,7 @@ class GenreStudioTestCase(unittest.TestCase):
         that trained on a silently truncated set; each row also read its artist
         and album back lazily. The count is the same for 3 tags and for 510.
         """
-        from supysonic.db import GenreTag, TrackTag
+        from neezer.db import GenreTag, TrackTag
         from .test_deezer import count_statements
 
         self._login()
@@ -5998,8 +6036,8 @@ class GenreStudioTestCase(unittest.TestCase):
         that were then thrown away. That is what made this endpoint take a
         minute on a real library.
         """
-        from supysonic.deezer import embedding as emb
-        from supysonic.webui import genre as gweb
+        from neezer.deezer import embedding as emb
+        from neezer.webui import genre as gweb
 
         self._login()
         gweb.invalidate_predictions()
@@ -6026,7 +6064,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_the_status_never_waits_for_the_model_to_load(self):
         """Loading a 40 MB ONNX graph is seconds. Doing it on the thread serving
         the studio's first request is what made the page take a minute."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         blocking = []
@@ -6040,7 +6078,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertIn(body["extractor"]["session_state"], ("ok", "error", "checking"))
 
     def test_candidates_skip_what_is_already_labelled(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         tag = self._tag("pieep")
@@ -6059,8 +6097,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_prototype_names_the_nearest_labelled_genre(self):
         """With no head at all, a single label per genre is enough to say
         something — which is the whole reason the prototype exists."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         self._login()
         tek = self._tag("techno")
@@ -6079,7 +6117,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_candidates_carry_the_vocabulary_ranked_for_them(self):
         """The studio orders its genres by THIS list, not by name: the nearest
         prototype first, for every genre that has one."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         names = ("techno", "rap", "jazz")
@@ -6105,7 +6143,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_the_tag_sheet_reads_one_track(self):
         """The sheet opened from a track's menu gets its tag and its ranking in
         one small answer, not the whole labelled set."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         tek = self._tag("techno")
@@ -6125,7 +6163,7 @@ class GenreStudioTestCase(unittest.TestCase):
             self.assertEqual(self.client.get(f"/api/genre/track/{bad}").status_code, 404)
 
     def test_the_ranking_blends_the_head_and_the_prototypes(self):
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         guess = ("a", 0.6, {"a": 0.6, "b": 0.4}, 0.2)
         protos = [("b", 0.90), ("a", 0.80), ("c", 0.79)]
@@ -6142,7 +6180,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_prototype_says_nothing_before_anything_is_labelled(self):
         """None, not a guess: a studio with no labels has no opinion, and an
         empty prototype must not be confused with one that happens to be far."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         self.assertIsNone(gen.centroids())
@@ -6151,8 +6189,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_prototype_ignores_magnitude(self):
         """Two copies of the same direction are the same genre whether they are
         loud or quiet — the embedding's length is not the signal."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         self._login()
         tag = self._tag("hardtekk")
@@ -6170,8 +6208,8 @@ class GenreStudioTestCase(unittest.TestCase):
         centroid and indexed the query vector with its length. A v1 sidecar is a
         legitimate return from load_embedding, so the two widths really do meet.
         The answer is "no opinion", not a crash and not a silent mis-index."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         self._login()
         tag = self._tag("techno")
@@ -6191,7 +6229,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """The end-to-end version of the crash: a library whose sidecars have not
         all been re-extracted yet still has v1-width vectors, and those meet a
         v2 centroid table. This request used to answer 500."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         tag = self._tag("techno")
@@ -6222,8 +6260,8 @@ class GenreStudioTestCase(unittest.TestCase):
         examples are some v2, some v3, and so are the candidates — and they all
         share the v2 part, so the prototypes must keep speaking, whichever width
         each side happens to be."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         self._login()
         a, b = self._track("2071"), self._track("2072")
@@ -6244,8 +6282,8 @@ class GenreStudioTestCase(unittest.TestCase):
         """The cache keys on the labelled SET. Adding a second track under a
         genre that already exists changes no name, so a name-only key would
         serve a stale centroid — the bug this pins."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         self._login()
         tag = self._tag("techno")
@@ -6269,10 +6307,10 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_prototype_is_offered_but_never_relabels_a_track(self):
         """The prototype has no confidence to gate on, so the analysis must not
         use it. With no head to speak, the track keeps its measured style."""
-        from supysonic.deezer import analysis as an
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
-        from supysonic.db import TrackAnalysis
+        from neezer.deezer import analysis as an
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
+        from neezer.db import TrackAnalysis
         import json as _json
 
         self._login()
@@ -6302,8 +6340,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_uncertainty_ordering_prefers_the_undecided_tracks(self):
         """The active-learning claim, pinned: a track the head cannot decide
         comes before one it is sure of, even when the sure one is played more."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         self._login()
         # A head that likes axis 0 for "techno" and axis 1 for "rap".
@@ -6335,7 +6373,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_uncertainty_is_reported_on_every_candidate(self):
         """The studio's readout reads this field, so it must always be there —
         including when there is no head, where nothing is decided yet."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         for i in range(3):
@@ -6349,7 +6387,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_default_order_is_still_by_plays(self):
         """The new ordering is opt-in: an existing studio's queue must not
         silently reorder under it."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         a = self._track("3011")
@@ -6360,14 +6398,14 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_active_order_is_drawn_from_a_wider_window(self):
         """An uncertainty ranking over the top of the play-count order would
         only ever re-rank the music that least needs tagging."""
-        from supysonic.webui import genre as gweb
+        from neezer.webui import genre as gweb
 
         self.assertGreater(gweb.CANDIDATE_SCAN_ACTIVE, gweb.CANDIDATE_SCAN_MAX)
 
     def test_uncertainty_order_keeps_a_random_reserve(self):
         """Uncertainty alone walks the same borderline cluster for ever; the
         reserve is what keeps the studio looking at genres it has not seen."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         for i in range(20):
@@ -6423,7 +6461,7 @@ class GenreStudioTestCase(unittest.TestCase):
 
     def test_a_linear_head_round_trips_and_classifies(self):
         """The browser trains it, the server must reach the same verdict."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         dim = 4
@@ -6454,7 +6492,7 @@ class GenreStudioTestCase(unittest.TestCase):
         metrics. The server must apply it, because the number it feeds the gate
         is the whole reason the scalar exists — and it must NOT change which
         label wins, which is the safety argument for applying it at all."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         dim = 4
@@ -6489,7 +6527,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_an_absurd_temperature_is_ignored_rather_than_obeyed(self):
         """A hand-written or corrupted metrics blob must not be able to make
         the head report anything it likes. Outside the sane range, T is 1."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         dim = 2
@@ -6509,7 +6547,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_an_mlp_head_round_trips_and_its_relu_fires(self):
         """An MLP is the same wire format with two more blocks; the relu has to
         be real, or the hidden layer is just another linear map."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         dim, hidden = 2, 2
@@ -6539,7 +6577,7 @@ class GenreStudioTestCase(unittest.TestCase):
 
     def test_a_two_layer_mlp_round_trips(self):
         """Two hidden layers are the same wire format with one more block."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         dim, hidden = 2, 2
@@ -6585,7 +6623,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_a_head_that_does_not_fit_is_refused_and_not_stored(self):
         """Weights, labels and dim must agree. A head stored but unreadable
         would silently do nothing for ever."""
-        from supysonic.db import GenreModel
+        from neezer.db import GenreModel
 
         self._login()
         # One value short of 2x4 + 2.
@@ -6627,7 +6665,7 @@ class GenreStudioTestCase(unittest.TestCase):
             self.assertEqual(r.status_code, 400, payload)
 
     def test_an_oversized_head_is_refused_before_it_is_parsed(self):
-        from supysonic.webui.genre import MODEL_MAX_BYTES
+        from neezer.webui.genre import MODEL_MAX_BYTES
 
         self._login()
         r = self.client.put(
@@ -6641,8 +6679,8 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertEqual(r.status_code, 413)
 
     def test_a_new_head_retires_the_old_one(self):
-        from supysonic.db import GenreModel
-        from supysonic.deezer import genre as gen
+        from neezer.db import GenreModel
+        from neezer.deezer import genre as gen
 
         self._login()
         self._put_linear(["a", "b"], [[1, 0], [0, 1]], [0, 0], 2)
@@ -6659,7 +6697,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_a_refused_head_leaves_the_working_one_active(self):
         """The old head was switched off BEFORE the new one was checked, so a
         refused upload left the server with no model at all."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         self._put_linear(["a", "b"], [[1, 0], [0, 1]], [0, 0], 2)
@@ -6683,8 +6721,8 @@ class GenreStudioTestCase(unittest.TestCase):
         a finished analysis leaves it."""
         import json as _json
 
-        from supysonic.db import TrackAnalysis
-        from supysonic.deezer import analysis as ana
+        from neezer.db import TrackAnalysis
+        from neezer.deezer import analysis as ana
 
         t = self._track(sid)
         if vec is not None:
@@ -6699,7 +6737,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def _row(self, track):
         import json as _json
 
-        from supysonic.db import TrackAnalysis
+        from neezer.db import TrackAnalysis
 
         row = TrackAnalysis.get(TrackAnalysis.track == track)
         return row, _json.loads(row.data)
@@ -6709,9 +6747,9 @@ class GenreStudioTestCase(unittest.TestCase):
         reached only what was archived after it. Storing one now re-decides
         every stored verdict from the stored measures and vectors — and never
         decodes a file to do it."""
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import embedding as emb
-        from supysonic.webui import genre as wg
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import embedding as emb
+        from neezer.webui import genre as wg
 
         self._login()
         dim = emb.EMBED_DIM
@@ -6761,8 +6799,8 @@ class GenreStudioTestCase(unittest.TestCase):
         weakest source there is; the family it is sure of is served instead."""
         import math
 
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import genre as gen
 
         self._login()
         labels = ["Rawstyle", "Rawphase", "Techno"]
@@ -6793,8 +6831,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def _bulk_head(self, labels, logits_on_axis, families=None):
         """A full-width head whose logits, on the one-hot vector e_k, are
         ``logits_on_axis[k]`` (a list per label)."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         dim = emb.EMBED_DIM
         rows = [[0.0] * dim for _ in labels]
@@ -6824,7 +6862,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """An album of five: one already wears the tag, one wears another, the
         model is sure one is something else, two agree — and two ids are not
         tracks of this library at all."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         from .test_deezer import count_statements
 
@@ -6868,7 +6906,7 @@ class GenreStudioTestCase(unittest.TestCase):
         record Rawphase is not a disagreement with that; tagging it Techno is."""
         import math
 
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         self._bulk_head(
@@ -6885,9 +6923,9 @@ class GenreStudioTestCase(unittest.TestCase):
             self.assertEqual(row["disagree"], want, name)
 
     def test_a_bulk_tag_applies_to_what_was_kept_and_re_decides_it(self):
-        from supysonic.db import TrackTag
-        from supysonic.deezer import analysis as ana
-        from supysonic.webui import genre as wg
+        from neezer.db import TrackTag
+        from neezer.deezer import analysis as ana
+        from neezer.webui import genre as wg
 
         self._login()
         french = self._tag("Frenchcore", "hard")
@@ -6914,7 +6952,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertEqual(self.client.post("/api/analyses", json={"ids": []}).json["gen"], gen_before + 1)
 
     def test_an_artist_scope_is_every_library_track_of_that_artist(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         self._login()
         tag = self._tag("Frenchcore", "hard")
@@ -6942,7 +6980,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """A search for "Jolene" answers with covers and karaoke first more often
         than not. Only the recording itself may be offered — and when Deezer
         does not carry it, nothing is, rather than the nearest thing."""
-        from supysonic.deezer import references as refs
+        from neezer.deezer import references as refs
 
         h = self._hit
         jolene = [
@@ -6970,8 +7008,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_every_reference_list_names_a_genre_of_the_studio(self):
         """A list filed under a name the vocabulary does not have would never be
         shown — so the keys are held to it, and each list to being a list."""
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import references as refs
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import references as refs
 
         labels = {name for name, _arch in ana.known_genres()}
         for genre, pairs in refs.REFERENCES.items():
@@ -6993,7 +7031,7 @@ class GenreStudioTestCase(unittest.TestCase):
 
     def _with_catalogue(self, tracks=None, artists=None, fail=False):
         """A provider whose public API answers from these search results."""
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         class Api(MockApi):
             calls = []
@@ -7016,13 +7054,13 @@ class GenreStudioTestCase(unittest.TestCase):
         self.app.deezer = provider
         self.app.deezer_prefetch = MockPrefetch()
         self.app.config["DEEZER"]["archive_dir"] = self.archive
-        from supysonic.webui import genre as wg
+        from neezer.webui import genre as wg
 
         wg._ref_cache.clear()
         return dz.api
 
     def test_the_studio_shows_a_genre_s_references_as_deezer_has_them(self):
-        from supysonic.deezer import references as refs
+        from neezer.deezer import references as refs
 
         self._login("bob", "B0bbb")
         self.assertEqual(self.client.get("/api/genre/references").status_code, 403)
@@ -7066,7 +7104,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertGreater(len(api.calls), n, "a failed lookup is asked again, not remembered")
 
     def test_importing_a_reference_brings_it_in_tagged(self):
-        from supysonic.db import TrackTag
+        from neezer.db import TrackTag
 
         self._with_catalogue()
         self._login()
@@ -7092,8 +7130,8 @@ class GenreStudioTestCase(unittest.TestCase):
         """The defaults are ADDED to the tags: a recording Deezer carries gets its
         sub-genre, a track already wearing a tag keeps it (one tag per track), and
         a recording Deezer does not carry (artist AND title) is not invented."""
-        from supysonic.db import GenreTag, TrackTag
-        from supysonic.webui import genre as wg
+        from neezer.db import GenreTag, TrackTag
+        from neezer.webui import genre as wg
 
         api = self._with_catalogue(tracks=[self._hit(11, "The Bells", "Jeff Mills")])
         self._login()
@@ -7115,8 +7153,8 @@ class GenreStudioTestCase(unittest.TestCase):
         import threading
         from unittest import mock
 
-        from supysonic.deezer import references as refs
-        from supysonic.webui import genre as wg
+        from neezer.deezer import references as refs
+        from neezer.webui import genre as wg
 
         sounds = [(g, a, t) for g, ps in lists.items() for a, t in ps]
         with mock.patch.object(refs, "default_sounds", return_value=sounds):
@@ -7132,7 +7170,7 @@ class GenreStudioTestCase(unittest.TestCase):
         families (Techno, Rock, Hip-hop…) got the two or three curated
         examples. Frenchcore, Uptempo and the other scenes with no canon
         written down stay short on purpose (references.py)."""
-        from supysonic.deezer import major_tracks, references as refs
+        from neezer.deezer import major_tracks, references as refs
 
         counts = {}
         for genre, _a, _t in refs.default_sounds():
@@ -7143,8 +7181,8 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), "a recording is a default sound of one genre only")
 
     def test_a_default_sounds_run_counts_what_it_did_and_remembers_it(self):
-        from supysonic.db import Meta, TrackTag
-        from supysonic.webui import genre as wg
+        from neezer.db import Meta, TrackTag
+        from neezer.webui import genre as wg
 
         self._with_catalogue(tracks=[self._hit(11, "The Bells", "Jeff Mills")])
         self._login()
@@ -7162,8 +7200,8 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertEqual(Meta.get(Meta.key == wg.SOUNDS_META_KEY).value, sig, "a finished run is not repeated")
 
     def test_a_default_sounds_run_stops_when_deezer_does_not_answer(self):
-        from supysonic.db import Meta, TrackTag
-        from supysonic.webui import genre as wg
+        from neezer.db import Meta, TrackTag
+        from neezer.webui import genre as wg
 
         self._with_catalogue(fail=True)
         self._login()
@@ -7177,7 +7215,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_removing_a_tag_gives_the_verdict_back(self):
         """A tag removed left the row naming the tag's genre with source "tag" —
         served as somebody's choice, by nobody, for ever."""
-        from supysonic.deezer import analysis as ana
+        from neezer.deezer import analysis as ana
 
         self._login()
         tag = self._tag("Hardtekk", "hard")
@@ -7198,7 +7236,7 @@ class GenreStudioTestCase(unittest.TestCase):
     CX_STD = [0.4, 40, 0.2, 0.2, 0.2, 0.1, 0.05, 0.2, 0.3, 0.1, 0.3, 0.2, 0.2, 0.2]
 
     def _cx_inputs(self, embed, scale=0.3):
-        from supysonic.deezer import construction as cx
+        from neezer.deezer import construction as cx
 
         return {"embed": embed, "extras": list(cx.EXTRAS), "mean": self.CX_MEAN,
                 "std": self.CX_STD, "scale": scale}
@@ -7207,8 +7245,8 @@ class GenreStudioTestCase(unittest.TestCase):
         """The head was trained on the block construction.js#extrasBlock builds;
         the server must rebuild it number for number, or every verdict it gives
         is computed on inputs the head never saw — and nothing would fail."""
-        from supysonic.deezer import construction as cx
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import construction as cx
+        from neezer.deezer import genre as gen
 
         head = {"dim": 4 + 15, "inputs": self._cx_inputs(4)}
         summary = {"n": 5000, "features": {"kickF0": 180, "piep": 0.9, "tail": 0.3,
@@ -7238,7 +7276,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_a_head_s_inputs_must_add_up(self):
         import json
 
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         good = self._cx_inputs(4)
         self.assertIsNotNone(gen._inputs(json.dumps({"inputs": good}), 19))
@@ -7272,7 +7310,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertIsNone(self.client.get("/api/genre/model").json.get("labels"))
 
     def test_construction_summaries_are_cleaned(self):
-        from supysonic.deezer import construction as cx
+        from neezer.deezer import construction as cx
 
         for bad in (None, [], {"n": 0, "features": {"piep": 1}}, {"n": "x", "features": {}},
                     {"n": 10, "features": []}, {"n": 10, "features": {"unknown": 1}},
@@ -7291,7 +7329,7 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_the_player_s_summary_is_kept_beside_the_audio(self):
         import json as _json
 
-        from supysonic.deezer import construction as cx
+        from neezer.deezer import construction as cx
 
         self.assertEqual(self._cx_post("1", 3000, {"piep": 1}).status_code, 401)
         self._login("bob", "B0bbb")
@@ -7319,7 +7357,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertIsNone(cx.load(u))
 
     def test_a_private_upload_takes_no_summary_from_another_user(self):
-        from supysonic.db import User
+        from neezer.db import User
 
         t = self._track("8303")
         t.owner = User.get(User.name == "alice")
@@ -7331,9 +7369,9 @@ class GenreStudioTestCase(unittest.TestCase):
         """Two tracks with the SAME embedding — the pair the extractor cannot
         tell apart — and a head that reads the piep: one is Pieep, the other
         Techno, and a summary arriving from the player re-decides the row."""
-        from supysonic.deezer import analysis as ana
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import analysis as ana
+        from neezer.deezer import embedding as emb
+        from neezer.deezer import genre as gen
 
         from .test_deezer import count_statements
 
@@ -7392,13 +7430,13 @@ class GenreStudioTestCase(unittest.TestCase):
 
     def test_predict_is_none_without_a_model(self):
         """No head is not an error — the heuristic classifier keeps its job."""
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self.assertIsNone(gen.active_head())
         self.assertIsNone(gen.predict([1, 2, 3]))
 
     def test_archetype_comes_from_the_user_s_own_tag(self):
-        from supysonic.deezer import genre as gen
+        from neezer.deezer import genre as gen
 
         self._login()
         self._tag("brutal death", "rock")
@@ -7407,7 +7445,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertIsNone(gen.archetype_for(None))
 
     def test_status_reports_what_the_studio_needs(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         self._tag("techno", "groove")
@@ -7435,7 +7473,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """The front-end feeds a variable number of patches, so the "-bs64"
         export (fixed batch of 64) must be refused with a sentence that says so
         — that is the exact mistake a "how do I get the model?" leads to."""
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         # The dynamic export: symbolic batch, 128 frames, 96 mel bands.
         self.assertIsNone(emb._input_problem(["n", 128, 96]))
@@ -7468,7 +7506,7 @@ class GenreStudioTestCase(unittest.TestCase):
         )
 
     def test_extractor_upload_and_delete_round_trip(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         with self.app.app_context():
@@ -7505,7 +7543,7 @@ class GenreStudioTestCase(unittest.TestCase):
         """
         import threading
 
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         self.assertEqual(self._upload_extractor().status_code, 200)
@@ -7540,7 +7578,7 @@ class GenreStudioTestCase(unittest.TestCase):
         emb.reset_session()
 
     def test_extractor_upload_replaces_the_previous_one(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         self.assertEqual(self._upload_extractor(data=b"first").status_code, 200)
@@ -7555,7 +7593,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertEqual(len(onnx), 1)
 
     def test_extractor_rejects_a_non_onnx_file(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         r = self._upload_extractor(name="model.bin")
@@ -7564,7 +7602,7 @@ class GenreStudioTestCase(unittest.TestCase):
             self.assertIsNone(emb.model_path())
 
     def test_configured_model_is_never_deleted(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         cache = self.app.config["WEBAPP"]["cache_dir"]
         path = os.path.join(cache, "my-own.onnx")
@@ -7602,7 +7640,7 @@ class GenreStudioTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/api/genre/embed").status_code, 403)
 
     def test_embed_refuses_without_the_extractor(self):
-        from supysonic.deezer import embedding as emb
+        from neezer.deezer import embedding as emb
 
         self._login()
         if emb.why_unavailable():
@@ -7618,8 +7656,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_the_embed_backfill_reports_a_reason(self):
         """A run that cannot measure anything must say WHY in one sentence,
         not report thousands of per-track failures."""
-        from supysonic.deezer import embedding as emb
-        from supysonic.deezer.analysis import backfill_embeddings
+        from neezer.deezer import embedding as emb
+        from neezer.deezer.analysis import backfill_embeddings
 
         if emb.why_unavailable():
             stats = backfill_embeddings()
@@ -7636,8 +7674,8 @@ class GenreStudioTestCase(unittest.TestCase):
     def test_the_embed_worker_reports_progress_and_finishes(self):
         """The job is a worker, not a request: it must fill the counters as it
         goes and always come back to not-running, even on failure."""
-        from supysonic.deezer import analysis as ana
-        from supysonic.webui import genre as wg
+        from neezer.deezer import analysis as ana
+        from neezer.webui import genre as wg
 
         self._login()
 

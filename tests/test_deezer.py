@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import peewee
 
-from supysonic.db import (
+from neezer.db import (
     Track,
     Album,
     Artist,
@@ -24,9 +24,9 @@ from supysonic.db import (
     PlaylistTrack,
     User,
 )
-from supysonic.deezer import ids
-from supysonic.deezer.provider import DeezerProvider
-from supysonic.deezer import archive, importer
+from neezer.deezer import ids
+from neezer.deezer.provider import DeezerProvider
+from neezer.deezer import archive, importer
 
 from .testbase import TestBase
 
@@ -141,7 +141,7 @@ class DeezerTestCase(TestBase):
     # -- library upsert --------------------------------------------------
 
     def test_upsert_track_creates_rows(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         self.assertTrue(root.root)
@@ -191,7 +191,7 @@ class DeezerTestCase(TestBase):
 
     def test_check_login_separates_a_dead_arl_from_a_dead_network(self):
         from deezerpy import Deezer
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         provider = DeezerProvider("dummy", self.archive_dir, "FLAC")
 
@@ -231,7 +231,7 @@ class DeezerTestCase(TestBase):
         self.assertIsNone(self.provider._dz)  # forces a fresh login
 
     def test_stored_arl_overrides_the_configured_one(self):
-        from supysonic import deezer as dzmod
+        from neezer import deezer as dzmod
 
         cfg = {
             "enabled": True,
@@ -273,8 +273,8 @@ class DeezerTestCase(TestBase):
         between our SELECT and our INSERT), and the constraint violation that
         follows is a real one from the database.
         """
-        from supysonic.db import Album, Artist, Folder, Track
-        from supysonic.deezer import library
+        from neezer.db import Album, Artist, Folder, Track
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         # The "winner": everything for this album/artist now exists.
@@ -317,8 +317,8 @@ class DeezerTestCase(TestBase):
         """A path race is NOT the same as a track race: a different track grabbed
         the filename we picked, so the loser must move to the next free one
         rather than adopt someone else's row."""
-        from supysonic.db import Track
-        from supysonic.deezer import library
+        from neezer.db import Track
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         taken = library.upsert_track(raw_track(1, "Same Name"), root, "FLAC")
@@ -346,7 +346,7 @@ class DeezerTestCase(TestBase):
     # -- multi-artist credits --------------------------------------------
 
     def test_credits_from_gateway_payload(self):
-        from supysonic.deezer.library import _credits
+        from neezer.deezer.library import _credits
 
         # No ARTISTS list (the trimmed favourites payload) means "Deezer told
         # us nothing" — NOT "one artist". Anything else and re-importing a
@@ -378,8 +378,8 @@ class DeezerTestCase(TestBase):
         self.assertEqual(_credits({"ARTISTS": [{"ART_NAME": "no id"}]}), [])
 
     def test_upsert_track_stores_credits(self):
-        from supysonic.db import TrackArtist
-        from supysonic.deezer import library
+        from neezer.db import TrackArtist
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         raw = raw_track(1, "Feature")
@@ -408,7 +408,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual(TrackArtist.select().where(TrackArtist.track == t.id).count(), 2)
 
     def test_credits_always_include_the_primary_artist(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         # ARTISTS that omits ART_ID entirely (Deezer does this on some remixes).
@@ -422,7 +422,7 @@ class DeezerTestCase(TestBase):
         self.assertIn("B", names)
 
     def test_credited_only_artist_survives_prune(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         raw = raw_track(1, "Feature")
@@ -437,8 +437,8 @@ class DeezerTestCase(TestBase):
         self.assertTrue(Artist.select().where(Artist.deezer_id == "2").exists())
 
     def test_deleting_a_folder_hierarchy_takes_the_credits_with_it(self):
-        from supysonic.db import TrackArtist
-        from supysonic.deezer import library
+        from neezer.db import TrackArtist
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         raw = raw_track(1, "Feature")
@@ -457,8 +457,8 @@ class DeezerTestCase(TestBase):
         self.assertFalse(Artist.select().where(Artist.deezer_id == "2").exists())
 
     def test_deleting_one_track_takes_its_credits_with_it(self):
-        from supysonic.db import TrackArtist
-        from supysonic.deezer import library
+        from neezer.db import TrackArtist
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         raw = raw_track(1, "Feature")
@@ -472,7 +472,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual(TrackArtist.select().count(), 0)
 
     def test_subsonic_child_exposes_credits(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         raw = raw_track(1, "Feature", art=("1", "A"))
@@ -492,7 +492,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual(child["displayArtist"], "A feat. B")
 
     def test_display_artist_without_a_main_credit(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         raw = raw_track(1, "Odd")
@@ -506,7 +506,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual(t.display_artist(), "A, B")
 
     def test_upsert_track_stores_replaygain(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         # Deezer sends GAIN as a string in dB; it lands on the Track row as a
@@ -528,7 +528,7 @@ class DeezerTestCase(TestBase):
         # The loudness is measured from the file now: Deezer's GAIN neither
         # reaches the tagging dict nor a ReplayGain tag (tests.test_detach_d
         # writes a real file and reads it back).
-        from supysonic.deezer import metadata
+        from neezer.deezer import metadata
 
         info = raw_track(1, "Loud")
         info["GAIN"] = "-8.4"
@@ -538,7 +538,7 @@ class DeezerTestCase(TestBase):
     def test_find_local_track_is_network_free(self):
         # An imported track is found by its Deezer id with a pure DB lookup, so
         # streaming archived audio never needs Deezer (offline resilience).
-        from supysonic.deezer import archive, library
+        from neezer.deezer import archive, library
 
         root = library.get_root_folder(self.archive_dir)
         library.upsert_track(raw_track(42, "Hello"), root, "FLAC")
@@ -548,7 +548,7 @@ class DeezerTestCase(TestBase):
         self.assertIsNone(archive.find_local_track("999"))
 
     def test_scan_local_imports_and_spares_deezer(self):
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(self.archive_dir)
         # A lazy Deezer row (no file on disk) must survive the local scan.
@@ -694,7 +694,7 @@ class DeezerTestCase(TestBase):
         last_modification), writing every column puts back the values read
         before it — and the track reads as not archived again.
         """
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         t = library.upsert_track(raw_track(1, "Song"), root, "FLAC")
@@ -721,7 +721,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual(row.title, "Song (remastered)")
 
     def test_a_resync_writes_what_deezer_changed(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         t = library.upsert_track(raw_track(1, "Song", num=3, dur=200), root, "FLAC")
@@ -781,7 +781,7 @@ class DeezerTestCase(TestBase):
         # Tagging rewrites the file in place; once it is at its archive path it
         # is being served (stream, Subsonic, the silence measurement), and a
         # reader in that window got a file half moved.
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         track = library.upsert_track(raw_track(31, "Staged"), root, "FLAC")
@@ -804,7 +804,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual([n for n in os.listdir(folder) if n.endswith(".part")], [])
 
     def test_a_live_stream_is_tagged_before_it_is_published(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         track = library.upsert_track(raw_track(32, "Live"), root, "FLAC")
@@ -824,7 +824,7 @@ class DeezerTestCase(TestBase):
         self.assertEqual([n for n in os.listdir(folder) if n.endswith(".part")], [])
 
     def test_ensure_archived_writes_file_and_updates_row(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         track = library.upsert_track(raw_track(7, "Lazy"), root, "FLAC")
@@ -863,7 +863,7 @@ class DeezerTestCase(TestBase):
         subset of the fields. Once the audio is archived, that row IS the
         metadata — Deezer may never answer about this track again — so the
         richer song.getData payload has to land on it."""
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         # A thin import: no track/disc number, no release date, no credits.
@@ -921,7 +921,7 @@ class DeezerTestCase(TestBase):
     def test_the_metadata_sidecar_never_stores_a_credential(self):
         """The gateway payload also carries stream tokens. Those are secrets
         with no business in a file that outlives the session."""
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         track = library.upsert_track(raw_track(11, "Tokens"), root, "FLAC")
@@ -939,7 +939,7 @@ class DeezerTestCase(TestBase):
     def test_ensure_archived_writes_cover_sidecar(self):
         # The album art is archived on disk (cover.jpg next to the audio) and
         # then served locally with no Deezer call — like the sound itself.
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         track = library.upsert_track(raw_track(8, "Art"), root, "FLAC")
@@ -1021,7 +1021,7 @@ class DeezerTestCase(TestBase):
         # track: raise instead of hammering the login endpoint.
         import time
 
-        from supysonic.deezer.provider import DeezerError
+        from neezer.deezer.provider import DeezerError
 
         relogins = []
         self.provider._dz = self._FakeDz(alive=False)
@@ -1035,7 +1035,7 @@ class DeezerTestCase(TestBase):
     # -- cover art for Deezer entities -----------------------------------
 
     def test_deezer_entities_expose_coverart(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         root = library.get_root_folder(self.archive_dir)
         t = library.upsert_track(
@@ -1060,7 +1060,7 @@ class DeezerTestCase(TestBase):
 
     def test_deezer_cover_path_routes_by_type(self):
         import os
-        from supysonic.deezer import archive, library
+        from neezer.deezer import archive, library
 
         root = library.get_root_folder(self.archive_dir)
         t = library.upsert_track(
@@ -1099,8 +1099,8 @@ class DeezerTestCase(TestBase):
     # -- prefetch worker -------------------------------------------------
 
     def test_prefetcher_archives_in_background(self):
-        from supysonic.deezer import library
-        from supysonic.deezer.prefetch import DeezerPrefetcher
+        from neezer.deezer import library
+        from neezer.deezer.prefetch import DeezerPrefetcher
 
         root = library.get_root_folder(self.archive_dir)
         track = library.upsert_track(raw_track(11, "Pre"), root, "FLAC")

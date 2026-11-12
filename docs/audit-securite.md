@@ -1,4 +1,4 @@
-# Audit de sécurité offensif — NSupySonic (passe 2, boîte noire)
+# Audit de sécurité offensif — Neezer (passe 2, boîte noire)
 
 > ## 🛠️ État des corrections (2026-07-29)
 >
@@ -49,9 +49,9 @@
 >   le télécharge. `DELETE /api/local/<uuid>` permet enfin de le supprimer.
 > - `SUPYSONIC_SECRETS_ENV_ONLY=1` interdit le repli base pour les secrets
 >   serveur (voir `config.sample`).
-> - Les mots de passe les plus courants (`changeme`, `supysonic`, …) sont
+> - Les mots de passe les plus courants (`changeme`, `neezer`, …) sont
 >   refusés ; `SUPYSONIC_MIN_PASSWORD_LENGTH` impose une longueur minimale.
-> - `supysonic-cli user add --password-stdin` évite d'exposer le mot de passe
+> - `neezer-cli user add --password-stdin` évite d'exposer le mot de passe
 >   dans `ps`.
 >
 > ---
@@ -144,7 +144,7 @@ Les preuves les plus marquantes de cette passe :
 | [NS-10](#ns-10) | Quota : TOCTOU (backend concurrent seulement) | 🟡 Moyen | ⚠️ Non reproduit | Inchangé — reste théorique (SQLite sérialise les écritures) |
 | [NS-26](#ns-26) | `_push_async` : thread par appel (admin-only) | 🟡 Moyen | ✅ Confirmé | `ThreadPoolExecutor(max_workers=4)` partagé |
 | [NS-27](#ns-27) | Aucun journal d'audit | 🟡 Moyen | 🔎 Confirmé | **Non corrigé** — table `AuditLog` à concevoir |
-| [NS-28](#ns-28) | Mots de passe par défaut (`changeme`, `supysonic`) | 🔵 Faible | 🔎 Confirmé | L'entrypoint refuse `changeme` & co. et génère un mot de passe si aucun n'est fourni |
+| [NS-28](#ns-28) | Mots de passe par défaut (`changeme`, `neezer`) | 🔵 Faible | 🔎 Confirmé | L'entrypoint refuse `changeme` & co. et génère un mot de passe si aucun n'est fourni |
 | [NS-29](#ns-29) | Aucune politique de mot de passe | 🔵 Faible | ✅ Confirmé | Mots de passe courants refusés ; longueur minimale via `SUPYSONIC_MIN_PASSWORD_LENGTH` |
 | [NS-30](#ns-30) | `LIKE` non échappé → scans coûteux | 🔵 Faible | ✅ Confirmé | Le joker `%` est retiré du terme de recherche ; plancher de 2 caractères sur `/api` |
 | [NS-31](#ns-31) | Bombes de décompression PIL (pochettes) | 🔵 Faible | 🔎 Confirmé | `Image.MAX_IMAGE_PIXELS` plafonné et paramètre `size` borné à 2048 |
@@ -161,7 +161,7 @@ Les preuves les plus marquantes de cette passe :
 
 ### <a id="ns-01"></a>NS-01 — 🔴 ✅ Le durcissement du cookie n'est jamais appliqué
 
-**Fichier :** `supysonic/web.py:110-118`
+**Fichier :** `neezer/web.py:110-118`
 
 ```python
 app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
@@ -204,7 +204,7 @@ assert "SameSite=Lax" in sc and "HttpOnly" in sc
 
 ### <a id="ns-02"></a>NS-02 — 🔴 ✅ Aucune protection CSRF, mutations en GET
 
-**Fichiers :** `supysonic/frontend/`, `supysonic/webui/__init__.py`
+**Fichiers :** `neezer/frontend/`, `neezer/webui/__init__.py`
 
 Aucun jeton CSRF n'existe. Combiné à NS-01, toute action est déclenchable en cross-site.
 **Preuve en boîte noire** (session admin frontend, requêtes GET) :
@@ -234,7 +234,7 @@ def _reject_cross_site():
 
 ### <a id="ns-03"></a>NS-03 — 🔴 ✅ Mot de passe en clair récupérable depuis la base seule
 
-**Fichiers :** `supysonic/managers/user.py:34-49`, `supysonic/utils.py:18-43`
+**Fichiers :** `neezer/managers/user.py:34-49`, `neezer/utils.py:18-43`
 
 **Preuve en boîte noire** (création d'un utilisateur `victim` / `SuperSecret#42`, puis
 déchiffrement en n'utilisant que le contenu de la base) :
@@ -263,14 +263,14 @@ base pour cette clé. (3) Chiffrement authentifié. (4) Idem `cookies_secret` ho
 
 ### <a id="ns-04"></a>NS-04 — 🔴 🔎 Démon : `pickle` sur socket `/tmp` prévisible → RCE
 
-**Fichiers :** `supysonic/daemon/server.py:38-70`, `supysonic/config.py:59-71`
+**Fichiers :** `neezer/daemon/server.py:38-70`, `neezer/config.py:59-71`
 
 **Preuve (lecture + introspection) :**
 
 ```
 uses multiprocessing Listener : True
 recv() puis isinstance-check   : True   (pickle AVANT toute validation)
-default socket path            : /tmp/supysonic/supysonic.sock  (répertoire partagé prévisible)
+default socket path            : /tmp/neezer/neezer.sock  (répertoire partagé prévisible)
 ```
 
 `multiprocessing.connection.recv()` désérialise avec `pickle` **avant** le
@@ -281,7 +281,7 @@ deux fragiles : l'`authkey` vit dans la base ([NS-03](#ns-03)), et le socket est
 **Chaîne :** fuite base → `daemon_key` → `Client(addr, authkey).send(pickle_bomb)` → RCE
 sous l'identité du démon (accès écriture bibliothèque + config = **ARL**).
 
-**Correctif.** (1) Socket dans `/run/supysonic` (0700, `umask 077`), refus si world-writable.
+**Correctif.** (1) Socket dans `/run/neezer` (0700, `umask 077`), refus si world-writable.
 (2) Remplacer le transport picklé par du **JSON + liste blanche de commandes** (moins de
 dix). (3) `daemon_key` hors base.
 
@@ -291,7 +291,7 @@ dix). (3) `daemon_key` hors base.
 
 ### <a id="ns-05"></a>NS-05 — 🟠 ✅ Mass assignment `admin=1`
 
-**Fichier :** `supysonic/frontend/user.py:249-275` — `UserManager.add(name, passwd, **args)`.
+**Fichier :** `neezer/frontend/user.py:249-275` — `UserManager.add(name, passwd, **args)`.
 
 **Preuve en boîte noire** (session admin frontend) :
 
@@ -313,7 +313,7 @@ booléens côté serveur, et refus de tout kwarg hors liste dans `UserManager.ad
 
 ### <a id="ns-06"></a>NS-06 — 🟠 ✅ `/rest/download?id=<folder>` exfiltre tout l'arbre
 
-**Fichier :** `supysonic/api/media.py:363-393` — `z.add_path(rv.path, recurse=True)`, **sans
+**Fichier :** `neezer/api/media.py:363-393` — `z.add_path(rv.path, recurse=True)`, **sans
 filtre d'extension ni contrôle de rôle**.
 
 **Preuve bout-en-bout** (un invité, `mallory`, télécharge le dossier racine où un fichier
@@ -332,7 +332,7 @@ et les uploads de tous les autres comptes. Ids de dossier séquentiels.
 
 **Aggravation avec [NS-05](#ns-05) :** un admin obtenu par CSRF enregistre `/` comme racine
 (`FolderManager.add` ne restreint aucun chemin) → lecture arbitraire du disque
-(`/data/supysonic.conf` = ARL, clés SSH montées…).
+(`/data/neezer.conf` = ARL, clés SSH montées…).
 
 **Correctif.** Filtrer par extension (itérer sur les `Track` du dossier, pas sur le FS),
 restreindre au rôle admin, et borner `FolderManager.add` à une liste blanche de racines.
@@ -341,7 +341,7 @@ restreindre au rôle admin, et borner `FolderManager.add` à une liste blanche d
 
 ### <a id="ns-07"></a>NS-07 — 🟠 ✅ Uploads non cloisonnés entre utilisateurs
 
-**Fichiers :** `supysonic/webui/__init__.py:1683-1697` et routes de lecture.
+**Fichiers :** `neezer/webui/__init__.py:1683-1697` et routes de lecture.
 
 **Preuve bout-en-bout** (`guest` uploade, `mallory` lit) :
 
@@ -367,7 +367,7 @@ propriétaire**. Le modèle `Track` n'a pas de champ owner. Toutes les routes de
 
 ### <a id="ns-08"></a>NS-08 — 🟠 ✅ Épuisement disque via `/api/download`
 
-**Fichier :** `supysonic/deezer/prefetch.py:45-53`
+**Fichier :** `neezer/deezer/prefetch.py:45-53`
 
 **Preuve (introspection) :** `self._dl_queue: queue.Queue = queue.Queue()` — **aucun
 `maxsize`**. `/api/download` accepte 2000 ids/requête, mais rien ne borne le nombre de
@@ -384,7 +384,7 @@ utilisateur, garde-fou `shutil.disk_usage`, et rate-limit sur la route.
 
 ### <a id="ns-09"></a>NS-09 — 🟠 🔎 Gel serveur : ffmpeg synchrone sur 8 threads
 
-**Fichiers :** `supysonic/webui/share.py:166-190, 300-355`, `docker/gunicorn.conf.py`
+**Fichiers :** `neezer/webui/share.py:166-190, 300-355`, `docker/gunicorn.conf.py`
 (1 worker / 8 threads).
 
 `/api/share/waveform` décode **tout** le fichier en PCM ; `/api/share/clip` réencode
@@ -401,7 +401,7 @@ formes d'onde générées à l'archivage plutôt qu'à la demande.
 
 ### <a id="ns-11"></a>NS-11 — 🟠 ✅ Rate-limit : le succès efface la progression de l'attaquant
 
-**Fichier :** `supysonic/ratelimit.py` + `api/__init__.py:81,102`, `webui:967`
+**Fichier :** `neezer/ratelimit.py` + `api/__init__.py:81,102`, `webui:967`
 
 **Preuve en boîte noire** (4 échecs depuis une IP, puis une connexion réussie depuis la
 même IP) :
@@ -447,7 +447,7 @@ incrémenté au changement de mot de passe / de rôle (rend les sessions révoca
 
 ### <a id="ns-37"></a>NS-37 — 🟠 ✅ **Nouveau** — Open redirect : garde contourné par `/\`
 
-**Fichier :** `supysonic/frontend/user.py:26-35` (`safe_redirect_target`), utilisé par
+**Fichier :** `neezer/frontend/user.py:26-35` (`safe_redirect_target`), utilisé par
 `frontend.login(returnUrl=…)`.
 
 Le garde rejette `//evil.com` mais **pas** `/\evil.com`. **Preuve en boîte noire :**
@@ -558,9 +558,9 @@ redirections à la main pour que le cookie de session n'aille qu'au serveur. Mix
 content refusé, sauvegarde et transfert d'appareil exclus.
 
 ### <a id="ns-20"></a>NS-20 — 🟡 🔎 Fuite de l'ARL et du mot de passe admin
-`entrypoint.sh` écrit `arl = …` en clair dans `/data/supysonic.conf` (umask 022, volume
+`entrypoint.sh` écrit `arl = …` en clair dans `/data/neezer.conf` (umask 022, volume
 persistant) ; `DEEZER_ARL` visible via `docker inspect`/`/proc/<pid>/environ` ;
-`supysonic-cli user add … -p "$PWD"` expose le mot de passe admin dans `ps`. → `chmod 600`
+`neezer-cli user add … -p "$PWD"` expose le mot de passe admin dans `ps`. → `chmod 600`
 + `umask 077`, secrets Docker (`*_FILE`), `--password-stdin`, rotation de l'ARL.
 
 ### <a id="ns-21"></a>NS-21 — 🟡 🔎 Supply chain : builds non reproductibles
@@ -615,7 +615,7 @@ admin, ajout de racine, changement de mot de passe d'un tiers, accès à un fich
 ## 4. Constats faibles
 
 ### <a id="ns-28"></a>NS-28 — 🔵 🔎 Mots de passe par défaut
-`changeme` / `${POSTGRES_PASSWORD:-supysonic}` s'appliquent silencieusement ; port publié
+`changeme` / `${POSTGRES_PASSWORD:-neezer}` s'appliquent silencieusement ; port publié
 sur `0.0.0.0`. → Refus de démarrer avec `changeme`, mot de passe aléatoire au premier boot.
 
 ### <a id="ns-29"></a>NS-29 — 🔵 ✅ Aucune politique de mot de passe
@@ -675,7 +675,7 @@ un nom valide. → Vérifier contre un hachage factice quand l'utilisateur n'exi
 2. POST /user/add admin=1  → pas de SameSite (NS-01✅), pas de CSRF (NS-02✅),
    mass assignment (NS-05✅)                     ⇒ compte ADMIN pour l'attaquant.
 3. GET /rest/download?id=<N> (NS-06✅)           ⇒ ZIP de tout l'arbre :
-     /data/supysonic.conf → ARL (NS-20)
+     /data/neezer.conf → ARL (NS-20)
      dump base → password_secret → mots de passe en clair (NS-03✅)
      dump base → cookies_secret → forge de session (NS-03✅)
      dump base → daemon_key → pickle → RCE (NS-04)

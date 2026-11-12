@@ -53,7 +53,7 @@ import java.util.concurrent.Executors
 import org.json.JSONObject
 
 /**
- * Full-screen WebView hosting the NSupySonic SPA (<server>/app/), bridged to
+ * Full-screen WebView hosting the Neezer SPA (<server>/app/), bridged to
  * PlayerService so playback gets a real MediaSession + foreground service.
  *
  * The bridge is injected from HERE (assets/nsshim.js replaces
@@ -252,7 +252,7 @@ class MainActivity : AppCompatActivity() {
             // So never — it was ALWAYS_ALLOW with verification off, which let
             // anyone on the network rewrite whatever loaded over http.
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString NSupySonicApp/1.0"
+            userAgentString = "$userAgentString NeezerApp/1.0"
         }
         wv.addJavascriptInterface(Bridge(), "NSNative")
 
@@ -699,7 +699,7 @@ class MainActivity : AppCompatActivity() {
     /** Save `text` as `name` in the public Downloads folder. */
     private fun writeToDownloads(name: String, text: String) {
         val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120)
-            .ifEmpty { "nsupysonic.txt" }
+            .ifEmpty { "neezer.txt" }
         try {
             val bytes = text.toByteArray(Charsets.UTF_8)
             if (Build.VERSION.SDK_INT >= 29) {
@@ -786,7 +786,7 @@ class MainActivity : AppCompatActivity() {
                 val fileName =
                     URLUtil.guessFileName(rawUrl, conn.getHeaderField("Content-Disposition"), mimeType)
                         .replace(Regex("[^A-Za-z0-9._ -]"), "_").trimStart('.').take(120)
-                        .ifEmpty { "nsupysonic" }
+                        .ifEmpty { "neezer" }
 
                 // One slot: a fresh share replaces whatever was queued before —
                 // nothing here needs to outlive the single chooser it feeds.

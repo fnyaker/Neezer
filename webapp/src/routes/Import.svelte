@@ -2,7 +2,7 @@
   // Import a playlist somebody shared: paste the link, the server reads it and
   // finds each title (your library first, then Deezer, then YouTube), and the
   // result plays at once. It is TEMPORARY until "Enregistrer" makes it one of
-  // your playlists. See supysonic/webui/playlist_import.py.
+  // your playlists. See neezer/webui/playlist_import.py.
   import { nameOf } from "../lib/sources.js";
   import { onDestroy } from "svelte";
   import { push } from "svelte-spa-router";

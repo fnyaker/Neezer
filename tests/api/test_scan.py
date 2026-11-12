@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2020-2022 Alban 'spl0k' Féron
 #
@@ -10,8 +10,8 @@ import time
 
 from threading import Thread
 
-from supysonic.daemon.server import Daemon
-from supysonic.db import Folder
+from neezer.daemon.server import Daemon
+from neezer.db import Folder
 
 from .apitestbase import ApiTestBase
 

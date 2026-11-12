@@ -3,7 +3,7 @@
   // whole "Indisponibles" list, and — since it replaces tracks WITHOUT asking —
   // always show what it replaced, with the score that justified it.
   //
-  // The server does the listening (supysonic/webui/automatch.py): the dead
+  // The server does the listening (neezer/webui/automatch.py): the dead
   // track's Deezer preview against each plausible candidate's audio, 99 % or
   // nothing. This screen only switches, starts, follows and reports.
   import { onDestroy, onMount } from "svelte";

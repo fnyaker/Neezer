@@ -23,9 +23,9 @@ sys.path.insert(0, ROOT)
 import mediafile  # noqa: E402
 from werkzeug.serving import make_server  # noqa: E402
 
-from supysonic.config import DefaultConfig  # noqa: E402
-from supysonic.managers.user import UserManager  # noqa: E402
-from supysonic.web import create_application  # noqa: E402
+from neezer.config import DefaultConfig  # noqa: E402
+from neezer.managers.user import UserManager  # noqa: E402
+from neezer.web import create_application  # noqa: E402
 
 RATE = 22050
 
@@ -67,7 +67,7 @@ def main():
     with app.app_context():
         UserManager.add("owner", "Owner1", admin=True)
         UserManager.add("friend", "Friend1", admin=False)
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(archive)
         tracks = []

@@ -6,7 +6,7 @@ FastCGI
 
 FastCGI is a deployment option on servers like `nginx`__ or `lighttpd`__; see
 :doc:`wsgi-standalone` for other options.
-To use Supysonic with any of them you will need a FastCGI server first. The most
+To use Neezer with any of them you will need a FastCGI server first. The most
 popular one is `flup`__ which we will use for this guide. Make sure to have it
 installed (with eith :command:`pip` or :command:`apt`) to follow along.
 
@@ -18,14 +18,14 @@ Creating a `.fcgi` file
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 First you need to create the FastCGI server file. Let's call it
-:file:`supysonic.fcgi`:
+:file:`neezer.fcgi`:
 
 .. code-block:: python3
 
    #!/usr/bin/python3
 
    from flup.server.fcgi import WSGIServer
-   from supysonic.web import create_application
+   from neezer.web import create_application
 
    if __name__ == "__main__":
       app = create_application()
@@ -43,21 +43,21 @@ to the :py:class:`~flup.server.fcgi.WSGIServer`:
 The path has to be the exact same path you define in the server
 config.
 
-Save the :file:`supysonic.fcgi` file somewhere you will find it again.
-It makes sense to have that in :file:`/var/www/supysonic` or something
+Save the :file:`neezer.fcgi` file somewhere you will find it again.
+It makes sense to have that in :file:`/var/www/neezer` or something
 similar.
 
 Make sure to set the executable bit on that file so that the servers
 can execute it::
 
-   $ chmod +x /var/www/supysonic/supysonic.fcgi
+   $ chmod +x /var/www/neezer/neezer.fcgi
 
 Configuring the web server
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The example above is good enough for a basic Apache deployment but your
 `.fcgi` file will appear in your application URL e.g.
-``example.com/supysonic.fcgi/``. If that bothers you or you wish to load it in
+``example.com/neezer.fcgi/``. If that bothers you or you wish to load it in
 another web server, Flask's documentation details how to do it for `Apache`__,
 `lighttpd`__ or `nginx`__.
 
@@ -76,14 +76,14 @@ Creating a `.cgi` file
 ^^^^^^^^^^^^^^^^^^^^^^
 
 First you need to create the CGI application file. Let's call it
-:file:`supysonic.cgi`:
+:file:`neezer.cgi`:
 
 .. code-block:: python3
 
    #!/usr/bin/python3
 
    from wsgiref.handlers import CGIHandler
-   from supysonic.web import create_application
+   from neezer.web import create_application
 
    app = create_application()
    CGIHandler().run(app)
@@ -99,4 +99,4 @@ In Apache for example you can put something like this into the config:
 
 .. code-block:: apache
 
-   ScriptAlias /supysonic /path/to/the/supysonic.cgi
+   ScriptAlias /neezer /path/to/the/neezer.cgi

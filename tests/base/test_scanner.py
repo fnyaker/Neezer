@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2023 Alban 'spl0k' Féron
 #
@@ -14,9 +14,9 @@ import unittest
 
 from contextlib import contextmanager
 
-from supysonic import db
-from supysonic.managers.folder import FolderManager
-from supysonic.scanner import Scanner
+from neezer import db
+from neezer.managers.folder import FolderManager
+from neezer.scanner import Scanner
 
 
 class ScannerTestCase(unittest.TestCase):
@@ -190,7 +190,7 @@ class ScannerTestCase(unittest.TestCase):
         shutil.copyfile(track.path, doomed)
         shutil.copyfile(track.path, survivor)
 
-        from supysonic import scanner as scanner_module
+        from neezer import scanner as scanner_module
 
         real_scandir = scanner_module.os.scandir
 

@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""Remote control (supysonic/webui/remote.py).
+"""Remote control (neezer/webui/remote.py).
 
 A link lends the owner's identity to whoever holds it, narrowed to a level.
 What is pinned here is exactly what that must never get wrong: every endpoint
@@ -23,11 +23,11 @@ import time
 import unittest
 from datetime import timedelta
 
-from supysonic.config import DefaultConfig
-from supysonic.db import RemoteLink, User, now, release_database
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
-from supysonic.webui import remote as R
+from neezer.config import DefaultConfig
+from neezer.db import RemoteLink, User, now, release_database
+from neezer.managers.user import UserManager
+from neezer.web import create_application
+from neezer.webui import remote as R
 
 DEVICE = "livingroom-pc-0001"
 

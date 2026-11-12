@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -18,9 +18,9 @@ import shutil
 import tempfile
 import unittest
 
-from supysonic import trackcredits
-from supysonic.db import Meta, Track, TrackCredit, User
-from supysonic.deezer import library
+from neezer import trackcredits
+from neezer.db import Meta, Track, TrackCredit, User
+from neezer.deezer import library
 
 from . import test_webui as _tw
 
@@ -187,7 +187,7 @@ class PanelTest(_Case):
         self.assertIn("composer", first)
         with self.app.app_context():
             self.assertIn("deezer", trackcredits.stored(t.id))
-        from supysonic.webui import credits
+        from neezer.webui import credits
 
         with credits._lock:
             credits._cache.clear()
@@ -233,7 +233,7 @@ class PersonTest(_Case):
         self.assertEqual(self.client.get("/api/credits/person?name=").status_code, 404)
 
     def test_a_private_upload_stays_private(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         with self.app.app_context():
             UserManager.add("bob", "B0b")
@@ -355,7 +355,7 @@ class BackfillTest(_Case):
         """Every Deezer call of the backfill first waits for the foreground."""
         from unittest import mock
 
-        from supysonic.deezer import workload
+        from neezer.deezer import workload
 
         self._archive(1500)
         provider = FakeProvider()
@@ -380,7 +380,7 @@ class UploadTest(unittest.TestCase):
     def test_import_stores_the_tags_credits(self):
         from mutagen.flac import FLAC
 
-        from supysonic.deezer import local
+        from neezer.deezer import local
 
         from .test_detach_d import make_audio
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# This file is part of Supysonic.
+# This file is part of Neezer.
 # Distributed under terms of the GNU AGPLv3 license.
 
 """Turn a browser HAR capture of the Deezer web app into an API catalog.

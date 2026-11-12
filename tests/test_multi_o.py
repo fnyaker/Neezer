@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -23,10 +23,10 @@ import struct
 import tempfile
 import unittest
 
-from supysonic import db as dbmod
-from supysonic import genretree
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer import genretree
+from neezer.config import DefaultConfig
+from neezer.db import (
     GenreAlias,
     GenreParent,
     GenreTag,
@@ -35,11 +35,11 @@ from supysonic.db import (
     init_database,
     release_database,
 )
-from supysonic.deezer import analysis as ana
-from supysonic.deezer import genre as gen
-from supysonic.deezer import genre_tree
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.deezer import analysis as ana
+from neezer.deezer import genre as gen
+from neezer.deezer import genre_tree
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from .test_deezer import count_statements
 
@@ -381,7 +381,7 @@ class DecideTestCase(_Db):
 
     def head(self, labels, probs, families):
         """Store a 1-wide head whose answer to [1.0] is ``probs``."""
-        from supysonic.db import GenreModel
+        from neezer.db import GenreModel
 
         logits = [math.log(p) for p in probs]
         flat = logits + [0.0] * len(labels)
@@ -525,7 +525,7 @@ class DecideTestCase(_Db):
             self.assertGreater(same, 5)
 
     def test_the_analysis_serves_the_ancestor_with_its_archetype(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         self.head(["Frenchcore", "Speedcore", "Jazz / acoustique"], [0.45, 0.40, 0.15],
                   {"Frenchcore": "frenchcore", "Speedcore": "speedcore", "Jazz / acoustique": "jazz"})
@@ -539,7 +539,7 @@ class DecideTestCase(_Db):
 
 
 def _track(case):
-    from supysonic.deezer import library
+    from neezer.deezer import library
 
     archive = os.path.join(case.dir, "archive")
     os.makedirs(archive, exist_ok=True)
@@ -589,7 +589,7 @@ class _App(unittest.TestCase):
         UserManager.add("alice", "Alic3", admin=True)
         UserManager.add("bob", "B0bbb", admin=False)
         self.client = self.app.test_client()
-        from supysonic.webui import genre as wg
+        from neezer.webui import genre as wg
 
         genretree.invalidate()
         gen.invalidate()
@@ -600,7 +600,7 @@ class _App(unittest.TestCase):
             wg._relabel_job.update(running=False, again=False, error=None)
 
     def tearDown(self):
-        from supysonic.webui import genre as wg
+        from neezer.webui import genre as wg
 
         wg._spawn = self._spawn
         with wg._relabel_lock:
@@ -624,7 +624,7 @@ class _App(unittest.TestCase):
         })
         self.assertEqual(r.status_code, 200, r.data)
         self.relabels.clear()
-        from supysonic.webui import genre as wg
+        from neezer.webui import genre as wg
 
         with wg._relabel_lock:
             wg._relabel_job.update(running=False, again=False)
@@ -755,7 +755,7 @@ class RoutesTestCase(_App):
     def test_the_candidates_scores_take_the_last_choice(self):
         self.login()
         self.client.get("/api/genre/tree")
-        from supysonic.webui import genre as wg
+        from neezer.webui import genre as wg
 
         with self.app.test_request_context("/?last=Frenchcore"):
             rows = wg._scores_json(("Zaag", 0.3, {"Zaag": 0.3, "House": 0.17, "Speedcore": 0.15}, 0.0), None)

@@ -171,7 +171,7 @@ function stamp(ms) {
 export function logText() {
   load();
   const head = [
-    "NSupySonic — journal client",
+    "Neezer — journal client",
     `exporté : ${new Date().toISOString()}`,
     `entrées : ${buffer.length}`,
     typeof navigator !== "undefined" ? `agent   : ${navigator.userAgent}` : "",
@@ -241,7 +241,7 @@ export function downloadLog() {
 
 function logFileName() {
   const d = new Date();
-  return `nsupysonic-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.txt`;
+  return `neezer-log-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.txt`;
 }
 
 /** Copy any text to the clipboard — the reliable path inside a WebView, where

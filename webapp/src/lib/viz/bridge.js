@@ -27,7 +27,7 @@
 import { setBackgroundAnalysis, BAND_COUNT, GENRE_KEYS } from "../audio/engine.js";
 import { LOOK_KEYS } from "../audio/style.js";
 
-const CHANNEL = "nsupysonic-viz";
+const CHANNEL = "neezer-viz";
 // ANALYSIS AND RENDERING ARE DIFFERENT THINGS, and this channel is the line
 // between them. The sound is analysed ONCE, in the tab that has the audio — one
 // beat tracker, one classifier, so the genre is decided once and both screens

@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2018 Alban 'spl0k' Féron
 # Copyright (C) 2024 Iván Ávalos
@@ -9,7 +9,7 @@
 import logging
 import unittest
 
-from supysonic.listenbrainz import ListenBrainz
+from neezer.listenbrainz import ListenBrainz
 
 from ..frontend.frontendtestbase import FrontendTestBase
 
@@ -18,7 +18,7 @@ class ListenBrainzTestCase(unittest.TestCase):
     """Basic test of unauthenticated ListenBrainz API method"""
 
     def test_request(self):
-        logging.getLogger("supysonic.listenbrainz").addHandler(logging.NullHandler())
+        logging.getLogger("neezer.listenbrainz").addHandler(logging.NullHandler())
         listenbrainz = ListenBrainz({"api_url": "https://api.listenbrainz.org/"}, None)
 
         user = "aavalos"

@@ -1,27 +1,37 @@
 #!/bin/sh
-# Entrypoint for the NSupySonic image.
+# Entrypoint for the Neezer image.
 #
 # Two ways to configure the container:
 #   1. Env vars (great for docker compose / .env) — this script renders
-#      /data/supysonic.conf from them. supysonic reads "supysonic.conf" from the
-#      working dir (/data) last, so it overrides the baked /etc/supysonic.
-#   2. Mount your own file at /etc/supysonic (set no Deezer/DB env vars).
+#      /tmp/neezer.conf from them. neezer reads "neezer.conf" from the
+#      working dir (/data) last, so it overrides the baked /etc/neezer.
+#   2. Mount your own file at /etc/neezer (set no Deezer/DB env vars).
 #
-# It also auto-creates an admin user on first boot when SUPYSONIC_ADMIN_USER and
-# SUPYSONIC_ADMIN_PASSWORD are set (idempotent).
+# It also auto-creates an admin user on first boot when NEEZER_ADMIN_USER and
+# NEEZER_ADMIN_PASSWORD are set (idempotent).
 set -e
 umask 077
+
+# Pre-rebrand environment names are still honoured: an existing compose file,
+# systemd unit or .env written before the rename must keep configuring the same
+# deployment. NEEZER_* wins when both are set.
+[ -n "${SUPYSONIC_CONFIG:-}" ] && [ -z "${NEEZER_CONFIG:-}" ] && NEEZER_CONFIG="$SUPYSONIC_CONFIG"
+[ -n "${SUPYSONIC_ADMIN_USER:-}" ] && [ -z "${NEEZER_ADMIN_USER:-}" ] && NEEZER_ADMIN_USER="$SUPYSONIC_ADMIN_USER"
+[ -n "${SUPYSONIC_ADMIN_PASSWORD:-}" ] && [ -z "${NEEZER_ADMIN_PASSWORD:-}" ] && NEEZER_ADMIN_PASSWORD="$SUPYSONIC_ADMIN_PASSWORD"
+[ -n "${SUPYSONIC_PROXY_HOPS:-}" ] && [ -z "${NEEZER_PROXY_HOPS:-}" ] && NEEZER_PROXY_HOPS="$SUPYSONIC_PROXY_HOPS"
+[ -n "${SUPYSONIC_SESSION_COOKIE_SECURE:-}" ] && [ -z "${NEEZER_SESSION_COOKIE_SECURE:-}" ] \
+    && NEEZER_SESSION_COOKIE_SECURE="$SUPYSONIC_SESSION_COOKIE_SECURE"
 
 mkdir -p /data/db /data/cache /data/archive 2>/dev/null || true
 
 # Rendered per CONTAINER, not on the shared /data volume, and pointed at with
-# SUPYSONIC_CONFIG (read last, so it wins over every discovered file).
+# NEEZER_CONFIG (read last, so it wins over every discovered file).
 #
 # It used to live at /data/supysonic.conf. The app and the optional daemon mount
 # the same volume, so they raced to write that one file from two different
 # environments — and since the [base] section is only emitted when DATABASE_URI
 # is set, a daemon started without it rewrote the file WITHOUT the database URI.
-# Both processes then fell back to the password baked into /etc/supysonic and
+# Both processes then fell back to the password baked into /etc/neezer and
 # died with "password authentication failed for user supysonic", having changed
 # nothing themselves.
 #
@@ -30,8 +40,8 @@ mkdir -p /data/db /data/cache /data/archive 2>/dev/null || true
 # and when that silently failed the config could not be written at all — which
 # is far worse than the problem it was fixing, because a process with no config
 # falls back to a DIFFERENT, EMPTY database and looks like it lost your data.
-CONF="${SUPYSONIC_CONFIG:-/tmp/supysonic.conf}"
-export SUPYSONIC_CONFIG="$CONF"
+CONF="${NEEZER_CONFIG:-/tmp/neezer.conf}"
+export NEEZER_CONFIG="$CONF"
 
 render_config() {
     # The Android app version this image expects clients to run. Defaults to the
@@ -42,7 +52,7 @@ render_config() {
 
     # Only generate when env-driven config is requested.
     [ -n "$DEEZER_ARL" ] || [ -n "$DATABASE_URI" ] \
-        || [ -n "$SUPYSONIC_PROXY_HOPS" ] || [ -n "$SUPYSONIC_SESSION_COOKIE_SECURE" ] \
+        || [ -n "$NEEZER_PROXY_HOPS" ] || [ -n "$NEEZER_SESSION_COOKIE_SECURE" ] \
         || [ -n "$ANDROID_VERSION" ] || [ -n "$ANDROID_DOWNLOAD_URL" ] \
         || return 0
 
@@ -52,11 +62,11 @@ render_config() {
             printf 'database_uri = %s\n\n' "$DATABASE_URI"
         fi
         # Reverse-proxy / TLS hardening (off unless explicitly set).
-        if [ -n "$SUPYSONIC_PROXY_HOPS" ] || [ -n "$SUPYSONIC_SESSION_COOKIE_SECURE" ] \
+        if [ -n "$NEEZER_PROXY_HOPS" ] || [ -n "$NEEZER_SESSION_COOKIE_SECURE" ] \
            || [ -n "$ANDROID_VERSION" ] || [ -n "$ANDROID_DOWNLOAD_URL" ]; then
             printf '[webapp]\n'
-            [ -n "$SUPYSONIC_PROXY_HOPS" ] && printf 'proxy_fix_hops = %s\n' "$SUPYSONIC_PROXY_HOPS"
-            [ -n "$SUPYSONIC_SESSION_COOKIE_SECURE" ] && printf 'session_cookie_secure = %s\n' "$SUPYSONIC_SESSION_COOKIE_SECURE"
+            [ -n "$NEEZER_PROXY_HOPS" ] && printf 'proxy_fix_hops = %s\n' "$NEEZER_PROXY_HOPS"
+            [ -n "$NEEZER_SESSION_COOKIE_SECURE" ] && printf 'session_cookie_secure = %s\n' "$NEEZER_SESSION_COOKIE_SECURE"
             [ -n "$ANDROID_VERSION" ] && printf 'android_version = %s\n' "$ANDROID_VERSION"
             [ -n "$ANDROID_DOWNLOAD_URL" ] && printf 'android_url = %s\n' "$ANDROID_DOWNLOAD_URL"
             printf '\n'
@@ -67,7 +77,7 @@ render_config() {
             printf 'arl = %s\n' "$DEEZER_ARL"
             printf 'archive_dir = %s\n' "${DEEZER_ARCHIVE_DIR:-/data/archive}"
             printf 'default_quality = %s\n' "${DEEZER_QUALITY:-FLAC}"
-            printf 'sync_user = %s\n' "${DEEZER_SYNC_USER:-${SUPYSONIC_ADMIN_USER:-admin}}"
+            printf 'sync_user = %s\n' "${DEEZER_SYNC_USER:-${NEEZER_ADMIN_USER:-admin}}"
             printf 'scan_local = %s\n' "${DEEZER_SCAN_LOCAL:-yes}"
             printf 'preload = %s\n' "${DEEZER_PRELOAD:-yes}"
             [ -n "$DEEZER_SYNC_AT" ] && printf 'sync_at = %s\n' "$DEEZER_SYNC_AT"
@@ -86,31 +96,31 @@ render_config() {
 
     # Say which database this process will use, with the password redacted. A
     # container whose DATABASE_URI is unset silently inherits the one baked into
-    # /etc/supysonic — which carries a placeholder password — and the only sign
+    # /etc/neezer — which carries a placeholder password — and the only sign
     # of it used to be a psycopg2 traceback that named neither the config file
     # nor the reason.
     if [ -n "$DATABASE_URI" ]; then
         echo "Database: $(redact_uri "$DATABASE_URI")"
     else
-        echo "Database: DATABASE_URI is unset; falling back to /etc/supysonic." >&2
+        echo "Database: DATABASE_URI is unset; falling back to /etc/neezer." >&2
         echo "          Set it on THIS service if it should talk to your own DB." >&2
     fi
 }
 
 assert_real_database() {
-    # Ask supysonic itself which database it resolved — the truth, not what we
+    # Ask neezer itself which database it resolved — the truth, not what we
     # think we wrote. Its built-in fallback is a SQLite file in a TEMP dir: a
     # brand new, empty database that every user account and playlist is missing
     # from. Booting onto it is indistinguishable from having lost everything, so
     # a container must refuse rather than come up looking wiped.
-    uri=$(supysonic-cli db uri 2>/dev/null) || uri=""
+    uri=$(neezer-cli db uri 2>/dev/null) || uri=""
     if [ -z "$uri" ]; then
         return 0  # older CLI without the subcommand: nothing to check
     fi
     case "$uri" in
         sqlite:///tmp/* | sqlite:////tmp/* | sqlite:///var/tmp/* | sqlite:////var/tmp/*)
             echo "FATAL: no usable configuration was found." >&2
-            echo "       supysonic resolved a throwaway database ($uri)," >&2
+            echo "       neezer resolved a throwaway database ($uri)," >&2
             echo "       which is EMPTY — your real data is untouched, this" >&2
             echo "       process simply cannot see it. Check DATABASE_URI on" >&2
             echo "       this service and that $CONF is writable." >&2
@@ -138,7 +148,7 @@ auto_migrate() {
     [ -f "$LEGACY_SQLITE" ] || return 0  # no legacy data to carry over
 
     echo "Found legacy SQLite DB and an external DATABASE_URI; migrating data…"
-    if supysonic-cli db migrate-to "$DATABASE_URI" \
+    if neezer-cli db migrate-to "$DATABASE_URI" \
         --from "sqlite:///$LEGACY_SQLITE" --skip-if-populated; then
         # A deployment that has been on the external DB for a while (many
         # boots, many upgrades) hits "already populated" every single time —
@@ -159,21 +169,21 @@ auto_migrate() {
 }
 
 bootstrap_admin() {
-    [ -n "$SUPYSONIC_ADMIN_USER" ] || return 0
+    [ -n "$NEEZER_ADMIN_USER" ] || return 0
 
-    if [ -z "$SUPYSONIC_ADMIN_PASSWORD" ]; then
+    if [ -z "$NEEZER_ADMIN_PASSWORD" ]; then
         # No password given: mint one instead of silently doing nothing, and
         # print it once. Beats any shared default.
-        SUPYSONIC_ADMIN_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
+        NEEZER_ADMIN_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
         GENERATED_PASSWORD=1
     fi
 
     # The documented placeholder is the password that actually ships to
     # production more often than any other. Refuse to start with it.
-    case "$SUPYSONIC_ADMIN_PASSWORD" in
-        changeme|supysonic|password|admin|123456)
+    case "$NEEZER_ADMIN_PASSWORD" in
+        changeme|neezer|password|admin|123456)
             echo "Refusing to create the admin account with the placeholder password" >&2
-            echo "'$SUPYSONIC_ADMIN_PASSWORD'. Set SUPYSONIC_ADMIN_PASSWORD to a real secret." >&2
+            echo "'$NEEZER_ADMIN_PASSWORD'. Set NEEZER_ADMIN_PASSWORD to a real secret." >&2
             exit 1
             ;;
     esac
@@ -186,19 +196,19 @@ bootstrap_admin() {
     #
     # The password goes in on stdin: passing it as an argv element exposes it to
     # every process on the host through `ps`.
-    if out=$(printf '%s' "$SUPYSONIC_ADMIN_PASSWORD" \
-        | supysonic-cli user add "$SUPYSONIC_ADMIN_USER" --password-stdin 2>&1); then
-        supysonic-cli user setroles "$SUPYSONIC_ADMIN_USER" -A 2>/dev/null || true
-        echo "Created admin user '$SUPYSONIC_ADMIN_USER'."
+    if out=$(printf '%s' "$NEEZER_ADMIN_PASSWORD" \
+        | neezer-cli user add "$NEEZER_ADMIN_USER" --password-stdin 2>&1); then
+        neezer-cli user setroles "$NEEZER_ADMIN_USER" -A 2>/dev/null || true
+        echo "Created admin user '$NEEZER_ADMIN_USER'."
         if [ -n "$GENERATED_PASSWORD" ]; then
-            echo "Generated admin password: $SUPYSONIC_ADMIN_PASSWORD"
+            echo "Generated admin password: $NEEZER_ADMIN_PASSWORD"
             echo "Store it now — it is not printed again."
         fi
     else
         case "$out" in
-            *"User '$SUPYSONIC_ADMIN_USER' exists"*) ;;  # already there
+            *"User '$NEEZER_ADMIN_USER' exists"*) ;;  # already there
             *)
-                echo "Could not create the admin user '$SUPYSONIC_ADMIN_USER':" >&2
+                echo "Could not create the admin user '$NEEZER_ADMIN_USER':" >&2
                 echo "$out" | tail -n 5 >&2
                 ;;
         esac
@@ -212,7 +222,7 @@ assert_real_database
 # before bootstrap_admin: creating the admin would make the destination "non
 # empty" and cause the migration to skip.
 case "$1" in
-    gunicorn | supysonic-server)
+    gunicorn | neezer-server | supysonic-server)
         auto_migrate
         bootstrap_admin
         ;;

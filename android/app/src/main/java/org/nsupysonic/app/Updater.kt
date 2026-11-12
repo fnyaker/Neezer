@@ -16,7 +16,7 @@ import java.util.concurrent.Executors
 /**
  * The app's own update, fetched from the configured server and installed in place.
  *
- * The server serves the APK at /api/android/apk (supysonic/webui/androidapk.py);
+ * The server serves the APK at /api/android/apk (neezer/webui/androidapk.py);
  * this downloads it with the session cookie (Net: our server only), then checks,
  * BEFORE asking Android, that it is this app (same package), newer (a higher
  * versionCode) and signed with the certificate this install carries. Android
@@ -75,7 +75,7 @@ class Updater(
     private fun download(url: String, cookie: String?): File? {
         val dir = File(activity.cacheDir, "update").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
-        val out = File(dir, "nsupysonic.apk")
+        val out = File(dir, "neezer.apk")
         try {
             // The first request may make the server fetch the release itself.
             val conn = Net.get(prefs, url, cookie, 15000, 120000)

@@ -2,7 +2,7 @@
 name = "rhythm"
 version = "0.1.0"
 edition = "2021"
-description = "NSupySonic's real-time rhythm analyser: spectrum, onsets, kick, tempo, beat grid, sections and style, for an AudioWorklet."
+description = "Neezer's real-time rhythm analyser: spectrum, onsets, kick, tempo, beat grid, sections and style, for an AudioWorklet."
 license = "AGPL-3.0-only"
 publish = false
 build = "build.rs"

@@ -1,0 +1,231 @@
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
+#
+# Copyright (C) 2013-2022 Alban 'spl0k' Féron
+#
+# Distributed under terms of the GNU AGPLv3 license.
+
+import time
+
+from flask import current_app, request
+
+from ..db import Track, Album, Artist, Folder
+from ..db import StarredTrack, StarredAlbum, StarredArtist, StarredFolder
+from ..db import RatingTrack, RatingFolder
+from ..lastfm import LastFm
+from ..listenbrainz import ListenBrainz
+
+from . import get_entity, get_entity_id, api_routing
+from .exceptions import AggregateException, GenericError, MissingParameter, NotFound
+
+
+def _deezer_favorite(cls, entity, add):
+    """A star is local; starring also archives what it holds (nothing is written
+    to the Deezer account)."""
+    if add:
+        _archive_starred(cls, entity)
+
+
+def _archive_starred(cls, entity):
+    """Starring from a Subsonic client archives the same thing the web app does.
+
+    A Track and an Album are already local rows, so they cost one query instead
+    of a Deezer call. An Artist means the whole discography, which only Deezer
+    can list — that goes to the same worker the web app uses.
+    """
+    from ..deezer import backfill
+
+    app = current_app._get_current_object()
+    try:
+        if cls is Track:
+            backfill.archive_tracks(app, [entity], event="on_fav_track")
+        elif cls is Album:
+            backfill.archive_tracks(app, entity.tracks, event="on_fav_album")
+        elif cls is Artist and getattr(entity, "deezer_id", None):
+            backfill.archive_entity(
+                app, getattr(current_app, "deezer", None), "artist", entity.deezer_id
+            )
+    except Exception:  # archiving is a consequence of starring, never a condition
+        pass
+
+
+def star_single(cls, starcls, eid):
+    """Stars an entity
+
+    :param cls: entity class, Folder, Artist, Album or Track
+    :param starcls: matching starred class, StarredFolder, StarredArtist, StarredAlbum or StarredTrack
+    :param eid: id of the entity to star
+    """
+
+    try:
+        e = cls[eid]
+    except cls.DoesNotExist:
+        raise NotFound(f"{cls.__name__} {eid}")
+
+    try:
+        starcls[request.user, eid]
+        raise GenericError(f"{cls.__name__} {eid} already starred")
+    except starcls.DoesNotExist:
+        pass
+
+    starcls.create(user=request.user, starred=e)
+    _deezer_favorite(cls, e, True)
+
+
+def unstar_single(cls, starcls, eid):
+    """Unstars an entity
+
+    :param cls: entity class, Folder, Artist, Album or Track
+    :param starcls: matching starred class, StarredFolder, StarredArtist, StarredAlbum or StarredTrack
+    :param eid: id of the entity to unstar
+    """
+
+    try:
+        entity = cls[eid]
+    except cls.DoesNotExist:
+        entity = None
+
+    starcls.delete().where(
+        starcls.user == request.user, starcls.starred == eid
+    ).execute()
+
+    if entity is not None:
+        _deezer_favorite(cls, entity, False)
+
+
+def handle_star_request(func):
+    id, albumId, artistId = map(request.values.getlist, ("id", "albumId", "artistId"))
+
+    if not id and not albumId and not artistId:
+        raise MissingParameter("id, albumId or artistId")
+
+    errors = []
+    for eid in id:
+        try:
+            tid = get_entity_id(Track, eid)
+        except GenericError:
+            tid = None
+        try:
+            fid = get_entity_id(Folder, eid)
+        except GenericError:
+            fid = None
+        err = None
+
+        if tid is None and fid is None:
+            raise GenericError("Invalid ID")
+
+        if tid is not None:
+            try:
+                func(Track, StarredTrack, tid)
+            except Exception as e:
+                err = e
+        else:
+            try:
+                func(Folder, StarredFolder, fid)
+            except Exception as e:
+                err = e
+
+        if err:
+            errors.append(err)
+
+    for alId in albumId:
+        alb_id = get_entity_id(Album, alId)
+        try:
+            func(Album, StarredAlbum, alb_id)
+        except Exception as e:
+            errors.append(e)
+
+    for arId in artistId:
+        art_id = get_entity_id(Artist, arId)
+        try:
+            func(Artist, StarredArtist, art_id)
+        except Exception as e:
+            errors.append(e)
+
+    if errors:
+        raise AggregateException(errors)
+    return request.formatter.empty
+
+
+@api_routing("/star")
+def star():
+    return handle_star_request(star_single)
+
+
+@api_routing("/unstar")
+def unstar():
+    return handle_star_request(unstar_single)
+
+
+@api_routing("/setRating")
+def rate():
+    id = request.values["id"]
+    rating = request.values["rating"]
+
+    try:
+        tid = get_entity_id(Track, id)
+    except GenericError:
+        tid = None
+    try:
+        fid = get_entity_id(Folder, id)
+    except GenericError:
+        fid = None
+    uid = None
+    rating = int(rating)
+
+    if tid is None and fid is None:
+        raise GenericError("Invalid ID")
+
+    if not 0 <= rating <= 5:
+        raise GenericError("rating must be between 0 and 5 (inclusive)")
+
+    if rating == 0:
+        if tid is not None:
+            RatingTrack.delete().where(
+                RatingTrack.user == request.user, RatingTrack.rated == tid
+            ).execute()
+        else:
+            RatingFolder.delete().where(
+                RatingFolder.user == request.user, RatingFolder.rated == fid
+            ).execute()
+    else:
+        if tid is not None:
+            rated = Track[tid]
+            rating_cls = RatingTrack
+            uid = tid
+        else:
+            rated = Folder[fid]
+            rating_cls = RatingFolder
+            uid = fid
+
+        try:
+            rating_info = rating_cls[request.user, uid]
+            rating_info.rating = rating
+            rating_info.save()
+        except rating_cls.DoesNotExist:
+            rating_cls.create(user=request.user, rated=rated, rating=rating)
+
+    return request.formatter.empty
+
+
+@api_routing("/scrobble")
+def scrobble():
+    res = get_entity(Track)
+    t, submission = map(request.values.get, ("time", "submission"))
+    t = int(t) / 1000 if t else int(time.time())
+
+    lfm = LastFm(current_app.config["LASTFM"], request.user)
+    lbz = ListenBrainz(current_app.config["LISTENBRAINZ"], request.user)
+
+    if submission in (None, "", True, "true", "True", 1, "1"):
+        lfm.scrobble(res, t)
+        lbz.scrobble(res, t)
+        # A client says this was listened to: the person's own history too.
+        from .. import listening
+
+        listening.record(request.user, res, res.duration, "subsonic")
+    else:
+        lfm.now_playing(res)
+        lbz.now_playing(res)
+
+    return request.formatter.empty

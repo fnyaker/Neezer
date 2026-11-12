@@ -1,4 +1,4 @@
-//! NSupySonic's genre-studio TRAINER, compiled to WebAssembly for the studio's
+//! Neezer's genre-studio TRAINER, compiled to WebAssembly for the studio's
 //! worker (src/lib/genre/worker.js through core.js).
 //!
 //!   train.rs   the heads (a softmax plane, a stack of dense layers) and the

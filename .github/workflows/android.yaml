@@ -85,10 +85,13 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$KS"
           else
+            # Alias/password defaults stay `nsupysonic`: an operator-supplied
+            # keystore may have been created with that alias, and a different
+            # one would simply fail to sign. It is a key identity, not a brand.
             keytool -genkeypair -keystore "$KS" -alias nsupysonic \
               -storepass nsupysonic -keypass nsupysonic \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=NSupySonic"
+              -dname "CN=Neezer"
           fi
           {
             echo "ANDROID_KEYSTORE_FILE=$KS"
@@ -109,17 +112,25 @@ jobs:
         run: gradle -p android assembleRelease
 
       - name: Collect APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk nsupysonic.apk
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk neezer.apk
+          # Same APK under the pre-rebrand name, for servers not upgraded yet.
+          cp neezer.apk nsupysonic.apk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nsupysonic-apk
-          path: nsupysonic.apk
+          name: neezer-apk
+          path: neezer.apk
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: nsupysonic.apk
+          # neezer.apk is the name the renamed server asks for; the pre-rebrand
+          # name is attached too, so a server that has not been upgraded yet can
+          # still fetch the update it expects.
+          files: |
+            neezer.apk
+            nsupysonic.apk

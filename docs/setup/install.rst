@@ -1,17 +1,17 @@
-Installing Supysonic
+Installing Neezer
 ====================
 
-Supysonic is written in Python and supports Python 3.10 and later.
+Neezer is written in Python and supports Python 3.10 and later.
 
 Linux
 -----
 
-Currently, only Debian-based distributions might provide Supysonic in their
-package repositories. Install the package ``supysonic`` using :command:`apt`::
+Currently, only Debian-based distributions might provide Neezer in their
+package repositories. Install the package ``neezer`` using :command:`apt`::
 
-   $ apt install supysonic
+   $ apt install neezer
 
-This will install Supysonic along with the minimal dependencies it needs to
+This will install Neezer along with the minimal dependencies it needs to
 run.
 
 If you plan on using it with a MySQL or PostgreSQL database you also need the
@@ -33,11 +33,11 @@ Windows
 -------
 
 .. note::
-   While Supysonic hasn't been thoroughly tested on Windows, it *should* work.
+   While Neezer hasn't been thoroughly tested on Windows, it *should* work.
    If something is broken, we're really sorry. Don't hesitate to `open an
    issue`__ on GitHub.
 
-   __ https://github.com/spl0k/supysonic/issues
+   __ https://github.com/fnyaker/Neezer/issues
 
 Most Windows users do not have Python installed by default, so we begin with
 the installation of Python itself.  To check if you already have Python
@@ -48,7 +48,7 @@ the screen.  If you do not have Python installed, head over to the `Python
 website`__ and install one of the `compatible Python versions`__. You need at
 least Python 3.10.
 
-Once Python is installed, you can install Supysonic using :command:`pip`. Refer
+Once Python is installed, you can install Neezer using :command:`pip`. Refer
 to the `installation instructions <pip_>`_ below for more information.
 
 __ https://www.python.org/
@@ -60,11 +60,11 @@ __ https://www.python.org/downloads/windows/
 pip
 ---
 
-Simply install the package ``supysonic`` with :command:`pip`::
+Simply install the package ``neezer`` with :command:`pip`::
 
-   $ pip install supysonic
+   $ pip install neezer
 
-This will install Supysonic along with the minimal dependencies it needs, but
+This will install Neezer along with the minimal dependencies it needs, but
 those don't include the requirements for the web server. For this you'll need
 to install either ``gevent``, ``gunicorn`` or ``waitress``.
 

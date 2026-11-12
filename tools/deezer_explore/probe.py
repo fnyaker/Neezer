@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# This file is part of Supysonic.
+# This file is part of Neezer.
 # Distributed under terms of the GNU AGPLv3 license.
 
 """Actively probe Deezer gateway methods with your ARL (read-only).

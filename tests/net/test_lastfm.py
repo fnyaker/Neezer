@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2018 Alban 'spl0k' Féron
 #
@@ -8,14 +8,14 @@
 import logging
 import unittest
 
-from supysonic.lastfm import LastFm
+from neezer.lastfm import LastFm
 
 
 class LastFmTestCase(unittest.TestCase):
     """Designed only to have coverage on the most important method"""
 
     def test_request(self):
-        logging.getLogger("supysonic.lastfm").addHandler(logging.NullHandler())
+        logging.getLogger("neezer.lastfm").addHandler(logging.NullHandler())
         lastfm = LastFm({"api_key": "key", "secret": "secret"}, None)
 
         rv = lastfm._LastFm__api_request(False, method="dummy", accents="àéèùö")

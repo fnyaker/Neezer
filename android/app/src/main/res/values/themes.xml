@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Forced dark to match the webapp; no action bar (fullscreen WebView). -->
-    <style name="Theme.NSupySonic" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.Neezer" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@color/on_accent</item>
         <item name="android:colorBackground">@color/bg</item>

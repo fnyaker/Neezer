@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""The listen party (supysonic/webui/party.py).
+"""The listen party (neezer/webui/party.py).
 
 Three things are worth pinning here. The capability model: the party id is the
 only credential a guest has, and it must open exactly what the host is playing
@@ -23,11 +23,11 @@ import tempfile
 import time
 import unittest
 
-from supysonic.config import DefaultConfig
-from supysonic.db import Track, User, release_database
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
-from supysonic.webui import party as P
+from neezer.config import DefaultConfig
+from neezer.db import Track, User, release_database
+from neezer.managers.user import UserManager
+from neezer.web import create_application
+from neezer.webui import party as P
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 
@@ -121,7 +121,7 @@ class PartyTestCase(unittest.TestCase):
 
     def _track(self, name="song.flac", seconds=20.0, owner=None, write=True):
         """A local track row, backed by real (noise) audio when ffmpeg is here."""
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(self.archive)
         d = os.path.join(self.archive, "Band", "Album")
@@ -424,7 +424,7 @@ class PartyTestCase(unittest.TestCase):
         self.assertEqual(self.guest.get(f"{base}/40").status_code, 404)
 
     def test_a_cold_track_waits_for_the_hosts_own_download_first(self):
-        from supysonic.deezer.workload import Priority
+        from neezer.deezer.workload import Priority
 
         pid = self._start()
         self._publish(pid, "3135556")
@@ -524,7 +524,7 @@ class PartyTestCase(unittest.TestCase):
             ["ffmpeg", "-v", "error", "-y", "-i", flac.path, "-c:a", "libmp3lame", "-q:a", "2", mp3_path],
             check=True,
         )
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         class Tag:
             artist = "Band"

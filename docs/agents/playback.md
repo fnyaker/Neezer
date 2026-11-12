@@ -12,7 +12,7 @@ progressive docs need ranges and a length to seek; the OpenSubsonic `transcodeOf
 seconds on a LAN, tens on a mobile link). The app's player has its own held seek (android.md, bridge 7).
 
 **Crossfade + silence trimming** (`components/Player.svelte`, `lib/edges.js`,
-`supysonic/webui/edges.py`). Two ideas that need each other: masters carry a beat of digital silence
+`neezer/webui/edges.py`). Two ideas that need each other: masters carry a beat of digital silence
 at each end, and a crossfade that ignores them fades one track's silence into another's — the gap it
 was meant to remove. The server measures the bounds once per (file, threshold) with ffmpeg's
 `silencedetect` and caches them; it **never archives to answer**, so asking about the next track can

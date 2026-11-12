@@ -1,4 +1,4 @@
-//! NSupySonic's rhythm analyser, compiled to WebAssembly and run INSIDE the
+//! Neezer's rhythm analyser, compiled to WebAssembly and run INSIDE the
 //! AudioWorklet that taps the player's output.
 //!
 //! WHY IT LIVES ON THE AUDIO THREAD. The JavaScript engine read two

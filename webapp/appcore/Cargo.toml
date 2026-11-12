@@ -2,7 +2,7 @@
 name = "appcore"
 version = "0.1.0"
 edition = "2021"
-description = "NSupySonic's app core: the time-sync estimators (listen party, output clock) and the track lists' index, for the page."
+description = "Neezer's app core: the time-sync estimators (listen party, output clock) and the track lists' index, for the page."
 license = "AGPL-3.0-only"
 publish = false
 build = "build.rs"

@@ -6,20 +6,20 @@ Man pages
 .. toctree::
    :maxdepth: 1
 
-   supysonic-cli
-   supysonic-cli-user
-   supysonic-cli-folder
+   neezer-cli
+   neezer-cli-user
+   neezer-cli-folder
 
 .. rubric:: Web server
 
 .. toctree::
    :maxdepth: 1
 
-   supysonic-server
+   neezer-server
 
 .. rubric:: Daemon
 
 .. toctree::
    :maxdepth: 1
 
-   supysonic-daemon
+   neezer-daemon

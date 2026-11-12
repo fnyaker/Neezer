@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 import unittest
 
-from supysonic.deezer import audiomatch as am
+from neezer.deezer import audiomatch as am
 
 HAVE = am.available()
 if not HAVE and os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
@@ -213,7 +213,7 @@ class DecideTestCase(_Material):
 
     def setUp(self):
         from types import SimpleNamespace as NS
-        from supysonic.deezer import automatch
+        from neezer.deezer import automatch
 
         self.automatch = automatch
         self.archive = tempfile.mkdtemp(prefix="ns-am-archive-")
@@ -281,7 +281,7 @@ class DecideTestCase(_Material):
             self.automatch.decide(dz, self.track, self.archive)
 
     def test_a_preview_url_off_deezers_cdn_is_never_fetched(self):
-        from supysonic.deezer.automatch import _preview_url_ok
+        from neezer.deezer.automatch import _preview_url_ok
 
         self.assertTrue(_preview_url_ok("https://cdnt-preview.dzcdn.net/a.mp3"))
         for url in ("http://cdnt-preview.dzcdn.net/a.mp3", "https://dzcdn.net.evil.com/a",
@@ -292,7 +292,7 @@ class DecideTestCase(_Material):
 class CauseTestCase(unittest.TestCase):
     def test_a_cause_never_carries_a_url_past_its_host(self):
         """A failed stream names its URL, and a Deezer stream URL is signed."""
-        from supysonic.deezer.automatch import cause
+        from neezer.deezer.automatch import cause
 
         exc = ConnectionError(
             "HTTPSConnectionPool(host='e-cdns-proxy-1.dzcdn.net'): Max retries exceeded with url: "

@@ -23,9 +23,9 @@ sys.path.insert(0, ROOT)
 
 from werkzeug.serving import make_server  # noqa: E402
 
-from supysonic.config import DefaultConfig  # noqa: E402
-from supysonic.managers.user import UserManager  # noqa: E402
-from supysonic.web import create_application  # noqa: E402
+from neezer.config import DefaultConfig  # noqa: E402
+from neezer.managers.user import UserManager  # noqa: E402
+from neezer.web import create_application  # noqa: E402
 
 RATE = 44100
 
@@ -81,7 +81,7 @@ def main():
     app = create_application(Config())
     with app.app_context():
         UserManager.add("bench", "Bench1", admin=True)
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(archive)
         tracks = {}

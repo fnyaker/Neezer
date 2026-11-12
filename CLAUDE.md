@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-NSupySonic is a fork of [supysonic](https://github.com/spl0k/supysonic) (a Python Subsonic API
+Neezer is a fork of [supysonic](https://github.com/spl0k/supysonic) (a Python Subsonic API
 server) wired into a **Subsonic ↔ Deezer proxy**, with its own Svelte web player at `/app` and a
 native Android app (`android/`). Tracks are fetched in FLAC, archived once, and transcoded to Opus
 on demand. AGPL-3.0, Python 3.10+. `AGENTS.md` is this same file.
@@ -40,7 +40,7 @@ them cost the person their patience.
    (c) everything else — playlist/offline downloads, account sync and import, archiving, analysis,
    backfills — which must YIELD while (a) or (b) needs the resource: paused or throttled, never
    competing. A background download that slows a tapped track is a bug, not a trade-off. The
-   mechanisms already exist — use them, never bypass them: `supysonic/deezer/workload.py`
+   mechanisms already exist — use them, never bypass them: `neezer/deezer/workload.py`
    (`Priority` USER/PREFETCH/BULK, `X-NS-Background`, `renice`, `quiet_wait`),
    `webapp/src/lib/ladder.js`, `webapp/src/lib/coverqueue.js`; details in
    [server.md](docs/agents/server.md) (*A person waiting in front of the app…*). Any NEW consumer of
@@ -74,7 +74,7 @@ them cost the person their patience.
 And the architecture's own rules, detailed in the area notes:
 
 - **Always archive FLAC, transcode to Opus (320/128/64). Never stream MP3 straight from Deezer.**
-  (Exception: the YouTube fallback keeps its original Opus.) Deezer entities are ordinary supysonic
+  (Exception: the YouTube fallback keeps its original Opus.) Deezer entities are ordinary neezer
   rows, so the Subsonic API works unchanged; only streaming is intercepted.
 - **Deezer is optional to the app running.** Everything on disk works at full speed with Deezer
   unreachable; what needs Deezer fails fast. **A failure to reach a provider is never a verdict**
@@ -82,7 +82,7 @@ And the architecture's own rules, detailed in the area notes:
   (`tests/test_detach_guard.py`). → [server.md](docs/agents/server.md), [providers.md](docs/agents/providers.md)
 - **Security.** Every route `@login_required` (or a capability token), ids validated, ownership
   checked, client-supplied ids/paths never trusted, hostile input neither crashes nor leaks. Never
-  commit secrets: the ARL is a full-account credential; `.env`, `config/supysonic.conf`, `dist/`
+  commit secrets: the ARL is a full-account credential; `.env`, `config/neezer.conf`, `dist/`
   and `*.har` captures are gitignored.
 - **Nothing deletes archived audio** except `deezer/cleanup.py`, and never an upload.
 
@@ -113,8 +113,8 @@ green, merge without asking. No skipped or disabled test to get there.
 | You touch… | Read |
 |---|---|
 | any test, bench or build command | [commands.md](docs/agents/commands.md), [testing.md](docs/agents/testing.md) |
-| `deezerpy/`, `supysonic/deezer/` (provider, archive, prefetch, backfill, rules, cleanup, importer, podcasts, YouTube, unavailable tracks, recommendations/radio/releases), `supysonic/webui/` routes, `supysonic/api/media.py`, priorities and background jobs | [server.md](docs/agents/server.md) |
-| `supysonic/providers/`, `sources.py`, `access.py`, accounts, groups, library import | [providers.md](docs/agents/providers.md) |
+| `deezerpy/`, `neezer/deezer/` (provider, archive, prefetch, backfill, rules, cleanup, importer, podcasts, YouTube, unavailable tracks, recommendations/radio/releases), `neezer/webui/` routes, `neezer/api/media.py`, priorities and background jobs | [server.md](docs/agents/server.md) |
+| `neezer/providers/`, `sources.py`, `access.py`, accounts, groups, library import | [providers.md](docs/agents/providers.md) |
 | `android/` (WebView, native player, offline store, updater, Deezer login) | [android.md](docs/agents/android.md) |
 | `webapp/src` screens, routing, back navigation, offline cache, service worker, code splitting, queue, search, sleep timer | [webapp.md](docs/agents/webapp.md) |
 | `Player.svelte`, crossfade, silence trim, direct/processed output, `webapp/appcore`, big-list cost | [playback.md](docs/agents/playback.md) |
@@ -128,9 +128,9 @@ Plans and studies: `docs/detachement-deezer.md`, `docs/multi-provider.md`, `todo
 
 ## Équipe d'agents (OpenCode)
 
-Huit sous-agents sont définis dans `opencode.json` (prompts dans `.opencode/prompts/`). Invoque-les
-avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@qa`, `@devops`, ou
-laisse l'agent principal déléguer d'après leur description.
+Neuf sous-agents sont définis dans `opencode.json` (prompts dans `.opencode/prompts/`). Invoque-les
+avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@qa`, `@devops`,
+`@batch`, ou laisse l'agent principal déléguer d'après leur description.
 
 | Agent | Quand l'appeler |
 |---|---|
@@ -142,11 +142,14 @@ laisse l'agent principal déléguer d'après leur description.
 | `android` | Kotlin, WebView, bridge, lecteur natif, offline, updater, login Deezer |
 | `qa` | tests, benches, upgrade, CI rouge, mesures |
 | `devops` | Docker, compose, workflows, release, ffmpeg, multi-arch |
+| `batch` | tâche répétitive, mécanique, scriptable et vérifiable (renommage de masse, même édition sur une liste, refactor mécanique) |
 
 - L'agent principal garde le besoin, le contrat entre zones, la vérification finale et le
   commit/PR/merge. Un sous-agent ne commit pas, ne pousse pas et ne fusionne pas.
 - Un seul agent écrivain par fichier à la fois. `security` (audit) et `explore` peuvent lire en
   parallèle du travail d'écriture.
+- Jusqu'à **10 `batch` en parallèle**, sur des fichiers **disjoints** uniquement (un seul écrivain
+  par fichier) ; les autres sous-agents restent séquentiels dès qu'ils partagent une zone.
 - Contrat d'abord : `api` définit la route/le payload/le schéma, `audio` le frame/la latence,
   `android` la version du bridge ; `frontend` et `animation` consomment, sans inventer un contrat
   parallèle.
@@ -162,18 +165,18 @@ pip install -e . && pip install lxml coverage        # dev install (a project .v
 python tools/partest.py                              # Python suite in parallel (what CI runs); takes test ids
 python -m unittest tests.test_webui.SomeClass.test_x # one test (unittest, no pytest)
 NS_REQUIRE_FFMPEG=1 python tools/partest.py          # fail, don't skip, without ffmpeg
-cd webapp && npm install && npm test && npm run build   # SPA suite and build (-> supysonic/webui/dist)
+cd webapp && npm install && npm test && npm run build   # SPA suite and build (-> neezer/webui/dist)
 cd webapp && npm run wasm                            # after touching a Rust crate; commit the .wasm files EXCEPT measure.wasm (built by CI and the Dockerfile, never committed)
 python tools/perf_api.py [--serve]                   # every /api route timed on a big synthetic library
-docker build -t nsupysonic:dev . && docker/smoke.sh nsupysonic:dev
+docker build -t neezer:dev . && docker/smoke.sh neezer:dev
 ```
 
 Every browser bench and the rest: [commands.md](docs/agents/commands.md).
 
 ## Database / schema
 
-Peewee ORM. `SCHEMA_VERSION` in `supysonic/db.py` is a date string (currently `20261102`); bump it
-and add a migration under `supysonic/schema/migration/{sqlite,postgres,mysql}/` when changing the
+Peewee ORM. `SCHEMA_VERSION` in `neezer/db.py` is a date string (currently `20261102`); bump it
+and add a migration under `neezer/schema/migration/{sqlite,postgres,mysql}/` when changing the
 schema. SQLite by default; Postgres/MySQL supported (PostgreSQL has no REPLACE: write portable
 upserts). A migration script is split on `;` AFTER its `--` comment lines are dropped
 (`db.split_sql_script`); `tests/test_schema.py` requires each piece to be a statement.
@@ -183,9 +186,10 @@ query) and replays them if a column or table is missing (`db._repair_skipped_mig
 
 ## Config & secrets
 
-Either env vars in `.env` (`DEEZER_ARL`, `SUPYSONIC_ADMIN_*`, `DEEZER_QUALITY`, `DEEZER_SYNC_AT`,
-read by `docker/entrypoint.sh`) or a mounted `config/supysonic.conf`. Every option is annotated in
-`config.sample` and `config/supysonic.conf.example`.
+Either env vars in `.env` (`DEEZER_ARL`, `NEEZER_ADMIN_*`, `DEEZER_QUALITY`, `DEEZER_SYNC_AT`,
+read by `docker/entrypoint.sh`; the pre-rebrand `SUPYSONIC_*` names still work) or a mounted
+`config/neezer.conf`. Every option is annotated in `config.sample` and
+`config/neezer.conf.example`.
 
 ## Keeping these notes useful
 

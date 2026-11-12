@@ -20,7 +20,7 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@style/Theme.NSupySonic"
+        android:theme="@style/Theme.Neezer"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true"
         android:allowBackup="false"

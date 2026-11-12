@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -17,10 +17,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from supysonic import db as dbmod
-from supysonic import similar
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer import db as dbmod
+from neezer import similar
+from neezer.config import DefaultConfig
+from neezer.db import (
     Track,
     TrackAnalysis,
     TrackNeighbor,
@@ -29,10 +29,10 @@ from supysonic.db import (
     now,
     release_database,
 )
-from supysonic.deezer import embedding as emb
-from supysonic.deezer import library
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.deezer import embedding as emb
+from neezer.deezer import library
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from . import test_detach_a as _ta
 from . import test_webui as _tw
@@ -321,7 +321,7 @@ class RouteTest(Base):
         self._login()
         # At the closest discovery level the new titles the Flow offers are
         # the neighbours of what was just played; the played ones come back as
-        # the Flow's share of known titles (supysonic/discover.py).
+        # the Flow's share of known titles (neezer/discover.py).
         titles = self.titles("/api/flow?d=0&seed=1")
         new = [t for t in titles if t not in ("A0", "A1")]
         self.assertLessEqual(set(new[:2]), {"A2", "A3", "A4", "A5"})
@@ -414,7 +414,7 @@ class HomeTest(Base):
         self.assertEqual(self.titles("/api/home/mix/techno"), titles)
         self.assertTrue(data["playlist"]["cover"])
         tomorrow = now() + datetime.timedelta(days=1)
-        with mock.patch("supysonic.webui.now", return_value=tomorrow):
+        with mock.patch("neezer.webui.now", return_value=tomorrow):
             other = self.titles("/api/home/mix/techno")
         self.assertEqual(other[0], "T17")
         self.assertNotEqual(other, titles)
@@ -452,7 +452,7 @@ class RebuildRouteTest(Base):
         for i in range(4):
             self.track(f"A{i}", cluster=0)
         self._login()
-        from supysonic.webui import neighbors
+        from neezer.webui import neighbors
 
         done = []
         real = similar.run_rebuild

@@ -1,0 +1,443 @@
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
+#
+# Copyright (C) 2013-2023 Alban 'spl0k' Féron
+#
+# Distributed under terms of the GNU AGPLv3 license.
+
+import logging
+import re
+
+from flask import flash, redirect, render_template, request, session, url_for
+from flask import current_app
+from functools import wraps
+from urllib.parse import urlsplit
+
+from ..db import ClientPrefs, User
+from ..lastfm import LastFm
+from ..listenbrainz import ListenBrainz
+from ..managers.user import UserManager
+from ..ratelimit import auth_limiter
+
+from . import admin_only, csrf_token, frontend
+
+logger = logging.getLogger(__name__)
+
+_TRUTHY = ("on", "true", "1", "yes", "checked", "selected")
+
+
+def _checkbox(value):
+    """An HTML checkbox as a bool: absent means unchecked, present means on."""
+    if value is None:
+        return False
+    return str(value).strip().lower() in _TRUTHY
+
+
+def safe_redirect_target(target, fallback):
+    """Only allow same-site relative redirect targets (blocks open redirects)."""
+    if not target:
+        return fallback
+    # Browsers normalise backslashes to forward slashes per the WHATWG URL
+    # standard, so "/\evil.com" reaches the network stack as "//evil.com" — a
+    # protocol-relative URL — even though urlsplit() reports an empty netloc for
+    # it. Fold them first so the checks below see what the browser will see.
+    # Same for leading C0 controls and spaces, which browsers also strip.
+    # Tabs and newlines are removed from ANYWHERE in the URL ("/\t/evil.com" is
+    # "//evil.com" to a browser), so they go first rather than relying on the
+    # Python version's urlsplit doing the same.
+    target = re.sub(r"[\t\n\r]", "", target)
+    target = target.replace("\\", "/").lstrip("".join(map(chr, range(0x21))))
+    # Reject absolute URLs, protocol-relative (//evil), and anything with a
+    # scheme or host; only a path that stays on this site is allowed.
+    parts = urlsplit(target)
+    if (
+        parts.scheme
+        or parts.netloc
+        or not target.startswith("/")
+        or target.startswith("//")
+    ):
+        return fallback
+    return target
+
+
+def me_or_uuid(f, arg="uid"):
+    @wraps(f)
+    def decorated_func(*args, **kwargs):
+        if kwargs:
+            uid = kwargs[arg]
+        else:
+            uid = args[0]
+
+        if uid == "me":
+            user = request.user
+        elif not request.user.admin:
+            return redirect(url_for("frontend.index"))
+        else:
+            try:
+                user = UserManager.get(uid)
+            except ValueError as e:
+                flash(str(e), "danger")
+                return redirect(url_for("frontend.index"))
+            except User.DoesNotExist:
+                flash("No such user", "danger")
+                return redirect(url_for("frontend.index"))
+
+        if kwargs:
+            kwargs["user"] = user
+        else:
+            args = (uid, user)
+
+        return f(*args, **kwargs)
+
+    return decorated_func
+
+
+@frontend.route("/user")
+@admin_only
+def user_index():
+    return render_template("users.html", users=User.select())
+
+
+@frontend.route("/user/<uid>")
+@me_or_uuid
+def user_profile(uid, user):
+    return render_template(
+        "profile.html",
+        user=user,
+        api_key=current_app.config["LASTFM"]["api_key"],
+        clients=user.clients,
+    )
+
+
+@frontend.route("/user/<uid>", methods=["POST"])
+@me_or_uuid
+def update_clients(uid, user):
+    clients_opts = {}
+    for key, value in request.form.items():
+        if "_" not in key:
+            continue
+        parts = key.split("_")
+        if len(parts) != 2:
+            continue
+        client, opt = parts
+        if not client or not opt:
+            continue
+
+        if client not in clients_opts:
+            clients_opts[client] = {opt: value}
+        else:
+            clients_opts[client][opt] = value
+    logger.debug(clients_opts)
+
+    for client, opts in clients_opts.items():
+        prefs = user.clients.where(ClientPrefs.client_name == client).first()
+        if prefs is None:
+            continue
+
+        if "delete" in opts and opts["delete"] in [
+            "on",
+            "true",
+            "checked",
+            "selected",
+            "1",
+        ]:
+            prefs.delete_instance()
+            continue
+
+        prefs.format = opts["format"] if "format" in opts and opts["format"] else None
+        prefs.bitrate = (
+            int(opts["bitrate"]) if "bitrate" in opts and opts["bitrate"] else None
+        )
+        prefs.save()
+
+    flash("Clients preferences updated.", "success")
+    return user_profile(uid, user)
+
+
+@frontend.route("/user/<uid>/changeusername")
+@admin_only
+def change_username_form(uid):
+    try:
+        user = UserManager.get(uid)
+    except ValueError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("frontend.index"))
+    except User.DoesNotExist:
+        flash("No such user", "danger")
+        return redirect(url_for("frontend.index"))
+
+    return render_template("change_username.html", user=user)
+
+
+@frontend.route("/user/<uid>/changeusername", methods=["POST"])
+@admin_only
+def change_username_post(uid):
+    try:
+        user = UserManager.get(uid)
+    except ValueError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("frontend.index"))
+    except User.DoesNotExist:
+        flash("No such user", "danger")
+        return redirect(url_for("frontend.index"))
+
+    username = request.form.get("user")
+    if username in ("", None):
+        flash("The username is required", "danger")
+        return render_template("change_username.html", user=user)
+    if user.name != username:
+        try:
+            User.get(name=username)
+            flash("This name is already taken", "danger")
+            return render_template("change_username.html", user=user)
+        except User.DoesNotExist:
+            pass
+
+    admin = _checkbox(request.form.get("admin"))
+
+    if user.name != username or user.admin != admin:
+        if user.admin != admin:
+            # Revoke the user's outstanding sessions so a downgraded admin
+            # doesn't keep admin rights until their cookie expires.
+            user.session_epoch = (user.session_epoch or 0) + 1
+        user.name = username
+        user.admin = admin
+        user.save()
+        flash(f"User '{username}' updated.", "success")
+    else:
+        flash(f"No changes for '{username}'.")
+
+    return redirect(url_for("frontend.user_profile", uid=uid))
+
+
+@frontend.route("/user/<uid>/changemail")
+@me_or_uuid
+def change_mail_form(uid, user):
+    return render_template("change_mail.html", user=user)
+
+
+@frontend.route("/user/<uid>/changemail", methods=["POST"])
+@me_or_uuid
+def change_mail_post(uid, user):
+    mail = request.form.get("mail", "")
+    # No validation, lol.
+    user.mail = mail
+    user.save()
+    return redirect(url_for("frontend.user_profile", uid=uid))
+
+
+@frontend.route("/user/<uid>/changepass")
+@me_or_uuid
+def change_password_form(uid, user):
+    return render_template("change_pass.html", user=user)
+
+
+@frontend.route("/user/<uid>/changepass", methods=["POST"])
+@me_or_uuid
+def change_password_post(uid, user):
+    error = False
+    if user.id == request.user.id:
+        current = request.form.get("current")
+        if not current:
+            flash("The current password is required", "danger")
+            error = True
+
+    new, confirm = map(request.form.get, ("new", "confirm"))
+
+    if not new:
+        flash("The new password is required", "danger")
+        error = True
+    if new != confirm:
+        flash("The new password and its confirmation don't match", "danger")
+        error = True
+
+    if not error:
+        try:
+            if user.id == request.user.id:
+                UserManager.change_password(user.id, current, new)
+                # The epoch bump above revokes every session of this account —
+                # including this one. The user just proved they know the old
+                # password, so re-stamp the session they're sitting in instead
+                # of bouncing them to the login page.
+                session["epoch"] = User[user.id].session_epoch or 0
+            else:
+                UserManager.change_password2(user.name, new)
+
+            flash("Password changed", "success")
+            return redirect(url_for("frontend.user_profile", uid=uid))
+        except ValueError as e:
+            flash(str(e), "danger")
+
+    return change_password_form(uid, user)
+
+
+@frontend.route("/user/add")
+@admin_only
+def add_user_form():
+    return render_template("adduser.html")
+
+
+@frontend.route("/user/add", methods=["POST"])
+@admin_only
+def add_user_post():
+    error = False
+    name, passwd, passwd_confirm = map(
+        request.form.get, ("user", "passwd", "passwd_confirm")
+    )
+    # Explicit whitelist: the form used to be forwarded wholesale to
+    # UserManager.add(**args), so any extra field became a User column write
+    # (`admin=1` -> instant privilege escalation). Checkboxes are read as
+    # booleans here rather than trusting whatever string the client sent.
+    args = {
+        "mail": request.form.get("mail", ""),
+        "admin": _checkbox(request.form.get("admin")),
+        "jukebox": _checkbox(request.form.get("jukebox")),
+    }
+    if not name:
+        flash("The name is required.", "danger")
+        error = True
+    if not passwd:
+        flash("Please provide a password.", "danger")
+        error = True
+    elif passwd != passwd_confirm:
+        flash("The passwords don't match.", "danger")
+        error = True
+
+    if not error:
+        try:
+            UserManager.add(name, passwd, **args)
+            flash(f"User '{name}' successfully added", "success")
+            return redirect(url_for("frontend.user_index"))
+        except ValueError as e:
+            flash(str(e), "danger")
+
+    return add_user_form()
+
+
+@frontend.route("/user/del/<uid>", methods=["POST"])
+@admin_only
+def del_user(uid):
+    try:
+        UserManager.delete(uid)
+        flash("Deleted user", "success")
+    except ValueError as e:
+        flash(str(e), "danger")
+    except User.DoesNotExist:
+        flash("No such user", "danger")
+
+    return redirect(url_for("frontend.user_index"))
+
+
+@frontend.route("/user/<uid>/lastfm/link")
+@me_or_uuid
+def lastfm_reg(uid, user):
+    token = request.args.get("token")
+    if not token:
+        flash("Missing LastFM auth token", "warning")
+        return redirect(url_for("frontend.user_profile", uid=uid))
+
+    lfm = LastFm(current_app.config["LASTFM"], user)
+    status, error = lfm.link_account(token)
+    if not status:
+        flash(error, "danger")
+    else:
+        flash("Successfully linked LastFM account", "success")
+
+    return redirect(url_for("frontend.user_profile", uid=uid))
+
+
+@frontend.route("/user/<uid>/lastfm/unlink", methods=["POST"])
+@me_or_uuid
+def lastfm_unreg(uid, user):
+    lfm = LastFm(current_app.config["LASTFM"], user)
+    lfm.unlink_account()
+    flash("Unlinked LastFM account", "success")
+    return redirect(url_for("frontend.user_profile", uid=uid))
+
+
+@frontend.route("/user/<uid>/listenbrainz/link", methods=["POST"])
+@me_or_uuid
+def listenbrainz_reg(uid, user):
+    token = request.form.get("token") or request.args.get("token")
+    if not token:
+        flash("Missing ListenBrainz auth token", "warning")
+        return redirect(url_for("frontend.user_profile", uid=uid))
+
+    lbz = ListenBrainz(current_app.config["LISTENBRAINZ"], user)
+    status, error = lbz.link_account(token)
+    if not status:
+        flash(error, "danger")
+    else:
+        flash("Successfully linked ListenBrainz account", "success")
+
+    return redirect(url_for("frontend.user_profile", uid=uid))
+
+
+@frontend.route("/user/<uid>/listenbrainz/unlink", methods=["POST"])
+@me_or_uuid
+def listenbrainz_unreg(uid, user):
+    lbz = ListenBrainz(current_app.config["LISTENBRAINZ"], user)
+    lbz.unlink_account()
+    flash("Unlinked ListenBrainz account", "success")
+    return redirect(url_for("frontend.user_profile", uid=uid))
+
+
+@frontend.route("/user/login", methods=["GET", "POST"])
+def login():
+    return_url = safe_redirect_target(
+        request.args.get("returnUrl"), url_for("frontend.index")
+    )
+    if request.user:
+        flash("Already logged in")
+        return redirect(return_url)
+
+    if request.method == "GET":
+        return render_template("login.html")
+
+    name, password = map(request.form.get, ("user", "password"))
+
+    throttled = not current_app.testing
+    if throttled and auth_limiter.is_blocked_any(request.remote_addr, name):
+        flash("Too many failed attempts. Try again later.", "danger")
+        return render_template("login.html"), 429
+
+    error = False
+    if not name:
+        flash("Missing user name", "danger")
+        error = True
+    if not password:
+        flash("Missing password", "danger")
+        error = True
+
+    if not error:
+        user = UserManager.try_auth(name, password)
+        if user:
+            logger.info("Logged user %s (IP: %s)", name, request.remote_addr)
+            if throttled:
+                auth_limiter.reset_user(name)
+            # Drop everything the pre-auth session carried before writing the
+            # identity into it: otherwise an attacker who can plant a session
+            # cookie keeps a handle on the account once the victim logs in
+            # (session fixation). A fresh CSRF token is minted on next use.
+            session.clear()
+            session["userid"] = str(user.id)
+            session["epoch"] = user.session_epoch or 0
+            csrf_token()
+            flash("Logged in!", "success")
+            return redirect(return_url)
+        else:
+            logger.error(
+                "Failed login attempt for user %s (IP: %s)", name, request.remote_addr
+            )
+            if throttled:
+                auth_limiter.record_failure(request.remote_addr, name)
+            flash("Wrong username or password", "danger")
+
+    return render_template("login.html")
+
+
+@frontend.route("/user/logout", methods=["POST"])
+def logout():
+    session.clear()
+    flash("Logged out!", "success")
+    return redirect(url_for("frontend.login"))

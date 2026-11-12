@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -14,8 +14,8 @@ the favourites list is the database's own.
 import unittest
 from unittest import mock
 
-from supysonic.db import Playlist, PlaylistTrack, StarredTrack, Track, User
-from supysonic.deezer import importer, scheduler
+from neezer.db import Playlist, PlaylistTrack, StarredTrack, Track, User
+from neezer.deezer import importer, scheduler
 
 from . import test_deezer, test_webui
 
@@ -61,7 +61,7 @@ class ScheduledSyncReadsNoAccountTestCase(test_deezer.DeezerTestCase):
             }
         }
         with mock.patch.object(scheduler, "_reachable", return_value=True), mock.patch(
-            "supysonic.deezer.backfill.sweep_for", return_value={"total": 0}
+            "neezer.deezer.backfill.sweep_for", return_value={"total": 0}
         ) as sweep:
             self.assertTrue(scheduler._run_sync(app))
         self.assertEqual(reads, [])
@@ -112,7 +112,7 @@ class UpgradeOfAnExistingServerTestCase(test_deezer.DeezerTestCase):
             "push_to_deezer": True, "archive_library": True,
         }}
         with mock.patch.object(scheduler, "_reachable", return_value=True), mock.patch(
-            "supysonic.deezer.backfill.sweep_for", return_value={"total": 0}
+            "neezer.deezer.backfill.sweep_for", return_value={"total": 0}
         ):
             self.assertTrue(scheduler._run_sync(app))
         after = (Playlist.select().count(), PlaylistTrack.select().count(),

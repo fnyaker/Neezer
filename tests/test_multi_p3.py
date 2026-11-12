@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -10,10 +10,10 @@ fetch FLAC."""
 
 from unittest import mock
 
-from supysonic import access
-from supysonic import libraryimport as li
-from supysonic.db import Meta, ProviderAccount, ProviderGrant, now
-from supysonic.deezer import accounts as dz_accounts
+from neezer import access
+from neezer import libraryimport as li
+from neezer.db import Meta, ProviderAccount, ProviderGrant, now
+from neezer.deezer import accounts as dz_accounts
 
 from .test_access import _Case
 from .test_webui import api_track
@@ -139,7 +139,7 @@ class PublicApiTestCase(_P3Case):
     def test_an_album_page_from_the_public_api(self):
         self.lend_only_to_bob()
         self.as_carol()
-        with mock.patch("supysonic.webui.PUBLIC_PAGE", 2):
+        with mock.patch("neezer.webui.PUBLIC_PAGE", 2):
             rv = self.client.get("/api/album/600")
         self.assertEqual(rv.status_code, 200, rv.get_data(as_text=True))
         j = rv.get_json()
@@ -262,7 +262,7 @@ class ServingOrderTestCase(_P3Case):
     def test_linking_records_the_offer(self):
         self.as_bob()
         who = {"id": "990001", "name": "Bob", "lossless": False}
-        with mock.patch("supysonic.webui.myaccounts._deezer_login", return_value=who), \
+        with mock.patch("neezer.webui.myaccounts._deezer_login", return_value=who), \
                 mock.patch.object(li, "start"):
             rv = self.client.post("/api/me/accounts/deezer", json={"arl": "a" * 192})
         self.assertEqual(rv.status_code, 200, rv.get_data(as_text=True))

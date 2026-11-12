@@ -2,7 +2,7 @@
 name = "nscore"
 version = "0.1.0"
 edition = "2021"
-description = "NSupySonic's native audio core for the Android app: the rhythm analyser and the output processing (gain, fades, EQ), reached over JNI."
+description = "Neezer's native audio core for the Android app: the rhythm analyser and the output processing (gain, fades, EQ), reached over JNI."
 license = "AGPL-3.0-only"
 publish = false
 

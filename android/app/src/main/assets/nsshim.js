@@ -1,4 +1,4 @@
-// Injected by the NSupySonic Android app at document start (MainActivity).
+// Injected by the Neezer Android app at document start (MainActivity).
 //
 // Replaces navigator.mediaSession with a capturing shim: the web player
 // already feeds mediaSession everything a media notification needs (metadata,

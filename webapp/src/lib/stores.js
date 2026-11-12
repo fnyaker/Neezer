@@ -616,7 +616,7 @@ function createFavorites() {
 }
 export const favorites = createFavorites();
 // The titles the person said they do not like (same keys as the hearts): they
-// leave the Flow, the radios and the mixes (supysonic/dislikes.py).
+// leave the Flow, the radios and the mixes (neezer/dislikes.py).
 export const disliked = createFavorites();
 
 // Asked by player.next() at the end of the queue: a track to append and play,

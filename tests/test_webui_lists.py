@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -26,8 +26,8 @@ import unittest
 
 import peewee
 
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer.config import DefaultConfig
+from neezer.db import (
     Album,
     Artist,
     Folder,
@@ -38,8 +38,8 @@ from supysonic.db import (
     User,
     release_database,
 )
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 
 @contextlib.contextmanager
@@ -113,7 +113,7 @@ class ListsTestCase(unittest.TestCase):
         os.remove(self.__db[1])
 
     def _fill(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         with self.app.app_context():
             root = library.get_root_folder(self.archive)
@@ -165,7 +165,7 @@ class ListsTestCase(unittest.TestCase):
         self.assertEqual(rv.status_code, 200)
 
     def test_the_tuple_path_answers_what_the_model_path_did(self):
-        from supysonic import webui
+        from neezer import webui
 
         with self.app.test_request_context():
             q = webui._db_playlist_track_rows(self.big)
@@ -192,7 +192,7 @@ class ListsTestCase(unittest.TestCase):
 
     def test_a_query_with_a_limit_reads_its_credits_by_id(self):
         # MySQL refuses LIMIT inside IN (...): a limited query takes the id list.
-        from supysonic import webui
+        from neezer import webui
 
         with self.app.test_request_context():
             q = webui._db_playlist_track_rows(self.big).limit(3)
@@ -273,7 +273,7 @@ class ListsTestCase(unittest.TestCase):
         self.assertEqual(rv.status_code, 200)
 
     def test_an_artists_album_grid_is_counted_once_not_per_album(self):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         with self.app.app_context():
             root = library.get_root_folder(self.archive)
@@ -303,7 +303,7 @@ class ListsTestCase(unittest.TestCase):
         self.assertLessEqual(counts["SELECT"], 5, counts)
 
     def test_podcasts_are_counted_once_not_per_show(self):
-        from supysonic.db import PodcastChannel, PodcastEpisode
+        from neezer.db import PodcastChannel, PodcastEpisode
 
         with self.app.app_context():
             alice = User.get(name="alice")

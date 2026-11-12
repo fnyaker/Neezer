@@ -1,7 +1,7 @@
 # Exporter une playlist vers un autre service
 
-Ce que chaque service permet en octobre 2026, et ce que NSupySonic en fait
-(`supysonic/services/`, `supysonic/webui/services.py`, `components/ExportSheet.svelte`).
+Ce que chaque service permet en octobre 2026, et ce que Neezer en fait
+(`neezer/services/`, `neezer/webui/services.py`, `components/ExportSheet.svelte`).
 
 | Service | Possible ? | Comment | Ce qu'il faut |
 |---|---|---|---|
@@ -49,6 +49,6 @@ Ce que chaque service permet en octobre 2026, et ce que NSupySonic en fait
 
 ## Pour le fil « import de playlists »
 
-`supysonic/services/` est fait pour servir dans les deux sens : `spotify.Client`,
+`neezer/services/` est fait pour servir dans les deux sens : `spotify.Client`,
 `ytmusic.Client` et `deezer.Client` savent déjà chercher, `match.wanted` / `match.pick`
 décrivent un titre et jugent une réponse, et `service_link` garde les comptes reliés.

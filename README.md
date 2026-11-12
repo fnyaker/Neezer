@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/screenshots/banner.svg" alt="NSupySonic" width="820">
+<img src="docs/screenshots/banner.svg" alt="Neezer" width="820">
 
 **Your Deezer library as a self-hosted music app — lossless, offline-first, and yours to keep.**
 
@@ -9,10 +9,10 @@ once in **FLAC**, archived on your own disk and served from there forever, trans
 on demand. Playlists, favourites, Flow, podcasts and new releases are all there — and nothing
 stops working the day Deezer does.
 
-[![Container](https://img.shields.io/badge/ghcr.io-nsupysonic%3Alatest-2496ED?logo=docker&logoColor=white)](https://github.com/fnyaker/NSupySonic/pkgs/container/nsupysonic)
-[![Docker build](https://github.com/fnyaker/NSupySonic/actions/workflows/docker.yaml/badge.svg)](https://github.com/fnyaker/NSupySonic/actions/workflows/docker.yaml)
-[![Tests](https://github.com/fnyaker/NSupySonic/actions/workflows/tests.yaml/badge.svg)](https://github.com/fnyaker/NSupySonic/actions/workflows/tests.yaml)
-[![Web app](https://github.com/fnyaker/NSupySonic/actions/workflows/webapp.yaml/badge.svg)](https://github.com/fnyaker/NSupySonic/actions/workflows/webapp.yaml)
+[![Container](https://img.shields.io/badge/ghcr.io-neezer%3Alatest-2496ED?logo=docker&logoColor=white)](https://github.com/fnyaker/Neezer/pkgs/container/neezer)
+[![Docker build](https://github.com/fnyaker/Neezer/actions/workflows/docker.yaml/badge.svg)](https://github.com/fnyaker/Neezer/actions/workflows/docker.yaml)
+[![Tests](https://github.com/fnyaker/Neezer/actions/workflows/tests.yaml/badge.svg)](https://github.com/fnyaker/Neezer/actions/workflows/tests.yaml)
+[![Web app](https://github.com/fnyaker/Neezer/actions/workflows/webapp.yaml/badge.svg)](https://github.com/fnyaker/Neezer/actions/workflows/webapp.yaml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)
 
@@ -22,8 +22,7 @@ stops working the day Deezer does.
 
 ---
 
-NSupySonic (**N**yaker's **Supysonic**) started as a fork of [supysonic][], a Python Subsonic
-server, and has become a music app of its own: a **Svelte web player at `/app`**, a native
+Neezer started as a fork of [Supysonic][], a Python Subsonic server, and has become a music app of its own: a **Svelte web player at `/app`**, a native
 **Android app**, and a **Deezer proxy** underneath that turns your account into an ordinary library
 on your disk. The server still speaks the Subsonic API at `/rest`, so any Subsonic client can play
 the same library — but that is a side door now, not the point.
@@ -55,29 +54,29 @@ The interface is in French.
 ## Quick start
 
 Every push to `master` publishes a prebuilt multi-arch (amd64 + arm64) image to the GitHub
-Container Registry: **`ghcr.io/fnyaker/nsupysonic:latest`**. It is public — nothing to log into.
+Container Registry: **`ghcr.io/fnyaker/neezer:latest`**. It is public — nothing to log into.
 
 **You need:** Docker, a Deezer account, and your Deezer `arl` cookie ([how to get it](#getting-your-arl)).
 
 ### Docker Compose (recommended)
 
 ```sh
-git clone https://github.com/fnyaker/NSupySonic.git
-cd NSupySonic
-cp .env.example .env          # set SUPYSONIC_ADMIN_PASSWORD and DEEZER_ARL
+git clone https://github.com/fnyaker/Neezer.git
+cd Neezer
+cp .env.example .env          # set NEEZER_ADMIN_PASSWORD and DEEZER_ARL
 docker compose up -d          # pulls the image, starts the app and its PostgreSQL
 ```
 
 ### One `docker run`
 
 ```sh
-docker run -d --name nsupysonic -p 5722:5722 \
-  -e SUPYSONIC_ADMIN_PASSWORD=change-me \
+docker run -d --name neezer -p 5722:5722 \
+  -e NEEZER_ADMIN_PASSWORD=change-me \
   -e DEEZER_ARL=your_arl_cookie \
   -e DEEZER_SYNC_USER=admin \
-  -e DATABASE_URI=sqlite:////data/supysonic.db \
-  -v nsupysonic-data:/data \
-  ghcr.io/fnyaker/nsupysonic:latest
+  -e DATABASE_URI=sqlite:////data/neezer.db \
+  -v neezer-data:/data \
+  ghcr.io/fnyaker/neezer:latest
 ```
 
 The image's built-in default points at the compose file's PostgreSQL service, so a standalone
@@ -104,29 +103,29 @@ The web player installs like an app on a phone or a desktop (*Add to home screen
 
 In Portainer a deployment is a **Stack**. The image is public, so there is nothing to authenticate.
 
-1. **Stacks → Add stack**, name it `nsupysonic`, and paste this into the web editor:
+1. **Stacks → Add stack**, name it `neezer`, and paste this into the web editor:
 
    ```yaml
    services:
-     supysonic:
-       image: ghcr.io/fnyaker/nsupysonic:latest
-       container_name: nsupysonic
+     neezer:
+       image: ghcr.io/fnyaker/neezer:latest
+       container_name: neezer
        restart: unless-stopped
        ports:
          - "5722:5722"
        environment:
-         SUPYSONIC_ADMIN_USER: ${SUPYSONIC_ADMIN_USER:-admin}
-         SUPYSONIC_ADMIN_PASSWORD: ${SUPYSONIC_ADMIN_PASSWORD}
+         NEEZER_ADMIN_USER: ${NEEZER_ADMIN_USER:-admin}
+         NEEZER_ADMIN_PASSWORD: ${NEEZER_ADMIN_PASSWORD}
          DEEZER_ARL: ${DEEZER_ARL}
-         DEEZER_SYNC_USER: ${SUPYSONIC_ADMIN_USER:-admin}
+         DEEZER_SYNC_USER: ${NEEZER_ADMIN_USER:-admin}
          DEEZER_QUALITY: ${DEEZER_QUALITY:-FLAC}
        volumes:
-         - nsupysonic-data:/data
+         - neezer-data:/data
    volumes:
-     nsupysonic-data:
+     neezer-data:
    ```
 
-2. Under **Environment variables**, add `SUPYSONIC_ADMIN_PASSWORD` and `DEEZER_ARL`.
+2. Under **Environment variables**, add `NEEZER_ADMIN_PASSWORD` and `DEEZER_ARL`.
 3. **Deploy the stack.** To update later: open the stack → **Pull and redeploy** (re-pull the image).
 
 </details>
@@ -266,8 +265,8 @@ Two ways; pick one.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SUPYSONIC_ADMIN_USER` | `admin` | Admin / login user, created on first boot. |
-| `SUPYSONIC_ADMIN_PASSWORD` | `changeme` | **Change this.** |
+| `NEEZER_ADMIN_USER` | `admin` | Admin / login user, created on first boot. |
+| `NEEZER_ADMIN_PASSWORD` | `changeme` | **Change this.** |
 | `DEEZER_ARL` | *(empty)* | Your Deezer `arl` cookie. Empty = run without Deezer. |
 | `DEEZER_SYNC_USER` | `admin` | The user auto-sync writes to (compose sets it to the admin). |
 | `DEEZER_QUALITY` | `FLAC` | Archive quality. Keep `FLAC`. |
@@ -278,12 +277,19 @@ Two ways; pick one.
 | `ANDROID_DOWNLOAD_URL` | *(releases page)* | Where that update is downloaded from. |
 
 Also available: `POSTGRES_PASSWORD` (the bundled database), `GUNICORN_THREADS` / `GUNICORN_TIMEOUT`
-(concurrency), and `SUPYSONIC_PROXY_HOPS` / `SUPYSONIC_SESSION_COOKIE_SECURE` (behind a reverse
+(concurrency), and `NEEZER_PROXY_HOPS` / `NEEZER_SESSION_COOKIE_SECURE` (behind a reverse
 proxy and HTTPS). They are documented inline in [`.env.example`](.env.example) and
 [`docker-compose.yml`](docker-compose.yml).
 
+> [!NOTE]
+> **Upgrading from NSupySonic?** The old `SUPYSONIC_*` variables, a config mounted at
+> `/etc/supysonic` (or `config/supysonic.conf`), the `supysonic-cli` / `supysonic-server` commands
+> and the `ghcr.io/fnyaker/nsupysonic` image tag are still accepted, so an existing deployment
+> upgrades in place. The PostgreSQL database and volume names stay `supysonic` on purpose: they
+> are the identity of the data already on disk, not the brand.
+
 **2. A mounted config file**, for full control (sync options, transcoders, archive paths…): copy
-`config/supysonic.conf.example` to `config/supysonic.conf`, edit it, and uncomment the volume line in
+`config/neezer.conf.example` to `config/neezer.conf`, edit it, and uncomment the volume line in
 `docker-compose.yml`. The full annotated option set is in [`config.sample`](config.sample). The file
 is gitignored because it holds your `arl`.
 
@@ -307,7 +313,7 @@ applies immediately.
 
 > [!WARNING]
 > **Treat the `arl` like a password.** It grants full access to your Deezer account. Never commit it
-> or share it. `.env`, `config/supysonic.conf` and `*.har` captures are gitignored and excluded from
+> or share it. `.env`, `config/neezer.conf` and `*.har` captures are gitignored and excluded from
 > the Docker build context for exactly this reason.
 
 ### Database
@@ -328,36 +334,36 @@ On first launch you enter your server URL, an optional port, and whether to veri
 (untick for self-signed setups). If Android kills the WebView while the app is in the background, it is
 rebuilt when you come back and resumes on the same track at the same position.
 
-The APK is built by CI: take the `nsupysonic-apk` artifact from any run, or the file attached to a
+The APK is built by CI: take the `neezer-apk` artifact from any run, or the file attached to a
 `v*` release. At startup — and only then — the app compares its version with the one your server
 publishes and offers the download when it is older. Details, including stable signing keys, are in
 [android/README.md](android/README.md).
 
 ## Running without Docker
 
-NSupySonic is a Python package (3.10+) with a few runtime tools.
+Neezer is a Python package (3.10+) with a few runtime tools.
 
 ```sh
 pip install .
 pip install gunicorn
 
-supysonic-cli user add MyUser -p MyPassword
-supysonic-cli user setroles MyUser -A
+neezer-cli user add MyUser -p MyPassword
+neezer-cli user setroles MyUser -A
 
 # add a [deezer] section to your config (see config.sample), then:
-supysonic-cli deezer login-test            # check the arl works
-supysonic-cli deezer import <deezer-url>   # a track, album or playlist
-supysonic-cli deezer sync                  # playlists, favourites, new releases
+neezer-cli deezer login-test            # check the arl works
+neezer-cli deezer import <deezer-url>   # a track, album or playlist
+neezer-cli deezer sync                  # playlists, favourites, new releases
 
 cd webapp && npm install && npm run build && cd ..   # the web player (Docker does this for you)
 
-supysonic-server                           # serves on :5722
+neezer-server                           # serves on :5722
 ```
 
 You need `ffmpeg` (with `libopus`) on the machine. Optional extras:
-`pip install 'supysonic[embedding]'` adds the audio feature extractor's runtime for the genre studio.
+`pip install 'neezer[embedding]'` adds the audio feature extractor's runtime for the genre studio.
 
-Handy batch commands: `supysonic-cli deezer lyrics` (archive lyrics for what you already have),
+Handy batch commands: `neezer-cli deezer lyrics` (archive lyrics for what you already have),
 `deezer analyze` (measure tempo and style), `deezer bpm-audit` (Deezer's published BPM against the
 measured one), `deezer embed` (extract genre embeddings).
 
@@ -372,7 +378,7 @@ python tools/partest.py                   # the same suite across processes — 
 cd webapp && npm install
 npm run dev                               # hot reload; proxies /api to localhost:5000
 npm test                                  # the SPA suite (audio analysis, animations, party, remote…)
-npm run build                             # -> supysonic/webui/dist
+npm run build                             # -> neezer/webui/dist
 
 # The Rust crates behind the analyser, the app core and the genre trainer
 cd webapp && npm run wasm                 # rebuilds all five committed .wasm binaries
@@ -382,7 +388,7 @@ The compiled `.wasm` files are committed so a checkout builds without a Rust too
 if one was not built from the sources beside it. The Flask development server is handy for the backend:
 
 ```sh
-export FLASK_APP="supysonic.web:create_application()"; flask run
+export FLASK_APP="neezer.web:create_application()"; flask run
 ```
 
 [CLAUDE.md](CLAUDE.md) (also `AGENTS.md`) is the working process and the standing rules;
@@ -397,9 +403,9 @@ rules each subsystem learned the hard way, and the measurements behind them. [to
 
 ```
 deezerpy/             The Deezer client: public API, private gateway, GraphQL (based on deezer-py)
-supysonic/deezer/     The proxy: provider, archive, sync, prefetch, analysis, genre embeddings, cleanup
-supysonic/webui/      The /api blueprint and the server for the bundled web player (/app)
-supysonic/api/        The Subsonic API (/rest), with streaming intercepted for Deezer tracks
+neezer/deezer/     The proxy: provider, archive, sync, prefetch, analysis, genre embeddings, cleanup
+neezer/webui/      The /api blueprint and the server for the bundled web player (/app)
+neezer/api/        The Subsonic API (/rest), with streaming intercepted for Deezer tracks
 webapp/               The Svelte web player, plus the Rust crates compiled to WebAssembly
 android/              The native Kotlin app
 docker/               Entrypoint and baked default config
@@ -410,18 +416,18 @@ docs/                 Notes, plans and README artwork
 
 ## Security and privacy
 
-- Your `arl` lives only in `.env`, `config/supysonic.conf` or the database. It is never shown again
+- Your `arl` lives only in `.env`, `config/neezer.conf` or the database. It is never shown again
   after saving (only its last four characters), and never written into a file that outlives the session.
 - Every `/api` route requires a login. Party, remote-control and share links are capabilities: an
   unguessable id that opens only what its owner published, and nothing else.
-- Sessions use `HttpOnly` + `SameSite=Lax` cookies; set `SUPYSONIC_SESSION_COOKIE_SECURE=yes` behind HTTPS.
+- Sessions use `HttpOnly` + `SameSite=Lax` cookies; set `NEEZER_SESSION_COOKIE_SECURE=yes` behind HTTPS.
 - Podcast episodes come from third-party feeds, so their URLs are restricted to public http(s)
   addresses, and the connection is pinned to the address that was checked.
 - `*.har` captures contain real session tokens and are gitignored — never commit them.
 
 ## Credits
 
-- [supysonic][] by Louis-Philippe Véronneau and Alban Féron — the Subsonic server this began as (AGPL-3.0).
+- [Supysonic][] by Louis-Philippe Véronneau and Alban Féron — the Subsonic server this began as (AGPL-3.0).
 - [deezer-py][] by RemixDev — the basis of the bundled Deezer client.
 - [LRCLIB](https://lrclib.net) for open synced lyrics.
 - [beatsync](https://github.com/freeman-jiang/beatsync) — the model for the listen party's clock.
@@ -431,5 +437,5 @@ docs/                 Notes, plans and README artwork
 Distributed under the **GNU AGPL-3.0-only** license, inherited from supysonic. See [LICENSE](LICENSE).
 
 [subsonic]: http://www.subsonic.org/
-[supysonic]: https://github.com/spl0k/supysonic
+[Supysonic]: https://github.com/spl0k/supysonic
 [deezer-py]: https://gitlab.com/RemixDev/deezer-py

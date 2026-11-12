@@ -8,7 +8,7 @@
 // session cookie the login sets, and hands back that one value.
 //
 // The password is therefore typed on deezer.com and never reaches this app nor
-// the NSupySonic server; only the ARL crosses back, and only to a page served
+// the Neezer server; only the ARL crosses back, and only to a page served
 // by the configured server (MainActivity.deliverArl checks the origin).
 //
 // See android/app/src/main/java/org/nsupysonic/app/DeezerLoginActivity.kt.

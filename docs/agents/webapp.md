@@ -4,7 +4,7 @@ Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.m
 
 **Web app** (`webapp/`): Svelte 5 + Vite 7 SPA, hash routing (svelte-spa-router), consuming `/api`.
 Existing components still use the legacy `$:` / `export let` syntax; follow the file you edit.
-Builds into `supysonic/webui/dist`. No emoji in the UI — all glyphs go through
+Builds into `neezer/webui/dist`. No emoji in the UI — all glyphs go through
 `src/components/Icon.svelte` (Lucide-style SVG). Home is **card-based** (mixes / recommended
 playlists / albums / artists), not track shelves. Podcasts have their own pages
 (`routes/Podcasts.svelte` grid + subscribe, `routes/Show.svelte` episode list) consuming
@@ -17,7 +17,7 @@ API (download fallback). Podcast markers live in `lib/markers.js`.
 
 **A show opens by its UUID or by Deezer's id** (`/api/podcast/<x>`, lot D): a catalogue card has no row, and a UUID cannot be turned back into the provider's id, so the page takes both forms; anything else is a 404 (`tests/test_multi_d.py`).
 
-**Export to another service** (`supysonic/services/`, `supysonic/webui/services.py`, the *Service* and *Liste*
+**Export to another service** (`neezer/services/`, `neezer/webui/services.py`, the *Service* and *Liste*
 tabs of `components/ExportSheet.svelte`, Réglages → Compte → *Services de streaming*; survey in
 `docs/playlist-export.md`). Spotify (the operator's own app, PKCE, `POST /me/playlists` + `/items` — the
 February 2026 endpoints), YouTube Music (`ytmusicapi` signed in with a tab's pasted headers; searches go
@@ -124,7 +124,7 @@ player (a `hashchange` listener). Its requests are keyed on the track's id as a 
 object, handed over again on every progress tick, and a reactive statement reading it asked for the credits four
 times a second (the browser test counts requests).
 
-**Full credits** (`supysonic/trackcredits.py`, `supysonic/webui/credits.py`, `GET /api/track/<id>/credits`): the
+**Full credits** (`neezer/trackcredits.py`, `neezer/webui/credits.py`, `GET /api/track/<id>/credits`): the
 performers are `TrackArtist` rows; everybody else on the sleeve (author, composer, producer, publisher…) is a
 `track_credit` row (schema `20261030`): one per person, role and SOURCE — `deezer` (the gateway's
 `SNG_CONTRIBUTORS`, stored when a track is archived), `tags` (an upload's composer/lyricist/producer, stored at
@@ -223,6 +223,10 @@ main bundle **656 kB → 457 kB** (223 → 158 kB gzipped), CSS **128 kB → 85 
   **preferred** source in `Cover.svelte`, not a fallback — it's the server's archived 1000px art, so
   waiting for a CDN request to fail first is pure delay. Anything you play caches its cover
   (`playcache.cacheCoverFor`), so hi-res art works offline for everything you've listened to.
+  The IndexedDB database names (`nsupy-apicache`, `nsupy-gains`, `nsupy-offline`,
+  `nsupy-playcache`) and `NSUPY_BUILD_ID` predate the Neezer rename and stay: they are the storage
+  identity of an installed app. Renaming them empties the device's caches and its downloaded
+  tracks, so this is a persisted name, not a brand token.
   That source is an OBJECT URL, so the CSP's `img-src` must carry `blob:` (`web.py`,
   `tests/test_security.py`): without it the browser refuses every cached cover, the refusal reads
   exactly like a corrupt file, and the cache "repaired" it by deleting the bytes — which is how a

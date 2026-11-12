@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -20,9 +20,9 @@ from mutagen.id3 import ID3, TBPM, TCOM, TDRC, TPUB, TSRC
 from mutagen.mp3 import MP3
 from mutagen.oggvorbis import OggVorbis
 
-from supysonic import filetags, libjob
-from supysonic.db import Meta, Track
-from supysonic.deezer import analysis, library, lyrics
+from neezer import filetags, libjob
+from neezer.db import Meta, Track
+from neezer.deezer import analysis, library, lyrics
 
 from . import test_deezer_lyrics as _tl
 from . import test_webui as _tw
@@ -100,8 +100,8 @@ class FactsTest(LyricsTestCase):
 
 class LibJobTest(unittest.TestCase):
     def setUp(self):
-        from supysonic.config import DefaultConfig
-        from supysonic.web import create_application
+        from neezer.config import DefaultConfig
+        from neezer.web import create_application
         import tempfile, shutil
 
         self.dir = tempfile.mkdtemp()
@@ -119,12 +119,12 @@ class LibJobTest(unittest.TestCase):
         self.app = create_application(Cfg())
         self.ctx = self.app.app_context()
         self.ctx.push()
-        from supysonic.db import Folder, Artist, Album
+        from neezer.db import Folder, Artist, Album
 
         root = Folder.create(name="r", path=self.dir, root=True)
         artist = Artist.create(name="a")
         album = Album.create(name="b", artist=artist)
-        from supysonic.db import db as pdb
+        from neezer.db import db as pdb
 
         with pdb.atomic():
             for i in range(2500):
@@ -136,7 +136,7 @@ class LibJobTest(unittest.TestCase):
         self.shutil = shutil
 
     def tearDown(self):
-        from supysonic.db import release_database
+        from neezer.db import release_database
 
         self.ctx.pop()
         release_database()
@@ -296,7 +296,7 @@ class FileTagsTest(unittest.TestCase):
 
 class GainTest(WebUITestCase):
     def _upload_row(self, owner=None):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         with self.app.app_context():
             root = library.get_root_folder(self.archive)
@@ -314,7 +314,7 @@ class GainTest(WebUITestCase):
     def test_apply_measured_gain_and_regain_pass(self):
         self._login()
         with self.app.app_context():
-            from supysonic.db import TrackAnalysis, now
+            from neezer.db import TrackAnalysis, now
 
             _, row = self._upload_row()
             TrackAnalysis.create(
@@ -327,7 +327,7 @@ class GainTest(WebUITestCase):
             self.assertEqual(analysis.regain_from_analyses(), 0)  # idempotent
 
     def test_routes_take_uuid_and_deezer_ids_without_network(self):
-        from supysonic.deezer import ids
+        from neezer.deezer import ids
 
         self._login()
         uid, row = self._upload_row()
@@ -336,7 +336,7 @@ class GainTest(WebUITestCase):
         self.assertAlmostEqual(self.client.get(f"/api/gain/{uid}").get_json()["gain"], -5.5)
         # A Deezer row, asked by its numeric id.
         with self.app.app_context():
-            from supysonic.deezer import library
+            from neezer.deezer import library
 
             r = library.upsert_track(raw_track(5, "D"), library.get_root_folder(self.archive), "FLAC")
             r.gain = -7.0
@@ -356,7 +356,7 @@ class GainTest(WebUITestCase):
 
 class LyricsRoutesTest(WebUITestCase):
     def _archived(self, sid=9):
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         with self.app.app_context():
             t = library.upsert_track(
@@ -386,7 +386,7 @@ class LyricsRoutesTest(WebUITestCase):
         self._login()
         t = self._archived()
         started = []
-        with mock.patch("supysonic.webui._lyrics_in_background", started.append):
+        with mock.patch("neezer.webui._lyrics_in_background", started.append):
             data = self.client.get(f"/api/lyrics/{t.id}").get_json()
         self.assertIsNone(data["lyrics"])
         self.assertEqual(started, [t.id])
@@ -394,13 +394,13 @@ class LyricsRoutesTest(WebUITestCase):
         with self.app.app_context():
             library.update_track_facts(t, {"lyrics_tried": 1}, "local")
         started.clear()
-        with mock.patch("supysonic.webui._lyrics_in_background", started.append):
+        with mock.patch("neezer.webui._lyrics_in_background", started.append):
             self.client.get(f"/api/lyrics/{t.id}")
         self.assertEqual(started, [])
 
     def test_cold_track_one_short_lrclib_request(self):
         self._login()
-        from supysonic.deezer import library
+        from neezer.deezer import library
 
         with self.app.app_context():
             t = library.upsert_track(
@@ -443,7 +443,7 @@ class LyricsRoutesTest(WebUITestCase):
             with self.app.app_context():
                 self.assertTrue(lyrics.lyrics_tried(Track[t.id]))
             started = []
-            with mock.patch("supysonic.webui._lyrics_in_background", started.append):
+            with mock.patch("neezer.webui._lyrics_in_background", started.append):
                 self.client.get(f"/api/lyrics/{t.id}")
             self.assertEqual(started, [])
             self.assertEqual(len(sess.calls), 1)

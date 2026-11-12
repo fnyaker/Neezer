@@ -204,7 +204,7 @@ function takeLock() {
   if (!navigator.locks || !navigator.locks.request) return Promise.resolve(true);
   return new Promise((resolve) => {
     navigator.locks
-      .request("nsupysonic-party-host", { ifAvailable: true }, (lock) => {
+      .request("neezer-party-host", { ifAvailable: true }, (lock) => {
         if (!lock) {
           resolve(false);
           return undefined;

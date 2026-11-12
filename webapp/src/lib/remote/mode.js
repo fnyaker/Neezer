@@ -9,7 +9,7 @@
 // echo, written when a link is claimed and dropped when the grant ends. App
 // reconciles the two at boot and reloads when they disagree.
 //
-// The four levels, each a superset of the one before (supysonic/webui/remote.py):
+// The four levels, each a superset of the one before (neezer/webui/remote.py):
 // queue (transport + the queue), read (the whole app, read-only), full
 // (everything but administration), admin.
 

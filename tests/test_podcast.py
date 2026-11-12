@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -20,11 +20,11 @@ import types
 import unittest
 from pathlib import Path
 
-from supysonic.config import DefaultConfig
-from supysonic.db import PodcastChannel, PodcastEpisode, User, release_database
-from supysonic.deezer import archive, ids, library
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.config import DefaultConfig
+from neezer.db import PodcastChannel, PodcastEpisode, User, release_database
+from neezer.deezer import archive, ids, library
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from .testbase import TestBase
 from .api.apitestbase import ApiTestBase
@@ -229,7 +229,7 @@ class PodcastLibraryTestCase(TestBase):
         self.assertEqual(episode.status, "error")
 
     def test_sync_podcasts_refreshes_known_channels(self):
-        from supysonic.deezer.importer import DeezerImporter
+        from neezer.deezer.importer import DeezerImporter
 
         # Pre-existing subscription (channel row), no episodes yet.
         library.upsert_channel(self.user, library.normalize_show(show_data()))
@@ -246,7 +246,7 @@ class PodcastLibraryTestCase(TestBase):
     def test_sync_podcasts_never_reads_the_deezer_account(self):
         # A show favorited on Deezer (no local row yet) is NOT imported: the
         # refresh only follows the local subscriptions.
-        from supysonic.deezer.importer import DeezerImporter
+        from neezer.deezer.importer import DeezerImporter
 
         eps = [episode_obj(i, f"Ep {i}") for i in range(1, 3)]
         provider = MockProvider(
@@ -411,8 +411,8 @@ class PodcastApiTestCase(ApiTestBase):
         """The whole show delisted — not one episode. Everything archived must
         stay listed, playable and complete, served from disk, and the sync must
         stop pestering Deezer about it."""
-        from supysonic.deezer.importer import DeezerImporter
-        from supysonic.deezer.provider import ShowUnavailable
+        from neezer.deezer.importer import DeezerImporter
+        from neezer.deezer.provider import ShowUnavailable
 
         self._create_channel()
         eid = str(ids.episode_uuid("1"))
@@ -454,8 +454,8 @@ class PodcastApiTestCase(ApiTestBase):
         self.assertEqual(rv.status_code, 200)
 
     def test_a_show_that_comes_back_is_no_longer_local(self):
-        from supysonic.deezer.importer import DeezerImporter
-        from supysonic.db import now
+        from neezer.deezer.importer import DeezerImporter
+        from neezer.db import now
 
         self._create_channel()
         channel = PodcastChannel[ids.show_uuid("1002156761")]
@@ -510,7 +510,7 @@ class PodcastWebUITestCase(unittest.TestCase):
         UserManager.add("alice", "Alic3", admin=True)
         # The archiving rules are cached per process: a rule another test
         # saved must not leak into this one.
-        from supysonic.deezer import rules
+        from neezer.deezer import rules
 
         rules.invalidate()
         self.addCleanup(rules.invalidate)
@@ -605,7 +605,7 @@ class PodcastWebUITestCase(unittest.TestCase):
         )
 
     def test_a_new_subscription_takes_the_admins_default(self):
-        from supysonic.deezer import rules
+        from neezer.deezer import rules
 
         rules.save({"on_podcast": False})
         pf = self._prefetch()
@@ -615,7 +615,7 @@ class PodcastWebUITestCase(unittest.TestCase):
         self.assertEqual(pf.episode_ids, [])
 
     def test_the_switch_off_keeps_a_show_out_of_the_archive(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         pf = self._prefetch()
         self._login()
@@ -633,7 +633,7 @@ class PodcastWebUITestCase(unittest.TestCase):
         self.assertEqual(pf.episode_ids, [])
 
     def test_turning_the_switch_on_queues_what_is_missing_once(self):
-        from supysonic.deezer import rules
+        from neezer.deezer import rules
 
         rules.save({"on_podcast": False})
         pf = self._prefetch()
@@ -650,8 +650,8 @@ class PodcastWebUITestCase(unittest.TestCase):
         self.assertNotIn("episodes", body)  # the answer stays small
 
     def test_the_refresh_queues_the_new_episodes_of_a_switched_on_show(self):
-        from supysonic.deezer.importer import DeezerImporter
-        from supysonic.deezer import backfill
+        from neezer.deezer.importer import DeezerImporter
+        from neezer.deezer import backfill
 
         pf = self._prefetch()
         self._login()

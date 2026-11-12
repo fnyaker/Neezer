@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -17,12 +17,12 @@ import shutil
 import tempfile
 import unittest
 
-from supysonic import linkimport
-from supysonic.config import DefaultConfig
-from supysonic.db import Playlist, release_database
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
-from supysonic.webui import playlist_import
+from neezer import linkimport
+from neezer.config import DefaultConfig
+from neezer.db import Playlist, release_database
+from neezer.managers.user import UserManager
+from neezer.web import create_application
+from neezer.webui import playlist_import
 
 SPOTIFY_ID = "37i9dQZF1DXcBWIGoYBM5M"
 
@@ -297,7 +297,7 @@ class ReadersTestCase(unittest.TestCase):
         used to hold every YouTube search and first play off for a minute."""
         from unittest import mock
 
-        from supysonic.deezer import youtube as yt
+        from neezer.deezer import youtube as yt
 
         yt.reset()
         self.addCleanup(yt.reset)
@@ -402,7 +402,7 @@ class ImportRouteTestCase(unittest.TestCase):
         UserManager.add("alice", "Alic3", admin=True)
         UserManager.add("bob", "B0bbb", admin=False)
 
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         from .test_webui import MockDz, MockPrefetch
 
@@ -442,7 +442,7 @@ class ImportRouteTestCase(unittest.TestCase):
         return self.client.get(f"/api/import/playlist/{jid}").get_json()
 
     def local_track(self, title, artist, length):
-        from supysonic.deezer import library, local
+        from neezer.deezer import library, local
 
         root = library.get_root_folder(self.archive)
         d = os.path.join(self.archive, artist, "Demo")
@@ -528,7 +528,7 @@ class ImportRouteTestCase(unittest.TestCase):
         self.assertTrue(self.api.queries)
 
     def test_a_save_in_progress_does_not_resend_the_list(self):
-        from supysonic.webui import playlist_import as pi
+        from neezer.webui import playlist_import as pi
 
         job = {k: None for k in ("id", "source", "source_label", "kind", "url", "name", "cover",
                                  "total", "truncated", "done", "matched", "error", "playlist_id")}

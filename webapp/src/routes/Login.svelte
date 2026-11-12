@@ -24,7 +24,7 @@
 
 <div class="wrap">
   <form on:submit={submit}>
-    <div class="brand"><span class="dot"></span> NSupySonic</div>
+    <div class="brand"><span class="dot"></span> Neezer</div>
     <h1>Connexion</h1>
     <input placeholder="Utilisateur" bind:value={username} autocomplete="username" />
     <input

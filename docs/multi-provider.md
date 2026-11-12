@@ -23,7 +23,7 @@ commune :
 
 | | Deezer | YouTube |
 |---|---|---|
-| Code | `supysonic/deezer/provider.py`, `archive.py`, `library.py` | `supysonic/deezer/youtube.py`, `webui/youtube.py` |
+| Code | `neezer/deezer/provider.py`, `archive.py`, `library.py` | `neezer/deezer/youtube.py`, `webui/youtube.py` |
 | Identité en base | `track/album/artist/playlist.deezer_id` | `track.youtube_id` (titre seulement) |
 | Recherche | `deezerpy/api.py`, route `/search` | route dédiée, case « YouTube » |
 | Son | FLAC déchiffré, Opus à la demande | Opus d'origine, remuxé, jamais ré-encodé |
@@ -52,7 +52,7 @@ consiste à **extraire ce qu'ils ont en commun** et à y brancher les deux, puis
 
 ## 1. L'interface d'un fournisseur
 
-Un module `supysonic/providers/` (nouveau) :
+Un module `neezer/providers/` (nouveau) :
 
 - `base.py` — la classe `Provider` et les types échangés ;
 - `errors.py` — les erreurs, qui portent la règle « pas de verdict sans réponse » ;
@@ -201,7 +201,7 @@ Trois niveaux, du plus sûr au plus prudent :
 3. **Rien de sûr** : deux lignes distinctes. Un mauvais morceau vaut pire qu'un doublon (règle de
    l'import de playlist).
 
-Ces fonctions sortent de `webui/availability.py` dans `supysonic/matching.py` (le module les
+Ces fonctions sortent de `webui/availability.py` dans `neezer/matching.py` (le module les
 ré-importe, rien ne change pour ses appelants) : la recherche, l'import de playlist, le remplacement et
 la fusion en sont tous clients.
 
@@ -239,12 +239,12 @@ archivé sinon.
 
 - Un fournisseur s'**enregistre** (`registry.register(ProviderClass)`) ; les intégrés le font à la
   création de l'application (`web.py#create_application`), les tiers par le groupe d'entrée
-  (`entry_points`) `supysonic.providers`, ce qui permet d'ajouter un fournisseur **sans modifier ce
+  (`entry_points`) `neezer.providers`, ce qui permet d'ajouter un fournisseur **sans modifier ce
   dépôt**. Ajouter un fournisseur = un fichier + une ligne ; le gabarit (`docs/providers.md`, écrit au
   lot J) le montre de bout en bout.
 - `current_app.providers` (le registre) remplace `current_app.deezer`, qui **reste** et pointe sur le
   fournisseur `deezer` pendant toute la transition (une cinquantaine d'appelants).
-- Configuration : `[provider.<id>]` dans `supysonic.conf` ; l'ancienne section `[deezer]`, les
+- Configuration : `[provider.<id>]` dans `neezer.conf` ; l'ancienne section `[deezer]`, les
   variables `DEEZER_*` et les clés `Meta` (ARL) restent lues par l'adaptateur Deezer **sans migration**
   des valeurs. Un fournisseur sans identifiant requis est actif par défaut ; un fournisseur à
   identifiants l'est une fois les identifiants validés.
@@ -313,9 +313,9 @@ Chaque lot qui touche au schéma ou à la configuration le teste :
 
 1. **Un titre = une ligne**, plusieurs `track_source` ; les colonnes `deezer_id`/`youtube_id` restent
    (double écriture) au lieu d'être migrées puis supprimées : moins risqué, réversible.
-2. **Le module `supysonic/deezer/` n'est pas renommé** (le renommage toucherait presque tous les
+2. **Le module `neezer/deezer/` n'est pas renommé** (le renommage toucherait presque tous les
    fichiers et entrerait en conflit avec chaque lot) ; les nouveaux fournisseurs vivent dans
-   `supysonic/providers/`.
+   `neezer/providers/`.
 3. **La règle d'amélioration de qualité est désactivée par défaut** et l'ordre des fournisseurs est
    l'ordre d'enregistrement (Deezer d'abord, YouTube repli).
 4. **YouTube reste un repli opt-in** (rôle `fallback`), pas un fournisseur de premier rang, même s'il
@@ -348,13 +348,13 @@ la généralise : **la famille devient l'ancêtre le plus proche qui est une fam
   ne dit pas « plus ou moins ». `genre_alias` (`name` replié, `genre` FK) rattache les noms venus
   d'ailleurs (genre Deezer, étiquettes d'un fournisseur, MusicBrainz) à un nœud, pour que ces
   données non fiables tombent dans l'arbre au lieu de créer un tag de plus.
-- **L'arbre par défaut** : un fichier de données (`supysonic/deezer/genre_tree.py`), écrit à la main
+- **L'arbre par défaut** : un fichier de données (`neezer/deezer/genre_tree.py`), écrit à la main
   à partir de ce que `FAMILIES`, `EXTRA_GENRES` et les listes de références disent déjà, semé
   **additivement** et par version (comme le vocabulaire : un nœud que la personne a déplacé ou
   supprimé n'est pas remis ; « Rétablir l'arbre par défaut » existe). Un test exige que chaque
   libellé de `known_genres()` ait au moins un parent ou soit une racine déclarée, et que le moteur
   d'animation retrouve une famille pour chacun.
-- **Une seule lecture, en mémoire** : l'arbre fait quelques centaines de nœuds. `supysonic/genretree.py`
+- **Une seule lecture, en mémoire** : l'arbre fait quelques centaines de nœuds. `neezer/genretree.py`
   le charge **une fois** (invalidé par un numéro de version dans `Meta`) et répond sans SQL :
   `ancestors(g)`, `descendants(g)` (le filtre « Techno » inclut le frenchcore), `family_of(g)`,
   `lca(a, b)`, `distance(a, b)` (plus court chemin pondéré, 0 à 1). Les listes et la recherche ne
@@ -460,7 +460,7 @@ en particulier **toutes les clés d'API** (MusicBrainz/AcoustID, Last.fm, fourni
 **chemins de fichiers** et ce qui doit être connu avant que la base ne s'ouvre (URI de base de
 données, hôte, port) restent dans le fichier de configuration.
 
-- Un **registre de réglages** (`supysonic/settings.py`) : chaque réglage déclare sa clé, sa section,
+- Un **registre de réglages** (`neezer/settings.py`) : chaque réglage déclare sa clé, sa section,
   son type, s'il est secret, son défaut, son validateur, s'il demande un redémarrage et une action de
   test. Les valeurs vivent en base, **lues avant le fichier de configuration, avant l'environnement**
   (comme l'ARL aujourd'hui) : une installation existante continue de marcher sans rien saisir.

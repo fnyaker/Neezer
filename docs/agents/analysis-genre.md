@@ -2,8 +2,8 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
-**Whole-track analysis is the SERVER's job** (`supysonic/deezer/analysis.py`, served by
-`supysonic/webui/analysis.py`, consumed by `webapp/src/lib/analysis.js`). The tempo and the style
+**Whole-track analysis is the SERVER's job** (`neezer/deezer/analysis.py`, served by
+`neezer/webui/analysis.py`, consumed by `webapp/src/lib/analysis.js`). The tempo and the style
 are properties of the whole piece, and a detector working them out live spends the first fifteen
 seconds of every track converging — through the intro, which is the least representative part of it
 — and pays that cost again on every device, on every play. Same reasoning as the loudness: the audio
@@ -164,7 +164,7 @@ does not change, so neither does the answer. Measure once, keep it in `track_ana
   the cached figure instead of asking again). The client keeps polling a provisional id until the
   measured verdict lands and keeps the published tempo if it never does. A figure Deezer lists at
   half the real tempo is the tracker's to correct, by its one-sided rule: a served tempo may be
-  DOUBLED by the kicks, never halved. `supysonic-cli deezer bpm-audit` answers "are Deezer's BPMs
+  DOUBLED by the kicks, never halved. `neezer-cli deezer bpm-audit` answers "are Deezer's BPMs
   right?" on the operator's own library — Deezer's figure against the file's measured tempo, per
   style, every disagreement listed.
 
@@ -177,7 +177,7 @@ owns the bar cues, the kick/snare gates, the arrangement and the genre channel);
 inferred on the device. The kick, the onsets and the transients stay live: no whole-file average can
 stand in for an event.
 
-**The genre studio** (`supysonic/deezer/embedding.py` + `genre.py`, `supysonic/webui/genre.py`,
+**The genre studio** (`neezer/deezer/embedding.py` + `genre.py`, `neezer/webui/genre.py`,
 `webapp/src/lib/genre/`, `routes/Genres.svelte`) is the answer to "the classifier does not know MY
 genres". The heuristic above knows the styles it was written with; this teaches it yours.
 
@@ -226,7 +226,7 @@ genres". The heuristic above knows the styles it was written with; this teaches 
   the front-end feeds however many patches a track yields, and the `-bs64` export declares a fixed
   batch of 64, which onnxruntime refuses — `validate_model` rejects it with that sentence rather than
   letting it fail at inference. onnxruntime is an optional dependency
-  (`pip install 'supysonic[embedding]'`, and in the Docker image): without it the module reports
+  (`pip install 'neezer[embedding]'`, and in the Docker image): without it the module reports
   itself unavailable and the heuristic classifier keeps doing its job unchanged.
 - **The front-end is the dangerous part.** A mel-spectrogram with the wrong window, scale or
   normalization yields vectors that look perfectly healthy and mean nothing. The parameters are the
@@ -351,7 +351,7 @@ genres". The heuristic above knows the styles it was written with; this teaches 
 - **The CSP had to be widened by exactly one token.** `script-src 'self' 'wasm-unsafe-eval'` permits
   WebAssembly compilation and nothing else — not `eval()`, not `new Function`, not inline script.
   Without it `WebAssembly.instantiate` is refused outright and deep training cannot run at all.
-- **A model travels as ONE FILE** (`supysonic/webui/genreshare.py`, the *Partager le modèle* card on the
+- **A model travels as ONE FILE** (`neezer/webui/genreshare.py`, the *Partager le modèle* card on the
   Modèle tab): `/genre/share/export` writes the genres, every label (genre + Deezer id, YouTube id, or
   artist and title for an upload) and the active head; `/genre/share/preview` then `/genre/share/import`
   read one back. The two halves serve different cases: the head serves at once but only where the
@@ -441,7 +441,7 @@ genres". The heuristic above knows the styles it was written with; this teaches 
   the classifier past its confidence floor. The served genre is the genre now (the analyser pins it),
   and the only one: a track the server has no genre for shows none.
 
-**Genre hierarchy (multi-provider lot O)** (`supysonic/genretree.py`, `supysonic/deezer/genre_tree.py`,
+**Genre hierarchy (multi-provider lot O)** (`neezer/genretree.py`, `neezer/deezer/genre_tree.py`,
 `webui/genre.py` `/genre/tree*`, `webapp/src/lib/genretree.js`, `components/GenreTree.svelte`, the *Arbre* tab of
 the studio). Genres form a DAG: `genre_parent` (weighted multi-parent edges, 1 = outright sub-genre) and `genre_alias`
 (schema `20261021`). The engine's *family* is the nearest ancestor that is a `FAMILIES` label. The tree is cached
@@ -513,7 +513,7 @@ Tests: `webapp/test/clientanalysis.test.mjs` (real wasm on a 150 BPM kick, mock 
 
 **The numbers are the server's, so no re-measure and no recalibration are needed.** `analysis._spectral` takes its descriptors from
 ffmpeg's `aspectralstats` on the SOURCE signal (its own rate, every channel, pooled). Recovered frame by frame, then checked on 99 real
-tracks of the owner's library (`supysonic-cli deezer measure-compare`, 90 s each; median relative error of own vs ffmpeg: centroid
+tracks of the owner's library (`neezer-cli deezer measure-compare`, 90 s each; median relative error of own vs ffmpeg: centroid
 1e-4, spread 7e-5, rolloff 0, flux 2e-4):
 - framing: 2048-sample symmetric Hann window, hop 1024, the first frame half silence; `m = |rfft|/2048` over the first 1024 bins
   (Nyquist excluded), `f[k] = k·rate/2048`;
@@ -535,7 +535,7 @@ No-dependency Rust, like `trainer`: `fft.rs`, `spectral.rs` (the descriptors abo
 range on a 0.1 LU histogram, this uses exact percentiles). WASM surface: `ms_begin/ms_channel/ms_run/ms_out`, `ms_src_hash` (a stale binary
 fails `test/measure.test.mjs`). `deezer/measure.py` is the numpy twin (float32 FFT, like ffmpeg); `tests/test_measure.py` pins numpy against
 ffmpeg and, when a native build exists (`cd webapp/measure && cargo build --release --example measure`), Rust against numpy (<= 1e-4).
-`supysonic-cli deezer measure-compare [--style X]` writes the paired ffmpeg/own descriptors (the image has ffmpeg alone: the rate and channels are read
+`neezer-cli deezer measure-compare [--style X]` writes the paired ffmpeg/own descriptors (the image has ffmpeg alone: the rate and channels are read
 from its banner, `analysis.probe_audio`).
 
 **The beat tracker is ported** (`webapp/measure/src/tempo.rs`, from `deezer/beats.py`): same constants, same order of operations,

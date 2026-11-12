@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic API server.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic API server.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-""""Je n'aime pas" (supysonic/dislikes.py): the title, its other rows and the
+""""Je n'aime pas" (neezer/dislikes.py): the title, its other rows and the
 titles that sound almost the same leave the radios, the Flow and the mixes;
 the farther neighbours are only pushed down; nothing a person plays
 themselves is touched."""
@@ -14,9 +14,9 @@ import sqlite3
 import tempfile
 import unittest
 
-from supysonic import db as dbmod
-from supysonic import discover, dislikes, radio
-from supysonic.db import Album, Track, TrackDislike, TrackNeighbor, User, UserTaste
+from neezer import db as dbmod
+from neezer import discover, dislikes, radio
+from neezer.db import Album, Track, TrackDislike, TrackNeighbor, User, UserTaste
 
 from .test_discover import count_statements
 from .test_radio_mix import _Graph
@@ -99,7 +99,7 @@ class DislikesTestCase(_Disliked):
         self.assertGreaterEqual(len(r), 20)
 
     def test_the_flow_leaves_them_out_and_their_weight_out_of_the_taste(self):
-        from supysonic import listening
+        from neezer import listening
 
         for _ in range(4):
             listening.record(self.user, self.bad, 200)
@@ -160,7 +160,7 @@ class RoutesTestCase(_Disliked):
         self.assertEqual(post("/api/dislike", data="x").status_code, 400)
 
     def test_a_guest_cannot_dislike_another_person_s_upload_and_has_their_own_list(self):
-        from supysonic.managers.user import UserManager
+        from neezer.managers.user import UserManager
 
         UserManager.add("bob", "B0bpass", admin=False)
         Track.update(owner=self.user.id).where(Track.id == self.far.id).execute()
@@ -191,7 +191,7 @@ class UpgradeTestCase(unittest.TestCase):
     arrive, nothing else moves."""
 
     def test_the_table_and_the_column_arrive(self):
-        from supysonic.db import init_database, release_database
+        from neezer.db import init_database, release_database
 
         fd, path = tempfile.mkstemp()
         os.close(fd)

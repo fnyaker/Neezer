@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -17,8 +17,8 @@ import tempfile
 import unittest
 from datetime import timedelta
 
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer.config import DefaultConfig
+from neezer.db import (
     Playlist,
     PlaylistTrack,
     StarredTrack,
@@ -27,9 +27,9 @@ from supysonic.db import (
     now,
     release_database,
 )
-from supysonic.deezer import cleanup, rules
-from supysonic.managers.user import UserManager
-from supysonic.web import create_application
+from neezer.deezer import cleanup, rules
+from neezer.managers.user import UserManager
+from neezer.web import create_application
 
 from .test_webui import MockDz, MockPrefetch
 
@@ -55,7 +55,7 @@ class RulesTestBase(unittest.TestCase):
         self.app = create_application(Config())
         UserManager.add("alice", "Alic3", admin=True)
 
-        from supysonic.deezer.provider import DeezerProvider
+        from neezer.deezer.provider import DeezerProvider
 
         provider = DeezerProvider("arl", self.archive, "FLAC")
         provider._dz = MockDz()
@@ -82,7 +82,7 @@ class RulesTestBase(unittest.TestCase):
 
     def _track(self, deezer_id="1", *, archived=True, size=1024, played=None, plays=0):
         """A Deezer track row, optionally with a real file behind it."""
-        from supysonic.deezer import archive as archive_mod
+        from neezer.deezer import archive as archive_mod
 
         track = archive_mod.import_track(self.app.deezer, deezer_id)
         if archived:
@@ -181,7 +181,7 @@ class EventRulesTestCase(RulesTestBase):
         self.assertEqual(self.app.deezer_prefetch.ids, ["2"])
 
     def test_each_favourite_kind_has_its_own_switch(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         rules.save({"on_fav_album": False})
         self.assertIsNone(
@@ -194,13 +194,13 @@ class EventRulesTestCase(RulesTestBase):
 
     def test_starring_an_artist_archives_nothing_by_default(self):
         """Starring an artist is following it; its discography is opt-in."""
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         self.assertIsNone(backfill.archive_entity(self.app, self.app.deezer, "artist", "9"))
         self.assertEqual(self.app.deezer_prefetch.ids, [])
 
     def test_artist_scope_releases_takes_the_most_recent_n(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         rules.save({"on_fav_artist": True, "artist_scope": "releases", "artist_limit": 1})
         thread = backfill.archive_entity(self.app, self.app.deezer, "artist", "9")
@@ -210,7 +210,7 @@ class EventRulesTestCase(RulesTestBase):
         self.assertEqual(self.app.deezer.dz.gw.taken_albums, ["11"])
 
     def test_artist_scope_top_takes_tracks_not_releases(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         rules.save({"on_fav_artist": True, "artist_scope": "top", "artist_limit": 2})
         thread = backfill.archive_entity(self.app, self.app.deezer, "artist", "9")
@@ -229,7 +229,7 @@ class PlayContextTestCase(RulesTestBase):
         self.assertEqual(self.app.deezer_prefetch.ids, [])
 
     def test_the_context_is_archived_once_when_enabled(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         backfill._recent_contexts.clear()
         rules.save({"on_play_context": True})
@@ -253,7 +253,7 @@ class PlayContextTestCase(RulesTestBase):
         self.assertEqual(self.app.deezer_prefetch.ids, ["1", "2", "3", "4", "5"])
 
     def test_a_radio_queue_has_no_context_to_archive(self):
-        from supysonic.deezer import backfill
+        from neezer.deezer import backfill
 
         backfill._recent_contexts.clear()
         rules.save({"on_play_context": True})
@@ -397,7 +397,7 @@ class CleanupTestCase(RulesTestBase):
         self.assertEqual(len(pl.get_tracks()), 1)  # still in the playlist
 
     def test_podcast_episodes_are_protected_by_default(self):
-        from supysonic.db import PodcastChannel, PodcastEpisode
+        from neezer.db import PodcastChannel, PodcastEpisode
 
         self._enable()
         user = User.get(User.name == "alice")
@@ -421,7 +421,7 @@ class CleanupTestCase(RulesTestBase):
     def test_an_episode_of_a_vanished_show_is_never_a_candidate(self):
         """When a show leaves Deezer the archive is the only copy left — that is
         the entire reason the channel became a local podcast."""
-        from supysonic.db import PodcastChannel, PodcastEpisode
+        from neezer.db import PodcastChannel, PodcastEpisode
 
         self._enable(clean_keep_podcast=False)
         user = User.get(User.name == "alice")
@@ -562,7 +562,7 @@ class CleanupTestCase(RulesTestBase):
         self.assertTrue(os.path.isfile(Track[track.id].path))
 
     def test_an_episode_removed_is_flagged_not_archived(self):
-        from supysonic.db import PodcastChannel, PodcastEpisode
+        from neezer.db import PodcastChannel, PodcastEpisode
 
         self._enable(clean_keep_podcast=False)
         user = User.get(User.name == "alice")
@@ -587,7 +587,7 @@ class CleanupTestCase(RulesTestBase):
         self.assertEqual(row.status, "new")
 
     def test_an_episode_listened_to_or_just_published_is_kept(self):
-        from supysonic.db import PodcastChannel, PodcastEpisode, PodcastProgress
+        from neezer.db import PodcastChannel, PodcastEpisode, PodcastProgress
 
         self._enable(clean_keep_podcast=False, clean_stale_days=30)
         user = User.get(User.name == "alice")

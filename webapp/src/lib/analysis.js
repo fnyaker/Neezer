@@ -1,6 +1,6 @@
 // The server's verdict on a track: its tempo and its style.
 //
-// Both are properties of the whole piece (see supysonic/deezer/analysis.py), so
+// Both are properties of the whole piece (see neezer/deezer/analysis.py), so
 // they are measured once on the server and simply read here. What that buys is
 // not a marginal accuracy gain — it is that the animation is RIGHT FROM THE
 // FIRST BAR. A live detector has to hear several seconds before it can say
@@ -20,7 +20,7 @@
 // The FIRST play is the one a measurement cannot help: the verdict is measured
 // from the archived file, and that play is what archives it. So the server
 // answers with Deezer's published tempo in the meantime, flagged `provisional`
-// (supysonic/deezer/analysis.py#tempo_hints). It is used at once — the tracker
+// (neezer/deezer/analysis.py#tempo_hints). It is used at once — the tracker
 // starts on it — and it is not the last word: the measured verdict follows the
 // archive, usually inside the first minute. A provisional id therefore stays
 // on the poll until the real one lands or the polls run out, and a later play
@@ -41,7 +41,7 @@ const mem = new Map(); // id -> verdict | null (null = asked, nothing there)
 // When each verdict was last heard from the server. A verdict kept on the
 // device used to be kept for good; now it is asked again after VERDICT_TTL, and
 // dropped at once when the server's GENERATION moves (a new genre head
-// re-applied to the whole library, supysonic/webui/genre.py#start_relabel).
+// re-applied to the whole library, neezer/webui/genre.py#start_relabel).
 const stamps = new Map(); // id -> ms
 const VERDICT_TTL = 24 * 3600 * 1000;
 // A MISS is kept for much less: "nothing yet" is exactly what a tag, an

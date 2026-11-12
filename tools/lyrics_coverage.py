@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How much of the archive has synced lyrics, plain ones, or none.
 
-    python tools/lyrics_coverage.py [--config supysonic.conf]
+    python tools/lyrics_coverage.py [--config neezer.conf]
 
 Reads the ``.lrc`` sidecars only: no network.
 """
@@ -17,9 +17,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--config", default=None)
     a = ap.parse_args()
-    from supysonic.config import IniConfig
-    from supysonic.db import Track, init_database
-    from supysonic.deezer import lyrics
+    from neezer.config import IniConfig
+    from neezer.db import Track, init_database
+    from neezer.deezer import lyrics
 
     config = IniConfig.from_common_locations() if not a.config else IniConfig(a.config)
     init_database(config.BASE["database_uri"])

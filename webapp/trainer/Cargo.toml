@@ -2,7 +2,7 @@
 name = "trainer"
 version = "0.1.0"
 edition = "2021"
-description = "NSupySonic's genre-studio trainer: the heads trained on the frozen embedding, cross-validated and calibrated, for the page."
+description = "Neezer's genre-studio trainer: the heads trained on the frozen embedding, cross-validated and calibrated, for the page."
 license = "AGPL-3.0-only"
 publish = false
 build = "build.rs"

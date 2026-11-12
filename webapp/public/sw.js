@@ -1,4 +1,4 @@
-/* NSupySonic web player service worker.
+/* Neezer web player service worker.
  *
  * Scope is /app/ (registered from /app/sw.js). Its jobs are (1) make the app
  * installable as a PWA, (2) make the shell boot INSTANTLY, online or off, and
@@ -16,7 +16,7 @@
  * update leaves the OLD, complete build in place, never a half one.
  */
 
-const CACHE = "nsupysonic-shell-v5";
+const CACHE = "neezer-shell-v6";
 const SCOPE_PATH = "/app/";
 const SHELL_KEY = "/app/";
 

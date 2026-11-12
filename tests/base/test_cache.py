@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2018 Alban 'spl0k' Féron
 #               2018-2019 Carey 'pR0Ps' Metcalfe
@@ -11,12 +11,12 @@ import unittest
 import shutil
 import tempfile
 
-from supysonic import cache as cache_module
-from supysonic.cache import Cache, CacheMiss, ProtectedError
+from neezer import cache as cache_module
+from neezer.cache import Cache, CacheMiss, ProtectedError
 
 
 class _Clock:
-    """What supysonic.cache reads as ``time()``, moved by hand."""
+    """What neezer.cache reads as ``time()``, moved by hand."""
 
     def __init__(self, now):
         self.now = now

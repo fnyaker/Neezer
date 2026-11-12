@@ -30,7 +30,7 @@ import androidx.appcompat.app.AppCompatActivity
  * out of the WebView's jar and hand it back.
  *
  * The credentials therefore never touch this app, and never touch the
- * NSupySonic server: only the resulting ARL crosses back, and only to a page
+ * Neezer server: only the resulting ARL crosses back, and only to a page
  * served by the configured server (see MainActivity.deliverDeezerArl).
  *
  * This WebView deliberately has **no JavaScript bridge** — the NSNative
@@ -53,7 +53,7 @@ class DeezerLoginActivity : AppCompatActivity() {
         )
 
         /**
-         * Same shape the server accepts (supysonic/deezer/__init__.py) — the
+         * Same shape the server accepts (neezer/deezer/__init__.py) — the
          * value goes out as a Cookie header, so anything outside this alphabet
          * is header injection and is not an ARL anyway.
          */
@@ -94,7 +94,7 @@ class DeezerLoginActivity : AppCompatActivity() {
         // Start from a clean Deezer jar so the ARL that comes back is always the
         // account the user just signed into — never a leftover session from a
         // previous link. Scoped to deezer.com: removeAllCookies() would also
-        // sign the user out of their own NSupySonic server.
+        // sign the user out of their own Neezer server.
         clearDeezerCookies()
 
         val cookies = CookieManager.getInstance()

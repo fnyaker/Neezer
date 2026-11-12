@@ -1,6 +1,6 @@
 //! A plain radix-2 complex FFT in f64 and the real-input magnitude spectrum built on it.
 //! Exactness over speed: these run once per 2048-sample frame and the numbers must
-//! match the Python twin (supysonic/deezer/measure.py) to rounding.
+//! match the Python twin (neezer/deezer/measure.py) to rounding.
 
 pub struct Fft {
     n: usize,

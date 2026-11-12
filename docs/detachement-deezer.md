@@ -95,15 +95,15 @@ Pour que la liste ci-dessous soit lisible, voici la frontière visée :
 est répercutée sur le compte Deezer.
 
 État actuel :
-- `supysonic/deezer/push.py` : `reconcile_playlist` (crée la playlist sur Deezer au premier push,
+- `neezer/deezer/push.py` : `reconcile_playlist` (crée la playlist sur Deezer au premier push,
   puis diffuse ajouts / retraits), `delete_playlist`.
-- Appelants : `supysonic/webui/__init__.py` (`create_playlist` crée la playlist **sur Deezer
+- Appelants : `neezer/webui/__init__.py` (`create_playlist` crée la playlist **sur Deezer
   d'abord** puis clé la ligne locale par `uuid5(deezer_id)` ; `_push_async("delete_playlist")` ;
-  `push.reconcile_playlist` après chaque édition), `supysonic/api/playlists.py` (`createPlaylist`,
-  `updatePlaylist`, `deletePlaylist` Subsonic), `supysonic/webui/availability.py` (miroir du
+  `push.reconcile_playlist` après chaque édition), `neezer/api/playlists.py` (`createPlaylist`,
+  `updatePlaylist`, `deletePlaylist` Subsonic), `neezer/webui/availability.py` (miroir du
   remplacement / de la suppression d'un titre dans les playlists Deezer de l'admin,
   `provider.add_songs_to_playlist` / `remove_songs_from_playlist`).
-- Option `push_to_deezer` dans `supysonic/config.py` (vraie par défaut).
+- Option `push_to_deezer` dans `neezer/config.py` (vraie par défaut).
 
 À faire :
 - Une playlist créée dans l'app est une ligne locale avec un UUID local (`uuid4`), jamais créée sur
@@ -123,7 +123,7 @@ au faux gateway pendant un cycle créer / éditer / réordonner / supprimer, en 
 ## D2. Arrêter de pousser les favoris vers Deezer
 
 État actuel :
-- `push.push_favorite` (titres, albums, artistes), appelé depuis `supysonic/api/annotation.py`
+- `push.push_favorite` (titres, albums, artistes), appelé depuis `neezer/api/annotation.py`
   (`star` / `unstar` Subsonic).
 - `/api/favorite` (titres) : `provider.dz` + `invalidate_favorites_cache`.
 - `/api/favorite/<kind>` (album, artiste, playlist) : **n'existe que côté Deezer**, il n'y a aucune
@@ -134,7 +134,7 @@ au faux gateway pendant un cycle créer / éditer / réordonner / supprimer, en 
 - Une étoile est une ligne locale, point. Retirer tous les appels `add_*_to_favorites` /
   `remove_*_from_favorites`.
 - Albums, artistes, playlists favoris : les stocker localement (`StarredAlbum`, `StarredArtist`
-  existent déjà dans le schéma supysonic ; pour les playlists, une table ou un drapeau à ajouter,
+  existent déjà dans le schéma neezer ; pour les playlists, une table ou un drapeau à ajouter,
   avec migration). L'archivage déclenché par le favori (`backfill.archive_entity`) reste : c'est
   l'archivage d'une source de sons.
 - L'état « favori » d'une page album / artiste ne doit plus venir de la page Deezer
@@ -152,7 +152,7 @@ après redémarrage, Deezer coupé.
   nourrit les recommandations Deezer.
 - Podcasts : `/api/podcasts` POST → `provider.add_favorite_show`, DELETE → `remove_favorite_show`,
   `/api/podcast/progress` → `provider.set_episode_position` (`episode.bookmarkSet`), et les mêmes
-  côté Subsonic (`supysonic/api/podcast.py`, gardés par `push_to_deezer`).
+  côté Subsonic (`neezer/api/podcast.py`, gardés par `push_to_deezer`).
 - `/flow/clusters` POST → `provider.set_flow_clusters` (GraphQL `UpdateFlowConfig`).
 
 À faire : supprimer ces écritures et l'option `report_listens`. Le compteur d'écoutes local
@@ -166,7 +166,7 @@ Fini quand : `push.py` n'a plus d'appelant et peut être supprimé, avec `push_t
 
 ## D4. Synchronisation entrante : une importation ponctuelle, plus une source de vérité
 
-État actuel (`supysonic/deezer/importer.py`, lancé par `scheduler.py` chaque nuit) :
+État actuel (`neezer/deezer/importer.py`, lancé par `scheduler.py` chaque nuit) :
 - `sync_playlists` réécrit chaque nuit les playlists locales depuis celles du compte Deezer.
 - `sync_favorites` **supprime** les étoiles locales des titres Deezer qui ne sont plus favoris sur
   Deezer (`stale` : la base suit Deezer).
@@ -177,7 +177,7 @@ Fini quand : `push.py` n'a plus d'appelant et peut être supprimé, avec `push_t
 
 À faire :
 - Transformer `sync_playlists` / `sync_favorites` en **import ponctuel** (bouton dans Réglages →
-  Compte Deezer, et `supysonic-cli deezer import-account`) : il ajoute, il ne retire jamais rien,
+  Compte Deezer, et `neezer-cli deezer import-account`) : il ajoute, il ne retire jamais rien,
   et il n'est plus lancé par le planificateur.
 - `/me/favorites` et `/me/favorite-ids` ne lisent plus que la base.
 - `sync_podcasts` ne lit plus les favoris Deezer, seulement les abonnements locaux (le
@@ -311,7 +311,7 @@ Fini quand : aucun gain ne vient de Deezer, et un upload est normalisé comme un
 
 ## D10. Crédits : ceux de Deezer restent, sans aller les chercher en direct
 
-État actuel : `supysonic/webui/credits.py` (`/api/track/<id>/credits`) lit `SNG_CONTRIBUTORS`,
+État actuel : `neezer/webui/credits.py` (`/api/track/<id>/credits`) lit `SNG_CONTRIBUTORS`,
 `LABEL_NAME`, ISRC, copyright dans le sidecar, sinon **demande à Deezer** et réécrit le sidecar.
 `NowPlayingMore.svelte` affiche le panneau.
 
@@ -331,7 +331,7 @@ Petit chantier, à faire avec D8.
 Les paroles Deezer ne sont pas fiables (souvent absentes, parfois d'une autre version) : elles
 font partie de ce qu'on cherche autrement.
 
-État actuel : `supysonic/deezer/lyrics.py` cherche d'abord les paroles **de Deezer**
+État actuel : `neezer/deezer/lyrics.py` cherche d'abord les paroles **de Deezer**
 (`provider.get_lyrics`), puis LRCLIB ; `/api/lyrics/<id>` interroge Deezer en direct pour un titre
 pas encore archivé ; les paroles sont embarquées dans les tags (`embed_lyrics`).
 
@@ -344,7 +344,7 @@ pas encore archivé ; les paroles sont embarquées dans les tags (`embed_lyrics`
   doit concorder à quelques secondes près.
 - Mesurer la couverture sur la bibliothèque réelle (part des titres avec paroles synchronisées,
   brutes, ou rien) avant de décider s'il faut une autre source.
-- Le CLI `deezer lyrics` devient `supysonic-cli lyrics`.
+- Le CLI `deezer lyrics` devient `neezer-cli lyrics`.
 
 Rien ne dépend des paroles : la ligne de paroles du lecteur s'affiche quand il y en a, et aucun
 algorithme ne les lit.
@@ -378,12 +378,12 @@ Aucun algorithme ne lit la date. Petit chantier.
 
 ## D13. Tempo et genre : nos algorithmes savent s'en passer
 
-État actuel (`supysonic/deezer/analysis.py`) :
+État actuel (`neezer/deezer/analysis.py`) :
 - `tempo_hints` / `provisional_payload` : le BPM publié par Deezer est servi comme tempo
   **provisoire** au premier passage, avant que le fichier soit mesuré.
 - `_deezer_bpm` + `_reconcile_tracked` : le BPM Deezer sert de **témoin d'octave** à la mesure
   (23/26 disques exacts sans le témoin, 26/26 avec, sur l'éval de `tools/tempo_eval.py`).
-- `supysonic-cli deezer bpm-audit` compare le BPM Deezer à notre mesure, par style.
+- `neezer-cli deezer bpm-audit` compare le BPM Deezer à notre mesure, par style.
 - Le genre ne vient jamais de Deezer : nos mesures, les étiquettes de l'utilisateur, le modèle du
   studio, et le genre écrit dans les tags d'un upload (`file_genre`, appliqué aux fichiers locaux
   seulement, parce que les archives Deezer portent le genre large de l'album).
@@ -472,7 +472,7 @@ qu'elle est Deezer allumé, hors section « disponible sur Deezer ».
 
 ## D16. Le planificateur ne synchronise plus le compte
 
-État actuel : `supysonic/deezer/scheduler.py` lance chaque nuit `importer.sync` (playlists, favoris,
+État actuel : `neezer/deezer/scheduler.py` lance chaque nuit `importer.sync` (playlists, favoris,
 podcasts, recommandations), puis le balayage d'archivage `backfill.sweep_for`, puis le scan local.
 
 À faire : une fois D4 et D5 faits, il ne reste que le rafraîchissement des épisodes de podcasts et
@@ -488,7 +488,7 @@ Dépend de : D4, D5.
 ## D17. Ménage : configuration, code mort, documentation
 
 À faire, quand les chantiers précédents sont fusionnés :
-- `supysonic/config.py`, `config.sample`, `config/supysonic.conf.example`, `.env.example`,
+- `neezer/config.py`, `config.sample`, `config/neezer.conf.example`, `.env.example`,
   `docker/entrypoint.sh` : retirer `push_to_deezer`, `report_listens`, `sync_playlists`,
   `sync_favorites`, `import_new_releases`, `import_flow`, `import_new_albums`, `smart_tracklists`
   (une option inconnue dans un ancien fichier de conf doit être ignorée, pas faire planter).
@@ -508,7 +508,7 @@ Dépend de : D4, D5.
 
 **Fait (lot I).** Les huit options (`push_to_deezer`, `report_listens`, `sync_playlists`,
 `sync_favorites`, `import_new_releases`, `import_flow`, `import_new_albums`, `smart_tracklists`)
-ne sont plus dans `config.py`, `config.sample`, `config/supysonic.conf.example`, `.env.example`,
+ne sont plus dans `config.py`, `config.sample`, `config/neezer.conf.example`, `.env.example`,
 `docker-compose.yml` ni `docker/entrypoint.sh` ; un ancien fichier qui les nomme est lu sans erreur
 et elles sont ignorées (`tests/test_detach_i.py`). Supprimés : `deezer/push.py`,
 `deezerpy/graphql.py`, les écritures du fournisseur et de `gw` (favoris, playlists, `log_listen`,
@@ -548,8 +548,8 @@ en justifiant qu'il récupère du son ou un fait de catalogue.
 ## D19. MusicBrainz, l'« IMDb de la musique » : évaluation et usage
 
 C'est le complément pour ce que Deezer ne sait pas, surtout pour les **uploads**, qui n'ont que
-leurs tags, et le recoupement des faits Deezer quand on doute. Un module neuf (`supysonic/enrich/`,
-hors de `supysonic/deezer/` puisqu'il sert aussi aux uploads), en arrière-plan comme le reste : un
+leurs tags, et le recoupement des faits Deezer quand on doute. Un module neuf (`neezer/enrich/`,
+hors de `neezer/deezer/` puisqu'il sert aussi aux uploads), en arrière-plan comme le reste : un
 titre est mis en file à l'archivage ou à l'upload, un seul worker suit le rythme imposé par chaque
 service, et un bouton + un CLI rattrapent la bibliothèque (reprise sur checkpoint, causes d'échec
 comptées). Rien n'attend ce module.
@@ -558,7 +558,7 @@ comptées). Rien n'attend ce module.
 
 | Source | Ce qu'on en tire | Conditions | Fiabilité |
 |---|---|---|---|
-| **MusicBrainz** (`/ws/2/`) | Identifiant stable de l'enregistrement, de l'œuvre et de la sortie ; date de première sortie ; label ; crédits (compositeur, parolier, producteur…) ; ISRC | Pas de clé ; **1 requête/s par IP en moyenne** (au-delà, 503 pour toute l'IP) ; User-Agent obligatoire au format `NSupySonic/<version> ( contact )` ; données principales en **CC0** ; usage non commercial gratuit ; recherche par ISRC (`/ws/2/isrc/<isrc>`) | C'est bien l'équivalent d'IMDb : une base encyclopédique éditée par une communauté avec relecture, où chaque entité a un identifiant permanent. Couverture excellente sur la pop, le rock et les grands labels, plus inégale sur les scènes hard dance : à mesurer sur la bibliothèque avant d'en faire plus. |
+| **MusicBrainz** (`/ws/2/`) | Identifiant stable de l'enregistrement, de l'œuvre et de la sortie ; date de première sortie ; label ; crédits (compositeur, parolier, producteur…) ; ISRC | Pas de clé ; **1 requête/s par IP en moyenne** (au-delà, 503 pour toute l'IP) ; User-Agent obligatoire au format `Neezer/<version> ( contact )` ; données principales en **CC0** ; usage non commercial gratuit ; recherche par ISRC (`/ws/2/isrc/<isrc>`) | C'est bien l'équivalent d'IMDb : une base encyclopédique éditée par une communauté avec relecture, où chaque entité a un identifiant permanent. Couverture excellente sur la pop, le rock et les grands labels, plus inégale sur les scènes hard dance : à mesurer sur la bibliothèque avant d'en faire plus. |
 | **AcoustID** (`api.acoustid.org/v2/lookup`) | Identification **par l'audio lui-même** (empreinte Chromaprint calculée avec `fpcalc` sur le fichier) → identifiant MusicBrainz, ISRC | **Clé d'application** gratuite (à fournir par l'opérateur, jamais committée) ; **3 requêtes/s** maximum ; **usage non commercial uniquement** | La seule méthode qui ne dépend d'aucune métadonnée : le bon recours pour un upload mal tagué. |
 | **LRCLIB** | Paroles (D11) | Pas de clé, déjà utilisé | Base ouverte participative ; la recherche par durée évite les mauvaises versions. |
 | **Cover Art Archive** | Pochette pour un upload qui n'en a pas | Pas de limite de débit annoncée ; licence des images à vérifier | Exacte quand l'identifiant MusicBrainz l'est. |

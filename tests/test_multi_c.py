@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -16,8 +16,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from supysonic import matching
-from supysonic.providers import quality as Q
+from neezer import matching
+from neezer.providers import quality as Q
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 if not HAVE_FFMPEG and os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
@@ -188,7 +188,7 @@ class SameRecording(unittest.TestCase):
 
 class MovedWithoutChange(unittest.TestCase):
     def test_old_import_sites_see_the_same_objects(self):
-        from supysonic.webui import availability, playlist_import
+        from neezer.webui import availability, playlist_import
 
         for name in ("match_score", "closeness", "_core_title", "_fold", "_artist_names", "PLAUSIBLE"):
             self.assertIs(getattr(availability, name), getattr(matching, name), name)

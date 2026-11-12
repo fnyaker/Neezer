@@ -197,7 +197,7 @@
     }
   });
 
-  // Admin: the releases check (supysonic/releases.py) — how often, how many
+  // Admin: the releases check (neezer/releases.py) — how often, how many
   // close artists, how far back — and a button to run it now.
   let rel = null;
   let relSaving = false;

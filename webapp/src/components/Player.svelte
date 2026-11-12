@@ -1951,7 +1951,7 @@
   // Two separate ideas that happen to need each other:
   //
   //  - TRIMMING asks the server where a file's audio actually starts and stops
-  //    (supysonic/webui/edges.py) and plays only that. Masters routinely carry
+  //    (neezer/webui/edges.py) and plays only that. Masters routinely carry
   //    a beat of digital silence at each end, and a crossfade that ignores them
   //    blends one track's silence into the next one's — which is the gap it was
   //    supposed to remove.
@@ -2009,7 +2009,7 @@
     if (dur && meta && Math.abs(dur - meta) > EDGE_LENGTH_SLACK) return null;
     return e;
   }
-  const EDGE_MAX = 10; // s — supysonic/webui/edges.py MAX_EDGE_TRIM
+  const EDGE_MAX = 10; // s — neezer/webui/edges.py MAX_EDGE_TRIM
   const EDGE_LENGTH_SLACK = 2.5; // s — metadata durations are whole seconds
 
   // Measure this track and the one after it. The next one is the point: its
@@ -2689,7 +2689,7 @@
 
   // What this listening session said, for the radio and the Flow refills:
   // the titles heard through and the ones skipped (under 30 s — the server's
-  // own rule, supysonic/listening.py). A new context is a new session.
+  // own rule, neezer/listening.py). A new context is a new session.
   const SKIP_UNDER = 30;
   let session = { key: null, heard: [], skipped: [], seed: null };
   function sessionFor(s) {

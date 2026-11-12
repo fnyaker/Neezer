@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -16,8 +16,8 @@ import re
 import unittest
 from pathlib import Path
 
-from supysonic.db import Playlist, User
-from supysonic.deezer import ids
+from neezer.db import Playlist, User
+from neezer.deezer import ids
 
 from .test_detach_e import _Case
 from .test_webui import MockApi

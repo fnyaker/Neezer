@@ -21,7 +21,7 @@
 //! publishes for a good share of hardcore) vetoed every vote to correct it,
 //! and the whole track ran at half speed: 0% on tempo across the half-seeded
 //! catalogue. Now the seed is asymmetric, like the server's own octave check
-//! (supysonic/deezer/analysis.py#_reconcile_octave): it still forbids moving
+//! (neezer/deezer/analysis.py#_reconcile_octave): it still forbids moving
 //! to a SLOWER level (a half-time dubstep groove is not 70 BPM because it
 //! feels like it), and it no longer forbids moving to a FASTER one when the
 //! kicks land on every beat of that faster grid.

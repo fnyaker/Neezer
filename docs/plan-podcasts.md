@@ -11,7 +11,7 @@
 > `PodcastCard`). **§1.5 résolu** : `deezer.pageProfile tab:podcasts` importe aussi
 > les shows déjà favoris côté Deezer lors du sync.
 
-État des lieux initial : **rien n'existait** côté podcasts. Supysonic n'implémente aucun endpoint
+État des lieux initial : **rien n'existait** côté podcasts. Neezer n'implémente aucun endpoint
 `getPodcasts*` (ils ne sont même pas dans `unsupported.py`), il n'y a pas de table
 podcast en base, et `deezerpy` n'expose que `get_chart_podcasts` (`deezerpy/api.py:121`).
 Deezer appelle les podcasts des **shows** en interne (`SHOW_ID`, `EPISODE_ID`).
@@ -147,7 +147,7 @@ Les épisodes ne sont **pas** des pistes (pas d'artiste/album, statuts de downlo
 purge) → tables dédiées plutôt que de matérialiser en albums, et mapping direct sur
 le modèle podcast de l'API Subsonic.
 
-- `supysonic/db.py` : deux modèles peewee, `SCHEMA_VERSION` bumpé + migrations
+- `neezer/db.py` : deux modèles peewee, `SCHEMA_VERSION` bumpé + migrations
   `{sqlite,postgres,mysql}` :
   - **PodcastChannel** : `id` (UUID pk), `deezer_id` (nullable, unique), `url`
     (lien deezer.com/show/… ; garde la porte ouverte à du RSS générique plus tard),
@@ -161,7 +161,7 @@ le modèle podcast de l'API Subsonic.
     archivé), `size`, `bitrate`, `suffix`/`mimetype`,
     `status` (`new | downloading | completed | error` — vocabulaire Subsonic),
     `play_offset` (position de lecture, alimentée par `episode.bookmarkSet` §1.3).
-- `supysonic/deezer/ids.py` : `NS_SHOW`, `NS_EPISODE` + `show_uuid()`,
+- `neezer/deezer/ids.py` : `NS_SHOW`, `NS_EPISODE` + `show_uuid()`,
   `episode_uuid()` (uuid5, même schéma déterministe → imports idempotents).
 
 ## 3. Couche Deezer
@@ -179,7 +179,7 @@ le modèle podcast de l'API Subsonic.
     `episode.bookmarkSet`.
   - `log_listen` étendu pour accepter `media.type="talk"` / `format="EXTERNAL"`
     (scrobble épisode).
-- **`supysonic/deezer/provider.py`** :
+- **`neezer/deezer/provider.py`** :
   - délégations métadonnées (`get_show`, `get_show_episodes`) ;
   - `resolve_episode(episode)` → `url` : renvoie directement
     `EPISODE_DIRECT_STREAM_URL` pour les shows direct-stream (cas nominal, §1.4).
@@ -189,7 +189,7 @@ le modèle podcast de l'API Subsonic.
     redirections et avec `Referer: https://www.deezer.com/` (mutualise l'écriture
     atomique `.part` de `download_to`, sans l'étape de déchiffrement).
   - `set_episode_position` / scrobble épisode (best-effort, comme `report_listen`).
-- **`supysonic/deezer/archive.py`** : `ensure_episode_archived(provider, episode)` —
+- **`neezer/deezer/archive.py`** : `ensure_episode_archived(provider, episode)` —
   même contrat qu'`ensure_archived` (idempotent, lock par id, `.part` atomique,
   statut `downloading`→`completed`/`error`), chemin
   `archive_dir/Podcasts/<Show>/<YYYY-MM-DD - Titre>.mp3`.
@@ -198,19 +198,19 @@ le modèle podcast de l'API Subsonic.
   la demande passe par le pipeline existant. La règle « ne jamais streamer
   directement depuis Deezer » reste respectée dans l'esprit : on archive d'abord,
   on sert le fichier local ensuite — on ne proxifie jamais le flux distant en direct.
-- **`supysonic/deezer/importer.py` + `scheduler.py`** : `sync_podcasts()` — pour
+- **`neezer/deezer/importer.py` + `scheduler.py`** : `sync_podcasts()` — pour
   chaque `PodcastChannel` connu (notre DB = source de vérité, §1.5), rafraîchir les
   métadonnées + les N derniers épisodes (audio à la demande). Config :
   `sync_podcasts = yes`, `podcast_episodes = 30`. (Import initial des shows déjà
   favoris = amélioration optionnelle, dépend de la sonde §1.5.)
-- **CLI** : `supysonic-cli deezer import https://deezer.com/…/show/<id>` (et
+- **CLI** : `neezer-cli deezer import https://deezer.com/…/show/<id>` (et
   `/episode/<id>`) — étendre le parseur d'URL de `archive.py`.
 - **`push.py`** : abonnement/désabonnement Subsonic → favori show Deezer
   (fail-soft, gardé par `push_to_deezer`).
 
 ## 4. API Subsonic (`/rest`)
 
-Nouveau `supysonic/api/podcast.py`, réponses conformes au XSD 1.16.0
+Nouveau `neezer/api/podcast.py`, réponses conformes au XSD 1.16.0
 (déjà dans `tests/assets/`) :
 
 - `getPodcasts` (`includeEpisodes`, `id`) — channels + épisodes (`status`,
@@ -229,7 +229,7 @@ Nouveau `supysonic/api/podcast.py`, réponses conformes au XSD 1.16.0
 
 ## 5. Web UI (`/api` + Svelte)
 
-- Routes (`supysonic/webui/__init__.py`, mêmes gardes `login_required` +
+- Routes (`neezer/webui/__init__.py`, mêmes gardes `login_required` +
   validation id numérique) : `GET /api/podcasts` (abonnements),
   `GET /api/podcast/<id>` (show + épisodes), `POST/DELETE /api/podcast/<id>/favorite`,
   `GET /api/podcast/episode/<id>/stream` (même pipeline opus),

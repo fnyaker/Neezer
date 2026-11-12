@@ -35,9 +35,9 @@ sys.path.insert(0, ROOT)
 
 import peewee  # noqa: E402
 
-from supysonic.config import DefaultConfig  # noqa: E402
-from supysonic.managers.user import UserManager  # noqa: E402
-from supysonic.web import create_application  # noqa: E402
+from neezer.config import DefaultConfig  # noqa: E402
+from neezer.managers.user import UserManager  # noqa: E402
+from neezer.web import create_application  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -68,8 +68,8 @@ def title(r):
 
 
 def populate(app, n_tracks, n_playlists, n_fav, big_playlist):
-    from supysonic.db import Playlist, PlaylistTrack, StarredTrack, User
-    from supysonic.deezer import library
+    from neezer.db import Playlist, PlaylistTrack, StarredTrack, User
+    from neezer.deezer import library
 
     r = random.Random(7)
     with app.app_context():
@@ -110,7 +110,7 @@ def populate(app, n_tracks, n_playlists, n_fav, big_playlist):
         # Everybody else on the sleeves: two to four people a track out of a
         # pool of writers and producers, one of them prolific (a credits page
         # of hundreds of titles), and the first artist writing for others too.
-        from supysonic.db import TrackCredit
+        from neezer.db import TrackCredit
 
         pool = [f"{title(r)} {k}" for k in range(400)]
         star_writer, artist_writer = "Max Prolific", artists[0][1]
@@ -144,7 +144,7 @@ def populate(app, n_tracks, n_playlists, n_fav, big_playlist):
         ).execute()
         # Followed artists, kept albums, and what the followed put out lately
         # (the home's "Nouveautés" and "Tes artistes", the library's chips).
-        from supysonic.db import Album, Artist, ArtistRelease, StarredAlbum, StarredArtist
+        from neezer.db import Album, Artist, ArtistRelease, StarredAlbum, StarredArtist
 
         rows = list(Artist.select().where(Artist.deezer_id.is_null(False)).limit(300))
         StarredArtist.insert_many([{"user": admin.id, "starred": a.id} for a in rows]).execute()
@@ -183,9 +183,9 @@ def make_archived(app, clusters=40):
 
     import numpy as np
 
-    from supysonic import similar
-    from supysonic.db import Track, TrackAnalysis, now
-    from supysonic.deezer import embedding as emb
+    from neezer import similar
+    from neezer.db import Track, TrackAnalysis, now
+    from neezer.deezer import embedding as emb
 
     styles = ["frenchcore", "techno", "house", "trance", "dnb", "hardstyle", "ambient",
               "pop", "rock", "jazz", "hiphop", "dubstep", "psytrance", "uptempo"]
@@ -268,7 +268,7 @@ def main():
     app = create_application(Config())
     with app.app_context():
         UserManager.add("bench", "Bench1", admin=True)
-        from supysonic.db import db as _db
+        from neezer.db import db as _db
 
         # One transaction for the whole fill: SQLite commits one statement at a
         # time otherwise, and the fill is thousands of upserts.
@@ -276,8 +276,8 @@ def main():
     print(f"populating ({args.tracks} tracks)...", file=sys.stderr)
     ids = populate(app, args.tracks, args.playlists, args.favorites, args.big_playlist)
     if args.audio:
-        from supysonic.db import Track
-        from supysonic.deezer import ids as dzids
+        from neezer.db import Track
+        from neezer.deezer import ids as dzids
 
         with app.app_context():
             for sng in ids["ids"]:
@@ -290,7 +290,7 @@ def main():
     if args.archived:
         make_archived(app)
     # Each request opens its own connection (web.py), as the server does.
-    from supysonic.db import close_connection
+    from neezer.db import close_connection
 
     close_connection()
 
@@ -326,7 +326,7 @@ def main():
         ("GET", "/api/storage", None),
     ]
     if args.archived:
-        from supysonic.db import Track
+        from neezer.db import Track
 
         with app.app_context():
             t = Track.select().where(Track.play_count > 0).first()

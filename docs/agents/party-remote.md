@@ -2,7 +2,7 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
-**Listen party** (`supysonic/webui/party.py`, `webapp/src/lib/party/`, `routes/Party.svelte`,
+**Listen party** (`neezer/webui/party.py`, `webapp/src/lib/party/`, `routes/Party.svelte`,
 `components/PartySheet.svelte`). The host shares a link (`/party/<id>`, with a QR code in the sheet);
 whoever opens it — no account needed — hears what the host plays, **at the same instant**, to the
 sample on each device. Modelled on beatsync (github.com/freeman-jiang/beatsync): NTP-style clock,
@@ -113,7 +113,7 @@ one shared timeline, Web Audio scheduling. What differs, and why:
   that is under 100 ms: a link the OS already counts would otherwise be counted twice.
   `window.__nsParty.host()` / `.guest()` expose those positions for exactly this check.
 
-**Remote control** (`supysonic/webui/remote.py`, `webapp/src/lib/remote/`, `components/RemoteSheet.svelte`,
+**Remote control** (`neezer/webui/remote.py`, `webapp/src/lib/remote/`, `components/RemoteSheet.svelte`,
 `RemoteHostChip.svelte`, `RemoteBanner.svelte`, `routes/RemoteClaim.svelte`). The owner makes a
 link on the device that PLAYS (the remote button next to the party's, in every player view) and
 hands it over as a URL or a QR code; whoever opens it drives that player from their own phone,

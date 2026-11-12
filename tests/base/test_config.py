@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2018 Alban 'spl0k' Féron
 #
@@ -7,7 +7,7 @@
 
 import unittest
 
-from supysonic.config import IniConfig
+from neezer.config import IniConfig
 
 
 class ConfigTestCase(unittest.TestCase):

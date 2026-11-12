@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -22,12 +22,12 @@ from deezerpy._circuit import breaker
 from deezerpy.errors import DeezerUnavailable
 from deezerpy.errors import GWAPIError
 
-from supysonic import db as dbmod
-from supysonic.db import Folder, Meta, Track, TrackSource, init_database, release_database
-from supysonic.deezer import ids
-from supysonic.deezer import youtube as yt
-from supysonic.deezer.provider import DeezerError, DeezerProvider, ShowUnavailable, TrackUnavailable
-from supysonic.providers import (
+from neezer import db as dbmod
+from neezer.db import Folder, Meta, Track, TrackSource, init_database, release_database
+from neezer.deezer import ids
+from neezer.deezer import youtube as yt
+from neezer.deezer.provider import DeezerError, DeezerProvider, ShowUnavailable, TrackUnavailable
+from neezer.providers import (
     CapabilityMissing,
     Gone,
     NotFound,
@@ -39,12 +39,12 @@ from supysonic.providers import (
     base,
     http,
 )
-from supysonic.providers.builtin import register_builtin
-from supysonic.providers.deezer import DeezerAdapter, hit_from_gw
-from supysonic.providers.fake import tiny_wav
-from supysonic.providers.local import LocalProvider
-from supysonic.providers.registry import MemoryStore
-from supysonic.providers.youtube import YoutubeAdapter
+from neezer.providers.builtin import register_builtin
+from neezer.providers.deezer import DeezerAdapter, hit_from_gw
+from neezer.providers.fake import tiny_wav
+from neezer.providers.local import LocalProvider
+from neezer.providers.registry import MemoryStore
+from neezer.providers.youtube import YoutubeAdapter
 
 
 # -- a Deezer client that counts ---------------------------------------------------
@@ -543,7 +543,7 @@ class RegistrationTestCase(_DbCase):
         self.assertNotIn("deezer", [p.id for p in reg.enabled()])
 
     def test_the_old_youtube_switch_commands_enabled_both_ways(self):
-        from supysonic.webui import youtube as webui_youtube
+        from neezer.webui import youtube as webui_youtube
 
         self.assertEqual(webui_youtube.ENABLED_KEY, "yt.enabled")
         with mock.patch.object(yt, "installed", return_value=True):
@@ -567,8 +567,8 @@ class RegistrationTestCase(_DbCase):
 
     def test_the_app_registers_them_outside_of_tests(self):
         """The upgrade path: an old config, an existing database."""
-        from supysonic.config import DefaultConfig
-        from supysonic.web import create_application
+        from neezer.config import DefaultConfig
+        from neezer.web import create_application
 
         path, cache = os.path.join(self.dir, "app.db"), self.dir
 
@@ -580,7 +580,7 @@ class RegistrationTestCase(_DbCase):
                 self.DEEZER = dict(self.DEEZER, enabled=True, arl="x" * 192, archive_dir=cache)
 
         release_database()
-        with mock.patch("supysonic.web._enrich_backfill", create=True):
+        with mock.patch("neezer.web._enrich_backfill", create=True):
             app = create_application(Config())
         self.assertEqual([p.id for p in app.providers.all()][:3], ["deezer", "youtube", "local"])
         self.assertTrue(app.providers.get("deezer").configured())

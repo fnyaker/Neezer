@@ -1,5 +1,5 @@
 // The user's accounts on other streaming services, for exporting playlists to
-// them (supysonic/webui/services.py). One store, so the settings and the export
+// them (neezer/webui/services.py). One store, so the settings and the export
 // sheet agree on what is linked the moment either one changes it.
 import { writable, get } from "svelte/store";
 import { api } from "./api.js";

@@ -178,7 +178,7 @@
   const EXTRA_SCALE = 0.3;
   // An optional input is kept on a gain of a point of balanced accuracy.
   const INPUT_MIN_GAIN = 0.01;
-  // The stored vectors' widths (supysonic/deezer/embedding.py): v2 is mean +
+  // The stored vectors' widths (neezer/deezer/embedding.py): v2 is mean +
   // spread, v3 adds the mean over the loud half of the track.
   const V2_DIM = 2560;
   const V3_DIM = 3840;

@@ -1,13 +1,13 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2025 Alban 'spl0k' Féron
 #                    2017 Óscar García Amor
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-from supysonic import db
-from supysonic.managers.user import UserManager
+from neezer import db
+from neezer.managers.user import UserManager
 
 import unittest
 import uuid
@@ -229,7 +229,7 @@ class UserManagerTestCase(unittest.TestCase):
 
         from argon2 import PasswordHasher
 
-        from supysonic.managers import user as user_module
+        from neezer.managers import user as user_module
 
         # What the module constructs at import time, evaluated fresh.
         prod = PasswordHasher()

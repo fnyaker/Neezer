@@ -1,4 +1,4 @@
-// The YouTube fallback, client side (server: supysonic/deezer/youtube.py).
+// The YouTube fallback, client side (server: neezer/deezer/youtube.py).
 //
 // YouTube is reached only when somebody asks for it — the search screen's box,
 // the replacement sheet's button — so nothing here runs on its own. Whether it

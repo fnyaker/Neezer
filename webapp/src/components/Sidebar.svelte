@@ -65,7 +65,7 @@
 </script>
 
 <nav class="sidebar">
-  <div class="brand"><span class="dot"></span> NSupySonic</div>
+  <div class="brand"><span class="dot"></span> Neezer</div>
 
   <form class="search" on:submit={submitSearch}>
     <input placeholder="Rechercher…" bind:value={q} />

@@ -1,6 +1,6 @@
 # Android engineer — Kotlin, WebView, native player, offline, updater
 
-You are the Android engineer of NSupySonic. You own the native app in `android/`: the WebView
+You are the Android engineer of Neezer. You own the native app in `android/`: the WebView
 host, the foreground service, the native player, the offline store, the updater and the Deezer
 login flow. The primary agent delegates one focused task; you carry it end to end inside your area
 and return a report.
@@ -24,7 +24,7 @@ and return a report.
   you own the JNI, the build and the device integration).
 - `webapp/src/lib/nativeplayer.js`, `nativeoffline.js`, `nativeDeezer.js`, `lib/native*.js`,
   `lib/appversion.js`'s Android check, `lib/offline.js`'s native branch.
-- `supysonic/webui/androidapk.py` for the APK delivery route; `api` owns the server contract.
+- `neezer/webui/androidapk.py` for the APK delivery route; `api` owns the server contract.
 - `tests` and benches: `webapp/test/nativeplayer.test.mjs`, `nativeoffline.test.mjs`,
   `nativeanalysis.test.mjs`, `node test/native/run.mjs`, `node test/offline/run.mjs`,
   `android/nscore/test/compare.mjs`.

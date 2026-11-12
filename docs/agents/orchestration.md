@@ -17,18 +17,19 @@ specialist reads its own notes, changes only its own files, measures, and return
 | Agent | Owns | Must read | Does not touch |
 |---|---|---|---|
 | `frontend` | `webapp/src` screens, components, navigation, offline UX, accessibility, French copy, perceived performance | [webapp.md](webapp.md), [playback.md](playback.md) for the player UI, [commands.md](commands.md), [testing.md](testing.md) | `/api` contract, DSP, viz internals, Android |
-| `api` | `supysonic/webui`, `supysonic/api`, `db.py`, `schema/`, `config.py`, `cli.py`, managers, access, providers, `deezer/`, `deezerpy/`, jobs | [server.md](server.md), [providers.md](providers.md), [commands.md](commands.md), [testing.md](testing.md) | Svelte, Android, DSP, viz, Docker |
+| `api` | `neezer/webui`, `neezer/api`, `db.py`, `schema/`, `config.py`, `cli.py`, managers, access, providers, `deezer/`, `deezerpy/`, jobs | [server.md](server.md), [providers.md](providers.md), [commands.md](commands.md), [testing.md](testing.md) | Svelte, Android, DSP, viz, Docker |
 | `audio` | playback path, graph, output/latency, crossfade/trim, ReplayGain, `webapp/rhythm`, live analysis, server tempo/descriptors, party audio | [playback.md](playback.md), [rhythm.md](rhythm.md), [analysis-genre.md](analysis-genre.md), [party-remote.md](party-remote.md), [testing.md](testing.md) | screens, `/api` payloads, viz, Android activity |
 | `animation` | `webapp/src/lib/viz`, worlds, shaders, skins, scope, projector, eco mode, `viz*.rs`, render bench | [animations.md](animations.md), [rhythm.md](rhythm.md), [webapp.md](webapp.md) for the settings route, [commands.md](commands.md) | analyser, audio graph, settings shell, `/api` |
 | `security` | threat model, auth, CSRF, SSRF, CSP, secrets, capabilities, Android trust, dependencies, supply chain | [audit-securite.md](../audit-securite.md), [server.md](server.md), [providers.md](providers.md), [android.md](android.md), [testing.md](testing.md) | production code unless explicitly asked to fix |
 | `android` | `android/`, bridge `NSNative`, native player/service, offline store, updater, Deezer login, JNI `nscore` | [android.md](android.md), [playback.md](playback.md), [webapp.md](webapp.md) for offline/versioning, [commands.md](commands.md) | Svelte UI, DSP formulas, `/api`, Docker |
 | `qa` | `tests/`, `webapp/test/`, benches, `tools/partest.py`, `tools/perf_api.py`, upgrade and CI verification | [testing.md](testing.md), [commands.md](commands.md), the area note of the code under test | production code written to fit a test |
 | `devops` | `Dockerfile`, `docker/`, compose, seven workflows, ffmpeg pin, multi-arch, release assets, image size | [commands.md](commands.md), [testing.md](testing.md), [android.md](android.md) for the APK release | application behaviour, Svelte, Kotlin, DSP |
+| `batch` | one short, fully specified mechanical job: mass rename/replacement, same edit across a list of files, mechanical refactor, generated table kept in sync | [commands.md](commands.md) and the area note of the files in its slice | design, architecture, contracts, real fixes; any file owned by another writer |
 
 ## How to invoke
 
 - Manually: `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@qa`,
-  `@devops` in a message.
+  `@devops`, `@batch` in a message.
 - Automatically: the primary agent delegates from each agent's `description` in `opencode.json`.
   The description is a routing contract; keep it precise when you edit it.
 - List what OpenCode loaded: `opencode debug agents` (`opencode agent list` on older builds).
@@ -44,9 +45,9 @@ specialist reads its own notes, changes only its own files, measures, and return
 | `webapp/src/lib/stores.js`, `actions.js`, `nav.js`, `offline.js`, `reconcile.js`, `grow.js`, `searchrank.js` | `frontend` |
 | `webapp/src/components/Player.svelte` layout/copy/controls | `frontend` |
 | `Player.svelte` crossfade/trim/seek/source handover, `lib/audio/**`, `webapp/rhythm/**` | `audio` |
-| `supysonic/webui/**`, `supysonic/api/**`, `supysonic/db.py`, `supysonic/schema/**` | `api` |
-| `supysonic/deezer/**`, `supysonic/providers/**`, `deezerpy/**`, `sources.py`, `access.py` | `api` |
-| `supysonic/deezer/analysis.py`, `beats.py`, `measure.py`, `embedding.py`, `genre*.py` | `audio` (route/DB part: `api`) |
+| `neezer/webui/**`, `neezer/api/**`, `neezer/db.py`, `neezer/schema/**` | `api` |
+| `neezer/deezer/**`, `neezer/providers/**`, `deezerpy/**`, `sources.py`, `access.py` | `api` |
+| `neezer/deezer/analysis.py`, `beats.py`, `measure.py`, `embedding.py`, `genre*.py` | `audio` (route/DB part: `api`) |
 | `webapp/src/lib/viz/**`, `webapp/rhythm/src/viz*.rs`, `webapp/test/render/**` | `animation` |
 | `android/**`, `webapp/src/lib/native*.js`, `webapp/src/lib/offline.js` native branch | `android` |
 | `tests/**`, `webapp/test/**`, a failing CI test job | `qa` |
@@ -85,6 +86,10 @@ specialist reads its own notes, changes only its own files, measures, and return
 
 Safe to run at the same time, because they do not write the same files:
 
+- **up to 10 `batch` workers**, each on a disjoint file list. This is the only place the team
+  scales horizontally: a mechanical job with a checkable command does not need judgment, so split
+  it by file and let the workers run together. Beyond 10, the checks and the review cost more than
+  the job; queue the rest.
 - `security` (read-only audit) with any implementation agent;
 - `qa` measuring the current state while `frontend` or `api` works in another area;
 - `frontend` and `animation` only if the boundary is explicit (the settings shell vs. the viz
@@ -112,8 +117,10 @@ and it does not weaken a test to claim success.
 
 ## Model and permissions
 
-- No model is hardcoded in `opencode.json`: each subagent inherits the primary agent's model.
-  This keeps the config portable across providers.
+- No model is hardcoded in `opencode.json`, except `batch`: it pins
+  `opencode-go/deepseek-v4.1-flash#low`, because a mechanical job does not need a strong model and
+  the ten-worker fan-out would otherwise be the most expensive part of the team. Every other
+  subagent inherits the primary agent's model, which keeps the config portable across providers.
 - `security` is read-only by default (`edit: ask`). It reports findings and recommended patches;
   the owner agent implements them unless the primary agent explicitly asks `security` to patch.
 - Every subagent may call `explore` for read-only codebase search, and nothing else through the

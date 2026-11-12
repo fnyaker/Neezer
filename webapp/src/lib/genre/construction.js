@@ -8,7 +8,7 @@
 // F_KF0..F_FOUR and the kick-shape weights). A ConstructionMeter averages those
 // over the part of a track where the groove is IN, and the summary travels to
 // the server (`POST /api/analysis/<id>/live`), where the head reads it next to
-// the embedding and the served tempo (supysonic/deezer/construction.py).
+// the embedding and the served tempo (neezer/deezer/construction.py).
 //
 // Two feeders, one meter: the player's engine while a track plays with the
 // analysis at the "smart" level (it costs thirteen additions a frame), and the
@@ -76,7 +76,7 @@ export class ConstructionMeter {
 // embedding's own components, plus ONE flag for "no construction summary" (a
 // missing summary is centred to zero, and the flag lets the head tell zero from
 // absent). The server reproduces this exactly from `metrics.inputs`
-// (supysonic/deezer/genre.py#assemble).
+// (neezer/deezer/genre.py#assemble).
 
 export const EXTRAS = ["tempo", ...CONSTRUCTION];
 

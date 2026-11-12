@@ -8,7 +8,7 @@
 // `AudioBufferSourceNode.start(when, offset)`, which the audio thread honours
 // to the sample.
 //
-// Beatsync decodes whole files. This decodes CHUNKS (supysonic/webui/party.py
+// Beatsync decodes whole files. This decodes CHUNKS (neezer/webui/party.py
 // cuts them): joining mid-track costs one chunk, memory stays flat whatever the
 // length, and — the part that matters for sync — every chunk is scheduled from
 // the clock estimate in force at the time, so each seam is a point where this

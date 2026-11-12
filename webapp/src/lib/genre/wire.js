@@ -2,7 +2,7 @@
 // (`PUT /api/genre/model`) and what the server hands back for training
 // (`POST /api/genre/embeddings`). Base64 float16 both ways — half the bytes for
 // a precision nothing downstream can resolve — and read by the server with
-// `struct`'s "e" format (supysonic/deezer/genre.py#_decode_f16).
+// `struct`'s "e" format (neezer/deezer/genre.py#_decode_f16).
 
 function f32ToF16(value) {
   const f = new Float32Array(1);

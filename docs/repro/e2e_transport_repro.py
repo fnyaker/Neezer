@@ -12,10 +12,10 @@
 # Setup (from the repo root):
 #   python3 -m venv .venv && .venv/bin/pip install -e . waitress playwright
 #   (cd webapp && npm install && npm run build)
-#   # config in ~/.supysonic: sqlite db + [deezer] archive_dir (no ARL needed)
-#   .venv/bin/supysonic-cli user add admin -p adminpw
-#   .venv/bin/supysonic-cli user setroles --admin admin
-#   .venv/bin/supysonic-server -p 5722 &
+#   # config in ~/.neezer: sqlite db + [deezer] archive_dir (no ARL needed)
+#   .venv/bin/neezer-cli user add admin -p adminpw
+#   .venv/bin/neezer-cli user setroles --admin admin
+#   .venv/bin/neezer-server -p 5722 &
 #   # generate 3 small WAVs (see gen_wavs() below) and upload them:
 #   python docs/repro/e2e_transport_repro.py --prepare
 #   python docs/repro/e2e_transport_repro.py

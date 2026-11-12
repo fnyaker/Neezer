@@ -22,7 +22,7 @@ on:
     branches:
       - master
     paths:
-      - supysonic/**
+      - neezer/**
       - deezerpy/**
       - tests/**
       - tools/partest.py
@@ -37,7 +37,7 @@ on:
       - .github/workflows/tests.yaml
   pull_request:
     paths:
-      - supysonic/**
+      - neezer/**
       - deezerpy/**
       - tests/**
       - tools/partest.py

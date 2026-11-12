@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -20,13 +20,13 @@ import unittest
 try:
     import numpy as np
 
-    from supysonic.deezer import measure as M
+    from neezer.deezer import measure as M
 
     HAVE_NUMPY = True
 except Exception:  # pragma: no cover - the minimal environment has no numpy
     HAVE_NUMPY = False
 
-from supysonic.deezer import analysis as ana
+from neezer.deezer import analysis as ana
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUST = os.path.join(ROOT, "webapp", "measure", "target", "release", "examples", "measure")
@@ -126,11 +126,11 @@ def _kick(bpm):
 @unittest.skipUnless(HAVE_NUMPY and shutil.which("ffmpeg") and os.path.exists(RUST_TEMPO),
                      "needs numpy, ffmpeg and a native build of webapp/measure (examples/tempo)")
 class RustTempoTestCase(unittest.TestCase):
-    """The Rust beat tracker against supysonic/deezer/beats.py: the tempo the client
+    """The Rust beat tracker against neezer/deezer/beats.py: the tempo the client
     measures is the tempo the server serves, beat for beat."""
 
     def test_the_same_tempo_and_the_same_beats_as_the_server(self):
-        from supysonic.deezer import beats
+        from neezer.deezer import beats
 
         d = tempfile.mkdtemp()
         try:
@@ -174,7 +174,7 @@ class RustMelTestCase(unittest.TestCase):
     def test_patches_levels_and_the_stored_vector_match(self):
         import struct
 
-        from supysonic.deezer import embedding as E
+        from neezer.deezer import embedding as E
 
         s = self._samples()
         offs = E.patch_offsets(len(s))
@@ -195,6 +195,6 @@ class RustMelTestCase(unittest.TestCase):
         self.assertLess(float(np.abs(ra - E._aggregate(rows, loud)).max()), 1e-5)
 
     def test_short_tracks_give_no_patches(self):
-        from supysonic.deezer import embedding as E
+        from neezer.deezer import embedding as E
 
         self.assertEqual(E.patch_offsets(1000), [])

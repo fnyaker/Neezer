@@ -1,6 +1,6 @@
 # TODO
 
-Fonctions de Spotify et d'Apple Music qui manquent encore à NSupySonic, classées par difficulté
+Fonctions de Spotify et d'Apple Music qui manquent encore à Neezer, classées par difficulté
 d'ajout. `[x]` = fait, `[ ]` = à faire. Les notes sous chaque ligne disent sur quoi s'appuyer dans
 le code.
 

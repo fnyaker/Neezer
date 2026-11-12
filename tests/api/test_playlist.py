@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2022 Alban 'spl0k' Féron
 #
@@ -8,7 +8,7 @@
 import unittest
 import uuid
 
-from supysonic.db import Folder, Artist, Album, Track, Playlist, User
+from neezer.db import Folder, Artist, Album, Track, Playlist, User
 
 from .apitestbase import ApiTestBase
 
@@ -120,7 +120,7 @@ class PlaylistTestCase(ApiTestBase):
         self.assertEqual(child.get("songCount"), "2")
         self.assertEqual(
             self._xpath(child, "count(./entry)"), 2
-        )  # don't count children, there may be 'allowedUser's (even though not supported by supysonic)
+        )  # don't count children, there may be 'allowedUser's (even though not supported by neezer)
         self.assertEqual(child.get("duration"), "4")
         self.assertEqual(child[0].get("title"), "One")
         self.assertTrue(

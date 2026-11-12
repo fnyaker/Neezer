@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2020-2022 Alban 'spl0k' Féron
 #
@@ -7,7 +7,7 @@
 
 import uuid
 
-from supysonic.db import RadioStation
+from neezer.db import RadioStation
 
 from .apitestbase import ApiTestBase
 

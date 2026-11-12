@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Copyright (C) 2017-2025 Alban 'spl0k' Féron
 #
@@ -12,7 +12,7 @@ import uuid
 from collections import namedtuple
 from peewee import IntegrityError
 
-from supysonic import db
+from neezer import db
 
 date_regex = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 

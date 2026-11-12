@@ -1,7 +1,7 @@
 // The arranged records of test/songs.mjs as 16-bit mono WAV files, with their
 // ground truth, for the SERVER's tempo measurement (tools/tempo_eval.py). The
 // client's analyser is scored on the same records by rhythm-eval.mjs; this is
-// how the whole-file estimator in supysonic/deezer/analysis.py gets the same
+// how the whole-file estimator in neezer/deezer/analysis.py gets the same
 // material instead of three sines.
 //
 //   node test/eval/render-wavs.mjs <out-dir>

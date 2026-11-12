@@ -2,16 +2,16 @@ Jukebox mode
 ============
 
 The jukebox mode allow playing audio files on the hardware of the machine
-running Supysonic, using regular clients that support it as a remote control.
+running Neezer, using regular clients that support it as a remote control.
 
 :doc:`setup/daemon` must be running in order to be able to use the jukebox mode.
-So be sure to start the :doc:`man/supysonic-daemon` command and keep it running.
+So be sure to start the :doc:`man/neezer-daemon` command and keep it running.
 
 Setting the player program
 --------------------------
 
-Jukebox mode in Supysonic works through the use of third-party command-line
-programs. Supysonic isn't bundled with such programs, and you are left to
+Jukebox mode in Neezer works through the use of third-party command-line
+programs. Neezer isn't bundled with such programs, and you are left to
 choose which one you want to use. The chosen program should be able to play a
 single audio file from a path specified on its command-line.
 
@@ -40,6 +40,6 @@ Allowing users to act on the jukebox
 
 The jukebox mode is only accessible to chosen users. Granting (or revoking)
 jukebox usage rights to a specific user is done with the
-:doc:`command line interface <man/supysonic-cli-user>`::
+:doc:`command line interface <man/neezer-cli-user>`::
 
-   $ supysonic-cli user setroles --jukebox <username>
+   $ neezer-cli user setroles --jukebox <username>

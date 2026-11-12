@@ -1,9 +1,9 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""Exporting a playlist to another service (supysonic/services, webui/services.py).
+"""Exporting a playlist to another service (neezer/services, webui/services.py).
 
 What is pinned is what an export must never get wrong: a song is only exported
 when the service's copy IS that recording (the ISRC first, then a search judged
@@ -24,8 +24,8 @@ import unittest
 import xml.etree.ElementTree as ET
 from urllib.parse import parse_qs, urlparse
 
-from supysonic.config import DefaultConfig
-from supysonic.db import (
+from neezer.config import DefaultConfig
+from neezer.db import (
     Album,
     Artist,
     Folder,
@@ -37,11 +37,11 @@ from supysonic.db import (
     User,
     release_database,
 )
-from supysonic.managers.user import UserManager
-from supysonic.services import spotify as sp
-from supysonic.services import ytmusic as ytm
-from supysonic.web import create_application
-from supysonic.webui import services as S
+from neezer.managers.user import UserManager
+from neezer.services import spotify as sp
+from neezer.services import ytmusic as ytm
+from neezer.web import create_application
+from neezer.webui import services as S
 
 CLIENT_ID = "0123456789abcdef0123456789abcdef"
 
@@ -188,7 +188,7 @@ class ServicesTestCase(unittest.TestCase):
                 track("Introuvable", "Personne", 180, 4),
             ]
             # An ISRC, where an archived track keeps it: the JSON sidecar.
-            from supysonic.deezer import library
+            from neezer.deezer import library
 
             path = library.metadata_path(self.tracks[0])
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -414,7 +414,7 @@ class ServicesTestCase(unittest.TestCase):
         self.assertEqual(slept, [2.0], "Retry-After is honoured, once")
         self.assertEqual(self.fake.token_calls[0]["refresh_token"], "RT0")
         with self.app.app_context():
-            from supysonic.managers.user import decrypt_password
+            from neezer.managers.user import decrypt_password
 
             stored = json.loads(decrypt_password(ServiceLink.get().data))
         self.assertEqual(stored["refresh_token"], "RT1")
@@ -453,7 +453,7 @@ class ServicesTestCase(unittest.TestCase):
             def add_playlist_items(self, *a, **k):
                 raise AssertionError("one batch is enough here")
 
-        from supysonic.deezer import youtube
+        from neezer.deezer import youtube
 
         hits = {
             "stromae papaoutai": [

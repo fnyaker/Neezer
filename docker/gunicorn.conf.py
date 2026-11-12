@@ -1,4 +1,4 @@
-# Gunicorn config for the NSupySonic container.
+# Gunicorn config for the Neezer container.
 #
 # Tunables are read from the environment so deployments can scale concurrency
 # without rebuilding the image (just set them in docker compose):
@@ -18,7 +18,7 @@
 # few enough that a handful of first plays (each holding a thread for as long as
 # a FLAC takes) left nothing for the rest of the app, and requests that had no
 # work to do at all sat in the accept queue for half a minute. The reservation
-# in supysonic/deezer/workload.py is the other half of that fix: background
+# in neezer/deezer/workload.py is the other half of that fix: background
 # requests may only ever hold a quarter of this.
 
 import os

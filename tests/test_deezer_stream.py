@@ -1,5 +1,5 @@
-# This file is part of Supysonic.
-# Supysonic is a Python implementation of the Subsonic server API.
+# This file is part of Neezer.
+# Neezer is a Python implementation of the Subsonic server API.
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
@@ -40,10 +40,10 @@ from Crypto.Cipher import Blowfish
 from deezerpy import new_session
 from deezerpy._circuit import breaker
 
-from supysonic.db import Track
-from supysonic.deezer import archive, ids, library
-from supysonic.deezer import provider as provider_mod
-from supysonic.deezer.provider import DeezerError, DeezerProvider, blowfish_key
+from neezer.db import Track
+from neezer.deezer import archive, ids, library
+from neezer.deezer import provider as provider_mod
+from neezer.deezer.provider import DeezerError, DeezerProvider, blowfish_key
 
 from .testbase import TestBase
 
@@ -430,7 +430,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.provider.fetch_cover = lambda md5, size=1000: COVER if md5 == "coverhash" else None
         self.analysed = []
         patcher = mock.patch(
-            "supysonic.deezer.analysis.queue_analysis",
+            "neezer.deezer.analysis.queue_analysis",
             lambda track, provider=None: self.analysed.append(track.id),
         )
         patcher.start()
@@ -564,7 +564,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         return data
 
     def _opus(self, bitrate=64):
-        from supysonic.webui import _opus_live_generator
+        from neezer.webui import _opus_live_generator
 
         aborted = threading.Event()
         self._on_abort = lambda: (setattr(self, "aborted", self.aborted + 1), aborted.set())
@@ -712,7 +712,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self._resolve_to(self.cdn.serve("live-finalize", encrypt_like_deezer(FLAC, self.SID)))
         _mimetype, stream = self._open()
         with mock.patch.object(library, "refresh_track_metadata", side_effect=RuntimeError("db gone")), \
-                self.assertLogs("supysonic.deezer.archive", "WARNING"):
+                self.assertLogs("neezer.deezer.archive", "WARNING"):
             self.assertEqual(b"".join(stream), FLAC)
 
 
@@ -785,11 +785,11 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
     SID = "3135556"
 
     def setUp(self):
-        from supysonic.config import DefaultConfig
-        from supysonic.db import release_database
-        from supysonic.deezer.workload import Priority
-        from supysonic.managers.user import UserManager
-        from supysonic.web import create_application
+        from neezer.config import DefaultConfig
+        from neezer.db import release_database
+        from neezer.deezer.workload import Priority
+        from neezer.managers.user import UserManager
+        from neezer.web import create_application
 
         fd, db_path = tempfile.mkstemp()
         os.close(fd)
@@ -819,7 +819,7 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
         )
         self.app.config["DEEZER"]["archive_dir"] = self.archive_dir
         self.prefetch_priority = Priority.PREFETCH
-        patcher = mock.patch("supysonic.deezer.analysis.queue_analysis", lambda *a, **k: None)
+        patcher = mock.patch("neezer.deezer.analysis.queue_analysis", lambda *a, **k: None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -854,7 +854,7 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
             with self.subTest(name):
                 self.queued.clear()
                 self._resolve_to(self.cdn.serve(name, body, mode))
-                with self.assertLogs("supysonic.webui", "WARNING"):
+                with self.assertLogs("neezer.webui", "WARNING"):
                     rv = self.client.get(f"/api/stream/{self.SID}")
                 self.assertEqual(rv.status_code, 502)
                 self.assertEqual(rv.get_json(), {"error": "track unavailable"})
@@ -863,7 +863,7 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
                 self.assertEqual(self.queued, [(self.SID, self.prefetch_priority)])
 
     def test_the_response_passes_everything_on_to_the_stream(self):
-        from supysonic.webui import _then
+        from neezer.webui import _then
 
         def stream(log):
             try:
@@ -908,7 +908,7 @@ class EnsureArchivedTestCase(_CdnMixin, TestBase):
         self.addCleanup(shutil.rmtree, self.archive_dir, ignore_errors=True)
         self.provider = self._provider(self.archive_dir)
         self.provider.fetch_cover = lambda md5, size=1000: None
-        patcher = mock.patch("supysonic.deezer.analysis.queue_analysis", lambda *a, **k: None)
+        patcher = mock.patch("neezer.deezer.analysis.queue_analysis", lambda *a, **k: None)
         patcher.start()
         self.addCleanup(patcher.stop)
         root = library.get_root_folder(self.archive_dir)

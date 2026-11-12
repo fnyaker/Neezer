@@ -134,7 +134,7 @@ class PlayerService : Service() {
             ).apply { setShowBadge(false) }
         )
 
-        session = MediaSessionCompat(this, "NSupySonic")
+        session = MediaSessionCompat(this, "Neezer")
         session.setCallback(object : MediaSessionCompat.Callback() {
             override fun onPlay() = send("play")
             override fun onPause() = send("pause")
@@ -156,10 +156,10 @@ class PlayerService : Service() {
         session.isActive = true
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "nsupysonic:playback")
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "neezer:playback")
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         @Suppress("DEPRECATION")
-        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "nsupysonic:stream")
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "neezer:stream")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
