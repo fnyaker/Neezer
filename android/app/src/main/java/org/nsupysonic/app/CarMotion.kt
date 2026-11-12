@@ -1,5 +1,6 @@
 package org.nsupysonic.app
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationListener
@@ -151,6 +152,7 @@ class CarMotion(context: Context, private val listener: Listener) {
      * the platform GPS; nothing here is required to be on the main thread by
      * the client, but its callbacks are (we pass [main]'s looper).
      */
+    @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun startFused() {
         try {
@@ -188,6 +190,7 @@ class CarMotion(context: Context, private val listener: Listener) {
      * platform's interface, and the framework does call them
      * (developer.android.com/reference/android/location/LocationListener).
      */
+    @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun startPlatform() {
         if (!started || platformOn) return
