@@ -120,14 +120,18 @@
           {:else if isCurrent && $playing}
             <span class="rowspin" aria-hidden="true"></span>
           {:else}
-            <span class="num">{i + 1}</span>
-            <span class="ic"><Icon name="play" size={14} /></span>
+            {#if isCurrent}
+              <span class="curplay" aria-hidden="true"><Icon name="play" size={13} /></span>
+            {:else}
+              <span class="num">{i + 1}</span>
+              <span class="ic"><Icon name="play" size={14} /></span>
+            {/if}
           {/if}
         </button>
       {/if}
 
       <div class="titles">
-        <div class="thumb"><Cover src={track.album?.cover} alt={track.title} size={40} kind="track" fallbackId={trackRef(track)} /></div>
+        <div class="thumb"><Cover src={track.album?.cover} alt={track.title} size={44} kind="track" fallbackId={trackRef(track)} /></div>
         <div class="meta">
           <div class="t">
             {#if offMain(track.source)}<span class="local" title={sourceTitle(track.source)}><Icon name={iconOf(track.source)} size={13} /></span>{:else if track.local}<span class="local" title={sourceTitle("local")}><Icon name="cloudOff" size={13} /></span>{/if}
@@ -138,6 +142,8 @@
           <span class="a muted"><ArtistLine {track} /></span>
         </div>
       </div>
+
+      <span class="alb muted">{track.album?.title || ""}</span>
 
       <span class="dur muted">{fmtDuration(track.duration)}</span>
 
@@ -160,11 +166,11 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 28px 40px 1fr 48px 30px 30px;
+    grid-template-columns: 28px 36px minmax(0, 1fr) minmax(0, 0.7fr) 56px 34px 34px;
     align-items: center;
     gap: 12px;
     padding: 6px 8px;
-    border-radius: 8px;
+    border-radius: 10px;
     user-select: none;
     background: var(--bg);
     /* This list can't be windowed — svelte-dnd-action needs every drop target
@@ -174,17 +180,17 @@
        intrinsic height, so drag hit-testing and scroll geometry stay exact.
        Rows are uniform, so the placeholder height below is the real one. */
     content-visibility: auto;
-    contain-intrinsic-size: 64px; /* fallback: engines without the `auto` keyword */
-    contain-intrinsic-size: auto 64px;
+    contain-intrinsic-size: 56px; /* fallback: engines without the `auto` keyword */
+    contain-intrinsic-size: auto 56px;
   }
   .row:hover {
-    background: var(--bg-hover);
+    background: var(--s2);
   }
   .row.active .t {
-    color: var(--accent);
+    color: var(--ac);
   }
   .grip {
-    color: var(--text-dim);
+    color: var(--dim);
     cursor: grab;
     opacity: 0;
     display: flex;
@@ -196,21 +202,28 @@
   }
   .grip:active {
     cursor: grabbing;
-    color: var(--text);
+    color: var(--tx);
   }
   .row:hover .grip,
   .list.editing .grip {
     opacity: 1;
   }
   .play {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     display: grid;
     place-items: center;
     position: relative;
+    border-radius: 50%;
   }
   .play .num {
-    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--dim);
+  }
+  .play .curplay {
+    display: flex;
+    color: var(--ac);
   }
   .play .ic {
     display: none;
@@ -235,12 +248,12 @@
     justify-content: center;
     width: 34px;
     height: 26px;
-    color: var(--text-dim);
+    color: var(--dim);
     border-radius: 6px;
   }
   .updown button:hover:not(:disabled) {
-    color: var(--text);
-    background: var(--bg-hover);
+    color: var(--tx);
+    background: var(--s2);
   }
   .updown button:disabled {
     opacity: 0.3;
@@ -248,17 +261,18 @@
   .titles {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     min-width: 0;
   }
   .thumb {
     flex: none;
-    width: 40px;
+    width: 44px;
   }
   .meta {
     min-width: 0;
   }
   .t {
+    font-size: 15px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -267,50 +281,54 @@
   .local {
     display: inline-flex;
     vertical-align: -2px;
-    color: var(--text-dim);
+    color: var(--dim);
     margin-right: 3px;
   }
   .dlbadge {
     display: inline-flex;
     vertical-align: -2px;
-    color: var(--accent);
+    color: var(--ac);
     margin-right: 3px;
   }
   .explicit {
     font-size: 0.6rem;
-    background: var(--bg-hover);
+    background: var(--s2);
     padding: 1px 3px;
     border-radius: 3px;
     vertical-align: 1px;
   }
   /* One hoverable button per credited artist lives inside (ArtistLine), so the
      hover treatment is applied there, per name, not on the whole line. */
-  .a {
+  .a,
+  .alb {
     display: block;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
-    font-size: 0.85rem;
+    font-size: 13px;
+    color: var(--dim);
   }
   .dur {
     text-align: right;
+    font-family: var(--font-mono);
+    font-size: 13px;
     font-variant-numeric: tabular-nums;
-    font-size: 0.85rem;
+    color: var(--dim);
   }
   .remove {
-    color: var(--text-dim);
+    color: var(--dim);
     opacity: 0;
     display: flex;
     align-items: center;
     justify-content: center;
   }
   .remove:hover {
-    color: var(--accent-2);
+    color: var(--ac);
   }
   .more {
-    color: var(--text-dim);
+    color: var(--dim);
     opacity: 0;
     display: flex;
     align-items: center;
@@ -322,7 +340,7 @@
     opacity: 1;
   }
   .more:hover {
-    color: var(--text);
+    color: var(--tx);
   }
   .empty {
     margin-top: 18px;
@@ -331,8 +349,8 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    border: 2px solid var(--bg-hover);
-    border-top-color: var(--accent);
+    border: 2px solid var(--s2);
+    border-top-color: var(--ac);
     animation: rowspin 0.8s linear infinite;
   }
   @keyframes rowspin {
@@ -349,7 +367,7 @@
   }
   .eq i {
     width: 3px;
-    background: var(--accent);
+    background: var(--ac);
     animation: eq 0.9s ease-in-out infinite;
   }
   .eq i:nth-child(1) {
@@ -373,12 +391,14 @@
 
   /* ----- Touch edit mode: a dedicated, finger-friendly layout ----- */
   @media (max-width: 640px) {
-    /* Three visible columns: play · title · more. The grip, duration and remove
-       button are out of the flow here (grip/remove only return in edit mode), so
-       the column count must match or the title gets squeezed to nothing. */
+    /* Three visible columns: play · title · more. The grip, album, duration and
+       remove button are out of the flow here (grip/remove only return in edit
+       mode), so the column count must match or the title gets squeezed. */
     .row {
-      grid-template-columns: 40px 1fr 30px;
+      grid-template-columns: 36px minmax(0, 1fr) 34px;
+      gap: 10px;
     }
+    .alb,
     .dur {
       display: none;
     }
@@ -402,11 +422,12 @@
       margin-left: -4px;
     }
     .list.editing .row {
-      grid-template-columns: 44px 40px 1fr 44px;
+      grid-template-columns: 44px 40px minmax(0, 1fr) 44px;
+      gap: 10px;
       padding: 12px 6px;
       align-items: center;
-      contain-intrinsic-size: 88px; /* taller edit rows on phones */
-      contain-intrinsic-size: auto 88px;
+      contain-intrinsic-size: 76px; /* taller edit rows on phones */
+      contain-intrinsic-size: auto 76px;
     }
     .list.editing .updown button {
       width: 40px;
@@ -422,16 +443,21 @@
       height: 44px;
     }
     .list.editing .row:nth-child(odd) {
-      background: var(--bg-hover);
+      background: var(--s2);
     }
   }
 
+  @media (prefers-reduced-motion: reduce) {
+    .eq i {
+      animation: none;
+      height: 70%;
+    }
+  }
   /* The floating clone svelte-dnd-action renders while dragging: lift it. */
   :global(#dnd-action-dragged-el) {
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+    outline: 2px solid var(--ac);
     border-radius: 10px;
-    outline: 1px solid var(--accent);
-    background: var(--bg-elev);
+    background: var(--s1);
     cursor: grabbing;
   }
 </style>

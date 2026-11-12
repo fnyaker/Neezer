@@ -4,7 +4,7 @@
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
-  import { player, isAdmin, toasts, lastPlaylist, openExport, openGenreBulk } from "../lib/stores.js";
+  import { player, isAdmin, toasts, lastPlaylist, openExport, openGenreBulk, openMenu } from "../lib/stores.js";
   import {
     toggleEntityFavorite,
     entityMeta,
@@ -21,7 +21,6 @@
   import TrackList from "../components/TrackList.svelte";
   import PlaylistTracks from "../components/PlaylistTracks.svelte";
   import AddTracksSheet from "../components/AddTracksSheet.svelte";
-  import GradientHeader from "../components/GradientHeader.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
@@ -254,6 +253,42 @@
   }
 
   $: total = (data?.tracks || []).reduce((s, t) => s + (t.duration || 0), 0);
+  // The facts line, assembled as ONE string: separators written around an
+  // {#if} get their surrounding whitespace trimmed by the compiler.
+  $: facts = data?.playlist
+    ? [
+        "Playlist",
+        data.playlist.owner,
+        `${data.tracks.length} titre${data.tracks.length > 1 ? "s" : ""}`,
+        fmtDuration(total),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+
+  // Everything that is not the two or three gestures a playlist is for goes
+  // behind the ⋯ (DESIGN §6: deleting a playlist is not a bare icon any more).
+  $: menuItems = data?.playlist ? playlistMenu() : [];
+  function playlistMenu() {
+    const items = [];
+    if (CAN_KEEP)
+      items.push({ label: "Exporter", icon: "archive", action: () => openExport("playlist", id, data.playlist.title) });
+    if ($isAdmin && CAN_KEEP && data.tracks.length)
+      items.push({
+        label: "Donner un genre",
+        icon: "tag",
+        action: () => openGenreBulk({ kind: "playlist", title: data.playlist.title, cover: data.playlist.cover, tracks: data.tracks }),
+      });
+    if (editable) {
+      items.push({ label: "Renommer", icon: "edit", action: openMeta });
+      items.push({ label: "Supprimer la playlist", icon: "trash", action: deletePlaylist });
+    }
+    return items;
+  }
+  function openActions(e) {
+    const r = e.currentTarget.getBoundingClientRect();
+    openMenu({ preventDefault() {}, stopPropagation() {}, clientX: r.left, clientY: r.bottom + 4 }, menuItems);
+  }
 </script>
 
 {#if loading}
@@ -263,74 +298,72 @@
   <LoadFailed error={loadError} notFound="Playlist introuvable." on:retry={() => load(id)} />
 {:else}
   <div class="fade-in">
-    <GradientHeader cover={data.playlist.cover}>
+    <header class="banner gh">
       <div class="art"><Cover src={data.playlist.cover} alt={data.playlist.title} kind="playlist" fallbackId={isLocalId(id) ? id : null} eager /></div>
       <div class="meta">
-        <span class="kind">Playlist</span>
         {#if editingMeta}
-          <input class="title-input" bind:value={draftTitle} placeholder="Nom de la playlist" />
+          <input class="title-input" bind:value={draftTitle} placeholder="Nom de la playlist" aria-label="Nom de la playlist" />
           <textarea class="desc-input" bind:value={draftDesc} rows="2" placeholder="Description (optionnel)"></textarea>
           <div class="meta-actions">
-            <button class="pill sm" on:click={saveMeta}><Icon name="check" size={16} /> Enregistrer</button>
-            <button class="ghost sm" on:click={() => (editingMeta = false)}>Annuler</button>
+            <button class="btn btn-primary btn-sm" on:click={saveMeta}><Icon name="check" size={16} /> Enregistrer</button>
+            <button class="btn btn-ghost btn-sm" on:click={() => (editingMeta = false)}>Annuler</button>
           </div>
         {:else}
+          <span class="kind">{facts}</span>
           <h1>{data.playlist.title}</h1>
           {#if data.playlist.description}<p class="desc muted">{data.playlist.description}</p>{/if}
-          <span class="muted">
-            {data.playlist.owner ? data.playlist.owner + " · " : ""}{data.tracks.length} titres · {fmtDuration(total)}
-          </span>
         {/if}
       </div>
-    </GradientHeader>
+    </header>
 
-    <div class="row actions">
-      <button class="pill" on:click={playAll}><Icon name="play" size={18} /> Lire</button>
-      <button class="icon-btn" on:click={shufflePlay} aria-label="Lecture aléatoire"><Icon name="shuffle" size={22} /></button>
+    <div class="actions">
+      <button class="btn btn-primary" on:click={playAll}><Icon name="play" size={15} /> Lire</button>
+      <button class="btn btn-ghost" on:click={shufflePlay}><Icon name="shuffle" size={16} /> Mélanger</button>
       {#if !REMOTE}
-        <button class="icon-btn" on:click={downloadAll} disabled={dlBusy} aria-label="Télécharger la playlist" title="Télécharger sur l'appareil (hors-ligne)"><Icon name="download" size={22} /></button>
-      {/if}
-      {#if CAN_KEEP}
-        <button class="icon-btn" on:click={() => openExport("playlist", id, data.playlist.title)} aria-label="Exporter" title="Exporter : vers Spotify, YouTube Music…, en ZIP ou en liste"><Icon name="archive" size={22} /></button>
-      {/if}
-      {#if $isAdmin && CAN_KEEP && data.tracks.length}
         <button
-          class="icon-btn"
-          on:click={() => openGenreBulk({ kind: "playlist", title: data.playlist.title, cover: data.playlist.cover, tracks: data.tracks })}
-          aria-label="Donner un genre à la playlist"
-          title="Donner un genre à toute la playlist"><Icon name="tag" size={21} /></button>
+          class="btn btn-ghost"
+          on:click={downloadAll}
+          disabled={dlBusy}
+          aria-label="Télécharger la playlist"
+          title="Télécharger sur l'appareil (hors-ligne)"><Icon name="download" size={16} /> Télécharger</button>
       {/if}
-
       {#if editable}
-        <button class="icon-btn" on:click={() => (showAdd = true)} aria-label="Ajouter des titres" title="Ajouter des titres"><Icon name="plus" size={24} /></button>
-        <button class="icon-btn" on:click={openMeta} aria-label="Renommer" title="Renommer / description"><Icon name="edit" size={20} /></button>
-        <button class="icon-btn danger" on:click={deletePlaylist} aria-label="Supprimer la playlist" title="Supprimer la playlist"><Icon name="trash" size={20} /></button>
+        <button class="btn btn-ghost" on:click={() => (showAdd = true)} aria-label="Ajouter des titres" title="Ajouter des titres"><Icon name="plus" size={16} /> Ajouter des titres</button>
         <button
-          class="edit-toggle"
+          class="btn"
+          class:btn-primary={editing}
+          class:btn-ghost={!editing}
           class:on={editing}
           disabled={!manualView}
           title={!manualView ? "Repassez en « Ordre d'origine » pour réorganiser" : ""}
-          on:click={() => (editing = !editing)}
-        >
-          {editing ? "Terminé" : "Modifier"}
+          on:click={() => (editing = !editing)}>
+          <Icon name={editing ? "check" : "edit"} size={16} /> {editing ? "Terminé" : "Modifier"}
         </button>
       {:else if CAN_KEEP}
-        <button class="icon-btn" class:on={fav} on:click={toggleFav} aria-label="Favori"><Icon name={fav ? "heartFilled" : "heart"} size={22} /></button>
+        <button class="btn btn-icon" class:on={fav} on:click={toggleFav} aria-label="Favori"><Icon name={fav ? "heartFilled" : "heart"} size={20} /></button>
+      {/if}
+      {#if menuItems.length}
+        <button class="btn btn-icon" on:click={openActions} aria-label="Plus d'actions : exporter, étiqueter, renommer, supprimer" title="Plus d'actions">
+          <Icon name="more" size={20} />
+        </button>
       {/if}
     </div>
 
     {#if editable}
-      <!-- Sort/search toolbar (like the favorites browser). -->
+      <!-- Sort/search toolbar (like the favourites browser). -->
       <div class="toolbar">
-        <div class="searchbox">
+        <label class="field searchbox">
           <Icon name="search" size={16} />
-          <input placeholder="Rechercher dans la playlist…" bind:value={plQuery} />
-        </div>
-        <div class="spacer"></div>
-        <select class="sortsel" bind:value={plSort} aria-label="Trier par">
-          {#each PL_SORTS as s}<option value={s.key}>{s.label}</option>{/each}
-        </select>
-        <button class="tb" class:rev={plDir === -1} on:click={() => (plDir = -plDir)} aria-label="Inverser l'ordre" title="Inverser l'ordre">
+          <input placeholder="Rechercher dans la playlist…" bind:value={plQuery} aria-label="Rechercher dans la playlist" />
+        </label>
+        <span class="spacer"></span>
+        <span class="selwrap">
+          <select class="sortsel" bind:value={plSort} aria-label="Trier par">
+            {#each PL_SORTS as s}<option value={s.key}>{s.label}</option>{/each}
+          </select>
+          <Icon name="chevronDown" size={15} />
+        </span>
+        <button class="btn btn-icon" class:rev={plDir === -1} on:click={() => (plDir = -plDir)} aria-label="Inverser l'ordre" title="Inverser l'ordre">
           <Icon name="sort" size={17} />
         </button>
       </div>
@@ -348,7 +381,7 @@
         <p class="muted empty-hint">Aucun titre ne correspond à « {plQuery} ».</p>
       {:else}
         <!-- View mode: the virtualized list — smooth scrolling on huge playlists. -->
-        <TrackList tracks={sortedTracks} context={{ kind: "playlist", id }} numbered={true} />
+        <TrackList tracks={sortedTracks} context={{ kind: "playlist", id }} numbered={true} headers />
       {/if}
     {:else}
       <TrackBrowser tracks={data.tracks} context={{ kind: "playlist", id }} />
@@ -365,6 +398,98 @@
 {/if}
 
 <style>
+  /* §6: playlist header — 200 px sleeve, title at 72, the facts in mono. */
+  .banner {
+    display: flex;
+    align-items: flex-end;
+    gap: 28px;
+    margin: calc(-1 * var(--page-y)) calc(-1 * var(--page-x)) 20px;
+    padding: 40px var(--page-x) 28px;
+    background: var(--s2);
+    border-bottom: 1px solid var(--ln);
+  }
+  .art {
+    width: 200px;
+    flex: none;
+    border-radius: var(--r-cover);
+    overflow: hidden;
+  }
+  .meta {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    max-width: 62ch;
+  }
+  .kind {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--dim);
+  }
+  h1 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(34px, 6vw, 72px);
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+    overflow-wrap: anywhere;
+  }
+  .desc {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .title-input {
+    font-family: var(--font-display);
+    font-size: clamp(26px, 4vw, 44px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    background: var(--s1);
+    border: 1px solid var(--ln);
+    border-radius: 10px;
+    color: var(--tx);
+    padding: 6px 10px;
+    outline: none;
+    max-width: 100%;
+  }
+  .desc-input {
+    max-width: 100%;
+    background: var(--s1);
+    border: 1px solid var(--ln);
+    border-radius: 10px;
+    color: var(--tx);
+    padding: 8px 10px;
+    outline: none;
+    resize: vertical;
+    font: inherit;
+  }
+  .title-input:focus,
+  .desc-input:focus {
+    border-color: var(--ac);
+  }
+  .meta-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 0 16px;
+  }
+  .btn-icon.on {
+    color: var(--hrt);
+    border-color: var(--hrt);
+  }
+  .btn.on {
+    color: var(--onac);
+    background: var(--ac);
+    border-color: transparent;
+  }
   /* Sort/search toolbar for the editable playlist view (mirrors TrackBrowser). */
   .toolbar {
     display: flex;
@@ -373,170 +498,90 @@
     margin: 6px 0 12px;
   }
   .searchbox {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--bg-card);
-    border: 1px solid transparent;
-    border-radius: 999px;
-    padding: 8px 14px;
-    color: var(--text-dim);
-    max-width: 340px;
-    flex: 1;
-  }
-  .searchbox:focus-within {
-    border-color: var(--accent);
-    color: var(--text);
+    width: 260px;
+    flex: 0 1 260px;
+    min-width: 160px;
   }
   .searchbox input {
     border: none;
     background: none;
     outline: none;
-    color: var(--text);
+    color: var(--tx);
+    font: inherit;
     width: 100%;
+    min-width: 0;
+    padding: 0;
+  }
+  .searchbox:focus-within {
+    border-color: var(--ac);
+    color: var(--tx);
   }
   .toolbar .spacer {
     flex: 1;
   }
+  .selwrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  .selwrap :global(svg) {
+    position: absolute;
+    right: 12px;
+    color: var(--dim);
+    pointer-events: none;
+  }
   .sortsel {
-    background: var(--bg-card);
-    color: var(--text);
-    border: 1px solid var(--bg-hover);
-    border-radius: 8px;
-    padding: 8px 10px;
+    height: 40px;
+    background: var(--s1);
+    color: var(--tx);
+    border: 1px solid var(--ln);
+    border-radius: 999px;
+    padding: 0 36px 0 14px;
+    font: inherit;
+    font-size: 13px;
     outline: none;
     cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
   }
-  .tb {
-    display: grid;
-    place-items: center;
-    width: 38px;
-    height: 38px;
-    border-radius: 8px;
-    background: var(--bg-card);
-    color: var(--text-dim);
-  }
-  .tb:hover {
-    color: var(--text);
-    background: var(--bg-hover);
-  }
-  .tb.rev {
-    color: var(--accent);
+  .btn-icon.rev {
+    color: var(--ac);
+    border-color: var(--ac);
   }
   .empty-hint {
     margin-top: 18px;
   }
-  .art {
-    width: 200px;
-    flex: none;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .meta {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 0;
-    max-width: 60ch;
-  }
-  .kind {
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  h1 {
-    font-size: clamp(1.8rem, 5vw, 3rem);
-  }
-  .desc {
-    margin: 0;
-  }
-  .title-input {
-    font-size: clamp(1.4rem, 4vw, 2.2rem);
-    font-weight: 800;
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid var(--bg-hover);
-    border-radius: 8px;
-    color: var(--text);
-    padding: 6px 10px;
-    outline: none;
-  }
-  .title-input:focus {
-    border-color: var(--accent);
-  }
-  .desc-input {
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid var(--bg-hover);
-    border-radius: 8px;
-    color: var(--text);
-    padding: 8px 10px;
-    outline: none;
-    resize: vertical;
-    font: inherit;
-  }
-  .desc-input:focus {
-    border-color: var(--accent);
-  }
-  .meta-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 2px;
-  }
-  .pill.sm,
-  .ghost.sm {
-    font-size: 0.85rem;
-    padding: 6px 12px;
-  }
-  .ghost {
-    color: var(--text-dim);
-  }
-  .ghost:hover {
-    color: var(--text);
-  }
-  .actions {
-    margin: 16px 0 18px;
-    gap: 18px;
-    flex-wrap: wrap;
-  }
-  .icon-btn {
-    font-size: 1.4rem;
-    color: var(--text-dim);
-  }
-  .icon-btn:hover {
-    color: var(--text);
-  }
-  .icon-btn.on {
-    color: var(--accent-2);
-  }
-  .icon-btn.danger:hover {
-    color: var(--accent-2);
-  }
-  /* The dedicated edit mode (drag handles + up/down + remove) is available on
-     every screen size — it used to be mobile-only, which made reordering
-     nearly undiscoverable there and unavailable as a "big handles" mode here. */
-  .edit-toggle {
-    display: inline-flex;
-    align-items: center;
-    margin-left: auto;
-    padding: 8px 16px;
-    border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    color: var(--text);
-    font-weight: 600;
-  }
-  .edit-toggle.on {
-    background: var(--accent);
-    color: #fff;
-    border-color: transparent;
-  }
-  .edit-toggle:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
   @media (max-width: 640px) {
+    /* The action pills scroll on ONE line instead of stacking three rows of
+       chrome between the header and the list. */
+    .actions {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      padding-bottom: 2px;
+    }
+    .actions::-webkit-scrollbar {
+      display: none;
+    }
+    /* Spotify's phone header: the sleeve and the facts share one short band,
+       so the tracklist is not pushed a screen and a half down. */
+    .banner {
+      flex-direction: row;
+      align-items: center;
+      gap: 14px;
+      padding: 16px var(--page-x) 16px;
+    }
     .art {
-      width: 150px;
+      width: 96px;
+    }
+    .meta {
+      gap: 6px;
+    }
+    h1 {
+      font-size: clamp(24px, 7vw, 34px);
+    }
+    .kind {
+      line-height: 1.5;
     }
     /* Same as the favourites' toolbar: the search on a line of its own. Beside
        the sort it was squeezed to a 90 px box showing "Rech". */
@@ -544,11 +589,16 @@
       flex-wrap: wrap;
     }
     .searchbox {
-      max-width: none;
       flex: 1 1 100%;
+      max-width: none;
+      width: auto;
     }
-    .sortsel {
-      flex: 1;
+    .selwrap {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .selwrap .sortsel {
+      width: 100%;
       min-width: 0;
     }
     .toolbar .spacer {
