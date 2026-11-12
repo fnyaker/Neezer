@@ -85,6 +85,26 @@ Podcasts, Téléchargés, Mes fichiers, Indisponibles), its adding actions one "
 title too (the whole row is the target), and without a number the play glyph sits on the cover. Starring an artist
 FOLLOWS it; archiving its discography (`on_fav_artist`) is off by default.
 
+**≤ 640 px is a different SHELL, not a narrower desktop** (`src/mobile.css`, `lib/viewport.js`,
+`components/MobileNav.svelte`, `PlayerBar.svelte`'s mobile block, `App.svelte`). One column sized to
+`100dvh` (a phone's URL bar makes `vh` lie), its bottom padded by `--mini-h + --tabbar-h + --safe-bottom`;
+the tab bar is EXACTLY 64 px of content (box-sizing content-box, the home indicator added as padding
+UNDER it, never folded into the height) and the mini player is a 64 px card floating 8 px above it, 12 px
+from each side. Tokens are structure only (`--mini-h --tabbar-h --player-h --safe-top --safe-bottom`,
+`--page-x` already 20) — the colours stay the theme's. ONE breakpoint: `MOBILE_MQ` in `lib/viewport.js`
+is what JavaScript reads, the `@media (max-width: 640px)` blocks are the same number in CSS; 641 px is
+a narrow DESKTOP (sidebar + 88 px bar). The mini card keeps the bench contract (`footer.player`,
+`.now`, `.info`, `.info .t`, `.pp`, `.next`) and carries only sleeve, names, play 44, next 36 and a 2 px
+progress line; everything else is hidden, the card itself opens the full-screen player. **A press on a
+control must not bubble into the card's tap target**: `player.toggle()` re-renders the icon, so by the time
+the event reaches `<footer>` its `target` is a DETACHED glyph and `closest("button")` finds nothing —
+read `composedPath()` (captured at dispatch) instead, or every press of play opened the player (seen in
+the bench). The Now-Playing column is a third column, so on a phone it is not mounted at all and a
+`ui.nowPlaying` left true on the desktop is closed on boot (it used to paint off-screen). Measured
+(`test/mobile/run.mjs`, 360/390/639/640/641): no sideways overflow at any width, bar 65 px with its
+border, card bottom exactly 8 px above the bar, play 44×44, `data-theme` kept across the player; 641 px
+still 88 px bar and the desktop panel mounted.
+
 **Search leads with the titles** (`routes/Search.svelte`, `lib/searchrank.js`, `components/TopResult.svelte`).
 Tabs Tout · Titres · Artistes · Albums · Playlists; there is no Podcasts tab (the user's ask): the shows are mixed
 into the albums after the first two, each card saying "Podcast". "Tout" opens on a **best result** only when the query

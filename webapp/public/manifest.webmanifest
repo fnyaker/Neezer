@@ -8,8 +8,8 @@
   "scope": "/app/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#0f0d13",
-  "theme_color": "#0f0d13",
+  "background_color": "#0C0C0B",
+  "theme_color": "#0C0C0B",
   "categories": ["music", "entertainment"],
   "icons": [
     { "src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
