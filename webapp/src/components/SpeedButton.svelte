@@ -87,8 +87,8 @@
     background: var(--ln);
   }
   .trigger.on {
-    color: var(--ac);
-    border-color: var(--ac);
+    color: var(--ac-text);
+    border-color: var(--ac-text);
   }
   .trigger.locked {
     opacity: 0.5;
@@ -141,7 +141,7 @@
     background: var(--s1);
   }
   .menu button.sel {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   @media (max-width: 640px) {
     .menu {

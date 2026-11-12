@@ -380,7 +380,7 @@
     background: var(--s2);
   }
   .track.active .t {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .play {
     width: 36px;
@@ -397,7 +397,7 @@
   }
   .play .curplay {
     display: flex;
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .play .ic {
     display: none;
@@ -460,7 +460,7 @@
   .gonebadge {
     display: inline-flex;
     vertical-align: -2px;
-    color: var(--ac);
+    color: var(--ac-text);
     margin-right: 4px;
     padding: 0;
   }
@@ -470,7 +470,7 @@
   .dlbadge {
     display: inline-flex;
     vertical-align: -2px;
-    color: var(--ac);
+    color: var(--ac-text);
     margin-right: 3px;
   }
   .a,
@@ -580,7 +580,7 @@
     height: 14px;
     border-radius: 50%;
     border: 2px solid var(--s2);
-    border-top-color: var(--ac);
+    border-top-color: var(--ac-text);
     animation: rowspin 0.8s linear infinite;
   }
   @keyframes rowspin {
@@ -597,7 +597,7 @@
   }
   .eq i {
     width: 3px;
-    background: var(--ac);
+    background: var(--ac-mark);
     animation: eq 0.9s ease-in-out infinite;
   }
   .eq i:nth-child(1) {

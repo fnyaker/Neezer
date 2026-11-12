@@ -960,7 +960,7 @@
       <!-- The name is exactly "File d'attente": it is the queue's own door (the
            benches click it by that label), the count is what the eye reads. -->
       <button class="fb file" on:click={() => (showQueue = true)} aria-label="File d'attente" title={`File d'attente · ${upcoming} titre${upcoming > 1 ? "s" : ""}`}>
-        <span class="fl">File</span>
+        <span class="fl">File ·</span>
         <span class="n mono">{upcoming}</span>
       </button>
     </div>
@@ -1124,7 +1124,7 @@
     flex: none;
   }
   .ic:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
   .ic:active {
@@ -1208,7 +1208,7 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
     overflow: hidden;
-    color: var(--ac);
+    color: var(--ac-text);
   }
 
   /* The carousel's box: a square sleeve up to 78 % of the width or 42 % of the
@@ -1353,7 +1353,7 @@
     cursor: pointer;
   }
   .seek input[type="range"]:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
     border-radius: 999px;
   }
@@ -1364,7 +1364,7 @@
     border-radius: 999px;
     background: linear-gradient(
       90deg,
-      var(--ac) var(--p, 0%),
+      var(--ac-mark) var(--p, 0%),
       color-mix(in srgb, var(--tx) 42%, transparent) var(--p, 0%),
       color-mix(in srgb, var(--tx) 42%, transparent) var(--b, 0%),
       var(--ln) var(--b, 0%)
@@ -1383,7 +1383,7 @@
     border-radius: 999px;
     background: linear-gradient(
       90deg,
-      var(--ac) var(--p, 0%),
+      var(--ac-mark) var(--p, 0%),
       color-mix(in srgb, var(--tx) 42%, transparent) var(--p, 0%),
       color-mix(in srgb, var(--tx) 42%, transparent) var(--b, 0%),
       var(--ln) var(--b, 0%)
@@ -1419,7 +1419,7 @@
     flex: none;
   }
   .controls button:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
   .controls button:not(.pp):active {
@@ -1432,7 +1432,7 @@
     color: var(--dim);
   }
   .controls .sm.on {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .controls .pp {
     width: 68px;
@@ -1459,7 +1459,7 @@
     }
   }
   .a.status {
-    color: var(--ac) !important;
+    color: var(--ac-text) !important;
   }
 
   .viz {
@@ -1515,7 +1515,7 @@
     background: var(--s2);
   }
   .fb:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
   .fb:active {
@@ -1596,7 +1596,7 @@
     color: var(--tx);
   }
   .peek:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
   .under {

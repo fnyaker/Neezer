@@ -6,7 +6,7 @@
   import { openMenu } from "../lib/stores.js";
   import { buildEntityMenu } from "../lib/actions.js";
   import { entityRef } from "../lib/entity.js";
-  import Cover from "./Cover.svelte";
+  import Avatar from "./Avatar.svelte";
 
   export let artist;
   // An optional second line ("12 titres"); the name alone says enough on the home.
@@ -22,7 +22,7 @@
 </script>
 
 <button class="tile" on:click={open} on:contextmenu={menu} title={artist.name}>
-  <span class="pic"><Cover src={artist.picture} alt={artist.name} kind="artist" round /></span>
+  <span class="pic"><Avatar src={artist.picture} name={artist.name} size="100%" /></span>
   <span class="name">{artist.name}</span>
   {#if detail}<span class="detail">{detail}</span>{/if}
 </button>
@@ -52,6 +52,10 @@
     aspect-ratio: 1;
     border-radius: 50%;
     overflow: hidden;
+  }
+  .pic :global(.av) {
+    width: 100%;
+    height: 100%;
   }
   .name {
     max-width: 100%;

@@ -335,7 +335,7 @@
     right: 6px;
     height: 2px;
     border-radius: 2px;
-    background: var(--ac);
+    background: var(--ac-mark);
     z-index: 1;
   }
   .qitem.before::before {
@@ -413,7 +413,7 @@
     cursor: grabbing;
   }
   .grip:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: -2px;
   }
   /* The empty column of the playing and played rows: three controls' width, so

@@ -58,8 +58,9 @@
     gap: 12px;
     padding: 11px 12px 11px 14px;
     border-radius: var(--radius);
-    background: linear-gradient(180deg, var(--bg-card), var(--bg-elev));
-    border: 1px solid var(--bg-hover);
+    background: var(--s1);
+    border: 1px solid var(--ln);
+    border-radius: var(--r-card);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     font-size: 0.9rem;
     line-height: 1.35;
@@ -76,8 +77,8 @@
   }
   .notice.warn .ico,
   .notice.error .ico {
-    background: rgba(255, 0, 146, 0.16);
-    color: #ff77c1;
+    background: color-mix(in srgb, var(--ac) 18%, transparent);
+    color: var(--ac-text);
   }
   .msg {
     flex: 1;
@@ -89,8 +90,8 @@
     border-radius: 999px;
     font-size: 0.83rem;
     font-weight: 700;
-    background: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    color: var(--onac);
     white-space: nowrap;
   }
   .act:hover {
@@ -104,6 +105,12 @@
     height: 30px;
     border-radius: 50%;
     color: var(--text-dim);
+  }
+  @media (pointer: coarse) {
+    .x {
+      width: 44px;
+      height: 44px;
+    }
   }
   .x:hover {
     background: var(--bg-hover);

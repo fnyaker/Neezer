@@ -8,8 +8,14 @@ build a screen from those, never from a literal colour. Rules that cost somethin
 
 - **A theme is an attribute on `<html>`** (`encre` the default, `papier`, `pochette`), never a class
   or a component prop: `--bg --s1 --s2 --ln --tx --dim --ac --onac --btn --onbtn --hrt`. The old
-  names (`--text`, `--text-dim`, `--accent`, `--accent-2`, `--bg-elev`, `--bg-card`, `--bg-hover`)
-  are aliases of them, so the screens not yet through the rebrand follow the theme for free.
+  names (`--text`, `--text-dim`, `--bg-elev`, `--bg-card`, `--bg-hover`) are aliases of them;
+  `--accent`/`--accent-2` alias `--ac-text`, not the lemon surface, so the screens not yet through
+  the rebrand stay readable on Papier.
+- **An accent used as TEXT or a MARK is `--ac-text` / `--ac-mark`; `--ac` is a SURFACE.** On
+  Papier the lemon is a highlighter, never ink (lemon on cream is 1.16:1): `--ac-text` is the ink
+  there, `--ac-mark` is too, and `--onac` stays the text colour on an `--ac` pill. The global
+  `:focus-visible` ring reads `--ac-text` for the same reason. `#fff` on `--ac`/`--accent` is a bug
+  in every theme (measured 1.16:1; the old purple made it 3.9:1 and hid it).
 - **A theme is a COLOUR PAIR.** Text on `--ac` is `--onac`; text on `--btn` is `--onbtn`. `#fff` on
   `var(--accent)` was right when the accent was purple and is 1.4:1 now that it is lemon (Home's
   count badge, Library's still do it) — every such pair is a bug the rebrand exposes, not a taste.
@@ -24,6 +30,11 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   `œ` lives in ext), `font-display: swap`, and the service worker stages all six with the shell.
   Measured first screen at 1440, Encre: **51 requests / 279 kB → 57 / 369 kB**, 84 kB of it type.
   Bricolage ships WITHOUT its optical-size axis: identical text width at 14–44 px, 47 kB cheaper.
+- **A missing sleeve is a groove, and a slow portrait is an initialled disc.** `Cover` paints the
+  deterministic rainure from the first frame (a queued image sits ON it); `Avatar` paints the tint
+  and initials UNDER the photo, so a 6 s cover request never leaves a blank `--s2` disc. A Deezer
+  md5 of all zeroes is ABSENCE, not art: the API returns no URL / a 404 (a 302 to the generic
+  `000…` JPEG made every fallback disappear behind the same lavender square).
 - **Pochette takes the sleeve's colour**: `dominantColor()` (the canvas that already fed the gradient
   headers), lifted by `readableAccent()` until it carries 4.5:1 on `--onac` (232 colours tested,
   worst 4.50:1; the lift SCALES, it does not blend white in, or a deep blue comes out grey-lilac).

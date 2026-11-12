@@ -108,7 +108,7 @@
     background: color-mix(in srgb, var(--ac) 14%, transparent);
   }
   .trigger:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
   .trigger :global(svg) {
@@ -156,7 +156,7 @@
     background: var(--s1);
   }
   .menu button.sel {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .ql {
     display: flex;

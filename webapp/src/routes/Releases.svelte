@@ -174,7 +174,7 @@
                 on:click={() => toggleGroup(g.id)}
                 aria-expanded={opened.has(g.id)}>
                 <Icon name={opened.has(g.id) ? "chevronUp" : "chevronDown"} size={15} />
-                {opened.has(g.id) ? "Masquer les titres" : `Voir les ${g.tracks.length} titre${g.tracks.length > 1 ? "s" : ""}`}
+                {opened.has(g.id) ? "Masquer les titres" : g.tracks.length > 1 ? `Voir les ${g.tracks.length} titres` : "Voir le titre"}
               </button>
             </div>
             {#if opened.has(g.id)}

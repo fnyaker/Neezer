@@ -62,7 +62,7 @@
     transition: color 0.2s;
   }
   .synced li.active {
-    color: var(--ac);
+    color: var(--ac-text);
     font-size: 1.3rem;
   }
   .lyrics > p {

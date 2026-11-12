@@ -47,6 +47,6 @@
     color: var(--tx);
   }
   .eco.on {
-    color: var(--ac);
+    color: var(--ac-text);
   }
 </style>

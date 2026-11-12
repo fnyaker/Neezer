@@ -6,15 +6,20 @@
   // loading state. The names come from the same rule as the home's chips
   // (styleFamilies in StylePicker.svelte), so both screens say the same thing.
   import { onMount, createEventDispatcher } from "svelte";
-  import { grooveBackground } from "../lib/sillon.js";
+  import { grooveBackground, STYLE_FALLBACK } from "../lib/sillon.js";
   import { styleFamilies, loadStyleRows } from "./StylePicker.svelte";
 
   const TILES = 8;
+  // DESIGN §6 names the styles Explorer offers. The live list comes from the
+  // Flow's own vocabulary; on a fresh library, an unreachable server or a
+  // response with no branch roots, this list is what keeps Explorer from being
+  // an empty page — the tiles are a way in, not a report.
   const dispatch = createEventDispatcher();
 
   let rows = [];
   let loaded = false;
-  $: tiles = styleFamilies(rows).slice(0, TILES);
+  $: families = styleFamilies(rows);
+  $: tiles = (families.length ? families : loaded ? STYLE_FALLBACK.map((name) => ({ name })) : []).slice(0, TILES);
 
   onMount(async () => {
     try {

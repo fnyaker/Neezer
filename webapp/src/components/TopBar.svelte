@@ -95,11 +95,13 @@
        left empty, because a phone cannot spare 48 px for a hole. -->
   <span class="back-slot"><BackButton /></span>
 
-  <button class="field search" on:click={goSearch} aria-label="Rechercher un titre, un artiste, un album, un podcast">
-    <Icon name="search" size={16} />
-    <span class="hint">Titres, artistes, albums, podcasts…</span>
-    <span class="kbd">⌘K</span>
-  </button>
+  {#if !$location.startsWith("/search")}
+    <button class="field search" on:click={goSearch} aria-label="Rechercher un titre, un artiste, un album, un podcast">
+      <Icon name="search" size={16} />
+      <span class="hint">Titres, artistes, albums, podcasts…</span>
+      <span class="kbd">⌘K</span>
+    </button>
+  {/if}
 
   <span class="grow"></span>
 
@@ -198,6 +200,7 @@
   @media (max-width: 640px) {
     .topbar {
       gap: 8px;
+      padding-top: var(--safe-top, env(safe-area-inset-top, 0px));
     }
     .search {
       flex: 1 1 auto;

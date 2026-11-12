@@ -217,7 +217,7 @@
     font-size: 14px;
   }
   .searchbox:focus-within {
-    border-color: var(--ac);
+    border-color: var(--ac-text);
     color: var(--tx);
   }
   .searchbox input {
@@ -318,7 +318,7 @@
   }
   .box.on {
     background: var(--ac);
-    border-color: var(--ac);
+    border-color: var(--ac-text);
   }
   .box:disabled {
     cursor: default;

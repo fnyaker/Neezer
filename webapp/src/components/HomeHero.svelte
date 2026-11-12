@@ -144,7 +144,7 @@
     padding: 0 24px;
     border-radius: 24px;
     background: var(--onac);
-    color: var(--ac);
+    color: var(--ac-text);
     font-size: 15px;
     font-weight: 700;
     white-space: nowrap;
@@ -180,7 +180,7 @@
   }
   .tune[aria-expanded="true"] {
     background: var(--onac);
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .tune:focus-visible {
     outline-color: var(--onac);

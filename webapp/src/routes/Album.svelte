@@ -191,6 +191,7 @@
     margin: 0;
     font-family: var(--font-display);
     font-weight: 800;
+    text-wrap: balance;
     font-size: clamp(34px, 6vw, 72px);
     line-height: 0.95;
     letter-spacing: -0.04em;
@@ -231,13 +232,9 @@
   @media (max-width: 640px) {
     /* Same as the playlist page: one scrolling row of actions, not three. */
     .actions {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
+      flex-wrap: wrap;
+      overflow: visible;
       padding-bottom: 2px;
-    }
-    .actions::-webkit-scrollbar {
-      display: none;
     }
     /* Spotify's phone header: the sleeve and the facts share one short band,
        so the tracklist is not pushed a screen and a half down. */

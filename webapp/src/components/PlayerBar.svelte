@@ -257,7 +257,7 @@
     line-height: 1.2;
   }
   .a.status {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .ph {
     color: var(--dim);
@@ -316,7 +316,7 @@
     color: var(--tx);
   }
   .transport .sm.on {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .pp {
     width: 46px;
@@ -375,14 +375,14 @@
   .seek input[type="range"] {
     background: linear-gradient(
       90deg,
-      var(--ac) var(--p, 0%),
+      var(--ac-mark) var(--p, 0%),
       color-mix(in srgb, var(--tx) 32%, transparent) var(--p, 0%),
       color-mix(in srgb, var(--tx) 32%, transparent) var(--b, 0%),
       var(--ln) var(--b, 0%)
     );
   }
   .vol {
-    background: linear-gradient(90deg, var(--ac) var(--p, 0%), var(--ln) var(--p, 0%));
+    background: linear-gradient(90deg, var(--ac-mark) var(--p, 0%), var(--ln) var(--p, 0%));
   }
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -425,7 +425,7 @@
     background: var(--s2);
   }
   .extra .sm.on {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .extra .max {
     color: var(--tx);
@@ -575,7 +575,7 @@
       display: block;
       height: 100%;
       width: var(--p, 0%);
-      background: var(--ac);
+      background: var(--ac-mark);
     }
     /* The two targets keep 44 px of finger room: the card is 64 high and the
        play button sits in its middle. */

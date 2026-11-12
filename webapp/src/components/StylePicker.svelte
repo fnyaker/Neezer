@@ -53,6 +53,7 @@
 
   $: byParent = rows.reduce((m, r) => ((m[r.parent || ""] ||= []).push(r), m), {});
   $: families = styleFamilies(rows);
+  $: visibleFamilies = families.length ? families : STYLE_FALLBACK.map((name) => ({ name }));
   $: subs = open ? flat(open) : [];
 
   function flat(name, depth = 0) {
@@ -93,7 +94,7 @@
   });
 </script>
 
-{#if families.length}
+{#if visibleFamilies.length}
   <section class="style-block fade-in">
     <div class="section-head">
       <h2 class="section-title">Par style</h2>
@@ -110,7 +111,7 @@
         {#if !$startStyles.length}<Icon name="check" size={13} />{/if}
         Tout
       </button>
-      {#each families as f (f.name)}
+      {#each visibleFamilies as f (f.name)}
         <button
           type="button"
           class="chip"
@@ -192,7 +193,7 @@
     }
   }
   .chip.open:not(.chip-active) {
-    border-color: var(--ac);
+    border-color: var(--ac-text);
   }
   .subs {
     display: flex;

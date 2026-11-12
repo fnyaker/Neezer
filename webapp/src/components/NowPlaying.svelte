@@ -113,7 +113,8 @@
     background: var(--s2);
   }
   .art {
-    padding: 4px 20px 0;
+    width: 72px;
+    padding: 12px 20px 0;
   }
   .meta {
     display: flex;

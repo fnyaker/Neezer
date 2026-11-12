@@ -253,7 +253,7 @@
   }
   .link {
     margin-left: 6px;
-    color: var(--ac);
+    color: var(--ac-text);
     font-weight: 700;
   }
   .artist {

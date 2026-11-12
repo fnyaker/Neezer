@@ -187,7 +187,7 @@
     background: var(--s2);
   }
   .row.active .t {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .grip {
     color: var(--dim);
@@ -223,7 +223,7 @@
   }
   .play .curplay {
     display: flex;
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .play .ic {
     display: none;
@@ -287,7 +287,7 @@
   .dlbadge {
     display: inline-flex;
     vertical-align: -2px;
-    color: var(--ac);
+    color: var(--ac-text);
     margin-right: 3px;
   }
   .explicit {
@@ -325,7 +325,7 @@
     justify-content: center;
   }
   .remove:hover {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .more {
     color: var(--dim);
@@ -350,7 +350,7 @@
     height: 14px;
     border-radius: 50%;
     border: 2px solid var(--s2);
-    border-top-color: var(--ac);
+    border-top-color: var(--ac-text);
     animation: rowspin 0.8s linear infinite;
   }
   @keyframes rowspin {
@@ -367,7 +367,7 @@
   }
   .eq i {
     width: 3px;
-    background: var(--ac);
+    background: var(--ac-mark);
     animation: eq 0.9s ease-in-out infinite;
   }
   .eq i:nth-child(1) {
@@ -455,7 +455,7 @@
   }
   /* The floating clone svelte-dnd-action renders while dragging: lift it. */
   :global(#dnd-action-dragged-el) {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     border-radius: 10px;
     background: var(--s1);
     cursor: grabbing;

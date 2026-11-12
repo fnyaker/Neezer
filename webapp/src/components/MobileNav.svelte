@@ -109,7 +109,7 @@
       color: var(--onac);
     }
     .mobilenav a:focus-visible {
-      outline: 2px solid var(--ac);
+      outline: 2px solid var(--ac-text);
       outline-offset: -2px;
       border-radius: 12px;
     }

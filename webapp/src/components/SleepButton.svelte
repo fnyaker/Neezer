@@ -117,7 +117,7 @@
     color: var(--tx);
   }
   .trigger.on {
-    color: var(--ac);
+    color: var(--ac-text);
     background: color-mix(in srgb, var(--ac) 16%, transparent);
     padding: 0 11px 0 9px;
   }
@@ -173,10 +173,10 @@
     background: var(--s1);
   }
   .menu button.sel {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .menu .off {
-    color: var(--ac);
+    color: var(--ac-text);
     margin-bottom: 4px;
     background: color-mix(in srgb, var(--ac) 12%, transparent);
   }

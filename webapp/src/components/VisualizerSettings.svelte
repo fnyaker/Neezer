@@ -894,9 +894,9 @@
     text-transform: capitalize;
   }
   .seg-btn.sel {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--ac);
+    border-color: var(--ac);
+    color: var(--onac);
   }
   .seg-btn.hot {
     display: inline-flex;
@@ -1070,14 +1070,19 @@
     gap: 8px;
     padding: 10px 18px;
     border-radius: 999px;
-    background: var(--accent);
+    background: var(--ac);
     border: none;
-    color: #fff;
+    color: var(--onac);
     font-weight: 650;
     font-size: 0.88rem;
     cursor: pointer;
   }
   .primary:hover {
     filter: brightness(1.08);
+  }
+  @media (pointer: coarse) {
+    .seg-btn {
+      min-height: 44px;
+    }
   }
 </style>

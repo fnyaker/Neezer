@@ -4,7 +4,7 @@
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
   import { player, isAdmin, openGenreBulk } from "../lib/stores.js";
   import { toggleEntityFavorite, entityMeta } from "../lib/actions.js";
-  import Cover from "../components/Cover.svelte";
+  import Avatar from "../components/Avatar.svelte";
   import Card from "../components/Card.svelte";
   import TrackList from "../components/TrackList.svelte";
   import PersonCredits from "../components/PersonCredits.svelte";
@@ -173,7 +173,7 @@
     <!-- §6: a plain `--s2` band under a hairline, not a gradient. The photo is
          round and 168 px, the name set at 88 in Bricolage 800. -->
     <header class="banner gh">
-      <div class="art"><Cover src={data.artist.picture} alt={data.artist.name} kind="artist" round eager /></div>
+      <div class="art"><Avatar src={data.artist.picture} name={data.artist.name} size="100%" /></div>
       <div class="meta">
         <span class="kind">{facts}</span>
         <h1>{data.artist.name}</h1>
@@ -302,6 +302,8 @@
   }
   .art {
     width: 168px;
+    height: 168px;
+    aspect-ratio: 1;
     flex: none;
     border-radius: 50%;
     overflow: hidden;
@@ -382,13 +384,9 @@
   }
   @media (max-width: 640px) {
     .actions {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
+      flex-wrap: wrap;
+      overflow: visible;
       padding-bottom: 2px;
-    }
-    .actions::-webkit-scrollbar {
-      display: none;
     }
     /* §9: a short band, like the album's and the playlist's — a 104 px disc
        and the name beside it, not a portrait stacked above three lines of
@@ -401,6 +399,7 @@
     }
     .art {
       width: 104px;
+      height: 104px;
     }
     .meta {
       gap: 6px;

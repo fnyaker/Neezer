@@ -17,7 +17,13 @@
     m.addEventListener("change", on);
     return () => m.removeEventListener("change", on);
   });
+
+  function onKey(e) {
+    if (e.key === "Escape" && $immersiveOpen) immersiveOpen.set(false);
+  }
 </script>
+
+<svelte:window on:keydown={onKey} />
 
 {#if $immersiveOpen && $current}
   {#if mobile}

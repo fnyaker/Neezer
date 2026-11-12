@@ -305,7 +305,7 @@
   bind:this={tile}
   class="cover"
   class:round
-  style={size ? `width:${size}px;height:${size}px` : ""}
+  style={`${size ? `width:${size}px;height:${size}px` : ""};--groove:${phGroove}`}
 >
   {#if shown && !failed && admitted}
     {#if low && !loaded}
@@ -366,7 +366,11 @@
     width: 100%;
     border-radius: var(--r-cover);
     overflow: hidden;
-    background: var(--s2);
+    background-color: var(--s2);
+    /* The groove paints from the first frame: a queued or loading cover is a
+       record sleeve waiting for its art, never an empty tile. The image and
+       the low-res blur sit on top of it. */
+    background-image: var(--groove);
   }
   .cover.round {
     border-radius: 50%;

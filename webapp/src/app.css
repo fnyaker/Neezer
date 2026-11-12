@@ -23,6 +23,10 @@
   --dim: #a09d92;
   --ac: #d2ff3c;
   --onac: #0c0c0b;
+  /* The accent used as TEXT/MARK, distinct from the accent used as a
+     SURFACE: on Papier the lemon is a highlighter, never ink (1.16:1). */
+  --ac-text: #d2ff3c;
+  --ac-mark: #d2ff3c;
   --btn: #d2ff3c;
   --onbtn: #0c0c0b;
   --hrt: #d2ff3c;
@@ -39,6 +43,8 @@
   --dim: #5f5b4f;
   --ac: #d2ff3c;
   --onac: #14130f;
+  --ac-text: #14130f;
+  --ac-mark: #14130f;
   --btn: #14130f;
   --onbtn: #f3f0e8;
   --hrt: #14130f;
@@ -57,6 +63,8 @@
   --dim: #a8a3ad;
   --ac: var(--cover-ac, #ff6b4a);
   --onac: #0c0c0b;
+  --ac-text: var(--tx);
+  --ac-mark: var(--ac);
   --btn: var(--ac);
   --onbtn: #0c0c0b;
   --hrt: var(--ac);
@@ -69,8 +77,11 @@
 :root {
   --text: var(--tx);
   --text-dim: var(--dim);
-  --accent: var(--ac);
-  --accent-2: var(--ac);
+  /* The legacy alias is the accent used as ink/mark, not the lemon surface:
+     on Papier that is the ink, so old panels stop drawing lemon text on cream
+     (1.16:1) while their solid accent buttons stay readable with white text. */
+  --accent: var(--ac-text);
+  --accent-2: var(--ac-text);
   --bg-elev: var(--s1);
   --bg-card: var(--s2);
   --bg-hover: var(--s2);
@@ -241,7 +252,7 @@ textarea {
 
 /* Keyboard users get a clear ring; mouse/touch get nothing (no ugly blue box). */
 :focus-visible {
-  outline: 2px solid var(--ac);
+  outline: 2px solid var(--ac-text);
   outline-offset: 2px;
 }
 :focus:not(:focus-visible) {
@@ -660,5 +671,20 @@ main:has(> .notices) .gh {
   }
   .pill:hover {
     transform: none;
+  }
+}
+
+/* Touch targets (§10): a finger, not a mouse. Controls that already fit their
+   row grow to 44 px of hit area; the compact list rows keep their measured
+   geometry and get their own coarse rules in the component. */
+@media (pointer: coarse) {
+  .btn,
+  .chip,
+  .field {
+    min-height: 44px;
+  }
+  .btn-icon {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

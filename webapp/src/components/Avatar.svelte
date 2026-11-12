@@ -12,6 +12,8 @@
   export let src = null;
   // Optional explicit alt; the name is the honest default for a portrait.
   export let alt = null;
+  // A number is a fixed px size; a CSS length ("100%") lets a responsive grid
+  // drive it. The initials scale from the fixed size only.
   export let size = 104;
   export let round = true;
 
@@ -23,22 +25,23 @@
   $: tint = grooveTint(seed);
   $: initials = initialsOf(name);
   $: withImage = !!src && !failed;
+  $: dim = typeof size === "number" ? `${size}px` : size;
+  $: fontSize = Math.max(11, Math.round((typeof size === "number" ? size : 104) * 0.29));
 </script>
 
 <span
   class="av"
   class:round
-  style={`width:${size}px;height:${size}px;font-size:${Math.max(11, Math.round(size * 0.29))}px;${
-    withImage ? "" : `background-image:${tint}`
-  }`}
-  role={withImage ? undefined : name ? "img" : undefined}
-  aria-label={!withImage && name ? name : undefined}
-  aria-hidden={!withImage && !name ? "true" : undefined}
+  style={`width:${dim};height:${dim};font-size:${fontSize}px;background-image:${tint}`}
+  role={name ? "img" : undefined}
+  aria-label={name || undefined}
 >
+  <!-- The discs and initials are UNDER the photo, never a state that waits for
+       a 404: on a slow link the artist is still an initialled disc while the
+       image is in flight. A loaded photo simply covers it. -->
+  <span class="ini" aria-hidden="true">{initials}</span>
   {#if withImage}
     <img {src} alt={alt ?? name} loading="lazy" decoding="async" on:error={() => (failed = true)} />
-  {:else}
-    <span class="ini" aria-hidden="true">{initials}</span>
   {/if}
 </span>
 
@@ -69,6 +72,14 @@
     object-fit: cover;
   }
   .ini {
-    display: block;
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    z-index: 0;
+  }
+  img {
+    position: relative;
+    z-index: 1;
   }
 </style>

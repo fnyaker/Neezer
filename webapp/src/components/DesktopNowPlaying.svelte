@@ -555,7 +555,7 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
     overflow: hidden;
-    color: var(--ac);
+    color: var(--ac-text);
   }
 
   .info {
@@ -724,7 +724,7 @@
     color: var(--dim);
   }
   .controls .sm.on {
-    color: var(--ac);
+    color: var(--ac-text);
   }
   .controls .pp {
     width: 68px;
@@ -754,7 +754,7 @@
     }
   }
   .a.status {
-    color: var(--ac);
+    color: var(--ac-text);
   }
 
   .viz {

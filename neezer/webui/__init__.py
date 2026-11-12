@@ -167,7 +167,16 @@ _CDN = "https://e-cdns-images.dzcdn.net/images/{kind}/{md5}/{w}x{w}-000000-80-0-
 # -- helpers ----------------------------------------------------------------
 
 
+def _real_md5(md5):
+    """An art id worth a CDN URL. Deezer spells "no art" as all zeroes, and a
+    302 to that JPEG is what made every Sillon fallback disappear behind the
+    same generic sleeve."""
+    value = str(md5 or "").strip()
+    return value if value and set(value) != {"0"} else None
+
+
 def _image(kind, md5, size=500):
+    md5 = _real_md5(md5)
     return _CDN.format(kind=kind, md5=md5, w=size) if md5 else None
 
 
@@ -4606,7 +4615,7 @@ def _album_cover_response(cid, vetted):
             found = _serve_embedded_cover(tr)
             if not isinstance(found, tuple):  # (json, 404) when it has none
                 return found
-    if alb.cover_md5:
+    if _real_md5(alb.cover_md5):
         return redirect(_image("cover", alb.cover_md5, 1000))
     return jsonify({"error": "not found"}), 404
 

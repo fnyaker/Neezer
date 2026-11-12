@@ -134,3 +134,20 @@ export function readableAccent(rgb, on = ON_ACCENT, ratio = 4.5) {
 export function accentFor(rgb) {
   return toHex(readableAccent(rgb));
 }
+
+// The styles Explorer and Home name when the Flow's vocabulary is empty (a
+// fresh library, a failing `/flow/styles`, or a response without branch roots).
+// One list, two screens: they must not disagree about what "Par style" offers.
+export const STYLE_FALLBACK = [
+  "Techno",
+  "Hard dance",
+  "Hardcore",
+  "Pop",
+  "Hip-hop",
+  "Rock",
+  "Dance/EDM",
+  "Drum & bass",
+  "Synthwave",
+  "Trance",
+  "Indie",
+];

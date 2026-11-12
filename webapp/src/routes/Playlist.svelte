@@ -431,6 +431,7 @@
     margin: 0;
     font-family: var(--font-display);
     font-weight: 800;
+    text-wrap: balance;
     font-size: clamp(34px, 6vw, 72px);
     line-height: 0.95;
     letter-spacing: -0.04em;
@@ -467,7 +468,7 @@
   }
   .title-input:focus,
   .desc-input:focus {
-    border-color: var(--ac);
+    border-color: var(--ac-text);
   }
   .meta-actions {
     display: flex;
@@ -513,7 +514,7 @@
     padding: 0;
   }
   .searchbox:focus-within {
-    border-color: var(--ac);
+    border-color: var(--ac-text);
     color: var(--tx);
   }
   .toolbar .spacer {
@@ -545,8 +546,8 @@
     -webkit-appearance: none;
   }
   .btn-icon.rev {
-    color: var(--ac);
-    border-color: var(--ac);
+    color: var(--ac-text);
+    border-color: var(--ac-text);
   }
   .empty-hint {
     margin-top: 18px;
@@ -555,13 +556,9 @@
     /* The action pills scroll on ONE line instead of stacking three rows of
        chrome between the header and the list. */
     .actions {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
+      flex-wrap: wrap;
+      overflow: visible;
       padding-bottom: 2px;
-    }
-    .actions::-webkit-scrollbar {
-      display: none;
     }
     /* Spotify's phone header: the sleeve and the facts share one short band,
        so the tracklist is not pushed a screen and a half down. */

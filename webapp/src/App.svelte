@@ -489,7 +489,10 @@
      included, so the last row of a list is never parked under them. */
   @media (max-width: 640px) {
     :global(:root) {
-      --topbar-h: 60px;
+      /* The PWA status bar sits above the content: the bar keeps 60 px of
+         controls and grows by the safe area, and every sticky page header
+         follows the same token. */
+      --topbar-h: calc(60px + var(--safe-top, 0px));
     }
     .layout,
     .layout.np-open {

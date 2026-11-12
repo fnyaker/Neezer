@@ -309,11 +309,16 @@
 <div class="head">
   <h1 class="page-title">Bibliothèque</h1>
   {#if counts}<span class="counts mono">{counts}</span>{/if}
-  {#if CAN_KEEP || CAN_BROWSE}
+  <span class="head-actions">
+    <a class="btn btn-icon" href="#/import" title="Importer une playlist partagée" aria-label="Importer une playlist partagée">
+      <Icon name="link" size={18} />
+    </a>
+    {#if CAN_KEEP || CAN_BROWSE}
     <button class="btn btn-icon add" on:click={addMenu} disabled={uploading || $syncing} aria-label="Ajouter à la bibliothèque" title="Ajouter">
       {#if uploading || $syncing}<span class="spin"><Icon name="refresh" size={20} /></span>{:else}<Icon name="plus" size={20} />{/if}
     </button>
-  {/if}
+    {/if}
+  </span>
   <input
     bind:this={fileInput}
     type="file"
@@ -578,6 +583,11 @@
   .grow {
     height: 1px;
   }
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .head {
     display: flex;
     align-items: flex-end;
@@ -638,6 +648,17 @@
      is what stops flex from squeezing them into unreadable slivers instead of
      overflowing, and the negative margin lets them run edge to edge while the
      page keeps its padding. */
+  /* With the File panel open the content column can be ~650 px while the
+     window is still wide: wrapping is the container-aware answer (a window
+     media query would miss it). */
+  :global(.layout.np-open) .tabs,
+  :global(.layout.np-open) .bar {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+  :global(.layout.np-open) .tabs::-webkit-scrollbar {
+    display: none;
+  }
   .tabs {
     display: flex;
     gap: 8px;
@@ -678,7 +699,7 @@
   }
   .chip-active .badge {
     background: var(--onac);
-    color: var(--ac);
+    color: var(--ac-text);
   }
   /* One action bar above a table: the primary on the left, the list's own
      tools on the right, everything on the 40 px rhythm (§6). */
@@ -715,7 +736,7 @@
     padding: 0;
   }
   .field:focus-within {
-    border-color: var(--ac);
+    border-color: var(--ac-text);
     color: var(--tx);
   }
   /* A native select on Linux paints its own grey widget: the theme owns the
@@ -747,12 +768,12 @@
   .sortsel:focus-visible,
   .btn:focus-visible,
   .chip:focus-visible {
-    outline: 2px solid var(--ac);
+    outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
   .btn-icon.rev {
-    color: var(--ac);
-    border-color: var(--ac);
+    color: var(--ac-text);
+    border-color: var(--ac-text);
   }
   .count-line {
     display: inline-block;
