@@ -53,6 +53,16 @@
     <string name="deezer_login_cancel">Annuler</string>
     <string name="deezer_login_ssl">Certificat invalide sur deezer.com. Connexion interrompue.</string>
 
+    <string name="car_mode">Mode voiture</string>
+    <string name="car_channel">Mode voiture</string>
+    <string name="car_notification_title">Mode voiture</string>
+    <string name="car_notification_text">Prêt quand la route commence</string>
+    <string name="car_notification_settings">Réglages</string>
+    <string name="car_notification_stop">Arrêter</string>
+    <string name="car_tile">Mode voiture</string>
+    <string name="car_overlay_blocked">Autorise « Afficher par-dessus les autres applis » pour le mode voiture.</string>
+    <string name="car_usage_blocked">Autorise l'accès à l'historique d'utilisation pour détecter l'app GPS.</string>
+
     <string name="shortcut_server">Serveur</string>
     <string name="shortcut_server_long">Paramètres du serveur</string>
 </resources>
