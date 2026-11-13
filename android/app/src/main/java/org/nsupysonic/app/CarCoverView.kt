@@ -18,6 +18,9 @@ import android.view.View
 import android.webkit.CookieManager
 import java.io.File
 import java.io.IOException
+import java.net.Inet6Address
+import java.net.InetAddress
+import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 import kotlin.math.max
@@ -328,7 +331,17 @@ internal object CarCovers {
             deliver(url, null)
             return
         }
-        var bitmap: Bitmap? = null
+        val prefs = Prefs(context)
+        // A cover URL is attacker-influenced (the server names it) and is
+        // fetched by this device: it may only reach the configured origin or
+        // Deezer's CDN. Checked before the disk too, so a file cached by an
+        // older build for an arbitrary host is not drawn any more.
+        if (!coverAllowed(prefs, url)) {
+            rememberFailure(url)
+            deliver(url, null)
+            return
+        }
+        var bitmap: Bitmap?
         try {
             val dir = File(context.filesDir, DIR_NAME)
             val file = File(dir, coverCacheKey(url) + ".img")
@@ -340,7 +353,7 @@ internal object CarCovers {
             bitmap = decode(stored, maxPx)
             if (bitmap == null) {
                 if (stored != null) file.delete()
-                val bytes = download(context, url)
+                val bytes = download(prefs, url)
                 if (bytes != null) {
                     bitmap = decode(bytes, maxPx)
                     if (bitmap != null) writeDisk(dir, file, bytes)
@@ -354,13 +367,15 @@ internal object CarCovers {
         } catch (_: Exception) {
             bitmap = null
         }
-        if (bitmap == null) {
-            try {
-                failed.put(url, SystemClock.elapsedRealtime() + FAIL_TTL_MS)
-            } catch (_: Exception) {
-            }
-        }
+        if (bitmap == null) rememberFailure(url)
         deliver(url, bitmap)
+    }
+
+    private fun rememberFailure(url: String) {
+        try {
+            failed.put(url, SystemClock.elapsedRealtime() + FAIL_TTL_MS)
+        } catch (_: Exception) {
+        }
     }
 
     private fun deliver(url: String, bitmap: Bitmap?) {
@@ -370,8 +385,7 @@ internal object CarCovers {
         if (Looper.myLooper() == Looper.getMainLooper()) run.run() else main.post(run)
     }
 
-    private fun download(context: Context, url: String): ByteArray? {
-        val prefs = Prefs(context)
+    private fun download(prefs: Prefs, url: String): ByteArray? {
         // Only our own server gets the session cookie; Net checks the origin
         // again on every redirect hop.
         val cookie = if (prefs.isServerUrl(url)) {
@@ -384,7 +398,10 @@ internal object CarCovers {
             null
         }
         val conn = try {
-            Net.get(prefs, url, cookie, CONNECT_TIMEOUT, READ_TIMEOUT)
+            Net.get(
+                prefs, url, cookie, CONNECT_TIMEOUT, READ_TIMEOUT,
+                allow = { candidate -> coverAllowed(prefs, candidate) },
+            )
         } catch (_: IOException) {
             return null
         }
@@ -551,11 +568,15 @@ internal class CoverFanout<T> {
     fun size(key: String): Int = waiting[key]?.size ?: 0
 }
 
-/** Whether [url] is an absolute http(s) URL the native fetcher may open. */
+/**
+ * Whether [url] is an absolute http(s) URL this fetcher can parse. Format
+ * only: the host policy (configured origin or Deezer CDN, no userinfo, no
+ * private IP) is [coverAllowed], applied before every disk read and every hop.
+ */
 internal fun coverIsHttp(url: String): Boolean {
     if (url.length > 2_048) return false
     return try {
-        val uri = java.net.URI(url)
+        val uri = URI(url)
         val scheme = uri.scheme?.lowercase()
         (scheme == "http" || scheme == "https") && !uri.host.isNullOrEmpty()
     } catch (_: Exception) {
@@ -576,4 +597,105 @@ internal fun resolveCoverUrl(baseUrl: String, raw: String?): String {
     if (!text.startsWith("/")) return ""
     val root = CarPlaylistSource.rootOf(baseUrl) ?: return ""
     return root + text
+}
+
+/** The only remote image hosts a cover may reach: Deezer's own CDN, HTTPS. */
+private const val DEEZER_CDN_SUFFIX = ".dzcdn.net"
+
+private val IPV4_LITERAL = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
+
+/**
+ * Whether a cover URL may be fetched at all. Two sources only:
+ *  - the configured server, through [isSameOrigin] (on the device that is
+ *    [Prefs.isServerUrl], the same origin definition as the navigation guard,
+ *    the shim and the certificate pin), whatever scheme that server uses;
+ *  - Deezer's image CDN, over HTTPS only.
+ *
+ * A URL carrying userinfo is refused BEFORE the same-origin test: a string
+ * such as `https://our-host@evil.example/` reads as our host to the eye and
+ * resolves to evil.example. Every other host, every IP literal in a private,
+ * loopback or link-local range, and cleartext off the configured server are
+ * refused.
+ */
+internal fun coverAllowed(url: String, isSameOrigin: (String) -> Boolean): Boolean {
+    if (url.length > 2_048) return false
+    val uri = try {
+        URI(url)
+    } catch (_: Exception) {
+        return false
+    }
+    if (uri.userInfo != null) return false
+    if (isSameOrigin(url)) return true
+    return coverAllowedRemote(uri)
+}
+
+/** The device predicate handed to [Net.get] for every hop. */
+internal fun coverAllowed(prefs: Prefs, url: String): Boolean =
+    coverAllowed(url) { candidate -> prefs.isServerUrl(candidate) }
+
+/** The remote half of the rule, without the configured origin. */
+internal fun coverAllowedRemote(url: String): Boolean = try {
+    coverAllowedRemote(URI(url))
+} catch (_: Exception) {
+    false
+}
+
+private fun coverAllowedRemote(uri: URI): Boolean {
+    if (uri.userInfo != null) return false
+    if (uri.scheme?.lowercase() != "https") return false
+    val host = uri.host?.lowercase()?.trimEnd('.') ?: return false
+    if (host.isEmpty()) return false
+    if (isLocalOrPrivateHost(host)) return false
+    // `*.dzcdn.net` — the apex is not an image host, and `dzcdn.net.evil.com`
+    // does not end with the suffix.
+    return host.endsWith(DEEZER_CDN_SUFFIX)
+}
+
+/**
+ * Private/loopback/link-local IP literals (and `localhost`) never pass, even
+ * if a future allow-list entry were an address. Names are not resolved here: a
+ * hostname that is not allow-listed is refused without a DNS query, and every
+ * allowed name is Deezer's own.
+ */
+private fun isLocalOrPrivateHost(host: String): Boolean {
+    val bare = host.removePrefix("[").removeSuffix("]")
+    if (bare == "localhost" || bare.endsWith(".localhost")) return true
+    val literal = bare.contains(':') || IPV4_LITERAL.matches(bare)
+    if (!literal) return false
+    val address = try {
+        InetAddress.getByName(bare)
+    } catch (_: Exception) {
+        return true // a would-be literal we cannot parse is refused, not resolved
+    }
+    if (address.isAnyLocalAddress || address.isLoopbackAddress ||
+        address.isLinkLocalAddress || address.isSiteLocalAddress ||
+        address.isMulticastAddress
+    ) {
+        return true
+    }
+    val bytes = address.address
+    if (bytes.size == 4 && isPrivateIpv4(bytes, 0)) return true
+    if (address is Inet6Address) {
+        // fc00::/7, the IPv6 unique-local range (not covered by isSiteLocal).
+        if (bytes.isNotEmpty() && (bytes[0].toInt() and 0xFE) == 0xFC) return true
+        if (isIpv4Mapped(bytes)) return isPrivateIpv4(bytes, 12)
+    }
+    return false
+}
+
+private fun isIpv4Mapped(bytes: ByteArray): Boolean {
+    if (bytes.size != 16) return false
+    for (i in 0 until 10) if (bytes[i].toInt() != 0) return false
+    return (bytes[10].toInt() and 0xFF) == 0xFF && (bytes[11].toInt() and 0xFF) == 0xFF
+}
+
+private fun isPrivateIpv4(bytes: ByteArray, at: Int): Boolean {
+    if (bytes.size < at + 4) return true
+    val a = bytes[at].toInt() and 0xFF
+    val b = bytes[at + 1].toInt() and 0xFF
+    return a == 0 || a == 10 || a == 127 ||
+        (a == 100 && b in 64..127) || // CGNAT
+        (a == 169 && b == 254) ||
+        (a == 172 && b in 16..31) ||
+        (a == 192 && b == 168)
 }
