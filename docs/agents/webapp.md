@@ -170,8 +170,8 @@ the URL names, so every deep link, `#/library/artists` from the home and Back ke
 it (no second route), and Musique remembers the leaf it was left on (`lastMusic` in the nav screen memory). A hash-only
 move between two library URLs updates the leaf instead of being ignored; a leaf switch uses `replace`, so it raises no
 history entry and does not scroll the page. The leaf strip scrolls sideways under a mask fade on a phone and never
-wraps: the old chip row was 148 px over three rows at 390 px, the two-level nav is 110 px and keeps 3 leaves + the
-filter on screen; 640 px fits the leaves and the filter; desktop caps the segmented control at 480 px. On touch the
+wraps: the old chip row was 148 px over three rows at 390 px, the two-level nav is 110 px and keeps four leaves + the
+filter on screen; desktop caps the segmented control at 480 px. On touch the
 segment is 44 px, leaves 45 px and the filter 44 px. The podcast grid mounts once and is kept hidden across a world
 switch: its search survives and coming back costs no request (the first open asks `/api/podcasts` once). Adding is ONE
 "+" menu. A track row is played by its

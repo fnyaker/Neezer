@@ -349,6 +349,18 @@ class RoutesTestCase(_Library):
         self.assertEqual(sum(first.values()), 1, first)
         self.assertEqual(sum(second.values()), 0, second)
 
+    def test_a_dislike_drops_the_cached_mood_catalog(self):
+        # The next Home visit must see the excluded title without waiting for
+        # the 60 s catalog TTL.
+        first = moods.catalog(self.user, DAY)
+        r = self.client.post(
+            "/api/dislike", json={"id": str(self.rows["calme"][0].id), "on": True}
+        )
+        self.assertEqual(r.status_code, 200, r.get_json())
+        second = moods.catalog(self.user, DAY)
+        self.assertIsNot(first, second)
+        self.assertNotIn(self.rows["calme"][0].id, second.mix_ids("calme", 40))
+
     def test_the_warm_routes_never_scan_the_library_again(self):
         # The catalog is built by setUp. A home visit is the login's user read
         # and nothing else; a mood page is that plus the sound-neighbour pairs

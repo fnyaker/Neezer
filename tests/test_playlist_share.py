@@ -256,6 +256,12 @@ class PlaylistShareTestCase(unittest.TestCase):
 
     # -- the public page ---------------------------------------------------------
 
+    def test_a_non_object_body_is_a_400(self):
+        pl = self._playlist(self.alice)
+        r = self.owner.post(f"/api/playlist/{pl.id}/share", json=[])
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json(), {"error": "invalid body"})
+
     def test_the_public_payload_lists_what_the_owner_archived_only(self):
         archived = self._deezer_track("1", "Archived One", archived=True)
         cold = self._deezer_track("2", "Cold One", archived=False)

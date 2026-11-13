@@ -241,7 +241,11 @@ def playlist_share_create(playlist_id):
     if pl is None:
         return jsonify({"error": "not found"}), 404
     ttl = None
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "invalid body"}), 400
     if data.get("ttl") is not None:
         try:
             ttl = int(data["ttl"])

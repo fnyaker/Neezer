@@ -9,7 +9,7 @@
   import { fade, scale } from "svelte/transition";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
-  import { exportSheet, closeExport, toasts } from "../lib/stores.js";
+  import { exportSheet, closeExport, toasts, isAdmin } from "../lib/stores.js";
   import { services, loadServices, linkSpotify, jobSummary } from "../lib/services.js";
   import { online } from "../lib/net.js";
   import Icon from "./Icon.svelte";
@@ -43,7 +43,7 @@
   $: if (target && loadedFor !== target) open(target);
   $: if (!target) started = false;
   $: listable = target && target.kind !== "podcast";
-  $: linkable = target && target.kind === "playlist";
+  $: linkable = target && target.kind === "playlist" && $isAdmin;
 
   function open(t) {
     loadedFor = t;
@@ -57,7 +57,7 @@
     if (t.kind !== "playlist" && mode === "link") mode = "audio";
     loadFormats();
     if (t.kind !== "podcast") loadServices(true);
-    if (t.kind === "playlist") loadLink();
+    if (t.kind === "playlist" && $isAdmin) loadLink();
   }
 
   // -- the public link --

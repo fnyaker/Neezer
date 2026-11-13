@@ -114,8 +114,9 @@ one shared timeline, Web Audio scheduling. What differs, and why:
   `window.__nsParty.host()` / `.guest()` expose those positions for exactly this check.
 
 **A public playlist link is the THIRD capability** (`neezer/webui/playlist_share.py`, table
-`playlist_share` schema `20261113`, `/pl/<token>` in `spa.py`). Same shape as the party/remote links:
-`<id>.<hmac>` under `secret_key`, a short HTML page with the OG title and a meta refresh into the SPA,
+`playlist_share` schema `20261113`, `/pl/<token>` in `spa.py`). Same shape as the remote-control
+link: `<id>.<hmac>` under `secret_key`, a short HTML page with the OG title and a meta refresh into
+the SPA,
 `no-store`/`noindex`/`no-referrer`, a calm dead-link page. It is read-only and ARCHIVED-ONLY: the
 public page lists the playlist and streams only files already on disk, never archives, transcodes or
 asks a provider; another person's private upload is excluded from both the list and the stream. One
