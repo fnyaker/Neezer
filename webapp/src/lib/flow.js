@@ -306,6 +306,47 @@ async function pickNext({ replace = false } = {}) {
   return picking;
 }
 
+// The app's native player goes on by itself while its activity is stopped; a
+// hidden page cannot choose one title at a time. When the activity goes to the
+// background, ask for a BATCH and queue it, so the app has ten titles to follow
+// instead of the Flow's usual one. A frozen page keeps the batch it already
+// named; past it the Flow stops until the page runs again (documented limit).
+export async function prefetchAhead(n = 10) {
+  if (!isFlow() || !session()) return false;
+  // A title already being chosen (the usual background pick) is part of the
+  // batch; wait for it, then ask for the rest rather than starting a second
+  // request beside it.
+  if (picking) {
+    try {
+      await picking;
+    } catch {
+      /* the pick's own catch already queued the reserve */
+    }
+    if (!isFlow() || !session() || picking) return false;
+  }
+  const s0 = get(player);
+  if (s0.index < 0) return false;
+  const have = s0.queue.length - s0.index - 1;
+  if (have >= n) return false;
+  const cur = s0.queue[s0.index];
+  const myGen = gen;
+  picking = (async () => {
+    try {
+      const got = await ask(n - have);
+      if (myGen !== gen || !isFlow()) return false;
+      const s = get(player);
+      if (trackKey(s.queue[s.index]) !== trackKey(cur)) return false;
+      const added = player.extend(got.slice(0, n - have));
+      return added > 0;
+    } catch {
+      return false;
+    } finally {
+      picking = null;
+    }
+  })();
+  return picking;
+}
+
 function askReserve() {
   clearTimeout(reserveTimer);
   reserveTimer = setTimeout(async () => {

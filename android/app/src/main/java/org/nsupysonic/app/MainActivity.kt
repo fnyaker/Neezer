@@ -72,15 +72,17 @@ class MainActivity : AppCompatActivity() {
          * no length, 8 it keeps that list while the page is shown, follows it
          * only while the activity is stopped, cuts a trimmed track there itself
          * and says `bg` in every state, 9 the car mode: carAvailable /
-         * openCarSettings / carPin, and the overlay's launch hook).
+         * openCarSettings / carPin, and the overlay's launch hook), 10 the app
+         * can hold a long list, repeat one/all, ask the page for more when it
+         * runs low (`__nsNeedNext`) and say when the list is exhausted.
          */
-        private const val BRIDGE_VERSION = 9
+        private const val BRIDGE_VERSION = 10
         /** Upper bound on one analyser command (the family table is ~16 kB). */
         private const val MAX_ANALYSIS_CMD = 64 * 1024
         /** Upper bound on one piece of a download moved into the app (base64 chars). */
         private const val MAX_OFF_PIECE = 2 * 1024 * 1024
-        /** Upper bound on one native player command (a few dozen bytes; the list of what follows, a few kB). */
-        private const val MAX_AUDIO_CMD = 32 * 1024
+        /** Upper bound on one native player command (a long list, bridge 10). */
+        private const val MAX_AUDIO_CMD = 128 * 1024
         /** Upper bound on a single Bridge.saveText payload (16 MB of chars). */
         private const val MAX_SAVE_TEXT = 16 * 1024 * 1024
         /** Upper bound on one car-mode JS expression (`__nsCarPlay` + a payload). */
@@ -115,6 +117,8 @@ class MainActivity : AppCompatActivity() {
     // hardened-allocator build turns from "usually gets away with it" into a
     // hard crash. Every entry point below checks this first.
     private var webViewDead = false
+    // Last renderer priority policy asked for (null: a fresh WebView).
+    private var rendererWanted: Boolean? = null
     // The WebView must be rebuilt before there is anything to look at: the
     // renderer died while we were in the background, and rebuilding is deferred
     // to the moment the user actually comes back (see onRenderProcessGone).
@@ -204,6 +208,8 @@ class MainActivity : AppCompatActivity() {
             localFile = { url -> store.fileFor(url)?.first },
             emitFrames = { json -> pushFrames(json) },
             onAdvance = { meta -> nativeAdvanced(meta) },
+            onNeedNext = { id -> requestNativeNext(id) },
+            onStalled = { nativeStalled() },
         )
         if (!prefs.configured) {
             startActivity(Intent(this, SetupActivity::class.java))
@@ -387,18 +393,27 @@ class MainActivity : AppCompatActivity() {
                 // down means the view system keeps measuring/drawing a WebView
                 // whose renderer is gone — a native use-after-free, and one of
                 // the few crashes an app hosting a WebView can actually cause.
-                disposeWebView()
-                // The audio went with the renderer, so the media notification
-                // is now a card whose buttons reach nothing. Take it down.
-                dropPlayback()
+                //
+                // The AUDIO DOES NOT DIE WITH IT when the app's own player is
+                // playing: keep the native players and the media notification,
+                // and let the page rebuild on return. The new document releases
+                // the old slots on its first naCreate. Killing the audio here is
+                // what made a renderer kill look like "the next track never
+                // started" until the app was reopened.
+                disposeWebView(releaseAudio = false)
+                if (nativeAudio == null || !(pendingState?.playing == true)) {
+                    // Nothing of ours is playing: the old card would be dead.
+                    dropPlayback()
+                }
                 // Rebuild only for a user who is there to see it. Reloading the
                 // page with the screen off is what turned a long background
                 // pause into "I have to restart the app": the reload can fail
                 // (off the home network, no connectivity), parking the app on an
                 // error screen, and the fresh renderer it built is every bit as
                 // killable as the one we just lost — so it could die again, and
-                // again, until the user came back to a blank page. Waiting costs
-                // nothing: there is no audio left to keep alive.
+                // again, until the user came back to a blank page. With the
+                // app's player in charge, waiting costs nothing: the music
+                // continues and the list already named covers the gap.
                 pendingRebuild = true
                 if (!isFinishing && !isDestroyed &&
                     lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
@@ -426,7 +441,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun rebuildWebView() {
         if (isFinishing || isDestroyed) return
-        disposeWebView() // no-op when the renderer death already did it
+        // The renderer is dead or wedged, but the app's player may still be
+        // playing: keep it until the new document's first naCreate releases
+        // the old slots (it does that when its PAGE token changes).
+        disposeWebView(releaseAudio = false)
         val root = findViewById<FrameLayout>(R.id.root) ?: return
         val wv = WebView(this)
         wv.layoutParams = FrameLayout.LayoutParams(
@@ -557,6 +575,9 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         nativeAudio?.setForeground(true)
+        // Visible again: the default policy is enough (the renderer is
+        // important while it is shown). onStop raises it if music is playing.
+        setRendererWanted(false)
     }
 
     override fun onStop() {
@@ -565,6 +586,10 @@ class MainActivity : AppCompatActivity() {
         // From here the page may be throttled or stopped: the app's player
         // makes the track changes itself (NativeAudio.followsList).
         nativeAudio?.setForeground(false)
+        // The FGS keeps the app process, not the WebView's renderer. While the
+        // app owns the sound, keep the renderer out of the "waived when not
+        // visible" bucket so Android is far less likely to freeze or kill it.
+        setRendererWanted(pendingState?.playing == true)
     }
 
     override fun onResume() {
@@ -682,12 +707,33 @@ class MainActivity : AppCompatActivity() {
         return if (u.port > 0) "$scheme://$host:${u.port}" else "$scheme://$host"
     }
 
+    /**
+     * Keep the WebView renderer important while the app owns the sound. The
+     * default policy treats it as WAIVED when it is not visible; that is the
+     * state in which Android/Chromium is free to freeze or kill it, which is
+     * exactly what a long screen-off used to do to the page's next list.
+     */
+    private fun setRendererWanted(on: Boolean) {
+        if (webViewDead || !::webView.isInitialized) return
+        if (rendererWanted == on) return
+        rendererWanted = on
+        try {
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, !on)
+        } catch (_: Exception) {
+            /* a WebView provider without the API: the audio is unaffected */
+        }
+    }
+
     /** Detach + destroy the WebView exactly once. */
-    private fun disposeWebView() {
+    private fun disposeWebView(releaseAudio: Boolean = true) {
         if (webViewDead || !::webView.isInitialized) return
         webViewDead = true
-        // The page drove the players; without it nothing advances the queue.
-        nativeAudio?.releaseAll()
+        rendererWanted = null
+        // The page drove the players, but when the renderer merely died the
+        // app's own player must keep playing: the new document releases the
+        // old slots on its first naCreate. Only the activity really going away
+        // (onDestroy) releases them here.
+        if (releaseAudio) nativeAudio?.releaseAll()
         try {
             // Nothing else may touch the WebView here — after a renderer death
             // even stopLoading() goes through the dead process. Detach, destroy.
@@ -994,6 +1040,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * The app's list of what follows is low and the activity is stopped: ask
+     * the page to name more (bridge 10). A frozen page queues the call and
+     * answers when it wakes; the long list named before the stop covers the
+     * gap. Nothing is awaited, and an older SPA simply has no hook.
+     */
+    private fun requestNativeNext(id: Int) {
+        if (webViewDead || !::webView.isInitialized || !onServerPage) return
+        try {
+            webView.evaluateJavascript("window.__nsNeedNext && window.__nsNeedNext($id)", null)
+        } catch (_: Exception) {
+            /* WebView torn down under us */
+        }
+    }
+
+    /**
+     * The app reached the end of its list: the sound is over, so the media
+     * notification must stop claiming it is playing. The service keeps its
+     * last track and position; the page (when it comes back) moves the queue on.
+     */
+    private fun nativeStalled() {
+        val s = pendingState ?: return
+        if (!s.active) return
+        pendingState = s.copy(playing = false)
+        setRendererWanted(false)
+        if (serviceStarted) service?.stalled()
+    }
+
+    /**
      * A native player went on to the next track while the page may be frozen:
      * the notification names it now, from what the page said of it, instead of
      * whenever the page runs again. The page's own publish replaces it then.
@@ -1018,6 +1092,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleState(state: PlayerService.State) {
+        // The renderer only needs to stay important while the app is actually
+        // playing and its activity is stopped; otherwise the default policy.
+        if (!state.playing) setRendererWanted(false)
+        else if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) setRendererWanted(true)
         if (!state.active) {
             // Playback wound down (queue emptied / logged out): let the service
             // clear its media notification instead of leaving a stale one up.

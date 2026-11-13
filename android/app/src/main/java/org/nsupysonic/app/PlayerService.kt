@@ -242,6 +242,18 @@ class PlayerService : Service() {
     fun state(): State? = lastState
 
     /**
+     * The app's native player reached the end of the list it was given (the
+     * WebView is frozen and cannot name more): the sound is over, so the
+     * media session and the notification must stop saying "playing". The
+     * track and position stay for the page that will move the queue on.
+     */
+    fun stalled() {
+        val s = lastState ?: return
+        if (!s.active) return
+        update(s.copy(playing = false))
+    }
+
+    /**
      * Observe every state update, on the main thread. Passing null detaches.
      * The current state is delivered immediately, so a binder never renders a
      * blank player until the page happens to publish again.

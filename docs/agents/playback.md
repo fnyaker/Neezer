@@ -41,6 +41,19 @@ thread for a routed element; a hidden page snaps a direct ramp under 0.3 s, whic
 anyway), and every crossfade deadline (start, give-up, end) is also checked on `timeupdate`
 (`xfadeTick`), which the media pipeline fires whatever the page's timers do.
 
+**Behind a locked screen the app's next-list is a LEASE, not the queue** (`Player.svelte#updateNativeNext`,
+`nativeplayer.js`, `android/…/NativeAudio.kt`). The page names what follows and the app follows it while its activity is stopped;
+bridge 10 names **32 titles visible and up to 200 compact entries when the activity stops**, and asks the page for more
+(`window.__nsNeedNext`) once at most every 30 s when four remain. This matters because the native player made the page silent to
+Chromium: an audible page is the one the Page Lifecycle API does not freeze, so the page may stop running entirely and cannot
+re-name the list — the old ten-title lease then ended in silence until the app was reopened (`test/native/run.mjs` freezes a
+40-title queue through 36 ends). The app also retries an IO failure by itself while stopped (2/5/10 s, three times; a 4xx or a
+decode error still fails fast), keeps the renderer important while it owns the sound, survives the renderer death without releasing
+its player, and marks the session paused when the list really ends instead of leaving a "playing" notification. `repeat=one` is
+restarted by the app; `repeat=all` wraps to the hint length; the Flow pre-chooses a batch of ten when the activity stops (past it,
+a frozen page still stops). Old APKs keep the ten-entry behaviour; old SPAs have no refill hook and are never sent a list they
+would drop whole (32 KiB `MAX_AUDIO_CMD`).
+
 **WHERE THE SOUND GOES: DIRECT OR PROCESSED** (`lib/audio/output.js`, `lib/audio/timekeeper.js`,
 `graph.js`, `Player.svelte#renewElements`, `android/…/AudioRoute.kt`). Played through a Bluetooth car
 radio (a Kenwood on AAC), the music "sounded sped up, as if pieces were being cut out", and switching

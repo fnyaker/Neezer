@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -90,6 +91,12 @@ class NativeAudio(
     // A player went on to the next track by itself: what the page said of it
     // (title, artist, album, cover, duration), for the notification.
     private val onAdvance: (JSONObject?) -> Unit = {},
+    // The list is low and the activity is stopped: the page may be running
+    // enough to name more (bridge 10). It re-sends op `next` if it does.
+    private val onNeedNext: (Int) -> Unit = {},
+    // The list is empty and the player reached the end: the service must say
+    // "paused" instead of leaving a playing notification over silence.
+    private val onStalled: () -> Unit = {},
 ) {
     /** The rhythm analyser on what the players play; null without the native core. */
     val analysis: NativeAnalysis? = if (emitFrames != null && NsCore.available) NativeAnalysis(emitFrames) else null
@@ -333,6 +340,16 @@ class NativeAudio(
         private var curKey = ""
         // Where the current track's audio ends (the page's silence trim), 0 for its file's end.
         private var curEndMs = 0L
+        // "off" | "one" | "all", as the page named it (bridge 10).
+        private var repeatMode = "off"
+        // Last time this player asked the page for more (elapsedRealtime).
+        private var lastNeedAt = 0L
+        // The end of the list has already been reported as paused.
+        private var stalledSent = false
+        // A network failure retried in the background (the page is frozen and
+        // its own recovery ladder cannot run).
+        private var retryCount = 0
+        private val retryEvent = Runnable { doRetry() }
         private val window = Timeline.Window()
         private val chaseTimeout = Runnable { endChase() }
         private val trimCheck = Runnable { checkTrim() }
@@ -352,6 +369,9 @@ class NativeAudio(
 
         fun command(o: JSONObject) {
             if (released) return
+            // Any command from the page means it is alive and owns the next
+            // action: a native retry queued for a frozen page must not fight it.
+            cancelRetry()
             lastCmd = maxOf(lastCmd, o.optLong("c", lastCmd))
             when (o.optString("op")) {
                 "src" -> {
@@ -362,6 +382,9 @@ class NativeAudio(
                     curAtMs = 0L
                     curKey = ""
                     curEndMs = 0
+                    repeatMode = "off"
+                    stalledSent = false
+                    retryCount = 0
                     main.removeCallbacks(trimCheck)
                     complete = false
                     this.url = url
@@ -388,6 +411,9 @@ class NativeAudio(
                     next = emptyList()
                     curKey = ""
                     curEndMs = 0
+                    repeatMode = "off"
+                    stalledSent = false
+                    retryCount = 0
                     main.removeCallbacks(trimCheck)
                     complete = false
                     url = ""
@@ -406,6 +432,8 @@ class NativeAudio(
                     }
                     requestFocus()
                     pausedByFocus.remove(id)
+                    retryCount = 0
+                    stalledSent = false
                     // The analyser follows the player told to play last: the
                     // incoming track of a crossfade, the one the page names.
                     analysis?.analysed = id
@@ -443,17 +471,101 @@ class NativeAudio(
                 "next" -> {
                     next = parseNext(o)
                     curEndMs = msOf(o.optDouble("end", 0.0))
+                    repeatMode = o.optString("rep", "off").let {
+                        if (it == "one" || it == "all") it else "off"
+                    }
+                    stalledSent = false
                     checkTrim()
+                    // A refill that arrives after the list already ended is the
+                    // app's next track: start it now instead of waiting for the
+                    // page to come back and reload a source.
+                    if (!foreground && player.playbackState == Player.STATE_ENDED && next.isNotEmpty()) {
+                        advance(next.first())
+                        return
+                    }
+                    maybeNeedNext()
                 }
                 "rate" -> {
                     player.setPlaybackSpeed(rate(o.optDouble("r", 1.0)))
                     send(null)
                 }
                 "release" -> {
+                    cancelRetry()
                     release()
                     slots.remove(id)
                 }
             }
+        }
+
+        /** The page answered (or a command arrived): no native retry is pending. */
+        private fun cancelRetry() {
+            main.removeCallbacks(retryEvent)
+            retryCount = 0
+        }
+
+        /** One attempt at reopening the same source (the page is frozen). */
+        private fun doRetry() {
+            if (released || foreground || !hasItem) return
+            prepared = false
+            prepare()
+            if (player.playWhenReady) player.play()
+            send(null)
+        }
+
+        private fun scheduleRetry() {
+            if (retryCount >= RETRY_MAX) return
+            val delay = RETRY_DELAYS_MS[minOf(retryCount, RETRY_DELAYS_MS.size - 1)]
+            retryCount++
+            main.postDelayed(retryEvent, delay)
+        }
+
+        /** Whether a Media3 playback error is worth reopening the same source. */
+        private fun isRetryable(e: PlaybackException): Boolean {
+            val code = e.errorCode
+            // 2000..2999 is Media3's IO family. File-not-found, cleartext
+            // refused and a 4xx are verdicts, not a bad moment: fail fast.
+            if (code !in 2000..2999) return false
+            if (code == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND) return false
+            if (code == PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED) return false
+            if (code == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
+                val status = (e.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)
+                    ?.responseCode ?: return false
+                // A 4xx (or an answer we cannot read) is a verdict; a 5xx is a
+                // bad moment and may succeed on the next connection.
+                return status >= 500
+            }
+            return true
+        }
+
+        /** The app's list is low: ask the page, at most once every REFILL_MS. */
+        private fun maybeNeedNext() {
+            if (foreground || released || repeatMode == "one" || next.size > REFILL_LOW) return
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastNeedAt < REFILL_MS) return
+            lastNeedAt = now
+            onNeedNext(id)
+        }
+
+        /** Repeat one, run by the app while the page cannot do it. */
+        private fun restartCurrent() {
+            if (!hasItem) return
+            cancelRetry()
+            stalledSent = false
+            retryCount = 0
+            main.removeCallbacks(trimCheck)
+            cancelChase()
+            pendingSeek = true
+            proc.startAt = curAtMs / 1000.0
+            player.seekTo(curAtMs)
+            player.playWhenReady = true
+            send(null)
+        }
+
+        /** The list is empty and the track ended: the service must stop saying "playing". */
+        private fun reportStalled() {
+            if (stalledSent) return
+            stalledSent = true
+            onStalled()
         }
 
         private fun prepare() {
@@ -488,7 +600,13 @@ class NativeAudio(
         /** The activity's state changed: the page learns it, a trim may now be ours. */
         fun onForeground() {
             if (released) return
-            if (foreground) main.removeCallbacks(trimCheck) else checkTrim()
+            if (foreground) {
+                main.removeCallbacks(trimCheck)
+                cancelRetry()
+            } else {
+                checkTrim()
+                maybeNeedNext()
+            }
             send(null)
         }
 
@@ -497,7 +615,8 @@ class NativeAudio(
          * it is the one playing, and the page named what follows.
          */
         private fun followsList(): Boolean =
-            !foreground && !released && id == lastPlayed && player.playWhenReady && chaseMs < 0 && next.isNotEmpty()
+            !foreground && !released && id == lastPlayed && player.playWhenReady && chaseMs < 0 &&
+                (next.isNotEmpty() || repeatMode == "one")
 
         /** In the background, a trimmed track ends where its audio does, on this player's own clock. */
         private fun checkTrim() {
@@ -505,7 +624,7 @@ class NativeAudio(
             if (curEndMs <= 0 || !followsList() || player.playbackState != Player.STATE_READY) return
             val rem = curEndMs - player.currentPosition
             if (rem <= TRIM_EARLY_MS) {
-                advance(next.first())
+                if (next.isNotEmpty()) advance(next.first()) else restartCurrent()
                 return
             }
             // The tick is 250 ms: the last stretch is timed, so the cut lands on the trim.
@@ -578,6 +697,9 @@ class NativeAudio(
 
         /** The page names the track that follows; this player goes on to it by itself. */
         private fun advance(n: Next) {
+            cancelRetry()
+            stalledSent = false
+            retryCount = 0
             next = next.drop(1)
             trail.add(n)
             if (trail.size > 20) trail.removeAt(0)
@@ -598,13 +720,21 @@ class NativeAudio(
             curKey = n.key.ifEmpty { "-" }
             send("adv")
             onAdvance(n.meta)
+            maybeNeedNext()
         }
 
         /** A media button's next (true) or previous (false), made here; false when it is not ours. */
         fun skip(forward: Boolean): Boolean {
             if (released || id != lastPlayed || chaseMs >= 0) return false
+            cancelRetry()
             if (forward) {
-                if (next.isEmpty()) return false
+                if (next.isEmpty()) {
+                    if (repeatMode == "one") {
+                        restartCurrent()
+                        return true
+                    }
+                    return false
+                }
                 advance(next.first())
                 return true
             }
@@ -653,6 +783,7 @@ class NativeAudio(
             main.removeCallbacks(tick)
             main.removeCallbacks(chaseTimeout)
             main.removeCallbacks(trimCheck)
+            main.removeCallbacks(retryEvent)
             pausedByFocus.remove(id)
             live.decrementAndGet()
             try {
@@ -713,11 +844,20 @@ class NativeAudio(
                 send(null)
                 return
             }
-            if (state == Player.STATE_ENDED && followsList()) {
-                advance(next.first())
+            if (state == Player.STATE_ENDED) {
+                if (followsList()) {
+                    if (next.isNotEmpty()) advance(next.first()) else restartCurrent()
+                    return
+                }
+                if (!foreground && id == lastPlayed && player.playWhenReady && hasItem) reportStalled()
+                send(null)
                 return
             }
-            if (state == Player.STATE_READY) checkTrim()
+            if (state == Player.STATE_READY) {
+                retryCount = 0
+                stalledSent = false
+                checkTrim()
+            }
             if (state == Player.STATE_READY && pendingSeek) {
                 pendingSeek = false
                 send("seeked")
@@ -735,6 +875,14 @@ class NativeAudio(
             cancelChase()
             pendingSeek = false
             prepared = false // a play() after an error prepares again
+            // The page is frozen behind a locked screen: its own recovery ladder
+            // cannot run. Re-open the SAME source a few times before calling the
+            // failure fatal; a 4xx, a decode error or a refused source is a
+            // verdict and keeps today's fail-fast path.
+            if (!foreground && isRetryable(e) && retryCount < RETRY_MAX) {
+                scheduleRetry()
+                return
+            }
             // HTMLMediaElement's codes: 2 network, 3 decode, 4 source not supported.
             val code = when (e.errorCode) {
                 in 3000..3999 -> 4
@@ -742,6 +890,9 @@ class NativeAudio(
                 else -> 2
             }
             error(code, e.errorCodeName)
+            // A failed next title after the retry budget is silence too: stop
+            // the notification claiming otherwise until the page recovers it.
+            if (!foreground && id == lastPlayed && hasItem) reportStalled()
         }
     }
 
@@ -767,8 +918,16 @@ class NativeAudio(
         // A held seek gives up after this, or after this many reopenings.
         private const val CHASE_MAX_MS = 60_000L
         private const val CHASE_TRIES = 4
-        // How many tracks ahead the page may name.
-        private const val MAX_NEXT = 12
+        // How many tracks ahead the page may name (bridge 10: long enough for
+        // hours behind a frozen page; the page sends 200 compact entries).
+        private const val MAX_NEXT = 256
+        // Ask the page for more when this few remain, at most this often.
+        private const val REFILL_LOW = 4
+        private const val REFILL_MS = 30_000L
+        // A network failure is retried this many times, at these delays, while
+        // the activity is stopped and the page cannot recover the track itself.
+        private const val RETRY_MAX = 3
+        private val RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L)
         // "Previous" restarts the track past this, goes back before it.
         private const val PREV_RESTART_MS = 3_000L
     }

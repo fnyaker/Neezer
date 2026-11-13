@@ -135,6 +135,51 @@ nothing changed. `node test/native/run.mjs` drives it on a hidden page whose tim
 events run, crossfade and trim on (`--old` runs that scenario as bridge 7: the page crossfaded by itself, the app never
 advanced).
 
+**Bridge 10: the list outlives the page** (`Player.svelte#updateNativeNext`, `nativeplayer.js`,
+`NativeAudio.kt`). The bridge-8 lease was ten titles: if the renderer was actually frozen (not just
+throttled) for longer, the app consumed it and stopped at the next end with no page to ask. Now the
+page names **32 titles while visible and up to 200 compact entries when the activity stops**
+(`MainActivity.onStop` calls `window.__nsAppBackground`, `visibilitychange` does too); each is
+`{url, at, e, v, k, meta}` with full metadata for the first 8 and shortened titles for the rest.
+`MAX_NEXT` is 256 and `MAX_AUDIO_CMD` 128 KiB (a 39-entry bench command measured 8 132 bytes; 200
+entries stay under the cap). When the app is stopped and **at most 4 remain**, `NativeAudio` asks
+the page once every 30 s through `window.__nsNeedNext(id)`; the page re-names the list (`setNext`
+with `force`, because the signature may not have changed). A frozen page simply queues the request;
+the long list already covers hours.
+
+The app also **retries a network failure itself** while the activity is stopped: a Media3
+`ERROR_CODE_IO_*` (except `FILE_NOT_FOUND`, cleartext refused and 4xx; a 5xx is retried) is
+re-opened after 2 s, 5 s and 10 s, cancelled by the first page command, and only then becomes the
+page's `error`. A decode error or a refused source keeps the fail-fast path. At the end of a list
+with nothing after it (or a repeat-one end) `STATE_ENDED` calls `PlayerService.stalled()`: the
+session and notification go **paused**, for the same reason the page's own `ended` would have
+paused them, instead of leaving a "playing" card over silence.
+
+The page also no longer loses the app's list during a load: `updateNativeNext` keeps the previous
+list while a load/switch/chase is in flight and while an advance waits to be adopted. A burst of
+`k` changes (the page was frozen) is coalesced into **one `nsadvance`** (25 ms, the last key) and
+`onNativeAdvance` jumps straight to that key, ignoring the intermediates; a stale duplicate is
+ignored (`lastAdvanceKey`). `repeat=one` is executed by the app (`seekTo(curAt)`, play) and
+`repeat=all` names a list that wraps to `HINT_AHEAD` instead of stopping at the queue turn. When
+the activity goes to the background the Flow asks for a **batch of 10** titles
+(`flow.js#prefetchAhead`) because its own queue holds at most the next one; a frozen page past
+that batch still stops (the Flow cannot invent a title; documented limit).
+
+The renderer is kept out of the "waived when not visible" bucket while the app is playing and the
+activity is stopped (`setRendererPriorityPolicy(IMPORTANT, false)`). A renderer death no longer
+releases the native player: `disposeWebView(releaseAudio = false)` keeps the audio and the
+notification, the page is rebuilt on return, and its first `naCreate` (new PAGE token) releases the
+old slots. `releaseAll()` is only for `onDestroy`/finishing.
+
+**Compatibility (bridge 10).** A new SPA facing an older APK (`bridgeVersion() < 10`) sends the ten
+entries it always did and never relies on the refill hook: sending 200 entries to the 32 KiB
+`MAX_AUDIO_CMD` of an older APK would make it drop the whole command. A new APK facing an older
+SPA has no `__nsNeedNext` and does not wait for an answer; the old ten entries remain. The audio
+and notification behaviour is unchanged for both old pairs; the long-background fix needs both
+halves. `test/native/run.mjs` freezes a 40-title queue and advances 36 times with no page, then
+checks the page catches up on the last one and the refill was asked exactly once; the unit test
+sends 200 entries, asserts the bridge-9 cap of ten, repeat flags and the 128 KiB ceiling.
+
 **Next / previous from a media button, with the page asleep** (`PlayerService` -> `PlayerService.nativeSkip` -> `NativeAudio.skip`).
 The notification, a headset or the lock screen used to send `next` / `prev` to the PAGE (`commandSink` -> `evaluateJavascript`): with the
 activity stopped that page is throttled (timers once a minute after five minutes) or frozen, with the activity gone `commandSink` is null
@@ -143,7 +188,8 @@ the playlist answers the command, whoever asks. So while the activity is stopped
 named (bridge 7/8): next = `advance(next.first())`, previous = restart the track past 3 s, else back to the one this player went through
 (`trail`, up to 20, the track left returns to the front of the list); each tells the page (`adv`, `onAdvance`) so it adopts the change when
 it wakes. Not ours to do (the page is shown, no list, nothing before) -> the command goes to the page as before. The list is only what the
-page named (<= 12): past it the app cannot know the next track, and a skip goes to the page. Sources: developer.chrome.com "Timer throttling
+page named (bridge 10: 32 visible / 200 in the background; an older APK still ten): past it the app cannot know the next track, and a
+skip goes to the page (or restarts the current title when `repeat=one`). Sources: developer.chrome.com "Timer throttling
 in Chrome 88" and the Page Lifecycle API (frozen pages run no timers), Media3 `MediaSession` / `MediaController` docs (commands go to the
 session's player). Unit-untestable (ExoPlayer): the build is CI's `android` workflow, the logic is read against `advance`.
 
