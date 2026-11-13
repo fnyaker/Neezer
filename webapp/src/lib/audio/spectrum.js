@@ -41,6 +41,12 @@ function binAt(hz, n, nyquist) {
 
 // Build the read plan for `bands` log-spaced bars. Pure data: no analyser is
 // touched here, so a plan can be built once and reused every frame.
+//
+// `edges`, when given, replaces the log spacing with explicit band boundaries
+// (bands + 1 values, low→high; the band count is then edges.length - 1). The
+// equalizer's meter uses it to read one octave per EQ slider, centred on that
+// slider's frequency (lib/audio/saturation.js) — a log plan over 22 Hz..18 kHz
+// would put the 31 Hz bar across two sliders and leave the top one half empty.
 export function buildBandPlan({
   bands,
   sampleRate,
@@ -48,17 +54,19 @@ export function buildBandPlan({
   fftHi,
   fMin = 22,
   fMax = 18000,
+  edges = null,
 }) {
   const nyquist = sampleRate / 2;
   const nLo = fftLo / 2;
   const nHi = fftHi / 2;
   const top = Math.min(fMax, nyquist * 0.92);
   const lowest = Math.max(10, Math.min(fMin, top / 4));
-  const plan = new Array(bands);
-  const centers = new Float32Array(bands);
-  for (let i = 0; i < bands; i++) {
-    const f0 = lowest * Math.pow(top / lowest, i / bands);
-    const f1 = lowest * Math.pow(top / lowest, (i + 1) / bands);
+  const count = edges ? Math.max(0, edges.length - 1) : bands;
+  const plan = new Array(count);
+  const centers = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const f0 = edges ? edges[i] : lowest * Math.pow(top / lowest, i / count);
+    const f1 = edges ? edges[i + 1] : lowest * Math.pow(top / lowest, (i + 1) / count);
     const fc = Math.sqrt(f0 * f1); // geometric centre — log spacing's midpoint
     centers[i] = fc;
     const mix =
@@ -73,7 +81,7 @@ export function buildBandPlan({
       hi: mix > 0 ? binSpec(f0, f1, nHi, nyquist) : null,
     };
   }
-  return { plan, centers, bands, sampleRate, fftLo, fftHi };
+  return { plan, centers, bands: count, sampleRate, fftLo, fftHi };
 }
 
 function binSpec(f0, f1, n, nyquist) {
