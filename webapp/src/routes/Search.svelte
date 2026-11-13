@@ -7,8 +7,9 @@
   // the library answers first and the main provider joins it, and a pasted
   // playlist link becomes an import offer (lib/linkimport.js).
   import { onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { api } from "../lib/api.js";
-  import { isAdmin } from "../lib/stores.js";
+  import { isAdmin, player, toasts } from "../lib/stores.js";
   import { rememberScreen, recallScreen } from "../lib/nav.js";
   import Card from "../components/Card.svelte";
   import PodcastCard from "../components/PodcastCard.svelte";
@@ -21,6 +22,11 @@
   import { playlistLink, importRoute } from "../lib/linkimport.js";
   import { entityRef } from "../lib/entity.js";
   import { topResult, mixPodcasts, rankSearchResults } from "../lib/searchrank.js";
+  import {
+    countSearchResults,
+    createRadioLauncher,
+    offerRadio,
+  } from "../lib/queryradio.js";
   import TopResult from "../components/TopResult.svelte";
 
   export let params = {};
@@ -316,6 +322,54 @@
     results.playlists?.length ||
     (results.podcasts?.length && $isAdmin);
 
+  // -- the radio the search can start ----------------------------------------
+  // A broad search is a mood, not a lookup: from RADIO_MIN_RESULTS distinct
+  // answers the results can become a queue. The count is the whole screen's
+  // (lib/queryradio.js), the fallback counted only once it has answered, and
+  // the button waits for the results of the term in the box — never a stale
+  // count under a new query. A pasted playlist link is an import, not a radio.
+  $: radioTotal = countSearchResults(
+    ytTerm,
+    results,
+    yt && ytAnswerHere ? ytTracks : [],
+    { withPodcasts: $isAdmin },
+  );
+  $: showRadio =
+    !!ytTerm &&
+    !shared &&
+    scope === "library" &&
+    !loading &&
+    searchedFor === ytTerm &&
+    offerRadio(radioTotal);
+  const radio = createRadioLauncher({
+    play: (tracks, start, context) => player.playQueue(tracks, start, context),
+    extend: (tracks) => player.extend(tracks),
+    radioNext: (seed, opts) => api.radioNext(seed, opts),
+    toast: (message, kind) => toasts.push(message, kind),
+    state: () => {
+      const s = get(player);
+      return { context: s.context, queue: s.queue, autoplay: s.autoplay };
+    },
+    // Player.svelte tops a queue of three titles or fewer up at once; leaving
+    // those to it is what keeps one press to ONE /api/radio/next.
+    deferShortQueueToPlayer: true,
+  });
+  let radioBusyFor = "";
+  $: radioBusy = radioBusyFor === ytTerm;
+  async function launchRadio() {
+    const term = ytTerm;
+    // Synchronous, before the first await: a second press in the same burst
+    // cannot start a second queue. Keyed by the term so refining the search
+    // while a top-up is still in flight is a new launch, not a dead button.
+    if (radioBusyFor === term) return;
+    radioBusyFor = term;
+    try {
+      await radio.launch(term, results, yt && ytAnswerHere ? ytTracks : []);
+    } finally {
+      if (radioBusyFor === term) radioBusyFor = "";
+    }
+  }
+
   // "Tout" leads with what a search is usually for: the artist the query
   // plainly names (only then — lib/searchrank.js), the titles, then the
   // artists, then the albums with the shows mixed in under a small "Podcast"
@@ -388,6 +442,23 @@
     on:keydown={onKey}
     autofocus={autofocusBox}
   />
+  {#if showRadio}
+    <button
+      class="btn btn-primary radio-launch"
+      on:click={launchRadio}
+      disabled={radioBusy}
+      aria-busy={radioBusy}
+      title="Écouter des titres qui ressemblent à cette recherche"
+    >
+      {#if radioBusy}
+        <span class="radio-spin" aria-hidden="true"></span>
+        Lancement…
+      {:else}
+        <Icon name="radio" size={17} />
+        Lancer la radio
+      {/if}
+    </button>
+  {/if}
 </div>
 
 {#if shared}
@@ -577,6 +648,46 @@
   /* Hide the browser's own clear cross: the box is the same pill everywhere. */
   .bar input::-webkit-search-cancel-button {
     -webkit-appearance: none;
+  }
+  /* The radio is a primary action riding the search field: same 44 px height,
+     the pressed control itself says it is working (no separate spinner line,
+     nothing jumps under it). */
+  .radio-launch {
+    height: 44px;
+    min-width: 170px;
+    padding: 0 20px;
+  }
+  /* A launch in progress is not a dead control: the label and the spinner stay
+     at full contrast (the shared .btn:disabled fade made the pressed primary
+     action unreadable). Clicks are still refused by the disabled attribute. */
+  .radio-launch:disabled {
+    opacity: 1;
+    cursor: progress;
+  }
+  .radio-launch:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .radio-spin {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    opacity: 0.9;
+    animation: radio-spin 0.8s linear infinite;
+  }
+  @keyframes radio-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .radio-spin {
+      animation: none;
+      border-right-color: currentColor;
+      opacity: 0.65;
+    }
   }
   .lead {
     margin: 4px 0 0;
@@ -780,6 +891,12 @@
     .bar input {
       flex: 1 1 100%;
       max-width: none;
+    }
+    /* And the radio takes the line under it: a full-width 44 px target rather
+       than a pill squeezed beside a field that already fills the screen. */
+    .radio-launch {
+      flex: 1 1 100%;
+      width: 100%;
     }
   }
 </style>
