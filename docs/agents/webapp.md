@@ -213,6 +213,29 @@ player (a `hashchange` listener). Its requests are keyed on the track's id as a 
 object, handed over again on every progress tick, and a reactive statement reading it asked for the credits four
 times a second (the browser test counts requests).
 
+**The desktop player adds reading columns before the queue gives way** (`DesktopNowPlaying.svelte`,
+`Lyrics.svelte`). The queue card is the one thing that never disappears: at **1200 px** (Material's *large*)
+the lyrics become a persistent left column — synchronised, scrolled to the active line even when the column
+mounts mid-track (`onMount` + `tick`; the old tab opened at the top and stayed there) — and at **1600 px**
+(*extra-large*) `À propos` gets a fourth card to the right of the queue. Space coming back is taken in that
+order: the facts return to the queue card's tab first, then the lyrics. Measured with the animation strip on:
+1920×1080 four columns 340 · 520 · 360 · 360 px; 1600×900 288 · 512 · 360 · 304; 1280×900 three
+columns 269 · 520 · 360; 1200×900 252 · 476 · 360 (the player's floor); 1199×900 two columns 520 + 360
+with all three tabs back. The strip itself keeps 44 px desktop / 40
+px mobile and is centred by auto margins in the empty band under the transport, never against the controls or
+the footer: 1920 y 885–929 with footer at 1022; 1100×900 y 749–793 with footer at 842; 390×844 mobile 670–710
+with the thumb row at 750 (a 34 px stripe at 360×640 became 40 px again with `flex:none`, the sleeve absorbing
+the 6 px). The queue card's tab row is a single dead pill once four columns are up, so it is replaced by the
+same label header the other columns use.
+
+**The phone's lyrics are a view, not a hidden gesture** (`MobileNowPlaying.svelte`): the labelled « Paroles »
+door in the thumb row opens a full-height sheet whose own header names the track and the artist, with a 44 px
+close. One scroller only — the sheet is `overflow:hidden`, `Lyrics.svelte` keeps `overflow-y:auto` and follows
+the active line; opening it scrolls straight to that line even mid-track (the same `onMount` + `tick` as the
+desktop column). It closes the queue sheet when it opens and the queue closes it back; `À propos` closes both.
+Measured 390×844: 30 lines, close 44×44, the list scrolls 169 → 281 as the active line goes 15 → 30; at
+360×640 the five thumb targets span 338 px of 360, no overflow, and the sheet still fills the screen.
+
 **Full credits** (`neezer/trackcredits.py`, `neezer/webui/credits.py`, `GET /api/track/<id>/credits`): the
 performers are `TrackArtist` rows; everybody else on the sleeve (author, composer, producer, publisher…) is a
 `track_credit` row (schema `20261030`): one per person, role and SOURCE — `deezer` (the gateway's
