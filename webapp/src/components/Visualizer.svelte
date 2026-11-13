@@ -114,6 +114,12 @@
     sizeCanvas();
   };
   let scene = null;
+  // Papier's player scrim is cream, not near-black: the transparent strip has
+  // to draw INK there rather than light, or a lemon row disappears into the
+  // paper. Read from the theme attribute, which is what the whole app paints
+  // from; a change of theme is pushed into the live scene, not a rebuild.
+  let light = false;
+  let themeObserver = null;
   let pal = createPalette(palette);
   let tier = resolveTier(quality);
   let preset = withPostGain(tierPreset(tier), tier);
@@ -168,6 +174,7 @@
       world,
       flash,
       fps,
+      light,
     };
   }
 
@@ -214,6 +221,10 @@
     sizeCanvas();
     next.setOptions?.(sceneOptions());
     if (next.kind === "gl" && lastCoverUrl) next.setCover?.(lastCoverUrl);
+  }
+
+  function readLight() {
+    light = document.documentElement.dataset.theme === "papier";
   }
 
   // The artwork's box, in canvas coordinates. Measured rather than assumed, and
@@ -380,6 +391,13 @@
   }
 
   onMount(() => {
+    readLight();
+    themeObserver = new MutationObserver(() => {
+      const was = light;
+      readLight();
+      if (was !== light) scene?.setOptions?.(sceneOptions());
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduced = mq.matches;
     const onMq = () => {
@@ -415,6 +433,8 @@
   });
 
   onDestroy(() => {
+    themeObserver?.disconnect();
+    themeObserver = null;
     detach();
     clearTimeout(idleTimer);
     stopLoop();
@@ -478,6 +498,7 @@
       world,
       flash,
       fps,
+      light,
     };
   }
   $: applyOptions(intensity, reduced, scopeOrientation, scopeColour, world, flash, fps);

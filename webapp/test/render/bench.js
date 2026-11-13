@@ -215,8 +215,9 @@ function fakeCover() {
 // The players' backdrop: the cover blown up and blurred, under the scrim
 // (MobileNowPlaying.svelte's .bg + .scrim), seen through a strip-sized window.
 let backdropCache = null;
-function paintBackdrop(g, w, h) {
-  if (!backdropCache || backdropCache.width !== w || backdropCache.height !== h) {
+let backdropLight = false;
+function paintBackdrop(g, w, h, light = false) {
+  if (!backdropCache || backdropCache.width !== w || backdropCache.height !== h || backdropLight !== light) {
     const c = document.createElement("canvas");
     c.width = w;
     c.height = h;
@@ -225,9 +226,12 @@ function paintBackdrop(g, w, h) {
     const side = w * 1.6;
     cg.drawImage(fakeCover(), (w - side) / 2, h / 2 - side * 0.62, side, side);
     cg.filter = "none";
-    cg.fillStyle = "rgba(8,8,12,0.55)";
+    // Papier's scrim is the page's own cream at 68-92%, so the strip sits on a
+    // PALE field — the one backdrop a light-emitting row can disappear into.
+    cg.fillStyle = light ? "rgba(243,240,232,0.9)" : "rgba(8,8,12,0.55)";
     cg.fillRect(0, 0, w, h);
     backdropCache = c;
+    backdropLight = light;
   }
   g.drawImage(backdropCache, 0, 0);
 }
@@ -270,6 +274,8 @@ async function run(opts) {
     // Composite each shot over the player's backdrop (the blurred cover under
     // its scrim): a transparent layout can only be judged on what it sits on.
     backdrop = false,
+    // The Papier theme's scrim is cream, not near-black.
+    light = false,
     // Device pixels per CSS pixel: the strip is judged at a phone's density.
     dpr = 1,
   } = opts;
@@ -302,6 +308,7 @@ async function run(opts) {
     fps: 60,
     flash: "full",
     layout,
+    light,
   });
   scene.attach(renderer);
   if (cover) renderer.setCover(fakeCover());
@@ -368,7 +375,7 @@ async function run(opts) {
     shot.width = canvas.width;
     shot.height = canvas.height;
     const sgx = shot.getContext("2d");
-    if (backdrop) paintBackdrop(sgx, shot.width, shot.height);
+    if (backdrop) paintBackdrop(sgx, shot.width, shot.height, light);
     sgx.drawImage(canvas, 0, 0);
     // The motion measurement: the same scene a frame later — or, over a
     // window, the mean change from each frame to the next.
