@@ -64,7 +64,8 @@ empty.
   (94 frames, 60 pictures). `exp`/`pow` are kept out of line (`util::exp64` / `pow64`) so LTO does
   not paste a libm routine into every call site.
 - **The JavaScript each port replaced is kept as its ORACLE** (`test/reference/`: `scope.js`,
-  `bars.js`, `musical.js`, `gl.js`, unchanged but for their imports) and `test/vizcore.test.mjs`
+  `bars.js`, `musical.js`, `gl.js`; the bars oracle's drawing follows the app's current picture,
+  its levelling is unchanged) and `test/vizcore.test.mjs`
   runs both side by side on the analyser's own reading of real records: the reading field by field
   (25 302 frames, identical to the bit), the scene's block, spectrum texture and history row picture
   by picture (9 517 pictures over three worlds, two layouts and 60/144 Hz: 0 of 1 065 904 floats
@@ -336,7 +337,41 @@ replaced them, for any world:
   of the drop renormalised to the same height.
 - **The strip renders at full resolution** (`scenes/gl.js#gq`): it is 40 px tall, cheaper than any
   full-screen world at its floor, and its capsules are a few pixels wide — a governed scale smeared
-  every edge into the next. The canvas twin (`scenes/bars.js`) draws the same capsules.
+  every edge into the next. The canvas twin (`scenes/bars.js`) draws the same capsules with flat
+  fills (no gradient object and no `shadowBlur` per bar in the fallback's loop).
+
+**THE BAR ROW IS SILLON'S (the 2026-11 visual pass).** The picture is no longer a row of evenly
+spaced thin sticks. It is one groove: thick fully-rounded capsules mirrored about the axis, at a
+CONSTANT pitch of **16 CSS px in the strip** and **20.5 px full screen** (24 beads at a 390 px strip,
+33 at 520, 70 at a 1440 px frame, capped by the tier — the low tier draws 40 beads rather than
+thinner ones). The bass end is wider than the treble, a loud band swells, and the low register is
+the subject: the sub's cone (`uPump.x`) and the kick fatten the first bands and add a broad light
+behind the left end. At rest the row BREATHES — one cycle per bar, in beats (`uClock.x`), a slow
+wave travelling along the bands; `prefers-reduced-motion` holds it still. The colour is the palette's
+own low→high walk across the row, a pale hot core on the axis and the band's colour through a warm
+gel at the tips (no second palette); the cover source's fallback is the Sillon lemon's own hue (73.8°, full
+saturation), so a track with no artwork draws the accent rather than an arbitrary violet. The tint is pinned by
+`viz.test.mjs` (the strip 24 / 33, full 31 / 70, low 40) and `npm test` passes 451.
+
+**Papier's strip is ink, not light.** The player's scrim is the theme's `--bg`, so on Papier the strip
+sits on cream, not near-black; a lemon bar there is 1.02:1 and disappears. `Visualizer.svelte` reads
+`data-theme` and passes a `light` flag; `gl.js` puts it in `uCtl.w` (the one unused component of the
+control slot, so the block layout is unchanged) and the strip draws the band's hue at an ink value
+with a pale axis core. Measured on the real player over the cream scrim: the ink body is **3.5:1**
+and the treble **4.8:1**, against **10.7:1** for the light row on Encre; the full scene stays the
+dark room on every theme. The `light` strip also turns the bloom off and raises the threshold
+(`look.bloom = 0`, `threshold × 2.2`), because a bloom of ink is a smudge and the sheet itself must
+not enter the bright pass.
+
+**The strip no longer draws an afterglow, and that is also a saving.** The peak ghost was a dark
+patch around short bars over a light backdrop and read as a 2005 sticker; the full row keeps its
+afterglow, the strip is one clean object. Moving the history loop below the strip branch removed
+**8 texture taps per pixel** from the 40 px strip (183k fewer taps a frame at 520×44, 1.65M at dpr 3).
+Measured on the real full-screen player in headless Chromium (SwiftShader): **60 fps at 1440×900 and
+at 390×844**, median frame **16.7 ms**, p95 **16.8 ms**, with the strip canvas at 520×44 and 346×40.
+The bench photographs the strip on Papier's cream scrim with `--strip --light`; the default
+`--strip` keeps Encre's dark one. `--light` only changes the STRIP: the full scene is a dark room
+on every theme.
 - **Light things; don't outline them.** `stairs` was neon wireframe slabs round a black void,
   every edge flashed on the kick — a 2000s screensaver. Its slabs are matte stone now, LIT by the
   column they turn round (diffuse falling off with distance, a hemisphere ambient, a soft sheen), the
@@ -428,8 +463,8 @@ at a time. `webapp/test/post.test.mjs` pins it.
   (`tunnel` as ebm's helix, as peaktime's dashes) before a user does. `--pscale 2` renders the phone
   layout at twice the size, to read detail. `--strip` photographs the players' 40 px bar strip
   instead (390×40 CSS px at `--pscale` density, default 3, over the blurred cover under its scrim —
-  a transparent layout can only be judged on what it sits on), and `--nograin` turns the post pass's
-  film grain off, to tell a world's own noise from the grain laid over every world.
+  a transparent layout can only be judged on what it sits on; `--light` puts it on Papier's cream
+  scrim), and `--nograin` turns the post pass's film grain off, to tell a world's own noise from the grain laid over every world.
 - **`webapp/test/viz.test.mjs` and `musical.test.mjs`** (node, in `npm test`) pin everything that can
   be decided without a GPU and that a GPU would only ever report as a black screen: the loader, the
   catalogue and the skins agree; every classifier family resolves by id AND by French label, and

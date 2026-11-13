@@ -93,7 +93,9 @@ export const MUSIC_SLOTS = [
   // z the top of the free band UNDER the artwork (p-space y), w unused.
   ["uHoleR", 1],
   // x intensity setting (amplitude of motion), y reduced motion (0/1),
-  // z the transparent (strip) layout flag, w unused.
+  // z the transparent (strip) layout flag, w the Papier light flag — a policy
+  // bit written by scenes/gl.js#pack after the core's own pack, not a layout
+  // change (the slot always had a spare component).
   ["uCtl", 1],
   // x steps factor (raymarch / octave budget of the tier), y particle factor,
   // z tier index 0..3, w render scale.

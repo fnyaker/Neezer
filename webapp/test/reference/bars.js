@@ -23,6 +23,8 @@
 import { approach, clamp, groupBands, hsl, roundRect } from "../../src/lib/viz/util.js";
 
 const CENTRES = [1 / 6, 0.5, 5 / 6];
+const BREATH_BEATS = 4;
+const TAU = Math.PI * 2;
 
 export function createBarsScene(opts = {}) {
   const layout = opts.layout || "strip"; // "strip" (centred) | "full" (grounded)
@@ -33,6 +35,7 @@ export function createBarsScene(opts = {}) {
   const agc = [0.15, 0.15, 0.15];
   let width = 0;
   let level = 0;
+  let beats = 0;
 
   function gainAt(gain, t) {
     if (t <= CENTRES[0]) return gain[0];
@@ -52,9 +55,8 @@ export function createBarsScene(opts = {}) {
 
   function resize(w, h, preset) {
     width = w;
-    // One bar per ~7 CSS px, inside the tier's ceiling: denser than that and
-    // the gaps disappear at any sane bar width.
-    const want = clamp(Math.floor(w / (layout === "full" ? 9 : 7)), 20, preset.bars);
+    // The same pitch as the app's canvas scene and its GL twin.
+    const want = clamp(Math.floor(w / (layout === "full" ? 20.5 : 16)), 18, preset.bars);
     setCount(want);
     void h;
   }
@@ -63,6 +65,9 @@ export function createBarsScene(opts = {}) {
     if (!bars) return;
     groupBands(frame.bands, grouped);
     level = approach(level, frame.features?.level || 0, 0.15, dt);
+    const b = frame.beat;
+    if (b && Number.isFinite(b.beatIndex)) beats = b.beatIndex + (b.phase || 0);
+    else beats += dt / Math.max(0.2, b?.period || 0.5);
 
     // Per-zone slow level → per-zone gain.
     const zoneSum = [0, 0, 0];
@@ -93,43 +98,69 @@ export function createBarsScene(opts = {}) {
 
   function draw(g, w, h, pal) {
     if (!bars || !w || !h) return;
-    // Bars draw no background of their own — in the player they sit over the
-    // blurred cover — so the canvas has to be cleared rather than washed. The
-    // other scenes keep their trails by painting a translucent wash instead;
-    // this one has nothing to wash WITH, and every frame it drew would
-    // otherwise still be on screen.
-    g.clearRect(0, 0, w, h);
-    // The same row of light the GL world draws (worlds/spectrum.js): one fully
-    // rounded capsule per band, mirrored about its axis as ONE shape, a dot at
-    // rest, and a faint afterglow where the band was a moment ago instead of a
-    // hairline cap hanging over it.
-    const bw = w / bars;
-    const body = Math.max(1.5, bw * 0.5);
-    const pad = (bw - body) / 2;
-    const r = body / 2;
     const full = layout === "full";
+    const ink = false; // the oracle's frames never carry the Papier option
+    if (full) {
+      g.fillStyle = hsl(pal.hue, pal.sat * 0.4, 0.045, 0.72);
+      g.fillRect(0, 0, w, h);
+    } else {
+      g.clearRect(0, 0, w, h);
+    }
+    const bw = w / bars;
+    const body = Math.max(2, Math.min(bw * 0.64, h * 0.55));
+    const r = body / 2;
     const axis = h / 2;
-    const reach = full ? h * 0.36 : h / 2 - 1;
+    const reach = full ? h * 0.31 : h / 2 - 1;
+
+    const loud = 0.3 + 0.7 * clamp(level * 1.5, 0, 1);
 
     for (let i = 0; i < bars; i++) {
       const t = i / (bars - 1 || 1);
-      const v = smooth[i];
-      const half = Math.max(r, v * reach);
-      const x = i * bw + pad;
-      // Hue walks the palette's spread across the row, so the low end and the
-      // top end are visibly different registers rather than one flat colour.
+      const v = smooth[i] * loud;
+      const taper = 1.06 - 0.26 * t;
+      const weight = Math.max(0, 1 - t * 2.5) * Math.min(1, v * 1.4);
+      const halfW = Math.min(r * taper * (0.88 + 0.22 * Math.min(1, v / 0.9) + 0.18 * weight), bw * 0.46);
+      const breath = Math.sin(TAU * (beats / BREATH_BEATS + t * 0.55));
+      const rest = 1 - 0.65 * clamp((v - 0.05) / 0.65, 0, 1);
+      const minHalf = halfW * (1 + 0.46 * (0.5 + 0.5 * breath) * rest);
+      const half = Math.max(minHalf, v * reach);
+      const x = i * bw + (bw - halfW * 2) / 2;
       const hue = pal.low + (pal.high - pal.low) * t;
-      const ph = Math.max(r, peaks[i] * reach);
-      if (ph > half + 2) {
-        g.fillStyle = hsl(hue, pal.sat, pal.light, 0.16);
-        roundRect(g, x, axis - ph, body, ph * 2, r);
+      const ph = Math.max(minHalf, peaks[i] * reach * loud);
+      if (full && ph > half + 1.5) {
+        g.fillStyle = hsl(hue + 12, pal.sat * 0.9, pal.light, 0.16);
+        roundRect(g, x, axis - ph, halfW * 2, ph * 2, halfW);
         g.fill();
       }
-      g.fillStyle = hsl(hue, pal.sat * 0.8, Math.min(0.9, pal.light + 0.08 + 0.2 * v), 0.62 + 0.38 * Math.min(1, v / 0.6));
-      roundRect(g, x, axis - half, body, half * 2, r);
+      g.fillStyle = ink
+        ? hsl(hue + 8, pal.sat, 0.3, 0.95)
+        : hsl(hue + 14, pal.sat, Math.min(0.9, pal.light - 0.01), 0.92);
+      roundRect(g, x, axis - half, halfW * 2, half * 2, halfW);
+      g.fill();
+      const inset = Math.min(1.4, halfW * 0.3);
+      const iw = halfW * 2 - inset * 2;
+      const ih = half * 2 - inset * 2;
+      if (iw > 0.6 && ih > 0.6) {
+        g.fillStyle = ink
+          ? hsl(hue, pal.sat * 0.75, 0.44, 0.92)
+          : hsl(hue, pal.sat * 0.85, Math.min(0.92, pal.light + 0.1 + 0.22 * v), 0.74 + 0.26 * Math.min(1, v / 0.6));
+        roundRect(g, x + inset, axis - half + inset, iw, ih, Math.max(0.5, halfW - inset));
+        g.fill();
+      }
+      const coreH = Math.max(1, Math.min(half, halfW * 1.7));
+      g.fillStyle = ink
+        ? hsl(hue, pal.sat * 0.45, 0.76, 0.3 + 0.25 * Math.min(1, v / 0.6))
+        : hsl(hue, pal.sat * 0.3, 0.9, 0.2 + 0.3 * Math.min(1, v / 0.6));
+      roundRect(g, x + inset, axis - coreH, Math.max(0.6, halfW * 2 - inset * 2), coreH * 2, Math.max(0.5, halfW - inset));
       g.fill();
     }
   }
 
-  return { resize, update, draw, get bars() { return bars; }, get level() { return level; } };
+  return {
+    resize, update, draw,
+    get smooth() { return smooth; },
+    get peaks() { return peaks; },
+    get bars() { return bars; },
+    get level() { return level; },
+  };
 }

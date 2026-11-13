@@ -108,6 +108,11 @@ export function createGLScene(opts = {}) {
     // The oscilloscope's two settings, read live by its driver.
     orientation: opts.orientation || "horizontal",
     colour: opts.colour || "duo",
+    // The player's backdrop is cream in the Papier theme, so the transparent
+    // strip must draw ink there instead of light. It rides in uCtl.w, the one
+    // unused component of the control slot (see pack below), so the block's
+    // layout does not change.
+    light: !!opts.light,
   };
   // Injectable, so the render bench can run the scene on a simulated clock and
   // photograph an exact instant of an exact bar.
@@ -545,6 +550,9 @@ export function createGLScene(opts = {}) {
     p[P.P_PARTICLES] = q.particles ?? 1;
     p[P.P_TIER] = Math.max(0, TIERS.indexOf(o.preset.tier));
     sc.pack();
+    // The one policy bit that is not in the core's pack: Papier's cream scrim.
+    // uCtl.w is documented unused, so this is a write, not a layout change.
+    sc.block()[O.uCtl + 3] = o.light ? 1 : 0;
     // The same geometry for the drivers, which place things clear of it.
     const block = sc.block();
     for (let i = 0; i < 4; i++) clocks.hole[i] = block[O.uHole + i];
@@ -685,8 +693,12 @@ export function createGLScene(opts = {}) {
     const lp = prev ? lookOf(prev) : lc;
     const k = prev ? dissolve : 1;
     look.exposure = mixLook(lp, lc, k, "exposure", 1) * (prev ? 1 : firstFade);
-    look.bloom = mixLook(lp, lc, k, "bloom", 1) * (q.bloomK ?? 1);
-    look.threshold = mixLook(lp, lc, k, "threshold", 0.9);
+    // In the strip on paper the picture is printed, not lit: no bloom to
+    // smudge the ink, and a threshold out of reach of the pale row. The full
+    // scene is a dark room on every theme, so nothing changes there.
+    const pale = o.light && o.layout === "strip";
+    look.bloom = mixLook(lp, lc, k, "bloom", 1) * (q.bloomK ?? 1) * (pale ? 0 : 1);
+    look.threshold = mixLook(lp, lc, k, "threshold", 0.9) * (pale ? 2.2 : 1);
     look.knee = mixLook(lp, lc, k, "knee", 0.6);
     look.saturation = mixLook(lp, lc, k, "saturation", 1.15);
     // The fringe is an IMPACT, not a finish: nothing at rest, a split for an
@@ -741,6 +753,7 @@ export function createGLScene(opts = {}) {
     if (next.reducedMotion != null) o.reducedMotion = !!next.reducedMotion;
     if (next.flash) o.flash = next.flash;
     if (next.fps != null) o.fps = next.fps;
+    if (next.light != null) o.light = !!next.light;
     if (next.orientation) o.orientation = next.orientation;
     if (next.colour) o.colour = next.colour;
     if (next.world && next.world !== o.world) {
