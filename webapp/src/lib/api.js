@@ -659,6 +659,16 @@ export const api = {
     req("/playlist/" + id + "/tracks", { method: "DELETE", body: body({ indexes }) }),
   reorderPlaylist: (id, tracks) =>
     req("/playlist/" + id + "/order", { method: "PUT", body: body({ tracks }) }),
+  // A public read-only link to one playlist: create/rotate, read, revoke. The
+  // link is a capability; the public page reads it without a session.
+  playlistShare: (id) => req("/playlist/" + id + "/share"),
+  createPlaylistShare: (id, ttl = null) =>
+    req("/playlist/" + id + "/share", {
+      method: "POST",
+      body: body(ttl == null ? {} : { ttl }),
+    }),
+  revokePlaylistShare: (id) => req("/playlist/" + id + "/share", { method: "DELETE" }),
+  sharedPlaylist: (token) => req("/shared/playlist/" + encodeURIComponent(token)),
   // `why` says what this archive request IS, so the server can order its queue:
   // "prefetch" is the track about to play, "bulk" (the default) is "archive
   // this playlist/artist, whenever". Never a number — every caller would claim
