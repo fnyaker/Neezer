@@ -282,7 +282,10 @@ px mobile and is centred by auto margins in the empty band under the transport, 
 the footer: 1920 y 885–929 with footer at 1022; 1100×900 y 749–793 with footer at 842; 390×844 mobile 670–710
 with the thumb row at 750 (a 34 px stripe at 360×640 became 40 px again with `flex:none`, the sleeve absorbing
 the 6 px). The queue card's tab row is a single dead pill once four columns are up, so it is replaced by the
-same label header the other columns use.
+same label header the other columns use. **The Flow's steering row is 92 px high** (its Genres door, two
+feedback chips and the energy wrap on two lines in the 520 px player), so under **950 px high** the strip
+yields to it rather than pushing the footer off screen: 1440×900 Flow now ends its footer at 848–882 with the
+strip hidden, 1920×1080 keeps the strip at 44 px, and 1440×900 without Flow keeps it too.
 
 **The phone's lyrics are a view, not a hidden gesture** (`MobileNowPlaying.svelte`): the labelled « Paroles »
 door in the thumb row opens a full-height sheet whose own header names the track and the artist, with a 44 px
