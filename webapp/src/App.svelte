@@ -98,6 +98,17 @@
     "/import": wrap({ asyncComponent: () => import("./routes/Import.svelte") }),
     "/import/:url": wrap({ asyncComponent: () => import("./routes/Import.svelte") }),
     "/releases": wrap({ asyncComponent: () => import("./routes/Releases.svelte") }),
+    // The two shelves opened from Nouveautés' cards: the same page component,
+    // told which half of the feed it shows. Not a playlist route — nothing here
+    // is editable.
+    "/releases/artists": wrap({
+      asyncComponent: () => import("./routes/ReleaseShelf.svelte"),
+      props: { shelf: "artists" },
+    }),
+    "/releases/discovery": wrap({
+      asyncComponent: () => import("./routes/ReleaseShelf.svelte"),
+      props: { shelf: "discovery" },
+    }),
     // A person's credits: what they wrote, composed, produced in the library.
     "/credits/:name": wrap({ asyncComponent: () => import("./routes/Credits.svelte") }),
   };
