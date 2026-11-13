@@ -16,9 +16,11 @@
   import { online } from "../lib/net.js";
   import { api } from "../lib/api.js";
   import { userPlaylists, runDeezerSync } from "../lib/actions.js";
+  import { isLocalId } from "../lib/format.js";
   import { grooveTint } from "../lib/sillon.js";
   import Icon from "./Icon.svelte";
   import Avatar from "./Avatar.svelte";
+  import Cover from "./Cover.svelte";
 
   // Deezer playlists belong to the account owner — guests don't see them.
   // The load is kicked off once; nothing here re-reads it.
@@ -71,6 +73,14 @@
 
   // The list is walked, not windowed: a person's playlists number in the tens,
   // and the scroll box keeps the column's height honest when they do not.
+  //
+  // The thumbnail is the REAL sleeve when `/me/playlists` gives one (the cover
+  // of the playlist's first track, same-origin) — it used to paint the groove
+  // tint unconditionally, so the sidebar never showed a picture even when the
+  // art existed. `Cover` brings the bounded loader with it (six requests in
+  // flight, nearest first, off-screen rows wait), the offline blob, and the
+  // groove fallback when the image fails. A playlist with no cover keeps the
+  // deterministic tint: a missing sleeve is never an empty square.
   function thumb(p) {
     return grooveTint(p.id || p.title || "");
   }
@@ -141,7 +151,21 @@
             {#each own as p (p.id)}
               <li>
                 <a use:link href={"/playlist/" + p.id} class="pl-row" class:active={isOn("/playlist/" + p.id)}>
-                  <span class="thumb" style={`background-image:${thumb(p)}`} aria-hidden="true"></span>
+                  <span
+                    class="thumb"
+                    style={p.cover ? undefined : `background-image:${thumb(p)}`}
+                    aria-hidden="true"
+                  >
+                    {#if p.cover}
+                      <Cover
+                        src={p.cover}
+                        alt=""
+                        size={26}
+                        kind="playlist"
+                        fallbackId={isLocalId(p.id) ? p.id : null}
+                      />
+                    {/if}
+                  </span>
                   <span class="pl-name">{p.title}</span>
                   <span class="pl-n mono">{p.nb_tracks || 0}</span>
                 </a>
@@ -170,7 +194,21 @@
               {#each auto as p (p.id)}
                 <li>
                   <a use:link href={"/playlist/" + p.id} class="pl-row" class:active={isOn("/playlist/" + p.id)}>
-                    <span class="thumb" style={`background-image:${thumb(p)}`} aria-hidden="true"></span>
+                    <span
+                      class="thumb"
+                      style={p.cover ? undefined : `background-image:${thumb(p)}`}
+                      aria-hidden="true"
+                    >
+                      {#if p.cover}
+                        <Cover
+                          src={p.cover}
+                          alt=""
+                          size={26}
+                          kind="playlist"
+                          fallbackId={isLocalId(p.id) ? p.id : null}
+                        />
+                      {/if}
+                    </span>
                     <span class="pl-name">{p.title}</span>
                     <span class="pl-n mono">{p.nb_tracks || 0}</span>
                   </a>
@@ -364,8 +402,14 @@
     height: 26px;
     flex: none;
     border-radius: 6px;
+    overflow: hidden;
     background-size: cover;
     background-position: center;
+  }
+  /* The tile is 26 px: Cover's 12 px corner would read as a circle, so keep the
+     sidebar's own radius on the art it renders. */
+  .thumb :global(.cover) {
+    border-radius: 6px;
   }
   .pl-name {
     flex: 1;
