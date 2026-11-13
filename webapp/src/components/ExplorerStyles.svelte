@@ -91,18 +91,29 @@
     };
   }
 
-  // The discovery POST is the one endpoint lib/api.js does not expose yet; the
-  // contract is Explorer's own. A POST is never retried here: "Découvrir" is
-  // the person's action, and a failed one offers "Réessayer".
-  async function postDiscover(style, level) {
+  // The discovery's two calls. They are NOT lib/api.js requests, on purpose:
+  // the poll's budget answer is a `Retry-After` the shared GET retry would
+  // swallow (it retries 503 on its own), and the POST must never be retried.
+  // A GET here NEVER starts work: the server answers `idle` when nothing is in
+  // cache or in flight, and only the person's "Découvrir" click POSTs.
+  async function requestDiscover(method, style, level) {
+    const url =
+      method === "GET"
+        ? `/api/explorer/discover?style=${encodeURIComponent(style)}&level=${level}`
+        : "/api/explorer/discover";
     let res;
     try {
-      res = await fetch("/api/explorer/discover", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ style, level }),
-      });
+      res = await fetch(
+        url,
+        method === "GET"
+          ? { credentials: "include", headers: { Accept: "application/json" } }
+          : {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ style, level }),
+            }
+      );
     } catch {
       throw { status: 0, message: "network", offline: true };
     }
@@ -116,10 +127,33 @@
       throw {
         status: res.status,
         code: res.headers.get("X-NS-Error") || undefined,
+        retryAfter: retryAfterOf(res, data),
         message: data.error || res.statusText,
       };
     }
     return data;
+  }
+
+  // The server's own wait, in seconds: `Retry-After` (seconds or HTTP date) or
+  // the JSON `retry_in` the API's error envelope already uses.
+  function retryAfterOf(res, data) {
+    const raw = res?.headers?.get?.("Retry-After") ?? data?.retry_after ?? data?.retry_in;
+    if (raw == null || raw === "") return 0;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds));
+    const at = Date.parse(String(raw));
+    return Number.isFinite(at) ? Math.max(0, Math.round((at - Date.now()) / 1000)) : 0;
+  }
+
+  // A failure that is not a wait: the cause in the server's words when it has
+  // some, the status's own meaning when it does not. Never both, never a
+  // sentence that says "error" without saying why.
+  function causeFor(e) {
+    if (e?.status === 403) return "Cette session distante n'a pas accès à la découverte.";
+    if (e?.status === 413) return "Le serveur a refusé la demande (trop volumineuse).";
+    if (e?.status === 0) return "Le serveur ne répond pas (réseau).";
+    const msg = typeof e === "string" ? e : e?.message;
+    return typeof msg === "string" && msg && msg !== "network" ? msg : failureCause(e) || "La découverte n'a pas abouti.";
   }
 
   function readStylesCache() {
@@ -160,13 +194,22 @@
 
   let picked = null;
   let level = readLevel();
-  let phase = "idle"; // idle | pending | ready | empty | error
+  // idle | pending | ready | empty | busy | error
+  // `busy` is the budget/workers answer (429/503 + Retry-After): no spinner,
+  // a named wait and a Réessayer — a server that asked for five seconds is
+  // not a server that failed.
+  let phase = "idle";
   let playlists = [];
   let errText = "";
-  let errCause = "";
+  let busyCause = "";
+  let retryAfter = 0; // seconds the server asked for (0: it did not say)
+  let retryLeft = 0; // the same, counting down
+  let retryMode = "post"; // what Réessayer must do: POST again, or poll again
+  let retryDeadline = 0;
 
   let polls = 0;
   let timer = null;
+  let countdown = null;
   let seq = 0; // bumped by every change of aim: an older answer is stale
 
   let dialog = null;
@@ -176,6 +219,8 @@
   $: maxTracks = Math.max(1, ...styles.map((s) => s.tracks));
   $: aim = LEVELS[level - 1] || LEVELS[2];
   $: pending = phase === "pending";
+  $: busy = phase === "busy";
+  $: busyWait = retryLeft > 0 ? `Réessaie dans ${retryLeft} s.` : retryAfter ? "Tu peux réessayer." : "Réessaie dans un moment.";
   // What is already on the device, when the network could not confirm it.
   $: stale = loaded && loadFailed && styles.length > 0;
 
@@ -190,6 +235,7 @@
 
   onDestroy(() => {
     stopPoll();
+    stopCountdown();
     seq++;
   });
 
@@ -221,6 +267,20 @@
     timer = null;
   }
 
+  function stopCountdown() {
+    clearInterval(countdown);
+    countdown = null;
+  }
+
+  function startCountdown() {
+    stopCountdown();
+    if (!retryLeft) return;
+    countdown = setInterval(() => {
+      retryLeft = Math.max(0, retryLeft - 1);
+      if (!retryLeft) stopCountdown();
+    }, 1000);
+  }
+
   function remember() {
     if (!picked) return;
     const key = `${picked.name}|${level}`;
@@ -232,21 +292,30 @@
       phase,
       playlists: playlists.slice(),
       errText,
-      errCause,
+      busyCause,
+      retryAfter,
+      retryMode,
+      retryDeadline,
     });
     while (results.size > 8) results.delete(results.keys().next().value);
   }
 
-  // Paint whatever this style + level already knows, and resume a sweep that
-  // was still running when the panel was last closed.
+  // Paint whatever this style + level already knows, and resume what was still
+  // running (or waiting) when the panel was last closed.
   function restore() {
     stopPoll();
+    stopCountdown();
     seq++;
     const kept = results.get(`${picked.name}|${level}`);
     phase = kept?.phase || "idle";
     playlists = kept?.playlists || [];
     errText = kept?.errText || "";
-    errCause = kept?.errCause || "";
+    busyCause = kept?.busyCause || "";
+    retryAfter = kept?.retryAfter || 0;
+    retryMode = kept?.retryMode || "post";
+    retryDeadline = kept?.retryDeadline || 0;
+    retryLeft = retryDeadline ? Math.max(0, Math.ceil((retryDeadline - Date.now()) / 1000)) : retryAfter;
+    if (phase === "busy") startCountdown();
     if (phase === "pending") {
       polls = 0;
       schedule();
@@ -274,6 +343,7 @@
 
   function close() {
     stopPoll();
+    stopCountdown();
     seq++;
     picked = null;
     const back = returnFocus;
@@ -283,79 +353,143 @@
     });
   }
 
-  function fail(e, mine) {
+  // `mode` says which call failed: a refused POST left nothing running (a
+  // retry must POST), a refused poll is a job still running server-side (a
+  // retry asks the GET again, and never starts a second sweep).
+  function fail(e, mine, mode = "post") {
     if (mine !== seq) return;
     stopPoll();
+    if (e?.status === 429 || e?.status === 503) {
+      phase = "busy";
+      retryMode = mode;
+      busyCause = e.status === 429 ? "Trop de découvertes demandées pour l'instant." : "Le serveur est occupé.";
+      retryAfter = Number.isFinite(e.retryAfter) ? e.retryAfter : e.status === 503 ? 5 : 0;
+      retryLeft = retryAfter;
+      retryDeadline = retryAfter ? Date.now() + retryAfter * 1000 : 0;
+      playlists = [];
+      errText = "";
+      startCountdown();
+      remember();
+      return;
+    }
+    stopCountdown();
     phase = "error";
-    const msg = typeof e === "string" ? e : e?.message;
-    // The server's own French when it has one; otherwise the HTTP/network cause
-    // `failureCause` names. Never both: "HTTP 503 : Deezer ne répond pas"
-    // doubled the same sentence back at the reader.
-    errText =
-      typeof msg === "string" && msg && msg !== "network" ? msg : failureCause(e) || "La découverte n'a pas abouti.";
-    errCause = "";
+    errText = causeFor(e);
+    retryMode = mode;
+    retryAfter = 0;
+    retryLeft = 0;
+    retryDeadline = 0;
+    busyCause = "";
     remember();
   }
 
-  // One answer from the server, whatever produced it. A ready sweep paints,
-  // an error names its cause, a pending one waits two more seconds.
+  // One answer from the server, whatever produced it. `idle` means the GET
+  // found nothing running: back to the button, never a spinner that waits on a
+  // job nobody started. A ready sweep paints, an error names its cause, a
+  // pending one waits two more seconds.
   function handle(r, mine) {
     if (mine !== seq) return;
+    if (r?.state === "idle") {
+      stopPoll();
+      stopCountdown();
+      phase = "idle";
+      playlists = [];
+      errText = "";
+      busyCause = "";
+      retryAfter = 0;
+      retryLeft = 0;
+      retryDeadline = 0;
+      remember();
+      return;
+    }
     if (r?.state === "error" || r?.error) {
-      fail(r?.error ? String(r.error) : "La découverte n'a pas abouti.", mine);
+      // A sweep that reported an error is over: retrying means launching it
+      // again (a POST), not polling a job that no longer exists.
+      fail(r?.error ? String(r.error) : "La découverte n'a pas abouti.", mine, "post");
       return;
     }
     if (r?.state === "ready") {
       stopPoll();
+      stopCountdown();
       playlists = (Array.isArray(r.playlists) ? r.playlists : []).map(playlistOf);
       phase = playlists.length ? "ready" : "empty";
       errText = "";
-      errCause = "";
+      busyCause = "";
+      retryAfter = 0;
+      retryLeft = 0;
+      retryDeadline = 0;
       remember();
       return;
     }
     phase = "pending";
+    busyCause = "";
+    retryAfter = 0;
+    retryLeft = 0;
+    retryDeadline = 0;
+    stopCountdown();
     remember();
     if (polls >= MAX_POLLS) {
-      fail("La découverte prend plus de temps que prévu. Réessayez dans un moment.", mine);
+      fail("La découverte prend plus de temps que prévu. Réessayez dans un moment.", mine, "post");
       return;
     }
     schedule();
   }
 
-  function schedule() {
+  function schedule(delay = POLL_MS) {
     stopPoll();
     const mine = seq;
     timer = setTimeout(async () => {
       timer = null;
       polls++;
       try {
-        const r = await api.get(
-          `/explorer/discover?style=${encodeURIComponent(picked?.name || "")}&level=${level}`
-        );
+        const r = await requestDiscover("GET", picked?.name || "", level);
         handle(r, mine);
       } catch (e) {
-        fail(e, mine);
+        fail(e, mine, "poll");
       }
-    }, POLL_MS);
+    }, delay);
   }
 
   async function discover() {
     if (!picked || pending) return;
     stopPoll();
+    stopCountdown();
     const mine = ++seq;
     phase = "pending";
     playlists = [];
     errText = "";
-    errCause = "";
+    busyCause = "";
+    retryAfter = 0;
+    retryLeft = 0;
+    retryDeadline = 0;
     polls = 0;
     remember();
     try {
-      const r = await postDiscover(picked.name, level);
+      const r = await requestDiscover("POST", picked.name, level);
       handle(r, mine);
     } catch (e) {
-      fail(e, mine);
+      fail(e, mine, "post");
     }
+  }
+
+  // "Réessayer" honours what failed: never a second POST for a job the server
+  // already accepted, never a GET-only retry when nothing was ever launched.
+  function retry() {
+    if (!picked) return;
+    if (retryMode === "post") {
+      discover();
+      return;
+    }
+    stopCountdown();
+    retryLeft = 0;
+    retryAfter = 0;
+    retryDeadline = 0;
+    busyCause = "";
+    phase = "pending";
+    errText = "";
+    const mine = ++seq;
+    remember();
+    schedule(0);
   }
 
   // A ready sweep with nothing in it is not a failure: the style may be too
@@ -524,7 +658,13 @@
         <p class="ahint">{aim.hint}</p>
       </div>
 
-      <button type="button" class="btn btn-primary go" on:click={discover} disabled={pending} aria-busy={pending}>
+      <button
+        type="button"
+        class="btn btn-primary go"
+        on:click={discover}
+        disabled={pending || busy}
+        aria-busy={pending}
+      >
         {#if pending}
           <span class="spin" aria-hidden="true"></span> Recherche…
         {:else}
@@ -546,10 +686,15 @@
             Recherche de playlists Deezer pour {picked.name}… La vérification des titres prend
             quelques secondes.
           </p>
+        {:else if phase === "busy"}
+          <div class="state fail" role="alert">
+            <p>{busyCause} <span class="wait">{busyWait}</span></p>
+            <button type="button" class="btn btn-ghost" on:click={retry}>Réessayer</button>
+          </div>
         {:else if phase === "error"}
           <div class="state fail" role="alert">
-            <p>{errText}{errCause ? ` (${errCause})` : ""}</p>
-            <button type="button" class="btn btn-ghost" on:click={discover}>Réessayer</button>
+            <p>{errText}</p>
+            <button type="button" class="btn btn-ghost" on:click={retry}>Réessayer</button>
           </div>
         {:else if phase === "empty"}
           <div class="state">
@@ -942,6 +1087,13 @@
     border-radius: 14px;
     border: 1px solid var(--ln);
     background: var(--bg);
+  }
+  .wait {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--dim);
+    white-space: nowrap;
   }
   .pending-note {
     margin: 2px 0 0;
