@@ -27,6 +27,8 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from urllib.parse import urlsplit
 
+from werkzeug.security import safe_join
+
 from flask import (
     Blueprint,
     current_app,
@@ -4747,6 +4749,30 @@ def _album_cover_response(cid, vetted):
     return jsonify({"error": "not found"}), 404
 
 
+def _safe_cover_path(path, provider, cache):
+    """``path`` when it lives under the archive or the cover cache, else None.
+
+    ``deezer_cover_path`` derives the file from a UUID and a model row, but the
+    id comes from the URL; checking the two roots before ``send_file`` keeps a
+    malformed/forged id from naming anything outside the server's own files.
+    """
+    if not path:
+        return None
+    for root in (getattr(provider, "archive_dir", None), getattr(cache, "_cache_dir", None)):
+        if not root:
+            continue
+        try:
+            real = os.path.realpath(path)
+            base = os.path.realpath(root)
+            rel = os.path.relpath(real, base)
+            safe = safe_join(base, rel)
+        except (TypeError, ValueError):
+            continue
+        if safe and os.path.realpath(safe) == real:
+            return safe
+    return None
+
+
 def cover_response(cid, *, vetted=False):
     """The body of ``/cover/<cid>``, shared with the listen party.
 
@@ -4790,7 +4816,9 @@ def cover_response(cid, *, vetted=False):
             # UUID without an archived Track: album/artist/playlist/podcast art.
             path = archive.deezer_cover_path(provider, cache, cid)
             if path:
-                return send_file(path, mimetype="image/jpeg", conditional=True)
+                safe = _safe_cover_path(path, provider, cache)
+                if safe:
+                    return send_file(safe, mimetype="image/jpeg", conditional=True)
             return jsonify({"error": "not found"}), 404
         key = f"deezer-cover-{cid}"
         if cache.has(key):
@@ -4804,7 +4832,7 @@ def cover_response(cid, *, vetted=False):
             return jsonify({"error": "not found"}), 404
         return send_file(cache.set(key, data), mimetype="image/jpeg", conditional=True)
     except Exception:
-        logger.debug("Cover fallback failed for %s", cid, exc_info=True)
+        logger.debug("Cover fallback failed", exc_info=True)
         return jsonify({"error": "not found"}), 404
 
 

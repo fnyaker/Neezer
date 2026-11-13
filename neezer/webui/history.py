@@ -251,8 +251,8 @@ def listening_history():
         days = _days_arg()
         outcome = _outcome_arg()
         before, before_id = _cursor()
-    except ValueError as exc:
-        return _bad(str(exc))
+    except ValueError:
+        return _bad("invalid query")
 
     # One row more than the page tells us whether a next one exists WITHOUT a
     # count statement; the cursor is then the last SERVED event, never the
