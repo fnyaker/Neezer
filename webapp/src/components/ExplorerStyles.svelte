@@ -7,16 +7,25 @@
   // style. The search box above keeps doing what it alone does: titles,
   // artists, albums, podcasts. A style is no longer a search term.
   //
+  // The play disc on each tile starts a STATION instead (and does not open the
+  // sheet): the server's own genre radio, which stays in the style and its
+  // sub-genres and follows the person's discovery level. "Toutes les stations"
+  // lists every analysed genre, because ten listened parents are not the whole
+  // tree. Starting one is a single click-first request; an empty station or a
+  // failure is a toast, never a dead sheet.
+  //
   // Requests, in order: ONE for the styles when the landing paints (kept on the
   // device and painted from there first), nothing at all until "Découvrir", the
   // discovery POST, then one GET every 2 s while the server works. The answers
   // are kept for the session, per style and level: reopening a panel paints
-  // what was found instead of asking again.
+  // what was found instead of asking again. The all-stations sheet paints its
+  // kept copy first and asks `/api/flow/styles` ONCE per open — never per tile.
   import { onDestroy, onMount, tick } from "svelte";
   import { api, failureCause } from "../lib/api.js";
   import { player, toasts } from "../lib/stores.js";
   import { playEntity } from "../lib/actions.js";
   import { grooveBackground } from "../lib/sillon.js";
+  import { filterStyles, stationContext, stationTracks, stylesOf } from "../lib/genrestation.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
 
@@ -32,6 +41,7 @@
   ];
   const LEVEL_KEY = "explorer.discover.level";
   const STYLES_KEY = "explorer.styles.v1";
+  const STATIONS_KEY = "explorer.stations.v1";
   const POLL_MS = 2000;
   // Two minutes of polling covers a real Deezer sweep on a slow link; past it
   // the panel stops asking on its own and hands the person a way out rather
@@ -44,6 +54,11 @@
   // localStorage, and re-asking a finished sweep would be one more cost the
   // person did not ask for.
   const results = new Map();
+
+  // The all-stations list, kept for the page session (a route remount paints
+  // it at once) and on the device: ~300 rows of names and counts, cheap, and
+  // the sheet is opened far more often than the library changes.
+  let stationsMemory = null;
 
   // -- pure helpers ----------------------------------------------------------
 
@@ -175,6 +190,26 @@
     }
   }
 
+  function readStationsCache() {
+    if (stationsMemory) return stationsMemory;
+    try {
+      const v = JSON.parse(localStorage.getItem(STATIONS_KEY) || "null");
+      const kept = stylesOf(v);
+      return kept.length ? kept : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStationsCache(rows) {
+    stationsMemory = rows;
+    try {
+      localStorage.setItem(STATIONS_KEY, JSON.stringify({ at: Date.now(), styles: rows }));
+    } catch {
+      /* a convenience: the sheet still works */
+    }
+  }
+
   function readLevel() {
     try {
       const v = parseInt(localStorage.getItem(LEVEL_KEY) || "3", 10);
@@ -215,6 +250,22 @@
   let dialog = null;
   let returnFocus = null;
 
+  // -- the stations ----------------------------------------------------------
+
+  // The style whose station is being started: one at a time, and the pressed
+  // control is the one that says so (a spinner, never a silent second click).
+  let stationBusy = "";
+  let allOpen = false;
+  let allDialog = null;
+  let allReturnFocus = null;
+  let allRows = [];
+  let allLoaded = false;
+  let allLoading = false;
+  let allFailed = false;
+  let allCause = "";
+  let allQuery = "";
+  let allSeq = 0; // a request answered after the sheet was left is stale
+
   $: styles = parentStyles(rows).slice(0, TILES_MAX);
   $: maxTracks = Math.max(1, ...styles.map((s) => s.tracks));
   $: aim = LEVELS[level - 1] || LEVELS[2];
@@ -223,6 +274,7 @@
   $: busyWait = retryLeft > 0 ? `Réessaie dans ${retryLeft} s.` : retryAfter ? "Tu peux réessayer." : "Réessaie dans un moment.";
   // What is already on the device, when the network could not confirm it.
   $: stale = loaded && loadFailed && styles.length > 0;
+  $: shownStations = filterStyles(allRows, allQuery);
 
   onMount(() => {
     const cached = readStylesCache();
@@ -237,6 +289,7 @@
     stopPoll();
     stopCountdown();
     seq++;
+    allSeq++;
   });
 
   async function loadStyles(force = false) {
@@ -513,27 +566,104 @@
     close();
   }
 
+  // -- stations --------------------------------------------------------------
+
+  // One request, then the queue plays at once (the tracks ARE the answer, so
+  // nothing is asked again before the first note). The station is its own
+  // playback context, so it replaces whatever played like any queue and never
+  // touches the Flow's saved aim. An empty answer and a failure are both said
+  // out loud; a failure leaves the sheet it came from open and usable.
+  async function startStation(name, fromSheet = false) {
+    const style = typeof name === "string" ? name : name?.name;
+    if (!style || stationBusy) return;
+    stationBusy = style;
+    try {
+      const r = await api.genreRadio(style);
+      const tracks = stationTracks(r);
+      const context = stationContext(style, r);
+      if (!tracks.length || !context) {
+        toasts.push("Cette station n'a encore rien à jouer.", "info");
+        return;
+      }
+      player.playQueue(tracks, 0, context);
+      if (fromSheet) closeStations();
+    } catch (e) {
+      toasts.push(`La station n'a pas pu démarrer (${failureCause(e) || "réseau"})`, "error");
+    } finally {
+      stationBusy = "";
+    }
+  }
+
+  // The all-stations sheet paints its kept copy first, then asks ONE time:
+  // every style of the tree that holds analysed titles, not the ten listened
+  // parents the tiles show.
+  function openStations() {
+    allOpen = true;
+    allReturnFocus = typeof document !== "undefined" ? document.activeElement : null;
+    allQuery = "";
+    const cached = readStationsCache();
+    if (cached) {
+      allRows = cached;
+      allLoaded = true;
+    }
+    loadStations();
+    tick().then(() => allDialog?.focus?.({ preventScroll: true }));
+  }
+
+  function closeStations() {
+    allOpen = false;
+    allQuery = "";
+    const back = allReturnFocus;
+    allReturnFocus = null;
+    tick().then(() => {
+      if (back && back.isConnected) back.focus?.({ preventScroll: true });
+    });
+  }
+
+  async function loadStations() {
+    if (allLoading) return;
+    allLoading = true;
+    allFailed = false;
+    allCause = "";
+    const mine = allSeq;
+    try {
+      const r = await api.flowStyles();
+      if (mine !== allSeq) return;
+      allRows = stylesOf(r);
+      allLoaded = true;
+      writeStationsCache(allRows);
+    } catch (e) {
+      if (mine !== allSeq) return;
+      allFailed = true;
+      allCause = failureCause(e);
+    } finally {
+      if (mine === allSeq) allLoading = false;
+    }
+  }
+
   // -- keyboard --------------------------------------------------------------
 
   function onKey(e) {
-    if (!picked) return;
+    const layer = allOpen ? allDialog : picked ? dialog : null;
+    if (!layer) return;
     if (e.key === "Escape") {
       // Capture: if this sheet were opened over something with its own Escape
       // (a player), the key closes THIS layer only.
       e.preventDefault();
       e.stopImmediatePropagation();
-      close();
+      if (allOpen) closeStations();
+      else close();
       return;
     }
-    if (e.key !== "Tab" || !dialog) return;
-    const f = [...dialog.querySelectorAll("button, [href], input, [tabindex]:not([tabindex='-1'])")].filter(
+    if (e.key !== "Tab") return;
+    const f = [...layer.querySelectorAll("button, [href], input, [tabindex]:not([tabindex='-1'])")].filter(
       (el) => !el.disabled && el.offsetParent !== null
     );
     if (!f.length) return;
     const first = f[0];
     const last = f[f.length - 1];
     const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === dialog || !dialog.contains(active))) {
+    if (e.shiftKey && (active === first || active === layer || !layer.contains(active))) {
       e.preventDefault();
       last.focus();
     } else if (!e.shiftKey && active === last) {
@@ -559,29 +689,57 @@
 <section class="styles" aria-labelledby="explorer-styles-title">
   <div class="head">
     <h2 class="section-title" id="explorer-styles-title">Parcourir par style</h2>
-    {#if styles.length}
-      <span class="lead">Vos styles les plus écoutés</span>
-    {/if}
+    <div class="head-actions">
+      {#if styles.length}
+        <span class="lead">Vos styles les plus écoutés</span>
+      {/if}
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm allbtn"
+        on:click={openStations}
+        aria-haspopup="dialog"
+      >
+        <Icon name="radio" size={15} /> Toutes les stations
+      </button>
+    </div>
   </div>
 
   {#if styles.length}
     <div class="tiles">
       {#each styles as s (s.name)}
-        <button
-          type="button"
-          class="tile"
-          style={`--art:${grooveBackground(s.name)}`}
-          aria-label={`Découvrir ${s.name} — ${countLabel(s.tracks)}`}
-          title={`Découvrir des playlists ${s.name}`}
-          on:click={() => chooseStyle(s)}
-        >
+        <!-- One card, two actions: the card opens the discovery sheet, the
+             disc starts the station. The disc is a real button ABOVE the
+             card-wide one, never a button inside a button. -->
+        <div class="tile" style={`--art:${grooveBackground(s.name)}`}>
           <span class="art" aria-hidden="true"></span>
-          <span class="cap">
+          <button
+            type="button"
+            class="open"
+            aria-label={`Découvrir ${s.name} — ${countLabel(s.tracks)}`}
+            title={`Découvrir des playlists ${s.name}`}
+            on:click={() => chooseStyle(s)}
+          ></button>
+          <span class="cap" aria-hidden="true">
             <span class="name">{s.name}</span>
             <span class="n">{countLabel(s.tracks)}</span>
             <span class="bar" aria-hidden="true" style={`--w:${Math.round((s.tracks / maxTracks) * 100)}%`}></span>
           </span>
-        </button>
+          <button
+            type="button"
+            class="station"
+            aria-label={`Lancer la station ${s.name}`}
+            title={`Lancer la station ${s.name}`}
+            disabled={stationBusy === s.name}
+            aria-busy={stationBusy === s.name}
+            on:click={() => startStation(s.name)}
+          >
+            {#if stationBusy === s.name}
+              <span class="spin" aria-hidden="true"></span>
+            {:else}
+              <Icon name="play" size={18} />
+            {/if}
+          </button>
+        </div>
       {/each}
     </div>
     {#if stale}
@@ -603,7 +761,8 @@
   {:else}
     <p class="state">
       Votre historique d'écoute est encore vide : les styles que vous écoutez le plus apparaîtront
-      ici. La recherche et la bibliothèque restent ouvertes au-dessus.
+      ici. La recherche et la bibliothèque restent ouvertes au-dessus, et « Toutes les stations »
+      lance un genre sans historique.
     </p>
   {/if}
 </section>
@@ -738,6 +897,99 @@
   </div>
 {/if}
 
+{#if allOpen}
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+  <div class="veil" use:toBody on:click={(e) => e.target === e.currentTarget && closeStations()}>
+    <div
+      class="panel all"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="all-stations-title"
+      tabindex="-1"
+      bind:this={allDialog}
+    >
+      <header>
+        <div class="ttl">
+          <p class="kicker">Stations</p>
+          <h2 id="all-stations-title">Toutes les stations</h2>
+          <p class="sub">
+            Un genre, ses sous-genres et votre écoute.
+            {#if allLoaded}{shownStations.length} style{shownStations.length === 1 ? "" : "s"}{/if}
+          </p>
+        </div>
+        <button type="button" class="x" on:click={closeStations} aria-label="Fermer">
+          <Icon name="close" size={18} />
+        </button>
+      </header>
+
+      <input
+        class="field allsearch"
+        type="search"
+        placeholder="Chercher un style"
+        aria-label="Chercher un style"
+        bind:value={allQuery}
+      />
+
+      <div class="out allout">
+        {#if !allLoaded && allLoading}
+          <div class="rows" aria-hidden="true">
+            {#each Array(6) as _}
+              <div class="row sk">
+                <span class="meta"><span class="sk-line"></span><span class="sk-line short"></span></span>
+              </div>
+            {/each}
+          </div>
+          <p class="srx" role="status">Chargement des stations…</p>
+        {:else if !allLoaded && allFailed}
+          <div class="state fail" role="alert">
+            <p>Impossible de charger les stations{allCause ? ` (${allCause})` : ""}.</p>
+            <button type="button" class="btn btn-ghost" on:click={loadStations}>Réessayer</button>
+          </div>
+        {:else if !shownStations.length}
+          <p class="state">
+            Aucun style analysé ne correspond{allQuery ? " à cette recherche" : " à votre bibliothèque"}.
+          </p>
+        {:else}
+          <ul class="stations">
+            {#each shownStations as row (row.name)}
+              <li class="srow">
+                <span class="smeta">
+                  <span class="sname">{row.name}</span>
+                  <span class="sparent">
+                    {row.parent ? `${row.parent} · ` : ""}{countLabel(row.branch)}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  class="btn btn-primary splay"
+                  aria-label={`Lancer la station ${row.name}`}
+                  disabled={stationBusy === row.name}
+                  aria-busy={stationBusy === row.name}
+                  on:click={() => startStation(row.name, true)}
+                >
+                  {#if stationBusy === row.name}
+                    <span class="spin" aria-hidden="true"></span>
+                  {:else}
+                    <Icon name="play" size={13} />
+                  {/if}
+                  Station
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+
+      {#if allFailed && allLoaded}
+        <p class="state">
+          Liste gardée sur cet appareil — l'actualisation a échoué.
+          <button type="button" class="linkbtn" on:click={loadStations}>Réessayer</button>
+        </p>
+      {/if}
+    </div>
+  </div>
+{/if}
+
 <style>
   .styles {
     container-type: inline-size;
@@ -748,12 +1000,23 @@
   }
   .head {
     display: flex;
-    align-items: baseline;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    gap: 8px 16px;
   }
   .head .section-title {
     margin: 0;
+  }
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+  }
+  .allbtn {
+    white-space: nowrap;
+    gap: 7px;
   }
   .lead {
     flex: none;
@@ -767,6 +1030,9 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
   }
+  /* A card, not a button: the whole surface opens the discovery sheet (the
+     `.open` overlay), and the station disc sits ABOVE it. A button may not
+     hold another button, hence the flat layer. */
   .tile {
     position: relative;
     display: flex;
@@ -784,6 +1050,20 @@
     contain-intrinsic-size: auto 112px;
     transition: border-color 0.15s ease;
   }
+  .open {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    padding: 0;
+    border: 0;
+    border-radius: inherit;
+    background: none;
+    cursor: pointer;
+  }
+  .open:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: -2px;
+  }
   .art {
     position: absolute;
     inset: 0 0 54px 0;
@@ -791,6 +1071,7 @@
   }
   .cap {
     position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -798,6 +1079,46 @@
     min-width: 0;
     padding: 9px 12px 10px;
     background: var(--s1);
+    /* The card-wide `.open` stays the target under the caption; only the
+       station disc takes clicks away from it. */
+    pointer-events: none;
+  }
+  /* The station, a 44 px disc on the sleeve — Spotify's card play button, the
+     same gesture Card.svelte uses, but always visible: a station is the
+     primary action of this shelf, not a hover secret. */
+  .station {
+    position: absolute;
+    right: 6px;
+    bottom: 58px;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--btn);
+    color: var(--onbtn);
+    box-shadow: 0 8px 20px color-mix(in srgb, var(--onac) 32%, transparent);
+    transition:
+      transform 0.14s ease,
+      filter 0.14s ease;
+  }
+  .station:hover:not(:disabled) {
+    transform: scale(1.07);
+    filter: brightness(1.05);
+  }
+  .station:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+  .station:disabled {
+    cursor: progress;
+    opacity: 0.75;
+  }
+  .station .spin {
+    width: 15px;
+    height: 15px;
   }
   .name {
     display: block;
@@ -1175,6 +1496,79 @@
     height: 8px;
   }
 
+  /* -- all the stations ----------------------------------------------------- */
+
+  .all {
+    width: min(560px, 100%);
+  }
+  .allsearch {
+    flex: none;
+    width: 100%;
+    height: 44px;
+    box-sizing: border-box;
+  }
+  /* One scroller: the sheet stays where it is, the list moves under the thumb
+     (a 320-style tree is taller than any phone). */
+  .allout {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .stations {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .srow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding: 4px 6px 4px 10px;
+    border-radius: 12px;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 56px;
+  }
+  .srow:hover {
+    background: var(--s2);
+  }
+  .smeta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .sname {
+    font-weight: 600;
+    font-size: 14.5px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sparent {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .splay {
+    flex: none;
+    height: 44px;
+    min-width: 108px;
+    padding: 0 14px;
+    gap: 6px;
+  }
+
   @media (pointer: coarse) {
     .x {
       width: 44px;
@@ -1201,6 +1595,15 @@
     }
     .lead {
       display: none;
+    }
+    /* The sleeve is 50 px tall on a phone: the disc sits at its foot. */
+    .station {
+      right: 4px;
+      bottom: 54px;
+    }
+    .splay {
+      min-width: 0;
+      padding: 0 12px;
     }
     .veil {
       align-items: flex-end;

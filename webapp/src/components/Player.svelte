@@ -2845,6 +2845,9 @@
         : { kind: "track", id: String(c.id) };
     if ((c.kind === "artist-radio" || c.kind === "artist") && c.id)
       return { kind: "artist", id: String(c.id) };
+    // A genre station refills from its STYLE, never from the title playing:
+    // the server keeps it in the branch and steers with the same session.
+    if (c.kind === "genre-radio" && c.id) return { kind: "genre", id: String(c.id) };
     const ss = sessionFor(s);
     if (!ss.seed) {
       const t = s.queue[s.queue.length - 1] || s.queue[s.index];
@@ -2860,6 +2863,11 @@
     if (s.context && s.context.kind === "flow") return flowNextNow();
     const seed = radioSeed(s);
     if (!seed) return [];
+    if (seed.kind === "genre")
+      return (
+        (await api.genreRadioNext(seed.id, { recent: ss.heard, skipped: ss.skipped, exclude }))
+          .tracks || []
+      );
     return (
       (await api.radioNext(seed, { recent: ss.heard, skipped: ss.skipped, exclude })).tracks || []
     );

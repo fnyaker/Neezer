@@ -315,7 +315,7 @@ export async function toggleFavorite(track) {
 // "not this one", so it is skipped at once (Pandora's thumbs down). In an album
 // or a playlist the person chose it: the dislike only concerns what is
 // recommended (Deezer, Spotify), and the title plays on.
-const GENERATED = new Set(["flow", "radio", "artist-radio", "reco", "mix"]);
+const GENERATED = new Set(["flow", "radio", "artist-radio", "reco", "mix", "genre-radio"]);
 
 // "Je n'aime pas" / back. Optimistic, with "Annuler" in the toast; a third
 // title of one artist offers to stop recommending the artist (Deezer does).
