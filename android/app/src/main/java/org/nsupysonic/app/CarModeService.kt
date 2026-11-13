@@ -119,21 +119,34 @@ class CarModeService : Service(), CarHost {
          * Running: ask the service to detach the overlay and launch the
          * activity itself, so no card is left above the settings eating
          * touches. Not running: nothing is drawing, launch directly.
+         *
+         * Returns whether the launch was accepted: the SPA bridge hands that
+         * boolean back to the page, so "nothing happened" is never a success.
          */
-        fun openSettings(context: Context) {
+        fun openSettings(context: Context): Boolean {
             if (!running) {
-                if (!launchSettingsActivity(context)) settingsMissingToast(context)
-                return
+                val opened = launchSettingsActivity(context)
+                if (!opened) settingsMissingToast(context)
+                return opened
             }
-            try {
-                context.startService(
+            return try {
+                val started = context.startService(
                     Intent(context, CarModeService::class.java).setAction(ACTION_OPEN_SETTINGS)
-                )
+                ) != null
+                if (started) {
+                    true
+                } else {
+                    val opened = launchSettingsActivity(context)
+                    if (!opened) settingsMissingToast(context)
+                    opened
+                }
             } catch (_: Exception) {
                 // The service died between isRunning() and here, or an OEM
                 // refuses background starts: there is no overlay left to
                 // detach, so opening the activity is still correct.
-                if (!launchSettingsActivity(context)) settingsMissingToast(context)
+                val opened = launchSettingsActivity(context)
+                if (!opened) settingsMissingToast(context)
+                opened
             }
         }
 
@@ -149,10 +162,16 @@ class CarModeService : Service(), CarHost {
         }
 
         private fun settingsMissingToast(context: Context) {
-            try {
-                Toast.makeText(context, R.string.car_settings_missing, Toast.LENGTH_SHORT).show()
-            } catch (_: Exception) {
+            val show = Runnable {
+                try {
+                    Toast.makeText(context, R.string.car_settings_missing, Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                }
             }
+            // The SPA bridge may call this from its own thread; a Toast needs
+            // a Looper, and the page already shows its own failure message.
+            if (Looper.myLooper() == Looper.getMainLooper()) show.run()
+            else Handler(Looper.getMainLooper()).post(show)
         }
 
         /**

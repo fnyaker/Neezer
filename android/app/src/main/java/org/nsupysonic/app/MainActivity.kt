@@ -1211,16 +1211,23 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun carAvailable(): Boolean = allowed()
 
-        /** Open the native car settings (trigger, keyboard, pins, opacity). */
+        /**
+         * Open the native car settings (trigger, keyboard, pins, opacity).
+         * Returns true only when the launch was accepted: the page shows its
+         * "indisponible" toast otherwise, instead of treating a void call as a
+         * success (an older APK had no return value at all).
+         */
         @JavascriptInterface
-        fun openCarSettings() {
-            if (!allowed()) return
-            runOnUiThread {
+        fun openCarSettings(): Boolean {
+            if (!allowed()) return false
+            return try {
                 // ONE door: CarModeService detaches the overlay first, then
                 // launches the full-screen activity. Launching it here would
-                // leave the card on top, eating every touch. With no service
-                // alive there is no overlay, so the helper opens it directly.
+                // leave the card on top, eating every touch. The helper is a
+                // binder call; the service does its UI work on the main thread.
                 CarModeService.openSettings(this@MainActivity)
+            } catch (_: Exception) {
+                false
             }
         }
 

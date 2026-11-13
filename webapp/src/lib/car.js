@@ -43,7 +43,10 @@ export function carAvailable() {
 export function openCarSettings() {
   if (!carAvailable()) return false;
   try {
-    return window.NSNative.openCarSettings() !== false;
+    // Strictly true: an APK from before the bridge returned a boolean gives
+    // `undefined`, and the page must say "indisponible" rather than pretend
+    // the screen opened.
+    return window.NSNative.openCarSettings() === true;
   } catch {
     return false;
   }
@@ -53,14 +56,23 @@ export function openCarSettings() {
  * Pin a playlist for the car (the action on a playlist's page). The native
  * side order is the display order; pinning an already pinned playlist is a
  * no-op there. `false` when this APK has no car mode or refused the call.
+ *
+ * `nbTracks` is optional: when the page knows it, the tile says "42 titres"
+ * before the first `/api/me/playlists` read. The three-argument overload is
+ * part of bridge 9; older APKs have no car mode at all, so nothing is lost.
  */
-export function carPin(id, title) {
+export function carPin(id, title, nbTracks) {
   if (!carAvailable() || id === null || id === undefined) return false;
   const key = String(id).trim().slice(0, 64);
   if (!key) return false;
   try {
     const label = String(title || "").slice(0, 200);
-    return window.NSNative.carPin(key, label) !== false;
+    const count = Number(nbTracks);
+    const known = Number.isFinite(count) && count > 0 && count <= 1_000_000;
+    const accepted = known
+      ? window.NSNative.carPin(key, label, Math.floor(count))
+      : window.NSNative.carPin(key, label);
+    return accepted === true;
   } catch {
     return false;
   }
