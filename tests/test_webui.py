@@ -2828,12 +2828,13 @@ class WebUITestCase(unittest.TestCase):
         rv = self.client.delete(f"/api/playlist/{pid}/tracks", json={"indexes": ["x"]})
         self.assertEqual(rv.status_code, 400)
 
-    def test_edit_playlist_non_string_title_ignored(self):
-        # A non-string title must be ignored, not 500 (.strip() AttributeError).
+    def test_edit_playlist_non_string_title_is_refused(self):
+        # A wrong type is a 400, never a 500 (.strip() AttributeError) and never
+        # a silently ignored value: the JSON contract says str (§5.2).
         self._login()
         pid = self._create_playlist("Keep")["id"]
         rv = self.client.patch(f"/api/playlist/{pid}", json={"title": 123})
-        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.status_code, 400)
         data = self.client.get(f"/api/playlist/{pid}").get_json()
         self.assertEqual(data["playlist"]["title"], "Keep")  # unchanged
 
@@ -3570,10 +3571,25 @@ class WebUIGuestTestCase(unittest.TestCase):
         self.assertIn("1", self.client.get("/api/me/favorite-ids").get_json()["ids"])
 
     def test_account_writes_forbidden(self):
+        """A guest creates their OWN playlist; nothing reaches the Deezer
+        account, and somebody else's private playlist stays invisible."""
         self._login()
-        self.assertEqual(
-            self.client.post("/api/playlists", json={"title": "X"}).status_code, 403
-        )
+        rv = self.client.post("/api/playlists", json={"title": "X"})
+        # Creation is open to every account (Subsonic always allowed it); the
+        # admin-only web rule was the anomaly. The creator becomes the owner.
+        self.assertEqual(rv.status_code, 200)
+        pid = rv.get_json()["id"]
+        mine = self.client.get(f"/api/playlist/{pid}").get_json()["playlist"]
+        self.assertEqual((mine["role"], mine["editable"], mine["can_manage"]), ("owner", True, True))
+        # Another account's private playlist is a 404, never a 403.
+        with self.app.app_context():
+            from neezer.db import Playlist
+            from neezer.managers.user import UserManager
+
+            alice = UserManager.add("carol", "C@r0l")
+            theirs = Playlist.create(user=alice, name="Carol private")
+        hidden = self.client.get(f"/api/playlist/{theirs.id}")
+        self.assertEqual(hidden.status_code, 404)
         # nothing reached the Deezer account
 
     def test_a_guest_stars_an_album_for_themselves(self):

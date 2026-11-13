@@ -229,9 +229,11 @@ class ListsTestCase(unittest.TestCase):
         # A local first track: its album's cover route, like any other.
         self.assertEqual(by_name["Local first"]["cover"], "/api/cover/" + str(self.tracks[3].album_id))
         # A playlist that was never ordered: unfiled, and no position at all.
+        # `role`/`can_manage`/`owner` are the collaborative lot's additive keys.
         self.assertEqual(by_name["Empty"], {
             "id": str(self.empty.id), "deezer_id": None, "title": "Empty", "cover": None,
             "nb_tracks": 0, "editable": True, "folder_id": None, "position": None,
+            "role": "owner", "can_manage": True, "owner": "alice",
         })
         self.assertEqual(answer["folders"], [])
         # Newest first, as the model path listed them.

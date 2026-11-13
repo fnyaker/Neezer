@@ -260,9 +260,12 @@ class FolderOwnershipTestCase(_FolderCase):
                 PlaylistFolder.select().where(PlaylistFolder.id == uuid.UUID(mine["id"])).count(), 1
             )
         self.assertEqual(self.client.patch("/api/playlist-folders/" + theirs["id"], json={"title": "X"}).status_code, 404)
-        # Neither account's list ever shows the other's folders (and a guest
-        # gets two empty arrays, so the feature is invisible to them).
-        self.assertEqual(self.bob_client.get("/api/me/playlists").get_json(), {"playlists": [], "folders": []})
+        # Neither account's list ever shows the other's folders. Every account
+        # has its own list now (collaborative lot): bob's has HIS folder and no
+        # playlist, never alice's folder.
+        bob_answer = self.bob_client.get("/api/me/playlists").get_json()
+        self.assertEqual([f["title"] for f in bob_answer["folders"]], ["À lui"])
+        self.assertEqual(bob_answer["playlists"], [])
         self.assertEqual(
             [f["title"] for f in self.client.get("/api/me/playlists").get_json()["folders"]],
             ["À moi"],
@@ -675,11 +678,25 @@ class MyPlaylistsFoldersTestCase(_FolderCase):
             ],
         )
         # Additive only: every key the older SPA and the car overlay read is
-        # still there, with the same meaning.
+        # still there, with the same meaning. `role`/`can_manage`/`owner` belong
+        # to the collaborative lot (shared playlists); an old client ignores
+        # them.
         for playlist in answer["playlists"]:
             self.assertEqual(
                 sorted(playlist),
-                ["cover", "deezer_id", "editable", "folder_id", "id", "nb_tracks", "position", "title"],
+                [
+                    "can_manage",
+                    "cover",
+                    "deezer_id",
+                    "editable",
+                    "folder_id",
+                    "id",
+                    "nb_tracks",
+                    "owner",
+                    "position",
+                    "role",
+                    "title",
+                ],
             )
 
     def test_a_guest_gets_two_empty_arrays(self):

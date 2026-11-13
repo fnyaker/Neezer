@@ -193,6 +193,16 @@ POLICY = {
     "album_on_deezer": "read",
     "album": "read",
     "playlist": "read",
+    "playlist_version": "read",
+    "playlist_members": "read",
+    # Membership is access: a lent session may SEE who is on a playlist (the
+    # collaborators sheet), but never changes who can reach it — the same
+    # reasoning as remote links and public share links. Admin override included:
+    # NEVER refuses even an admin controller.
+    "playlist_invite": NEVER,
+    "playlist_member_role": NEVER,
+    "playlist_member_remove": NEVER,
+    "playlist_leave": NEVER,
     "discography": "read",
     "lyrics": "read",
     "track_gain": "read",

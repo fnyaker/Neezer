@@ -17,10 +17,13 @@ Contract:
 * ``GET /api/playlist/<playlist_id>/recommendations?limit=12``
   -> ``{playlist: {id, title}, tracks: [...]}``
 
-The playlist is resolved like every other playlist route, so a Deezer
-editorial playlist (no row here) is a 404: there is nothing of ours to seed
-from. The route is READ-ONLY; adding a suggestion stays the ordinary
-``POST /api/playlist/<id>/tracks``.
+The playlist is resolved like every other playlist route, through
+``_playlist_guard``: a non-member gets **404** (the same body as an unknown id),
+a public reader is allowed, and a Deezer editorial playlist (no row here) is a
+404 because there is nothing of ours to seed from. The seeds are the caller's
+VISIBLE rows (``Track.visible``): another account's private upload is not a
+hint about what this person should hear next. The route is READ-ONLY; adding a
+suggestion stays the ordinary ``POST /api/playlist/<id>/tracks``.
 
 The draw is seeded with the playlist's id and the day, so the suggestions do
 not move while the page is open and are new tomorrow (the same rule as the
@@ -36,7 +39,7 @@ from flask import jsonify, request
 
 from .. import radio
 from ..db import PlaylistTrack, Track
-from . import _resolve_db_playlist, _tracks_in_order, login_required, webapi
+from . import _playlist_guard, _tracks_in_order, login_required, webapi
 
 #: Enough to fill the section under a phone; the SPA asks for this.
 DEFAULT_LIMIT = 12
@@ -79,21 +82,29 @@ def _seed_sample(seed_ids):
 @webapi.route("/playlist/<playlist_id>/recommendations")
 @login_required
 def playlist_recommendations(playlist_id):
-    pl = _resolve_db_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
+    pl, _role, error = _playlist_guard(playlist_id, "read")
+    if error:
+        return error
 
-    # The playlist's own rows are the seeds. One statement, and the duplicate
-    # occurrences a playlist may hold collapse to one seed: the same title
-    # twice says nothing more about what the playlist is.
+    # Every row of the playlist, read as tuples: the caller's VISIBLE ones seed
+    # the radio, ALL of them are excluded from the answer (a hidden upload is
+    # still a title the playlist holds; suggesting it would both be wrong and
+    # reveal it). One statement.
+    rows = list(
+        Track.select(Track.id, Track.owner)
+        .join(PlaylistTrack, on=(PlaylistTrack.track == Track.id))
+        .where(PlaylistTrack.playlist == pl.id)
+        .order_by(PlaylistTrack.index)
+        .tuples()
+    )
+    user = request.webuser
+    is_admin = bool(getattr(user, "admin", False))
+    all_ids = list(dict.fromkeys(tid for tid, _owner in rows))
     seed_ids = list(
         dict.fromkeys(
-            r[0]
-            for r in Track.select(Track.id)
-            .join(PlaylistTrack, on=(PlaylistTrack.track == Track.id))
-            .where(PlaylistTrack.playlist == pl)
-            .order_by(PlaylistTrack.index)
-            .tuples()
+            tid
+            for tid, owner in rows
+            if owner is None or is_admin or owner == user.id
         )
     )
     payload = {"playlist": {"id": str(pl.id), "title": pl.name}}
@@ -111,10 +122,12 @@ def playlist_recommendations(playlist_id):
     # sample only limits how many SEEDS the radio reads (MAX_SEEDS above): every
     # row of the playlist is still excluded from the answer.
     picks = radio.build(
-        request.webuser,
+        user,
         _seed_sample(seed_ids),
         n=_limit(),
-        exclude=seed_ids,
+        # ALL the playlist's rows are excluded, visible or not: the radio can
+        # never suggest a title the playlist holds.
+        exclude=all_ids,
         rng=rng,
         block_seeds=True,
     )
