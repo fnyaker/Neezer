@@ -99,6 +99,38 @@ le code.
   arrivent de Deezer en MP3 brut, sans flux RSS : à voir d'où viennent les chapitres. La
   transcription demande un modèle de reconnaissance vocale.
 
+## Niveau 5 — administration et onboarding (gros chantier)
+
+- [ ] **Dashboard admin des utilisateurs** — dans Réglages, visible seulement pour un admin :
+  liste et recherche des comptes, rôle, état (actif / invité / désactivé), dernière connexion,
+  création d'une invitation, révocation, désactivation/suppression avec garde-fous (pas de
+  suppression du dernier admin, pas d'auto-suppression), renvoi du lien. Routes `/api/admin/users…`
+  avec `@login_required` + contrôle admin, pagination, aucune énumération pour un non-admin.
+- [ ] **Invitation à usage unique** — lien copiable (pas d'email tant qu'aucun SMTP n'est
+  configuré) : table `invite` (id, empreinte du jeton, créateur, dates, expiration, utilisé par,
+  révoqué), jeton opaque signé, une seule création de compte par lien, expiration et révocation
+  immédiate. Page publique de création : username limité (3–32 caractères `[a-z0-9_.-]`, replié,
+  noms réservés, unicité insensible à la casse), mot de passe fort + confirmation, limitation de
+  débit, CSRF, aucune fuite d'existence de compte, hachage argon2 existant.
+- [ ] **Onboarding par les artistes** — après la création du compte : une page plein écran montre
+  une liste d'artistes connus (Deezer public : `get_chart_artists` / artistes populaires, cache,
+  sélection diverse par genres et pays), scroll infini et barre de recherche en haut. Un like
+  insère **juste après** l'artiste des artistes similaires (`artist/<id>/related`), sans casser la
+  diversité ; minimum 1 artiste pour terminer (3–5 recommandés), bouton « Terminé ». Les artistes
+  choisis deviennent des artistes suivis/étoilés pour le profil de goût et les Nouveautés ; rien
+  n'est téléchargé.
+- [ ] **Étape compte et import** — après les artistes, proposer sans bloquer : lier son compte
+  Deezer (ARL ou connexion navigateur), ou importer ses playlists/favoris depuis YouTube, Spotify
+  et Apple Music, via `neezer/services/` et `neezer/webui/playlist_import.py`. Chaque option est
+  skippable ; les imports sont des jobs de fond avec progression et cause d'échec ; rien n'est
+  jamais écrit sur le compte du fournisseur.
+- [ ] **Finitions** — l'onboarding est une route gardée avant l'Accueil (reprise après refresh),
+  français, mobile/desktop, cibles 44 px, états vides/erreurs ; tests d'invitation (usage unique,
+  expiration, révocation), d'unicité/validation du username, de mot de passe, de similarité des
+  artistes et d'import ; mesure du nombre de requêtes et du temps de première peinture. Migration
+  pour SQLite/PostgreSQL/MySQL et upgrade d'un serveur existant (les comptes actuels ne voient
+  jamais l'onboarding).
+
 ---
 
 ## Écarté ou à réévaluer
