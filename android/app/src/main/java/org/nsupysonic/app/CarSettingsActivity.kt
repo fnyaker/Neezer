@@ -14,6 +14,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.AttributeSet
 import android.view.Gravity
@@ -47,8 +48,11 @@ import kotlin.math.roundToInt
  * The playlist catalogue is the server's `/api/me/playlists`, fetched natively
  * through [CarPlaylistSource] with the WebView's session cookie: the same
  * origin rule, pin and redirect discipline as every other native fetch, and no
- * new endpoint. Offline, the pinned rows already in [CarPrefs] still paint and
- * can still be un-pinned.
+ * new endpoint. The URL is built from the server root, so the SPA's `/app`
+ * path can never end up in front of `/api`. Offline, the pinned rows already
+ * in [CarPrefs] still paint, are announced as local, and can still be
+ * un-pinned; the status line names the cause (session, offline, timeout, TLS,
+ * server error, unexpected page) and offers one retry.
  */
 class CarSettingsActivity : AppCompatActivity() {
 
@@ -65,13 +69,25 @@ class CarSettingsActivity : AppCompatActivity() {
     private lateinit var letterFlow: CarFlow
     private lateinit var layoutHint: TextView
 
-    private enum class Catalogue { IDLE, LOADING, READY, NO_SESSION, FAILED }
+    private enum class Catalogue {
+        IDLE,
+        LOADING,
+        READY,
+        NO_SERVER,
+        NO_SESSION,
+        OFFLINE,
+        TIMEOUT,
+        TLS,
+        SERVER,
+        UNEXPECTED,
+    }
 
     private class CatalogueRow(
         val id: String,
         val title: String,
         val nbTracks: Int,
         val stale: Boolean,
+        val cover: String?,
     )
 
     private class GpsApp(val label: String, val packages: Set<String>)
@@ -79,6 +95,8 @@ class CarSettingsActivity : AppCompatActivity() {
     private var catalogue = Catalogue.IDLE
     private var serverItems: List<CarPlaylistSource.Item> = emptyList()
     private var loadSeq = 0
+    private var lastAttemptAt = 0L
+    private var lastSuccessAt = 0L
     private val permissionRows = mutableListOf<Pair<View, () -> Boolean>>()
 
     // The Android runtime permissions (location for the speed, the microphone
@@ -121,7 +139,9 @@ class CarSettingsActivity : AppCompatActivity() {
 
         build()
         refreshPermissions()
-        refreshCatalogue()
+        // The catalogue is read from onResume: onCreate is always followed by
+        // one, and that is also the hook that must retry after a failure or
+        // after a minute away.
     }
 
     override fun onResume() {
@@ -129,7 +149,24 @@ class CarSettingsActivity : AppCompatActivity() {
         // Back from the overlay/usage-access settings, and pins that may have
         // changed in the playlist page while this screen was behind it.
         refreshPermissions()
-        if (::pinsBox.isInitialized) renderPins()
+        if (::pinsBox.isInitialized) {
+            seedFromCache()
+            renderPins()
+            refreshCatalogue()
+        }
+    }
+
+    /**
+     * The overlay's own read is process-wide: reusing it here paints the
+     * covers and counts without a request. It is only a minute old, and
+     * [refreshCatalogue] re-reads as soon as it is not.
+     */
+    private fun seedFromCache() {
+        if (catalogue != Catalogue.IDLE || serverItems.isNotEmpty()) return
+        val cached = CarPlaylistSource.fresh(SystemClock.elapsedRealtime()) ?: return
+        serverItems = cached.items
+        lastSuccessAt = cached.at
+        catalogue = Catalogue.READY
     }
 
     override fun onDestroy() {
@@ -424,7 +461,7 @@ class CarSettingsActivity : AppCompatActivity() {
 
         val hint = CarStyle.text(
             this,
-            "Épingle celles que tu veux voir en roulant. « Mon Flow » reste toujours en premier. Tu peux aussi épingler depuis la page d'une playlist dans l'app.",
+            "Épingle celles que tu veux voir en roulant. « Mon Flow » reste toujours en premier. Tu peux aussi épingler depuis la page d'une playlist dans l'app. Les épinglées restent sur cet appareil, même sans serveur.",
             13f,
             CarStyle.DIM,
         ).apply { setLineSpacing(0f, 1.4f) }
@@ -459,9 +496,9 @@ class CarSettingsActivity : AppCompatActivity() {
                 topWrap(8)
             )
         } else {
-            for (row in rows) {
+            for ((index, row) in rows.withIndex()) {
                 pinsBox.addView(
-                    pinRow(row, pins),
+                    pinRow(row, pins, index < COVER_ROWS),
                     LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
@@ -473,7 +510,6 @@ class CarSettingsActivity : AppCompatActivity() {
     }
 
     private fun rowsForSettings(pins: List<PinnedPlaylist>): List<CatalogueRow> {
-        val known = serverItems.associateBy { it.id }
         val rows = mutableListOf<CatalogueRow>()
         val seen = HashSet<String>()
         // Pinned first, in the car's own order: "monter" must move a row the
@@ -483,24 +519,32 @@ class CarSettingsActivity : AppCompatActivity() {
         val hasCatalogue = catalogue == Catalogue.READY || serverItems.isNotEmpty()
         for (pin in pins) {
             if (!seen.add(pin.id)) continue
-            val fresh = known[pin.id]
+            val fresh = CarPlaylistSource.find(serverItems, pin.id)
+            // A pin stored under the Deezer id matches the list's UUID row:
+            // remember both ids so the catalogue loop below does not add the
+            // same playlist a second time.
+            if (fresh != null) {
+                seen.add(fresh.id)
+                fresh.deezerId?.let { seen.add(it) }
+            }
             rows.add(
                 CatalogueRow(
                     pin.id,
                     fresh?.title ?: pin.title.ifBlank { "Playlist" },
                     fresh?.nbTracks ?: pin.nbTracks,
                     hasCatalogue && fresh == null,
+                    fresh?.cover,
                 )
             )
         }
         for (item in serverItems) {
             if (!seen.add(item.id)) continue
-            rows.add(CatalogueRow(item.id, item.title, item.nbTracks, false))
+            rows.add(CatalogueRow(item.id, item.title, item.nbTracks, false, item.cover))
         }
         return rows
     }
 
-    private fun pinRow(row: CatalogueRow, pins: List<PinnedPlaylist>): View {
+    private fun pinRow(row: CatalogueRow, pins: List<PinnedPlaylist>, withCover: Boolean): View {
         val line = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -509,6 +553,10 @@ class CarSettingsActivity : AppCompatActivity() {
         val cover = CarCoverView(this).apply {
             seed = row.id
             sizeDp = 40
+            // The pinned rows (first in the list) get the real sleeve; the
+            // rest of the catalogue stays on its grooves so opening a 500-row
+            // settings screen never fans out 500 image requests.
+            coverUrl = if (withCover) CarCovers.resolve(prefs.baseUrl(), row.cover) else ""
         }
         line.addView(cover, LinearLayout.LayoutParams(d(40), d(40)))
 
@@ -571,12 +619,51 @@ class CarSettingsActivity : AppCompatActivity() {
     }
 
     private fun renderCatalogueStatus() {
-        val retry = catalogue == Catalogue.FAILED
-        val (text, color) = when (catalogue) {
-            Catalogue.LOADING -> "Chargement des playlists…" to CarStyle.DIM
-            Catalogue.NO_SESSION -> "Session absente — connecte-toi dans l'app." to CarStyle.DIM
-            Catalogue.FAILED -> "Serveur injoignable · réessayer" to CarStyle.WARN
-            else -> "" to CarStyle.DIM
+        val retry = when (catalogue) {
+            Catalogue.NO_SESSION,
+            Catalogue.OFFLINE,
+            Catalogue.TIMEOUT,
+            Catalogue.TLS,
+            Catalogue.SERVER,
+            Catalogue.UNEXPECTED
+            -> true
+            else -> false
+        }
+        var text = ""
+        var color = CarStyle.DIM
+        when (catalogue) {
+            Catalogue.IDLE -> Unit
+            Catalogue.LOADING -> text = "Chargement des playlists…"
+            Catalogue.READY -> if (serverItems.isEmpty()) {
+                text = "Aucune playlist sur ce compte. Les épinglées restent sur cet appareil."
+            }
+            Catalogue.NO_SERVER -> {
+                text = "Aucun serveur configuré. Les épinglées restent sur cet appareil."
+            }
+            Catalogue.NO_SESSION -> {
+                text = "Session absente — connecte-toi dans l'app. " +
+                    "Les épinglées restent sur cet appareil · réessayer"
+            }
+            Catalogue.OFFLINE -> {
+                text = "Hors ligne — les épinglées restent sur cet appareil · réessayer"
+                color = CarStyle.WARN
+            }
+            Catalogue.TIMEOUT -> {
+                text = "Le serveur ne répond pas (délai dépassé) · réessayer"
+                color = CarStyle.WARN
+            }
+            Catalogue.TLS -> {
+                text = "Certificat refusé — les épinglées restent sur cet appareil · réessayer"
+                color = CarStyle.WARN
+            }
+            Catalogue.SERVER -> {
+                text = "Le serveur a répondu par une erreur · réessayer"
+                color = CarStyle.WARN
+            }
+            Catalogue.UNEXPECTED -> {
+                text = "Réponse inattendue du serveur (page de connexion ?) · réessayer"
+                color = CarStyle.WARN
+            }
         }
         pinsStatus.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
         pinsStatus.text = text
@@ -584,47 +671,63 @@ class CarSettingsActivity : AppCompatActivity() {
         pinsStatus.isClickable = retry
         pinsStatus.isFocusable = retry
         pinsStatus.foreground = if (retry) ripple(6f) else null
-        pinsStatus.setOnClickListener(if (retry) View.OnClickListener { refreshCatalogue() } else null)
+        pinsStatus.setOnClickListener(if (retry) View.OnClickListener { refreshCatalogue(true) } else null)
         pinsStatus.contentDescription =
-            if (retry) "Serveur injoignable, toucher pour réessayer" else null
+            if (retry) "$text — toucher pour réessayer" else null
     }
 
-    private fun refreshCatalogue() {
-        val seq = ++loadSeq
+    /**
+     * Read (or re-read) the catalogue. On return to the screen a successful
+     * read younger than 60 s is reused; a failure is retried, at most once
+     * every 2 s so a flapping screen cannot hammer the server.
+     */
+    private fun refreshCatalogue(force: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        val freshSuccess = catalogue == Catalogue.READY && lastSuccessAt != 0L &&
+            now - lastSuccessAt < 60_000L
+        if (catalogue == Catalogue.LOADING) return
+        if (!force && freshSuccess) return
+        if (!force && lastAttemptAt != 0L && now - lastAttemptAt < 2_000L) return
+
         val url = CarPlaylistSource.endpoint(prefs)
         if (url == null) {
-            catalogue = Catalogue.NO_SESSION
+            catalogue = Catalogue.NO_SERVER
             renderCatalogueStatus()
             return
         }
-        val cookie = CarPlaylistSource.cookie(url)
-        if (cookie.isNullOrEmpty()) {
-            catalogue = Catalogue.NO_SESSION
-            renderCatalogueStatus()
-            return
-        }
+        val seq = ++loadSeq
+        lastAttemptAt = now
         catalogue = Catalogue.LOADING
         renderCatalogueStatus()
         CarPlaylistSource.IO.execute {
-            var expired = false
-            val fetched = try {
-                CarPlaylistSource.fetch(prefs, url, cookie)
-            } catch (_: CarPlaylistSource.SessionExpired) {
-                expired = true
-                null
-            } catch (_: Exception) {
-                null
-            }
+            val outcome = carListOutcome { CarPlaylistSource.load(prefs, url) }
             runOnUiThread {
                 if (seq != loadSeq || isFinishing || isDestroyed) return@runOnUiThread
-                if (expired) {
-                    catalogue = Catalogue.NO_SESSION
-                } else if (fetched != null) {
-                    serverItems = fetched
-                    rememberCounts(fetched)
-                    catalogue = Catalogue.READY
-                } else {
-                    catalogue = Catalogue.FAILED
+                when (val result = outcome) {
+                    is CarListOutcome.Ok -> {
+                        serverItems = result.items
+                        // The overlay's own cache must see the same read, so
+                        // opening the panel does not cost a second request.
+                        CarPlaylistSource.remember(result.items)
+                        rememberCounts(result.items)
+                        lastSuccessAt = SystemClock.elapsedRealtime()
+                        catalogue = Catalogue.READY
+                    }
+                    is CarListOutcome.Fail -> {
+                        if (result.failure is CarListFailure.NoSession) {
+                            // A 401 is not a stale menu: the cache must not
+                            // survive a session that is gone.
+                            CarPlaylistSource.forget()
+                        }
+                        catalogue = when (result.failure) {
+                            is CarListFailure.NoSession -> Catalogue.NO_SESSION
+                            is CarListFailure.Timeout -> Catalogue.TIMEOUT
+                            is CarListFailure.Tls -> Catalogue.TLS
+                            is CarListFailure.Http -> Catalogue.SERVER
+                            is CarListFailure.Unexpected -> Catalogue.UNEXPECTED
+                            else -> Catalogue.OFFLINE
+                        }
+                    }
                 }
                 renderPins()
             }
@@ -633,10 +736,9 @@ class CarSettingsActivity : AppCompatActivity() {
 
     /** A successful read refreshes the pinned titles/counts; the order stays. */
     private fun rememberCounts(items: List<CarPlaylistSource.Item>) {
-        val byId = items.associateBy { it.id }
         var changed = false
         val next = car.pins.map { pin ->
-            val fresh = byId[pin.id] ?: return@map pin
+            val fresh = CarPlaylistSource.find(items, pin.id) ?: return@map pin
             if (fresh.title == pin.title && fresh.nbTracks == pin.nbTracks) pin
             else {
                 changed = true
@@ -899,6 +1001,9 @@ class CarSettingsActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** At most this many rows of the settings list fetch a real sleeve. */
+        private const val COVER_ROWS = 12
+
         private val LAYOUTS = listOf(
             "auto" to "Auto (système)",
             "azerty" to "AZERTY",

@@ -20,7 +20,9 @@ import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
+import javax.net.ssl.SSLException
 import kotlin.math.max
 
 /**
@@ -52,13 +54,25 @@ class CarPlaylistsView @JvmOverloads constructor(
     constructor(context: Context, host: CarHost, carPrefs: CarPrefs) :
         this(context, host, Prefs(context), carPrefs)
 
-    private enum class Load { IDLE, LOADING, READY, NO_SESSION, FAILED }
+    private enum class Load {
+        IDLE,
+        LOADING,
+        READY,
+        NO_SERVER,
+        NO_SESSION,
+        OFFLINE,
+        TIMEOUT,
+        TLS,
+        SERVER,
+        UNEXPECTED,
+    }
 
     private inner class Cell(
         val id: String,
         val title: String,
         val count: Int,
         val flow: Boolean,
+        val cover: String,
     ) {
         val countLabel: String
             get() = when {
@@ -84,6 +98,7 @@ class CarPlaylistsView @JvmOverloads constructor(
     private var loadSeq = 0
     private var lastRefreshAt = 0L
     private var lastSuccessAt = 0L
+    private var fromCache = false
 
     private val subColor = 0xFFD5D2C8.toInt()
     private val white10 = 0x1AFFFFFF
@@ -220,10 +235,22 @@ class CarPlaylistsView @JvmOverloads constructor(
     }
 
     private fun updateSubtitle() {
-        val (text, color, retry) = when (state) {
-            Load.NO_SESSION -> Triple("session absente", CarStyle.DIM, false)
-            Load.FAILED -> Triple("hors ligne · réessayer", CarStyle.WARN, true)
-            else -> Triple("épinglées", subColor, false)
+        val retry = state != Load.IDLE && state != Load.LOADING && state != Load.READY
+        val (text, color) = when (state) {
+            Load.IDLE -> "épinglées" to subColor
+            Load.LOADING -> "épinglées · chargement du catalogue" to subColor
+            Load.READY -> when {
+                items.isEmpty() -> "épinglées · catalogue vide" to subColor
+                fromCache -> "épinglées · catalogue mémorisé" to subColor
+                else -> "épinglées · catalogue à jour" to subColor
+            }
+            Load.NO_SERVER -> "épinglées · serveur non configuré" to CarStyle.WARN
+            Load.NO_SESSION -> "épinglées · session absente" to CarStyle.WARN
+            Load.OFFLINE -> "épinglées · hors ligne" to CarStyle.WARN
+            Load.TIMEOUT -> "épinglées · serveur muet" to CarStyle.WARN
+            Load.TLS -> "épinglées · certificat refusé" to CarStyle.WARN
+            Load.SERVER -> "épinglées · serveur en erreur" to CarStyle.WARN
+            Load.UNEXPECTED -> "épinglées · réponse inattendue" to CarStyle.WARN
         }
         subtitle.text = text
         subtitle.setTextColor(color)
@@ -232,22 +259,25 @@ class CarPlaylistsView @JvmOverloads constructor(
         subtitle.foreground = if (retry) ripple(6f) else null
         subtitle.setOnClickListener(if (retry) View.OnClickListener { refresh(true) } else null)
         subtitle.contentDescription =
-            if (retry) "Serveur injoignable, toucher pour réessayer" else null
+            if (retry) "$text — toucher pour réessayer" else null
     }
 
     // -- tiles ---------------------------------------------------------------
 
     private fun buildCells(): List<Cell> {
-        val byId = items.associateBy { it.id }
-        val cells = mutableListOf(Cell("", "Mon Flow", 0, true))
+        val cells = mutableListOf(Cell("", "Mon Flow", 0, true, ""))
         for (pin in prefs.pins) {
-            val fresh = byId[pin.id]
+            // A pin may be stored under the playlist's UUID or its Deezer id
+            // (the page's own id): the catalogue answers both, and the tile
+            // must find the same playlist either way.
+            val fresh = CarPlaylistSource.find(items, pin.id)
             cells.add(
                 Cell(
                     pin.id,
                     fresh?.title?.takeIf { it.isNotBlank() } ?: pin.title.ifBlank { "Playlist" },
                     fresh?.nbTracks ?: pin.nbTracks,
                     false,
+                    CarCovers.resolve(server.baseUrl(), fresh?.cover),
                 )
             )
         }
@@ -279,6 +309,7 @@ class CarPlaylistsView @JvmOverloads constructor(
         val cover = CarCoverView(context).apply {
             seed = cell.coverSeed
             sizeDp = 52
+            coverUrl = cell.cover
         }
         box.addView(cover, LinearLayout.LayoutParams(d(52), d(52)))
 
@@ -386,6 +417,7 @@ class CarPlaylistsView @JvmOverloads constructor(
             render()
             return
         }
+        if (state == Load.LOADING) return
         // The overlay is detached and recreated each time the settings screen
         // or a size change drops it: this instance's fields start empty, but
         // the process-wide read may still be fresh. Reuse it instead of
@@ -393,56 +425,54 @@ class CarPlaylistsView @JvmOverloads constructor(
         if (!force && state == Load.IDLE) {
             val cached = CarPlaylistSource.fresh(now)
             if (cached != null) {
-                items = cached
+                items = cached.items
                 state = Load.READY
-                lastSuccessAt = now
+                fromCache = true
+                lastSuccessAt = cached.at
                 render()
                 return
             }
         }
-        lastRefreshAt = now
-        val seq = ++loadSeq
-
         val url = CarPlaylistSource.endpoint(server)
         if (url == null) {
-            state = Load.NO_SESSION
+            state = Load.NO_SERVER
             render()
             return
         }
-        val cookie = CarPlaylistSource.cookie(url)
-        if (cookie.isNullOrEmpty()) {
-            state = Load.NO_SESSION
-            render()
-            return
-        }
+        lastRefreshAt = now
+        val seq = ++loadSeq
 
         state = Load.LOADING
         updateSubtitle()
         CarPlaylistSource.IO.execute {
-            var expired = false
-            val fetched = try {
-                CarPlaylistSource.fetch(server, url, cookie)
-            } catch (_: CarPlaylistSource.SessionExpired) {
-                expired = true
-                null
-            } catch (_: Exception) {
-                null
-            }
+            val outcome = carListOutcome { CarPlaylistSource.load(server, url) }
             main.post {
                 if (seq != loadSeq || !isAttachedToWindow) return@post
-                if (expired) {
-                    CarPlaylistSource.forget()
-                    state = Load.NO_SESSION
-                } else if (fetched != null) {
-                    items = fetched
-                    CarPlaylistSource.remember(fetched)
-                    remember(fetched)
-                    lastSuccessAt = SystemClock.elapsedRealtime()
-                    state = Load.READY
-                } else {
-                    // Keep what we already had: a refresh failure does not
-                    // erase a list that was read a minute ago.
-                    state = Load.FAILED
+                when (val result = outcome) {
+                    is CarListOutcome.Ok -> {
+                        items = result.items
+                        CarPlaylistSource.remember(result.items)
+                        remember(result.items)
+                        fromCache = false
+                        lastSuccessAt = SystemClock.elapsedRealtime()
+                        state = Load.READY
+                    }
+                    is CarListOutcome.Fail -> {
+                        if (result.failure is CarListFailure.NoSession) {
+                            CarPlaylistSource.forget()
+                        }
+                        // Keep what we already had: a refresh failure does not
+                        // erase a list that was read a minute ago, and the pins
+                        // below still paint.
+                        state = when (result.failure) {
+                            is CarListFailure.NoSession -> Load.NO_SESSION
+                            is CarListFailure.Timeout -> Load.TIMEOUT
+                            is CarListFailure.Tls -> Load.TLS
+                            is CarListFailure.Http -> Load.SERVER
+                            is CarListFailure.Unexpected -> Load.UNEXPECTED
+                            else -> Load.OFFLINE
+                        }
+                    }
                 }
                 render()
             }
@@ -451,10 +481,9 @@ class CarPlaylistsView @JvmOverloads constructor(
 
     /** Keep the pinned titles/counts current after a successful list read. */
     private fun remember(list: List<CarPlaylistSource.Item>) {
-        val byId = list.associateBy { it.id }
         var changed = false
         val next = prefs.pins.map { pin ->
-            val fresh = byId[pin.id] ?: return@map pin
+            val fresh = CarPlaylistSource.find(list, pin.id) ?: return@map pin
             if (fresh.title == pin.title && fresh.nbTracks == pin.nbTracks) pin
             else {
                 changed = true
@@ -476,6 +505,7 @@ class CarPlaylistsView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         loadSeq++ // an answer in flight is about a panel that is gone
+        if (state == Load.LOADING) state = Load.IDLE
         lastRefreshAt = 0L
         super.onDetachedFromWindow()
     }
@@ -548,6 +578,55 @@ class CarPlaylistsView @JvmOverloads constructor(
 }
 
 /**
+ * Why the car could not read `/api/me/playlists`. The panel and the settings
+ * say different French sentences, but they must not disagree on the cause:
+ * a 401 is "log in", a timeout is "the server is silent", a 403/5xx is "the
+ * server answered", and an HTML body is "unexpected answer".
+ */
+internal sealed class CarListFailure : Exception() {
+    object NoSession : CarListFailure()
+    object Offline : CarListFailure()
+    object Timeout : CarListFailure()
+    object Tls : CarListFailure()
+    object Unexpected : CarListFailure()
+    data class Http(val code: Int) : CarListFailure()
+}
+
+/** The result of one catalogue read, as both car screens consume it. */
+internal sealed class CarListOutcome {
+    class Ok(val items: List<CarPlaylistSource.Item>) : CarListOutcome()
+    class Fail(val failure: CarListFailure) : CarListOutcome()
+}
+
+/** Run one read and classify its failure; never throws. */
+internal inline fun carListOutcome(read: () -> List<CarPlaylistSource.Item>): CarListOutcome = try {
+    CarListOutcome.Ok(read())
+} catch (failure: CarListFailure) {
+    CarListOutcome.Fail(failure)
+} catch (error: Exception) {
+    CarListOutcome.Fail(carListFailureOf(error))
+}
+
+private val HTTP_CODE = Regex("""\bHTTP (\d{3})\b""")
+
+/**
+ * Net's one non-2xx answer worth distinguishing is `IOException("HTTP 401")`;
+ * every other status arrives the same way. The mapping is pure so the three
+ * states the person sees (log in / offline / server answered) are held by a
+ * test, not by a guess at each call site.
+ */
+internal fun carListFailureOf(error: Throwable): CarListFailure {
+    if (error is CarListFailure) return error
+    val code = HTTP_CODE.find(error.message ?: "")?.groupValues?.get(1)?.toIntOrNull()
+    if (code != null) {
+        return if (code == 401) CarListFailure.NoSession else CarListFailure.Http(code)
+    }
+    if (error is SocketTimeoutException) return CarListFailure.Timeout
+    if (error is SSLException) return CarListFailure.Tls
+    return CarListFailure.Offline
+}
+
+/**
  * The one reader of `/api/me/playlists` for the car (the overlay and the
  * settings screen). It is the server's own route: no new endpoint, no Deezer
  * call, and the session cookie only ever goes to the configured origin because
@@ -558,7 +637,16 @@ internal object CarPlaylistSource {
     private const val MAX_BYTES = 1024 * 1024
     private const val MAX_ITEMS = 500
 
-    data class Item(val id: String, val title: String, val nbTracks: Int)
+    data class Item(
+        val id: String,
+        val title: String,
+        val nbTracks: Int,
+        val cover: String? = null,
+        val deezerId: String? = null,
+    )
+
+    /** A cached read, with the instant it was taken (elapsedRealtime). */
+    data class Cached(val items: List<Item>, val at: Long)
 
     /** How long a successful read serves every panel without a new request. */
     private const val CACHE_MS = 60_000L
@@ -567,9 +655,9 @@ internal object CarPlaylistSource {
 
     /** The last good list if it is younger than a minute, else null. */
     @Synchronized
-    fun fresh(now: Long): List<Item>? {
+    fun fresh(now: Long): Cached? {
         val list = cached ?: return null
-        return if (now - cachedAt in 0 until CACHE_MS) list else null
+        return if (now - cachedAt in 0 until CACHE_MS) Cached(list, cachedAt) else null
     }
 
     /** Keep a successful read for the next panel instance (attach/reattach). */
@@ -586,21 +674,66 @@ internal object CarPlaylistSource {
         cachedAt = 0L
     }
 
-    /** The cookie was absent, expired or refused: the page must log in again. */
-    class SessionExpired : Exception()
-
     /** One daemon thread for both screens; a hung read never blocks the UI. */
     val IO = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "car-playlists").apply { isDaemon = true }
     }
 
-    /** The configured server's list URL, or null when there is no server. */
+    /**
+     * The configured server's list URL, or null when there is no server.
+     *
+     * [Prefs.baseUrl] may carry the SPA's `/app` path (a person pastes the
+     * player's address): the API never lives under it. [rootOf] removes that
+     * one suffix and keeps any reverse-proxy prefix the server is deployed
+     * under, then [Prefs.isServerUrl] holds the result to the configured
+     * origin — the same definition as the navigation guard and the pin.
+     */
     fun endpoint(prefs: Prefs): String? {
-        val base = prefs.baseUrl().trimEnd('/')
-        if (base.isEmpty()) return null
-        val url = base + PATH
+        val url = endpointFor(prefs.baseUrl()) ?: return null
         return if (prefs.isServerUrl(url)) url else null
     }
+
+    /** The pure half of [endpoint], held by a JVM test. */
+    fun endpointFor(baseUrl: String): String? {
+        val root = rootOf(baseUrl) ?: return null
+        return root + PATH
+    }
+
+    /** The server root: the configured base without a trailing `/app`. */
+    fun rootOf(baseUrl: String): String? {
+        var text = baseUrl.trim()
+        if (text.isEmpty() || !text.contains("://")) return null
+        while (text.endsWith("/")) text = text.dropLast(1)
+        if (text.endsWith("/app", ignoreCase = true)) text = text.dropLast(4)
+        val uri = try {
+            java.net.URI(text)
+        } catch (_: Exception) {
+            return null
+        }
+        val scheme = uri.scheme?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        if (uri.host.isNullOrEmpty()) return null
+        return text
+    }
+
+    /**
+     * The catalogue row for a pin. A pin is stored under whatever id the page
+     * had — a playlist UUID, or the Deezer id for a Deezer playlist — while the
+     * list carries both: match either, UUID case-insensitively.
+     */
+    fun find(items: List<Item>, pinId: String): Item? {
+        val key = pinId.trim()
+        if (key.isEmpty()) return null
+        for (item in items) if (sameId(item.id, key)) return item
+        for (item in items) {
+            val dz = item.deezerId ?: continue
+            if (sameId(dz, key)) return item
+        }
+        return null
+    }
+
+    private fun sameId(a: String, b: String): Boolean =
+        a == b || (a.length == b.length && a.equals(b, ignoreCase = true))
 
     /** The WebView's own session cookie — never read for another origin. */
     fun cookie(url: String): String? = try {
@@ -609,15 +742,30 @@ internal object CarPlaylistSource {
         null
     }
 
-    fun fetch(prefs: Prefs, url: String, cookie: String): List<Item> {
+    /**
+     * One catalogue read: the cookie the WebView holds, or — when the jar has
+     * not been touched yet in this process (the tile can open the settings
+     * before the page ever loaded) — one flush and a second read. A request
+     * without a cookie is still worth making: its 401 or its login-page HTML
+     * tells "session absente" from "server down".
+     */
+    fun load(prefs: Prefs, url: String): List<Item> {
+        var session = cookie(url)
+        if (session.isNullOrEmpty()) {
+            try {
+                CookieManager.getInstance().flush()
+            } catch (_: Exception) {
+            }
+            session = cookie(url)
+        }
+        return fetch(prefs, url, session)
+    }
+
+    fun fetch(prefs: Prefs, url: String, cookie: String?): List<Item> {
         val conn = try {
-            Net.get(prefs, url, cookie, connectTimeout = 8000, readTimeout = 8000)
-        } catch (e: java.io.IOException) {
-            // Net's one non-2xx answer worth distinguishing: the API says 401
-            // when the session cookie is gone or revoked (neezer/webui
-            // login_required), which is "log in", not "the server is down".
-            if (e.message == "HTTP 401") throw SessionExpired()
-            throw e
+            Net.get(prefs, url, cookie, connectTimeout = 6000, readTimeout = 6000)
+        } catch (error: Exception) {
+            throw carListFailureOf(error)
         }
         val text = try {
             conn.inputStream.use { input ->
@@ -628,19 +776,27 @@ internal object CarPlaylistSource {
                     val read = input.read(buffer)
                     if (read < 0) break
                     total += read
-                    if (total > MAX_BYTES) throw java.io.IOException("playlist list too large")
+                    if (total > MAX_BYTES) throw CarListFailure.Unexpected
                     out.write(buffer, 0, read)
                 }
                 String(out.toByteArray(), Charsets.UTF_8)
             }
+        } catch (failure: CarListFailure) {
+            throw failure
+        } catch (error: Exception) {
+            throw carListFailureOf(error)
         } finally {
             conn.disconnect()
         }
 
         val array: JSONArray = try {
-            JSONObject(text).optJSONArray("playlists") ?: JSONArray()
+            JSONObject(text).optJSONArray("playlists") ?: throw CarListFailure.Unexpected
+        } catch (failure: CarListFailure) {
+            throw failure
         } catch (_: Exception) {
-            throw java.io.IOException("not a playlist list")
+            // A 200 that is not our JSON is a login page or a proxy error
+            // page — "the server answered, but not with the catalogue".
+            throw CarListFailure.Unexpected
         }
         val out = ArrayList<Item>(array.length().coerceAtMost(MAX_ITEMS))
         val seen = HashSet<String>()
@@ -651,8 +807,16 @@ internal object CarPlaylistSource {
             if (id.isEmpty() || !seen.add(id)) continue
             val title = o.optString("title").trim().take(200).ifEmpty { "Playlist" }
             val count = o.optInt("nb_tracks", 0).coerceAtLeast(0)
-            out.add(Item(id, title, count))
+            val cover = optionalText(o, "cover")?.take(2_048)
+            val deezerId = optionalText(o, "deezer_id")
+            out.add(Item(id, title, count, cover, deezerId))
         }
         return out
+    }
+
+    /** `optString` renders a JSON null as the word "null": drop it. */
+    private fun optionalText(o: JSONObject, name: String): String? {
+        val text = o.optString(name).trim()
+        return text.takeIf { it.isNotEmpty() && it != "null" }
     }
 }

@@ -109,12 +109,40 @@ test("carPin trims, caps and reports refusal", () => {
   assert.equal(carPin("p1", "Voiture"), false);
 });
 
+test("carPin hands the known track count over, and keeps the two-argument call otherwise", () => {
+  const w = freshWindow();
+  const calls = [];
+  w.NSNative = {
+    carAvailable: () => true,
+    carPin: (...args) => {
+      calls.push(args);
+      return true;
+    },
+  };
+  assert.equal(carPin("p1", "Voiture", 42), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture", 42]);
+  // The page often has no count (a Deezer playlist before its first read).
+  assert.equal(carPin("p1", "Voiture"), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture"]);
+  assert.equal(carPin("p1", "Voiture", "n/a"), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture"]);
+  assert.equal(carPin("p1", "Voiture", 0), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture"]);
+  // An APK that returns nothing is a refusal, not a success.
+  w.NSNative.carPin = () => undefined;
+  assert.equal(carPin("p1", "Voiture", 42), false);
+});
+
 test("openCarSettings only calls an installed bridge", () => {
   const w = freshWindow();
   let opened = 0;
   w.NSNative = { carAvailable: () => true, openCarSettings: () => (opened++, true) };
   assert.equal(openCarSettings(), true);
   assert.equal(opened, 1);
+  // An APK from before the boolean return (or any void implementation) must
+  // not be read as "the screen opened".
+  w.NSNative.openCarSettings = () => undefined;
+  assert.equal(openCarSettings(), false);
   w.NSNative.openCarSettings = () => false;
   assert.equal(openCarSettings(), false);
   w.NSNative.openCarSettings = () => {

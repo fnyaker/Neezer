@@ -209,6 +209,27 @@ unknown while Maps is in front. The `location` type is while-in-use:
 on Android 14 the service must be created from a visible app or an exempt start (tile, notification),
 so the permission is granted before the service starts. This lot adds no dependency:
 `play-services-location` is lot A's.
+**The car's sleeves are real covers, not only grooves** (`CarCoverView`, `CarCovers`; no bridge
+change). The overlay, the playlist tiles and the settings rows draw the album/playlist image when
+one exists and keep the deterministic Sillon grooves as the placeholder (and as the final answer on
+failure). The loader is one daemon thread, an in-memory `LruCache` sized to 1/16 of the heap
+(3–8 MB), and a `filesDir/car-covers` disk cache whose file name is the SHA-256 of the URL — never a
+path built from the URL. A tile asks at its own dp size; the decode is bounded by
+`BitmapFactory.inSampleSize` and the encoded body by 4 MB; the disk directory by 24 MB / 300 files,
+trimmed oldest-first at most once a minute. MINI, FULL and ULTRA ask for the same URL and share one
+transfer (`CoverFanout`; a request from a newer track wins, the older answer is dropped by
+generation). The session cookie is read only for the configured origin and `Net` enforces the same
+rule again on every redirect; a failed URL is remembered for 60 s so a repaint never retries it. A
+closed settings screen cancels its queued loads before any of them opens a connection, and the
+settings list fetches at most 12 sleeves (the pinned rows first): opening a 500-playlist catalogue
+never fans out 500 requests. The request policy is one transfer per distinct URL: a panel page is
+at most six cold GETs (zero once the process-wide read or the disk has them), and the fanout holds
+ten simultaneous callers on a single transfer (`CarCoverCacheTest`). The disk bound is held by
+a test too: ten 3 MB files under a 24 MB budget evict the two oldest; the file name is 64 hex
+characters, never a host or a slash. The memory hit is a synchronous `LruCache` lookup that hands the
+bitmap to the view's `invalidate()` in the same frame; no device was available for a frame-time
+measure in this lot.
+
 **The car overlay is a foreground service, not a second player** (bridge version 9, `CarModeService`,
 `CarOverlayRoot`, `CarTileService`). It binds the same `PlayerService` (BIND_AUTO_CREATE), reads
 `state()` and registers `onState`, and sends `transport(cmd, value)` — the MediaSession's own routing,
@@ -271,15 +292,32 @@ new state synchronously. `NSNative.carAvailable()` gates the SPA's settings card
 page's “Épingler pour la voiture” action (`NSNative.carPin`); an older APK has neither method and the
 entries simply do not exist, while a newer APK facing an older SPA finds no hook and must say so.
 `carPin` accepts two arities (the WebView bridge resolves an overload by argument count): the old
-`(id, title)` and `(id, title, nbTracks)`, so a newer SPA can hand the count over at pin time. Today's
-`lib/car.js` still calls the two-argument form, so the tile keeps the title-only pin until the first
-`/api/me/playlists` read fills the count.
+`(id, title)` and `(id, title, nbTracks)`. `lib/car.js` passes the count when the playlist page has
+it (`data.playlist.nb_tracks`), so the tile says "42 titres" before the first `/api/me/playlists`
+read; a page without a count still calls the two-argument form. `openCarSettings()` answers a real
+boolean (`true` only when the launch was accepted); `lib/car.js` requires `=== true`, so an APK
+from before the return value is reported as "Réglages indisponibles" by the new SPA instead of a
+silent success. Older SPA + newer APK: the extra return value is ignored, and the two-argument
+`carPin` overload is still there — no bridge version bump.
 The playlist panel shows Flow + `CarPrefs.pins`, six 84 dp tiles to a page; its catalogue is
 `/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
 (401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
-device remembers. A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`): the
+device remembers. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
+SPA's `/app` path (a person pastes the player's address) and the route never lives under it, while a
+reverse-proxied prefix is kept (`https://host/musique/app/` → `https://host/musique/api/me/playlists`);
+`Prefs.isServerUrl` still holds it to the one origin definition. If the jar has no cookie yet (the
+tile can open the settings before the page ever loaded), one `CookieManager.flush()` and a second
+read happen off the UI, then the request is still made without a cookie: its 401 or its login-page
+HTML is more informative than "server down". The states are kept apart — session absente (401),
+hors ligne, délai dépassé, certificat refusé, serveur en erreur (403/5xx), réponse inattendue (HTML)
+— and every failure is retryable; the pinned rows are always announced as local ("épinglées").
+A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`, covers included): the
 overlay is destroyed and recreated on every drop/reattach, and a fresh cache means returning from
-the settings does not cost a second request; only a 401 forgets it. Tapping a tile calls
+the settings does not cost a second request; a 401 forgets it. The panel labels a cache-served list
+"catalogue mémorisé", so a stale list never passes for a live one. `CarSettingsActivity` seeds
+its rows from that same cache on open (instant covers, no request), then re-reads on `onResume`
+when the last attempt failed or the last success is older than 60 s, at most once every 2 s; a 401
+there also forgets the process cache. Tapping a tile calls
 `CarHost.launch` only — the service changes to the player and shows the single "Lecture : X" / "Playlist lancée : X" toast
 when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée".
 The native search (`CarSearchView`) waits **700 ms** after the last key and needs **2 characters**

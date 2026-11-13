@@ -79,6 +79,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     private var shownTitle: String? = "Aucun titre"
     private var shownArtist: String? = ""
     private var shownSeed: String? = ""
+    private var shownCover: String? = ""
     private var shownPlaying = false
     private var shownFavorite = false
     private var shownUltraDescription = DEFAULT_ULTRA_DESCRIPTION
@@ -400,10 +401,10 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
             fullArtist.text = n.artist
         }
 
-        // CarCoverView draws Sillon's grooves, not a CDN image. The seed is the
-        // track's identity (album/title/artist) rather than the cover URL, so
-        // MINI, FULL and ULTRA show the same sleeve even if the URL carries a
-        // size.
+        // The sleeve's seed is the track's identity (album/title/artist), not
+        // the cover URL, so MINI, FULL and ULTRA keep the same grooves even if
+        // the URL carries a size. The URL itself paints the real cover; both
+        // are set here, and the image arrives off the main thread.
         val seed = listOf(n.album, n.title, n.artist)
             .filter { it.isNotBlank() }
             .joinToString("\u0000")
@@ -412,6 +413,13 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
             miniCover.seed = seed
             fullCover.seed = seed
             ultraCover.seed = seed
+        }
+        val cover = n.cover.trim()
+        if (cover != shownCover) {
+            shownCover = cover
+            miniCover.coverUrl = cover
+            fullCover.coverUrl = cover
+            ultraCover.coverUrl = cover
         }
 
         if (n.playing != shownPlaying) {
