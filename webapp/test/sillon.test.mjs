@@ -7,6 +7,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 import {
   GROOVES,
@@ -24,6 +27,103 @@ import {
   toHex,
   fromHex,
 } from "../src/lib/sillon.js";
+
+// lib/theme.js reads localStorage at import and writes <html> through the
+// store subscriptions, so the tests below bring a four-line DOM. They also run
+// the pre-paint script (public/theme-boot.js) in a vm with the same storage:
+// the two implementations of the custom accent must agree pixel for pixel.
+const bootPath = fileURLToPath(new URL("../public/theme-boot.js", import.meta.url));
+const indexHtml = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+
+const fakeStorage = new Map();
+const fakeProps = new Map();
+const fakeMeta = { attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); } };
+const noop = () => {};
+const fakeDocument = {
+  addEventListener: noop,
+  removeEventListener: noop,
+  visibilityState: "visible",
+  documentElement: {
+    dataset: {},
+    style: {
+      backgroundColor: "",
+      setProperty(k, v) {
+        fakeProps.set(k, String(v));
+      },
+      removeProperty(k) {
+        fakeProps.delete(k);
+      },
+    },
+  },
+  querySelector: (sel) => (String(sel).includes("theme-color") ? fakeMeta : null),
+};
+globalThis.document = fakeDocument;
+globalThis.location = { hash: "", pathname: "/" };
+globalThis.window = {
+  addEventListener: noop,
+  removeEventListener: noop,
+  location: globalThis.location,
+  matchMedia: () => ({ matches: false, addEventListener: noop }),
+  innerWidth: 1280,
+  innerHeight: 900,
+};
+globalThis.localStorage = {
+  getItem: (k) => (fakeStorage.has(k) ? fakeStorage.get(k) : null),
+  setItem: (k, v) => fakeStorage.set(k, String(v)),
+  removeItem: (k) => fakeStorage.delete(k),
+  clear: () => fakeStorage.clear(),
+};
+
+const themeLib = await import("../src/lib/theme.js");
+
+const themeBg = { encre: "#1E1E1B", papier: "#FBF9F4" }; // INK_BG: --s2 / --s1
+const CUSTOM_SAMPLES = [
+  ["#FFF176", "clair"],
+  ["#7C5CFF", "moyen"],
+  ["#101C3A", "sombre"],
+];
+
+// Run the real pre-paint script with a given storage snapshot. It is a
+// classic script by contract (no imports), so a vm is exactly how a browser
+// executes it: synchronously, before the app module.
+function runBoot(storage) {
+  const props = new Map();
+  const attrs = new Map();
+  const html = {
+    style: {
+      backgroundColor: "",
+      setProperty(k, v) {
+        props.set(k, String(v));
+      },
+      removeProperty(k) {
+        props.delete(k);
+      },
+    },
+    setAttribute(k, v) {
+      attrs.set(k, String(v));
+    },
+  };
+  const meta = { attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); } };
+  const sandbox = {
+    localStorage: {
+      getItem: (k) => (Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null),
+    },
+    document: {
+      documentElement: html,
+      querySelector: () => meta,
+    },
+  };
+  vm.runInNewContext(readFileSync(bootPath, "utf8"), sandbox);
+  return { props, attrs, meta, html };
+}
+
+function resetThemeState() {
+  fakeStorage.clear();
+  fakeProps.clear();
+  themeLib.clearCustomAccent();
+  themeLib.setTheme("encre");
+}
+
 
 test("the same seed always picks the same groove", () => {
   const ids = [];
@@ -154,3 +254,181 @@ test("a sleeve with no colour at all still gives a readable accent", () => {
   // The designed fallback is itself legible, so an empty state can use it.
   assert.ok(contrast(fromHex(ACCENT_FALLBACK), fromHex(ON_ACCENT)) >= 4.5);
 });
+
+// -- the person's own accent (Réglages › Apparence) --------------------------
+
+test("a custom accent keeps its exact surface and legible text at every lightness", () => {
+  for (const [hex, kind] of CUSTOM_SAMPLES) {
+    for (const name of ["encre", "papier"]) {
+      const p = themeLib.accentVars(hex, name);
+      assert.equal(p.surface, hex, `${kind} on ${name}: the surface is the chosen colour`);
+      // Text on the pill is pure black or white, never a themed near-black.
+      assert.ok(p.on === "#000000" || p.on === "#FFFFFF", p.on);
+      const onRatio = contrast(fromHex(p.surface), fromHex(p.on));
+      const inkRatio = contrast(fromHex(p.ink), fromHex(themeBg[name]));
+      console.log(
+        `# ${kind} ${hex} on ${name}: text ${onRatio.toFixed(2)}:1 (${p.on}), ink ${p.ink} ${inkRatio.toFixed(2)}:1${p.adjusted ? " (lifted)" : ""}`
+      );
+      assert.ok(onRatio >= 4.5, `${hex} on ${name}: ${onRatio.toFixed(2)}:1 on the pill`);
+      assert.ok(inkRatio >= 4.5, `${hex} on ${name}: ink ${p.ink} only ${inkRatio.toFixed(2)}:1`);
+    }
+  }
+  // The light theme must darken a pale colour, the dark one must lighten a
+  // dark colour — and the flags are what Réglages uses to say so.
+  assert.equal(themeLib.accentVars("#FFF176", "papier").tooLight, true);
+  assert.equal(themeLib.accentVars("#101C3A", "encre").tooDark, true);
+  // A colour that already passes is left alone on both.
+  const mid = themeLib.accentVars("#7C5CFF", "encre");
+  if (contrast(fromHex("#7C5CFF"), fromHex(themeBg.encre)) >= 4.5) {
+    assert.equal(mid.adjusted, false);
+    assert.equal(mid.ink, "#7C5CFF");
+  }
+});
+
+test("an invalid colour is refused, a shorthand one is completed", () => {
+  assert.equal(themeLib.normalizeAccent("#D2FF3C"), "#D2FF3C");
+  assert.equal(themeLib.normalizeAccent("d2ff3c"), "#D2FF3C");
+  assert.equal(themeLib.normalizeAccent("#d2f"), "#DD22FF");
+  assert.equal(themeLib.normalizeAccent("not-a-colour"), null);
+  assert.equal(themeLib.normalizeAccent("#12345"), null);
+  assert.equal(themeLib.normalizeAccent("#GGGGGG"), null);
+  assert.equal(themeLib.normalizeAccent(""), null);
+  assert.equal(themeLib.normalizeAccent(null), null);
+  assert.equal(themeLib.setCustomAccent("#nope"), null);
+});
+
+test("no colour in the cube can put an illegible label on its own button", () => {
+  // The on-colour is pure black or white, so this is a hard guarantee, not a
+  // sample: every one of the 4 096 coarse colours must clear 4.5:1.
+  let worst = Infinity;
+  let worstHex = "";
+  for (let r = 0; r <= 255; r += 17) {
+    for (let g = 0; g <= 255; g += 17) {
+      for (let b = 0; b <= 255; b += 17) {
+        const hex = toHex([r, g, b]);
+        const p = themeLib.accentVars(hex, "encre");
+        const ratio = contrast(fromHex(p.surface), fromHex(p.on));
+        if (ratio < worst) {
+          worst = ratio;
+          worstHex = hex;
+        }
+        assert.ok(ratio >= 4.5, `${hex} → ${p.on} only ${ratio.toFixed(2)}:1`);
+      }
+    }
+  }
+  console.log(`# 4 096 colours, worst label ratio ${worst.toFixed(2)}:1 (${worstHex})`);
+});
+
+test("the accent ink clears 4.5:1 on the worst surface for every colour and theme", () => {
+  let worst = Infinity;
+  let worstWhat = "";
+  for (const name of ["encre", "papier"]) {
+    for (let r = 0; r <= 255; r += 17) {
+      for (let g = 0; g <= 255; g += 17) {
+        for (let b = 0; b <= 255; b += 17) {
+          const hex = toHex([r, g, b]);
+          const p = themeLib.accentVars(hex, name);
+          const ratio = contrast(fromHex(p.ink), fromHex(p.background));
+          if (ratio < worst) {
+            worst = ratio;
+            worstWhat = `${hex} → ${p.ink} on ${name}`;
+          }
+          assert.ok(ratio >= 4.5, `${hex} on ${name} → ${p.ink} only ${ratio.toFixed(2)}:1`);
+        }
+      }
+    }
+  }
+  console.log(`# 8 192 pairs, worst ink ratio ${worst.toFixed(2)}:1 (${worstWhat})`);
+});
+
+
+
+test("the custom accent is persisted, applied, and reset to the theme", () => {
+  resetThemeState();
+  assert.equal(themeLib.setCustomAccent("#7c5cff"), "#7C5CFF");
+  assert.equal(fakeStorage.get("ui.accent"), JSON.stringify("#7C5CFF"));
+  assert.equal(fakeProps.get("--ac"), "#7C5CFF");
+  assert.equal(fakeProps.get("--btn"), "#7C5CFF");
+  assert.ok(contrast(fromHex("#7C5CFF"), fromHex(fakeProps.get("--onac"))) >= 4.5);
+
+  themeLib.clearCustomAccent();
+  assert.equal(fakeStorage.has("ui.accent"), false);
+  assert.equal(fakeProps.has("--ac"), false);
+  assert.equal(fakeProps.has("--btn"), false);
+  // The theme's own tokens take over again (app.css owns them).
+  assert.equal(themeLib.themeAccentOf("encre"), "#D2FF3C");
+});
+
+test("Pochette keeps the sleeve's accent and never lets the custom one freeze it", () => {
+  resetThemeState();
+  themeLib.setCustomAccent("#101C3A");
+  assert.equal(fakeProps.get("--ac"), "#101C3A");
+  themeLib.setTheme("pochette");
+  // The custom block is gone; --ac is var(--cover-ac) again.
+  assert.equal(fakeProps.has("--ac"), false);
+  assert.equal(fakeProps.has("--btn"), false);
+  // The sleeve fallback is painted, and is not the custom colour.
+  assert.equal(fakeProps.get("--cover-ac"), ACCENT_FALLBACK);
+  themeLib.setTheme("encre");
+  assert.equal(fakeProps.get("--ac"), "#101C3A");
+  assert.equal(fakeProps.get("--cover-ac"), ACCENT_FALLBACK);
+});
+
+test("the pre-paint script paints the same pair as theme.js, before the app", () => {
+  for (const [hex, kind] of CUSTOM_SAMPLES) {
+    for (const name of ["encre", "papier"]) {
+      const boot = runBoot({
+        "ui.theme": JSON.stringify(name),
+        "ui.accent": JSON.stringify(hex),
+      });
+      const vars = themeLib.accentVars(hex, name);
+      assert.equal(boot.attrs.get("data-theme"), name);
+      assert.equal(boot.props.get("--ac"), vars.surface, `${kind}/${name}: --ac`);
+      assert.equal(boot.props.get("--btn"), vars.surface, `${kind}/${name}: --btn`);
+      assert.equal(boot.props.get("--onac"), vars.on, `${kind}/${name}: --onac`);
+      assert.equal(boot.props.get("--onbtn"), vars.on, `${kind}/${name}: --onbtn`);
+      assert.equal(boot.props.get("--ac-text"), vars.ink, `${kind}/${name}: --ac-text`);
+      assert.equal(boot.props.get("--ac-mark"), vars.ink, `${kind}/${name}: --ac-mark`);
+      assert.equal(boot.props.get("--hrt"), vars.ink, `${kind}/${name}: --hrt`);
+      assert.ok(
+        contrast(fromHex(boot.props.get("--onac")), fromHex(boot.props.get("--ac"))) >= 4.5
+      );
+    }
+  }
+
+  // The theme's page background is set on <html> and in the meta tag, so the
+  // browser chrome and the overscroll edges match before the CSS arrives.
+  const papier = runBoot({ "ui.theme": JSON.stringify("papier") });
+  assert.equal(papier.html.style.backgroundColor, "#F3F0E8");
+  assert.equal(papier.meta.attrs.content, "#F3F0E8");
+
+  // Pochette ignores the custom accent and keeps --cover-ac.
+  const pochette = runBoot({
+    "ui.theme": JSON.stringify("pochette"),
+    "ui.accent": JSON.stringify("#FFF176"),
+    "ui.coverAc": JSON.stringify("#123456"),
+  });
+  assert.equal(pochette.attrs.get("data-theme"), "pochette");
+  assert.equal(pochette.props.has("--ac"), false);
+  assert.equal(pochette.props.get("--cover-ac"), "#123456");
+
+  // A garbage value is ignored, not painted; a shorthand one is completed.
+  const garbage = runBoot({ "ui.theme": JSON.stringify("encre"), "ui.accent": '"red"' });
+  assert.equal(garbage.props.has("--ac"), false);
+  const shorthand = runBoot({ "ui.theme": JSON.stringify("encre"), "ui.accent": '"#d2f"' });
+  assert.equal(shorthand.props.get("--ac"), "#DD22FF");
+});
+
+test("index.html loads the boot script blocking, in the head, before the app", () => {
+  const bootAt = indexHtml.indexOf('src="/app/theme-boot.js"');
+  const moduleAt = indexHtml.indexOf('type="module"');
+  assert.ok(bootAt > 0, "theme-boot.js is loaded");
+  assert.ok(moduleAt > bootAt, "the app module comes after the boot script");
+  const tagStart = indexHtml.lastIndexOf("<script", bootAt);
+  const tagEnd = indexHtml.indexOf(">", bootAt);
+  const tag = indexHtml.slice(tagStart, tagEnd + 1);
+  assert.ok(!/\b(defer|async)\b/.test(tag), `the boot script must block the parser: ${tag}`);
+  assert.ok(!/type="module"/.test(tag), "a module would be deferred");
+  assert.ok(indexHtml.indexOf("<head>") < bootAt && bootAt < indexHtml.indexOf("</head>"));
+});
+

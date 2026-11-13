@@ -30,6 +30,24 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   there is REFUSED by the browser (it said so in the console on every load). It sets `data-theme`,
   the html background and `<meta name="theme-color">` from `ui.theme` / `ui.coverAc`;
   `initTheme()` in `main.js` then owns the session. Change one, change the other.
+- **A custom accent is an INLINE overlay on Encre/Papier, never a fourth theme** (Réglages ›
+  Apparence: native `<input type="color">`, a controlled six-digit field, "Réinitialiser",
+  `ui.accent` stored as JSON). `theme-boot.js` paints it before the first frame and
+  `lib/theme.js#apply` owns it afterwards; both run the same maths and `test/sillon.test.mjs`
+  compares their output so the copies cannot drift. `--ac`/`--btn` are the EXACT chosen surface,
+  `--onac`/`--onbtn` are pure black or white (`#0C0C0B` would miss 4.5:1 on a mid grey),
+  and `--ac-text`/`--ac-mark`/`--hrt` are a legible ink variant corrected against the most
+  demanding surface they are drawn on (`--s2` on Encre, `--s1` on Papier), because those tokens
+  are foregrounds (focus ring, hearts, progress). Measured: `#7C5CFF` on Encre gets black text at
+  4.83:1 and a lifted `#8F6AFF` at 4.51:1; `#FFF176` on Papier gets black text at 18.10:1 and a
+  deepened `#736C35` at 5.08:1; a 4 096-colour cube gives a worst label of 4.58:1 and its 8 192
+  theme/ink pairs a worst of 4.50:1. `apply()` clears every inline custom property before a theme
+  switch, so **Pochette keeps `--ac: var(--cover-ac)`** and a custom colour can never freeze the
+  sleeve (`--cover-ac` is never touched). The field refuses a non-colour (`aria-invalid`,
+  `role=alert`), says when the ink was lifted/darkened (`role=status`), and its controls are
+  46 px. The boot script grew to ~6.2 kB raw / 2.5 kB gzipped: the contrast maths cannot wait for
+  the bundle, and it is staged with the shell like the rest of the pre-paint code. In the built
+  app, the first rAF after a reload already had `--ac` with `#app` empty (measured at 390×844).
 - **Typography is self-hosted** (OFL texts beside the files): Bricolage Grotesque 600–800 for titles
   (`-0.03em` on big ones), Instrument Sans 400–700 for the interface, JetBrains Mono 400–500 for
   metadata and the small capitals (`.label-mono`, `letter-spacing:.08em`). latin + latin-ext (French
