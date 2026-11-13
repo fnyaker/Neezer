@@ -118,7 +118,7 @@ again — a file with ranges now — at the target, muted until it lands; 60 s o
 with no seek map) pin both.
 
 **The app owns the track changes while its activity is stopped** (bridge version 8). Bridge 7 still failed on a phone,
-because a hidden WebView is not FROZEN, it is THROTTLED: Chromium holds a hidden silent page's timers to once a second,
+because a hidden WebView was assumed to be THROTTLED, not FROZEN: Chromium holds a hidden silent page's timers to once a second,
 then once a minute after five minutes (developer.chrome.com, "timer throttling in Chrome 88"), and every event the app
 sends it still runs. So the page heard the app's `timeupdate`s, began a crossfade or a trimmed ending itself, cleared
 the list while arming it, and stalled in its own throttled steps; and the list was only named at the instant the page
@@ -322,7 +322,8 @@ characters, never a host or a slash. The memory hit is a synchronous `LruCache` 
 bitmap to the view's `invalidate()` in the same frame; no device was available for a frame-time
 measure in this lot.
 
-**The car overlay is a foreground service, not a second player** (bridge version 9, `CarModeService`,
+**The car overlay is a foreground service, not a second player** (bridge version 9, unchanged in
+bridge 10; `CarModeService`,
 `CarOverlayRoot`, `CarTileService`). It binds the same `PlayerService` (BIND_AUTO_CREATE), reads
 `state()` and registers `onState`, and sends `transport(cmd, value)` — the MediaSession's own routing,
 native skip first. The overlay is `TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_FOCUSABLE
@@ -388,7 +389,7 @@ server. Cookie arrival is polled (~600 ms, only while the screen is up): Deezer'
 so no navigation fires and there is no cookie-change callback to hook. Google/Apple SSO is refused
 inside any WebView — email + password is the supported route. SPA side: `lib/nativeDeezer.js`.
 
-**Car mode, the page side and the pinned playlists** (bridge 9, lots A–E; SPA: `lib/car.js`,
+**Car mode, the page side and the pinned playlists** (bridge 9, unchanged in bridge 10; lots A–E; SPA: `lib/car.js`,
 `CarPlaylistsView.kt`, `CarSettingsActivity.kt`). The overlay is native and the WebView still owns
 the queue, so the two sides meet at exactly two hooks, installed once by `App.svelte` (never on a
 party/remote page): `window.__nsCarPlay(kind, id, title, payload)` launches a Flow (`startFlow`), a
