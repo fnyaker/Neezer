@@ -132,6 +132,19 @@ tapped here plays and then its radio (`TrackList radio`). With Deezer out (or no
 the library answers alone: titles, and the artists and albums by NAME that hold a title on disk
 (`webui._local_search_entities`, two statements). Each section carries a "Tout afficher" that switches to its tab.
 
+**A broad search can become a radio** (`lib/queryradio.js`, `routes/Search.svelte`). At **30 distinct results**
+(titles, artists, albums, playlists, shows — each counted once, the fallback's hits only once that source has
+answered, shows only for the admin who sees them) a primary "Lancer la radio" button rides the search field: 44 px,
+full-width under the field on a phone. It opens with the titles **above the search's own bar** (`CATALOGUE_MIN` 0.5,
+`YOUTUBE_MIN` 0.75), strongest first (a library row wins a tie) — the first one plays at once, before any request —
+then one `POST /api/radio/next` seeds from the best title (with its artist, for the catalogue row not in the library
+yet) or from the best artist, and appends what is new. A queue of three titles or fewer is left to
+`Player.svelte#ensureUpcoming`, which tops it up at once anyway: that is what keeps one press to ONE radio request.
+The context is `radio` / `artist-radio` with `title: "Radio de <query>"`, so another playback replaces it like any
+queue. Two clicks in one burst share one launch, a newer search's radio (or any playback started while the top-up
+is in flight) supersedes a late answer instead of having it appended, and no seed is an honest error toast, never a
+silent no-op.
+
 **The YouTube fallback is ON by default and inside the same list** (`lib/searchrank.js#matchScore`,
 `rankSearchResults`). It is asked once the query settles — 800 ms after the last keystroke, at once on Enter, a
 recent term or a deep link, and never when the account lacks `youtube:search` or the source is off: one request
