@@ -495,6 +495,7 @@ class PodcastWebUITestCase(unittest.TestCase):
         self.archive = tempfile.mkdtemp()
         db_path = self.__db[1]
         cache = self.__dir
+        archive = self.archive
 
         class Config(DefaultConfig):
             TESTING = True
@@ -505,6 +506,7 @@ class PodcastWebUITestCase(unittest.TestCase):
                 self.WEBAPP = dict(
                     self.WEBAPP, cache_dir=cache, mount_webui=True, mount_api=True
                 )
+                self.DEEZER = dict(getattr(self, "DEEZER", {}), archive_dir=archive)
 
         self.app = create_application(Config())
         UserManager.add("alice", "Alic3", admin=True)
@@ -802,3 +804,123 @@ class PodcastWebUITestCase(unittest.TestCase):
         self._login()
         r = self.client.get("/api/search/podcasts?q=").get_json()
         self.assertEqual(r["podcasts"], [])
+
+    # -- an episode's audio is not one of the user's files -------------------
+
+    def _write_wav(self, path, seconds=0.2):
+        """Real, readable audio — the scanner WOULD import it if it were not a
+        podcast episode (a fake MP3 would fail to tag and prove nothing)."""
+        import struct
+        import wave
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        frames = int(8000 * seconds)
+        with wave.open(path, "wb") as fh:
+            fh.setnchannels(1)
+            fh.setsampwidth(2)
+            fh.setframerate(8000)
+            fh.writeframes(struct.pack("<h", 0) * frames)
+        return path
+
+    def _archived_episode(self):
+        """Episode 1 archived exactly where the archiver puts it."""
+        episode = PodcastEpisode[ids.episode_uuid("1")]
+        path = library.episode_archive_path(
+            self.archive, episode.channel.title, episode.publish_date, episode.title
+        )
+        self._write_wav(path)
+        episode.path = path
+        episode.status = "completed"
+        episode.save()
+        return episode
+
+    def test_an_archived_episode_is_not_a_user_file(self):
+        from neezer.db import Track
+        from neezer.deezer import local
+
+        self._login()
+        cid = self._subscribe().get_json()["id"]
+        episode = self._archived_episode()
+        self.assertTrue(
+            os.path.dirname(episode.path).startswith(
+                os.path.join(self.archive, "Podcasts") + os.sep
+            )
+        )
+        # A normal file dropped in the archive is a user's file, and stays one.
+        self._write_wav(os.path.join(self.archive, "Ma chanson.wav"))
+
+        out = local.scan_local(self.archive)
+        self.assertEqual(out["added"], 1)
+        self.assertFalse(Track.select().where(Track.path == episode.path).exists())
+
+        titles = {
+            t["title"] for t in self.client.get("/api/me/local").get_json()["tracks"]
+        }
+        self.assertEqual(titles, {"Ma chanson"})
+
+        # The episode stays its own thing: listed, archived, and served from
+        # disk by its own route.
+        detail = self.client.get("/api/podcast/" + cid).get_json()
+        ep = next(e for e in detail["episodes"] if e["id"] == str(episode.id))
+        self.assertTrue(ep["archived"])
+        rv = self.client.get("/api/stream/" + str(episode.id))
+        self.assertEqual(rv.status_code, 200)
+        self.assertTrue(rv.data.startswith(b"RIFF"))
+        self.assertEqual(rv.headers.get("Accept-Ranges"), "bytes")
+        rv.close()
+
+        # Claimed by its row wherever it sits (a hand-moved archive): still
+        # not a Track, and the scan adds nothing.
+        moved = os.path.join(self.archive, "hors-podcast.wav")
+        os.replace(episode.path, moved)
+        episode.path = moved
+        episode.save()
+        out = local.scan_local(self.archive)
+        self.assertEqual(out["added"], 0)
+        self.assertFalse(Track.select().where(Track.path == moved).exists())
+
+    def test_a_duplicate_track_left_by_an_old_scan_is_not_listed(self):
+        """The upgrade path: an older server's scan made a Track from an
+        episode's audio (no Deezer id, so it looked like an upload). It must
+        disappear from "Mes fichiers" without the audio being deleted."""
+        from neezer.db import Album, Artist, Folder, Track
+
+        self._login()
+        cid = self._subscribe().get_json()["id"]
+        episode = self._archived_episode()
+        with self.app.app_context():
+            root = library.get_root_folder(self.archive)
+            folder = Folder.create(
+                root=False, name="Podcasts", path=os.path.dirname(episode.path),
+                parent=root,
+            )
+            artist = Artist.create(name="Test Podcast")
+            album = Album.create(name="Test Podcast", artist=artist)
+            duplicate = Track.create(
+                id=ids.local_track_uuid(episode.path), deezer_id=None,
+                disc=1, number=1, title=episode.title, duration=episode.duration,
+                album=album, artist=artist, bitrate=128, path=episode.path,
+                last_modification=int(os.path.getmtime(episode.path)),
+                root_folder=root, folder=folder,
+            )
+
+        titles = {
+            t["title"] for t in self.client.get("/api/me/local").get_json()["tracks"]
+        }
+        self.assertNotIn(episode.title, titles)
+
+        # Nothing is deleted: neither the row nor the audio. Only the listing
+        # leaves it out.
+        self.assertTrue(Track.select().where(Track.id == duplicate.id).exists())
+        self.assertTrue(os.path.isfile(episode.path))
+        detail = self.client.get("/api/podcast/" + cid).get_json()
+        self.assertTrue(
+            next(e for e in detail["episodes"] if e["id"] == str(episode.id))["archived"]
+        )
+        # And a later scan does not create a second one nor prune it.
+        from neezer.deezer import local
+
+        self.assertEqual(local.scan_local(self.archive), {"added": 0, "removed": 0})
+        self.assertEqual(
+            Track.select().where(Track.path == episode.path).count(), 1
+        )
