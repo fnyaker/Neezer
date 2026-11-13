@@ -27,33 +27,69 @@
   import Icon from "../components/Icon.svelte";
   import UnavailableList from "../components/UnavailableList.svelte";
   import ArtistTile from "../components/ArtistTile.svelte";
+  import LibraryNav from "../components/LibraryNav.svelte";
   import Podcasts from "./Podcasts.svelte";
   import TrackList from "../components/TrackList.svelte";
   import { SORTS, createProjector } from "../lib/tracklist.js";
   import { STEP, nearEnd } from "../lib/grow.js";
 
-  // One library, filtered by chips (Spotify's "Your Library", 2021): what you
-  // keep is in one place whatever it is — titles, artists, albums, playlists,
-  // podcasts, downloads, your own files. The chip is in the URL
-  // (#/library/artists) so the home's "Tout afficher" lands on it and Back
-  // returns to it.
+  // One library, two worlds. The old row of chips mixed music with podcasts
+  // and wrapped onto three rows on a phone; now a segmented control chooses the
+  // world (Musique / Podcasts), then a strip of leaves filters it. The leaf is
+  // still what the URL names (#/library/artists, #/library/podcasts…), so every
+  // deep link and "Tout afficher" keeps working.
   export let params = {};
-  const CHIPS = [
+  const MUSIC_TABS = [
     { id: "favorites", label: "Titres" },
     { id: "artists", label: "Artistes" },
     { id: "albums", label: "Albums" },
     { id: "playlists", label: "Playlists", admin: true },
-    { id: "podcasts", label: "Podcasts" },
     { id: "downloaded", label: "Téléchargés", local: true },
     { id: "local", label: "Mes fichiers" },
-    { id: "gone", label: "Indisponibles" },
   ];
-  $: chips = CHIPS.filter((c) => (!c.admin || $isAdmin) && (!c.local || !REMOTE));
+  const PODCAST_TABS = [{ id: "podcasts", label: "Abonnements" }];
+  const ALL_TABS = [...MUSIC_TABS, ...PODCAST_TABS, { id: "gone" }];
+  $: musicTabs = MUSIC_TABS.filter((c) => (!c.admin || $isAdmin) && (!c.local || !REMOTE));
   const saved = recallScreen();
-  let tab = (CHIPS.some((c) => c.id === params.tab) && params.tab) || saved?.tab || "favorites";
+  let tab = (ALL_TABS.some((c) => c.id === params.tab) && params.tab) || saved?.tab || "favorites";
+  // A tab the current mode does not even mount (a remote control has no
+  // downloads strip) still names its content; the panel falls back to the
+  // world's own tab so it is never left unlabelled.
+  $: panelLabel =
+    tab === "gone" || tab === "podcasts" || musicTabs.some((t) => t.id === tab)
+      ? `lib-leaf-${tab}`
+      : "lib-cat-music";
+  // The world is a function of the leaf, so the URL stays the single source of
+  // truth and an old link needs no redirect. Musique remembers the leaf you
+  // left it on: switching to Podcasts and back does not throw your filter away.
+  $: category = tab === "podcasts" ? "podcasts" : "music";
+  let lastMusic =
+    saved?.lastMusic && ALL_TABS.some((c) => c.id === saved.lastMusic)
+      ? saved.lastMusic
+      : tab === "podcasts"
+        ? "favorites"
+        : tab;
+  $: if (category === "music") lastMusic = tab;
+  // The podcast grid is mounted once and then kept (hidden) across a world
+  // switch: its own search box and its answers survive, and coming back costs
+  // no request.
+  let podcastsMounted = tab === "podcasts";
+  $: if (tab === "podcasts") podcastsMounted = true;
+  // A hash-only navigation (`#/library/artists` → `#/library/gone`) reuses this
+  // component instead of remounting it: follow the URL when it moves, but not
+  // when `choose()` itself is what moved it.
+  let seenTab = params.tab;
+  $: if (params.tab !== seenTab) {
+    seenTab = params.tab;
+    if (params.tab && ALL_TABS.some((c) => c.id === params.tab)) tab = params.tab;
+  }
   function choose(id) {
     tab = id;
     replace("/library/" + id);
+  }
+  function chooseCategory(world) {
+    if (world === category) return;
+    choose(world === "podcasts" ? "podcasts" : lastMusic);
   }
   // Upload usage/cap for the current user (guests get a per-user quota; admins
   // are unlimited). Null until loaded.
@@ -73,7 +109,7 @@
   // shows up in this tab the moment it exists.
   $: myPlaylists = $playlists;
   let plQuery = saved?.plQuery ?? "";
-  $: rememberScreen({ tab, plQuery, arQuery, arSort });
+  $: rememberScreen({ tab, lastMusic, plQuery, arQuery, arSort });
   $: shownPlaylists = filterPlaylists(myPlaylists, plQuery);
   function filterPlaylists(list, term) {
     if (!list) return null;
@@ -336,27 +372,17 @@
   </div>
 {/if}
 
-<div class="tabs bleed-x" role="tablist" aria-label="Filtrer la bibliothèque">
-  {#each chips.filter((c) => c.id !== "gone") as c (c.id)}
-    <button
-      class="chip"
-      class:chip-active={tab === c.id}
-      role="tab"
-      aria-selected={tab === c.id}
-      on:click={() => choose(c.id)}>{c.label}</button>
-  {/each}
-  {#if chips.some((c) => c.id === "gone")}
-    <button
-      class="chip gone"
-      class:chip-active={tab === "gone"}
-      role="tab"
-      aria-selected={tab === "gone"}
-      on:click={() => choose("gone")}>
-      Indisponibles{#if gone?.length}<span class="badge">{gone.length}</span>{/if}
-    </button>
-  {/if}
-</div>
+<LibraryNav
+  {category}
+  {tab}
+  musicTabs={musicTabs}
+  podcastTabs={PODCAST_TABS}
+  goneCount={gone?.length || null}
+  onpick={choose}
+  oncategory={chooseCategory}
+/>
 
+<div id="library-view" role="tabpanel" aria-labelledby={panelLabel}>
 {#if tab === "favorites"}
   {#if favorites === null}
     <Skeleton kind="list" />
@@ -470,8 +496,6 @@
     </div>
     {#if albums.length > alLimit}<div class="grow" use:nearEnd={() => (alLimit += STEP)}></div>{/if}
   {/if}
-{:else if tab === "podcasts"}
-  <Podcasts embedded />
 {:else if tab === "playlists"}
   {#if myPlaylists === null}
     <Skeleton kind="shelf" />
@@ -579,6 +603,11 @@
   {/if}
 {/if}
 
+{#if podcastsMounted}
+  <div hidden={tab !== "podcasts"}><Podcasts embedded /></div>
+{/if}
+</div>
+
 <style>
   .grow {
     height: 1px;
@@ -642,64 +671,12 @@
     margin-top: 6px;
     font-size: 11px;
   }
-  /* The chips scroll on their own rather than wrapping onto a second line: on a
-     phone five pills don't fit, and a wrapped row pushes the content down and
-     makes the page jump every time the set changes. `flex: none` on the buttons
-     is what stops flex from squeezing them into unreadable slivers instead of
-     overflowing, and the negative margin lets them run edge to edge while the
-     page keeps its padding. */
   /* With the File panel open the content column can be ~650 px while the
      window is still wide: wrapping is the container-aware answer (a window
      media query would miss it). */
-  :global(.layout.np-open) .tabs,
   :global(.layout.np-open) .bar {
     flex-wrap: wrap;
     overflow: visible;
-  }
-  :global(.layout.np-open) .tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tabs {
-    display: flex;
-    gap: 8px;
-    margin-block: 6px 20px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x proximity;
-    padding-block: 2px;
-  }
-  .tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tabs .chip {
-    scroll-snap-align: start;
-  }
-  /* §6 puts the rare list on the right of the row, as a filter rather than a
-     destination: it keeps its `role=tab` and its place in the URL. */
-  .tabs .gone {
-    margin-left: auto;
-    color: var(--dim);
-  }
-  .tabs .gone.chip-active {
-    color: var(--onac);
-  }
-  .badge {
-    display: inline-block;
-    margin-left: 7px;
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: var(--s2);
-    color: var(--tx);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
-    vertical-align: 1px;
-  }
-  .chip-active .badge {
-    background: var(--onac);
-    color: var(--ac);
   }
   /* One action bar above a table: the primary on the left, the list's own
      tools on the right, everything on the 40 px rhythm (§6). */
@@ -766,8 +743,7 @@
     -webkit-appearance: none;
   }
   .sortsel:focus-visible,
-  .btn:focus-visible,
-  .chip:focus-visible {
+  .btn:focus-visible {
     outline: 2px solid var(--ac-text);
     outline-offset: 2px;
   }
@@ -906,12 +882,6 @@
       padding: 0;
       font-size: 11px;
     }
-    /* The chips wrap here (all of them stay visible, the filter included)
-       instead of scrolling the last two out of reach. */
-    .tabs {
-      flex-wrap: wrap;
-      overflow: visible;
-    }
     /* The three actions wrap rather than scrolling the last one out of
        reach; the filter and the sort share the next row. */
     .bar-actions {
@@ -943,10 +913,6 @@
       white-space: normal;
       overflow: visible;
       line-height: 1.4;
-    }
-    .tabs {
-      margin-block: 4px 16px;
-      row-gap: 6px;
     }
     .bar .spacer,
     .tools .spacer {
