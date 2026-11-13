@@ -69,6 +69,11 @@
     <string name="car_launched">Lecture : %1$s</string>
     <string name="car_playlist_launched">Playlist lancée : %1$s</string>
     <string name="car_settings_missing">Réglages du mode voiture indisponibles</string>
+    <string name="car_start_blocked">Mode voiture en attente</string>
+    <string name="car_start_blocked_text">Touche pour démarrer le mode voiture</string>
+    <string name="car_start_blocked_action">Démarrer</string>
+    <string name="car_position_reset">Positions réinitialisées</string>
+    <string name="car_position_reset_app">Position de %1$s réinitialisée</string>
 
     <string name="shortcut_server">Serveur</string>
     <string name="shortcut_server_long">Paramètres du serveur</string>

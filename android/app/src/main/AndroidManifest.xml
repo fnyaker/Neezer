@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The car mode comes back on its own after a reboot or an update:
+         the receiver starts CarModeService, which then watches for the
+         navigation app. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Car mode: a window over the navigation app, the usage-access grant
          that says which app is in front (no AccessibilityService), location
@@ -43,6 +47,12 @@
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- The car mode tells the launcher from a real app (Home must not be
+             mistaken for YouTube, and a custom launcher must be seen at all). -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
         </intent>
     </queries>
 
@@ -117,6 +127,19 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Boot / update: start the car mode when the person's settings want
+             it, so a navigation app coming forward is seen without opening
+             Neezer. Not exported: the system may still deliver these two
+             protected broadcasts to it. -->
+        <receiver
+            android:name=".CarBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

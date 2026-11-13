@@ -141,6 +141,17 @@ class CarIconView @JvmOverloads constructor(
                 path.moveTo(5f, 12f); path.lineTo(19f, 12f)
                 canvas.drawPath(path, paint)
             }
+            "move" -> {
+                // Four arrows from one centre: the drag handle of the car
+                // card (no emoji, no font icon).
+                path.moveTo(12f, 3f); path.lineTo(12f, 21f)
+                path.moveTo(3f, 12f); path.lineTo(21f, 12f)
+                path.moveTo(9f, 6f); path.lineTo(12f, 3f); path.lineTo(15f, 6f)
+                path.moveTo(9f, 18f); path.lineTo(12f, 21f); path.lineTo(15f, 18f)
+                path.moveTo(6f, 9f); path.lineTo(3f, 12f); path.lineTo(6f, 15f)
+                path.moveTo(18f, 9f); path.lineTo(21f, 12f); path.lineTo(18f, 15f)
+                canvas.drawPath(path, paint)
+            }
             "more" -> {
                 paint.style = Paint.Style.FILL
                 canvas.drawCircle(5f, 12f, 1.8f, paint)
