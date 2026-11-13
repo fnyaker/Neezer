@@ -74,6 +74,7 @@
     <string name="car_start_blocked_action">Démarrer</string>
     <string name="car_position_reset">Positions réinitialisées</string>
     <string name="car_position_reset_app">Position de %1$s réinitialisée</string>
+    <string name="car_pin_limit">Impossible d\'épingler : 24 playlists au maximum</string>
 
     <string name="shortcut_server">Serveur</string>
     <string name="shortcut_server_long">Paramètres du serveur</string>

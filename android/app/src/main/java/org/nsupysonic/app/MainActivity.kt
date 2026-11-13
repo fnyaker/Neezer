@@ -1251,8 +1251,10 @@ class MainActivity : AppCompatActivity() {
             if (cleanId.isEmpty() || cleanId.length > 200) return false
             val cleanTitle = title?.trim().orEmpty().take(200).ifBlank { cleanId }
             val count = nbTracks.coerceAtLeast(0)
-            CarPrefs(this@MainActivity).pin(PinnedPlaylist(cleanId, cleanTitle, count))
-            return true
+            // The cap lives in CarPrefs.pin (MAX_PINS): a full list answers
+            // false, which the SPA already shows as "Impossible d'épingler".
+            return CarPrefs(this@MainActivity)
+                .pin(PinnedPlaylist(cleanId, cleanTitle, count))
         }
 
         @JavascriptInterface

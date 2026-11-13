@@ -132,6 +132,41 @@ object CarPositions {
 }
 
 /**
+ * Adding or updating one pinned playlist, with the hard cap.
+ *
+ * The person's own catalogue can be large, and the SPA's pin action is reachable
+ * from any page of the same origin: an unbounded list would let that page grow
+ * `CarPrefs.pins` (a JSON string rewritten at every pin) without limit. 24 is
+ * the ceiling — six pages of four tiles in the overlay, far past what a driver
+ * scrolls; a pin that already exists can ALWAYS be refreshed in place, and a
+ * new one past the ceiling is refused (the SPA shows "Impossible d'épingler").
+ *
+ * Pure on purpose: `CarPinsTest` holds the boundary on the JVM.
+ */
+object CarPins {
+    const val MAX_PINS = 24
+
+    /**
+     * The list after adding [item], or null when it would exceed [MAX_PINS].
+     * An existing id is replaced at its current rank (dedup, order kept).
+     */
+    fun add(
+        current: List<PinnedPlaylist>,
+        item: PinnedPlaylist,
+    ): List<PinnedPlaylist>? {
+        if (item.id.isBlank()) return null
+        val at = current.indexOfFirst { it.id == item.id }
+        if (at >= 0) {
+            val next = current.toMutableList()
+            next[at] = item
+            return next
+        }
+        if (current.size >= MAX_PINS) return null
+        return current + item
+    }
+}
+
+/**
  * The car mode's own preferences, in the app's SharedPreferences convention
  * (no DataStore dependency, no server round-trip). Everything is on this
  * device: visibility, opacity, keyboard, triggers, the pinned order and the
@@ -218,9 +253,15 @@ class CarPrefs(context: Context) {
 
     fun isPinned(id: String): Boolean = pins.any { it.id == id }
 
-    fun pin(item: PinnedPlaylist) {
-        if (isPinned(item.id)) return
-        pins = pins + item
+    /**
+     * Pin (or refresh) one playlist. The ONE door for the cap: [CarPins.add]
+     * refuses a new pin past 24 and always accepts an existing id. Returns
+     * whether the list changed, so `carPin` can answer the SPA truthfully.
+     */
+    fun pin(item: PinnedPlaylist): Boolean {
+        val next = CarPins.add(pins, item) ?: return false
+        pins = next
+        return true
     }
 
     fun unpin(id: String) {
