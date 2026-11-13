@@ -207,6 +207,21 @@ phone shows the list OR a category (back returns to the list, `replace` on a dee
 open category. A link into a setting names its category (`/settings/sources`, `/settings/account`); old `fx`/`quality`
 names are mapped. Benches open the category they test (`#/settings/playback`, `#/settings/downloads`), never bare `#/settings`.
 
+**The Égaliseur card is a picker, a meter and ten faders** (`components/AudioEffects.svelte`,
+`lib/eqpresets.js`). It is its own card under the volume/bass one. The presets are two groups — Intégrés (5)
+and Mes préréglages — as a horizontal snap rail at ≤640 px (44 px chips, the next one clipped as the scroll
+affordance, no scrollbar) and as a vertical scrolling list in two columns on desktop (the 760 px settings
+pane). Every preset is reachable; the active one is highlighted and **revealed when the card mounts** (on a
+ten-preset rail it would otherwise mount out of view). Clicking applies the whole stored chain (EQ, curve,
+bass, normalization). A selected user preset that has been edited says « modifié » and enables « Mettre à
+jour », which writes the ten bands and the bass lift only; a built-in is code, so it offers « Enregistrer
+comme… » instead. Update and delete are undoable toasts, never a confirmation dialog. The live per-band
+meter and its saturation warning sit above the faders; the meter's subscription is scoped to the card being
+on screen and the page visible, and the warning's « Réduire le volume de X dB » lowers the player volume
+optimistically with an undo toast (cost, colours and the peak-hold reset: playback.md). Measured 390x844:
+card 350 px wide, no sideways overflow, chips 44 px, all 15 presets in the DOM and the rail scrollable; at
+1440: 760 px card, bars centred on their frequency labels to 0.01 px.
+
 **Long grids grow as they scroll** (`lib/grow.js`: `STEP`, `use:nearEnd` on a sentinel after the last tile;
 Library's Artistes, Albums, Playlists). 300 followed artists mounted at once cost 1.2 s of main thread on the
 4x-throttled desktop (0.9 s phone) before the chip answered; mounting 36 then the next 36 as the end comes

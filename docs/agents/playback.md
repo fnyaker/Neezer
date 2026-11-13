@@ -114,6 +114,30 @@ session. Every bad window (and one good one a minute) goes to the diagnostic log
 detector on healthy and broken readings, and the volume envelopes; `test/output/run.mjs` drives the
 whole thing in Chromium.
 
+**The equalizer's meter lives only while its card does** (`lib/audio/saturation.js`,
+`components/AudioEffects.svelte`, `lib/eqpresets.js`). The engine's tap is refcounted and free when nobody
+listens, but the card must also stop paying when it is not on screen: the subscription starts when the card
+intersects (`rootMargin: 160px`) in a visible page and stops when it scrolls away, when the tab is hidden,
+and on unmount. The bars are painted from the snapshot by direct CSS custom-property writes, not Svelte
+state (ten updates per tick would run the component's update pass 250 times a second for ten 6 px lines),
+at 13 Hz with a 90 ms CSS glide while the RISK and the warning still see every 25 Hz reading. Measured in
+headless Chromium at 390x844 with a real multitone through the chain: a write per reading cost 124 ms of
+main thread per second (321 style recalcs in 5 s); half the rate costs 45 ms/s, of which the engine's own
+tap is 32 (offscreen, no subscription: 20 ms/s). Layouts stayed at ~7/s in both, so the bars add paint and
+style, not layout. The number readout is written straight to its spans at 4 Hz with fixed-width slots for
+the same reason. The risk colours are semantic, theme-scoped marks — lemon on Encre, ink on Papier, `--tx`
+on Pochette, amber `#f5b041`/`#8a5200`, red `#ff6b6b`/`#b3261e` — measured against the card at 14.4/5.0/5.2:1
+minimum (encre/papier/pochette), far above the 3:1 a graphical object needs.
+**A volume change resets the warning's peak-hold after 160 ms**, not immediately: the analyser's 85 ms
+window still holds the pre-change signal, and a hold started inside it kept the old 9.7 dB reduction for the
+whole episode while the live peak had already fallen (seen in the bench). The player's volume is the media
+element's own and applies BEFORE its `MediaElementAudioSourceNode` (measured on Chromium: volume 0.5 halved
+the analyser peak), so the warning's "Réduire le volume" really does lower the pre-limiter peak — 9.2 dB →
+1.1 dB at the same instant in the bench — and the banner recomputes its own margin instead of claiming the
+old one. Presets: built-ins are code and refuse "Mettre à jour"; a user preset takes the ten bands and the
+bass lift only (not its EQ switch or normalization level), and update/delete ride in a toast with "Annuler"
+rather than a confirmation dialog (`test/eqpresets.test.mjs`).
+
 **THE APP CORE IS RUST TOO** (`webapp/appcore`, compiled to `src/lib/appcore/appcore.wasm`, reached
 through `lib/appcore/core.js`). The interface's own logic — not the DOM, the logic — where the
 JavaScript allocated as it went, on the main thread, in the paths that must not stutter:
