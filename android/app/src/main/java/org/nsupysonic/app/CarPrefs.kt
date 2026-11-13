@@ -19,10 +19,123 @@ data class PinnedPlaylist(val id: String, val title: String, val nbTracks: Int =
     }
 }
 
+/** One saved place on screen, in dp, from the display's left edge and bottom. */
+data class CarSlot(val xDp: Float, val bottomDp: Float)
+
+/** The display's safe insets, in dp (status bar, navigation bar, cutout). */
+data class CarInsets(
+    val leftDp: Float = 0f,
+    val topDp: Float = 0f,
+    val rightDp: Float = 0f,
+    val bottomDp: Float = 0f,
+)
+
+/**
+ * The card's geometry, pure so the JVM tests can hold the prototype's numbers
+ * and the drag clamp without a device.
+ *
+ * The overlay's window is EXACTLY the painted surface (see CarModeService):
+ * FULL/MINI are `screen - 16 dp` wide at x = 8 dp, ULTRA is 76 × 76 dp. The
+ * stored slot is always measured from the START edge, even for ULTRA whose
+ * window uses Gravity.END: the service converts it, so rotating the phone
+ * keeps the button near the same corner instead of off screen.
+ */
+object CarPlacement {
+    const val SIDE_DP = 8f
+    const val CARD_BOTTOM_DP = 92f
+    const val ULTRA_SIZE_DP = 76f
+    const val ULTRA_END_DP = 14f
+    const val ULTRA_BOTTOM_DP = 104f
+
+    fun widthDp(size: CarSize, screenWidthDp: Float): Float =
+        if (size == CarSize.ULTRA) ULTRA_SIZE_DP
+        else (screenWidthDp - SIDE_DP * 2f).coerceAtLeast(1f)
+
+    /**
+     * Where the prototype puts each size on a fresh install: FULL/MINI at
+     * x = 8 dp / bottom = 92 dp; ULTRA 76 dp square, 14 dp from the END edge
+     * and 104 dp from the bottom.
+     */
+    fun defaults(size: CarSize, screenWidthDp: Float): CarSlot = if (size == CarSize.ULTRA) {
+        CarSlot(screenWidthDp - ULTRA_END_DP - ULTRA_SIZE_DP, ULTRA_BOTTOM_DP)
+    } else {
+        CarSlot(SIDE_DP, CARD_BOTTOM_DP)
+    }
+
+    /**
+     * Keep a slot inside the safe area. [windowHeightDp] is the measured card
+     * height (0 before the first layout: only the bottom's lower bound and the
+     * x bounds are enforced then; the service re-clamps after layout).
+     */
+    fun clamp(
+        slot: CarSlot,
+        windowWidthDp: Float,
+        windowHeightDp: Float,
+        screenWidthDp: Float,
+        screenHeightDp: Float,
+        insets: CarInsets = CarInsets(),
+    ): CarSlot {
+        val width = windowWidthDp.coerceAtLeast(1f)
+        val height = windowHeightDp.coerceAtLeast(0f)
+        val minX = insets.leftDp.coerceAtLeast(0f)
+        val maxX = (screenWidthDp - width - insets.rightDp).coerceAtLeast(minX)
+        val minBottom = insets.bottomDp.coerceAtLeast(0f)
+        val maxBottom =
+            (screenHeightDp - height - insets.topDp).coerceAtLeast(minBottom)
+        return CarSlot(
+            slot.xDp.coerceIn(minX, maxX),
+            slot.bottomDp.coerceIn(minBottom, maxBottom),
+        )
+    }
+}
+
+/**
+ * The storage key of one (navigation app, size) slot. Preferences keys are
+ * flat strings, so the package goes in them verbatim (a package name cannot
+ * contain ':') and an empty package means "no navigation app in front" — the
+ * manual/Bluetooth case. No JSON, no path, no Android type: the JVM test can
+ * round-trip every key and value.
+ */
+object CarPositions {
+    private const val PREFIX = "position:"
+
+    fun key(pkg: String?, size: CarSize): String =
+        "$PREFIX${pkg.orEmpty()}:${size.name}"
+
+    fun isPositionKey(key: String): Boolean = key.startsWith(PREFIX)
+
+    /** The (package, size) a stored key names, or null for anything else. */
+    fun parse(key: String): Pair<String?, CarSize>? {
+        if (!key.startsWith(PREFIX)) return null
+        val rest = key.removePrefix(PREFIX)
+        val at = rest.lastIndexOf(':')
+        if (at < 0) return null
+        val size = CarSize.values().firstOrNull { it.name == rest.substring(at + 1) }
+            ?: return null
+        val pkg = rest.substring(0, at)
+        return pkg.ifEmpty { null } to size
+    }
+
+    fun packageOf(key: String): String? = parse(key)?.first
+
+    fun encode(slot: CarSlot): String = "${slot.xDp},${slot.bottomDp}"
+
+    fun decode(raw: String?): CarSlot? {
+        if (raw == null) return null
+        val at = raw.indexOf(',')
+        if (at <= 0) return null
+        val x = raw.substring(0, at).toFloatOrNull() ?: return null
+        val bottom = raw.substring(at + 1).toFloatOrNull() ?: return null
+        if (!x.isFinite() || !bottom.isFinite() || x < 0f || bottom < 0f) return null
+        return CarSlot(x, bottom)
+    }
+}
+
 /**
  * The car mode's own preferences, in the app's SharedPreferences convention
  * (no DataStore dependency, no server round-trip). Everything is on this
- * device: visibility, opacity, keyboard, triggers and the pinned order.
+ * device: visibility, opacity, keyboard, triggers, the pinned order and the
+ * per-navigation-app position.
  *
  * The opacity is CLAMPED here, at the only door: Android 12+ stops delivering
  * touches to an overlay whose background is more than 80 % opaque, and a car
@@ -124,6 +237,49 @@ class CarPrefs(context: Context) {
         list.add(to, item)
         pins = list
     }
+
+    // -- position ------------------------------------------------------------
+
+    /**
+     * The saved place of the card for [pkg] in [size], or null when the person
+     * never moved it there (the caller then applies [CarPlacement.defaults]).
+     */
+    fun position(pkg: String?, size: CarSize): CarSlot? {
+        val raw = sp.getString(CarPositions.key(pkg, size), null) ?: return null
+        return CarPositions.decode(raw)
+    }
+
+    /** Save one slot; the service listens to the file and re-applies it live. */
+    fun setPosition(pkg: String?, size: CarSize, slot: CarSlot) {
+        sp.edit()
+            .putString(CarPositions.key(pkg, size), CarPositions.encode(slot))
+            .apply()
+    }
+
+    /** Forget every size of one navigation app (null = the no-app slot). */
+    fun clearPosition(pkg: String?) {
+        val edit = sp.edit()
+        for (key in sp.all.keys) {
+            if (CarPositions.parse(key)?.first == pkg) edit.remove(key)
+        }
+        edit.apply()
+    }
+
+    /** Back to the prototype's place for every app and every size. */
+    fun clearPositions() {
+        val edit = sp.edit()
+        for (key in sp.all.keys) {
+            if (CarPositions.isPositionKey(key)) edit.remove(key)
+        }
+        edit.apply()
+    }
+
+    /** The navigation apps that have a saved position (the null bucket is reset by [clearPositions]). */
+    fun positionedPackages(): Set<String> = sp.all.keys
+        .asSequence()
+        .mapNotNull { CarPositions.packageOf(it) }
+        .filter { it.isNotBlank() }
+        .toSet()
 
     companion object {
         private const val KEY_ALPHA = "overlayAlpha"

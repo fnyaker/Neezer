@@ -185,30 +185,69 @@ later process's connection by accident. The name is reduced to printable charact
 reaches a page. An older APK reports nothing: verdicts are then per page's own guess of the output
 (the latency its context reports) and live until their retry.
 
-**The car mode's triggers** (`CarTrigger`, `CarMotion`; lot E, native only — no bridge change).
-The overlay's visibility is ONE formula, in `CarTrigger`: `(gpsTrigger && a listed navigation app
-is in front) || (bluetoothTrigger && an A2DP/BLE output is connected)`. No AccessibilityService:
-foreground apps come from `UsageStatsManager.queryEvents(now - 5 s, now)` on a worker every second,
-the LAST `ACTIVITY_RESUMED` winning and staying sticky across polls (a navigation app that has been
-guiding for ten minutes emits no new event, and a 5 s window alone would call it gone), plus a
-one-off 6 h seed at start for the app already in front. `queryEvents` returns null while locked
-(the previous state is kept) and needs usage access (without it the trigger stays off, no crash).
-The screen being off skips the query; Bluetooth sinks are `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` and
-`registerAudioDeviceCallback` (no permission; a headset counts like a car radio, hence the switch).
-Speed: fused location 1 Hz high accuracy plus `lastLocation` only when younger than 30 s; after 3 s
-without a live fused callback the platform GPS takes over for good. `Location.getSpeed() * 3.6`;
-5 km/h and above is moving at once, below it the answer stays "moving" for 5 s (the red light), and
-an UNKNOWN speed — no fix, a fix without speed, 5 s of silence, no location permission — is always
-"moving" (no crash, keyboard stays restricted). Listener on the main thread, `start`/`stop`
-idempotent; `CarMotionTest` (JVM) holds the 5 km/h / 5 s thresholds. Android 10+ requires a
-foreground service reading location while its activity is not
-visible to declare the `location` type (`developer.android.com/develop/sensors-and-location/location/permissions`):
-the car service (lot A) must add `FOREGROUND_SERVICE_LOCATION`, `specialUse|location`
-(plus `microphone` once the mic grant exists) and start it with all of them, or the speed stays
-unknown while Maps is in front. The `location` type is while-in-use:
-on Android 14 the service must be created from a visible app or an exempt start (tile, notification),
-so the permission is granted before the service starts. This lot adds no dependency:
-`play-services-location` is lot A's.
+**The car mode's triggers** (`CarTrigger`, `CarMotion`, `CarBootReceiver`; lot E and the
+visibility/position lot — native only, no bridge change). The overlay's visibility is ONE formula,
+in `CarVisibility`: **GPS first**. When the GPS trigger is on and the usage access granted, the
+overlay exists only while a configured navigation app is really in front — Bluetooth no longer
+keeps it over YouTube or the launcher (the old `gps || bluetooth` was the reported leak). The GPS
+trigger off means Bluetooth alone decides (the documented mode, the platform cannot tell a car
+radio from a headset); the GPS trigger on with the usage access missing cannot see anything, so
+Bluetooth is the only signal left and the settings' access row explains it. `manual` is NOT in the
+formula: a tile or settings start shows the card once, then the first answer saying no navigation
+app is in front takes it down (the close button and the notification remain the explicit way out).
+A `DriveState` carries the foreground package, so the service applies that app's own position and
+switches when Maps → Waze. `CarForegroundTest` and `CarVisibilityTest` hold the formula on the
+JVM.
+
+The foreground decision is `CarForegroundTracker` (pure, same test): `UsageStatsManager.queryEvents`
+every second, the LAST meaningful `ACTIVITY_RESUMED` winning and staying sticky (a navigation app
+guiding for ten minutes emits no new event), plus a one-off 6 h seed at start that skips the system
+chrome. `queryEvents` returns null while locked (the previous state is kept) and needs usage access
+(without it the trigger stays off, no crash). Transients: `com.android.systemui` and the permission
+controllers are drawn OVER the map and are ignored outright — opening the notification shade must
+not hide the card, and closing it emits no new event. Our own screens, the launcher and a real app
+schedule the hide at `event + GRACE_MS` (2 s) and the 1 s poll lands it at **2.0–3.0 s**; coming
+back inside the grace cancels it, and a real departure (YouTube, Messages) hides. The service and
+the seed both skip system events, so no shade event can become "the last foreground app".
+**No path keeps the card over a non-GPS app while the GPS trigger is usable**: `shouldDetach` no
+longer asks `manual`, and `ACTION_REFRESH` attaches through `shouldAttach` (visible, not
+suppressed, not dismissed, not attached) — once. The settings screen's `onPause` calls
+`CarModeService.settingsClosed` (the same ACTION_REFRESH), the trigger reclassifies our own
+package and hides, and the navigation app's resume reattaches; returning within the grace is no
+longer left hidden. The only deliberate exceptions are the two explicit modes above (Bluetooth
+alone, or both triggers off = a manual card until closed).
+
+The screen being off skips the usage query; Bluetooth sinks are
+`AudioManager.getDevices(GET_DEVICES_OUTPUTS)` and `registerAudioDeviceCallback` (no permission; a
+headset counts like a car radio, hence the switch). Speed: fused location 1 Hz high accuracy plus
+`lastLocation` only when younger than 30 s; after 3 s without a live fused callback the platform
+GPS takes over for good. `Location.getSpeed() * 3.6`; 5 km/h and above is moving at once, below it
+the answer stays "moving" for 5 s (the red light), and an UNKNOWN speed — no fix, a fix without
+speed, 5 s of silence, no location permission — is always "moving" (no crash, keyboard stays
+restricted). Listener on the main thread, `start`/`stop` idempotent; `CarMotionTest` (JVM) holds
+the 5 km/h / 5 s thresholds.
+
+**Starting itself without Neezer open** (`CarBootReceiver`, `START_STICKY`). `BOOT_COMPLETED` and
+`MY_PACKAGE_REPLACED` (permission `RECEIVE_BOOT_COMPLETED`, receiver `exported="false"` — the
+system still delivers these protected broadcasts) call `CarModeService.startIfEnabled`: the service
+then watches for the navigation app even if Neezer is never opened. Android 12+ allows those two
+broadcasts as background FGS starts (developer.android.com, "Exemptions from background start
+restrictions"), and SYSTEM_ALERT_WINDOW — already required to draw — is another exemption. Both
+services return `START_STICKY`, and `onStartCommand(null)` is handled: the car service re-arms the
+trigger (no manual flag, no stale dismissal), the player stops when it has neither a client nor a
+state, so no zombie notification survives. A refused background start
+(`ForegroundServiceStartNotAllowedException`, or the Android 14 while-in-use `SecurityException`
+for the location/microphone types) is caught: a plain `startService` is tried, then a notification
+with a “Démarrer” action is posted — a notification action is an allowed start — never a crash.
+Android 10+ requires a foreground service reading location while its activity is not visible to
+declare the `location` type (`developer.android.com/develop/sensors-and-location/location/permissions`):
+the car service declares `FOREGROUND_SERVICE_LOCATION`, `specialUse|location` (plus `microphone`
+once the mic grant exists) and starts it with all of them, or the speed stays unknown while Maps
+is in front. The `location`/`microphone` types are while-in-use: on Android 14 a service created
+from the background (a boot/update start included) is refused those bits at `startForeground`, so
+`goForeground` falls back to `specialUse` — the overlay still comes up, the speed stays unknown
+until the person opens the app again; a tile/notification start (a user action) keeps them. This
+lot adds no dependency: `play-services-location` is lot A's.
 **The car's sleeves are real covers, not only grooves** (`CarCoverView`, `CarCovers`; no bridge
 change). The overlay, the playlist tiles and the settings rows draw the album/playlist image when
 one exists and keep the deterministic Sillon grooves as the placeholder (and as the final answer on
@@ -245,7 +284,20 @@ native skip first. The overlay is `TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_FOCUSABL
 `screen − 16 dp` wide at `x=8 dp`, bottom 92 dp; ULTRA is exactly 76 × 76 dp at `x=14 dp`,
 bottom 104 dp (`WindowManager` interprets positive x/y under `END`/`BOTTOM` as distance from that
 edge). No transparent side padding and no margin inside the window: those bands still receive
-touches and used to swallow the GPS app's taps (a 90 × 180 dp window for a 76 dp button). Cross-window
+touches and used to swallow the GPS app's taps (a 90 × 180 dp window for a 76 dp button). **The
+place is the person's**: a slot is stored per (navigation app, size) in `CarPrefs` — x from the
+START edge and distance to the bottom, in dp (`CarPlacement`/`CarPositions`, pure and JVM-tested).
+Defaults are the prototype's: FULL/MINI 8/92, ULTRA 76 × 76 at 14 from the END and 104 from the
+bottom. FULL's transport row carries a 44 dp move handle in the prototype's empty 64 px balance
+slot (tap + drag, light `CLOCK_TICK` haptic); ULTRA accepts a long press + drag on the disc, and a
+long press that never moves still shrinks to MINI. Each delta goes through
+`WindowManager.updateViewLayout`, clamped to the status bar / navigation bar / cutout insets,
+re-clamped after layout, rotation and size change; release writes the slot for the app in front.
+Measured in dp: 411 × 891 → FULL 395 × 286 at (8, 92), top 513, bounds x 0–16 / bottom 48–581;
+ULTRA at x=321 (14 from the end), bottom 104, top 711, bounds x 0–335 / bottom 48–791. 360 × 640 →
+FULL 344 wide at (8, 92), top 262; ULTRA x=270, top 460. `CarSettingsActivity`'s Position card
+explains the gesture and resets all apps or one, immediately and with a toast (no dialog).
+Cross-window
 blur is requested only for FULL/MINI and only where the WindowManager reports it enabled (a square
 of frost around the round ULTRA disc would be visible). The window alpha is 1: Android 12's
 untrusted-touch cap applies to a window that lets a touch PASS THROUGH it, and this one is touchable
@@ -264,9 +316,11 @@ it by hand. **There is one door to the settings**: the notification's Réglages 
 `CarModeService.openSettings(context)`, and the playlist ghost tile goes through
 `CarHost.openSettings()`; all three lead to the same `openSettingsNow()`, which detaches the overlay
 before launching the activity (with no service alive the helper launches it directly, since nothing
-draws). MainActivity's next `onResume` sends `ACTION_REFRESH` — and a navigation app becoming visible
-again clears the suppression — so `CarTrigger.refresh()` re-reads the state and the overlay
-reattaches once (guarded by `overlayAttached` and `!dismissed`). `MainActivity` owns the `jsSink` into
+draws). The return path is `CarSettingsActivity.onPause` (when finishing) → `CarModeService.settingsClosed` →
+`ACTION_REFRESH`: it clears the suppression, `CarTrigger.refresh()` reclassifies our own package and
+hides, and the navigation app's `ACTIVITY_RESUMED` reattaches — through `CarVisibility.shouldAttach`
+(visible, not suppressed, not dismissed, not attached), so one window, never two, and no
+stuck-hidden card when the return happens inside the 2 s grace. `MainActivity` owns the `jsSink` into
 the SPA (`__nsCarPlay` / `__nsCarFav`). `PlayerService.evalJs(js, onResult)` carries the page's
 boolean answer back (false when no WebView/never our origin): `launch()` changes the screen and toasts
 "Lecture : X" (or "Playlist lancée : X" for a playlist) only on true, and otherwise shows "Ouvre Neezer pour lancer la musique" on the current
@@ -335,7 +389,9 @@ passenger keyboard: 532 dp panel + 92 dp bottom margin with three results, 16 dp
 `CarSettingsActivity` is the full-screen Réglages → Mode voiture (manifest
 `android:exported="false"`; reached only through `CarModeService.openSettings`, which hides the
 overlay first), asks overlay, usage-access, location, Bluetooth and microphone through
-`CarPermissions`, and never shows a confirmation dialog. `webapp/test/car.test.mjs` drives the hooks
+`CarPermissions`, and never shows a confirmation dialog. Its **Position** card explains the drag
+gesture and resets the saved slots — all apps, or one row per navigation app that has one —
+immediately, with a toast. `webapp/test/car.test.mjs` drives the hooks
 with injected player functions
 (launch kinds, no session, remote, the favourite hook appearing/disappearing); `npm test` 439 and
 `npm run build` pass. The Kotlin side is built by CI's `android` workflow; `assembleDebug`,

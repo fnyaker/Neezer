@@ -205,8 +205,11 @@ class PlayerService : Service() {
         }
         // startForegroundService contract: go foreground right away.
         goForeground()
-        // A restart without the WebView would be a zombie — don't be sticky.
-        return START_NOT_STICKY
+        // Sticky while the WebView is bound and the session has a state: an OS
+        // kill can bring the service back, and a restart with neither a client
+        // nor a state is stopped above (onStartCommand(null) on the next
+        // process) instead of parking a zombie notification.
+        return START_STICKY
     }
 
     /**

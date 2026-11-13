@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
@@ -39,6 +40,13 @@ import kotlin.math.roundToInt
  * second finger, the view being hidden and a size change all drop the pending
  * long press; a tap goes through performClick so TalkBack and the click sound
  * keep working. [CarPrefs.invertSwipe] swaps the ULTRA's left/right actions.
+ *
+ * Placement: FULL has a dedicated 44 dp move handle in the transport row's end
+ * slot (tap + drag, light haptic, clamped by the service and remembered per
+ * navigation app); ULTRA also accepts a long press + drag on the disc — a long
+ * press that never moves is still the prototype's "shrink to MINI". The handle
+ * takes the prototype's empty 64 px balance span, away from the heart and the
+ * 92 dp play button, so a drag cannot be mistaken for a transport command.
  *
  * Everything the view knows comes from [render]; every action leaves through
  * [CarHost]. It owns no playback state, no audio and no network.
@@ -240,9 +248,24 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     )
 
     // The prototype balances the heart with an empty 64 px span so the play
-    // button stays centred.
-    private val fullSpacer = View(context).apply {
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    // button stays centred. That span becomes the move handle's slot: the same
+    // balance, the title keeps its width, and a drag has its own control away
+    // from the heart/play pair. The visible button is 44 dp inside the 64 dp
+    // slot (the accessible minimum, and no transport glyph is near it).
+    private val fullMove = iconButton(
+        sizeDp = 44,
+        fill = veil(CarStyle.TX, 0.10f),
+        stroke = Color.TRANSPARENT,
+        strokeDp = 0f,
+        icon = icon("move", 20, CarStyle.TX),
+        description = "Déplacer la carte : maintiens et fais glisser",
+    )
+
+    private val fullMoveSlot = FrameLayout(context).apply {
+        addView(
+            fullMove,
+            FrameLayout.LayoutParams(dp(44f), dp(44f), Gravity.CENTER),
+        )
     }
 
     private val fullControls = SpaceBetweenRow(context, MIN_TARGET_DP).apply {
@@ -251,7 +274,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         addView(fullPrev, ViewGroup.LayoutParams(dp(72f), dp(72f)))
         addView(fullPlay, ViewGroup.LayoutParams(dp(92f), dp(92f)))
         addView(fullNext, ViewGroup.LayoutParams(dp(72f), dp(72f)))
-        addView(fullSpacer, ViewGroup.LayoutParams(dp(64f), dp(64f)))
+        addView(fullMoveSlot, ViewGroup.LayoutParams(dp(64f), dp(64f)))
     }
 
     private val playlistsButton = wideButton(
@@ -374,7 +397,9 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
             left = { swipeLeft() },
             right = { swipeRight() },
             up = { openFull() },
+            longDrag = true,
         )
+        attachMoveHandle(fullMove)
 
         ready = true
     }
@@ -527,21 +552,85 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         left: (() -> Unit)? = null,
         right: (() -> Unit)? = null,
         up: (() -> Unit)? = null,
+        longDrag: Boolean = false,
     ) {
         tap?.let { action -> view.setOnClickListener { action() } }
         long?.let { action ->
             view.setOnLongClickListener {
                 // TalkBack's double-tap-and-hold reaches this path; a physical
                 // long press goes through the Gesture timer below, which calls
-                // performLongClick().
+                // performLongClick() (or, with longDrag, moves instead).
                 it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 action()
                 true
             }
         }
-        val gesture = Gesture(view, long != null, left, right, up)
+        val gesture = Gesture(view, long != null, left, right, up, longDrag)
         gestures += gesture
         view.setOnTouchListener(gesture)
+    }
+
+    /**
+     * The FULL card's move handle. Raw coordinates, so the gesture keeps
+     * working while the window is being moved under the finger: a drag sends
+     * deltas to the service, which clamps and updates the window in the same
+     * frame. A tap is only a click for TalkBack (the handle has no action).
+     */
+    private fun attachMoveHandle(view: View) {
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        var lastX = 0f
+        var lastY = 0f
+        var moved = false
+        view.setOnTouchListener { target, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    lastX = downX
+                    lastY = downY
+                    moved = false
+                    target.alpha = PRESS_ALPHA
+                    target.isPressed = true
+                    true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (!moved && (abs(event.rawX - downX) > slop ||
+                            abs(event.rawY - downY) > slop)
+                    ) {
+                        moved = true
+                        // Light tick: the driver feels the card answer before
+                        // looking at where it goes.
+                        target.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    }
+                    if (moved) {
+                        host.moveOverlayBy(
+                            (event.rawX - lastX).roundToInt(),
+                            (event.rawY - lastY).roundToInt(),
+                        )
+                        lastX = event.rawX
+                        lastY = event.rawY
+                    }
+                    true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    target.alpha = 1f
+                    target.isPressed = false
+                    if (moved) {
+                        host.endOverlayMove()
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {
+                        target.performClick()
+                    }
+                    moved = false
+                    true
+                }
+
+                else -> false
+            }
+        }
     }
 
     private fun cancelGestures() {
@@ -553,6 +642,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         fullPrev.alpha = 1f
         fullPlay.alpha = 1f
         fullNext.alpha = 1f
+        fullMove.alpha = 1f
         playlistsButton.alpha = 1f
         searchButton.alpha = 1f
     }
@@ -576,6 +666,10 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
      * The prototype's detector, with Android's lifecycle folded in: one action
      * at most per touch, timers removed on UP/CANCEL/hide/detach, and a tap
      * routed through performClick for accessibility and the click sound.
+     *
+     * [longDrag] is the ULTRA disc's extra gesture: at 550 ms the touch arms a
+     * drag instead of firing the long action; moving then drags the window, and
+     * releasing without moving fires the long action (the prototype's MINI).
      */
     private inner class Gesture(
         private val target: View,
@@ -583,17 +677,34 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         private val left: (() -> Unit)?,
         private val right: (() -> Unit)?,
         private val up: (() -> Unit)?,
+        private val longDrag: Boolean = false,
     ) : View.OnTouchListener {
         private var downX = 0f
         private var downY = 0f
         private var touchActive = false
         private var tracking = false
         private var fired = false
+        private var dragArmed = false
+        private var dragging = false
+        private var lastRawX = 0f
+        private var lastRawY = 0f
+        private var lastTouchX = 0f
+        private var lastTouchY = 0f
 
         private val longPress = Runnable {
             if (tracking && !fired) {
-                fired = true
-                target.performLongClick()
+                if (longDrag) {
+                    // Arm, do not fire: the release decides between a drag
+                    // and the long action. Start from where the finger is now.
+                    dragArmed = true
+                    dragging = false
+                    lastRawX = lastTouchX
+                    lastRawY = lastTouchY
+                    target.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                } else {
+                    fired = true
+                    target.performLongClick()
+                }
             }
         }
 
@@ -603,8 +714,14 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
                     touchActive = true
                     tracking = true
                     fired = false
+                    dragArmed = false
+                    dragging = false
                     downX = event.x
                     downY = event.y
+                    lastRawX = event.rawX
+                    lastRawY = event.rawY
+                    lastTouchX = event.rawX
+                    lastTouchY = event.rawY
                     target.alpha = PRESS_ALPHA
                     target.removeCallbacks(longPress)
                     if (hasLong) target.postDelayed(longPress, LONG_PRESS_MS)
@@ -622,7 +739,23 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
 
                 MotionEvent.ACTION_MOVE -> {
                     if (!touchActive) return false
+                    lastTouchX = event.rawX
+                    lastTouchY = event.rawY
                     if (event.pointerCount > 1) cancel()
+                    if (dragArmed) {
+                        val dx = (event.rawX - lastRawX).roundToInt()
+                        val dy = (event.rawY - lastRawY).roundToInt()
+                        if (dx != 0 || dy != 0) {
+                            if (!dragging) {
+                                dragging = true
+                                target.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            }
+                            host.moveOverlayBy(dx, dy)
+                            lastRawX = event.rawX
+                            lastRawY = event.rawY
+                        }
+                        return true
+                    }
                     // The prototype does not cancel the long press when the
                     // finger moves, so neither do we; fired decides the rest.
                     return true
@@ -633,6 +766,18 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
                     touchActive = false
                     target.removeCallbacks(longPress)
                     target.alpha = 1f
+                    if (dragArmed) {
+                        dragArmed = false
+                        tracking = false
+                        if (dragging) {
+                            dragging = false
+                            host.endOverlayMove()
+                        } else {
+                            // Held long enough, never moved: the long action.
+                            target.performLongClick()
+                        }
+                        return true
+                    }
                     if (!tracking) {
                         fired = false
                         return true
@@ -668,6 +813,11 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         fun cancel() {
             tracking = false
             fired = false
+            dragArmed = false
+            if (dragging) {
+                dragging = false
+                host.endOverlayMove()
+            }
             target.removeCallbacks(longPress)
             target.alpha = 1f
         }

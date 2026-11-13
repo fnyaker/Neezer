@@ -37,9 +37,10 @@ import kotlin.math.roundToInt
 /**
  * Réglages → Mode voiture, full screen in the app: what triggers the overlay,
  * which apps count as navigation, the keyboard and its letter limit, the
- * pinned playlists and the bar's opacity. The prototype's three cards, plus
- * the permissions the Android side actually needs (shown only while one is
- * missing) and the gesture inversion, which had no other home.
+ * pinned playlists, the card's position per navigation app and the bar's
+ * opacity. The prototype's cards, plus the permissions the Android side
+ * actually needs (shown only while one is missing) and the gesture inversion,
+ * which had no other home.
  *
  * Nothing here confirms before acting: pinning, unpinning and moving a pin are
  * one tap and a large toast, never a dialog. Nothing here plays either — the
@@ -64,6 +65,7 @@ class CarSettingsActivity : AppCompatActivity() {
     private lateinit var pinsBox: LinearLayout
     private lateinit var pinsStatus: TextView
     private lateinit var pinCount: TextView
+    private lateinit var positionsBox: LinearLayout
     private lateinit var gpsFlow: CarFlow
     private lateinit var layoutFlow: CarFlow
     private lateinit var letterFlow: CarFlow
@@ -156,6 +158,17 @@ class CarSettingsActivity : AppCompatActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Leaving the settings (back to the navigation app): the service
+        // detached and suppressed the card to show this screen. Clear the
+        // suppression through the ONE refresh path so returning to a
+        // navigation app reattaches exactly once — including a return inside
+        // the transient grace, where no new foreground event was needed. A
+        // permission screen on top (not finishing) keeps the card suppressed.
+        if (isFinishing) CarModeService.settingsClosed(this)
+    }
+
     /**
      * The overlay's own read is process-wide: reusing it here paints the
      * covers and counts without a request. It is only a minute old, and
@@ -187,6 +200,7 @@ class CarSettingsActivity : AppCompatActivity() {
 
         addCard(triggerCard())
         addCard(buildPermissionsCard())
+        addCard(positionCard())
         addCard(keyboardCard())
         addCard(pinsCard())
         addCard(opacityCard())
@@ -245,7 +259,7 @@ class CarSettingsActivity : AppCompatActivity() {
             card,
             toggleRow(
                 "Aussi au Bluetooth de la voiture",
-                "Démarre la musique et le mode voiture à la connexion.",
+                "Sert quand le déclenchement GPS est désactivé (ou sans accès aux statistiques d'usage) : le mode apparaît avec le Bluetooth de la voiture.",
                 car.bluetoothTrigger,
             ) { car.bluetoothTrigger = it },
             14
@@ -266,6 +280,88 @@ class CarSettingsActivity : AppCompatActivity() {
             })
         }
     }
+
+    // -- Position ------------------------------------------------------------
+
+    /**
+     * Where the card was dragged, per navigation app and per size. The card is
+     * moved from the overlay itself (the FULL header's move handle, or a long
+     * press + drag on the ULTRA disc); this screen only explains it and forgets
+     * one app or all of them — no dialog, one tap and a toast.
+     */
+    private fun positionCard(): LinearLayout {
+        val card = newCard()
+        addStack(card, cardTitle("Position"))
+        val hint = CarStyle.text(
+            this,
+            "Fais glisser la carte en mode Grand pour la placer ; elle est mémorisée " +
+                "pour chaque app GPS. En mode Ultra, appui long puis glisse sur le rond.",
+            13f,
+            CarStyle.DIM,
+        ).apply { setLineSpacing(0f, 1.4f) }
+        addStack(card, hint, 6)
+
+        positionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        addStack(card, positionsBox, 12)
+        renderPositions()
+        return card
+    }
+
+    private fun renderPositions() {
+        positionsBox.removeAllViews()
+        positionsBox.addView(
+            chip("Réinitialiser la position", false) {
+                car.clearPositions()
+                toast(getString(R.string.car_position_reset))
+                renderPositions()
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                d(40)
+            )
+        )
+        val packages = car.positionedPackages()
+        if (packages.isEmpty()) {
+            positionsBox.addView(
+                CarStyle.text(
+                    this,
+                    "Aucune position enregistrée — la carte reprend sa place par défaut.",
+                    13f,
+                    CarStyle.DIM,
+                ),
+                topWrap(10)
+            )
+            return
+        }
+        for (pkg in packages.sortedBy { gpsLabel(it) }) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val name = gpsLabel(pkg)
+            val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            column.addView(CarStyle.text(this, name, 15f, CarStyle.TX))
+            if (name != pkg) {
+                column.addView(CarStyle.monoText(this, pkg, 11f, CarStyle.DIM), topWrap(2))
+            }
+            row.addView(column, weight())
+            row.addView(
+                chip("Réinitialiser", false) {
+                    car.clearPosition(pkg)
+                    toast(getString(R.string.car_position_reset_app, name))
+                    renderPositions()
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    d(40)
+                ).apply { leftMargin = d(12) }
+            )
+            positionsBox.addView(row, topWrap(8))
+        }
+    }
+
+    private fun gpsLabel(pkg: String): String =
+        GPS_APPS.firstOrNull { pkg in it.packages }?.label ?: pkg
 
     // -- Autorisations -------------------------------------------------------
 
