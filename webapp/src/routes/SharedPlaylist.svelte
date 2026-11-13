@@ -15,6 +15,13 @@
   let phase = "loading"; // loading | ready | missing | failed
   let data = null; // { playlist, tracks }
   let queue = []; // the streamable tracks, in list order
+  // A public link may hold thousands of titles: paint a first slice and let the
+  // person ask for more, so the DOM and the cover queue never mount 4 000 rows
+  // on a phone. The queue still uses ALL streamable titles.
+  const SLICE = 100;
+  let shown = SLICE;
+  $: visibleTracks = data ? data.tracks.slice(0, shown) : [];
+  $: moreTracks = !!(data && data.tracks.length > shown);
   let seq = []; // playback order: indices into `queue`
   let pos = -1; // position in `seq`
   let playing = false;
@@ -41,6 +48,7 @@
     try {
       data = await api.sharedPlaylist(token);
       queue = data.tracks.filter((t) => t.streamable);
+      shown = SLICE;
       phase = "ready";
     } catch (e) {
       phase = e?.status === 404 ? "missing" : "failed";
@@ -153,6 +161,7 @@
       .then((d) => {
         data = d;
         queue = d.tracks.filter((t) => t.streamable);
+        shown = SLICE;
         phase = "ready";
       })
       .catch((e) => (phase = e?.status === 404 ? "missing" : "failed"));
@@ -221,7 +230,7 @@
 
       {#if data.tracks.length}
         <ol class="tracks">
-          {#each data.tracks as t (t.mid)}
+          {#each visibleTracks as t (t.mid)}
             <li class:current={isCurrent(t)} class:off={!t.streamable}>
               {#if t.streamable}
                 <button
@@ -262,6 +271,14 @@
             </li>
           {/each}
         </ol>
+        {#if moreTracks}
+          <div class="more">
+            <button class="btn btn-ghost" on:click={() => (shown += SLICE)}>
+              Afficher les {Math.min(SLICE, data.tracks.length - shown)} titres suivants
+            </button>
+            <span class="muted count">{shown} sur {data.tracks.length}</span>
+          </div>
+        {/if}
       {:else}
         <p class="empty muted">Cette playlist ne contient aucun titre.</p>
       {/if}
@@ -471,6 +488,18 @@
   }
   .tracks li.current {
     background: var(--s1);
+  }
+  .more {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 18px 0 0;
+    flex-wrap: wrap;
+  }
+  .more .count {
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
   }
   .row {
     display: flex;

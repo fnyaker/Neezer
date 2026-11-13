@@ -568,4 +568,6 @@ seek and volume, the capability cover URLs, a disabled « Non archivé » row, a
 n'est plus valide. » for a revoked/expired token. No edit, favourite, add, download or library
 navigation. The short link is a real HTML page (OG title/description, meta refresh into
 `#/shared/playlist/<token>`, noindex, no-referrer). Measured 390/1440: no sideways overflow, 44 px
-targets; a 4 000-title page is 50 ms / 5 statements.
+targets; a 4 000-title page is 50 ms / 5 statements. The list mounts **100 rows at first** and
+« Afficher les N titres suivants » extends it in slices, so the DOM and the cover queue never mount
+4 000 rows on a phone; the queue itself still holds every streamable title.
