@@ -2498,9 +2498,13 @@
   let hintSeq = 0;
 
   // The app's bridge 10 can hold a long list and ask for a refill; before it,
-  // the page sends the same ten entries it always did.
+  // the page sends the same ten entries it always did. This is a property of
+  // the WIRE, not of whether this element is about to be replaced: a stale
+  // element (a Web Audio hand-over, a fresh element about to take over) must
+  // still be given the long background list, or the page falls back to ten at
+  // exactly the moment the activity stops.
   function nativeLongNext() {
-    return isNativeEl(audio) && !stale(audio) && audio.longNext;
+    return isNativeEl(audio) && audio.longNext;
   }
   function hintAhead() {
     if (!nativeLongNext()) return 10;
@@ -2517,7 +2521,11 @@
   function onNativeAppBackground() {
     if (nativeBackground || !nativeLongNext()) return;
     nativeBackground = true;
-    if (audio && !stale(audio)) {
+    // Name the long list even if this element is stale: a hand-over may be
+    // replacing it, and the new element needs the list too. The old one is
+    // harmless to tell; updateNativeNext is driven by `audio` again after the
+    // swap.
+    if (audio) {
       // The Flow's queue holds at most the next title: ask for a batch now,
       // while the page can still run, so the app has ten titles to follow.
       if ($player.context && $player.context.kind === "flow") flowPrefetchAhead(10);
@@ -2566,7 +2574,7 @@
   // events the app sends it (only its timers are throttled), so it used to
   // start one on a timeupdate and stall halfway through it.
   function nativeOwnsTransition() {
-    return nativeOwnsBackground() && (pageHidden || audio.appInBackground) && hinted.length > 0;
+    return nativeOwnsBackground() && (pageHidden || nativeBackground || audio.appInBackground) && hinted.length > 0;
   }
   // Where a track's audio ends, for the app to cut there (0: its file's end).
   function trimEndFor(track) {
@@ -2585,7 +2593,11 @@
   }
 
   function nextHintTargets() {
-    if (!pageHidden && !nativeOwnsBackground()) return [];
+    // The explicit onStop hook is a background signal even when the WebView
+    // never hears visibilitychange (the app deliberately skips onPause), and
+    // a stale native element still has to be told the long list before it is
+    // replaced.
+    if (!pageHidden && !nativeBackground && !nativeOwnsBackground()) return [];
     // A crossfade being armed (its incoming track preloading, XFADE_PRELOAD
     // before the fade) keeps the list: the screen may lock right then, and the
     // fade is the page's own to give up (onTime). Once fading, the list is the

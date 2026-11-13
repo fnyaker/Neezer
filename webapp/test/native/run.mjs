@@ -201,12 +201,11 @@ function fakeApp() {
   // the bench's native side is outside the page's frozen timers, exactly like
   // ExoPlayer reaching the end while the page runs nothing.
   window.__fake.endNow = () => {
-    for (const sl of slots.values()) {
-      if (sl.el.paused) continue;
-      sl.el.dispatchEvent(new Event("ended"));
-      return true;
-    }
-    return false;
+    const sl = slots.get(window.__fake.lastPlayed) ||
+      [...slots.values()].find((s) => !s.el.paused);
+    if (!sl || sl.el.paused) return false;
+    sl.el.dispatchEvent(new Event("ended"));
+    return true;
   };
   // The APK under test: bridge 4 (the player alone) unless the bench says 6, 7, 8 or 10.
   const version = () => +(localStorage.getItem("__bridge") || 4);
@@ -622,11 +621,18 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
   await page.locator("footer.player .pp").click();
   await page.waitForTimeout(1200);
   const nextLen = () => page.evaluate(() => {
-    const sl = [...window.__fake.slots.values()].find((s) => !s.el.paused);
-    return sl ? { n: sl.next.length, lists: sl.lists || 0, srcs: sl.srcs || 0 } : null;
+    // The active player is the one the page told to play last — the same rule
+    // NativeAudio.followsList uses. Never "the first not paused": a second
+    // slot can be alive for a moment and would hide the active list.
+    const id = window.__fake.lastPlayed;
+    const sl = window.__fake.slots.get(id) ||
+      [...window.__fake.slots.values()].find((s) => !s.el.paused);
+    const playing = [...window.__fake.slots.values()].filter((s) => !s.el.paused).length;
+    return sl ? { id, n: sl.next.length, lists: sl.lists || 0, srcs: sl.srcs || 0, playing } : null;
   });
   let n = await nextLen();
-  check(n && n.n === 32, "bridge 10, visible: the app holds 32 titles, not 10", JSON.stringify(n));
+  check(n && n.n === 32 && n.playing === 1,
+    "bridge 10, visible: the app holds 32 titles, not 10", JSON.stringify(n));
 
   // The activity stops: the page names the long background list before it can
   // be throttled/frozen.
@@ -637,7 +643,8 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
   });
   await page.waitForTimeout(900);
   n = await nextLen();
-  check(n && n.n === 39, "background: the app holds the whole remaining queue (39)", JSON.stringify(n));
+  check(n && n.n === 39 && n.playing === 1,
+    "background: the app holds the whole remaining queue (39)", JSON.stringify(n));
   const srcsBefore = n.srcs;
 
   // Frozen for 36 track ends: the page runs nothing and is told nothing; the
@@ -651,7 +658,7 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
     advanced: window.__fake.advanced || 0,
     needCalls: window.__fake.needCalls || 0,
     held: window.__fake.needsHeld.length,
-    next: [...window.__fake.slots.values()].find((s) => !s.el.paused)?.next.length ?? -1,
+    next: window.__fake.slots.get(window.__fake.lastPlayed)?.next.length ?? -1,
   }));
   check(frozen.advanced === 36, "frozen: the app went on 36 times without the page", JSON.stringify(frozen));
   check(frozen.needCalls === 1 && frozen.held === 1,
