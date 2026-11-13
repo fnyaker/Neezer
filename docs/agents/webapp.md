@@ -115,8 +115,18 @@ discovery level behind one chip, the energy notches under it — `EnergyPicker.s
 `artist_release.tracks`, which the releases watcher fills when it finds a release — `releases._fill_tracklists`,
 `TRACKLISTS_PER_RUN` a run, an outage leaves it for the next run, Deezer answering "gone" keeps `[]`), the favourite
 artists (`/me/artists`: stars + library count + the person's listens, three statements), Pour toi (titles), recently
-played shortcuts, mixes. The library is one page of chips (`/library/<chip>`: Titres, Artistes, Albums, Playlists,
-Podcasts, Téléchargés, Mes fichiers, Indisponibles), its adding actions one "+" menu. A track row is played by its
+played shortcuts, mixes. **The library has two levels** (`components/LibraryNav.svelte`): a Musique / Podcasts
+segmented control, then a leaf strip (`/library/<leaf>`: Titres, Artistes, Albums, Playlists, Téléchargés, Mes
+fichiers; Podcasts → Abonnements), the rare "Indisponibles" list kept on the right as a filter. The leaf is still what
+the URL names, so every deep link, `#/library/artists` from the home and Back keep working; the world is derived from
+it (no second route), and Musique remembers the leaf it was left on (`lastMusic` in the nav screen memory). A hash-only
+move between two library URLs updates the leaf instead of being ignored; a leaf switch uses `replace`, so it raises no
+history entry and does not scroll the page. The leaf strip scrolls sideways under a mask fade on a phone and never
+wraps: the old chip row was 148 px over three rows at 390 px, the two-level nav is 110 px and keeps 3 leaves + the
+filter on screen; 640 px fits all six and the filter; desktop caps the segmented control at 480 px. On touch the
+segment is 44 px, leaves 45 px and the filter 44 px. The podcast grid mounts once and is kept hidden across a world
+switch: its search survives and coming back costs no request (the first open asks `/api/podcasts` once). Adding is ONE
+"+" menu. A track row is played by its
 title too (the whole row is the target), and without a number the play glyph sits on the cover. Starring an artist
 FOLLOWS it; archiving its discography (`on_fav_artist`) is off by default.
 
