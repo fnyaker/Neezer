@@ -103,6 +103,40 @@
         }
       }
     },
+    "android-playback": {
+      "description": "Médecin de la lecture Android en arrière-plan (cycle de vie, WebView, Media3, MediaSession, Doze, handoff de file). À utiliser quand le titre suivant ne démarre pas tant que l'app n'est pas revenue au premier plan, quand la file gèle en arrière-plan, ou pour prouver une transition écran éteint. Ne pas utiliser pour l'UI Svelte, le DSP ou les routes.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/android-playback.md}",
+      "temperature": 0.1,
+      "color": "#0EA5E9",
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "task": {
+          "*": "deny",
+          "explore": "allow"
+        }
+      }
+    },
+    "data": {
+      "description": "Analyste data (écoutes, goûts, hiérarchie des styles, confiance de l'analyse, statistiques par personne). À utiliser pour vérifier un algorithme d'écoute, choisir les styles parents les plus écoutés, définir un seuil de découverte ou mesurer une couverture. Ne pas utiliser pour la mise en page, le DSP ou un contrat HTTP.",
+      "mode": "subagent",
+      "prompt": "{file:./.opencode/prompts/data.md}",
+      "temperature": 0.1,
+      "color": "#A855F7",
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "task": {
+          "*": "deny",
+          "explore": "allow"
+        }
+      }
+    },
     "qa": {
       "description": "Ingénieur QA/performance (tests Python et SPA, benches Chromium, upgrade, CI rouge, mesures de statements/requêtes/bytes/ms). À utiliser pour prouver un comportement, reproduire un échec CI, ajouter un test de non-régression ou mesurer une régression. Ne pas utiliser pour réécrire la prod afin de faire passer un test.",
       "mode": "subagent",
