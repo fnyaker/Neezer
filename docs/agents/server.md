@@ -485,6 +485,15 @@ app looked untouched — and the cleanup decides what to drop from exactly this 
   load per core <= 0.5, one preview at a time through a `Throttle`, 1.5 s between Deezer calls, stopping at the first outage (never a
   verdict). The queue's next title may be prefetched like any catalogue title, so a find at the head of the queue can be archived just
   before it plays.
+  The **Explorer's screens** add two read-only routes in their own blueprint (`neezer/webui/explorer.py`, registered under `/api`;
+  `webui/__init__.py` is untouched by that lot): `GET /api/explorer/styles` returns the ten PARENT styles of the caller's own taste
+  (`discover.parent_styles`: raw verdicts merged into their nearest two-child/family/root parent, confidence and track count included,
+  empty with a `source` when the person has no history — never the library's styles as theirs), and `GET|POST /api/explorer/discover`
+  (`{style, level 1..5}`) answers `pending` then `ready`, measuring at most 2 playlists / 8 previews at a level-dependent tree distance
+  and confidence (0.10/0.60 at level 1 to 0.25/0.45 at level 5: a sibling at 0.20 may pass at 5, the 0.30 cousin never), on a
+  `Throttle` + `renice` worker, cached 24 h in chunked `Meta` rows (60 s for a provider failure). A Deezer outage is
+  `ready` + `playlists: []` + `error: "provider"`, never a 500 and never a verdict about the style. Numbers and thresholds:
+  [analysis-genre.md](analysis-genre.md).
 - **A Flow around a STYLE** (`discover.style_taste`, `styles` on `POST /api/flow` and `/api/flow/next`, `GET /api/flow/styles`,
   `StylePicker.svelte`, `lib/flow.js#startStyles`): the person's taste is cut down to the chosen genres (a branch means all of
   it: the weighted tracks, artists and albums whose served genre is `within` one of them) and the taste's genres become the

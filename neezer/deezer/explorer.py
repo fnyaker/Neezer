@@ -40,6 +40,8 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+from deezerpy.errors import is_transport_failure
+
 from .. import genretree
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,23 @@ POOL_MAX = 400
 ACCEPT_DIST = 0.1  # tree distance: the same genre, or its direct parent / child
 #: …with at least this much confidence.
 ACCEPT_CONF = 0.4
+#: The Explorer's parent-style discovery: one playlist search, at most two
+#: playlists read and eight previews measured. The thresholds TIGHTEN as the
+#: level goes down — level 1 is "the same shelf", level 5 still refuses a
+#: cousin. Measured tree distances in the shipped tree: child/parent 0.10,
+#: siblings (Gabber vs Frenchcore) 0.20, cousins (Hardstyle vs Frenchcore) 0.30.
+#: The last step keeps the 0.25 ceiling for that reason: a level-5 discovery
+#: may reach a close neighbour, never a cousin branch.
+STYLE_LEVELS = {
+    1: (0.10, 0.60),
+    2: (0.15, 0.58),
+    3: (0.20, 0.55),
+    4: (0.20, 0.50),
+    5: (0.25, 0.45),
+}
+STYLE_PLAYLISTS = 2
+STYLE_PREVIEWS = 8
+STYLE_TRACKS_PER_PLAYLIST = 100
 #: A batch: this many genres, this many previews from each.
 TARGETS_PER_BATCH = 2
 PREVIEWS_PER_TARGET = 3
@@ -266,15 +285,180 @@ def fetch_preview(provider, url, dest) -> bool:
         return False
 
 
-def verify(target, result):
-    """``(accepted, node, confidence)`` for an ``analyze_file`` result."""
+def verify(target, result, max_dist=None, min_conf=None):
+    """``(accepted, node, confidence)`` for an ``analyze_file`` result.
+
+    The batch explorer uses the module's own ``ACCEPT_DIST`` / ``ACCEPT_CONF``;
+    the per-style discovery passes the ladder of ``STYLE_LEVELS`` so that a low
+    level is strict and a high one is wider WITHOUT ever accepting a cousin.
+    """
     v = result["verdict"]
     node = _node(v.get("style"))
     conf = float(v.get("conf") or 0.0)
     if not node:
         return False, None, conf
-    ok = conf >= ACCEPT_CONF and genretree.distance(node, target) <= ACCEPT_DIST
+    ok = conf >= (ACCEPT_CONF if min_conf is None else min_conf) and genretree.distance(
+        node, target
+    ) <= (ACCEPT_DIST if max_dist is None else max_dist)
     return ok, node, conf
+
+
+def style_limits(level):
+    """``(max tree distance, min confidence)`` for a discovery level 1..5."""
+    if isinstance(level, bool):
+        raise ValueError("the discovery level is a whole number from 1 to 5")
+    try:
+        if isinstance(level, float) and not level.is_integer():
+            raise ValueError
+        level = int(level)
+    except (TypeError, ValueError):
+        raise ValueError("the discovery level is a whole number from 1 to 5") from None
+    if level not in STYLE_LEVELS:
+        raise ValueError("the discovery level is a whole number from 1 to 5")
+    return STYLE_LEVELS[level]
+
+
+def _playlist_cover(p):
+    return (p.get("picture_xl") or p.get("picture_big") or p.get("picture_medium")
+            or p.get("picture_small") or p.get("picture") or p.get("cover"))
+
+
+def style_playlists(api, style, rng, limit=STYLE_PLAYLISTS, pause=time.sleep):
+    """Up to ``limit`` Deezer playlists named after ``style``.
+
+    The public API's search is the relevance model; the verification of the
+    previews is what decides whether a playlist actually carries the style. A
+    lookup Deezer answers with nothing is an empty list, not a failure; a
+    transport failure is raised for the caller to report as ``provider``.
+    """
+    # "Disco / funk" is a tree label, not a search term: drop the punctuation
+    # the engine uses to name families.
+    query = " ".join(str(style).replace("/", " ").split())[:80]
+    try:
+        res = api.search_playlist(query, limit=20)
+    except Exception as exc:
+        if is_transport_failure(exc):
+            raise
+        logger.debug("explorer: playlist search failed for %s", style, exc_info=True)
+        return []
+    lists = [
+        p for p in (res or {}).get("data", [])
+        if isinstance(p, dict) and p.get("id") and (p.get("nb_tracks") or 0) >= 10
+    ]
+    rng.shuffle(lists)
+    return lists[:limit]
+
+
+def discover_style(provider, style, level, gate=None, *, rng=None, analyze=None,
+                   fetch=None, pause=time.sleep, to_payload=None):
+    """The Explorer's per-style discovery: playlists, then their previews measured.
+
+    Returns ``[{"id", "title", "cover", "nb_tracks", "matched", "tracks"}]``.
+    At most ``STYLE_PLAYLISTS`` playlists are read and ``STYLE_PREVIEWS``
+    previews measured in total, each analysed with the SAME
+    ``analysis.analyze_file`` the library uses. A title is kept only when the
+    engine hears ``style`` or a neighbour inside the level's tree distance and
+    confidence (``verify``). A preview that cannot be fetched or measured is
+    skipped, never recorded as a verdict about the title.
+    """
+    import tempfile
+
+    from . import analysis as ana
+
+    target = _node(style)
+    if target is None:
+        raise ValueError("unknown style")
+    max_dist, min_conf = style_limits(level)
+    rng = rng or random.Random()  # nosec B311 - a draw for variety, not a secret
+    api = provider.dz.api
+    analyze = analyze or ana.analyze_file
+    fetch = fetch or (lambda url, dest: fetch_preview(provider, url, dest))
+    to_payload = to_payload or info_of
+    gate = gate or _OpenGate()
+
+    lists = style_playlists(api, target, rng, pause=pause)
+    # The preview budget is shared by the playlists that actually answered, so
+    # one result still measures STYLE_PREVIEWS titles, not half of them.
+    per_playlist = max(1, STYLE_PREVIEWS // max(1, len(lists)))
+
+    out = []
+    measured = set()
+    for p in lists:
+        if not gate.wait():
+            break
+        pause(CALL_PAUSE)
+        try:
+            raw = api.get_playlist_tracks(p["id"], limit=STYLE_TRACKS_PER_PLAYLIST)
+        except Exception as exc:
+            if is_transport_failure(exc):
+                raise
+            logger.debug("explorer: playlist %s unreadable", p.get("id"), exc_info=True)
+            continue
+        tracks = [
+            t for t in (raw or {}).get("data", [])
+            if isinstance(t, dict) and t.get("id") and t.get("preview")
+        ]
+        known = _known_ids(t["id"] for t in tracks)
+        tracks = [t for t in tracks if str(t["id"]) not in known]
+        rng.shuffle(tracks)
+        kept = []
+        taken = 0
+        for t in tracks:
+            tid = str(t["id"])
+            if taken >= per_playlist:
+                break
+            if tid in measured:
+                continue
+            measured.add(tid)
+            taken += 1
+            if not gate.wait():
+                break
+            t0 = time.monotonic()
+            fd, tmp = tempfile.mkstemp(suffix=".mp3", prefix="ns-style-")
+            os.close(fd)
+            try:
+                if fetch(t.get("preview"), tmp):
+                    try:
+                        res = analyze(tmp)
+                    except Exception:
+                        logger.debug(
+                            "explorer: analysis failed for %s", t.get("id"), exc_info=True
+                        )
+                    else:
+                        ok, node, conf = verify(
+                            target, res, max_dist=max_dist, min_conf=min_conf
+                        )
+                        if ok:
+                            kept.append(dict(
+                                to_payload(t), deezer_id=str(t["id"])[:20],
+                                style=node, confidence=round(conf, 3),
+                            ))
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            gate.spent(time.monotonic() - t0)
+            pause(CALL_PAUSE)
+        out.append({
+            "id": str(p["id"])[:20],
+            "title": str(p.get("title") or "")[:200],
+            "cover": _playlist_cover(p),
+            "nb_tracks": int(p.get("nb_tracks") or 0),
+            "matched": len(kept),
+            "tracks": kept,
+        })
+    return out
+
+
+class _OpenGate:
+    """A gateway for direct calls (tests, a one-off): never waits, never rests."""
+
+    def wait(self):
+        return True
+
+    def spent(self, _seconds):
+        return None
 
 
 # -- one batch --------------------------------------------------------------

@@ -410,6 +410,14 @@ def create_application(config=None):
 
         app.register_blueprint(webapi, url_prefix="/api")
 
+        # The Explorer's own blueprint: the parent styles of one person's taste
+        # and the per-style Deezer discovery. Separate because
+        # webui/__init__.py is not this lot's to edit; registered under the same
+        # /api prefix so the SPA sees one API.
+        from .webui.explorer import explorer_api
+
+        app.register_blueprint(explorer_api, url_prefix="/api")
+
         if app.config["WEBAPP"].get("mount_spa", True):
             # Bundled Svelte discovery app, served at /app (hash-routed).
             from .webui.spa import spa
