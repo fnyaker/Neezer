@@ -489,10 +489,16 @@ shipped tree (child 0.10, sibling 0.20, cousin 0.30): 1 → (0.10, 0.60), 2 → 
 (Gabber for Frenchcore) but the 0.25 ceiling still refuses the cousin (Hardstyle, 0.30). A preview that cannot
 be fetched or measured is skipped, never a verdict; Deezer unreachable answers `state: "ready"` with
 `playlists: []` and `error: "provider"` (never a 500, never a verdict about the style). The work never runs in
-the request: the first call answers `pending` and starts one worker, the screen polls every 2 s, and the ready
+the request: the first POST answers `pending` and starts one worker, the screen polls every 2 s, and the ready
 answer is kept 24 h in `Meta` (a provider failure only 60 s) as numbered chunks beside a pointer row — the
 table's key is 32 characters and its value 256, so `explorer_style:<blake2b8 of the folded style>:<level>` names
 it. A restart still answers from that cache.
+**A poll never starts work and never spends the budget.** `GET /api/explorer/discover` answers `idle` when no
+cache and no worker exist, `pending` while one runs, `ready` when cached; only a POST starts, and only a POST
+that actually starts a worker spends the person's budget (6 starts / 10 min, 30 / h): over it, `429` with a
+seconds `Retry-After`; with both workers busy, `503` and `Retry-After: 5` (never a `pending` nobody works on).
+A POST body over 8 KiB is refused `413` before it is parsed. Each cache write drops expired groups and orphan
+chunks and caps the cache at 512 groups, so a busy screen cannot grow the 256-char `Meta` rows without bound.
 
 ## Library maintenance: stamped versions, a nightly window, zero impact
 

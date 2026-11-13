@@ -96,11 +96,13 @@ class RemoteTestCase(unittest.TestCase):
     def test_every_endpoint_is_classified(self):
         """An endpoint missing from POLICY is refused to every remote session —
         which is safe, but it also means a new screen silently does nothing
-        for a controller. So the table must name each route, and no more."""
+        for a controller. So the table must name each route, and no more.
+        Every /api endpoint counts, whatever blueprint serves it: the Explorer
+        used to escape this test because it only looked at ``webapi.*``."""
         endpoints = {
-            rule.endpoint[len("webapi."):]
+            rule.endpoint.rsplit(".", 1)[-1]
             for rule in self.app.url_map.iter_rules()
-            if rule.endpoint.startswith("webapi.")
+            if rule.rule.startswith("/api/")
         }
         self.assertEqual(sorted(endpoints - set(R.POLICY)), [], "unclassified endpoints")
         self.assertEqual(sorted(set(R.POLICY) - endpoints), [], "stale policy entries")
@@ -168,6 +170,28 @@ class RemoteTestCase(unittest.TestCase):
         self.assertNotEqual(c.get("/api/cover/123").status_code, 403)
         for path in ("/api/search?q=a", "/api/me/favorites", "/api/lyrics/1", "/api/home"):
             self.assertEqual(c.get(path).status_code, 403, path)
+
+    def test_a_queue_controller_cannot_read_the_owner_s_styles_or_start_deezer(self):
+        """The Explorer is a second /api blueprint; the policy must reach it."""
+        c, _ = self._controller("queue")
+        self.assertEqual(c.get("/api/explorer/styles").status_code, 403)
+        self.assertEqual(
+            c.post("/api/explorer/discover",
+                   json={"style": "Frenchcore", "level": 2}).status_code,
+            403,
+        )
+        self.assertEqual(c.get("/api/explorer/discover?style=Frenchcore&level=2").status_code, 403)
+        # The owner, whose session is not lent, keeps the screen.
+        self.assertEqual(self.owner.get("/api/explorer/styles").status_code, 200)
+
+    def test_a_read_controller_may_see_the_styles_but_never_start_a_discovery(self):
+        c, _ = self._controller("read")
+        self.assertEqual(c.get("/api/explorer/styles").status_code, 200)
+        self.assertEqual(
+            c.post("/api/explorer/discover",
+                   json={"style": "Frenchcore", "level": 2}).status_code,
+            403,
+        )
 
     def test_read_sees_everything_and_changes_nothing_kept(self):
         c, _ = self._controller("read")
@@ -237,6 +261,19 @@ class RemoteTestCase(unittest.TestCase):
         # ...and it stays ended: the grant is gone from the cookie.
         self.assertEqual(c.get("/api/me").status_code, 401)
         self.assertEqual(c.get("/api/me").get_json()["error"], "unauthorized")
+
+    def test_a_cut_ends_an_explorer_session_on_its_first_explorer_request(self):
+        c, link = self._controller("read")
+        self.assertEqual(c.get("/api/explorer/styles").status_code, 200)
+        self.assertEqual(self.owner.delete(f"/api/remote/links/{link['id']}").get_json()["revoked"], 1)
+        r = c.get("/api/explorer/styles")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.get_json()["error"], "remote ended")
+        # The Explorer poller cannot start Deezer work either, and the grant is
+        # truly gone (a second request is a plain unauthenticated one).
+        self.assertIn(c.get("/api/explorer/discover?style=Frenchcore&level=2").status_code,
+                      (401, 403))
+        self.assertEqual(c.get("/api/explorer/styles").status_code, 401)
 
     def test_cutting_a_device_cuts_every_link_onto_it(self):
         c1, _ = self._controller("queue")

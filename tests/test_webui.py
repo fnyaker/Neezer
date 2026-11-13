@@ -2560,6 +2560,21 @@ class WebUITestCase(unittest.TestCase):
         rv = self.client.post("/api/listen", json={"deezer_id": "abc"})
         self.assertEqual(rv.status_code, 400)
 
+    def test_a_guest_cannot_report_a_listen_on_someone_elses_upload(self):
+        from neezer.db import ListenEvent, Track, User
+
+        self._login()
+        t = self._make_local_track("Private Play")
+        Track.update(owner=User.get(User.name == "alice").id).where(
+            Track.id == t.id).execute()
+        self.client.post("/api/logout")
+        UserManager.add("bob", "B0bpass", admin=False)
+        self.client.post("/api/login", json={"username": "bob", "password": "B0bpass"})
+        before = ListenEvent.select().count()
+        rv = self.client.post("/api/listen", json={"deezer_id": str(t.id), "listened": 200})
+        self.assertEqual(rv.status_code, 404)
+        self.assertEqual(ListenEvent.select().count(), before)
+
     def test_search_playlists(self):
         self._login()
         data = self.client.get("/api/search?q=foo").get_json()
