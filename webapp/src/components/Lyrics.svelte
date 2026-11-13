@@ -1,10 +1,17 @@
 <script>
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { trackLyrics, activeLyricIndex } from "../lib/lyrics.js";
+  import { current } from "../lib/stores.js";
+  import { playable } from "../lib/ladder.js";
+  import { trackKey } from "../lib/trackkey.js";
   import { followScroll } from "../lib/scroll.js";
 
   $: lyrics = $trackLyrics;
   $: activeIdx = $activeLyricIndex;
+  // The lyrics are asked for once the audio is under way (lib/lyrics.js): until
+  // then "none" means still loading, not unavailable — the two states used to
+  // read the same and the empty panel looked broken on every track change.
+  $: ready = !!$current && $playable === trackKey($current);
 
   let box;
   let firstFollow = true;
@@ -22,11 +29,19 @@
   }
   // Reset the "instant first jump" when the track (lyrics) changes.
   $: lyrics, (firstFollow = true);
+  // A view mounted MID-TRACK (the desktop's left column appears when the window
+  // grows, the phone's sheet opens late, the queue card switches back to
+  // Paroles) already has an active line: scroll to it now instead of waiting
+  // for the next line change. Without this the highlight was visible somewhere
+  // far below the fold and the panel looked stuck at the top.
+  onMount(() => tick().then(() => follow($activeLyricIndex)));
 </script>
 
-<div class="lyrics" bind:this={box}>
+<div class="lyrics" class:empty-state={!lyrics} bind:this={box}>
   {#if !lyrics}
-    <p class="muted">Paroles indisponibles.</p>
+    <p class="muted empty" role="status">
+      {ready ? "Paroles indisponibles pour ce titre." : "Chargement des paroles…"}
+    </p>
   {:else if lyrics.synced && lyrics.synced.length}
     <ul class="synced">
       {#each lyrics.synced as line, i}
@@ -44,6 +59,17 @@
     overflow-y: auto;
     padding: 8px 4px;
     color: var(--tx);
+  }
+  /* No words: the message is a quiet, centred state, not a line stuck to the
+     top of a tall column. */
+  .lyrics.empty-state {
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  .lyrics.empty-state > p {
+    max-width: 26ch;
+    margin: 0;
   }
   .synced {
     list-style: none;
