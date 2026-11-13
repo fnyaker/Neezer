@@ -177,8 +177,10 @@ A single-page app built for speed, at `/app`:
 - **Two-way Deezer sync**: your playlists, favourites, Flow and new releases come in on a schedule
   (on startup, then daily); starring a track or editing a playlist here is mirrored back to your
   account.
-- **Flow and mixes**, with **customizable Flow clusters**, track and artist radio, and an endless
-  queue you can reorder by dragging and clear in one tap.
+- **Flow and mixes**, with **customizable Flow clusters**, track and artist radio, **genre stations**
+  from any style of the tree, and an endless queue you can reorder by dragging and clear in one tap.
+- **Mood mixes** built from the measured energy, tempo and spectral colour of your own library, and a
+  **listening history** with a 30-day summary and day-by-day filters.
 - **Explore**: what is charting worldwide, by genre and by country, and the new releases.
 - **Under the full-screen player**, swipe up for tracks that sound like the one playing and the
   artist behind it.
@@ -188,7 +190,9 @@ A single-page app built for speed, at `/app`:
   after, archived beside the audio.
 - **Podcasts** — subscribe to Deezer shows; episodes are archived on first play, positions are saved
   on the server and synced with Deezer, and you can drop markers in an episode.
-- **Sharing** — send the whole file or an excerpt you select on a zoomable waveform.
+- **Sharing** — send the whole file, an excerpt you select on a zoomable waveform, or one to three
+  lyric lines as an image card. A playlist can also be published as a **read-only public link**
+  that needs no account and plays only the tracks already archived.
 - **Bulk export** of a playlist, an album or your favourites as one streamed ZIP, in the format you
   choose.
 - **Uploads** of your own files next to your Deezer library.

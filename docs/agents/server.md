@@ -544,6 +544,53 @@ app looked untouched — and the cleanup decides what to drop from exactly this 
   keyed by the PROVIDER's ref (`artist_watch`, `artist_release`, `artist_link`, `artist_top`); catalogue
   suggestions are never downloaded to be proposed.
 
+**A genre station** (`webui/genre_radio.py`, `GET /api/radio/genre/<path:style>`,
+`POST /api/radio/genre/next`; the Explorer tile's play disc and *Toutes les stations*): the Flow built
+around ONE tree node, then **cut to the branch** (`genretree.within(TrackAnalysis.style, node)`)
+because the Flow's pool also holds sound neighbours and explorer finds verified only NEAR the style —
+a station promises one genre, so catalogue rows (no local analysis) are dropped. `recent` is folded
+into `exclude`; caps 40/30/400; `<path:>` because a node may hold a slash ("Disco / funk", sent
+`%2F`); an empty branch is `200` + `[]`, an unknown style `404`. It is its own playback context and
+writes nothing (`UserTaste`, `flow.styles` and the energy notch untouched). No provider call: on the
+8 000-track bench the first answer is **91 ms / 25 statements / 37 titles**, a refill 93 ms / 27.
+`remote.POLICY`: `genre_radio` and `genre_radio_next` = `read`.
+
+**Mood mixes** (`neezer/moods.py`, `GET /api/moods`, `GET /api/moods/<id>`): six sets of measured
+bands over the archived library — Calme, Concentration, Bonne humeur, Énergie, Soirée, Nuit — built
+from the `energy` rank, BPM above `BPM_TRUSTED`, and centroid/flux ranked in the library, never from
+a hand-typed tag. A mood with fewer than `READY_MIN` (8) matching titles is not offered. The catalog
+is one joined read cached 60 s per (person, day): **208 ms cold / 0.6 ms warm**, 10 statements then 1
+on the 8 000-title bench; a 40-title mix is 5.3 ms / 4 statements / 19.1 kB (4.3 kB gzip). The
+opening title is drawn among the 12 best fits at `<user>:<date>:<mood>`, so the card's cover is the
+page's first track and both are stable for the day. No provider; `mix.assemble` caps an artist at 3
+and keeps 3 positions between two of their titles.
+
+**The bottom of a playlist** (`radio.build`, `GET /api/playlist/<id>/recommendations`,
+`Playlist.svelte`) seeds the anchored assembler from the playlist's own rows, minus every title it
+holds, the unavailable ones and duplicates, and applies the person's skips/dislikes. Library-only,
+one request; the draw is seeded `<playlist id>:<date>`. Default 12, max 20; a non-DB/editorial id is
+a 404, under two titles an empty answer. A long playlist is represented by an evenly spaced sample
+of 80 seeds while ALL its rows stay excluded: on the 8 000-title bench a 4 000-title playlist cost
+**2 171 ms with every seed and 139 ms with 80** (12 statements, 7.0 kB / 1.7 kB gzip).
+
+**The listening history** (`webui/history.py`, `GET /api/history`) is the person's own
+`listen_event` rows, newest first, with a **keyset cursor** `(at, id)` — not OFFSET, so a play
+recorded while somebody pages can neither drop nor repeat an event. 50 per page (200 max),
+`outcome=listen|skip`, 30-day summary by default (365 max): listens, skips, minutes (every `listened`
+second, skips included) and the top 5 artists/titles by number of LISTENS. The page is one event
+query plus one batched `_db_tracks`; **9 statements** for 50 events, 36 kB / 1.4 kB gzip (135 kB /
+3.4 kB at the 200 ceiling). `request.webuser` only: an admin never sees another person's history.
+
+**A public playlist link** (`webui/playlist_share.py`, table `playlist_share` schema `20261113`,
+`/pl/<token>` in `spa.py`): the token is `<id>.<hmac>` under the app secret (the remote-link
+pattern), so a copy of the table opens nothing; one live link per playlist, revoked or expired means
+404 on the very next request. The public page lists the playlist and plays ONLY files already on
+disk (`streamable` checks `os.path.isfile`), never archives, transcodes or asks a provider; another
+person's private upload is excluded from both the list and the stream. 120 stream requests / 10 min
+per (token, IP), `no-store` + `noindex` everywhere. A 4 000-title page costs **5 statements / 50 ms**
+and 10.2 kB gzip; Range works. `remote.POLICY`: the owner routes are `NEVER`, the public ones
+`queue`.
+
 **Cleanup** (`neezer/deezer/cleanup.py`) is the **only** code in the project that deletes archived
 audio. It is off by default, needs a free-space floor (`clean_min_free_gb`) to do anything, and is
 event-driven like the rest — `prefetch._check_space` looks right after a download, the one moment the

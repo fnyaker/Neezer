@@ -8,6 +8,9 @@ Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.m
 python -m unittest                                   # whole suite (~55s serially)
 python -m unittest tests.test_deezer                 # one module
 python -m unittest tests.test_webui.SomeClass.test_x # one test
+# The 2026-11 discovery/history/mood/share lots, together (all offline):
+python tools/partest.py tests.test_genre_radio tests.test_history tests.test_moods \
+    tests.test_playlist_recs tests.test_playlist_share
 python -m unittest tests.net.suite                   # network tests (hit real services; weekly in CI)
 
 # Same suite across processes — ~12s on 4 cores. Takes the same test ids. What CI runs.
@@ -30,6 +33,8 @@ cd webapp && npm test                                # node --test: the shipped 
                                                      # its JavaScript oracles, the catalogue/skins/drivers, the genre trainers, the cover loader.
                                                      # No test framework — but run the npm install above first: the modules under
                                                      # test reach svelte/store via stores.js, and a pretest guard says so in one line.
+cd webapp && node --test test/genre_station.test.mjs test/pan.test.mjs test/lyriccard.test.mjs
+                                                     # the pure rules of the station context, mono/pan law and lyric card
 cd webapp && npm run wasm                            # rebuild rhythm.wasm + rhythm-simd.wasm from webapp/rhythm, appcore.wasm from
                                                      # webapp/appcore and trainer.wasm + trainer-simd.wasm from webapp/trainer (Rust,
                                                      # target wasm32-unknown-unknown). All five binaries are COMMITTED; npm test

@@ -158,20 +158,36 @@ discovery level behind one chip, the energy notches under it — `EnergyPicker.s
 `artist_release.tracks`, which the releases watcher fills when it finds a release — `releases._fill_tracklists`,
 `TRACKLISTS_PER_RUN` a run, an outage leaves it for the next run, Deezer answering "gone" keeps `[]`), the favourite
 artists (`/me/artists`: stars + library count + the person's listens, three statements), Pour toi (titles), recently
-played shortcuts, mixes. **The library has two levels** (`components/LibraryNav.svelte`): a Musique / Podcasts
-segmented control, then a leaf strip (`/library/<leaf>`: Titres, Artistes, Albums, Playlists, Téléchargés, Mes
+played shortcuts, mixes. **Mixes d'ambiance** closes the home (`MoodCard.svelte`, `GET /api/moods`):
+one catalog request on mount, no section when nothing is ready, one `/api/moods/<id>` per card tap;
+the card is a single 44 px+ button (sleeve, name, subtitle, title count), and the queue it starts is
+FINITE (`autoplay: false`), so the endless radio continuation never turns a 40-title mix into a
+station. The catalog is built from measured bands only — no provider — and paints from the offline
+`/api` cache when the link is bad. **The library has two levels** (`components/LibraryNav.svelte`): a Musique / Podcasts
+segmented control, then a leaf strip (`/library/<leaf>`: Titres, Historique, Artistes, Albums, Playlists, Téléchargés, Mes
 fichiers; Podcasts → Abonnements), the rare "Indisponibles" list kept on the right as a filter. The leaf is still what
 the URL names, so every deep link, `#/library/artists` from the home and Back keep working; the world is derived from
 it (no second route), and Musique remembers the leaf it was left on (`lastMusic` in the nav screen memory). A hash-only
 move between two library URLs updates the leaf instead of being ignored; a leaf switch uses `replace`, so it raises no
 history entry and does not scroll the page. The leaf strip scrolls sideways under a mask fade on a phone and never
 wraps: the old chip row was 148 px over three rows at 390 px, the two-level nav is 110 px and keeps 3 leaves + the
-filter on screen; 640 px fits all six and the filter; desktop caps the segmented control at 480 px. On touch the
+filter on screen; 640 px fits the leaves and the filter; desktop caps the segmented control at 480 px. On touch the
 segment is 44 px, leaves 45 px and the filter 44 px. The podcast grid mounts once and is kept hidden across a world
 switch: its search survives and coming back costs no request (the first open asks `/api/podcasts` once). Adding is ONE
 "+" menu. A track row is played by its
 title too (the whole row is the target), and without a number the play glyph sits on the cover. Starring an artist
 FOLLOWS it; archiving its discography (`on_fav_artist`) is off by default.
+
+**« Historique » is the library's own leaf** (`routes/History.svelte`, `#/library/history`,
+`GET /api/history`): one page is one request, with a keyset cursor `(at, id)` so a play recorded while
+the person pages cannot drop or repeat an event. « Charger plus » appends the next page and keeps the
+rows already read (one request per click); the filter chips Tout / Écoutes / Sauts refetch one page and
+keep the 30-day summary. Day headers are 44 px and event rows 72 px, and the list is windowed: 6 rows
+mounted at 1440×900, 24 for 100 events after scrolling, 10 on a 390 px phone. The row carries a glyph
+AND a word (Écouté / Passé / Partiel), never colour alone; a failure is `LoadFailed` + « Réessayer »
+(3.3 s with the API's retry budget), never a spinner. Personal history is never written to
+`localStorage` nor to the offline `/api` cache. Measured 390/641/768/900/1024/1200+panel/1440+panel:
+no sideways overflow; the tops stack under 720 px of content.
 
 **Nouveautés is two shelves, then the per-release list** (`routes/Releases.svelte`,
 `components/ReleaseCard.svelte`, `routes/ReleaseShelf.svelte`). `close_to` splits the payload:
@@ -353,6 +369,16 @@ desktop column). It closes the queue sheet when it opens and the queue closes it
 Measured 390×844: 30 lines, close 44×44, the list scrolls 169 → 281 as the active line goes 15 → 30; at
 360×640 the five thumb targets span 338 px of 360, no overflow, and the sheet still fills the screen.
 
+**La carte de paroles** (`Lyrics.svelte`, `LyricCard.svelte`, `lib/lyriccard.js`): « Créer une carte »
+opens a 1080×1350 (4:5) canvas poster from one to three tapped lines (the active line by default,
+always in lyric order; a fourth tap is refused, the last line cannot be removed). The sleeve comes
+from `offlineCovers` only — never a request — and a missing one is Sillon's deterministic groove;
+`dominantColor` tints the halo under a scrim, so cream text stays ≥ 6.08:1 even on a white sleeve.
+Share = Web Share with a PNG File, else a download; the Android bridge's `shareFile` only takes a
+server URL, so the app says so rather than pretending. Measured at 4× CPU: sheet 11.9 ms, preview
+paint 189.5 ms, line tap 2.1 ms, `toBlob` 375 ms; PNG 1.2–1.6 MB. Zero `/api` and zero sleeve
+requests at open, selection and share.
+
 **Full credits** (`neezer/trackcredits.py`, `neezer/webui/credits.py`, `GET /api/track/<id>/credits`): the
 performers are `TrackArtist` rows; everybody else on the sleeve (author, composer, producer, publisher…) is a
 `track_credit` row (schema `20261030`): one per person, role and SOURCE — `deezer` (the gateway's
@@ -506,6 +532,18 @@ replayed it), and an `idle` answer is **1 GET then 0**. The Flow picker (`FlowPi
 `FlowControls.svelte`) shows the selected genres and the diversity level in one sheet on phone and desktop;
 it consumes the existing `flow.js` actions and changes no queue rule.
 
+**A style tile starts a genre station with its disc** (`ExplorerStyles.svelte`, `lib/genrestation.js`,
+`GET /api/radio/genre/<path:style>`, `POST /api/radio/genre/next`). The tile is a card with TWO
+sibling buttons, never a button in a button: the `.open` overlay keeps the Deezer discovery sheet,
+and a 44 px play disc (always visible — Spotify's card play button, not a hover secret) starts the
+station through `player.playQueue(..., {kind: "genre-radio", id, title: "Station <style>"})`. One
+request, then the player tops up with `api.genreRadioNext`; an empty branch is one toast, a failure
+is one toast and the sheet stays usable, and the pressed disc shows a spinner + `aria-busy`.
+« Toutes les stations » lists every analysed genre from `/api/flow/styles` (name, parent, branch
+count) with an accent-insensitive local filter; it paints the session/localStorage copy first and
+asks ONCE per open, never per tile. Measured 1440/390: 132 rows, 2 opens = 2 requests, disc 44×44,
+no sideways overflow at 390.
+
 **A sidebar playlist's thumb is its real cover** (`components/Sidebar.svelte`, `Cover.svelte`,
 `lib/coverqueue.js`). The 26 px tile renders `Cover` with the playlist's `cover` and keeps the deterministic
 groove only while loading or when no cover exists. The shared queue bounds it: **6 requests in flight**, an
@@ -513,3 +551,21 @@ horizon of two viewports, and no request for a playlist without art. On a 61-pla
 cover painted in **186 ms**, 30 requests for the rows near the viewport, and scrolling to the bottom asked
 15 more (37/60 total, never more than 6 at once); the phone (≤640 px) hides the sidebar and makes **0**
 cover requests.
+
+**« Titres recommandés » is the bottom of a playlist** (`routes/Playlist.svelte`,
+`GET /api/playlist/<id>/recommendations`): only for an editable playlist, never in edit/search mode or
+on a remote/read-only session; asked AFTER the playlist's own payload, once per open, cached in module
+memory per playlist and invalidated by any add/remove. **+** adds through the page's optimistic
+`onAdded` (the row leaves at once, returns if the save failed); *Tout ajouter* sends exactly the
+visible rows in ONE `POST /api/playlist/<id>/tracks`; a failure is a compact line with « Réessayer »,
+never a skeleton. 12 rows, ~7 kB / 1.7 kB gzip, 12 statements whatever the playlist size.
+
+**A playlist can be published as a read-only link** (`ExportSheet.svelte` → « Lien public »,
+`routes/SharedPlaylist.svelte`, `/pl/<token>`): the sheet creates/reads/revokes the capability, copies
+the full URL, and says that only archived tracks play. The public page is loaded BEFORE login, with
+no app shell and no global player: its own `<audio>` queue, Lire/Mélanger, next on `ended`, previous,
+seek and volume, the capability cover URLs, a disabled « Non archivé » row, and a calm « Ce lien
+n'est plus valide. » for a revoked/expired token. No edit, favourite, add, download or library
+navigation. The short link is a real HTML page (OG title/description, meta refresh into
+`#/shared/playlist/<token>`, noindex, no-referrer). Measured 390/1440: no sideways overflow, 44 px
+targets; a 4 000-title page is 50 ms / 5 statements.
