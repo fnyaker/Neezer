@@ -707,9 +707,12 @@ class CarSettingsActivity : AppCompatActivity() {
         if (pinned) {
             car.unpin(row.id)
             toast("« ${row.title} » retirée de la voiture")
-        } else {
-            car.pin(PinnedPlaylist(row.id, row.title, row.nbTracks))
+        } else if (car.pin(PinnedPlaylist(row.id, row.title, row.nbTracks))) {
             toast("« ${row.title} » épinglée pour la voiture")
+        } else {
+            // The 24-pin ceiling (CarPrefs.MAX_PINS): say why, never claim a
+            // pin that was refused.
+            toast(getString(R.string.car_pin_limit))
         }
         renderPins()
     }

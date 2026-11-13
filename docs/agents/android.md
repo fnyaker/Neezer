@@ -357,7 +357,12 @@ entries simply do not exist, while a newer APK facing an older SPA finds no hook
 `carPin` accepts two arities (the WebView bridge resolves an overload by argument count): the old
 `(id, title)` and `(id, title, nbTracks)`. `lib/car.js` passes the count when the playlist page has
 it (`data.playlist.nb_tracks`), so the tile says "42 titres" before the first `/api/me/playlists`
-read; a page without a count still calls the two-argument form. `openCarSettings()` answers a real
+read; a page without a count still calls the two-argument form. The list is **capped at 24 pins**
+(`CarPins.MAX_PINS`, the one gate in `CarPrefs.pin`): any page of the same origin can call `carPin`,
+and the whole list is rewritten on every pin, so an unbounded list would grow without limit. An id
+already pinned is updated in place at its rank (title/count) and still accepted at the ceiling; a
+new 25th answers `false` — the SPA's own "Impossible d'épingler" — and the settings' pin action
+says the reason. `CarPinsTest` holds the boundary on the JVM. `openCarSettings()` answers a real
 boolean (`true` only when the launch was accepted); `lib/car.js` requires `=== true`, so an APK
 from before the return value is reported as "Réglages indisponibles" by the new SPA instead of a
 silent success. Older SPA + newer APK: the extra return value is ignored, and the two-argument
