@@ -17,12 +17,12 @@
 //
 //   elA → srcA → normA → fadeA ─┐
 //   elB → srcB → normB → fadeB ─┼→ input → eq[0..9] → bass → bassComp
-//   preview → normP → fadeP ────┘                              ↓
-//                                                          limiter → output
-//                                   analyserLo ← output ────────┘   ↓
-//                                   analyserHi ← output          lookahead
-//                                                                   ↓
-//                                                              destination
+//   preview → normP → fadeP ────┘                              │
+//                                                              ├→ satPre  (the EQ's meter —
+//                                                              ↓            see saturation.js)
+//                                                          limiter → output ─┬→ lookahead → destination
+//                                                                             ├→ analysisBus → analyserLo/Hi
+//                                                                             └→ analysisBus → scope, rhythm
 //
 // Two things about that shape are load-bearing:
 //
@@ -94,6 +94,16 @@ let bassNode = null;
 let bassComp = null;
 let limiterNode = null;
 
+// The equalizer's own meter tap (lib/audio/saturation.js): an analyser AFTER
+// the EQ, the bass shelf and its compressor and BEFORE the safety limiter. It
+// answers a different question from the two analysers below — what the user's
+// settings have done to the signal, and how much the limiter has to catch —
+// and must not move them: they read what the listener HEARS, after the limiter.
+// Refcounted and built on demand, like the scope: a session that never opens
+// the equalizer's meter pays nothing.
+let satPre = null;
+let satRefs = 0;
+
 // createMediaElementSource may only run ONCE per element, so each wired element
 // keeps its strip of the graph here: { source, norm, fade, gainDb }. The player
 // keeps two <audio> elements (for gapless quality switching and crossfades) and
@@ -129,6 +139,12 @@ const EQ_MAX_DB = 16;
 //    which is what the mids/highs and the onset detector need.
 const FFT_LO = 8192;
 const FFT_HI = 2048;
+// The equalizer meter's own analyser. 4096 points → 11.7 Hz bins and an 85 ms
+// window at 48 kHz: fine enough for octave bands down to 31 Hz, and half the
+// FFT cost of the visualizer's fine analyser. The meter reads its POST peak
+// from analyserLo (8192 points) and compares the most recent 4096 samples of
+// each, so both sides of the limiter are judged on the same 85 ms of audio.
+const SAT_FFT = 4096;
 // Where the readers stop trusting LO and start trusting HI. Below it LO's
 // resolution is what matters; above it HI's speed is.
 export const SPLIT_HZ = 420;
@@ -430,6 +446,9 @@ function ensureGraph() {
     // A context rebuilt under a scope that is still on screen (resetContext)
     // gets its tap back.
     if (scopeRefs > 0 && !scopeAnL) buildScope();
+    // Same for the equalizer's meter (saturation.js): a meter still open when
+    // the graph was rebuilt.
+    if (satRefs > 0) buildSaturationTap();
     return true;
   } catch {
     ctx = null;
@@ -830,6 +849,107 @@ export function getAnalysers() {
 
 export function getContext() {
   return ctx;
+}
+
+// --- the equalizer's pre-limiter tap (lib/audio/saturation.js) --------------
+//
+// WHERE, exactly: after the ten peaking filters, the bass shelf and its
+// compressor, and before the safety limiter. A tap after the limiter could not
+// tell what the settings did (the limiter has already undone the peak) and a
+// tap before the EQ would not see the boosts at all. The visualizer's two
+// analysers stay where they are — on `analysisBus`, after the limiter — since
+// they read the sound the listener hears.
+//
+// One AnalyserNode, no output. Per the Web Audio spec an AnalyserNode works
+// with its output unconnected (it is still processed, unlike an ordinary node
+// whose result nothing pulls); this is the same thing the two visualizer
+// analysers already rely on. It never carries audio anywhere: neither the
+// limiter nor the destination sees a second copy.
+//
+// fftSize is SAT_FFT (4096 → 11.7 Hz bins, 85 ms at 48 kHz): fine enough for
+// one-octave bands down to 31 Hz, and half the FFT the visualizer's analysers
+// pay. The meter takes its POST-limiter peak from analyserLo, whose window is
+// larger, and compares the most recent 4096 samples of each — the same 85 ms
+// of audio on both sides of the limiter, whichever way the two sizes move.
+// The window is also what makes a 25 Hz reading honest: a transient stays in
+// it for two readings, so none can fall between them.
+//
+// maxDecibels 0: this is dBFS. A band pushed past full scale reads as 0 dB
+// rather than a wrapped or clamped value, and the time-domain peak (which is
+// not clamped by the analyser) is what reports the overload.
+function buildSaturationTap() {
+  if (satPre || !ctx || !bassComp) return;
+  let a = null;
+  try {
+    a = ctx.createAnalyser();
+    a.fftSize = SAT_FFT;
+    // No averaging: the meter's window is its own smoothing, and an IIR would
+    // hide the very peaks the saturation warning exists to catch.
+    a.smoothingTimeConstant = 0;
+    a.minDecibels = -100;
+    a.maxDecibels = 0;
+    bassComp.connect(a);
+    satPre = a;
+  } catch {
+    // Nothing half-connected survives a failed build: an analyser left on the
+    // chain would be rendered into for the rest of the context's life.
+    try {
+      a?.disconnect();
+    } catch {
+      /* already gone */
+    }
+    satPre = null;
+  }
+}
+
+function teardownSaturationTap() {
+  if (!satPre) return;
+  try {
+    bassComp?.disconnect(satPre);
+  } catch {
+    /* already gone: its context was closed */
+  }
+  try {
+    satPre.disconnect();
+  } catch {
+    /* already gone */
+  }
+  satPre = null;
+}
+
+/**
+ * Ask for the pre-limiter tap (refcounted; pair with releaseSaturationTap).
+ * Does NOT build an AudioContext: a settings screen with nothing playing gets
+ * no reading until a graph exists, which is the honest answer.
+ */
+export function requestSaturationTap() {
+  satRefs++;
+  buildSaturationTap();
+}
+
+export function releaseSaturationTap() {
+  satRefs = Math.max(0, satRefs - 1);
+  if (!satRefs) teardownSaturationTap();
+}
+
+/**
+ * What lib/audio/saturation.js reads, or null when the sound is not going
+ * through the graph. `pre` is the tap above (EQ, bass and their compressor,
+ * before the limiter); `post` is the visualizer's fine analyser, after the
+ * limiter. Their fftSizes differ (SAT_FFT against FFT_LO), so the meter reads
+ * the most recent min(fftSize) samples of each: the same 85 ms of audio on
+ * both sides of the limiter. `running` is false while the context is
+ * suspended, when both analysers hold their last window and a reading would be
+ * a frozen one.
+ */
+export function getSaturationTap() {
+  if (!ctx || !satPre || !analyserLo) return null;
+  return {
+    pre: satPre,
+    post: analyserLo,
+    sampleRate: ctx.sampleRate,
+    running: ctx.state === "running",
+  };
 }
 
 // --- the stereo scope tap ---------------------------------------------------
@@ -1445,6 +1565,9 @@ function closeContext() {
   inputNode = outputNode = analysisBus = lookaheadNode = null;
   eqFilters = [];
   bassNode = bassComp = limiterNode = null;
+  // Its node lived in the context that is closing; ensureGraph builds it again
+  // for whatever still wants it (satRefs is not reset).
+  satPre = null;
   scheduledLead = null;
   leadSettlesAt = 0;
   try {
@@ -1498,6 +1621,9 @@ export function pathState(el) {
     context: ctx ? ctx.state : null,
     serial: ctxSerial,
     analysis: analysisActive,
+    // The equalizer's meter tap (lib/audio/saturation.js): absent until a
+    // meter asks for it, and never a second path for the sound.
+    saturation: satPre ? { fft: satPre.fftSize, refs: satRefs } : null,
     level,
   };
 }
