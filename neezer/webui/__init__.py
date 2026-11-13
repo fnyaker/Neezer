@@ -5019,3 +5019,7 @@ from . import discover as _discover_routes  # noqa: E402,F401  isort:skip
 from . import accessapi  # noqa: E402,F401  isort:skip
 from . import myaccounts  # noqa: E402,F401  isort:skip
 from . import sourcesapi  # noqa: E402,F401  isort:skip
+from . import genre_radio  # noqa: E402,F401  isort:skip
+from . import history  # noqa: E402,F401  isort:skip
+from . import moods  # noqa: E402,F401  isort:skip
+from . import playlistrecs  # noqa: E402,F401  isort:skip
