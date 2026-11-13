@@ -306,6 +306,17 @@ def family_of(g):
     return t.family(n) if n is not None else None
 
 
+def is_family(g) -> bool:
+    """Is ``g`` one of the engine's own family labels (or ids)?
+
+    ``family_of`` answers the nearest family ABOVE a sub-genre; this answers
+    whether the node itself is one. The Explorer's parent list uses it to stop
+    climbing a one-child chain at the family, and to keep a family that happens
+    to have no children in the tree.
+    """
+    return fold(g) in _family_ids()
+
+
 def lca(a, b):
     """The lowest genre above (or equal to) both, or None."""
     t = get()

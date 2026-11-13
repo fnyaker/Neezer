@@ -457,6 +457,43 @@ head is active; the undo log is compact per-key `Meta` rows (256-char limit). Th
 Flow's genre candidates (`tests/test_discover.py::FamilyIdsTestCase`).
 `tests/test_multi_o.py` pins statement counts and the unchanged verdicts; `node test/genretree/run.mjs` is the bench.
 
+**One person, one profile — and the Explorer's parent styles.** The shared `Track.play_count` counts every
+account, so it now completes ONLY the admin's profile, and only until that account has 200 events of its own
+(`discover.LEGACY_UNTIL`), and never a guest's private upload (the shared rows plus the admin's own files); a guest
+used to inherit the whole house's taste from it. Measured on a synthetic
+3 000-track library with three accounts: a fresh account had 400 rows of somebody else's play counts in its
+taste before the fix, 0 after; the admin's upgraded server keeps the documented fallback (8 statements, 13 ms).
+Inside the profile a finished listen weighs 1, a neutral change (30 s to half the track, or 4 min) 0.5, a skip
+nothing, and a star +2.5 (album +3, artist +5) — explicit taste beats implicit.
+`profile` keeps the RAW style weights beside the lifted `genres` (`Taste.style_stats`, filled by the same one
+analysis statement), so a leaf can be carried to a parent without counting its lifted ancestors twice.
+`discover.parent_styles` merges a leaf into its nearest meaningful parent — two children or more, an engine
+family, or a root; a one-child chain of plain labels climbs to the first real shelf or the family — ranks the
+merged weight, and reports `tracks`,
+normalised `weight`, weighted mean `confidence`, `leaf`/`children`, `parent`, `family`, plus the whole `scale`,
+the share of weighted titles with a served verdict and the share the tree does not know. Measured on the same
+library, Bob (real history, 3 stars, 20 skips, 10 neutral): 15 raw nodes → 14 parents, 45.4 % of the known raw
+weight changed node, stars 36.6 % of his profile weight; KNOWN leaves in the top 10: 2/10 before, 0/10 after
+(his unknown "Freeform" style stays, explicitly marked `leaf`); 1.6–3.9 KB JSON,
+0 statements when the 120 s profile is warm. A leaf is never served: Boogie → Disco/funk, Frenchcore → Hardcore.
+An account with no history gets `styles: []`, `source: "none"`; history with no verdict gets `source:
+"unanalysed"` — the library's styles are never passed off as the person's taste.
+
+**The Explorer's per-style discovery** (`neezer/deezer/explorer.discover_style`,
+`neezer/webui/explorer.py`, `GET|POST /api/explorer/discover`). For one parent style and a level 1–5 it reads at
+most TWO Deezer playlists named after the style and measures EIGHT 30 s previews with `analysis.analyze_file`,
+1.5 s between calls, under a `workload.Throttle` (duty 0.5, 20 s listen-quiet, load ≤ 0.8) and `renice` — it
+gives way to a person listening or downloading. The tree distance / confidence ladder, measured against the
+shipped tree (child 0.10, sibling 0.20, cousin 0.30): 1 → (0.10, 0.60), 2 → (0.15, 0.58), 3 → (0.20, 0.55),
+4 → (0.20, 0.50), 5 → (0.25, 0.45). A low level accepts only the shelf itself; level 5 reaches a sibling
+(Gabber for Frenchcore) but the 0.25 ceiling still refuses the cousin (Hardstyle, 0.30). A preview that cannot
+be fetched or measured is skipped, never a verdict; Deezer unreachable answers `state: "ready"` with
+`playlists: []` and `error: "provider"` (never a 500, never a verdict about the style). The work never runs in
+the request: the first call answers `pending` and starts one worker, the screen polls every 2 s, and the ready
+answer is kept 24 h in `Meta` (a provider failure only 60 s) as numbered chunks beside a pointer row — the
+table's key is 32 characters and its value 256, so `explorer_style:<blake2b8 of the folded style>:<level>` names
+it. A restart still answers from that cache.
+
 ## Library maintenance: stamped versions, a nightly window, zero impact
 
 **Every stage of a track's analysis carries the generation that produced it**

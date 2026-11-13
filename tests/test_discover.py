@@ -108,6 +108,35 @@ class TasteTestCase(_Library):
         self.assertIn("Hardcore", taste.genres)
         self.assertLess(taste.genres["Hardcore"], taste.genres["Frenchcore"])
 
+    def test_the_legacy_counters_complete_the_admins_profile_only(self):
+        """The shared ``Track.play_count`` is the upgraded single-owner
+        server's fallback — never a guest's taste. Measured: before the fix a
+        fresh account inherited the whole house's profile from it."""
+        from neezer.managers.user import UserManager
+
+        UserManager.add("bob", "B0bpass", admin=False)
+        bob = User.get(User.name == "bob")
+        guest = discover.profile(bob, fresh=True)
+        self.assertEqual(guest.tracks, {})
+        self.assertEqual(guest.artists, {})
+        self.assertEqual(guest.genres, {})
+        self.assertEqual(guest.style_total, 0.0)
+        # the admin's own upgraded server keeps the documented fallback
+        mine = discover.profile(self.user, fresh=True)
+        self.assertTrue(mine.tracks)
+        self.assertIn("Frenchcore", mine.genres)
+
+    def test_even_the_admin_never_inherits_a_guest_s_private_upload(self):
+        from neezer.managers.user import UserManager
+
+        bob = UserManager.add("bob2", "B0bpass", admin=False)
+        private, shared = self.tracks["Fav"][1], self.tracks["Fav"][2]
+        Track.update(owner=bob.id).where(Track.id == private.id).execute()
+        discover.invalidate()
+        taste = discover.profile(self.user, fresh=True)
+        self.assertNotIn(private.id, taste.tracks)  # somebody's own file
+        self.assertIn(shared.id, taste.tracks)      # a shared library row
+
     def test_the_profile_costs_a_bounded_number_of_statements(self):
         n = count_statements(lambda: discover.profile(self.user, fresh=True))
         # 10, plus the person's dislikes (one statement when there are none)
