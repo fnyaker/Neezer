@@ -65,6 +65,42 @@ class CarPlaylistSourceTest {
     }
 
     @Test
+    fun theFavoritesEndpointIsBuiltFromTheSameRoot() {
+        assertEquals(
+            "https://music.example/api/me/favorite-ids",
+            CarPlaylistSource.favoritesEndpointFor("https://music.example"),
+        )
+        assertEquals(
+            "https://music.example/musique/api/me/favorite-ids",
+            CarPlaylistSource.favoritesEndpointFor("https://music.example/musique/app/"),
+        )
+        assertNull(CarPlaylistSource.favoritesEndpointFor("ftp://music.example"))
+        assertNull(CarPlaylistSource.favoritesEndpointFor(""))
+    }
+
+    @Test
+    fun aNonJsonFavoritesAnswerIsUnknown() {
+        // org.json is a stub in JVM unit tests (it throws "Stub!"), so the
+        // positive shape is read on device and held here only for the cases
+        // that must never become a wrong 0.
+        assertNull(CarPlaylistSource.favoriteCountOf("<html>login</html>"))
+        assertNull(CarPlaylistSource.favoriteCountOf(""))
+    }
+
+    @Test
+    fun theSnapshotOutcomeCarriesTheStarCount() {
+        val ok = carSnapshotOutcome {
+            CarPlaylistSource.Snapshot(listOf(CarPlaylistSource.Item("p", "T", 1)), 7)
+        }
+        assertTrue(ok is CarListOutcome.Ok)
+        assertEquals(7, (ok as CarListOutcome.Ok).favorites)
+        val unknown = carSnapshotOutcome { CarPlaylistSource.Snapshot(emptyList(), null) }
+        assertNull((unknown as CarListOutcome.Ok).favorites)
+        val offline = carSnapshotOutcome { throw java.io.IOException("unreachable") }
+        assertTrue((offline as CarListOutcome.Fail).failure is CarListFailure.Offline)
+    }
+
+    @Test
     fun aPinMatchesTheUuidOrTheDeezerId() {
         val uuid = "0b7d5f3a-9c2e-4b41-8d6f-1a2b3c4d5e6f"
         val items = listOf(

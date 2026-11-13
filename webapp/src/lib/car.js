@@ -7,6 +7,10 @@
 //   window.__nsCarPlay(kind, id, title, payload) — launch what the overlay
 //   tapped, through the SAME functions the SPA's own buttons use (playEntity,
 //   startFlow, player.playQueue). No second playback path, no new endpoint.
+//   "favorites" is the one asynchronous kind: the page reads the person's
+//   starred tracks (/api/me/favorites, through the app's own api client and its
+//   offline cache) and then queues them; the page says what happened, the native
+//   service stays silent for that kind.
 //
 //   window.__nsCarFav() — present only while a track is loaded; toggles the
 //   current favourite and returns its new state synchronously (the optimistic
@@ -14,11 +18,13 @@
 //   answer at once, and disappear when nothing is playing.
 //
 // The injection is a no-op in a browser: `installCarBridge` is called once by
-// App.svelte with the app's own stores/actions, so this module imports neither
-// the player nor the API and can be tested on its own. Older APKs simply have
+// App.svelte with the app's own stores/actions, so the player itself is always
+// injected and the launch path is testable on its own. Older APKs simply have
 // no `NSNative.carAvailable`, and every entry point here stays hidden.
 
 import { get } from "svelte/store";
+import { api } from "./api.js";
+import { toasts } from "./stores.js";
 
 /**
  * Whether the installed APK carries the car mode. The bridge is injected
@@ -79,9 +85,51 @@ export function carPin(id, title, nbTracks) {
 }
 
 /** The kinds the overlay may launch; anything else is ignored. */
-const KINDS = new Set(["flow", "track", "playlist", "album", "artist", "mix"]);
+const KINDS = new Set(["flow", "favorites", "track", "playlist", "album", "artist", "mix"]);
 /** One track's JSON from the page: a few kilobytes, never a whole queue. */
 const MAX_PAYLOAD = 64 * 1024;
+
+/** The built-in Favoris queue: one stable context for every launch. */
+const FAVORITES_CONTEXT = { kind: "favorites", id: "favorites" };
+
+/**
+ * The "Favoris" tile: read the person's starred tracks, then play them through
+ * the player's own queue. It is asynchronous (one request), so the hook answers
+ * `true` at once — "accepted, loading" — and the PAGE says what really
+ * happened. The native service shows no toast for this kind, which is what
+ * keeps "Playlist lancée : Favoris" from appearing before there is a queue.
+ *
+ * `deps.favorites` is the app's own reader (`api.myFavorites`, injected by
+ * installCarBridge); `deps.toast` is the app's toast store, so the messages are
+ * visible in the player and testable without one.
+ */
+function playFavorites(deps) {
+  if (!deps.player || typeof deps.player.playQueue !== "function") return false;
+  if (typeof deps.favorites !== "function") return false;
+  const say = typeof deps.toast === "function" ? deps.toast : () => {};
+  say("Chargement des favoris…");
+  void (async () => {
+    try {
+      const answer = await deps.favorites();
+      const tracks = Array.isArray(answer)
+        ? answer
+        : answer && Array.isArray(answer.tracks)
+          ? answer.tracks
+          : [];
+      if (!tracks.length) {
+        say("Aucun favori pour l'instant");
+        return;
+      }
+      deps.player.playQueue(tracks, 0, { ...FAVORITES_CONTEXT });
+      say("Lecture des favoris");
+    } catch (error) {
+      if (error && error.status === 401) say("Session absente", "error");
+      else if (error && error.offline) say("Hors ligne : favoris indisponibles", "error");
+      else say("Favoris indisponibles", "error");
+    }
+  })();
+  return true;
+}
 
 /** Parse the track object the native side carried along, or null. */
 export function carTrackPayload(payload) {
@@ -109,6 +157,8 @@ export function playFromCar(deps, kind, id, title, payload) {
   // Without a session the API answers 401: refuse before the request, so the
   // overlay can say "connecte-toi" rather than spin a dead launch.
   if (typeof deps.isSignedIn === "function" && !deps.isSignedIn()) return false;
+
+  if (kind === "favorites") return playFavorites(deps);
 
   if (kind === "flow") {
     if (typeof deps.startFlow !== "function") return false;
@@ -181,6 +231,10 @@ export function installCarBridge(deps) {
         playEntity: deps.playEntity,
         startFlow: deps.startFlow,
         trackKey: deps.trackKey,
+        // The one kind that needs a request: the app's own cached client, not
+        // a second fetch of its own. A test (or a display) may inject one.
+        favorites: deps.favorites || (() => api.myFavorites()),
+        toast: deps.toast || ((message, tone) => toasts.push(message, tone)),
       },
       kind,
       id,

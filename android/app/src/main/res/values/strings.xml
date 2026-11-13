@@ -66,6 +66,7 @@
     <string name="car_notification_permission">Autorise « Afficher par-dessus les autres applis »</string>
     <string name="car_no_player">Ouvre Neezer pour lancer la musique</string>
     <string name="car_favorites_unavailable">Ouvre Neezer pour gérer les favoris</string>
+    <string name="car_favorites_launch_failed">Ouvre Neezer pour lancer tes favoris</string>
     <string name="car_launched">Lecture : %1$s</string>
     <string name="car_playlist_launched">Playlist lancée : %1$s</string>
     <string name="car_settings_missing">Réglages du mode voiture indisponibles</string>
