@@ -11,14 +11,18 @@ are searched, what is accepted, what is never archived, when it stands down."""
 
 import json
 import random
+import threading
+import time
 import unittest
+import unittest.mock as mock
 
 from neezer import discover
-from neezer.db import Discovery, Track, TrackAnalysis, now
+from neezer.db import Discovery, Meta, Track, TrackAnalysis, now
 from neezer.deezer import analysis as ana
 from neezer.deezer import explorer as X
+from neezer.webui import explorer as W
 
-from .test_discover import _Library
+from .test_discover import _Library, count_statements
 
 
 class _Gate:
@@ -102,6 +106,28 @@ class ChoosingTestCase(unittest.TestCase):
         self.assertFalse(X.verify("Techno", res("house", 0.9))[0])            # a sibling
         self.assertFalse(X.verify("Frenchcore", res("frenchcore", 0.2))[0])   # unsure
         self.assertFalse(X.verify("Frenchcore", res("nonsense", 0.9))[0])
+
+    def test_the_style_levels_tighten_low_and_never_accept_a_cousin(self):
+        """Measured tree distances in the shipped tree: child/parent 0.10,
+        sibling (Gabber vs Frenchcore) 0.20, cousin (Hardstyle vs Frenchcore)
+        0.30. Level 1 only takes the shelf itself; level 5 reaches a sibling;
+        the 0.25 ceiling refuses the cousin at every level."""
+        res = lambda style, conf: {"verdict": {"style": style, "conf": conf}}
+        self.assertTrue(X.verify("Frenchcore", res("frenchcore", 0.8), *X.STYLE_LEVELS[1])[0])
+        self.assertFalse(X.verify("Frenchcore", res("gabber", 0.8), *X.STYLE_LEVELS[1])[0])
+        self.assertTrue(X.verify("Frenchcore", res("gabber", 0.8), *X.STYLE_LEVELS[5])[0])
+        self.assertFalse(X.verify("Frenchcore", res("hardstyle", 0.9), *X.STYLE_LEVELS[5])[0])
+        self.assertFalse(X.verify("Frenchcore", res("frenchcore", 0.5), *X.STYLE_LEVELS[1])[0])
+        self.assertTrue(X.verify("Frenchcore", res("frenchcore", 0.6), *X.STYLE_LEVELS[3])[0])
+        for level in (1, 2, 3, 4, 5):
+            dist, conf = X.STYLE_LEVELS[level]
+            self.assertLessEqual(dist, 0.25)
+            self.assertGreaterEqual(conf, 0.45)
+        self.assertEqual([X.STYLE_LEVELS[i][0] for i in range(1, 6)],
+                         sorted(X.STYLE_LEVELS[i][0] for i in range(1, 6)))
+        for bad in (0, 6, "x", True, None, 2.5):
+            with self.assertRaises(ValueError):
+                X.style_limits(bad)
 
 
 class ExploreTestCase(_Library):
@@ -207,6 +233,417 @@ class ExploreTestCase(_Library):
         self.assertTrue(body["archive"])
         self.assertEqual(body["pool"], X.POOL_MAX)
         self.assertTrue(self.client.get("/api/explorer").json["archive"])
+
+
+class StyleDiscoveryTestCase(_Library):
+    """The per-style discovery: two playlists, eight previews, the level's
+    ladder. What is asserted is the RULE (which verdict is kept, how many calls,
+    what is never a verdict), not the network."""
+
+    class Api:
+        def __init__(self, playlists, tracks):
+            self.playlists = playlists
+            self.tracks = tracks
+            self.calls = []
+            self.analyses = 0
+
+        def search_playlist(self, q, limit=12):
+            self.calls.append(("playlists", q))
+            return {"data": self.playlists}
+
+        def get_playlist_tracks(self, pid, index=0, limit=-1):
+            self.calls.append(("tracks", pid))
+            return {"data": self.tracks.get(str(pid), [])}
+
+    def _playlists(self, n=2, per=6):
+        lists = {str(10 + i): [dict(_track(i * 100 + j), id=900000 + i * 100 + j)
+                               for j in range(per)] for i in range(n)}
+        rows = [{"id": int(pid), "title": f"P{pid}", "nb_tracks": 40,
+                 "picture_xl": f"https://x/{pid}.jpg"} for pid in lists]
+        return lists, rows
+
+    def _run(self, verdicts, level=5, gate=None, fetch=None):
+        lists, rows = self._playlists()
+        api = self.Api(rows, lists)
+        provider = type("P", (), {"dz": type("D", (), {"api": api})()})()
+        it = iter(verdicts)
+
+        def analyze(path):
+            api.analyses += 1
+            return {"verdict": next(it), "bpm": 190.0}
+
+        got = X.discover_style(
+            provider, "Frenchcore", level, gate=gate, rng=random.Random(1),
+            analyze=analyze, fetch=fetch or (lambda url, dest: True),
+            pause=lambda s: None,
+        )
+        return got, api
+
+    def test_two_playlists_eight_previews_and_only_the_levels_verdicts(self):
+        # Gabber is a sibling (0.20): kept at level 5. Hardstyle is a cousin
+        # (0.30): never. Jazz is unrelated.
+        verdicts = [{"style": "gabber", "conf": 0.8}] * 3 + \
+                   [{"style": "hardstyle", "conf": 0.9}] * 3 + \
+                   [{"style": "jazz", "conf": 0.9}] * 2
+        got, api = self._run(verdicts, level=5)
+        self.assertEqual(len(got), 2)
+        self.assertEqual(api.analyses, 8)  # 4 + 4 previews, no more
+        self.assertEqual(sum(p["matched"] for p in got), 3)
+        self.assertEqual({t["style"] for p in got for t in p["tracks"]}, {"Gabber"})
+        for t in (t for p in got for t in p["tracks"]):
+            self.assertTrue(t["deezer_id"].isdigit())
+            self.assertAlmostEqual(t["confidence"], 0.8)
+            self.assertTrue(t["title"].startswith("T"))
+        self.assertEqual(sum(1 for c in api.calls if c[0] == "tracks"), 2)
+        # the same verdicts at level 1: a sibling is out of reach
+        got1, api1 = self._run(verdicts, level=1)
+        self.assertEqual(sum(p["matched"] for p in got1), 0)
+        self.assertEqual(api1.analyses, 8)
+
+    def test_a_preview_that_cannot_be_fetched_is_not_a_verdict(self):
+        calls = []
+
+        def fetch(url, dest):
+            calls.append(url)
+            return len(calls) != 1  # the first preview never arrives
+
+        verdicts = [{"style": "hardcore", "conf": 0.8}] * 8
+        got, api = self._run(verdicts, level=5, fetch=fetch)
+        self.assertEqual(sum(p["matched"] for p in got), 7)
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(api.analyses, 7)  # the missing one is never measured
+
+    def test_the_gate_stops_the_previews_and_nothing_else_is_asked(self):
+        got, api = self._run([{"style": "hardcore", "conf": 0.8}] * 8,
+                             level=5, gate=_Gate(3))
+        self.assertLessEqual(sum(len(p["tracks"]) for p in got), 2)
+        self.assertEqual(sum(1 for c in api.calls if c[0] == "tracks"), 1)
+
+    def test_the_known_id_lookup_is_bounded(self):
+        verdicts = [{"style": "hardcore", "conf": 0.8}] * 8
+        n = count_statements(lambda: self._run(verdicts, level=5))
+        # one Track + one Discovery query per playlist that answers, plus the
+        # 30 s tree version check (a warm process spends 0 there)
+        self.assertLessEqual(n, 6)
+
+
+class DiscoveryRoutesTestCase(_Library):
+    """The HTTP contract: pending then ready, cached in Meta, never a 500 for a
+    provider failure, and the background job never holds the request."""
+
+    LEVEL = 2
+    STYLE = "Frenchcore"
+
+    def setUp(self):
+        super().setUp()
+        W._inflight.clear()
+        W._budget.clear()
+        for key in list(Meta.select().where(Meta.key.startswith(W.CACHE_PREFIX))):
+            key.delete_instance()
+
+    def _ready(self, style=None, conf=0.8):
+        return [{
+            "id": "42", "title": "A playlist", "cover": "https://x/c.jpg",
+            "nb_tracks": 30, "matched": 1,
+            "tracks": [{"deezer_id": "1", "title": "T", "style": style or "Frenchcore",
+                        "confidence": conf}],
+        }]
+
+    def test_pending_then_ready_and_the_second_poll_asks_nobody(self):
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def fake(provider, style, level, gate, **_kw):
+            calls.append((style, level))
+            self.assertEqual(gate.duty, W.STYLE_DUTY)
+            self.assertEqual(gate.listen_quiet, W.STYLE_LISTEN_QUIET)
+            started.set()
+            release.wait(10)
+            return self._ready()
+
+        provider = type("P", (), {"available": lambda self: True})()
+        with mock.patch.object(X, "discover_style", fake), \
+                mock.patch.object(W, "_dz_live", lambda: provider):
+            first = self.client.post(
+                "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+            )
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json["state"], "pending")
+            self.assertEqual(first.json["playlists"], [])
+            self.assertTrue(started.wait(10))
+            polling = self.client.get(
+                f"/api/explorer/discover?style={self.STYLE}&level={self.LEVEL}"
+            )
+            self.assertEqual(polling.json["state"], "pending")  # a worker really runs
+            self.assertEqual(len(W._budget), 1)
+            thread = W._inflight.get((self.STYLE, self.LEVEL))
+            self.assertIsNotNone(thread)
+            release.set()
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+            second = self.client.get(
+                f"/api/explorer/discover?style={self.STYLE}&level={self.LEVEL}"
+            )
+        self.assertEqual(second.json["state"], "ready")
+        self.assertEqual(second.json["level"], self.LEVEL)
+        self.assertEqual(second.json["style"], self.STYLE)
+        self.assertEqual(second.json["playlists"], self._ready())
+        self.assertNotIn("error", second.json)
+        self.assertEqual(calls, [(self.STYLE, self.LEVEL)])  # the cache answered the poll
+
+    def test_the_cache_survives_a_restart_and_expires_after_a_day(self):
+        W._cache_write(self.STYLE, self.LEVEL, W._payload(
+            self.STYLE, self.LEVEL, self._ready()))
+        W._inflight.clear()  # a restart: nothing in memory
+        ready = W._cache_read(self.STYLE, self.LEVEL)
+        self.assertIsNotNone(ready)
+        self.assertEqual(ready["playlists"][0]["id"], "42")
+        keys = list(Meta.select(Meta.key, Meta.value)
+                    .where(Meta.key.startswith(W._cache_key(self.STYLE, self.LEVEL))))
+        self.assertGreater(len(keys), 1)  # split to fit Meta.value
+        self.assertTrue(all(len(k.key) <= 32 for k in keys))
+        self.assertTrue(all(len(k.value) <= 256 for k in keys))
+        pointer = Meta.get(Meta.key == W._cache_key(self.STYLE, self.LEVEL))
+        pointer.value = json.dumps({"n": json.loads(pointer.value)["n"],
+                                    "at": time.time() - W.CACHE_TTL - 1})
+        pointer.save()
+        self.assertIsNone(W._cache_read(self.STYLE, self.LEVEL))
+
+    def test_an_unreachable_provider_is_ready_empty_never_a_500(self):
+        with mock.patch.object(W, "_dz_live", lambda: None):
+            r = self.client.post(
+                "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json["state"], "ready")
+        self.assertEqual(r.json["playlists"], [])
+        self.assertEqual(r.json["error"], "provider")
+        self.assertNotIn((self.STYLE, self.LEVEL), W._inflight)
+
+    def test_a_worker_outage_is_cached_for_a_minute_not_a_day(self):
+        provider = type("P", (), {"available": lambda self: False})()
+        started, release = threading.Event(), threading.Event()
+
+        def down(provider, style, level, gate, **_kw):
+            started.set()
+            release.wait(10)
+            raise RuntimeError("down")
+
+        with mock.patch.object(X, "discover_style", down), \
+                mock.patch.object(W, "_dz_live", lambda: provider):
+            self.client.post(
+                "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+            )
+            self.assertTrue(started.wait(10))
+            thread = W._inflight.get((self.STYLE, self.LEVEL))
+            self.assertIsNotNone(thread)
+            release.set()
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+        ready = W._cache_read(self.STYLE, self.LEVEL)
+        self.assertEqual(ready["error"], "provider")
+        pointer = Meta.get(Meta.key == W._cache_key(self.STYLE, self.LEVEL))
+        pointer.value = json.dumps({"n": json.loads(pointer.value)["n"],
+                                    "at": time.time() - W.PROVIDER_TTL - 1})
+        pointer.save()
+        self.assertIsNone(W._cache_read(self.STYLE, self.LEVEL))
+
+    def test_the_worker_runs_the_real_discovery_end_to_end(self):
+        class Api:
+            def search_playlist(self, q, limit=12):
+                return {"data": [{"id": 7, "title": "Core", "nb_tracks": 30,
+                                  "picture_big": "https://x/7.jpg"}]}
+
+            def get_playlist_tracks(self, pid, index=0, limit=-1):
+                return {"data": [dict(_track(i), id=910000 + i) for i in range(6)]}
+
+        provider = type("P", (), {
+            "dz": type("D", (), {"api": Api()})(),
+            "available": lambda self: True,
+        })()
+        verdict = {"verdict": {"style": "frenchcore", "conf": 0.8}, "bpm": 190.0}
+        from neezer.deezer import workload
+
+        with mock.patch.object(W, "_dz_live", lambda: provider), \
+                mock.patch.object(X, "fetch_preview", lambda p, u, d: True), \
+                mock.patch.object(X, "CALL_PAUSE", 0), \
+                mock.patch.object(workload, "listening_for", lambda: float("inf")), \
+                mock.patch.object(workload, "foreground_busy", lambda: False), \
+                mock.patch.object(workload, "load_per_core", lambda: 0.0), \
+                mock.patch.object(ana, "analyze_file", lambda path: verdict):
+            self.client.post(
+                "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+            )
+            thread = W._inflight.get((self.STYLE, self.LEVEL))
+            self.assertIsNotNone(thread)
+            thread.join(20)
+            self.assertFalse(thread.is_alive())
+            ready = self.client.get(
+                f"/api/explorer/discover?style={self.STYLE}&level={self.LEVEL}"
+            ).json
+        self.assertEqual(ready["state"], "ready")
+        self.assertEqual(len(ready["playlists"]), 1)
+        self.assertEqual(ready["playlists"][0]["matched"], 6)
+        self.assertEqual(len(ready["playlists"][0]["tracks"]), 6)
+        self.assertEqual(ready["playlists"][0]["tracks"][0]["style"], "Frenchcore")
+
+    def test_at_most_two_discoveries_run_at_once(self):
+        release = threading.Event()
+
+        def slow(app, provider, style, level):
+            release.wait(10)
+
+        provider = type("P", (), {"available": lambda self: True})()
+        try:
+            with mock.patch.object(W, "_run", slow), \
+                    mock.patch.object(W, "_dz_live", lambda: provider):
+                for style in ("Frenchcore", "Techno"):
+                    r = self.client.post(
+                        "/api/explorer/discover", json={"style": style, "level": self.LEVEL}
+                    )
+                    self.assertEqual(r.json["state"], "pending")
+                third = self.client.post(
+                    "/api/explorer/discover",
+                    json={"style": "Hardcore", "level": self.LEVEL},
+                )
+                self.assertEqual(third.status_code, 503)
+                self.assertEqual(third.headers["Retry-After"], "5")
+                self.assertNotIn("state", third.json)  # never a pending nobody works on
+                self.assertEqual(len(W._inflight), 2)
+                self.assertNotIn(("Hardcore", self.LEVEL), W._inflight)
+        finally:
+            release.set()
+            for thread in list(W._inflight.values()):
+                thread.join(5)
+            W._inflight.clear()
+
+    def test_the_poll_is_idle_cold_and_never_starts_or_spends(self):
+        with mock.patch.object(W, "_dz_live", lambda: self.fail("must not be asked")):
+            r = self.client.get(
+                f"/api/explorer/discover?style={self.STYLE}&level={self.LEVEL}"
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json["state"], "idle")
+        self.assertEqual(r.json["style"], self.STYLE)
+        self.assertEqual(r.json["level"], self.LEVEL)
+        self.assertEqual(r.json["playlists"], [])
+        self.assertEqual(W._inflight, {})
+        self.assertEqual(W._budget, {})
+
+    def test_a_cached_answer_is_free_and_a_second_post_asks_nothing(self):
+        W._cache_write(self.STYLE, self.LEVEL, W._payload(
+            self.STYLE, self.LEVEL, self._ready()))
+        W._budget.clear()
+        r = self.client.post(
+            "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+        )
+        self.assertEqual(r.json["state"], "ready")
+        self.assertEqual(r.json["playlists"], self._ready())
+        self.assertEqual(W._budget, {})
+        self.assertEqual(W._inflight, {})
+
+    def test_the_budget_is_six_per_ten_minutes_and_thirty_per_hour(self):
+        W._budget.clear()
+        for _ in range(6):
+            self.assertEqual(W._budget_take("someone"), (True, 0))
+        allowed, retry = W._budget_take("someone")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(retry, 1)
+        self.assertLessEqual(retry, 600)
+        # another person has their own budget
+        self.assertEqual(W._budget_take("else"), (True, 0))
+        W._budget.clear()
+        with mock.patch.object(W, "BUDGET_WINDOWS", ((3600, 30),)):
+            for _ in range(30):
+                self.assertEqual(W._budget_take("someone"), (True, 0))
+            allowed, retry = W._budget_take("someone")
+            self.assertFalse(allowed)
+            self.assertGreaterEqual(retry, 3590)
+
+    def test_a_spent_budget_answers_429_with_retry_after(self):
+        provider = type("P", (), {"available": lambda self: True})()
+        with mock.patch.object(W, "_dz_live", lambda: provider), \
+                mock.patch.object(W, "_budget_take", lambda uid: (False, 7)):
+            r = self.client.post(
+                "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+            )
+        self.assertEqual(r.status_code, 429)
+        self.assertEqual(r.headers["Retry-After"], "7")
+        self.assertEqual(r.json["retry_after"], 7)
+        self.assertEqual(W._inflight, {})  # nothing was started
+
+    def test_a_body_over_eight_kilobytes_is_refused_before_parsing(self):
+        with mock.patch.object(W, "_dz_live", lambda: self.fail("must not be asked")):
+            r = self.client.post(
+                "/api/explorer/discover", data=b"{" + b"x" * 9000,
+                content_type="application/json",
+            )
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(W._inflight, {})
+        self.assertEqual(W._budget, {})
+
+    def test_a_cache_write_prunes_expired_groups(self):
+        W._cache_write(self.STYLE, self.LEVEL, W._payload(
+            self.STYLE, self.LEVEL, self._ready()))
+        stale = W._cache_key(self.STYLE, self.LEVEL)
+        pointer = Meta.get(Meta.key == stale)
+        value = json.loads(pointer.value)
+        value["at"] = time.time() - W.CACHE_TTL - 1
+        pointer.value = json.dumps(value)
+        pointer.save()
+        W._cache_write("Techno", self.LEVEL, W._payload("Techno", self.LEVEL, []))
+        self.assertIsNone(Meta.get_or_none(Meta.key == stale))
+        self.assertEqual(
+            list(Meta.select().where(Meta.key.startswith(stale + ":"))), []
+        )
+
+    def test_the_cache_is_capped_at_512_groups(self):
+        from neezer.db import db as dbproxy
+
+        now = time.time()
+        rows = [{
+            "key": f"{W.CACHE_PREFIX}{i:08x}:2",
+            "value": json.dumps({"n": 0, "at": now - i, "ttl": W.CACHE_TTL}),
+        } for i in range(W.CACHE_MAX + 1)]
+        with dbproxy.atomic():
+            Meta.insert_many(rows, fields=[Meta.key, Meta.value]).execute()
+        W._prune_cache()
+        self.assertEqual(
+            Meta.select().where(Meta.key.startswith(W.CACHE_PREFIX)).count(),
+            W.CACHE_MAX,
+        )
+        # the oldest group went; the newest stayed
+        self.assertIsNone(Meta.get_or_none(
+            Meta.key == f"{W.CACHE_PREFIX}{W.CACHE_MAX:08x}:2"))
+        self.assertIsNotNone(Meta.get_or_none(Meta.key == f"{W.CACHE_PREFIX}{0:08x}:2"))
+
+    def test_junk_is_refused_before_anything_is_scheduled(self):
+        with mock.patch.object(W, "_dz_live", lambda: self.fail("must not be asked")):
+            for body in ({"style": "not a genre", "level": 2},
+                         {"style": "Frenchcore", "level": 0},
+                         {"style": "Frenchcore", "level": 6},
+                         {"style": "Frenchcore", "level": 2.5},
+                         {"style": "Frenchcore", "level": True},
+                         {"style": "", "level": 2}, {}):
+                self.assertEqual(
+                    self.client.post("/api/explorer/discover", json=body).status_code, 400, body
+                )
+            self.assertEqual(self.client.get("/api/explorer/discover").status_code, 400)
+        self.assertEqual(W._inflight, {})
+
+    def test_a_cross_site_post_is_refused(self):
+        r = self.client.post(
+            "/api/explorer/discover",
+            json={"style": self.STYLE, "level": self.LEVEL},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(W._inflight, {})
+
+    def test_the_screen_is_open_to_any_signed_in_person(self):
+        self.assertEqual(self.client.get("/api/explorer/styles").status_code, 200)
+        self.client.post("/api/logout")
+        self.assertEqual(self.client.get("/api/explorer/styles").status_code, 401)
 
 
 if __name__ == "__main__":

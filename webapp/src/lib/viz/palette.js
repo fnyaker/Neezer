@@ -53,25 +53,30 @@ const FIXED = {
 };
 
 export function createPalette(mode = "cover") {
-  let hue = 280;
-  let spread = 70;
-  let sat = 0.8;
-  let light = 0.58;
+  // The cover source's FALLBACK is the Sillon accent — the lemon of Encre and
+  // Papier — not an arbitrary violet. It is what a track with no artwork (a
+  // local file, a sleeve the CDN cannot serve) draws with, and the colour the
+  // first frames have before the artwork's own dominant colour arrives. Once a
+  // cover answers, it takes over: this is still the "cover" source.
+  let hue = 73.8;
+  let spread = 64;
+  let sat = 1;
+  let light = 0.62;
   let drift = 0; // continuous rotation, advanced at the tempo
-  let coverHue = 280;
-  let coverSat = 0.7;
+  let coverHue = 73.8;
+  let coverSat = 1;
 
   const out = {
     mode,
-    hue: 280,
-    spread: 70,
-    sat: 0.8,
-    light: 0.58,
+    hue,
+    spread,
+    sat,
+    light,
     // Accent hues for the three broad registers, so a scene can colour a bass
     // element and a treble element differently without inventing its own scheme.
-    low: 280,
-    mid: 300,
-    high: 320,
+    low: hue - spread / 2,
+    mid: hue,
+    high: hue + spread / 2,
     energy: 0,
   };
 

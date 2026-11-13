@@ -90,6 +90,11 @@ function syncEntry() {
     // An id we handed out earlier: a back or forward traversal.
     currentId = id;
     traversed = true;
+    // A reload starts the counter at 0 again while the entries already in the
+    // stack keep their old ids. Without this, the first push after a reload
+    // handed out id 1 again and two entries shared one scroll offset — back
+    // landed at the top of the screen it had just left.
+    if (id > seq) seq = id;
   }
   prune(scrolls);
   prune(scratch);

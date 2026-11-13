@@ -27,11 +27,15 @@ const O = await import("../src/lib/audio/output.js");
 function app({ version = 4, available = true } = {}) {
   const sent = [];
   let next = 1;
+  window.__cmdLens = [];
   window.NSNative = {
     bridgeVersion: () => version,
     nativeAudio: () => available,
     naCreate: () => next++,
-    naCmd: (id, json) => sent.push({ id, ...JSON.parse(json) }),
+    naCmd: (id, json) => {
+      window.__cmdLens.push(json.length);
+      sent.push({ id, ...JSON.parse(json) });
+    },
   };
   N.resetNativeAudio();
   return sent;
@@ -376,6 +380,7 @@ test("the app going on by itself: one nsadvance, nothing else until the page ado
   // A page frozen through the end of the track: the first thing it hears is the app already on "b".
   report(el, { c, st: 3, p: true, t: 12, d: 180, sk: true, sc: true, k: "b", u: "http://srv/api/stream/b" });
   report(el, { c, ev: "tick", st: 3, p: true, t: 12.25, d: 180, sk: true, sc: true, k: "b", u: "http://srv/api/stream/b" });
+  await new Promise((r) => setTimeout(r, 40)); // the advance burst is coalesced
   assert.deepEqual(seen, ["nsadvance"], "not an end, and nothing about a track the page does not know yet");
   assert.equal(el.advancedKey, "b");
   assert.equal(el.src, "http://srv/api/stream/b");
@@ -390,6 +395,7 @@ test("the app going on by itself: one nsadvance, nothing else until the page ado
   assert.ok(el.currentTime >= 12.25 - 1e-9);
   // Going on again (the next one on the list) is news again.
   report(el, { c, st: 2, p: true, t: 0, sk: true, sc: true, k: "c", u: "http://srv/api/stream/c" });
+  await new Promise((r) => setTimeout(r, 40));
   assert.equal(seen.filter((t) => t === "nsadvance").length, 2);
   // A page that loads its own source instead takes the element back entirely.
   el.dropAdvance();
@@ -397,4 +403,63 @@ test("the app going on by itself: one nsadvance, nothing else until the page ado
   el.load();
   await flush();
   assert.ok(seen.includes("loadstart"));
+});
+
+test("bridge 10: a long list, repeat flags, and an old APK never gets more than ten", () => {
+  let sent = app({ version: 9 });
+  let el = N.createNativeElement();
+  assert.equal(el.longNext, false);
+  const many = Array.from({ length: 200 }, (_, i) => ({
+    url: "http://srv/api/stream/" + i, at: 0, e: 0, v: 1, k: "k" + i, meta: { title: "T" + i },
+  }));
+  el.setNext(many, 0, "all");
+  let next = sent.filter((m) => m.op === "next");
+  assert.equal(next.length, 1);
+  assert.equal(next[0].q.length, 10, "a bridge 9 APK would drop a longer command whole");
+  assert.equal("rep" in next[0], false);
+
+  sent = app({ version: 10 });
+  el = N.createNativeElement();
+  assert.equal(el.longNext, true);
+  el.setNext(many, 200.5, "all");
+  next = sent.filter((m) => m.op === "next");
+  assert.equal(next.length, 1);
+  assert.equal(next[0].q.length, 200);
+  assert.equal(next[0].end, 200.5);
+  assert.equal(next[0].rep, "all");
+  assert.ok(Math.max(...window.__cmdLens) < 128 * 1024, "a 200-entry command stays under MAX_AUDIO_CMD");
+  // The same list is not re-sent, but a refill request forces it.
+  el.setNext(many, 200.5, "all");
+  assert.equal(sent.filter((m) => m.op === "next").length, 1);
+  el.setNext(many, 200.5, "all", true);
+  assert.equal(sent.filter((m) => m.op === "next").length, 2);
+  // One RE-NAMED list, even with no next track (repeat one: the app loops).
+  el.setNext([], 0, "one", true);
+  assert.deepEqual(sent.at(-1).q, []);
+  assert.equal(sent.at(-1).rep, "one");
+});
+
+test("bridge 10: the app asks for more through __nsNeedNext, and a burst is one nsadvance", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  let asked = 0;
+  el.addEventListener("nsneednext", () => asked++);
+  assert.equal(typeof window.__nsNeedNext, "function");
+  window.__nsNeedNext(el._id);
+  assert.equal(asked, 1);
+
+  const seen = [];
+  el.addEventListener("nsadvance", () => seen.push(el.advancedKey));
+  // Three advances delivered before the page runs: only the last matters.
+  const c = sent.at(-1).c;
+  report(el, { c, st: 3, p: true, t: 1, k: "b", u: "http://srv/api/stream/b" });
+  report(el, { c, st: 3, p: true, t: 1, k: "c", u: "http://srv/api/stream/c" });
+  report(el, { c, st: 3, p: true, t: 1, k: "d", u: "http://srv/api/stream/d" });
+  assert.deepEqual(seen, [], "nothing fires synchronously");
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(seen, ["d"], "one nsadvance, carrying the last key");
+  assert.equal(el.advancedKey, "d");
 });

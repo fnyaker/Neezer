@@ -118,7 +118,7 @@ again — a file with ranges now — at the target, muted until it lands; 60 s o
 with no seek map) pin both.
 
 **The app owns the track changes while its activity is stopped** (bridge version 8). Bridge 7 still failed on a phone,
-because a hidden WebView is not FROZEN, it is THROTTLED: Chromium holds a hidden silent page's timers to once a second,
+because a hidden WebView was assumed to be THROTTLED, not FROZEN: Chromium holds a hidden silent page's timers to once a second,
 then once a minute after five minutes (developer.chrome.com, "timer throttling in Chrome 88"), and every event the app
 sends it still runs. So the page heard the app's `timeupdate`s, began a crossfade or a trimmed ending itself, cleared
 the list while arming it, and stalled in its own throttled steps; and the list was only named at the instant the page
@@ -135,6 +135,51 @@ nothing changed. `node test/native/run.mjs` drives it on a hidden page whose tim
 events run, crossfade and trim on (`--old` runs that scenario as bridge 7: the page crossfaded by itself, the app never
 advanced).
 
+**Bridge 10: the list outlives the page** (`Player.svelte#updateNativeNext`, `nativeplayer.js`,
+`NativeAudio.kt`). The bridge-8 lease was ten titles: if the renderer was actually frozen (not just
+throttled) for longer, the app consumed it and stopped at the next end with no page to ask. Now the
+page names **32 titles while visible and up to 200 compact entries when the activity stops**
+(`MainActivity.onStop` calls `window.__nsAppBackground`, `visibilitychange` does too); each is
+`{url, at, e, v, k, meta}` with full metadata for the first 8 and shortened titles for the rest.
+`MAX_NEXT` is 256 and `MAX_AUDIO_CMD` 128 KiB (a 39-entry bench command measured 8 132 bytes; 200
+entries stay under the cap). When the app is stopped and **at most 4 remain**, `NativeAudio` asks
+the page once every 30 s through `window.__nsNeedNext(id)`; the page re-names the list (`setNext`
+with `force`, because the signature may not have changed). A frozen page simply queues the request;
+the long list already covers hours.
+
+The app also **retries a network failure itself** while the activity is stopped: a Media3
+`ERROR_CODE_IO_*` (except `FILE_NOT_FOUND`, cleartext refused and 4xx; a 5xx is retried) is
+re-opened after 2 s, 5 s and 10 s, cancelled by the first page command, and only then becomes the
+page's `error`. A decode error or a refused source keeps the fail-fast path. At the end of a list
+with nothing after it (or a repeat-one end) `STATE_ENDED` calls `PlayerService.stalled()`: the
+session and notification go **paused**, for the same reason the page's own `ended` would have
+paused them, instead of leaving a "playing" card over silence.
+
+The page also no longer loses the app's list during a load: `updateNativeNext` keeps the previous
+list while a load/switch/chase is in flight and while an advance waits to be adopted. A burst of
+`k` changes (the page was frozen) is coalesced into **one `nsadvance`** (25 ms, the last key) and
+`onNativeAdvance` jumps straight to that key, ignoring the intermediates; a stale duplicate is
+ignored (`lastAdvanceKey`). `repeat=one` is executed by the app (`seekTo(curAt)`, play) and
+`repeat=all` names a list that wraps to `HINT_AHEAD` instead of stopping at the queue turn. When
+the activity goes to the background the Flow asks for a **batch of 10** titles
+(`flow.js#prefetchAhead`) because its own queue holds at most the next one; a frozen page past
+that batch still stops (the Flow cannot invent a title; documented limit).
+
+The renderer is kept out of the "waived when not visible" bucket while the app is playing and the
+activity is stopped (`setRendererPriorityPolicy(IMPORTANT, false)`). A renderer death no longer
+releases the native player: `disposeWebView(releaseAudio = false)` keeps the audio and the
+notification, the page is rebuilt on return, and its first `naCreate` (new PAGE token) releases the
+old slots. `releaseAll()` is only for `onDestroy`/finishing.
+
+**Compatibility (bridge 10).** A new SPA facing an older APK (`bridgeVersion() < 10`) sends the ten
+entries it always did and never relies on the refill hook: sending 200 entries to the 32 KiB
+`MAX_AUDIO_CMD` of an older APK would make it drop the whole command. A new APK facing an older
+SPA has no `__nsNeedNext` and does not wait for an answer; the old ten entries remain. The audio
+and notification behaviour is unchanged for both old pairs; the long-background fix needs both
+halves. `test/native/run.mjs` freezes a 40-title queue and advances 36 times with no page, then
+checks the page catches up on the last one and the refill was asked exactly once; the unit test
+sends 200 entries, asserts the bridge-9 cap of ten, repeat flags and the 128 KiB ceiling.
+
 **Next / previous from a media button, with the page asleep** (`PlayerService` -> `PlayerService.nativeSkip` -> `NativeAudio.skip`).
 The notification, a headset or the lock screen used to send `next` / `prev` to the PAGE (`commandSink` -> `evaluateJavascript`): with the
 activity stopped that page is throttled (timers once a minute after five minutes) or frozen, with the activity gone `commandSink` is null
@@ -143,7 +188,8 @@ the playlist answers the command, whoever asks. So while the activity is stopped
 named (bridge 7/8): next = `advance(next.first())`, previous = restart the track past 3 s, else back to the one this player went through
 (`trail`, up to 20, the track left returns to the front of the list); each tells the page (`adv`, `onAdvance`) so it adopts the change when
 it wakes. Not ours to do (the page is shown, no list, nothing before) -> the command goes to the page as before. The list is only what the
-page named (<= 12): past it the app cannot know the next track, and a skip goes to the page. Sources: developer.chrome.com "Timer throttling
+page named (bridge 10: 32 visible / 200 in the background; an older APK still ten): past it the app cannot know the next track, and a
+skip goes to the page (or restarts the current title when `repeat=one`). Sources: developer.chrome.com "Timer throttling
 in Chrome 88" and the Page Lifecycle API (frozen pages run no timers), Media3 `MediaSession` / `MediaController` docs (commands go to the
 session's player). Unit-untestable (ExoPlayer): the build is CI's `android` workflow, the logic is read against `advance`.
 
@@ -185,31 +231,99 @@ later process's connection by accident. The name is reduced to printable charact
 reaches a page. An older APK reports nothing: verdicts are then per page's own guess of the output
 (the latency its context reports) and live until their retry.
 
-**The car mode's triggers** (`CarTrigger`, `CarMotion`; lot E, native only — no bridge change).
-The overlay's visibility is ONE formula, in `CarTrigger`: `(gpsTrigger && a listed navigation app
-is in front) || (bluetoothTrigger && an A2DP/BLE output is connected)`. No AccessibilityService:
-foreground apps come from `UsageStatsManager.queryEvents(now - 5 s, now)` on a worker every second,
-the LAST `ACTIVITY_RESUMED` winning and staying sticky across polls (a navigation app that has been
-guiding for ten minutes emits no new event, and a 5 s window alone would call it gone), plus a
-one-off 6 h seed at start for the app already in front. `queryEvents` returns null while locked
-(the previous state is kept) and needs usage access (without it the trigger stays off, no crash).
-The screen being off skips the query; Bluetooth sinks are `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` and
-`registerAudioDeviceCallback` (no permission; a headset counts like a car radio, hence the switch).
-Speed: fused location 1 Hz high accuracy plus `lastLocation` only when younger than 30 s; after 3 s
-without a live fused callback the platform GPS takes over for good. `Location.getSpeed() * 3.6`;
-5 km/h and above is moving at once, below it the answer stays "moving" for 5 s (the red light), and
-an UNKNOWN speed — no fix, a fix without speed, 5 s of silence, no location permission — is always
-"moving" (no crash, keyboard stays restricted). Listener on the main thread, `start`/`stop`
-idempotent; `CarMotionTest` (JVM) holds the 5 km/h / 5 s thresholds. Android 10+ requires a
-foreground service reading location while its activity is not
-visible to declare the `location` type (`developer.android.com/develop/sensors-and-location/location/permissions`):
-the car service (lot A) must add `FOREGROUND_SERVICE_LOCATION`, `specialUse|location`
-(plus `microphone` once the mic grant exists) and start it with all of them, or the speed stays
-unknown while Maps is in front. The `location` type is while-in-use:
-on Android 14 the service must be created from a visible app or an exempt start (tile, notification),
-so the permission is granted before the service starts. This lot adds no dependency:
-`play-services-location` is lot A's.
-**The car overlay is a foreground service, not a second player** (bridge version 9, `CarModeService`,
+**The car mode's triggers** (`CarTrigger`, `CarMotion`, `CarBootReceiver`; lot E and the
+visibility/position lot — native only, no bridge change). The overlay's visibility is ONE formula,
+in `CarVisibility`: **GPS first**. When the GPS trigger is on and the usage access granted, the
+overlay exists only while a configured navigation app is really in front — Bluetooth no longer
+keeps it over YouTube or the launcher (the old `gps || bluetooth` was the reported leak). The GPS
+trigger off means Bluetooth alone decides (the documented mode, the platform cannot tell a car
+radio from a headset); the GPS trigger on with the usage access missing cannot see anything, so
+Bluetooth is the only signal left and the settings' access row explains it. `manual` is NOT in the
+formula: a tile or settings start shows the card once, then the first answer saying no navigation
+app is in front takes it down (the close button and the notification remain the explicit way out).
+A `DriveState` carries the foreground package, so the service applies that app's own position and
+switches when Maps → Waze. `CarForegroundTest` and `CarVisibilityTest` hold the formula on the
+JVM.
+
+The foreground decision is `CarForegroundTracker` (pure, same test): `UsageStatsManager.queryEvents`
+every second, the LAST meaningful `ACTIVITY_RESUMED` winning and staying sticky (a navigation app
+guiding for ten minutes emits no new event), plus a one-off 6 h seed at start that skips the system
+chrome. `queryEvents` returns null while locked (the previous state is kept) and needs usage access
+(without it the trigger stays off, no crash). Transients: `com.android.systemui` and the permission
+controllers are drawn OVER the map and are ignored outright — opening the notification shade must
+not hide the card, and closing it emits no new event. Our own screens, the launcher and a real app
+schedule the hide at `event + GRACE_MS` (2 s) and the 1 s poll lands it at **2.0–3.0 s**; coming
+back inside the grace cancels it, and a real departure (YouTube, Messages) hides. The service and
+the seed both skip system events, so no shade event can become "the last foreground app".
+**No path keeps the card over a non-GPS app while the GPS trigger is usable**: `shouldDetach` no
+longer asks `manual`, and `ACTION_REFRESH` attaches through `shouldAttach` (visible, not
+suppressed, not dismissed, not attached) — once. The settings screen's `onPause` calls
+`CarModeService.settingsClosed` (the same ACTION_REFRESH), the trigger reclassifies our own
+package and hides, and the navigation app's resume reattaches; returning within the grace is no
+longer left hidden. The only deliberate exceptions are the two explicit modes above (Bluetooth
+alone, or both triggers off = a manual card until closed).
+
+The screen being off skips the usage query; Bluetooth sinks are
+`AudioManager.getDevices(GET_DEVICES_OUTPUTS)` and `registerAudioDeviceCallback` (no permission; a
+headset counts like a car radio, hence the switch). Speed: fused location 1 Hz high accuracy plus
+`lastLocation` only when younger than 30 s; after 3 s without a live fused callback the platform
+GPS takes over for good. `Location.getSpeed() * 3.6`; 5 km/h and above is moving at once, below it
+the answer stays "moving" for 5 s (the red light), and an UNKNOWN speed — no fix, a fix without
+speed, 5 s of silence, no location permission — is always "moving" (no crash, keyboard stays
+restricted). Listener on the main thread, `start`/`stop` idempotent; `CarMotionTest` (JVM) holds
+the 5 km/h / 5 s thresholds.
+
+**Starting itself without Neezer open** (`CarBootReceiver`, `START_STICKY`). `BOOT_COMPLETED` and
+`MY_PACKAGE_REPLACED` (permission `RECEIVE_BOOT_COMPLETED`, receiver `exported="false"` — the
+system still delivers these protected broadcasts) call `CarModeService.startIfEnabled`: the service
+then watches for the navigation app even if Neezer is never opened. Android 12+ allows those two
+broadcasts as background FGS starts (developer.android.com, "Exemptions from background start
+restrictions"), and SYSTEM_ALERT_WINDOW — already required to draw — is another exemption. Both
+services return `START_STICKY`, and `onStartCommand(null)` is handled: the car service re-arms the
+trigger (no manual flag, no stale dismissal), the player stops when it has neither a client nor a
+state, so no zombie notification survives. A refused background start
+(`ForegroundServiceStartNotAllowedException`, or the Android 14 while-in-use `SecurityException`
+for the location/microphone types) is caught: a plain `startService` is tried, then a notification
+with a “Démarrer” action is posted — a notification action is an allowed start — never a crash.
+Android 10+ requires a foreground service reading location while its activity is not visible to
+declare the `location` type (`developer.android.com/develop/sensors-and-location/location/permissions`):
+the car service declares `FOREGROUND_SERVICE_LOCATION`, `specialUse|location` (plus `microphone`
+once the mic grant exists) and starts it with all of them, or the speed stays unknown while Maps
+is in front. The `location`/`microphone` types are while-in-use: on Android 14 a service created
+from the background (a boot/update start included) is refused those bits at `startForeground`, so
+`goForeground` falls back to `specialUse` — the overlay still comes up, the speed stays unknown
+until the person opens the app again; a tile/notification start (a user action) keeps them. This
+lot adds no dependency: `play-services-location` is lot A's.
+**The car's sleeves are real covers, not only grooves** (`CarCoverView`, `CarCovers`; no bridge
+change). The overlay, the playlist tiles and the settings rows draw the album/playlist image when
+one exists and keep the deterministic Sillon grooves as the placeholder (and as the final answer on
+failure). The loader is one daemon thread, an in-memory `LruCache` sized to 1/16 of the heap
+(3–8 MB), and a `filesDir/car-covers` disk cache whose file name is the SHA-256 of the URL — never a
+path built from the URL. A tile asks at its own dp size; the decode is bounded by
+`BitmapFactory.inSampleSize` and the encoded body by 4 MB; the disk directory by 24 MB / 300 files,
+trimmed oldest-first at most once a minute. MINI, FULL and ULTRA ask for the same URL and share one
+transfer (`CoverFanout`; a request from a newer track wins, the older answer is dropped by
+generation). The session cookie is read only for the configured origin and `Net` enforces the same
+rule again on every redirect; a failed URL is remembered for 60 s so a repaint never retries it.
+**A cover URL is attacker-influenced, so it may only make the device fetch the configured origin or
+Deezer's image CDN** (`*.dzcdn.net`, HTTPS only): `Net.get` takes an optional `allow` predicate,
+asked on the first URL and on every `Location` before a socket is opened, and `CarCovers` passes
+`coverAllowed`. A URL with userinfo, a private/loopback/link-local IP literal (`127.0.0.1`, `10/8`,
+`172.16/12`, `192.168/16`, `169.254/16`, `[::1]`, `fc00::/7`, `fe80::/10`), another host, or
+cleartext off the configured server is refused; the cookie still goes only to the configured origin
+and the disk name is still the URL's SHA-256, never a path. A
+closed settings screen cancels its queued loads before any of them opens a connection, and the
+settings list fetches at most 12 sleeves (the pinned rows first): opening a 500-playlist catalogue
+never fans out 500 requests. The request policy is one transfer per distinct URL: a panel page is
+at most six cold GETs (zero once the process-wide read or the disk has them), and the fanout holds
+ten simultaneous callers on a single transfer (`CarCoverCacheTest`). The disk bound is held by
+a test too: ten 3 MB files under a 24 MB budget evict the two oldest; the file name is 64 hex
+characters, never a host or a slash. The memory hit is a synchronous `LruCache` lookup that hands the
+bitmap to the view's `invalidate()` in the same frame; no device was available for a frame-time
+measure in this lot.
+
+**The car overlay is a foreground service, not a second player** (bridge version 9, unchanged in
+bridge 10; `CarModeService`,
 `CarOverlayRoot`, `CarTileService`). It binds the same `PlayerService` (BIND_AUTO_CREATE), reads
 `state()` and registers `onState`, and sends `transport(cmd, value)` — the MediaSession's own routing,
 native skip first. The overlay is `TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_FOCUSABLE
@@ -217,7 +331,20 @@ native skip first. The overlay is `TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_FOCUSABL
 `screen − 16 dp` wide at `x=8 dp`, bottom 92 dp; ULTRA is exactly 76 × 76 dp at `x=14 dp`,
 bottom 104 dp (`WindowManager` interprets positive x/y under `END`/`BOTTOM` as distance from that
 edge). No transparent side padding and no margin inside the window: those bands still receive
-touches and used to swallow the GPS app's taps (a 90 × 180 dp window for a 76 dp button). Cross-window
+touches and used to swallow the GPS app's taps (a 90 × 180 dp window for a 76 dp button). **The
+place is the person's**: a slot is stored per (navigation app, size) in `CarPrefs` — x from the
+START edge and distance to the bottom, in dp (`CarPlacement`/`CarPositions`, pure and JVM-tested).
+Defaults are the prototype's: FULL/MINI 8/92, ULTRA 76 × 76 at 14 from the END and 104 from the
+bottom. FULL's transport row carries a 44 dp move handle in the prototype's empty 64 px balance
+slot (tap + drag, light `CLOCK_TICK` haptic); ULTRA accepts a long press + drag on the disc, and a
+long press that never moves still shrinks to MINI. Each delta goes through
+`WindowManager.updateViewLayout`, clamped to the status bar / navigation bar / cutout insets,
+re-clamped after layout, rotation and size change; release writes the slot for the app in front.
+Measured in dp: 411 × 891 → FULL 395 × 286 at (8, 92), top 513, bounds x 0–16 / bottom 48–581;
+ULTRA at x=321 (14 from the end), bottom 104, top 711, bounds x 0–335 / bottom 48–791. 360 × 640 →
+FULL 344 wide at (8, 92), top 262; ULTRA x=270, top 460. `CarSettingsActivity`'s Position card
+explains the gesture and resets all apps or one, immediately and with a toast (no dialog).
+Cross-window
 blur is requested only for FULL/MINI and only where the WindowManager reports it enabled (a square
 of frost around the round ULTRA disc would be visible). The window alpha is 1: Android 12's
 untrusted-touch cap applies to a window that lets a touch PASS THROUGH it, and this one is touchable
@@ -236,9 +363,11 @@ it by hand. **There is one door to the settings**: the notification's Réglages 
 `CarModeService.openSettings(context)`, and the playlist ghost tile goes through
 `CarHost.openSettings()`; all three lead to the same `openSettingsNow()`, which detaches the overlay
 before launching the activity (with no service alive the helper launches it directly, since nothing
-draws). MainActivity's next `onResume` sends `ACTION_REFRESH` — and a navigation app becoming visible
-again clears the suppression — so `CarTrigger.refresh()` re-reads the state and the overlay
-reattaches once (guarded by `overlayAttached` and `!dismissed`). `MainActivity` owns the `jsSink` into
+draws). The return path is `CarSettingsActivity.onPause` (when finishing) → `CarModeService.settingsClosed` →
+`ACTION_REFRESH`: it clears the suppression, `CarTrigger.refresh()` reclassifies our own package and
+hides, and the navigation app's `ACTIVITY_RESUMED` reattaches — through `CarVisibility.shouldAttach`
+(visible, not suppressed, not dismissed, not attached), so one window, never two, and no
+stuck-hidden card when the return happens inside the 2 s grace. `MainActivity` owns the `jsSink` into
 the SPA (`__nsCarPlay` / `__nsCarFav`). `PlayerService.evalJs(js, onResult)` carries the page's
 boolean answer back (false when no WebView/never our origin): `launch()` changes the screen and toasts
 "Lecture : X" (or "Playlist lancée : X" for a playlist) only on true, and otherwise shows "Ouvre Neezer pour lancer la musique" on the current
@@ -260,28 +389,73 @@ server. Cookie arrival is polled (~600 ms, only while the screen is up): Deezer'
 so no navigation fires and there is no cookie-change callback to hook. Google/Apple SSO is refused
 inside any WebView — email + password is the supported route. SPA side: `lib/nativeDeezer.js`.
 
-**Car mode, the page side and the pinned playlists** (bridge 9, lots A–E; SPA: `lib/car.js`,
+**Car mode, the page side and the pinned playlists** (bridge 9, unchanged in bridge 10; lots A–E; SPA: `lib/car.js`,
 `CarPlaylistsView.kt`, `CarSettingsActivity.kt`). The overlay is native and the WebView still owns
 the queue, so the two sides meet at exactly two hooks, installed once by `App.svelte` (never on a
 party/remote page): `window.__nsCarPlay(kind, id, title, payload)` launches a Flow (`startFlow`), a
-track from its JSON (`player.playQueue`, context `track`), or an entity (`playEntity(kind, id)`) —
-never a second playback path — and returns a boolean the service can report. `window.__nsCarFav()`
+track from its JSON (`player.playQueue`, context `track`), an entity (`playEntity(kind, id)`), or
+the starred tracks (`favorites`: it reads `/api/me/favorites` then
+`player.playQueue(tracks, 0, {kind:"favorites", id:"favorites"})` — still the one player, no second
+engine) — and returns a boolean the service can report. `window.__nsCarFav()`
 exists only while a track is current: it toggles that track's favourite and returns the optimistic
 new state synchronously. `NSNative.carAvailable()` gates the SPA's settings card and the playlist
 page's “Épingler pour la voiture” action (`NSNative.carPin`); an older APK has neither method and the
 entries simply do not exist, while a newer APK facing an older SPA finds no hook and must say so.
 `carPin` accepts two arities (the WebView bridge resolves an overload by argument count): the old
-`(id, title)` and `(id, title, nbTracks)`, so a newer SPA can hand the count over at pin time. Today's
-`lib/car.js` still calls the two-argument form, so the tile keeps the title-only pin until the first
-`/api/me/playlists` read fills the count.
-The playlist panel shows Flow + `CarPrefs.pins`, six 84 dp tiles to a page; its catalogue is
+`(id, title)` and `(id, title, nbTracks)`. `lib/car.js` passes the count when the playlist page has
+it (`data.playlist.nb_tracks`), so the tile says "42 titres" before the first `/api/me/playlists`
+read; a page without a count still calls the two-argument form. The list is **capped at 24 pins**
+(`CarPins.MAX_PINS`, the one gate in `CarPrefs.pin`): any page of the same origin can call `carPin`,
+and the whole list is rewritten on every pin, so an unbounded list would grow without limit. An id
+already pinned is updated in place at its rank (title/count) and still accepted at the ceiling; a
+new 25th answers `false` — the SPA's own "Impossible d'épingler" — and the settings' pin action
+says the reason. `CarPinsTest` holds the boundary on the JVM. `openCarSettings()` answers a real
+boolean (`true` only when the launch was accepted); `lib/car.js` requires `=== true`, so an APK
+from before the return value is reported as "Réglages indisponibles" by the new SPA instead of a
+silent success. Older SPA + newer APK: the extra return value is ignored, and the two-argument
+`carPin` overload is still there — no bridge version bump.
+The playlist panel shows a built-in “Favoris” tile first, then `CarPrefs.pins`, six 84 dp tiles to
+a page. “Mon Flow” is no longer one of its tiles: the `flow` launch kind stays in the bridge for an
+older page, but nothing in the car surfaces it. The Favoris tile is not a playlist — it is never in
+`CarPrefs.pins`, and cannot be removed or reordered — and its count is the length of the light
+`/api/me/favorite-ids` `ids` array (track stars only), read with the same cookie on the same worker
+as the catalogue; a 401, an offline read or a server without the route leaves the count unknown
+(“tes titres aimés”) without touching the other tiles, and `/api/me/favorites` is never fetched
+just for a counter (measured on the 8 000-track bench: 15 ms / 45 KB for 4 000 stars on the light
+route, against 99 ms / 2 MB for the full one). Its catalogue is
 `/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
 (401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
-device remembers. A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`): the
-overlay is destroyed and recreated on every drop/reattach, and a fresh cache means returning from
-the settings does not cost a second request; only a 401 forgets it. Tapping a tile calls
+device remembers. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
+SPA's `/app` path (a person pastes the player's address) and the route never lives under it, while a
+reverse-proxied prefix is kept (`https://host/musique/app/` → `https://host/musique/api/me/playlists`);
+`Prefs.isServerUrl` still holds it to the one origin definition. If the jar has no cookie yet (the
+tile can open the settings before the page ever loaded), one `CookieManager.flush()` and a second
+read happen off the UI, then the request is still made without a cookie: its 401 or its login-page
+HTML is more informative than "server down". The states are kept apart — session absente (401),
+hors ligne, délai dépassé, certificat refusé, serveur en erreur (403/5xx), réponse inattendue (HTML)
+— and every failure is retryable; the pinned rows are always announced as local ("épinglées").
+A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`, covers and star count
+included): the overlay is destroyed and recreated on every drop/reattach, and a fresh cache means
+returning from the settings does not cost a second request; a 401 forgets it. A catalogue read made
+by the settings screen alone keeps the last known count instead of erasing it; a panel that finds a
+cached list with no count re-reads rather than showing “tes titres aimés” for a minute. The panel
+labels a cache-served list
+"catalogue mémorisé", so a stale list never passes for a live one. `CarSettingsActivity` seeds
+its rows from that same cache on open (instant covers, no request), then re-reads on `onResume`
+when the last attempt failed or the last success is older than 60 s, at most once every 2 s; a 401
+there also forgets the process cache. Tapping a tile calls
 `CarHost.launch` only — the service changes to the player and shows the single "Lecture : X" / "Playlist lancée : X" toast
-when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée".
+when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée". The built-in
+Favoris tile launches the `favorites` kind (`LAUNCH_KINDS` on the service, `KINDS` in `lib/car.js`):
+its read is asynchronous, so the PAGE owns the wording — “Chargement des favoris…” then “Lecture
+des favoris”, or “Aucun favori pour l'instant”, “Session absente” on a 401, “Hors ligne : favoris
+indisponibles”. The service stays silent for `favorites` on success (no “Playlist lancée” before a
+queue exists) and only says “Ouvre Neezer pour lancer tes favoris” when the page refused
+synchronously (older SPA without the path, signed out). Removing the synthetic Flow tile is not a
+library cleanup: playlists named “Deezer · Flow” in `/api/me/playlists` stay ordinary rows,
+pin-able and playable like any other — there is no reliable automatic flag to tell them from a
+person's own playlist of the same name, so the app never deletes or hides a server row on a name
+match.
 The native search (`CarSearchView`) waits **700 ms** after the last key and needs **2 characters**
 before calling `/api/search` (one call fans out to five provider searches), cancels the previous
 `HttpURLConnection` on a new keypress or detach, and lets a late answer from an older generation be
@@ -290,8 +464,11 @@ passenger keyboard: 532 dp panel + 92 dp bottom margin with three results, 16 dp
 `CarSettingsActivity` is the full-screen Réglages → Mode voiture (manifest
 `android:exported="false"`; reached only through `CarModeService.openSettings`, which hides the
 overlay first), asks overlay, usage-access, location, Bluetooth and microphone through
-`CarPermissions`, and never shows a confirmation dialog. `webapp/test/car.test.mjs` drives the hooks
+`CarPermissions`, and never shows a confirmation dialog. Its **Position** card explains the drag
+gesture and resets the saved slots — all apps, or one row per navigation app that has one —
+immediately, with a toast. `webapp/test/car.test.mjs` drives the hooks
 with injected player functions
-(launch kinds, no session, remote, the favourite hook appearing/disappearing); `npm test` 439 and
+(launch kinds, no session, remote, the favourite hook appearing/disappearing, the asynchronous
+favourites launch and its empty/401/offline answers); `npm test` 455 and
 `npm run build` pass. The Kotlin side is built by CI's `android` workflow; `assembleDebug`,
 `lintDebug` and `testDebugUnitTest` also pass locally with JDK 17/SDK 34.

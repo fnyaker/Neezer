@@ -2,7 +2,8 @@
   // Settings UI for the opt-in DSP chain (see lib/audio/graph.js): volume
   // normalization, bass enhancement and a 10-band equalizer. Everything writes
   // to the persisted fx.* stores, which the audio graph subscribes to live.
-  import { tick } from "svelte";
+  import { tick, onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import {
     player,
     eqEnabled,
@@ -26,6 +27,20 @@
     toasts,
   } from "../lib/stores.js";
   import { EQ_FREQS, EQ_MIN_DB, EQ_MAX_DB } from "../lib/audio/graph.js";
+  import { subscribeSaturation } from "../lib/audio/saturation.js";
+  import {
+    BUILTIN_PRESETS,
+    EQ_BAND_COUNT,
+    activePresetId,
+    createMeterSession,
+    dbToGain,
+    fmtDb,
+    presetItems,
+    presetNeedsUpdate,
+    riskTone,
+    updatedPreset,
+    volumeCutDb,
+  } from "../lib/eqpresets.js";
   import { outputPlan, retryNow } from "../lib/audio/output.js";
   import {
     nativeAudioAvailable,
@@ -112,15 +127,6 @@
   // user can pull the level down to offset the EQ / bass boost.
   $: volPct = Math.round(($player.muted ? 0 : $player.volume) * 100);
 
-  // A few useful curves (dB per band, low→high). "Plat" resets everything.
-  const PRESETS = [
-    { id: "flat", label: "Plat", bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
-    { id: "bass", label: "Basses+", bands: [6, 5, 4, 2, 0, 0, 0, 0, 0, 0] },
-    { id: "vocal", label: "Voix", bands: [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1] },
-    { id: "treble", label: "Aigus+", bands: [0, 0, 0, 0, 0, 1, 2, 4, 5, 6] },
-    { id: "loud", label: "Loudness", bands: [6, 4, 2, 0, -1, -1, 0, 2, 4, 6] },
-  ];
-
   function freqLabel(hz) {
     return hz >= 1000 ? hz / 1000 + "k" : String(hz);
   }
@@ -130,11 +136,6 @@
     next[i] = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, +v || 0));
     eqBands.set(next);
   }
-  function applyPreset(bands) {
-    eqBands.set(bands.slice());
-    eqEnabled.set(true);
-  }
-  $: activePreset = PRESETS.find((p) => p.bands.every((v, i) => v === $eqBands[i]))?.id;
 
   $: bassPct = Math.round($bassBoost * 100);
 
@@ -145,15 +146,43 @@
   $: skipFadeLabel =
     $crossfadeSkipSeconds <= 0 ? "coupe douce" : `${(+$crossfadeSkipSeconds).toFixed(2).replace(/0$/, "")} s`;
 
-  // -- the user's own presets ------------------------------------------------
+  // -- the equalizer's presets (the rules live in lib/eqpresets.js) ----------
   // A saved preset captures the whole chain (EQ + bass + normalisation), so it
   // restores a complete listening setup — "casque", "voiture", "nuit" — not just
   // a curve. Naming happens in an inline field rather than window.prompt: the
   // native dialog is blocked outright in some embedded webviews (including the
   // Android app's), and it looks nothing like the rest of the app.
+  let pickedId = null;
   let naming = false;
   let draftName = "";
   let nameInput;
+  let builtinList = null;
+  let mineList = null;
+
+  $: chain = { eq: $eqEnabled, bands: $eqBands, bass: $bassBoost, norm: $normalization };
+  $: items = presetItems($fxPresets);
+  $: builtins = items.filter((p) => p.builtin);
+  $: mine = items.filter((p) => !p.builtin);
+  $: activeId = activePresetId(items, chain);
+  // What the person clicked (or last applied), even after they move a slider:
+  // that is the preset "Mettre à jour" writes. Without a click, the preset the
+  // chain matches is the natural selection; with neither, a custom setting.
+  $: picked = items.find((p) => p.id === pickedId) || null;
+  $: selected = picked || items.find((p) => p.id === activeId) || null;
+  $: dirty = !!selected && !selected.builtin && presetNeedsUpdate(selected, chain);
+
+  function usePreset(p) {
+    if (!p) return;
+    if (p.builtin) {
+      eqBands.set(p.bands.slice());
+      eqEnabled.set(true);
+    } else {
+      applyFxPreset(p);
+    }
+    pickedId = p.id;
+    // No toast: the chip highlights, the state line names the preset, and a
+    // second toast would only stack under the next action's.
+  }
 
   async function openNaming() {
     naming = true;
@@ -169,7 +198,14 @@
     }
     naming = false;
     draftName = "";
+    // saveFxPreset answers with the snapshot it BUILT; re-saving an existing
+    // name keeps the stored row's id, so select what storage actually holds.
+    const stored = get(fxPresets).find(
+      (p) => String(p.name).toLowerCase() === saved.name.toLowerCase()
+    );
+    pickedId = (stored || saved).id;
     toasts.push(`Préréglage « ${saved.name} » enregistré`);
+    revealSelected();
   }
   function cancelSave() {
     naming = false;
@@ -179,29 +215,332 @@
     if (e.key === "Enter") confirmSave();
     else if (e.key === "Escape") cancelSave();
   }
-  function useCustom(p) {
-    applyFxPreset(p);
-    toasts.push(`Préréglage « ${p.name} » appliqué`);
-  }
-  function removeCustom(p) {
-    deleteFxPreset(p.id);
-    toasts.push(`Préréglage « ${p.name} » supprimé`);
+
+  function restorePreset(p) {
+    if (!p) return;
+    fxPresets.update((list) => {
+      const i = list.findIndex((x) => x.id === p.id);
+      if (i < 0) return [...list, p];
+      const next = list.slice();
+      next[i] = p;
+      return next;
+    });
   }
 
-  // A custom preset is "active" when every part of the live chain matches it.
-  function matches(p, eq, bands, bass, norm) {
-    return (
-      !!p.eq === !!eq &&
-      p.norm === norm &&
-      Math.abs((+p.bass || 0) - bass) < 0.005 &&
-      Array.isArray(p.bands) &&
-      p.bands.length === bands.length &&
-      p.bands.every((v, i) => v === bands[i])
-    );
+  // "Mettre à jour" writes the current curve and bass lift into the selected
+  // user preset. The previous row rides in the toast, so undo is one tap and
+  // there is no confirmation dialog in the way.
+  function updateCurrent() {
+    if (!selected || selected.builtin) return;
+    const before = $fxPresets.find((p) => p.id === selected.id);
+    const next = updatedPreset(before, chain);
+    if (!next) return;
+    fxPresets.update((list) => list.map((p) => (p.id === next.id ? next : p)));
+    pickedId = next.id;
+    toasts.push(`Préréglage « ${next.name} » mis à jour`, "info", 2600, {
+      label: "Annuler",
+      run: () => restorePreset(before),
+    });
   }
-  $: activeCustom = $fxPresets.find((p) =>
-    matches(p, $eqEnabled, $eqBands, $bassBoost, $normalization)
-  )?.id;
+
+  function removeCustom(p) {
+    if (!p || p.builtin) return;
+    const at = $fxPresets.findIndex((x) => x.id === p.id);
+    if (at < 0) return;
+    const removed = $fxPresets[at];
+    deleteFxPreset(p.id);
+    if (pickedId === p.id) pickedId = null;
+    revealSelected();
+    toasts.push(`Préréglage « ${p.name} » supprimé`, "info", 2600, {
+      label: "Annuler",
+      run: () =>
+        fxPresets.update((list) => {
+          if (list.some((x) => x.id === removed.id)) return list;
+          const next = list.slice();
+          next.splice(Math.min(at, next.length), 0, removed);
+          return next;
+        }),
+    });
+  }
+
+  // A preset's curve at a glance, so two presets named alike (or a built-in
+  // and its copy) are told apart before applying them. Static per preset.
+  function sparkHeight(db) {
+    const v = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, +db || 0));
+    return Math.round(10 + ((v - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB)) * 80);
+  }
+
+  // Bring the selected preset into its rail's window without scrolling the
+  // page: with ten saved curves, the one the chain matches can mount past the
+  // right edge on a phone (or below the fold of the desktop list), and a
+  // highlight nobody can see is not a highlight.
+  async function revealSelected() {
+    await tick();
+    for (const list of [builtinList, mineList]) {
+      if (!list) continue;
+      const el = list.querySelector('.pitem[data-selected="true"]');
+      if (!el) continue;
+      const lr = list.getBoundingClientRect();
+      const er = el.getBoundingClientRect();
+      if (list.scrollWidth > list.clientWidth) {
+        if (er.left < lr.left) list.scrollLeft += er.left - lr.left - 4;
+        else if (er.right > lr.right) list.scrollLeft += er.right - lr.right + 4;
+      }
+      if (list.scrollHeight > list.clientHeight) {
+        if (er.top < lr.top) list.scrollTop += er.top - lr.top - 4;
+        else if (er.bottom > lr.bottom) list.scrollTop += er.bottom - lr.bottom + 4;
+      }
+    }
+  }
+
+  // -- the live level meter (lib/audio/saturation.js) -----------------------
+  // One snapshot at 25 Hz. The BARS are written straight to the DOM: ten
+  // Svelte updates per tick would run the component's dirty checks 250 times a
+  // second for ten 10 px rectangles. The readout and the warning are reactive,
+  // but at a human pace (5 Hz / 2 Hz) and only when a rounded value moves.
+  let eqCard = null;
+  let cardVisible = false;
+  const fills = new Array(EQ_BAND_COUNT).fill(null);
+  const lastBands = new Array(EQ_BAND_COUNT).fill(0);
+  let meterAvailable = false;
+  let meterReason = "idle";
+  let meterRisk = "off";
+  let meterMeasured = false;
+  // The readout is written straight to its three spans, not through Svelte: a
+  // `stats = {...}` at 5 Hz re-ran the component's update pass 5 times a
+  // second over fifteen preset chips and ten faders for three numbers, which
+  // measured 98 ms of main thread a second in the phone profile. The engine's
+  // own tick costs 8.
+  const readValues = { peak: -96, headroom: 96, reduction: 0 };
+  const readEls = { peak: null, headroom: null, reduction: null };
+  let lastReadAt = 0;
+  // The ENGINE publishes at 25 Hz; the BARS are painted at 13 Hz and glide
+  // between readings (90 ms of CSS). Measured on this screen at 390 px: a
+  // write per reading cost 124 ms of main thread a second (321 style recalcs
+  // in 5 s) for ten 6 px lines, half the rate costs 45 ms/s of which the
+  // engine's own tap is 32. The risk and the warning still see every reading.
+  const BAR_PAINT_MS = 75;
+  let lastBarsAt = 0;
+  const nowMs = () =>
+    typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  let warn = null;
+  let warnAnnounce = "";
+  let holdReduction = 0;
+  let holdMargin = 0;
+  let holdAfter = 0;
+  let warnedTone = "ok";
+  let lastWarnAt = 0;
+
+  $: meterState = !meterAvailable ? "off" : meterMeasured ? "live" : "pending";
+
+  function paintReadout() {
+    if (readEls.peak) readEls.peak.textContent = fmtDb(readValues.peak);
+    if (readEls.headroom) readEls.headroom.textContent = fmtDb(readValues.headroom);
+    if (readEls.reduction) {
+      readEls.reduction.textContent = fmtDb(readValues.reduction);
+      readEls.reduction.classList.toggle("lit", readValues.reduction >= 0.1);
+    }
+  }
+  function readout(node, which) {
+    readEls[which] = node;
+    paintReadout();
+    return {
+      destroy() {
+        if (readEls[which] === node) readEls[which] = null;
+      },
+    };
+  }
+
+  // `use:levelBar={i}`: the node exists only while the bars are rendered, so
+  // registration follows mount/unmount instead of a query after every change.
+  function levelBar(node, i) {
+    fills[i] = node;
+    node.style.setProperty("--lvl", String(lastBands[i] || 0));
+    return {
+      destroy() {
+        if (fills[i] === node) fills[i] = null;
+      },
+    };
+  }
+
+  function paintBars(bands) {
+    for (let i = 0; i < EQ_BAND_COUNT; i++) {
+      const v = Math.max(0, Math.min(1, +bands?.[i] || 0));
+      lastBands[i] = v;
+      const el = fills[i];
+      if (el) el.style.setProperty("--lvl", v.toFixed(3));
+    }
+  }
+
+  function onSaturation(snap) {
+    if (!snap) return;
+    const now = nowMs();
+    if (!snap.available) {
+      if (meterAvailable || readValues.peak !== -96) {
+        meterAvailable = false;
+        meterMeasured = false;
+        readValues.peak = -96;
+        readValues.headroom = 96;
+        readValues.reduction = 0;
+        paintBars(null);
+        warn = null;
+        warnedTone = "ok";
+        holdReduction = 0;
+        holdMargin = 0;
+        if (warnAnnounce) warnAnnounce = "";
+      }
+      if (snap.reason !== meterReason) meterReason = snap.reason || "idle";
+      if (meterRisk !== "off") meterRisk = "off";
+      return;
+    }
+    if (!meterAvailable) {
+      meterAvailable = true;
+      meterReason = "";
+    }
+    if (snap.measured !== meterMeasured) meterMeasured = snap.measured;
+    if (now - lastBarsAt >= BAR_PAINT_MS) {
+      lastBarsAt = now;
+      paintBars(snap.bands);
+    }
+
+    const tone = riskTone(snap.risk);
+    if (tone !== meterRisk) meterRisk = tone;
+
+    if (now - lastReadAt >= 250) {
+      lastReadAt = now;
+      const peak = Math.round((+snap.peakDb || 0) * 10) / 10;
+      const headroom = Math.round((+snap.headroomDb || 0) * 10) / 10;
+      const reduction = Math.round((+snap.reductionDb || 0) * 10) / 10;
+      if (
+        peak !== readValues.peak ||
+        headroom !== readValues.headroom ||
+        reduction !== readValues.reduction
+      ) {
+        readValues.peak = peak;
+        readValues.headroom = headroom;
+        readValues.reduction = reduction;
+        paintReadout();
+      }
+    }
+
+    if (tone === "ok") {
+      holdReduction = 0;
+      holdMargin = 0;
+      warnedTone = "ok";
+      if (warnAnnounce) warnAnnounce = "";
+      if (warn) warn = null;
+      return;
+    }
+    // The analyser's 85 ms window still holds the signal from before a volume
+    // change. A peak-hold started inside it would keep the old reduction for
+    // the whole episode (seen: the button lowered the level, the visible peak
+    // fell to 0.8 dB, and the banner insisted on the previous 7.0).
+    if (now < holdAfter) return;
+    // A peak-hold over the warning: the offer must not flap between 0.6 and 2.1
+    // dB at 25 Hz while the person reads it, and the largest reduction of the
+    // episode is what the ear actually heard.
+    holdReduction = Math.max(holdReduction, +snap.reductionDb || 0);
+    holdMargin = Math.max(holdMargin, +snap.marginDb || 0);
+    if (tone !== warnedTone) {
+      warnedTone = tone;
+      warnAnnounce = `${tone === "clip" ? "Saturation" : "Risque de saturation"} : le limiteur réduit de ${fmtDb(holdReduction)}.`;
+      lastWarnAt = 0; // paint the banner now, not after the throttle
+    }
+    if (now - lastWarnAt >= 750) {
+      lastWarnAt = now;
+      const next = {
+        tone,
+        reduction: Math.round(holdReduction * 10) / 10,
+        margin: Math.round(holdMargin * 10) / 10,
+        cut: volumeCutDb(holdMargin),
+      };
+      if (
+        !warn ||
+        warn.tone !== next.tone ||
+        warn.reduction !== next.reduction ||
+        warn.margin !== next.margin ||
+        warn.cut !== next.cut
+      )
+        warn = next;
+    }
+  }
+
+  // The engine's tap costs about 0.46 s of main thread a minute; it is worth
+  // paying only while this card is on screen in a visible page. Scrolling the
+  // equalizer out of view, switching tab, or leaving Réglages stops it.
+  const meter = createMeterSession(subscribeSaturation, onSaturation);
+  $: canReduce = !!warn && !$player.muted && $player.volume > 0.005;
+
+  // A deliberate volume move (the slider, the mute button, or the warning's own
+  // "Réduire le volume") invalidates the peak-hold: keeping the old 9.7 dB next
+  // to a quieter chain read as "the button did nothing". The next reading
+  // rebuilds the banner from the level that is actually playing now.
+  let lastVolume = null;
+  $: if ($player.volume !== lastVolume) {
+    lastVolume = $player.volume;
+    holdReduction = 0;
+    holdMargin = 0;
+    // Let the meter's 85 ms window turn over before the next reading becomes
+    // the new hold; see the guard in onSaturation.
+    holdAfter = nowMs() + 160;
+    lastWarnAt = 0;
+    warnedTone = "ok";
+    if (warnAnnounce) warnAnnounce = "";
+  }
+
+  onMount(() => {
+    let io = null;
+    const sync = () => {
+      if (cardVisible && document.visibilityState !== "hidden") meter.start();
+      else meter.stop();
+    };
+    const onVisibility = () => sync();
+    document.addEventListener("visibilitychange", onVisibility);
+    if (typeof IntersectionObserver === "function") {
+      io = new IntersectionObserver(
+        (entries) => {
+          cardVisible = !!entries[entries.length - 1]?.isIntersecting;
+          sync();
+        },
+        { rootMargin: "160px 0px" }
+      );
+      io.observe(eqCard);
+    } else {
+      cardVisible = true;
+      sync();
+    }
+    revealSelected();
+    return () => {
+      io?.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  });
+  onDestroy(() => meter.stop());
+
+  $: unavailableText = native
+    ? "Mesure indisponible avec le lecteur de l'application."
+    : meterReason === "direct"
+      ? "Mesure indisponible en lecture directe : le son ne traverse pas l'égaliseur."
+      : "La mesure démarre avec la lecture.";
+
+  // The requested mitigation: the player's volume, optimistically, one toast
+  // with undo. A quiet confirmation that the chain is quieter now — no engine
+  // write, no automatic change of the sound.
+  function reduceVolume() {
+    if (!warn) return;
+    const cut = warn.cut;
+    const before = { volume: $player.volume, muted: $player.muted };
+    const target = Math.max(0, before.volume * dbToGain(cut));
+    if (target >= before.volume - 0.0005) return;
+    player.setVolume(target);
+    toasts.push(`Volume réduit de ${fmtDb(cut)}`, "info", 2600, {
+      label: "Annuler",
+      run: () => {
+        player.setVolume(before.volume);
+        if (before.muted && !$player.muted) player.toggleMute();
+      },
+    });
+  }
 </script>
 
 <section class="card">
@@ -325,94 +664,202 @@
       <span class="val">{bassPct}%</span>
     </div>
   </div>
+</section>
 
-  <!-- 10-band equalizer --------------------------------------------------- -->
-  <div class="block">
-    <button class="toggle" role="switch" aria-checked={$eqEnabled} on:click={() => eqEnabled.set(!$eqEnabled)}>
-      <span class="tg-txt">
-        <span class="tg-title">Égaliseur 10 bandes</span>
-        <span class="tg-hint muted">
-          Ajustez chaque bande de fréquence (±16 dB).
-          {#if dspNote}<span class="off-note">{dspNote}</span>{/if}
-        </span>
+<!-- The equaliser: its presets first (a shortcut to a curve), then the ten
+     faders with the live level of each band above them. The meter is read from
+     lib/audio/saturation.js, pre-limiter, so it can say how hard the safety
+     limiter is working — which is the whole point of the warning. -->
+<section class="card eq-card" bind:this={eqCard}>
+  <h2><Icon name="sliders" size={18} /> Égaliseur</h2>
+  <p class="muted sub">
+    Dix bandes de 31 Hz à 16 kHz (±16 dB). Un limiteur de sécurité rattrape les
+    pics en fin de chaîne ; le mètre montre le niveau réel de chaque bande et
+    l'effort du limiteur.
+    {#if dspNote}<span class="off-note">{dspNote}</span>{/if}
+  </p>
+
+  <button class="toggle" role="switch" aria-checked={$eqEnabled} on:click={() => eqEnabled.set(!$eqEnabled)}>
+    <span class="tg-txt">
+      <span class="tg-title">Égaliseur 10 bandes</span>
+      <span class="tg-hint muted">
+        Ajustez chaque bande (±16 dB), ou partez d'un préréglage.
       </span>
-      <span class="sw" class:on={$eqEnabled}><span class="knob"></span></span>
-    </button>
+    </span>
+    <span class="sw" class:on={$eqEnabled}><span class="knob"></span></span>
+  </button>
 
-    <div class="presets">
-      {#each PRESETS as p}
-        <button class="preset" class:sel={activePreset === p.id} on:click={() => applyPreset(p.bands)}>{p.label}</button>
-      {/each}
+  <!-- Presets: built-ins and the person's own, all of them reachable --------- -->
+  <div class="picker">
+    <div class="pgroup">
+      <div class="pgroup-head">
+        <span class="pgroup-title">Intégrés</span>
+        <span class="pcount mono">{BUILTIN_PRESETS.length}</span>
+      </div>
+      <div class="plist" role="group" aria-label="Préréglages intégrés" bind:this={builtinList}>
+        {#each builtins as p (p.id)}
+          <button
+            class="pitem"
+            class:active={activeId === p.id}
+            class:picked={pickedId === p.id && activeId !== p.id}
+            data-selected={selected?.id === p.id ? "true" : "false"}
+            aria-pressed={activeId === p.id}
+            title="Appliquer « {p.name} »"
+            on:click={() => usePreset(p)}
+          >
+            <span class="pname">{p.name}</span>
+            <span class="pspark" aria-hidden="true">
+              {#each p.bands as g}<i style={`height:${sparkHeight(g)}%`}></i>{/each}
+            </span>
+            {#if activeId === p.id}<span class="pcheck"><Icon name="check" size={14} /></span>{/if}
+          </button>
+        {/each}
+      </div>
+    </div>
+    <div class="pgroup">
+      <div class="pgroup-head">
+        <span class="pgroup-title">Mes préréglages</span>
+        <span class="pcount mono">{mine.length}</span>
+        <button class="padd" on:click={openNaming} aria-label="Nouveau préréglage" title="Nouveau préréglage">
+          <Icon name="plus" size={16} />
+        </button>
+      </div>
+      {#if mine.length}
+        <div class="plist" role="group" aria-label="Mes préréglages" bind:this={mineList}>
+          {#each mine as p (p.id)}
+            <button
+              class="pitem"
+              class:active={activeId === p.id}
+              class:picked={pickedId === p.id && activeId !== p.id}
+              data-selected={selected?.id === p.id ? "true" : "false"}
+              aria-pressed={activeId === p.id}
+              title="Appliquer « {p.name} »"
+              on:click={() => usePreset(p)}
+            >
+              <span class="pname">{p.name}</span>
+              <span class="pspark" aria-hidden="true">
+                {#each p.bands as g}<i style={`height:${sparkHeight(g)}%`}></i>{/each}
+              </span>
+              {#if activeId === p.id}<span class="pcheck"><Icon name="check" size={14} /></span>{/if}
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="pempty muted">Aucun préréglage enregistré.</p>
+      {/if}
+    </div>
+  </div>
+
+  <p class="pstate" aria-live="polite">
+    {#if selected}
+      {#if selected.builtin}
+        «&nbsp;{selected.name}&nbsp;» · préréglage intégré, non modifiable.
+      {:else if dirty}
+        «&nbsp;{selected.name}&nbsp;» · <strong>modifié</strong> — «&nbsp;Mettre à jour&nbsp;» garde ce
+        réglage.
+      {:else}
+        «&nbsp;{selected.name}&nbsp;» · à jour.
+      {/if}
+    {:else}
+      Réglage personnalisé — enregistrez-le pour le retrouver.
+    {/if}
+  </p>
+
+  {#if naming}
+    <div class="naming">
+      <input
+        bind:this={nameInput}
+        bind:value={draftName}
+        on:keydown={onNameKey}
+        placeholder="Nom du préréglage (ex. Casque)"
+        aria-label="Nom du préréglage"
+        maxlength="40"
+      />
+      <button class="pill sm" on:click={confirmSave} disabled={!draftName.trim()}>
+        <Icon name="check" size={15} /> Enregistrer
+      </button>
+      <button class="ghost sm" on:click={cancelSave}>Annuler</button>
+    </div>
+  {:else}
+    <div class="pactions">
+      {#if selected?.builtin}
+        <button class="save" on:click={openNaming}>
+          <Icon name="plus" size={16} /> Enregistrer comme…
+        </button>
+      {:else if selected}
+        <button class="upd" on:click={updateCurrent} disabled={!dirty}>
+          <Icon name="check" size={16} /> Mettre à jour
+        </button>
+        <button class="del" on:click={() => removeCustom(selected)}>
+          <Icon name="trash" size={15} /> Supprimer
+        </button>
+      {:else}
+        <button class="save" on:click={openNaming}>
+          <Icon name="plus" size={16} /> Enregistrer comme…
+        </button>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- The live meter: one snapshot at 25 Hz, bars painted by hand ----------- -->
+  <div class="meter-block" class:off={!meterAvailable}>
+    <div class="meter-head">
+      <span class="meter-title"><Icon name="activity" size={14} /> Niveau par bande</span>
+      {#if meterState === "live"}
+        <span class="meter-read">
+          <span>Pic <span class="mv" use:readout={"peak"}></span></span>
+          <span>Marge <span class="mv" use:readout={"headroom"}></span></span>
+          <span>Limiteur <span class="mv" use:readout={"reduction"}></span></span>
+        </span>
+      {:else if meterState === "pending"}
+        <span class="meter-read">Mesure en cours…</span>
+      {:else}
+        <span class="meter-read meter-offtxt">{unavailableText}</span>
+      {/if}
     </div>
 
-    <div class="eq" class:dim={!$eqEnabled}>
+    {#if warn}
+      <div class="warn" class:clip={warn.tone === "clip"}>
+        <span class="warn-ico"><Icon name="alert" size={18} /></span>
+        <span class="warn-txt">
+          <strong>{warn.tone === "clip" ? "Saturation" : "Risque de saturation"}</strong>
+          <span class="muted">
+            {#if warn.reduction >= 0.1}Le limiteur réduit de {fmtDb(warn.reduction)}.{:else}Le signal touche
+              0 dBFS.{/if}
+            Marge recommandée : {fmtDb(warn.margin)}.
+          </span>
+        </span>
+        <button class="warn-btn" on:click={reduceVolume} disabled={!canReduce}>
+          Réduire le volume de {fmtDb(warn.cut)}
+        </button>
+      </div>
+    {/if}
+    <span class="sr-live" aria-live="polite">{warnAnnounce}</span>
+
+    <div class="eq" class:dim={!$eqEnabled} data-risk={meterRisk}>
       {#each EQ_FREQS as hz, i}
         <div class="band">
           <span class="gain">{$eqBands[i] > 0 ? "+" : ""}{$eqBands[i]}</span>
-          <input
-            class="vert"
-            type="range"
-            min={EQ_MIN_DB}
-            max={EQ_MAX_DB}
-            step="1"
-            value={$eqBands[i]}
-            disabled={!$eqEnabled}
-            on:input={(e) => setBand(i, e.target.value)}
-            aria-label={freqLabel(hz) + " Hz"}
-          />
+          <div class="band-mid">
+            <span class="lvl" aria-hidden="true">
+              <span class="lvl-fill" use:levelBar={i}></span>
+            </span>
+            <input
+              class="vert"
+              type="range"
+              min={EQ_MIN_DB}
+              max={EQ_MAX_DB}
+              step="1"
+              value={$eqBands[i]}
+              disabled={!$eqEnabled}
+              on:input={(e) => setBand(i, e.target.value)}
+              aria-label={freqLabel(hz) + " Hz"}
+            />
+          </div>
           <span class="freq">{freqLabel(hz)}</span>
         </div>
       {/each}
     </div>
-  </div>
-
-  <!-- The user's own presets ------------------------------------------------ -->
-  <div class="block">
-    <div class="block-head">
-      <span class="block-title">Mes préréglages</span>
-      <span class="muted block-hint">
-        Enregistrez le réglage complet — égaliseur, basses et normalisation — pour
-        le rappeler d'un geste (un pour le casque, un pour la voiture…).
-      </span>
-    </div>
-
-    {#if $fxPresets.length}
-      <div class="mine">
-        {#each $fxPresets as p (p.id)}
-          <div class="chip" class:sel={activeCustom === p.id}>
-            <button class="chip-main" on:click={() => useCustom(p)} title="Appliquer « {p.name} »">
-              {#if activeCustom === p.id}<Icon name="check" size={14} />{/if}
-              <span class="cname">{p.name}</span>
-            </button>
-            <button class="chip-x" on:click={() => removeCustom(p)} aria-label="Supprimer « {p.name} »" title="Supprimer">
-              <Icon name="close" size={13} />
-            </button>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <p class="muted none">Aucun préréglage enregistré pour l'instant.</p>
-    {/if}
-
-    {#if naming}
-      <div class="naming">
-        <input
-          bind:this={nameInput}
-          bind:value={draftName}
-          on:keydown={onNameKey}
-          placeholder="Nom du préréglage (ex. Casque)"
-          maxlength="40"
-        />
-        <button class="pill sm" on:click={confirmSave} disabled={!draftName.trim()}>
-          <Icon name="check" size={15} /> Enregistrer
-        </button>
-        <button class="ghost sm" on:click={cancelSave}>Annuler</button>
-      </div>
-    {:else}
-      <button class="save" on:click={openNaming}>
-        <Icon name="plus" size={16} /> Enregistrer le réglage actuel
-      </button>
-    {/if}
   </div>
 </section>
 
@@ -809,81 +1256,199 @@
     background: var(--onbtn);
     transform: translateX(16px);
   }
-  .presets {
+  /* -- the equalizer's presets -------------------------------------------- */
+  .eq-card {
+    /* Semantic marks, not brand colours: the meter has to be readable on all
+       three themes, and "safe" must not be the cover's colour on Pochette.
+       Lemon on Encre, ink on Papier, the text colour on Pochette; the amber
+       and red are dark enough for Papier's cream card. */
+    --m-ok: var(--tx);
+    --m-warn: #f5b041;
+    --m-clip: #ff6b6b;
+  }
+  :global([data-theme="encre"]) .eq-card {
+    --m-ok: var(--ac);
+  }
+  :global([data-theme="papier"]) .eq-card {
+    --m-warn: #8a5200;
+    --m-clip: #b3261e;
+  }
+  .picker {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    margin: 2px 0 10px;
+  }
+  .pgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .pgroup-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 28px;
+  }
+  .pgroup-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  .pcount {
+    font-size: 0.66rem;
+    color: var(--text-dim);
+    background: var(--bg);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-variant-numeric: tabular-nums;
+  }
+  .padd {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--bg-hover);
+    color: var(--text-dim);
+  }
+  .padd:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+  }
+  .plist {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 236px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 2px;
+    margin: -2px;
+  }
+  .pitem {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 10px 0 12px;
+    border-radius: 10px;
+    border: 1px solid var(--bg-hover);
+    background: var(--bg);
+    color: var(--text);
+    text-align: left;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .pitem:hover {
+    border-color: var(--text-dim);
+  }
+  .pitem.active {
+    border-color: var(--ac-text);
+    background: color-mix(in srgb, var(--ac-text) 8%, var(--bg));
+  }
+  .pitem.active .pname {
+    color: var(--ac-text);
+  }
+  .pitem.picked:not(.active) {
+    border-style: dashed;
+    border-color: var(--text-dim);
+  }
+  .pname {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pspark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    height: 20px;
+    width: 52px;
+  }
+  .pspark i {
+    display: block;
+    flex: 1;
+    min-height: 2px;
+    border-radius: 1px;
+    background: var(--text-dim);
+  }
+  .pitem.active .pspark i {
+    background: var(--ac-text);
+  }
+  .pcheck {
+    flex: none;
+    display: flex;
+    color: var(--ac-text);
+  }
+  .pempty {
+    font-size: 0.8rem;
+    line-height: 1.4;
+    margin: 0;
+    padding: 10px 0;
+  }
+  .pstate {
+    min-height: 1.3em;
+    margin: 0 0 10px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--text-dim);
+  }
+  .pstate strong {
+    color: var(--text);
+  }
+  .pactions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 8px;
   }
-  .preset {
-    padding: 6px 12px;
+  .upd {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 40px;
+    padding: 0 16px;
     border-radius: 999px;
+    background: var(--ac);
+    color: var(--onac);
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .upd:disabled {
     background: var(--bg);
     border: 1px solid var(--bg-hover);
     color: var(--text-dim);
-    font-weight: 600;
-    font-size: 0.8rem;
+    cursor: default;
   }
-  .preset.sel {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  .mine {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .chip {
-    display: inline-flex;
-    align-items: stretch;
-    border-radius: 999px;
-    border: 1px solid var(--bg-hover);
-    background: var(--bg);
-    overflow: hidden;
-  }
-  .chip.sel {
-    border-color: var(--accent);
-  }
-  .chip-main {
+  .del {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 6px 8px 14px;
+    min-height: 40px;
+    padding: 0 12px;
+    border-radius: 999px;
     color: var(--text-dim);
     font-weight: 600;
-    font-size: 0.85rem;
-    max-width: 220px;
-  }
-  .chip.sel .chip-main {
-    color: var(--accent);
-  }
-  .chip-main:hover {
-    color: var(--text);
-  }
-  .cname {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .chip-x {
-    display: inline-flex;
-    align-items: center;
-    padding: 0 11px 0 7px;
-    color: var(--text-dim);
-  }
-  .chip-x:hover {
-    color: var(--accent-2);
-  }
-  .none {
     font-size: 0.82rem;
-    margin: 0 0 12px;
+  }
+  .del:hover {
+    color: var(--text);
   }
   .save {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 9px 15px;
+    min-height: 40px;
+    padding: 0 15px;
     border-radius: 999px;
     border: 1px dashed var(--bg-hover);
     color: var(--text-dim);
@@ -928,24 +1493,167 @@
   .ghost.sm:hover {
     color: var(--text);
   }
+  /* -- the live meter: peak, margin, limiter work, and the warning ---------- */
+  .meter-block {
+    margin-top: 4px;
+  }
+  .meter-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-bottom: 8px;
+  }
+  .meter-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .meter-read {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .meter-read .lit {
+    color: var(--m-warn);
+  }
+  /* Fixed slots: the numbers change five times a second, the line must not. */
+  .meter-read .mv {
+    display: inline-block;
+    min-width: 7.5ch;
+    font-variant-numeric: tabular-nums;
+  }
+  .meter-block.off .meter-read {
+    font-family: inherit;
+  }
+  .warn {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--m-warn) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--m-warn) 45%, transparent);
+  }
+  .warn.clip {
+    background: color-mix(in srgb, var(--m-clip) 13%, transparent);
+    border-color: color-mix(in srgb, var(--m-clip) 48%, transparent);
+  }
+  .warn-ico {
+    display: flex;
+    flex: none;
+    padding-top: 1px;
+    color: var(--m-warn);
+  }
+  .warn.clip .warn-ico {
+    color: var(--m-clip);
+  }
+  .warn-txt {
+    flex: 1 1 220px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+  .warn-txt strong {
+    font-size: 0.9rem;
+  }
+  .warn-btn {
+    flex: none;
+    margin-left: auto;
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--m-warn) 60%, var(--ln));
+    background: var(--bg);
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.8rem;
+  }
+  .warn.clip .warn-btn {
+    border-color: color-mix(in srgb, var(--m-clip) 60%, var(--ln));
+  }
+  .warn-btn:hover:not(:disabled) {
+    background: var(--bg-card);
+  }
+  .warn-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .sr-live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* -- the ten faders, each with its band's level above it ----------------- */
   .eq {
     display: flex;
     justify-content: space-between;
     gap: 6px;
     overflow-x: auto;
     padding: 4px 2px 0;
-    transition: opacity 0.15s ease;
-  }
-  .eq.dim {
-    opacity: 0.45;
   }
   .band {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex: 1;
-    min-width: 42px;
+    min-width: 44px;
+  }
+  .band-mid {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .lvl {
+    display: flex;
+    align-items: flex-end;
+    width: 12px;
+    height: 48px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 15%, transparent);
+  }
+  .lvl-fill {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    background: var(--m-ok);
+    transform: scaleY(var(--lvl, 0));
+    transform-origin: 50% 100%;
+    transition: transform 90ms linear, background-color 160ms ease;
+  }
+  .eq[data-risk="warn"] .lvl-fill {
+    background: var(--m-warn);
+  }
+  .eq[data-risk="clip"] .lvl-fill {
+    background: var(--m-clip);
   }
   .gain {
     font-size: 0.74rem;
@@ -957,6 +1665,10 @@
     font-size: 0.72rem;
     color: var(--text-dim);
   }
+  .eq.dim .gain,
+  .eq.dim input.vert {
+    opacity: 0.45;
+  }
   input.vert {
     writing-mode: vertical-lr;
     direction: rtl;
@@ -964,7 +1676,8 @@
     height: 170px;
     -webkit-appearance: none;
     appearance: none;
-    background: var(--bg-hover);
+    background: var(--bg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
     border-radius: 5px;
     cursor: pointer;
   }
@@ -994,26 +1707,75 @@
      stacked vertically. Page scroll (up/down) and fader drag (left/right)
      are now on perpendicular axes, so they never fight — `touch-action:
      pan-y` makes the browser hand vertical swipes to the page and horizontal
-     drags to the fader. */
+     drags to the fader. The band's meter becomes the thin line above its
+     fader, so the level and the slider share the same frequency label. */
   @media (max-width: 640px) {
+    .picker {
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    .plist {
+      flex-direction: row;
+      max-height: none;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-snap-type: x mandatory;
+      padding: 2px 2px 8px;
+      margin: -2px -2px 0;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+    }
+    .plist::-webkit-scrollbar {
+      display: none;
+    }
+    .pitem {
+      flex: 0 0 auto;
+      width: auto;
+      max-width: 74vw;
+      min-height: 44px;
+      padding: 0 14px;
+      scroll-snap-align: start;
+    }
+    .pspark {
+      display: none;
+    }
+    .pname {
+      flex: 0 1 auto;
+    }
     .eq {
       flex-direction: column;
       justify-content: flex-start;
-      gap: 6px;
+      gap: 4px;
       overflow-x: visible;
       padding: 4px 0 2px;
     }
     .band {
       flex-direction: row;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
       width: 100%;
       min-width: 0;
       /* The 26px thumbs draw outside the thin track's box, so give each row a
          generous height — otherwise adjacent thumbs sit on top of each other
          and the whole thing reads as a cramped grid. This is the breathing
          room that makes it feel considered rather than crammed. */
-      min-height: 44px;
+      min-height: 56px;
+    }
+    .band-mid {
+      flex: 1;
+      min-width: 0;
+      gap: 6px;
+      align-items: stretch;
+    }
+    .lvl {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+    }
+    .lvl-fill {
+      border-radius: 3px;
+      transform: scaleX(var(--lvl, 0));
+      transform-origin: 0 50%;
     }
     .freq {
       order: -1;
@@ -1034,10 +1796,30 @@
     input.vert {
       writing-mode: horizontal-tb;
       direction: ltr;
-      flex: 1;
-      width: auto;
+      width: 100%;
+      /* 6 px of visible track, 19 px of transparent hit area above and below:
+         the thumb is 26 px and the row must stay a 44 px target. The track is
+         drawn by the runnable-track pseudo-element so the padding stays empty
+         (the input's own background would paint a second line at its top). */
+      box-sizing: content-box;
       height: 6px;
+      padding: 19px 0;
+      background: transparent;
+      box-shadow: none;
+      border-radius: 0;
       touch-action: pan-y;
+    }
+    input.vert::-webkit-slider-runnable-track {
+      height: 6px;
+      border-radius: 3px;
+      background: var(--bg);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
+    }
+    input.vert::-moz-range-track {
+      height: 6px;
+      border-radius: 3px;
+      background: var(--bg);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
     }
     input.vert::-webkit-slider-thumb {
       width: 26px;
@@ -1047,10 +1829,31 @@
       width: 26px;
       height: 26px;
     }
+    .warn-btn {
+      flex: 1 1 100%;
+      margin-left: 0;
+      min-height: 44px;
+    }
   }
   @media (pointer: coarse) {
-    .seg-btn {
+    .seg-btn,
+    .padd,
+    .save,
+    .del,
+    .upd,
+    .warn-btn,
+    .naming input,
+    .naming button {
       min-height: 44px;
+    }
+    .padd {
+      width: 44px;
+      height: 44px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lvl-fill {
+      transition: none;
     }
   }
 </style>

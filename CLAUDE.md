@@ -128,9 +128,9 @@ Plans and studies: `docs/detachement-deezer.md`, `docs/multi-provider.md`, `todo
 
 ## Équipe d'agents (OpenCode)
 
-Neuf sous-agents sont définis dans `opencode.json` (prompts dans `.opencode/prompts/`). Invoque-les
-avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@qa`, `@devops`,
-`@batch`, ou laisse l'agent principal déléguer d'après leur description.
+Onze sous-agents sont définis dans `opencode.json` (prompts dans `.opencode/prompts/`). Invoque-les
+avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@android-playback`,
+`@data`, `@qa`, `@devops`, `@batch`, ou laisse l'agent principal déléguer d'après leur description.
 
 | Agent | Quand l'appeler |
 |---|---|
@@ -140,6 +140,8 @@ avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@qa`
 | `animation` | world, shader, skin, oscilloscope, projector, éco, render bench |
 | `security` | audit, auth, CSRF, SSRF, CSP, secrets, capabilities, Android, dépendances |
 | `android` | Kotlin, WebView, bridge, lecteur natif, offline, updater, login Deezer |
+| `android-playback` | titre suivant qui ne démarre pas en arrière-plan, file gelée, MediaSession/Doze, handoff écran éteint |
+| `data` | écoutes, goûts, styles parents, confiance de l'analyse, seuils de découverte, couverture |
 | `qa` | tests, benches, upgrade, CI rouge, mesures |
 | `devops` | Docker, compose, workflows, release, ffmpeg, multi-arch |
 | `batch` | tâche répétitive, mécanique, scriptable et vérifiable (renommage de masse, même édition sur une liste, refactor mécanique) |

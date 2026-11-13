@@ -115,6 +115,8 @@ async function main() {
   // transparent layout, 390x40 CSS px (times --pscale, default 3), over the
   // blurred cover, one shot per section stacked in a column.
   const strip = !!arg("strip");
+  // --light: the strip over Papier's cream scrim instead of Encre's dark one.
+  const light = !!arg("light");
 
   const { createServer } = await import("vite");
   const server = await createServer({
@@ -155,7 +157,7 @@ async function main() {
     const res = await run({
       world: "spectrum", genre, bpm, w: 390, h: 40, dpr: S, tier, palette, skin: false,
       shots: ["breakdown", "build", "impact", "drop", "dropOff"], cols: 1,
-      layout: "strip", backdrop: true, grain: true,
+      layout: "strip", backdrop: true, grain: true, light,
     });
     save("strip.png", res.sheet);
     if (res.errors?.length) console.log(res.errors.join("\n"));
@@ -169,7 +171,7 @@ async function main() {
     const t0 = Date.now();
     const r = { world };
     try {
-      const wide = await run({ world, genre, bpm, w, h, tier, palette, shots, skin, grain });
+      const wide = await run({ world, genre, bpm, w, h, tier, palette, shots, skin, grain, light });
       save(`${world}.png`, wide.sheet);
       r.wide = wide.frames;
       r.cost = wide.costMs;
@@ -177,7 +179,7 @@ async function main() {
       if (phone) {
         const ph = await run({
           world, genre, bpm, w: PHONE.w, h: PHONE.h, hole: phoneHole(), tier, palette,
-          shots: ["breakdown", "drop", "dropOff"], cols: 3, skin,
+          shots: ["breakdown", "drop", "dropOff"], cols: 3, skin, light,
         });
         save(`${world}-phone.png`, ph.sheet);
         r.phone = ph.frames;

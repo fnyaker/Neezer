@@ -7,11 +7,21 @@
 loves, at the distance from it they asked for.
 
 **The taste profile** (``profile``) is read from the database in a handful of
-grouped statements: every play counts (``log1p`` of the play count, faded by
-how long ago the track was last heard — a track played daily a year ago is not
-today's taste), every star counts more (a starred artist most of all), and the
-genres follow from the served verdicts, carried up the genre tree so that a
-person who plays frenchcore also leans, less, toward hardcore.
+grouped statements: the person's OWN ``listen_event`` log (ACT-R activation,
+``neezer/listening.py``: a listen weighs 1, a neutral change 0.5, a skip is
+kept apart), every star counts more (a starred track +2.5, album +3, artist
++5), and — only for the admin of an upgraded server, until 200 events of their
+own — the shared ``Track.play_count`` (``log1p``, faded by how long ago the
+track was last heard). The genres follow from the served verdicts, carried up
+the genre tree so that a person who plays frenchcore also leans, less, toward
+hardcore.
+
+**One person, one profile.** The shared ``Track.play_count`` is not anybody's
+history: it counts every account on the server, and a guest used to inherit the
+whole house's taste from it. It completes ONLY the admin's profile, and only
+until that account has ``LEGACY_UNTIL`` events of its own — the upgraded server
+whose only listener predates the log, and nobody else (the same rule
+``releases.listened_refs`` follows).
 
 **Candidates** each carry an estimated DISTANCE from that taste, 0 (what the
 person already plays) to 1 (as far from it as the library goes):
@@ -148,6 +158,16 @@ class Taste:
         self.artists = {}  # artist id -> weight
         self.albums = {}  # album id -> weight
         self.genres = {}  # served style -> weight (with the tree's ancestors)
+        # The RAW style weight behind `genres`, before the tree lift: what the
+        # Explorer's parent list needs (a leaf must climb to its parent, not be
+        # counted twice through an already-lifted ancestor). Keyed by tree node
+        # (or by the stored spelling when the tree does not know it); value is
+        # [weight, tracks, confidence_weight, confidence_sum].
+        self.style_stats = {}
+        self.style_nodes = {}  # raw key -> tree node, or None for an unknown style
+        self.style_total = 0.0  # weight of every weighted title, analysed or not
+        self.style_known = 0.0  # weight whose verdict is a node of the tree
+        self.style_unknown = 0.0  # weight whose verdict the tree does not know
         self.played = set()  # every track ever played
         self.starred_tracks = set()
         self.starred_artists = set()
@@ -187,7 +207,12 @@ def _normalise(weights):
 
 
 def profile(user, fresh=False) -> Taste:
-    key = getattr(user, "id", None)
+    # The database is part of the key: a test (or a process that swaps its
+    # database) must never read a taste built from another one's rows, even
+    # when both happen to use the same user id.
+    from .db import db
+
+    key = (getattr(user, "id", None), id(getattr(db, "obj", None)))
     if not fresh:
         with _cache_lock:
             hit = _cache.get(key)
@@ -238,15 +263,17 @@ def style_taste(user, styles):
     if not nodes:
         return profile(user)
     uid = getattr(user, "id", None)
-    key = (uid, tuple(nodes))
+    from .db import db
+
+    key = (id(getattr(db, "obj", None)), uid, tuple(nodes))
     hit = _style_profiles.get(key)
     if hit is not None and time.monotonic() - hit[0] < PROFILE_TTL:
         return hit[1]
     base = profile(user)
     t = Taste()
-    for field in ("played", "starred_tracks", "starred_artists", "starred_albums", "muted"):
+    for field in ("played", "starred_tracks", "starred_artists", "starred_albums", "muted",
+                  "history", "dislikes"):
         setattr(t, field, getattr(base, field))
-    t.history, t.dislikes = base.history, base.dislikes
     keep = set()
     ids = list(base.tracks)
     for i in range(0, len(ids), 500):
@@ -291,7 +318,9 @@ def invalidate(user=None):
         if user is None:
             _cache.clear()
         else:
-            _cache.pop(getattr(user, "id", user), None)
+            uid = getattr(user, "id", user)
+            for k in [k for k in _cache if k[0] == uid]:
+                _cache.pop(k, None)
 
 
 def _build(user) -> Taste:
@@ -312,16 +341,26 @@ def _build(user) -> Taste:
     _normalise(t.tracks)
     _normalise(t.artists)
     _normalise(t.albums)
-    # A server upgraded from before the log has only the shared counters: they
-    # complete the profile until the person's own history is long enough.
-    legacy = max(0.0, 1.0 - hist.events / LEGACY_UNTIL)
+    # A server upgraded from before the log has only the shared counters. They
+    # count EVERY account on the server, so only the admin's profile may use
+    # them — the upgraded single-owner server — and only until that account has
+    # enough events of its own. A guest's blank profile stays blank (one person,
+    # one profile); `releases.listened_refs` follows the same rule.
+    admin = bool(user is not None and getattr(user, "admin", False))
+    legacy = max(0.0, 1.0 - hist.events / LEGACY_UNTIL) if admin else 0.0
     if legacy > 0:
         lt, la, lal = {}, {}, {}
-        for tid, aid, alid, plays, last in _visible(
+        # Even the admin does not inherit the play counts of somebody else's
+        # private upload: the shared counters may be the house's, never a
+        # person's own files.
+        rows = _visible(
             Track.select(Track.id, Track.artist, Track.album, Track.play_count, Track.last_play)
             .where((Track.play_count > 0) | Track.last_play.is_null(False)),
             user,
-        ).tuples():
+        )
+        if user is not None:
+            rows = rows.where(Track.owner.is_null(True) | (Track.owner == user.id))
+        for tid, aid, alid, plays, last in rows.tuples():
             w = math.log1p(max(1, plays or 0)) * _fade(last, today)
             t.played.add(tid)
             lt[tid] = lt.get(tid, 0.0) + w
@@ -368,21 +407,44 @@ def _build(user) -> Taste:
     for tid in t.dislikes.tracks:
         t.tracks.pop(tid, None)
     # The genres of what is loved, in ONE statement: the analysis joined to the
-    # tracks that carry a weight (played, or starred by this person).
+    # tracks that carry a weight (played, or starred by this person). The same
+    # rows also keep the RAW style weights the Explorer's parent list needs.
     if t.tracks:
-        q = TrackAnalysis.select(TrackAnalysis.track, TrackAnalysis.style).where(
-            TrackAnalysis.style.is_null(False)
-        )
+        q = TrackAnalysis.select(
+            TrackAnalysis.track, TrackAnalysis.style, TrackAnalysis.style_confidence
+        ).where(TrackAnalysis.style.is_null(False))
         tree = genretree.get()
         weighted = list(t.tracks)
         rows = []
         for i in range(0, len(weighted), 500):
             rows += list(q.where(TrackAnalysis.track.in_(weighted[i : i + 500])).tuples())
-        for tid, style in rows:
+        for tid, style, conf in rows:
             w = t.tracks.get(tid)
             if not w:
                 continue
-            t.genres[style] = t.genres.get(style, 0.0) + w
+            raw = (style or "").strip()
+            if not raw:
+                continue
+            t.genres[raw] = t.genres.get(raw, 0.0) + w
+            node = tree.node(raw)
+            key = node or raw
+            entry = t.style_stats.get(key)
+            if entry is None:
+                entry = t.style_stats[key] = [0.0, 0, 0.0, 0.0]
+                t.style_nodes[key] = node
+            entry[0] += w
+            entry[1] += 1  # one analysis row per track: no double count
+            try:
+                c = float(conf or 0.0)
+            except (TypeError, ValueError):
+                c = 0.0
+            if c > 0.0:
+                entry[2] += w
+                entry[3] += w * c
+            if node is not None:
+                t.style_known += w
+            else:
+                t.style_unknown += w
         # A person who plays frenchcore also leans, less, toward hardcore.
         lifted = dict(t.genres)
         for style, w in t.genres.items():
@@ -394,6 +456,7 @@ def _build(user) -> Taste:
                     break
                 lifted[up] = lifted.get(up, 0.0) + w * firm * (0.5 ** hops)
         t.genres = lifted
+    t.style_total = sum(w for w in t.tracks.values() if w > 0)
     if t.artists:
         top = t.top_artists(400)
         for aid, name, dz in Artist.select(Artist.id, Artist.name, Artist.deezer_id).where(
@@ -405,6 +468,129 @@ def _build(user) -> Taste:
     for weights in (t.tracks, t.artists, t.albums, t.genres):
         _normalise(weights)
     return t
+
+
+# -- the Explorer's parent styles ---------------------------------------------------
+#
+# "What do I actually listen to?" cannot answer with a leaf: a person who plays
+# Boogie lives in Disco/funk, and a top ten made of `Boogie`, `Italo disco`,
+# `Nu disco` would be the same shelf split three ways. So the RAW style weights
+# (before `_build` lifts them) are each carried to their nearest MEANINGFUL
+# parent — a node with two children or more, an engine family, or a root —
+# merged, and only then ranked. A one-child chain of plain labels climbs past
+# itself to the first node that is a real shelf (or to the family).
+#
+# Nothing is invented: the weights exist only for titles the person played or
+# starred, and a style the tree does not know is kept under its own name rather
+# than dropped or mapped to a cousin.
+
+#: How many parent styles the Explorer shows, and how many the scale keeps.
+STYLES_TOP = 10
+STYLES_SCALE_MAX = 60
+#: A parent is meaningfully a parent with this many children...
+PARENT_CHILDREN = 2
+#: ...unless it is an engine family or a root, which stand on their own.
+
+
+def lift_style(tree, node):
+    """The nearest meaningful PARENT of ``node`` (see the note above).
+
+    ``node`` itself is kept when it already is one; else its firmest parent is
+    tried, and a one-child chain is climbed until it reaches a branching node, a
+    family or a root. ``None`` in, ``None`` out.
+    """
+    cur = node
+    seen = set()
+    for _ in range(16):
+        if cur is None or cur in seen:
+            return cur
+        seen.add(cur)
+        kids = tree.children.get(cur, ())
+        if kids and (len(kids) >= PARENT_CHILDREN or genretree.is_family(cur)):
+            return cur
+        parents = tree.parents.get(cur, ())
+        if not parents:
+            return cur
+        cur = sorted(parents, key=lambda p: (-p[1], p[0]))[0][0]
+    return cur
+
+
+def _family_name(tree, node):
+    """The engine family's display label for a node, or None."""
+    from .deezer.analysis import FAMILY_LABEL
+
+    fid = tree.family(node) if node in tree.nodes else None
+    if fid is None:
+        return None
+    return FAMILY_LABEL.get(fid, fid)
+
+
+def parent_styles(user, n=STYLES_TOP, taste=None):
+    """The ``n`` parent styles this person listens to most, with the scale.
+
+    Returns the Explorer's payload (``styles``, ``scale``, ``analysed``,
+    ``unknown``, ``tracks``, ``source``, ``generated``). An account with no
+    history or no analysed title gets an empty list and a ``source`` that says
+    which: a library style is never presented as the person's taste.
+    """
+    taste = taste if taste is not None else profile(user)
+    tree = genretree.get()
+    merged = {}
+
+    for key, (weight, count, conf_w, conf_sum) in taste.style_stats.items():
+        node = taste.style_nodes.get(key)
+        target = lift_style(tree, node) if node is not None else key
+        got = merged.get(target)
+        if got is None:
+            got = merged[target] = {
+                "weight": 0.0, "tracks": 0, "conf_w": 0.0, "conf_sum": 0.0,
+            }
+        got["weight"] += weight
+        got["tracks"] += count
+        got["conf_w"] += conf_w
+        got["conf_sum"] += conf_sum
+
+    top_weight = max((m["weight"] for m in merged.values()), default=0.0)
+    total = sum(m["weight"] for m in merged.values())
+    rows = []
+    for name, m in merged.items():
+        known = name in tree.nodes
+        parents = sorted(tree.parents.get(name, ()), key=lambda p: (-p[1], p[0]))
+        kids = tree.children.get(name, ())
+        rows.append({
+            "name": name,
+            "parent": parents[0][0] if parents else None,
+            "family": _family_name(tree, name) if known else None,
+            "tracks": m["tracks"],
+            "weight": round(m["weight"] / top_weight, 4) if top_weight > 0 else 0.0,
+            "confidence": round(m["conf_sum"] / m["conf_w"], 3) if m["conf_w"] > 0 else 0.0,
+            "leaf": (not known) or (not kids),
+            "children": len(kids) if known else 0,
+            "_raw": m["weight"],
+        })
+    rows.sort(key=lambda r: (-r["_raw"], -r["tracks"], r["name"]))
+    scale = [
+        {"name": r["name"], "weight": r["weight"],
+         "share": round(r["_raw"] / total, 4) if total > 0 else 0.0}
+        for r in rows[:STYLES_SCALE_MAX]
+    ]
+    try:
+        limit = max(0, min(int(n), STYLES_TOP))
+    except (TypeError, ValueError):
+        limit = STYLES_TOP
+    styles = rows[:limit]
+    return {
+        "styles": [{k: v for k, v in r.items() if k != "_raw"} for r in styles],
+        "scale": scale,
+        "analysed": round(
+            (taste.style_known + taste.style_unknown) / taste.style_total, 3
+        ) if taste.style_total > 0 else 0.0,
+        "unknown": round(taste.style_unknown / taste.style_total, 3)
+        if taste.style_total > 0 else 0.0,
+        "tracks": sum(r["tracks"] for r in styles),
+        "source": "history" if merged else ("unanalysed" if taste.style_total > 0 else "none"),
+        "generated": int(time.time()),
+    }
 
 
 # -- candidates ----------------------------------------------------------------------

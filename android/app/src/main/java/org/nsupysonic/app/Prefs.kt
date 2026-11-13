@@ -1,11 +1,14 @@
 package org.nsupysonic.app
 
 import android.content.Context
-import android.net.Uri
+import android.content.SharedPreferences
+import java.net.URL
 
 /** Server settings entered on first launch (host/port/SSL verification). */
-class Prefs(context: Context) {
-    private val sp = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+class Prefs internal constructor(private val sp: SharedPreferences) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    )
 
     var host: String
         get() = sp.getString("host", "") ?: ""
@@ -57,6 +60,20 @@ class Prefs(context: Context) {
         return originOf(url) == mine
     }
 
+    /**
+     * Whether an ALREADY PARSED URL — [protocol], [host] and [port] as
+     * `java.net.URL` reports them, `-1` meaning the scheme's default — is the
+     * configured server's origin.
+     *
+     * [Net] hands the parts of the one [URL] it is about to open, so the
+     * connection, the cookie and the certificate pin are decided on that same
+     * parse, never on a second parser that could name another host.
+     */
+    fun isServerOrigin(protocol: String?, host: String?, port: Int): Boolean {
+        val mine = serverOrigin() ?: return false
+        return originOf(protocol, host, port) == mine
+    }
+
     /** The pin that applies to [url]: the server's, never another host's. */
     fun pinForUrl(url: String?): String? =
         if (isServerUrl(url)) pinFor(serverOrigin()) else null
@@ -92,28 +109,38 @@ class Prefs(context: Context) {
         fun appUrlFor(host: String, port: String): String = buildBaseUrl(host, port) + "/app/"
 
         /**
-         * "scheme://host:port" with the port always spelled out (":443" and ""
-         * compare equal) and scheme/host lowercased, or null for anything that
-         * is not http(s) with a host. ONE definition of "same server", shared by
-         * the navigation guard, the shim, the JS bridge, the certificate pin
-         * and the native fetches, so they cannot drift apart.
+         * "scheme://host:port" from already-parsed parts, with the port always
+         * spelled out (":443" and the scheme's default compare equal) and the
+         * scheme/host lowercased, or null for anything that is not http(s)
+         * with a host. ONE normalization: [originOf] the string and
+         * [isServerOrigin] the parts both end here.
          */
-        fun originOf(url: String?): String? {
-            if (url.isNullOrEmpty()) return null
-            val u = try {
-                Uri.parse(url)
-            } catch (_: Exception) {
-                return null
-            }
-            val scheme = u.scheme?.lowercase() ?: return null
+        fun originOf(protocol: String?, host: String?, port: Int): String? {
+            val scheme = protocol?.lowercase() ?: return null
             val defaultPort = when (scheme) {
                 "https" -> 443
                 "http" -> 80
                 else -> return null
             }
-            val host = u.host?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
-            val port = if (u.port > 0) u.port else defaultPort
-            return "$scheme://$host:$port"
+            val cleanHost = host?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+            val actual = if (port > 0) port else defaultPort
+            return "$scheme://$cleanHost:$actual"
+        }
+
+        /**
+         * The configured origin from [originOf]. The URL is parsed with
+         * `java.net.URL`, the parser `HttpURLConnection` opens: one URL, one
+         * host, for the navigation guard, the shim, the JS bridge, the
+         * certificate pin and the native fetches.
+         */
+        fun originOf(url: String?): String? {
+            if (url.isNullOrEmpty()) return null
+            return try {
+                val parsed = URL(url)
+                originOf(parsed.protocol, parsed.host, parsed.port)
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 }

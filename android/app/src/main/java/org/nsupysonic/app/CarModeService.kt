@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -25,6 +26,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
+import kotlin.math.abs
 
 /**
  * The car mode: a foreground service that owns the overlay window and the
@@ -58,6 +60,9 @@ class CarModeService : Service(), CarHost {
         private const val EXTRA_MANUAL = "manual"
 
         const val NOTIFICATION_ID = 2
+
+        /** A start the OS refused from the background: one tap is the way back. */
+        private const val BLOCKED_NOTIFICATION_ID = 3
         private const val CHANNEL_ID = "car"
 
         private const val MAX_LAUNCH_ID = 200
@@ -65,17 +70,10 @@ class CarModeService : Service(), CarHost {
         // Quoted inside the expression below, so keep it under PlayerService.JS_MAX.
         private const val MAX_LAUNCH_PAYLOAD = 12 * 1024
 
-        private val LAUNCH_KINDS = setOf("flow", "playlist", "album", "artist", "mix", "track")
+        private val LAUNCH_KINDS = setOf("flow", "favorites", "playlist", "album", "artist", "mix", "track")
 
         private const val TICK_MS = 1_000L
         private const val REBIND_MS = 1_000L
-        /** The card's sides and its distance from the bottom (prototype). */
-        private const val BOTTOM_DP = 92
-        private const val SIDE_DP = 8
-        /** ULTRA is a lone 76 dp button, 14 dp from the right, 104 dp from the bottom. */
-        private const val ULTRA_SIZE_DP = 76
-        private const val ULTRA_END_DP = 14
-        private const val ULTRA_BOTTOM_DP = 104
         private const val BLUR_DP = 18
         private const val MAX_SPEED = 400.0
         private const val MAX_SEEK = 24.0 * 60 * 60
@@ -91,15 +89,139 @@ class CarModeService : Service(), CarHost {
             val intent = Intent(context, CarModeService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_MANUAL, true)
-            try {
+            if (startForeground(context, intent)) return
+            // A manual start from the tile/activity is normally allowed; if an
+            // OEM refused it anyway, the notification is the explicit door.
+        }
+
+        /**
+         * Start a foreground service, and report a refused background start
+         * instead of throwing into a BroadcastReceiver.
+         *
+         * Android 12+ throws `ForegroundServiceStartNotAllowedException` when
+         * the app is in the background (developer.android.com, "Restrictions on
+         * starting a foreground service from the background"). The exemptions
+         * this app relies on are the BOOT_COMPLETED / MY_PACKAGE_REPLACED
+         * broadcasts and the SYSTEM_ALERT_WINDOW grant it already requires. If
+         * an OEM refuses anyway, a plain `startService` is tried (allowed for
+         * the lifetime of a broadcast receiver) and the notification is the
+         * last, explicit fallback.
+         */
+        private fun startForeground(context: Context, intent: Intent): Boolean {
+            return try {
                 ContextCompat.startForegroundService(context, intent)
-            } catch (_: Exception) {
-                // Background FGS-start restriction: the tile/activity is the
-                // normal caller and is allowed; a failure leaves the mode off.
-                try {
-                    context.startService(intent)
-                } catch (_: Exception) {
+                true
+            } catch (e: Exception) {
+                // Android 12+ throws ForegroundServiceStartNotAllowedException
+                // for a start from the background; Android 14 adds the
+                // while-in-use SecurityException for a location/microphone
+                // type. Both are expected here and the notification is the
+                // explicit way back.
+                val retryable = isBackgroundStartRestriction(e) || e is SecurityException
+                val plain = if (retryable) {
+                    try {
+                        context.startService(
+                            Intent(context, CarModeService::class.java)
+                                .setAction(ACTION_START)
+                                .putExtra(EXTRA_MANUAL, false)
+                        )
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                } else {
+                    false
                 }
+                if (!plain) notifyStartBlocked(context)
+                plain
+            }
+        }
+
+        /** The Android 12+ background-start refusal, without a hard class link. */
+        private fun isBackgroundStartRestriction(e: Exception): Boolean =
+            Build.VERSION.SDK_INT >= 31 &&
+                e is android.app.ForegroundServiceStartNotAllowedException
+
+        /** The car service's notification channel (created once, idempotent). */
+        fun ensureChannel(context: Context) {
+            val nm = context.getSystemService(NotificationManager::class.java) ?: return
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                context.getString(R.string.car_channel),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                setShowBadge(false)
+                setSound(null, null)
+            }
+            nm.createNotificationChannel(channel)
+        }
+
+        /**
+         * The OS refused a background start: post the one notification the
+         * person can tap to start the mode (a notification action is an
+         * allowed foreground start), instead of a crash or a silent nothing.
+         */
+        private fun notifyStartBlocked(context: Context) {
+            try {
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(
+                        context, android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) return
+                if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+                ensureChannel(context)
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                val open = PendingIntent.getActivity(
+                    context, 10,
+                    Intent(context, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    flags
+                )
+                val start = PendingIntent.getForegroundService(
+                    context, 14,
+                    Intent(context, CarModeService::class.java)
+                        .setAction(ACTION_START)
+                        .putExtra(EXTRA_MANUAL, true),
+                    flags
+                )
+                val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_car)
+                    .setContentTitle(context.getString(R.string.car_start_blocked))
+                    .setContentText(context.getString(R.string.car_start_blocked_text))
+                    .setContentIntent(open)
+                    .setOngoing(false)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(true)
+                    .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .addAction(
+                        R.drawable.ic_car,
+                        context.getString(R.string.car_start_blocked_action),
+                        start
+                    )
+                    .build()
+                NotificationManagerCompat.from(context)
+                    .notify(BLOCKED_NOTIFICATION_ID, notification)
+            } catch (_: Exception) {
+                // Notifications denied: the tile and the settings screen remain.
+            }
+        }
+
+        /**
+         * The car settings screen is going away. `openSettingsNow` detached the
+         * card and suppressed it; this clears the suppression through the one
+         * ACTION_REFRESH path, so returning to a navigation app reattaches
+         * exactly once — including when the trigger had not seen a new event
+         * (coming back inside the grace).
+         */
+        fun settingsClosed(context: Context) {
+            if (!running) return
+            try {
+                context.startService(
+                    Intent(context, CarModeService::class.java).setAction(ACTION_REFRESH)
+                )
+            } catch (_: Exception) {
+                // The service died meanwhile: nothing is drawing.
             }
         }
 
@@ -119,21 +241,34 @@ class CarModeService : Service(), CarHost {
          * Running: ask the service to detach the overlay and launch the
          * activity itself, so no card is left above the settings eating
          * touches. Not running: nothing is drawing, launch directly.
+         *
+         * Returns whether the launch was accepted: the SPA bridge hands that
+         * boolean back to the page, so "nothing happened" is never a success.
          */
-        fun openSettings(context: Context) {
+        fun openSettings(context: Context): Boolean {
             if (!running) {
-                if (!launchSettingsActivity(context)) settingsMissingToast(context)
-                return
+                val opened = launchSettingsActivity(context)
+                if (!opened) settingsMissingToast(context)
+                return opened
             }
-            try {
-                context.startService(
+            return try {
+                val started = context.startService(
                     Intent(context, CarModeService::class.java).setAction(ACTION_OPEN_SETTINGS)
-                )
+                ) != null
+                if (started) {
+                    true
+                } else {
+                    val opened = launchSettingsActivity(context)
+                    if (!opened) settingsMissingToast(context)
+                    opened
+                }
             } catch (_: Exception) {
                 // The service died between isRunning() and here, or an OEM
                 // refuses background starts: there is no overlay left to
                 // detach, so opening the activity is still correct.
-                if (!launchSettingsActivity(context)) settingsMissingToast(context)
+                val opened = launchSettingsActivity(context)
+                if (!opened) settingsMissingToast(context)
+                opened
             }
         }
 
@@ -149,10 +284,16 @@ class CarModeService : Service(), CarHost {
         }
 
         private fun settingsMissingToast(context: Context) {
-            try {
-                Toast.makeText(context, R.string.car_settings_missing, Toast.LENGTH_SHORT).show()
-            } catch (_: Exception) {
+            val show = Runnable {
+                try {
+                    Toast.makeText(context, R.string.car_settings_missing, Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                }
             }
+            // The SPA bridge may call this from its own thread; a Toast needs
+            // a Looper, and the page already shows its own failure message.
+            if (Looper.myLooper() == Looper.getMainLooper()) show.run()
+            else Handler(Looper.getMainLooper()).post(show)
         }
 
         /**
@@ -179,12 +320,7 @@ class CarModeService : Service(), CarHost {
             val intent = Intent(context, CarModeService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_MANUAL, false)
-            return try {
-                ContextCompat.startForegroundService(context, intent)
-                true
-            } catch (_: Exception) {
-                false
-            }
+            return startForeground(context, intent)
         }
 
         private fun autoStartAllowed(context: Context): Boolean {
@@ -220,7 +356,6 @@ class CarModeService : Service(), CarHost {
 
     private var trigger: CarTrigger? = null
     private var triggerVisible = false
-    private var lastVisible = false
     private var manual = false
     private var dismissed = false
     /** The full-screen car settings is on top: never draw over it. */
@@ -228,6 +363,13 @@ class CarModeService : Service(), CarHost {
     private var moving = true
     private var speed = 0.0
     private var passenger = false
+
+    /** The navigation app in front, keyed position lookup (null = manual/BT). */
+    private var gpsPackage: String? = null
+    /** Where the window sits right now, in dp from the start edge and bottom. */
+    private var liveSlot: CarSlot? = null
+    /** A drag is in flight: a prefs echo must not reset the window. */
+    private var dragging = false
 
     private var foregrounded = false
     private var foregroundType = -1
@@ -246,8 +388,8 @@ class CarModeService : Service(), CarHost {
         }
 
     private val triggerListener = object : CarTrigger.Listener {
-        override fun onDrive(visible: Boolean, moving: Boolean, speedKmh: Double) {
-            main.post { handleDrive(visible, moving, speedKmh) }
+        override fun onDrive(state: DriveState) {
+            main.post { handleDrive(state) }
         }
     }
 
@@ -306,7 +448,7 @@ class CarModeService : Service(), CarHost {
         running = true
         carPrefs = CarPrefs(this)
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        createChannel()
+        ensureChannel(this)
         bindPlayer()
 
         // The settings screen writes the same "car" file; a trigger/opacity
@@ -319,7 +461,30 @@ class CarModeService : Service(), CarHost {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        when (intent?.action) {
+        if (intent == null) {
+            // START_STICKY brought us back after the OS killed the process:
+            // no manual start, no stale dismissal. The trigger's seed decides
+            // whether the card comes back, and the service keeps watching.
+            manual = false
+            dismissed = false
+            suppressOverlay = false
+            if (!goForeground()) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            syncTrigger()
+            bindPlayer()
+            if (!carPrefs.gpsTrigger && !carPrefs.bluetoothTrigger) {
+                // The process was killed after a manual start with no trigger
+                // configured: nothing can restore that card, so do not park a
+                // foreground notification that draws nothing.
+                stopEverything()
+                return START_NOT_STICKY
+            }
+            updateNotification()
+            return START_STICKY
+        }
+        when (intent.action) {
             ACTION_STOP -> {
                 // A startForegroundService caller owes Android a
                 // startForeground even when the first thing it does is stop.
@@ -357,8 +522,14 @@ class CarModeService : Service(), CarHost {
                 // Returning from the car settings: re-read the Bluetooth sink,
                 // the foreground GPS package, the speed permission.
                 trigger?.refresh()
-                if (!overlayAttached && !dismissed &&
-                    (manual || triggerVisible || trigger?.visible == true)
+                // ONE attach, through the same rule the trigger uses: the card
+                // is wanted, nothing suppresses it, and it is not already up.
+                if (CarVisibility.shouldAttach(
+                        visible = trigger?.visible == true,
+                        suppressed = suppressOverlay,
+                        dismissed = dismissed,
+                        attached = overlayAttached,
+                    )
                 ) attachOverlay()
                 overlay?.refreshStyle()
                 updateOverlayParams()
@@ -367,10 +538,10 @@ class CarModeService : Service(), CarHost {
                 if (!carPrefs.gpsTrigger && !carPrefs.bluetoothTrigger && !manual) {
                     stopEverything()
                 }
-                return START_NOT_STICKY
+                return START_STICKY
             }
             else -> {
-                manual = if (intent == null) false else intent.getBooleanExtra(EXTRA_MANUAL, true)
+                manual = intent.getBooleanExtra(EXTRA_MANUAL, true)
                 dismissed = false
                 suppressOverlay = false
                 if (!goForeground()) {
@@ -379,9 +550,14 @@ class CarModeService : Service(), CarHost {
                 }
                 syncTrigger()
                 bindPlayer()
-                if (manual) attachOverlay()
+                if (manual) {
+                    // The tile/settings start shows the card once. From the
+                    // first drive state the visibility rule takes over, so a
+                    // manual start can never park the card over a non-GPS app.
+                    attachOverlay()
+                }
                 updateNotification()
-                return START_NOT_STICKY
+                return START_STICKY
             }
         }
     }
@@ -391,17 +567,21 @@ class CarModeService : Service(), CarHost {
 
     // -- window -----------------------------------------------------------------
 
-    private fun buildParams(size: CarSize): WindowManager.LayoutParams {
+    private fun buildParams(size: CarSize, slot: CarSlot): WindowManager.LayoutParams {
         val ultra = size == CarSize.ULTRA
         // The window is EXACTLY the painted surface, never a full-width strip:
         // a transparent band inside the window still receives the touch and
         // eats the GPS app's taps underneath.
         val width = if (ultra) {
-            dp(ULTRA_SIZE_DP)
+            dpF(CarPlacement.ULTRA_SIZE_DP)
         } else {
-            (screenWidthPx() - dp(SIDE_DP * 2)).coerceAtLeast(dp(1))
+            (screenWidthPx() - dpF(CarPlacement.SIDE_DP * 2f)).coerceAtLeast(dp(1))
         }
-        val height = if (ultra) dp(ULTRA_SIZE_DP) else WindowManager.LayoutParams.WRAP_CONTENT
+        val height = if (ultra) {
+            dpF(CarPlacement.ULTRA_SIZE_DP)
+        } else {
+            WindowManager.LayoutParams.WRAP_CONTENT
+        }
         val params = WindowManager.LayoutParams(
             width,
             height,
@@ -412,12 +592,12 @@ class CarModeService : Service(), CarHost {
         )
         // With BOTTOM, y is the distance from the bottom edge (AOSP
         // Gravity.apply: bottom - height - y); with END, x is the distance
-        // from the right edge. So the prototype's 14 dp right / 104 dp bottom
-        // is x=14, y=104, not a margin inside the content.
+        // from the right edge. The slot is stored from the START edge for every
+        // size (so a rotation keeps it in the same place); applySlot converts
+        // it for ULTRA's END gravity.
         params.gravity =
             if (ultra) Gravity.BOTTOM or Gravity.END else Gravity.BOTTOM or Gravity.START
-        params.x = if (ultra) dp(ULTRA_END_DP) else dp(SIDE_DP)
-        params.y = if (ultra) dp(ULTRA_BOTTOM_DP) else dp(BOTTOM_DP)
+        applySlot(params, size, slot)
         // The window is fully opaque and its content does the transparency:
         // the 40–80 % setting only fills the card (CarOverlayRoot), so text
         // and the lemon play button stay at 100 %. Android 12's untrusted-touch
@@ -442,6 +622,81 @@ class CarModeService : Service(), CarHost {
         return params
     }
 
+    /** Put [slot] (dp, from the START edge / bottom) on [params]. */
+    private fun applySlot(
+        params: WindowManager.LayoutParams,
+        size: CarSize,
+        slot: CarSlot,
+    ) {
+        val startPx = dpF(slot.xDp)
+        params.y = dpF(slot.bottomDp)
+        params.x = if (size == CarSize.ULTRA) {
+            (screenWidthPx() - startPx - dpF(CarPlacement.ULTRA_SIZE_DP)).coerceAtLeast(0)
+        } else {
+            startPx
+        }
+    }
+
+    /**
+     * Where the window should be for the current navigation app and size: the
+     * person's saved slot, else the prototype's default, always clamped to the
+     * safe area of the CURRENT display (rotation, split screen, a stored slot
+     * from a wider phone).
+     */
+    private fun currentSlot(
+        size: CarSize,
+        windowHeightDp: Float = windowHeightDp(size),
+    ): CarSlot {
+        val base = carPrefs.position(gpsPackage, size)
+            ?: CarPlacement.defaults(size, screenWidthDp())
+        return CarPlacement.clamp(
+            slot = base,
+            windowWidthDp = CarPlacement.widthDp(size, screenWidthDp()),
+            windowHeightDp = windowHeightDp,
+            screenWidthDp = screenWidthDp(),
+            screenHeightDp = screenHeightDp(),
+            insets = screenInsetsDp(),
+        )
+    }
+
+    /** The measured card height in dp, 0 before the first layout. */
+    private fun windowHeightDp(size: CarSize): Float {
+        if (size == CarSize.ULTRA) return CarPlacement.ULTRA_SIZE_DP
+        val root = overlay ?: return 0f
+        if (root.height <= 0) return 0f
+        return root.height / density()
+    }
+
+    /**
+     * Re-clamp after a layout or a size change: the card's measured height is
+     * only known now, and a slot dragged high on a tall screen must not put the
+     * card under the status bar on a shorter one. No-op while a drag runs (the
+     * finger owns the position) and when the clamp changed nothing.
+     */
+    private fun enforceBounds() {
+        if (!overlayAttached || dragging) return
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { enforceBounds() }
+            return
+        }
+        val root = overlay ?: return
+        val heightDp = windowHeightDp(desiredSize)
+        if (heightDp <= 0f) return
+        val slot = currentSlot(desiredSize, heightDp)
+        val shown = liveSlot
+        if (shown != null && abs(shown.xDp - slot.xDp) < 0.5f &&
+            abs(shown.bottomDp - slot.bottomDp) < 0.5f
+        ) return
+        liveSlot = slot
+        val lp = root.layoutParams as? WindowManager.LayoutParams ?: return
+        applySlot(lp, desiredSize, slot)
+        try {
+            windowManager.updateViewLayout(root, lp)
+        } catch (_: Exception) {
+            detachOverlay()
+        }
+    }
+
     /**
      * Full display width in pixels. The overlay is laid out against the
      * display frame, not this service's (empty) window, so the card can use
@@ -455,6 +710,37 @@ class CarModeService : Service(), CarHost {
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealSize(size)
         return size.x
+    }
+
+    private fun screenHeightPx(): Int {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return windowManager.currentWindowMetrics.bounds.height()
+        }
+        val size = android.graphics.Point()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealSize(size)
+        return size.y
+    }
+
+    private fun density(): Float =
+        resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+
+    private fun screenWidthDp(): Float = screenWidthPx() / density()
+
+    private fun screenHeightDp(): Float = screenHeightPx() / density()
+
+    /** Status bar, navigation bar and cutout, in dp; 0 below Android 11. */
+    private fun screenInsetsDp(): CarInsets {
+        if (Build.VERSION.SDK_INT < 30) return CarInsets()
+        return try {
+            val insets = windowManager.currentWindowMetrics.windowInsets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            val d = density()
+            CarInsets(insets.left / d, insets.top / d, insets.right / d, insets.bottom / d)
+        } catch (_: Exception) {
+            CarInsets()
+        }
     }
 
     private fun attachOverlay() {
@@ -477,11 +763,14 @@ class CarModeService : Service(), CarHost {
         root.setSize(desiredSize)
         root.setScreen(desiredScreen)
         renderOverlay()
+        val slot = currentSlot(desiredSize)
+        liveSlot = slot
         try {
-            windowManager.addView(root, buildParams(desiredSize))
+            windowManager.addView(root, buildParams(desiredSize, slot))
             overlayAttached = true
             overlayBlockedToastShown = false
             startTicker()
+            root.post { enforceBounds() }
             updateNotification()
         } catch (_: Exception) {
             // Permission revoked between the check and addView, a stale token,
@@ -489,6 +778,7 @@ class CarModeService : Service(), CarHost {
             // notification carries the Réglages action.
             overlay = null
             overlayAttached = false
+            liveSlot = null
             stopTicker()
             updateNotification()
         }
@@ -509,18 +799,24 @@ class CarModeService : Service(), CarHost {
             }
         }
         overlayAttached = false
+        liveSlot = null
+        dragging = false
         updateNotification()
     }
 
     private fun updateOverlayParams() {
         if (!overlayAttached) return
+        if (dragging) return
         if (Looper.myLooper() != Looper.getMainLooper()) {
             main.post { updateOverlayParams() }
             return
         }
         val root = overlay ?: return
+        val slot = currentSlot(desiredSize)
+        liveSlot = slot
         try {
-            windowManager.updateViewLayout(root, buildParams(desiredSize))
+            windowManager.updateViewLayout(root, buildParams(desiredSize, slot))
+            root.post { enforceBounds() }
         } catch (_: Exception) {
             detachOverlay()
         }
@@ -543,36 +839,53 @@ class CarModeService : Service(), CarHost {
         trigger?.stop()
         trigger = null
         if (gps || bluetooth) {
-            lastVisible = false
             trigger = CarTrigger(this, carPrefs, triggerListener).also { it.start() }
         } else {
             triggerVisible = false
-            lastVisible = false
+            // No trigger watches anything: only an explicit manual start keeps
+            // the card (and the service) alive.
             if (!manual) detachOverlay()
         }
     }
 
-    private fun handleDrive(visible: Boolean, moving: Boolean, speedKmh: Double) {
-        this.moving = moving
-        this.speed = if (speedKmh.isFinite()) speedKmh.coerceIn(0.0, MAX_SPEED) else 0.0
-        val becameHidden = !visible && lastVisible
-        lastVisible = visible
-        if (visible) {
+    private fun handleDrive(state: DriveState) {
+        this.moving = state.moving
+        this.speed = if (state.speedKmh.isFinite()) {
+            state.speedKmh.coerceIn(0.0, MAX_SPEED)
+        } else {
+            0.0
+        }
+        val becameVisible = state.visible && !triggerVisible
+        val packageChanged = state.gpsPackage != gpsPackage
+        gpsPackage = state.gpsPackage
+        triggerVisible = state.visible
+        if (state.visible) {
             // A new arrival clears a manual close; a repeated "still visible"
             // tick does not reopen what the person deliberately closed.
-            if (!triggerVisible) {
+            if (becameVisible) {
                 dismissed = false
                 // The settings screen was on top and a navigation app is in
                 // front again: whatever Activity resumed (MainActivity sends
                 // ACTION_REFRESH too), the overlay may come back now.
                 suppressOverlay = false
             }
-            triggerVisible = true
-            if (!suppressOverlay && !dismissed && !overlayAttached) attachOverlay()
-        } else if (becameHidden) {
-            triggerVisible = false
+            if (!suppressOverlay && !dismissed) {
+                if (!overlayAttached) {
+                    attachOverlay()
+                } else if (packageChanged) {
+                    // Maps → Waze: the new app's own saved place, live.
+                    updateOverlayParams()
+                }
+            }
+        } else if (CarVisibility.shouldDetach(state.decided, state.visible, overlayAttached)) {
+            // THE rule: no configured navigation app is in front, no card —
+            // `manual` gave it one showing, not a permanent home.
             passenger = false
-            if (!manual) detachOverlay()
+            detachOverlay()
+        } else if (!state.decided && packageChanged && overlayAttached) {
+            // The first state of a new trigger has no answer yet: leave the
+            // manual card where it is until the seed comes back.
+            updateOverlayParams()
         }
         if (overlayAttached) renderOverlay()
         updateNotification()
@@ -616,19 +929,6 @@ class CarModeService : Service(), CarHost {
     }
 
     // -- notification ------------------------------------------------------------
-
-    private fun createChannel() {
-        val nm = getSystemService(NotificationManager::class.java) ?: return
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            getString(R.string.car_channel),
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            setShowBadge(false)
-            setSound(null, null)
-        }
-        nm.createNotificationChannel(channel)
-    }
 
     /**
      * The foreground type this service wants right now.
@@ -878,7 +1178,12 @@ class CarModeService : Service(), CarHost {
             desiredSize = size
             if (size == CarSize.ULTRA) desiredScreen = CarScreen.PLAYER
             overlay?.setSize(size)
-            if (overlayAttached) updateOverlayParams()
+            if (overlayAttached) {
+                // A new size has its own saved slot (and its own measured
+                // height): re-clamp after the layout, not against the old one.
+                updateOverlayParams()
+                overlay?.post { enforceBounds() }
+            }
         }
     }
 
@@ -892,12 +1197,56 @@ class CarModeService : Service(), CarHost {
     override fun closeOverlay() {
         runMain {
             manual = false
-            // Keep triggerVisible/lastVisible as they are: the next callback
-            // is a repeat of "still visible", which must not reopen what was
-            // just closed. A real leave-and-return resets `dismissed`.
+            // Keep triggerVisible as it is: the next callback is a repeat of
+            // "still visible", which must not reopen what was just closed. A
+            // real leave-and-return resets `dismissed`.
             dismissed = true
             suppressOverlay = false
             detachOverlay()
+        }
+    }
+
+    /**
+     * Live drag from the card's move handle: pixels since the last call. The
+     * slot stays in dp (start edge / bottom), is clamped to the safe area
+     * before every window update, and is persisted on [endOverlayMove] for
+     * THIS navigation app and size only.
+     */
+    override fun moveOverlayBy(dxPx: Int, dyPx: Int) {
+        runMain {
+            if (!overlayAttached) return@runMain
+            val root = overlay ?: return@runMain
+            val lp = root.layoutParams as? WindowManager.LayoutParams ?: return@runMain
+            val base = liveSlot ?: currentSlot(desiredSize)
+            val d = density()
+            dragging = true
+            val heightDp = windowHeightDp(desiredSize)
+            val moved = CarPlacement.clamp(
+                slot = CarSlot(base.xDp + dxPx / d, base.bottomDp - dyPx / d),
+                windowWidthDp = CarPlacement.widthDp(desiredSize, screenWidthDp()),
+                windowHeightDp = heightDp,
+                screenWidthDp = screenWidthDp(),
+                screenHeightDp = screenHeightDp(),
+                insets = screenInsetsDp(),
+            )
+            liveSlot = moved
+            applySlot(lp, desiredSize, moved)
+            try {
+                windowManager.updateViewLayout(root, lp)
+            } catch (_: Exception) {
+                detachOverlay()
+            }
+        }
+    }
+
+    override fun endOverlayMove() {
+        runMain {
+            if (!dragging) return@runMain
+            dragging = false
+            val slot = liveSlot ?: return@runMain
+            carPrefs.setPosition(gpsPackage, desiredSize, slot)
+            // The preference listener re-applies it (and re-clamps after the
+            // rotation/size change); write once, no second update here.
         }
     }
 
@@ -932,13 +1281,25 @@ class CarModeService : Service(), CarHost {
                     if (answered) return@answer
                     answered = true
                     if (!ok) {
-                        toast(R.string.car_no_player)
+                        toast(
+                            if (kind == "favorites") R.string.car_favorites_launch_failed
+                            else R.string.car_no_player
+                        )
                         return@answer
                     }
                     desiredScreen = CarScreen.PLAYER
                     overlay?.setScreen(CarScreen.PLAYER)
                     // One toast, worded for what was launched: the playlist
                     // panel no longer adds its own "Playlist lancée".
+                    //
+                    // "favorites" is asynchronous on the page (it fetches
+                    // /api/me/favorites before it has a queue), so `true` here
+                    // only means "accepted, loading". The PAGE owns that
+                    // wording — "Chargement des favoris…" then "Lecture des
+                    // favoris", or the honest failure — and the service stays
+                    // silent, so the person never gets "Playlist lancée" for a
+                    // launch that had not happened yet (or for an empty list).
+                    if (kind == "favorites") return@answer
                     toast(
                         if (kind == "playlist") {
                             getString(R.string.car_playlist_launched, label)
@@ -1005,8 +1366,11 @@ class CarModeService : Service(), CarHost {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         if (!overlayAttached) return
+        // New display bounds/insets: the stored slot is re-clamped (a card
+        // dragged to the far right of a wide phone stays reachable).
         overlay?.refreshStyle()
         updateOverlayParams()
+        overlay?.post { enforceBounds() }
         renderOverlay()
     }
 
@@ -1077,4 +1441,6 @@ class CarModeService : Service(), CarHost {
     private fun toast(resId: Int) = toast(getString(resId))
 
     private fun dp(value: Int): Int = CarStyle.dp(this, value.toFloat())
+
+    private fun dpF(value: Float): Int = CarStyle.dp(this, value)
 }

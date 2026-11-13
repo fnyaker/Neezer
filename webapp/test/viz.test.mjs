@@ -453,6 +453,32 @@ test("the canvas scenes survive every tier, aspect and artwork, at any frame", (
   }
 });
 
+test("the canvas bars draw the Papier ink row, and hold still under reduced motion", () => {
+  // The fallback is what a device with no WebGL2 gets, and on Papier its strip
+  // must be ink on the cream scrim. The geometry is the same row: 24 thick
+  // beads at 390 px, the count the GL driver also decides.
+  const preset = tierPreset("high");
+  const scene = makeScene("bars", { layout: "strip", light: true, reducedMotion: true });
+  scene.resize(390, 44, preset);
+  assert.equal(scene.bars, 24, `the canvas row drew ${scene.bars} beads`);
+  const pal = createPalette("neon");
+  const g = recorder(390, 44);
+  const dt = 1 / 60;
+  for (let i = 0; i < 60; i++) {
+    const f = makeFrame(i * dt);
+    pal.update(f, dt);
+    scene.update(f, dt);
+    scene.draw(g, 390, 44, pal.out);
+  }
+  assert.ok(g.ink.length > 100, `the ink row drew almost nothing (${g.ink.length})`);
+  // The ink path and the light path are the same scene: switching the theme
+  // mid-play must not rebuild it or change the count.
+  scene.setOptions({ light: false });
+  scene.draw(g, 390, 44, pal.out);
+  assert.equal(scene.bars, 24);
+  scene.dispose();
+});
+
 test("the scope fills a 16:9 frame and keeps off the artwork", () => {
   const w = 1920;
   const h = 1080;
@@ -728,6 +754,46 @@ test("the scene loader hands back the right KIND of scene, on demand", async () 
   assert.ok("bars" in fbBars, "every other mode falls back to the bars");
   fbScope.dispose();
   fbBars.dispose();
+});
+
+test("the spectrum's band count is bounded, stable and pitches with the screen", async () => {
+  // The Sillon row is one bead per 16 CSS px in the strip and one per 20.5 full
+  // screen, under the tier's ceiling: a thicker row than the old one per 7 px,
+  // a constant physical pitch on any display, and a count that only changes
+  // when the window does. Measured here on the driver, which is the only place
+  // the count is decided.
+  const def = (await import("../src/lib/viz/worlds/spectrum.js")).default;
+  const count = (layout, width, tier = "high") => {
+    const state = new Float32Array(8);
+    const driver = def.create({
+      preset: tierPreset(tier),
+      state,
+      flash() {},
+      params: { ...def.params },
+      opts: { layout },
+    });
+    const height = layout === "strip" ? 40 : 360;
+    driver.step(
+      1 / 60,
+      { ease: (v) => v, stamp: { drop: -1 } },
+      { width, height, aspect: width / height, spec: new Float32Array(128) }
+    );
+    return state[3];
+  };
+  for (const tier of TIERS) {
+    for (const [layout, width] of [["strip", 390], ["strip", 520], ["full", 640], ["full", 1440]]) {
+      const n = count(layout, width, tier);
+      assert.ok(n >= 18 && n <= tierPreset(tier).bars, `${tier} ${layout} ${width}: ${n} bands`);
+      assert.equal(n, count(layout, width, tier), `${tier} ${layout} ${width}: the count moved on its own`);
+    }
+  }
+  // The player's 390 px strip: 24 thick beads (the old row had 55 thin ones).
+  assert.equal(count("strip", 390), 24);
+  assert.equal(count("strip", 520), 33);
+  assert.equal(count("full", 640), 31);
+  assert.equal(count("full", 1440), 70);
+  // A small device draws fewer beads, not thinner ones: the low tier caps it.
+  assert.equal(count("full", 1440, "low"), 40);
 });
 
 test("every world in the loader is in the catalogue, and the reverse", async () => {

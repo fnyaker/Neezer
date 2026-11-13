@@ -59,6 +59,19 @@ export const NATIVE_NEXT_BRIDGE = 7;
 // ...and the one that keeps the list while visible and owns the transitions in
 // the background (the trimmed end included).
 export const NATIVE_OWN_BRIDGE = 8;
+// ...and the one that can hold a long list, repeat one/all, and ask the page
+// for more when it runs low (bridge 10). Before it, the page sends the same
+// ten entries it always did: a longer list would overflow MAX_AUDIO_CMD and
+// be dropped whole by an older APK.
+export const NATIVE_LONG_NEXT = 10;
+// The native side drops a command over MAX_AUDIO_CMD (128 KiB on bridge 10).
+// Keep a margin for the JSON wrapper and UTF-8: 200 compact entries fit.
+const MAX_NEXT_CHARS = 120 * 1024;
+// A burst of native advances (the page was frozen) is coalesced into one
+// nsadvance: loading each intermediate track would throw the page's queue
+// behind the app. Long enough to cover one evaluateJavascript batch, short
+// enough to be invisible to a listener.
+const ADVANCE_COALESCE_MS = 25;
 
 // A reading of the position that goes back by less than this is taken for the
 // tick arriving a little behind the interpolation, not for a move.
@@ -84,6 +97,14 @@ function releaseAllNative(e) {
 function receive(id, s) {
   const el = registry.get(id);
   if (el && s && typeof s === "object") el._onState(s);
+}
+
+// The app is low on what follows: bridge 10 asks the page to re-name the list.
+// A frozen page queues the call and answers when it wakes; one that is only
+// throttled answers at once. Absent on an older APK (it never calls this).
+function receiveNeedNext(id) {
+  const el = registry.get(+id);
+  if (el) el._needNext();
 }
 
 function bridge() {
@@ -274,6 +295,7 @@ export class NativeAudioElement extends EventTarget {
     const id = b.naCreate(PAGE);
     if (typeof window !== "undefined") {
       if (window.__nsAudio !== receive) window.__nsAudio = receive;
+      if (window.__nsNeedNext !== receiveNeedNext) window.__nsNeedNext = receiveNeedNext;
       // Leaving the page (a reload, an update) stops what it was playing.
       if (!pageHideHooked && typeof window.addEventListener === "function") {
         pageHideHooked = true;
@@ -306,10 +328,12 @@ export class NativeAudioElement extends EventTarget {
     this._advKey = ""; // the key of the track the app went on to by itself
     this._advPending = false; // ...which the page has not taken over yet
     this._advFired = false;
+    this._advTimer = null; // coalesces a burst of advances into one nsadvance
     this._clear();
   }
 
   _clear() {
+    this._clearAdvanceTimer();
     this._t = 0;
     this._at = now();
     this._lastOut = 0;
@@ -351,6 +375,19 @@ export class NativeAudioElement extends EventTarget {
     });
   }
 
+  _clearAdvanceTimer() {
+    if (this._advTimer) {
+      clearTimeout(this._advTimer);
+      this._advTimer = null;
+    }
+  }
+
+  /** The app asked for more tracks (bridge 10): Player.svelte re-names the list. */
+  _needNext() {
+    if (this._released) return;
+    this.dispatchEvent(new Event("nsneednext"));
+  }
+
   _settlePlays(err) {
     const p = this._plays;
     this._plays = [];
@@ -385,12 +422,20 @@ export class NativeAudioElement extends EventTarget {
       this._seeking = false;
       this._lastOut = 0;
       this._advFired = true;
-      // Player.svelte moves its queue on now; it takes the source over (adopt)
-      // once this state has been read, before the next one arrives.
-      this._fire("nsadvance");
+      // A page frozen through several advances hears them in a burst: keep the
+      // LAST key and fire one nsadvance, not one per intermediate track.
+      this._clearAdvanceTimer();
+      this._advTimer = setTimeout(() => {
+        this._advTimer = null;
+        if (this._advPending) this._fire("nsadvance");
+      }, ADVANCE_COALESCE_MS);
     }
     if (typeof s.sc === "boolean") this._chase = s.sc;
-    if (typeof s.bg === "boolean") this._appBg = s.bg;
+    if (typeof s.bg === "boolean") {
+      const wasBg = this._appBg;
+      this._appBg = s.bg;
+      if (wasBg !== this._appBg) this._fire(this._appBg ? "nsbackground" : "nsforeground");
+    }
     const prevSt = this._st;
     const prevD = this._d;
     const prevBuf = this._buf;
@@ -480,6 +525,16 @@ export class NativeAudioElement extends EventTarget {
     }
   }
 
+  /** Whether the app accepts a long list, refills and repeat flags (bridge 10). */
+  get longNext() {
+    if (!this.canChain) return false;
+    try {
+      return this._b.bridgeVersion() >= NATIVE_LONG_NEXT;
+    } catch {
+      return false;
+    }
+  }
+
   /** Whether the app's activity is stopped (screen off, another app), as its last state said. */
   get appInBackground() {
     return !!this._appBg && this.ownsBackground;
@@ -490,23 +545,40 @@ export class NativeAudioElement extends EventTarget {
    * `[{url, at, e, v, k, meta}]` (`at` where it starts, `e` where its audio
    * ends — 0 for the file's end —, `v` its volume, `k` its key, `meta` what the
    * notification shows); empty for none. `end` is where the CURRENT track's
-   * audio ends (0: its file's end).
+   * audio ends (0: its file's end). `rep` is "off", "one" or "all" (bridge 10).
+   *
+   * `force` re-sends an identical list: the app asked for more because it is
+   * low, even when the page's own signature has not changed.
    */
-  setNext(list, end = 0) {
+  setNext(list, end = 0, rep = "off", force = false) {
     if (!this.canChain) return;
     const own = this.ownsBackground;
-    const q = (Array.isArray(list) ? list : [])
+    const long = this.longNext;
+    let q = (Array.isArray(list) ? list : [])
       .filter((n) => n && n.url)
       .map((n) => {
         const o = { url: n.url, at: +n.at || 0, v: +n.v || 0, k: String(n.k || ""), meta: n.meta || null };
         if (own) o.e = +n.e > 0 ? +n.e : 0;
         return o;
       });
+    // An old APK drops a command over MAX_AUDIO_CMD whole: never hand it a
+    // list longer than the ten entries it knows how to follow.
+    if (!long && q.length > 10) q = q.slice(0, 10);
     const cut = own && +end > 0 ? +end : 0;
-    const msg = q.length ? JSON.stringify(q) + "|" + cut : "";
-    if (msg === this._nextSent) return;
+    const body = { q };
+    if (own) body.end = cut;
+    if (long) body.rep = rep === "one" || rep === "all" ? rep : "off";
+    let msg = JSON.stringify(body);
+    // Bridge 10 accepts up to 120 KiB of command; trim the tail if a queue of
+    // very long titles would cross it (the app simply keeps the shorter list).
+    while (msg.length > MAX_NEXT_CHARS && body.q.length) {
+      body.q.pop();
+      if (body.q.length === 0) delete body.end;
+      msg = JSON.stringify(body);
+    }
+    if (msg === this._nextSent && !force) return;
     this._nextSent = msg;
-    this._send("next", own ? { q, end: cut } : { q });
+    this._send("next", body);
   }
 
   /** The key of the track the app went on to and the page has not taken over, or "". */
@@ -520,6 +592,7 @@ export class NativeAudioElement extends EventTarget {
    */
   adopt(key) {
     if (!this._advPending || key !== this._advKey) return false;
+    this._clearAdvanceTimer();
     this._advPending = false;
     this._advFired = false;
     this._dirty = false;
@@ -539,6 +612,7 @@ export class NativeAudioElement extends EventTarget {
 
   /** The page will not take it over (it loads a source of its own instead). */
   dropAdvance() {
+    this._clearAdvanceTimer();
     this._advPending = false;
     this._advFired = false;
   }
@@ -773,6 +847,7 @@ export class NativeAudioElement extends EventTarget {
   /** Let the native player go. The element is dead afterwards. */
   release() {
     if (this._released) return;
+    this._clearAdvanceTimer();
     this._send("release");
     this._released = true;
     registry.delete(this._id);

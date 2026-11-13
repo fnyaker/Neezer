@@ -11,8 +11,9 @@
 // meanwhile — nothing it is sent is delivered — catches up when it wakes), the
 // same with the page only throttled and the crossfade and trim on (bridge 8:
 // the app holds the list before the screen locks and cuts each song itself;
-// `--old` runs that scenario as bridge 7), a seek in a first-play stream with
-// no length, and the Réglages card at the widths it lives in.
+// `--old` runs that scenario as bridge 7), bridge 10's long list through 36
+// ends with the page frozen and its one refill request, a seek in a first-play
+// stream with no length, and the Réglages card at the widths it lives in.
 //
 //   npm run build && node test/native/run.mjs [--shots <dir>] [--old]
 import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
@@ -44,7 +45,14 @@ function fakeApp() {
   const DELAY = 15; // binder + evaluateJavascript
   const slots = new Map();
   let next = 1;
-  window.__fake = { cmds: [], made: 0, released: 0, slots, frozen: false, held: [], lastPlayed: 0, bg: false, throttled: false, advAt: [] };
+  window.__fake = { cmds: [], made: 0, released: 0, slots, frozen: false, held: [], lastPlayed: 0, bg: false, throttled: false, advAt: [], needCalls: 0, needsHeld: [], nextBytes: 0 };
+  // The bench's queue can be longer than the twelve audio files the perf
+  // server archives; a made-up stream URL still names a distinct track for
+  // the page, but the real <audio> behind the stand-in must play a file.
+  const playable = (u) => {
+    if (!u.includes("/api/stream/x")) return u;
+    return window.__fake.validUrl || u;
+  };
   // A frozen page runs nothing it is sent: the messages wait, in order, for it to wake.
   const deliver = (id, s) => window.__nsAudio && window.__nsAudio(id, s);
   const emit = (id, s) =>
@@ -66,20 +74,32 @@ function fakeApp() {
     window.__fake.throttled = false;
     for (const [id, s] of window.__fake.held.splice(0)) deliver(id, s);
     for (const f of parked.splice(0)) f();
+    // The app's refill request waited in the renderer queue while frozen: let
+    // the page's nsadvance coalescer and adopt run first (25 ms), then deliver.
+    const needs = window.__fake.needsHeld.splice(0);
+    if (needs.length) setTimeout(() => {
+      for (const id of needs) if (window.__nsNeedNext) window.__nsNeedNext(id);
+    }, 120);
   };
   // MainActivity.onStop / onStart: the app's players learn it and say it.
   window.__fake.setBg = (bg) => {
     window.__fake.bg = bg;
     for (const sl of slots.values()) sl.send(null);
+    // MainActivity.onStop/onStart: the page names the long list while it can.
+    try {
+      if (bg && window.__nsAppBackground) window.__nsAppBackground();
+      else if (!bg && window.__nsAppForeground) window.__nsAppForeground();
+    } catch (_) {
+      /* the page hook is optional */
+    }
   };
   // The screen: a hidden page, as the WebView behind a locked phone is.
-  window.__hidden = false;
-  Object.defineProperty(document, "visibilityState", { get: () => (window.__hidden ? "hidden" : "visible") });
+  window.__hidden = false;  Object.defineProperty(document, "visibilityState", { get: () => (window.__hidden ? "hidden" : "visible") });
   Object.defineProperty(document, "hidden", { get: () => window.__hidden });
   function slot(id) {
     const el = new Real();
     el.preload = "auto";
-    const sl = { id, el, c: 0, item: false, prepared: false, pwr: false, seek: false, ended: false, tick: null, next: [], key: "", url: "" };
+    const sl = { id, el, c: 0, item: false, prepared: false, pwr: false, seek: false, ended: false, tick: null, next: [], key: "", url: "", rep: "off", lastNeedAt: 0 };
     // A first play: generated as it is sent, no seek map (NativeAudio.kt holds the seek).
     const unseekable = (sl.unseekable = () => localStorage.getItem("__unseekable") === "1" && !sl.whole);
     const st = () => {
@@ -118,7 +138,20 @@ function fakeApp() {
     });
     // NativeAudio.kt#followsList: bridge 8 follows the list only while the activity is stopped.
     const follows = () =>
-      sl.next.length && sl.id === window.__fake.lastPlayed && sl.pwr && (version() < 8 || window.__fake.bg);
+      (sl.next.length || (version() >= 10 && sl.rep === "one")) &&
+      sl.id === window.__fake.lastPlayed && sl.pwr && (version() < 8 || window.__fake.bg);
+    // NativeAudio.kt#maybeNeedNext: bridge 10 asks the page when the list is
+    // low while the activity is stopped, at most once every 30 s. A frozen
+    // page queues the call; the bench holds it until thaw.
+    const maybeNeed = () => {
+      if (version() < 10 || !window.__fake.bg || sl.next.length > 4) return;
+      const now = Date.now();
+      if (now - sl.lastNeedAt < 30000) return;
+      sl.lastNeedAt = now;
+      window.__fake.needCalls++;
+      if (window.__fake.frozen) window.__fake.needsHeld.push(id);
+      else if (window.__nsNeedNext) window.__nsNeedNext(id);
+    };
     // NativeAudio.kt#advance: on to the next one, by itself.
     const advance = () => {
       const n = sl.next[0];
@@ -128,19 +161,28 @@ function fakeApp() {
       sl.key = n.k || "-";
       sl.url = n.url;
       window.__fake.advanced = (window.__fake.advanced || 0) + 1;
-      el.src = n.url;
+      if (!window.__fake.validUrl) window.__fake.validUrl = n.url;
+      el.src = playable(n.url);
       el.volume = n.v;
       el.load();
       if (n.at > 0) el.addEventListener("loadedmetadata", () => (el.currentTime = n.at), { once: true });
       el.play().catch(() => {});
       lastSt = 2;
       sl.send("adv");
+      maybeNeed();
     };
     sl.checkTrim = () => {
       if (version() >= 8 && sl.end > 0 && follows() && st() === 3 && el.currentTime >= sl.end - 0.015) advance();
     };
     el.addEventListener("ended", () => {
-      if (follows()) return advance();
+      if (follows()) {
+        if (sl.next.length) return advance();
+        // bridge 10 repeat one: the app loops the current source itself.
+        sl.send("adv");
+        el.currentTime = 0;
+        el.play().catch(() => {});
+        return;
+      }
       sl.ended = true;
       onChange();
     });
@@ -155,7 +197,17 @@ function fakeApp() {
     el.addEventListener("error", () => emit(id, { c: sl.c, ev: "error", code: 2, msg: "fake" }));
     return sl;
   }
-  // The APK under test: bridge 4 (the player alone) unless the bench says 6 or 7.
+  // Fast-forward the sounding slot to its end, as if LEN seconds had passed:
+  // the bench's native side is outside the page's frozen timers, exactly like
+  // ExoPlayer reaching the end while the page runs nothing.
+  window.__fake.endNow = () => {
+    const sl = slots.get(window.__fake.lastPlayed) ||
+      [...slots.values()].find((s) => !s.el.paused);
+    if (!sl || sl.el.paused) return false;
+    sl.el.dispatchEvent(new Event("ended"));
+    return true;
+  };
+  // The APK under test: bridge 4 (the player alone) unless the bench says 6, 7, 8 or 10.
   const version = () => +(localStorage.getItem("__bridge") || 4);
   // The player itself breaking (the audio output refused, as ExoPlayer reports it).
   window.__fake.fail = () => {
@@ -193,7 +245,9 @@ function fakeApp() {
           case "next":
             sl.next = o.q || [];
             sl.end = +o.end || 0;
+            sl.rep = o.rep || "off";
             sl.lists = (sl.lists || 0) + 1;
+            window.__fake.nextBytes = Math.max(window.__fake.nextBytes, json.length);
             break;
           case "src":
             sl.srcs = (sl.srcs || 0) + 1;
@@ -208,7 +262,8 @@ function fakeApp() {
             sl.item = true;
             sl.pwr = false;
             el.pause();
-            el.src = o.url;
+            if (!window.__fake.validUrl) window.__fake.validUrl = o.url;
+            el.src = playable(o.url);
             el.volume = o.v;
             el.playbackRate = o.r;
             el.load();
@@ -551,6 +606,93 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
   }
   check(both2 >= 3 && w4.title === "Song 4", "visible again: the page crossfades into Song 4 itself",
     `${(both2 * 0.2).toFixed(1)} s overlap, now ${w4.title}`);
+  await ctx.close();
+}
+
+{
+  // Bridge 10: a 40-title queue, a hidden page and then a FROZEN one. The app
+  // must go on past the old ten-title lease with no page at all, ask the page
+  // for more once when its list runs low, and the page must catch up on the
+  // LAST advance (not load every intermediate track) when it wakes.
+  const queueLong = Array.from({ length: 40 }, (_, k) =>
+    song(k < ids.ids.length ? ids.ids[k] : "x" + (k + 1), k + 1));
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await open(ctx, { __bridge: 10 }, queueLong);
+  await page.locator("footer.player .pp").click();
+  await page.waitForTimeout(1200);
+  const nextLen = () => page.evaluate(() => {
+    // The active player is the one the page told to play last — the same rule
+    // NativeAudio.followsList uses. Never "the first not paused": a second
+    // slot can be alive for a moment and would hide the active list.
+    const id = window.__fake.lastPlayed;
+    const sl = window.__fake.slots.get(id) ||
+      [...window.__fake.slots.values()].find((s) => !s.el.paused);
+    const playing = [...window.__fake.slots.values()].filter((s) => !s.el.paused).length;
+    return sl ? { id, n: sl.next.length, lists: sl.lists || 0, srcs: sl.srcs || 0, playing } : null;
+  });
+  let n = await nextLen();
+  check(n && n.n === 32 && n.playing === 1,
+    "bridge 10, visible: the app holds 32 titles, not 10", JSON.stringify(n));
+
+  // The activity stops: the page names the long background list before it can
+  // be throttled/frozen.
+  await page.evaluate(() => {
+    window.__hidden = true;
+    window.__fake.setBg(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForTimeout(900);
+  n = await nextLen();
+  check(n && n.n === 39 && n.playing === 1,
+    "background: the app holds the whole remaining queue (39)", JSON.stringify(n));
+  const srcsBefore = n.srcs;
+
+  // Frozen for 36 track ends: the page runs nothing and is told nothing; the
+  // app alone must go on, well past the old ten-title limit.
+  await page.evaluate(() => {
+    window.__fake.frozen = true;
+    for (let i = 0; i < 36; i++) window.__fake.endNow();
+  });
+  await page.waitForTimeout(300);
+  const frozen = await page.evaluate(() => ({
+    advanced: window.__fake.advanced || 0,
+    needCalls: window.__fake.needCalls || 0,
+    held: window.__fake.needsHeld.length,
+    next: window.__fake.slots.get(window.__fake.lastPlayed)?.next.length ?? -1,
+  }));
+  check(frozen.advanced === 36, "frozen: the app went on 36 times without the page", JSON.stringify(frozen));
+  check(frozen.needCalls === 1 && frozen.held === 1,
+    "frozen: the refill was asked once when the list ran low, and waits for the page", JSON.stringify(frozen));
+
+  // The person comes back: the queued advances and the queued refill run; the
+  // page must land on the track the app is on, then name what follows it.
+  await page.evaluate(() => {
+    window.__hidden = false;
+    window.__fake.setBg(false);
+    window.__fake.thaw();
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const thawAt = Date.now();
+  await page.waitForFunction(
+    () => document.querySelector("footer.player .info .t")?.textContent === "Song 37",
+    null,
+    { timeout: 5000 }
+  );
+  const catchUpMs = Date.now() - thawAt;
+  await page.waitForTimeout(400);
+  const w = await where(page);
+  n = await nextLen();
+  check(w.title === "Song 37" && !w.paused && w.playing === 1,
+    "awake: the page caught up on the LAST advance (Song 37), one player sounding",
+    `${w.title} at ${w.t?.toFixed(2)}, ${w.playing} playing, caught up in ${catchUpMs} ms`);
+  check(catchUpMs < 1500, "the catch-up after the freeze is bounded", `${catchUpMs} ms`);
+  check(n && n.lists >= 3 && n.n >= 3,
+    "awake: one refill named what follows the app's current track", JSON.stringify(n));
+  check(n && n.srcs === srcsBefore, "and the page adopted the app's source instead of reloading it",
+    `${n ? n.srcs - srcsBefore : "?"} new loads`);
+  const bytes = await page.evaluate(() => window.__fake.nextBytes || 0);
+  check(bytes > 0 && bytes < 128 * 1024, "the longest bridge `next` payload stays under MAX_AUDIO_CMD",
+    `${bytes} bytes`);
   await ctx.close();
 }
 

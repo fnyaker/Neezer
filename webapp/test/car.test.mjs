@@ -31,6 +31,7 @@ function deps(over = {}) {
   const user = writable({ name: "nyaker" });
   let favourite = false;
   const toggled = [];
+  const toastCalls = [];
   const base = {
     player,
     current,
@@ -44,6 +45,8 @@ function deps(over = {}) {
     startFlow: () => calls.push({ flow: true }),
     trackKey: (t) => (t && t.id ? String(t.id) : null),
     isSignedIn: () => !!get(user),
+    favorites: async () => ({ tracks: [] }),
+    toast: (message) => toastCalls.push(message),
     remote: false,
   };
   return {
@@ -53,9 +56,13 @@ function deps(over = {}) {
     current,
     user,
     toggled,
+    toastCalls,
     setFavourite: (v) => (favourite = v),
   };
 }
+
+/** Let the favourites launch's request + playQueue settle. */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("no bridge: nothing is available, nothing crosses", () => {
   freshWindow();
@@ -109,12 +116,40 @@ test("carPin trims, caps and reports refusal", () => {
   assert.equal(carPin("p1", "Voiture"), false);
 });
 
+test("carPin hands the known track count over, and keeps the two-argument call otherwise", () => {
+  const w = freshWindow();
+  const calls = [];
+  w.NSNative = {
+    carAvailable: () => true,
+    carPin: (...args) => {
+      calls.push(args);
+      return true;
+    },
+  };
+  assert.equal(carPin("p1", "Voiture", 42), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture", 42]);
+  // The page often has no count (a Deezer playlist before its first read).
+  assert.equal(carPin("p1", "Voiture"), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture"]);
+  assert.equal(carPin("p1", "Voiture", "n/a"), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture"]);
+  assert.equal(carPin("p1", "Voiture", 0), true);
+  assert.deepEqual(calls.at(-1), ["p1", "Voiture"]);
+  // An APK that returns nothing is a refusal, not a success.
+  w.NSNative.carPin = () => undefined;
+  assert.equal(carPin("p1", "Voiture", 42), false);
+});
+
 test("openCarSettings only calls an installed bridge", () => {
   const w = freshWindow();
   let opened = 0;
   w.NSNative = { carAvailable: () => true, openCarSettings: () => (opened++, true) };
   assert.equal(openCarSettings(), true);
   assert.equal(opened, 1);
+  // An APK from before the boolean return (or any void implementation) must
+  // not be read as "the screen opened".
+  w.NSNative.openCarSettings = () => undefined;
+  assert.equal(openCarSettings(), false);
   w.NSNative.openCarSettings = () => false;
   assert.equal(openCarSettings(), false);
   w.NSNative.openCarSettings = () => {
@@ -152,6 +187,78 @@ test("playFromCar: a track goes through player.playQueue with its own context", 
   assert.deepEqual(player.calls[0].tracks, [track]);
   assert.equal(player.calls[0].start, 0);
   assert.deepEqual(player.calls[0].context, { kind: "track", id: "t1" });
+});
+
+test("playFromCar: favorites reads /api/me/favorites, then plays the queue once", async () => {
+  const list = [{ id: "t1", title: "A" }, { id: "t2", title: "B" }];
+  let asked = 0;
+  const { deps: d, player, toastCalls } = deps({
+    favorites: async () => {
+      asked++;
+      return { tracks: list };
+    },
+  });
+  assert.equal(playFromCar(d, "favorites", "", "Favoris", null), true);
+  assert.equal(asked, 1);
+  assert.deepEqual(toastCalls, ["Chargement des favoris…"]);
+  await tick();
+  assert.equal(player.calls.length, 1);
+  assert.deepEqual(player.calls[0], {
+    tracks: list,
+    start: 0,
+    context: { kind: "favorites", id: "favorites" },
+  });
+  // The page owns the wording; the native service shows no toast for this kind.
+  assert.deepEqual(toastCalls, ["Chargement des favoris…", "Lecture des favoris"]);
+});
+
+test("playFromCar: no favourite starts nothing and says so", async () => {
+  const { deps: d, player, toastCalls } = deps({ favorites: async () => ({ tracks: [] }) });
+  assert.equal(playFromCar(d, "favorites", "", "Favoris", null), true);
+  await tick();
+  assert.deepEqual(player.calls, []);
+  assert.deepEqual(toastCalls, ["Chargement des favoris…", "Aucun favori pour l'instant"]);
+});
+
+test("playFromCar: a 401 on the favourites says Session absente", async () => {
+  const { deps: d, player, toastCalls } = deps({
+    favorites: async () => {
+      throw { status: 401, message: "unauthorized" };
+    },
+  });
+  assert.equal(playFromCar(d, "favorites", "", "Favoris", null), true);
+  await tick();
+  assert.deepEqual(player.calls, []);
+  assert.deepEqual(toastCalls, ["Chargement des favoris…", "Session absente"]);
+});
+
+test("playFromCar: favorites without a session never asks the server", async () => {
+  const { deps: d, user, player } = deps();
+  let asked = 0;
+  user.set(null);
+  const withReader = {
+    ...d,
+    favorites: async () => {
+      asked++;
+      return { tracks: [{ id: "t1" }] };
+    },
+  };
+  assert.equal(playFromCar(withReader, "favorites", "", "Favoris", null), false);
+  await tick();
+  assert.equal(asked, 0);
+  assert.deepEqual(player.calls, []);
+});
+
+test("playFromCar: an offline favourites read fails honestly, no queue", async () => {
+  const { deps: d, player, toastCalls } = deps({
+    favorites: async () => {
+      throw { status: 0, offline: true };
+    },
+  });
+  assert.equal(playFromCar(d, "favorites", "", "Favoris", null), true);
+  await tick();
+  assert.deepEqual(player.calls, []);
+  assert.deepEqual(toastCalls, ["Chargement des favoris…", "Hors ligne : favoris indisponibles"]);
 });
 
 test("playFromCar refuses an unknown kind, a bad track and a missing id", () => {

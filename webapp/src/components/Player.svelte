@@ -25,7 +25,7 @@
     trimThresholdDb,
   } from "../lib/stores.js";
   import { api } from "../lib/api.js";
-  import { tick as flowTick, noteHeard as flowHeard, nextNow as flowNextNow } from "../lib/flow.js";
+  import { tick as flowTick, noteHeard as flowHeard, nextNow as flowNextNow, prefetchAhead as flowPrefetchAhead } from "../lib/flow.js";
   import { online } from "../lib/net.js";
   import { logInfo } from "../lib/log.js";
   import { isDownloaded, getObjectURL, touch } from "../lib/offline.js";
@@ -117,6 +117,9 @@
     ["timeupdate", onTime],
     ["ended", onEnded],
     ["nsadvance", onNativeAdvance],
+    ["nsneednext", onNativeNeedNext],
+    ["nsbackground", onNativeBackground],
+    ["nsforeground", onNativeForeground],
     ["play", onElPlay],
     ["pause", onElPause],
     ["error", onElError],
@@ -189,6 +192,12 @@
       paused: audio ? audio.paused : null,
       volume: audio ? audio.volume : null,
     });
+    // MainActivity.onStop/onStart tell the page when the activity is stopped:
+    // the WebView is deliberately not paused, so visibilitychange alone cannot
+    // be trusted on a screen-off. The native side calls these before/after its
+    // own state says `bg`, and the page then names a much longer list.
+    window.__nsAppBackground = onNativeAppBackground;
+    window.__nsAppForeground = onNativeAppForeground;
     document.addEventListener("visibilitychange", onVisibility);
     // Last reliable moment before the tab is discarded: report the current
     // track's play time (reportListen uses keepalive, so it survives unload).
@@ -212,6 +221,9 @@
     clearTimeout(archiveTimer);
     document.removeEventListener("visibilitychange", onVisibility);
     window.removeEventListener("pagehide", onPageHide);
+    if (window.__nsAppBackground === onNativeAppBackground) delete window.__nsAppBackground;
+    if (window.__nsAppForeground === onNativeAppForeground) delete window.__nsAppForeground;
+    if (nativeNeedTimer) clearTimeout(nativeNeedTimer);
     releaseWakeLock();
     setBlobUrl(null); // revoke any live object URL
     for (const el of els) {
@@ -255,6 +267,8 @@
   }
   function onVisibility() {
     pageHidden = document.visibilityState === "hidden";
+    if (pageHidden) onNativeAppBackground();
+    else onNativeAppForeground();
     const s = get(player);
     logInfo("player", `visibility=${document.visibilityState} index=${s.index} playing=${s.playing} t=${(s.currentTime || 0).toFixed(1)}`,
             null, { important: true });
@@ -264,6 +278,13 @@
     // full-screen player is still up.
     resumeAudio();
     if (get(immersiveOpen) && get(player).playing) requestWakeLock();
+    // A frozen page may have missed the app's end-of-list `ended` (events are
+    // suppressed until the advance is adopted). The person is looking now:
+    // move the queue on, exactly as the element's own `ended` would have.
+    if (audio && isNativeEl(audio) && audio.ended && !loadingTrack && get(player).playing) {
+      onEnded({ target: audio });
+      return;
+    }
     // A resume refused while we were away (the lock-screen play button, a
     // headset click) leaves the transport wedged, and a backgrounded page's
     // timers are throttled to as little as once a minute — so don't make the
@@ -1050,6 +1071,13 @@
     if (detachLadder) detachLadder();
     detachLadder = watchAudio(audio, trackKey(track));
     if (!(adopt && audio.adopt(trackKey(track)))) {
+      // A newer native advance landed while this adopt was in flight: do not
+      // reattach the older source over the app's current one. The newer
+      // nsadvance already moved the queue; its own load will attach it.
+      if (adopt && isNativeEl(audio) && audio.advancedKey && audio.advancedKey !== trackKey(track)) {
+        loadingTrack = false;
+        return;
+      }
       if (isNativeEl(audio)) audio.dropAdvance();
       audio.src = src.url;
       audio.load();
@@ -1065,6 +1093,7 @@
       setFade(audio, 1);
     }
     loadingTrack = false; // new source attached — accept its timeupdates again
+    lastAdvanceKey = null; // the next native advance may name this key again
     // The outgoing audio is silenced the instant its src is reassigned above, so
     // flip the normalization gain to THIS track's value now — synced to the
     // audible handover. The new source is still buffering (silent) here, so we
@@ -2451,15 +2480,87 @@
   // only while its activity is stopped (cutting a trimmed track itself); the
   // page then starts no transition of its own (nativeOwnsTransition). Visible,
   // nothing the app does changes.
-  const HINT_AHEAD = 10;
+  const HINT_AHEAD = 32;
+  const HINT_AHEAD_BG = 200;
+  const META_AHEAD = 8;
   const EDGES_AHEAD = 5;
   const edgesAsked = new Set();
   let pageHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  // MainActivity.onStop/onStart (and the native `bg` state) say the activity
+  // is stopped even when the WebView never hears visibilitychange.
+  let nativeBackground = false;
+  let nativeNeedTimer = null;
   let adoptKey = null; // the track loadTrack is to take over rather than load
+  let lastAdvanceKey = null; // the last nsadvance handled (a burst repeats the key)
   let hinted = []; // [{ key, index }]: what the app was told follows
   let hintSig = "";
   let hintEl = null; // the element hintSig was sent to
   let hintSeq = 0;
+
+  // The app's bridge 10 can hold a long list and ask for a refill; before it,
+  // the page sends the same ten entries it always did. This is a property of
+  // the WIRE, not of whether this element is about to be replaced: a stale
+  // element (a Web Audio hand-over, a fresh element about to take over) must
+  // still be given the long background list, or the page falls back to ten at
+  // exactly the moment the activity stops.
+  function nativeLongNext() {
+    return isNativeEl(audio) && audio.longNext;
+  }
+  function hintAhead() {
+    if (!nativeLongNext()) return 10;
+    return pageHidden || nativeBackground || (isNativeEl(audio) && audio.appInBackground)
+      ? HINT_AHEAD_BG
+      : HINT_AHEAD;
+  }
+  function repeatModeFor(s) {
+    if (!s) return "off";
+    if (s.repeat === "one" || repeatsItself(s)) return "one";
+    if (s.repeat === "all") return "all";
+    return "off";
+  }
+  function onNativeAppBackground() {
+    if (nativeBackground || !nativeLongNext()) return;
+    nativeBackground = true;
+    // Name the long list even if this element is stale: a hand-over may be
+    // replacing it, and the new element needs the list too. The old one is
+    // harmless to tell; updateNativeNext is driven by `audio` again after the
+    // swap.
+    if (audio) {
+      // The Flow's queue holds at most the next title: ask for a batch now,
+      // while the page can still run, so the app has ten titles to follow.
+      if ($player.context && $player.context.kind === "flow") flowPrefetchAhead(10);
+      updateNativeNext(true);
+    }
+  }
+  function onNativeAppForeground() {
+    if (!nativeBackground) return;
+    nativeBackground = false;
+    // The app may have run out of its list while the page was frozen: the
+    // element is ended and no `ended` survived the suppression. The person is
+    // here now; move the queue on the way the element would have.
+    if (audio && isNativeEl(audio) && audio.ended && !loadingTrack && get(player).playing) {
+      onEnded({ target: audio });
+    }
+  }
+  function onNativeBackground(e) {
+    if (e && e.target !== audio) return;
+    onNativeAppBackground();
+  }
+  function onNativeForeground(e) {
+    if (e && e.target !== audio) return;
+    onNativeAppForeground();
+  }
+  function onNativeNeedNext(e) {
+    if (!e || e.target !== audio) return;
+    // The app asks as soon as its list is low, which can be right after a
+    // burst of advances: let the nsadvance coalescer/jump settle first, or the
+    // list would be named from the page's old index.
+    if (nativeNeedTimer) clearTimeout(nativeNeedTimer);
+    nativeNeedTimer = setTimeout(() => {
+      nativeNeedTimer = null;
+      if (isNativeEl(audio) && audio === e.target) updateNativeNext(true);
+    }, 60);
+  }
 
   // From bridge 8 the app keeps the list while the page is VISIBLE too: naming
   // it only once the page was hidden raced the page being throttled (an
@@ -2473,7 +2574,7 @@
   // events the app sends it (only its timers are throttled), so it used to
   // start one on a timeupdate and stall halfway through it.
   function nativeOwnsTransition() {
-    return nativeOwnsBackground() && (pageHidden || audio.appInBackground) && hinted.length > 0;
+    return nativeOwnsBackground() && (pageHidden || nativeBackground || audio.appInBackground) && hinted.length > 0;
   }
   // Where a track's audio ends, for the app to cut there (0: its file's end).
   function trimEndFor(track) {
@@ -2484,25 +2585,35 @@
     return e.end;
   }
 
+  function hintTransient() {
+    // A load/switch/chase in flight is not "nothing follows": keep the app's
+    // current list instead of clearing it (a background transition would then
+    // lose the very list the app is following).
+    return !curId || loadingTrack || switching || chasing || recovering;
+  }
+
   function nextHintTargets() {
-    if (!pageHidden && !nativeOwnsBackground()) return [];
+    // The explicit onStop hook is a background signal even when the WebView
+    // never hears visibilitychange (the app deliberately skips onPause), and
+    // a stale native element still has to be told the long list before it is
+    // replaced.
+    if (!pageHidden && !nativeBackground && !nativeOwnsBackground()) return [];
     // A crossfade being armed (its incoming track preloading, XFADE_PRELOAD
     // before the fade) keeps the list: the screen may lock right then, and the
     // fade is the page's own to give up (onTime). Once fading, the list is the
     // incoming element's, which is `audio` by then.
-    if (!curId || loadingTrack || switching || chasing || recovering) return [];
+    if (hintTransient()) return [];
     if (sleepStopsAtTrackEnd()) return [];
     const s = get(player);
     if (s.repeat === "one" || repeatsItself(s) || !s.queue.length) return [];
     const out = [];
     let prev = curId;
-    for (let i = 1; i <= HINT_AHEAD; i++) {
+    for (let i = 1; i <= hintAhead(); i++) {
       let index = s.index + i;
       if (index >= s.queue.length) {
         if (s.repeat !== "all") break;
         index %= s.queue.length;
       }
-      if (index === s.index) break; // round the whole queue
       const track = s.queue[index];
       // The same track twice in a row is a restart of the element, not a new source.
       if (!track || trackKey(track) === prev) break;
@@ -2529,10 +2640,17 @@
     return abs(api.streamUrl(trackRef(track), get(quality)));
   }
 
-  async function updateNativeNext() {
+  async function updateNativeNext(force = false) {
     const el = audio;
     if (!isNativeEl(el) || !el.canChain) return;
+    // A native advance is waiting for the page to adopt it: keep the list that
+    // names it. Re-arming now from the page's old index (a visibility change,
+    // a progress tick) would forget the track the app is already playing.
+    if (el.advancedKey) return;
     const targets = nextHintTargets();
+    // Do not clear the app's list while a load/switch/chase is in flight: the
+    // previous list is still the app's to follow if the screen goes off now.
+    if (!targets.length && hintTransient()) return;
     // Where the first few end is asked now (once per track, kept on the device):
     // the server only says it for the current and the next one otherwise, and
     // the app cuts a song it was given no bounds for at its file's end.
@@ -2554,19 +2672,21 @@
       };
     });
     const end = want.length && $current ? trimEndFor($current) : 0;
+    const rep = repeatModeFor(get(player));
     const sig = want.length
-      ? get(quality) + "|" + end + "|" +
+      ? get(quality) + "|" + end + "|" + rep + "|" +
         want.map((w) => `${trackKey(w.track)}@${w.index}:${w.at}:${w.e}:${w.v.toFixed(3)}`).join(",")
       : "";
     // Per element: a quality switch or a crossfade hands the track to the other
-    // player, which has been told nothing, whatever the list looks like.
-    if (sig === hintSig && el === hintEl) return;
+    // player, which has been told nothing, whatever the list looks like. A
+    // refill request (force) re-sends even when the signature is unchanged.
+    if (sig === hintSig && el === hintEl && !force) return;
     hintSig = sig;
     hintEl = el;
     const seq = ++hintSeq;
     const list = [];
     const keys = [];
-    for (const w of want) {
+    for (const [i, w] of want.entries()) {
       const url = await hintUrl(w.track);
       if (seq !== hintSeq || el !== audio) return;
       if (!url) break; // the app cannot play this one: it stops there
@@ -2577,6 +2697,10 @@
       } catch {
         /* none */
       }
+      // The near titles carry the full metadata (the notification names them
+      // now); far ones are compact so 200 entries stay under the bridge limit.
+      const full = i < META_AHEAD;
+      const cut = (s, n) => String(s || "").slice(0, n);
       list.push({
         url,
         at: w.at,
@@ -2584,9 +2708,9 @@
         v: w.v,
         k: trackKey(t),
         meta: {
-          title: String(t.title || "").slice(0, 200),
-          artist: String(artistLine(t) || "").slice(0, 200),
-          album: String(t.album?.title || "").slice(0, 200),
+          title: cut(t.title, full ? 200 : 90),
+          artist: cut(artistLine(t), full ? 200 : 90),
+          album: cut(t.album?.title, full ? 200 : 70),
           cover,
           duration: t.duration || 0,
         },
@@ -2594,23 +2718,25 @@
       keys.push({ key: trackKey(t), index: w.index });
     }
     hinted = keys;
-    el.setNext(list, list.length ? end : 0);
+    el.setNext(list, list.length ? end : 0, rep, force);
   }
   // Every input of the decision; the signature keeps a progress tick from
   // sending anything.
-  $: audio, $player, $current, $quality, pageHidden, loadingTrack, xfade, chasing, updateNativeNext();
+  $: audio, $player, $current, $quality, pageHidden, nativeBackground, loadingTrack, xfade, chasing, updateNativeNext();
 
   function onNativeAdvance(e) {
     const el = e && e.target;
     if (!el || !isNativeEl(el)) return;
     const key = el.advancedKey;
+    if (!key || key === lastAdvanceKey) return; // a coalesced burst, or already handled
+    lastAdvanceKey = key;
     logInfo("audio", `the app went on to ${key} by itself`, null, { important: true });
     const at = hinted.findIndex((h) => h.key === key);
     const h = at >= 0 ? hinted[at] : null;
     // What is left of the list is what the app still has.
     hinted = h ? hinted.slice(at + 1) : [];
     const s = get(player);
-    if (el !== audio || !h || loadingTrack || trackKey(s.queue[h.index] || {}) !== key) {
+    if (el !== audio || !h || trackKey(s.queue[h.index] || {}) !== key) {
       // Not a track the queue expects (it moved meanwhile): the page plays
       // what it decides, from a source of its own.
       hintSig = "";
@@ -2621,6 +2747,11 @@
       }
       return;
     }
+    // A page frozen through several advances hears them in a burst. If a load
+    // for an older key is still in flight, supersede it with the newest one
+    // instead of dropping it: the old load's token/curId check bails out, and
+    // the queue lands on the track the app is really playing.
+    if (loadingTrack && (curId === key || get(player).index === h.index)) return;
     const cur = $current;
     if (cur && cur.podcast) markEpisodeFinished(trackKey(cur), cur.duration || 0);
     adoptKey = key;

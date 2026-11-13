@@ -7,11 +7,12 @@
     <title>Neezer</title>
 
     <!-- The Sillon theme, applied BEFORE the first frame: a session in Papier
-         (or in Pochette, whose accent comes from the sleeve) must not flash the
-         dark default while the bundle loads. A classic script — no module, no
-         defer — so it blocks the parser and runs before <body> paints; it is a
-         file and not inline because the CSP is `script-src 'self'`. lib/theme.js
-         reads the same keys afterwards and owns the rest of the session. -->
+         (or in Pochette, whose accent comes from the sleeve, or with a custom
+         accent) must not flash the dark default while the bundle loads. A
+         classic script — no module, no defer — so it blocks the parser and
+         runs before <body> paints; it is a file and not inline because the CSP
+         is `script-src 'self'`. lib/theme.js reads the same keys afterwards and
+         owns the rest of the session. -->
     <script src="/app/theme-boot.js"></script>
 
     <!-- PWA -->

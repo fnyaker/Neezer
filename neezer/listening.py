@@ -19,8 +19,9 @@ per person, in ``listen_event``, and judged by two published rules:
 How much a person likes a track is the base-level activation of ACT-R's
 declarative memory, ``B = sum((t_now - t_i) ^ -d)`` over the times it was
 heard, d = 0.5 (Reiter-Haas et al., RecSys 2021: the best single predictor
-of relistening, frequency and recency in one number). The time unit does
-not matter: scaling it scales every activation by the same factor.
+of relistening, frequency and recency in one number). Time is in hours and the
+``+1`` inside the power keeps a play from this second finite; that offset makes
+the unit a choice, not a scale factor, so it is fixed here.
 
 Everything here is a read or one insert; nothing calls the network.
 """

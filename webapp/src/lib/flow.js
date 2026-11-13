@@ -88,6 +88,66 @@ export function setStartStyles(list) {
   }
 }
 
+// How far the Flow strays, in SIX notches over the same discovery level the
+// home's slider writes (lib/discovery.js, 0…1). The server takes one number;
+// six stops are what a thumb can hit without reading a scale (M3's segmented
+// choice, YouTube Music's Familiar→Discover radio setting). The two ends are
+// Explorer's words — "Prudent" and "Large" — so both screens describe the same
+// breadth the same way.
+export const DIVERSITY_STEPS = [
+  { name: "Prudent", value: 0, hint: "Presque uniquement ce que vous écoutez déjà." },
+  { name: "Proche", value: 0.2, hint: "Votre bibliothèque et ses voisins immédiats." },
+  { name: "Voisin", value: 0.4, hint: "Des artistes proches de vos favoris." },
+  { name: "Exploration", value: 0.6, hint: "Des genres voisins, des artistes à deux pas." },
+  { name: "Aventure", value: 0.8, hint: "Loin de vos habitudes." },
+  { name: "Large", value: 1, hint: "Le plus d'inconnus possible, sans boussole." },
+];
+
+// The notch a level falls on: the NEAREST stop, ties upward — the same rule a
+// slider's own value reads back with. A value from an older build (0.35, say)
+// lands on "Voisin", not on a notch that does not exist.
+export function diversityIndex(level) {
+  const v = Number.isFinite(Number(level)) ? Math.min(1, Math.max(0, Number(level))) : 0;
+  let best = 0;
+  for (let i = 1; i < DIVERSITY_STEPS.length; i++) {
+    if (Math.abs(DIVERSITY_STEPS[i].value - v) <= Math.abs(DIVERSITY_STEPS[best].value - v)) best = i;
+  }
+  return best;
+}
+
+export function diversityStep(level) {
+  return DIVERSITY_STEPS[diversityIndex(level)];
+}
+
+// "Techno, House +1 · Voisin": what the Flow will aim at, in the width of a
+// chip. Two names at most — a summary that must be read is not a summary — and
+// never the word "genres" when there are none: "Tous les styles" says it.
+export function flowAimSummary(styles = [], level = 0) {
+  const names = (styles || []).filter((s) => typeof s === "string" && s).slice(0, STYLES_MAX);
+  const label =
+    !names.length
+      ? "Tous les styles"
+      : names.length <= 2
+        ? names.join(", ")
+        : `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+  return `${label} · ${diversityStep(level).name}`;
+}
+
+// The same aim for a button that is only ~150 px wide on a narrow player
+// column: past two genres the NAMES are what gives way, not the breadth — the
+// word a person needs to recognise their own setting ("Voisin") must survive
+// the ellipsis. The full list is in the panel, one tap away.
+export function flowAimShort(styles = [], level = 0) {
+  const names = (styles || []).filter((s) => typeof s === "string" && s).slice(0, STYLES_MAX);
+  const label =
+    !names.length
+      ? "Tous les styles"
+      : names.length <= 2
+        ? names.join(", ")
+        : `${names.length} genres`;
+  return `${label} · ${diversityStep(level).name}`;
+}
+
 export function setStartEnergy(v) {
   startEnergy.set(v);
   try {
@@ -238,6 +298,47 @@ async function pickNext({ replace = false } = {}) {
         player.extend([reserve]);
         reserve = null;
       }
+      return false;
+    } finally {
+      picking = null;
+    }
+  })();
+  return picking;
+}
+
+// The app's native player goes on by itself while its activity is stopped; a
+// hidden page cannot choose one title at a time. When the activity goes to the
+// background, ask for a BATCH and queue it, so the app has ten titles to follow
+// instead of the Flow's usual one. A frozen page keeps the batch it already
+// named; past it the Flow stops until the page runs again (documented limit).
+export async function prefetchAhead(n = 10) {
+  if (!isFlow() || !session()) return false;
+  // A title already being chosen (the usual background pick) is part of the
+  // batch; wait for it, then ask for the rest rather than starting a second
+  // request beside it.
+  if (picking) {
+    try {
+      await picking;
+    } catch {
+      /* the pick's own catch already queued the reserve */
+    }
+    if (!isFlow() || !session() || picking) return false;
+  }
+  const s0 = get(player);
+  if (s0.index < 0) return false;
+  const have = s0.queue.length - s0.index - 1;
+  if (have >= n) return false;
+  const cur = s0.queue[s0.index];
+  const myGen = gen;
+  picking = (async () => {
+    try {
+      const got = await ask(n - have);
+      if (myGen !== gen || !isFlow()) return false;
+      const s = get(player);
+      if (trackKey(s.queue[s.index]) !== trackKey(cur)) return false;
+      const added = player.extend(got.slice(0, n - have));
+      return added > 0;
+    } catch {
       return false;
     } finally {
       picking = null;

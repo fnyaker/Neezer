@@ -64,6 +64,18 @@
   let showQueue = false;
   let showLyrics = false;
 
+  // One sheet at a time: the lyrics view, the queue and the À propos panel all
+  // live over the same player, and two stacked scrollers would fight for the
+  // gesture and for the close.
+  function openLyrics() {
+    showQueue = false;
+    showLyrics = true;
+  }
+  function openQueue() {
+    showLyrics = false;
+    showQueue = true;
+  }
+
   function trackMenu(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -209,6 +221,8 @@
   }
   function openMore() {
     if (!moreAvailable) return;
+    showQueue = false;
+    showLyrics = false;
     more = true;
     revealing = false;
     reveal = panelH();
@@ -868,7 +882,7 @@
   </header>
 
   <div class="body">
-    <div class="mid">
+    <div class="mid" class:strip={stripViz}>
       <div class="cur-lyric" class:on={!!$currentLyricLine && !$ecoMode} aria-hidden="true">
         {#if $currentLyricLine && !$ecoMode}
           {#key $currentLyricLine}
@@ -954,12 +968,13 @@
         <PartyButton size={21} />
         <RemoteButton size={21} />
       {/if}
-      <button class="fb" on:click={() => (showLyrics = true)} aria-label="Paroles" title="Paroles">
+      <button class="fb" on:click={openLyrics} aria-label="Paroles" title="Paroles">
         <Icon name="music" size={21} />
+        <span class="fl">Paroles</span>
       </button>
       <!-- The name is exactly "File d'attente": it is the queue's own door (the
            benches click it by that label), the count is what the eye reads. -->
-      <button class="fb file" on:click={() => (showQueue = true)} aria-label="File d'attente" title={`File d'attente · ${upcoming} titre${upcoming > 1 ? "s" : ""}`}>
+      <button class="fb file" on:click={openQueue} aria-label="File d'attente" title={`File d'attente · ${upcoming} titre${upcoming > 1 ? "s" : ""}`}>
         <span class="fl">File ·</span>
         <span class="n mono">{upcoming}</span>
       </button>
@@ -1004,10 +1019,10 @@
   {/if}
 
   {#if showQueue}
-    <div class="sheet" transition:fade={{ duration: 120 }}>
+    <div class="sheet" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="File d'attente">
       <div class="sheet-h">
         <span>File d'attente</span>
-        <button class="ic" on:click={() => (showQueue = false)} aria-label="Fermer"><Icon name="chevronDown" size={22} /></button>
+        <button class="ic" on:click={() => (showQueue = false)} aria-label="Fermer la file d'attente"><Icon name="chevronDown" size={22} /></button>
       </div>
       <div class="queue">
         <QueueList items={q} {idx} bind:this={queueVL} onPick={() => (showQueue = false)} />
@@ -1017,10 +1032,17 @@
   {/if}
 
   {#if showLyrics}
-    <div class="sheet" transition:fade={{ duration: 120 }}>
-      <div class="sheet-h">
-        <span>Paroles</span>
-        <button class="ic" on:click={() => (showLyrics = false)} aria-label="Fermer"><Icon name="chevronDown" size={22} /></button>
+    <!-- A real view, not a drawer behind a gesture: its own header names the
+         track and the artist, the close is a 44 px button, and the only
+         scroller is the lyrics list inside it. -->
+    <div class="sheet lyrics-view" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="Paroles">
+      <div class="sheet-h lyrics-h">
+        <div class="lyrics-meta">
+          <span class="lyrics-k">Paroles</span>
+          <span class="lyrics-t">{$current.title}</span>
+          <span class="lyrics-a"><ArtistLine track={$current} navigate={go} /></span>
+        </div>
+        <button class="ic" on:click={() => (showLyrics = false)} aria-label="Fermer les paroles"><Icon name="chevronDown" size={22} /></button>
       </div>
       <div class="lyrics-sheet">
         <Lyrics />
@@ -1465,8 +1487,19 @@
   .viz {
     position: relative;
     height: 40px;
+    flex: none;
     margin: 0 22px;
     opacity: 0.9;
+  }
+  /* The bars live in the space between the transport and the thumb row, not
+     against the controls: the auto margins centre the fixed 40 px band in the
+     leftover height, and the thumb row stays on the bottom edge. */
+  .mid.strip > .stagebox,
+  .mid.strip .viz {
+    margin-top: auto;
+  }
+  .mid.strip .viz {
+    margin-bottom: auto;
   }
   /* Sits above the blurred cover and its scrim, below the controls: the
      backdrop becomes the animation instead of competing with it. */
@@ -1528,6 +1561,12 @@
     color: var(--tx);
     padding: 0 10px;
   }
+  /* Both labelled doors of the thumb row (Paroles, File) speak at the same
+     size: a 44 px target with the word inside it. */
+  .fb .fl {
+    font-size: 13px;
+    font-weight: 700;
+  }
   .fb.file .n {
     font-family: var(--font-mono);
     font-size: 11px;
@@ -1570,9 +1609,51 @@
   .lyrics-sheet {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    /* One scroller only: Lyrics.svelte owns the scroll (it follows the active
+       line); the view reserves the home indicator under it. */
+    overflow: hidden;
     padding: 0 18px calc(24px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
     color: var(--tx);
+  }
+  .lyrics-h {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .lyrics-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+    padding-top: 1px;
+  }
+  .lyrics-k {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .lyrics-t {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--tx);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .lyrics-a {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   /* The swipe-up panel's door: a quiet hint, still a 44 px target. */

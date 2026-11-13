@@ -4,7 +4,7 @@
   // left, one raised card on the right holding the queue, the lyrics and what
   // the track is. The blurred backdrop and the animation stay as they were.
   import { trackKey, trackRef } from "../lib/trackkey.js";
-  import { onDestroy, tick } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { REMOTE, CAN_KEEP, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
   import { fade } from "svelte/transition";
@@ -81,6 +81,40 @@
   import SpeedButton from "./SpeedButton.svelte";
 
   let tab = "queue";
+  // How much of the stage goes to reading, decided by what the columns need.
+  // 1200 px is where the sleeve column, the player and the queue still hold
+  // their comfortable widths; 1600 px adds a fourth column (the facts) without
+  // taking width from the other three. Both are Material's large / extra-large
+  // window classes, and both are measured in test/fullscreen/run.mjs.
+  // Below ROOMY, the lyrics return to the queue card's tabs; below WIDE, so do
+  // the facts. That order is the whole point: the queue never gives way first.
+  const ROOMY_MQ = "(min-width: 1200px)";
+  const WIDE_MQ = "(min-width: 1600px)";
+  let roomy = false;
+  let wide = false;
+  if (typeof window !== "undefined") {
+    roomy = window.matchMedia(ROOMY_MQ).matches;
+    wide = window.matchMedia(WIDE_MQ).matches;
+  }
+  onMount(() => {
+    const r = window.matchMedia(ROOMY_MQ);
+    const w = window.matchMedia(WIDE_MQ);
+    const on = () => {
+      roomy = r.matches;
+      wide = w.matches;
+    };
+    r.addEventListener("change", on);
+    w.addEventListener("change", on);
+    return () => {
+      r.removeEventListener("change", on);
+      w.removeEventListener("change", on);
+    };
+  });
+  // A tab that gained a column of its own must not leave a duplicate view
+  // behind in the queue card.
+  $: if (roomy && tab === "lyrics") tab = "queue";
+  $: if (wide && tab === "more") tab = "queue";
+
   // The artwork's box, handed to the animation so its scenes lay themselves out
   // AROUND the cover instead of behind it (lib/viz/geometry.js). An element
   // rather than a measurement: the cover is min(330px, 46vh, 100%) wide and
@@ -184,6 +218,41 @@
   });
 </script>
 
+<!-- One source for the facts, rendered either in the queue card's À propos tab
+     or in its own right-hand column when the stage can afford it. Exactly one
+     of the two is mounted, so the credits and the mix are never asked twice. -->
+{#snippet aboutContent()}
+  {#if hasFacts}
+    <div class="facts">
+      <div class="fact">
+        <span class="label-mono">Artiste</span>
+        <span class="v"><ArtistLine track={$current} navigate={go} /></span>
+      </div>
+      <div class="fact">
+        <span class="label-mono">Album</span>
+        <span class="v ellipsis" title={albumTitle}>{albumTitle || "—"}</span>
+      </div>
+      <div class="fact">
+        <span class="label-mono">Genre</span>
+        <span class="v ellipsis" title={styleLabel}>{styleLabel || "—"}</span>
+      </div>
+      <div class="fact">
+        <span class="label-mono">Qualité</span>
+        <span class="v mono">{qualityText}</span>
+      </div>
+      <div class="fact">
+        <span class="label-mono">Durée</span>
+        <span class="v mono">{fmtDuration($current.duration)}</span>
+      </div>
+      <div class="fact">
+        <span class="label-mono">Source</span>
+        <span class="v ellipsis" title={sourceLabel}>{sourceLabel}</span>
+      </div>
+    </div>
+  {/if}
+  <NowPlayingMore track={$current} />
+{/snippet}
+
 <div class="d" transition:fade={{ duration: 150 }}>
   {#if $ecoMode}
     {#if $bg.length}
@@ -235,7 +304,13 @@
   </header>
 
   <div class="stage">
-    <section class="main" class:steer={CAN_KEEP && $flowLive}>
+    {#if roomy && CAN_BROWSE}
+      <aside class="lyrics-col" aria-label="Paroles">
+        <header class="col-h"><span class="label-mono">Paroles</span></header>
+        <div class="lyrics-body"><Lyrics /></div>
+      </aside>
+    {/if}
+    <section class="main" class:steer={CAN_KEEP && $flowLive} class:strip={stripViz}>
       <div class="cur-lyric" aria-hidden="true">
         {#if $currentLyricLine && !$ecoMode}
           {#key $currentLyricLine}
@@ -351,13 +426,21 @@
     </section>
 
     <aside class="side">
-      <div class="tabs">
-        <button class:active={tab === "queue"} on:click={() => (tab = "queue")}>File d'attente</button>
-        <!-- A queue-only link lends the transport and the queue, not the
-             library's reading (the lyrics are served at the "read" level). -->
-        {#if CAN_BROWSE}<button class:active={tab === "lyrics"} on:click={() => (tab = "lyrics")}>Paroles</button>{/if}
-        {#if CAN_BROWSE && !$current.podcast}<button class:active={tab === "more"} on:click={() => (tab = "more")}>À propos</button>{/if}
-      </div>
+      {#if wide}
+        <!-- Four columns: the queue's tab row would be a single dead pill.
+             Its header aligns with the two reading columns. -->
+        <header class="col-h"><span class="label-mono">File d'attente</span></header>
+      {:else}
+        <div class="tabs">
+          <button class:active={tab === "queue"} on:click={() => (tab = "queue")}>File d'attente</button>
+          <!-- A queue-only link lends the transport and the queue, not the
+               library's reading (the lyrics are served at the "read" level).
+               Each tab disappears when its column has its own room, so there is
+               never a second copy of the same view. -->
+          {#if CAN_BROWSE && !roomy}<button class:active={tab === "lyrics"} on:click={() => (tab = "lyrics")}>Paroles</button>{/if}
+          {#if CAN_BROWSE && !$current.podcast && !wide}<button class:active={tab === "more"} on:click={() => (tab = "more")}>À propos</button>{/if}
+        </div>
+      {/if}
       <div class="side-body">
         {#if tab === "queue"}
           <div class="queue">
@@ -365,40 +448,21 @@
             <FlowUpNext />
           </div>
         {:else if tab === "more"}
-          {#if hasFacts}
-            <div class="facts">
-              <div class="fact">
-                <span class="label-mono">Artiste</span>
-                <span class="v"><ArtistLine track={$current} navigate={go} /></span>
-              </div>
-              <div class="fact">
-                <span class="label-mono">Album</span>
-                <span class="v ellipsis" title={albumTitle}>{albumTitle || "—"}</span>
-              </div>
-              <div class="fact">
-                <span class="label-mono">Genre</span>
-                <span class="v ellipsis" title={styleLabel}>{styleLabel || "—"}</span>
-              </div>
-              <div class="fact">
-                <span class="label-mono">Qualité</span>
-                <span class="v mono">{qualityText}</span>
-              </div>
-              <div class="fact">
-                <span class="label-mono">Durée</span>
-                <span class="v mono">{fmtDuration($current.duration)}</span>
-              </div>
-              <div class="fact">
-                <span class="label-mono">Source</span>
-                <span class="v ellipsis" title={sourceLabel}>{sourceLabel}</span>
-              </div>
-            </div>
-          {/if}
-          <NowPlayingMore track={$current} />
+          {@render aboutContent()}
         {:else}
           <Lyrics />
         {/if}
       </div>
     </aside>
+
+    {#if wide && CAN_BROWSE && !$current.podcast}
+      <!-- The facts get their own card only once the stage can hold four
+           columns; below that they are the queue card's third tab. -->
+      <aside class="about" aria-label="À propos">
+        <header class="col-h"><span class="label-mono">À propos</span></header>
+        <div class="side-body about-body">{@render aboutContent()}</div>
+      </aside>
+    {/if}
   </div>
 </div>
 
@@ -507,6 +571,50 @@
     flex-direction: column;
     justify-content: center;
     gap: 18px;
+  }
+
+  /* The reading columns (Sillon's raised card, same as the queue's). They only
+     exist when their media query holds; the queue keeps its own width so the
+     player never has to give up more than the room left over. */
+  .lyrics-col,
+  .about {
+    flex: none;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--s1);
+    border: 1px solid var(--ln);
+    border-radius: 24px;
+    overflow: hidden;
+  }
+  .lyrics-col {
+    width: clamp(250px, 21vw, 300px);
+  }
+  .about {
+    width: clamp(300px, 19vw, 360px);
+  }
+  .col-h {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 56px;
+    padding: 16px 18px 8px;
+    color: var(--dim);
+  }
+  .lyrics-body {
+    flex: 1;
+    min-height: 0;
+    padding: 0 18px 18px;
+  }
+  .about .side-body {
+    flex: 1;
+    min-height: 0;
+    padding: 6px 16px 18px;
+  }
+  .about-body .facts {
+    margin: 6px 0 10px;
   }
 
   .cover {
@@ -761,7 +869,22 @@
     position: relative;
     width: 100%;
     height: 44px;
+    flex: none;
     opacity: 0.9;
+  }
+  /* The strip lives in the empty band between the transport and the footer
+     instead of hugging the controls: the flexible auto margins put it in the
+     middle of that band, footer on the bottom edge. Only when the strip is
+     actually drawn (the ± and the bars are one setting) and only while the
+     height query leaves the band room — below that the strip is hidden. */
+  @media (min-height: 821px) {
+    .main.strip > .cur-lyric,
+    .main.strip .viz {
+      margin-top: auto;
+    }
+    .main.strip .viz {
+      margin-bottom: auto;
+    }
   }
   /* Above the blurred cover and its scrim, below the stage: the backdrop
      becomes the animation instead of competing with it. */
@@ -884,6 +1007,26 @@
     text-overflow: ellipsis;
   }
 
+  @media (min-width: 1200px) {
+    /* Three columns: the sleeve column, the player, the queue. The row is
+       centred in a wider stage; the queue card keeps its full width so its
+       rows stay readable, and the player takes what is left (still > 470 px
+       at 1200, its full 520 from 1244). */
+    .stage {
+      max-width: 1440px;
+      gap: 24px;
+      justify-content: center;
+    }
+  }
+  @media (min-width: 1600px) {
+    /* Four columns: the facts get their own card to the right of the queue. */
+    .stage {
+      max-width: 1720px;
+    }
+    .lyrics-col {
+      width: clamp(280px, 18vw, 340px);
+    }
+  }
   @media (max-width: 900px) {
     .stage {
       gap: 20px;
@@ -898,6 +1041,18 @@
     }
     .tabs button {
       padding: 0 10px;
+    }
+  }
+  /* The Flow's steering row is 92 px high in the player (the Genres door, the
+     two feedback chips and the energy wrap onto two lines), against 40 px for
+     the old row. At 900 px high the row and the 44 px strip together push the
+     footer off the screen — measured at 1440x900: footer 879-913 in a 900 px
+     window. The strip is decoration, the row and the footer are not: the bars
+     yield whenever the Flow is live and the window is under 950 px high.
+     1920x1080 keeps them; 1440x900 without Flow keeps them too. */
+  @media (max-height: 949px) {
+    .main.steer .viz {
+      display: none;
     }
   }
   /* A narrow window keeps the full layout (the programs this runs in have both

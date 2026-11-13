@@ -134,14 +134,19 @@ second interface to keep in step with the first, and that is the whole design:
   read-only: browse, search, add to the queue, choose the animations), `full` (everything but
   administration, genre tagging included), `admin`. The UI hides what a level cannot do
   (`mode.js#CAN_BROWSE/CAN_KEEP/CAN_ADMIN`), but **the server's `POLICY` is the enforcement**: one
-  table naming the lowest level for EVERY `/api` endpoint (by method where it splits), closed by
-  default — an unlisted endpoint is refused to every remote session and a test fails until the new
-  route is classified. What no level gets, because it takes the owner's hand off their own player:
-  making or cutting links, the host's side of the channel, hosting a party, reporting plays.
+  table naming the lowest level for EVERY `/api` endpoint (by method where it splits), whatever
+  blueprint serves it (the key is the view function without its prefix), closed by default — an
+  unlisted endpoint is refused to every remote session and a test fails until the new route is
+  classified. What no level gets, because it takes the owner's hand off their own player:
+  making or cutting links, the host's side of the channel, hosting a party, reporting plays, and
+  starting the Explorer's Deezer work (`explorer_discover` is NEVER; reading the parent styles is
+  `read`).
 - **The token is the capability**: `<id>.<HMAC(secret, id)[:24]>`. The row (`RemoteLink`) names the
   grant; only this process can mint or check a token, and a copy of the table opens nothing.
   Claiming is rate-limited. A claimed session IS the owner's (`uid`, `epoch`) plus `rc`, so what the
-  holder sees is what the owner sees, narrowed by level on every request (`_remote_scope`); the
+  holder sees is what the owner sees, narrowed by level on every request (`enforce_remote_scope`,
+  installed ONCE on the application in `neezer/web.py` so the Explorer's separate `/api` blueprint
+  cannot escape it); the
   browser's own account is kept aside (`rc_prev`) and handed back on leave, on a cut and on
   `/logout` — logging out of a borrowed session ends the loan, not the holder's own login. The
   legacy admin pages read another session key, so a remote session is never a login to them.

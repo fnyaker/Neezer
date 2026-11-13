@@ -30,6 +30,24 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   there is REFUSED by the browser (it said so in the console on every load). It sets `data-theme`,
   the html background and `<meta name="theme-color">` from `ui.theme` / `ui.coverAc`;
   `initTheme()` in `main.js` then owns the session. Change one, change the other.
+- **A custom accent is an INLINE overlay on Encre/Papier, never a fourth theme** (Réglages ›
+  Apparence: native `<input type="color">`, a controlled six-digit field, "Réinitialiser",
+  `ui.accent` stored as JSON). `theme-boot.js` paints it before the first frame and
+  `lib/theme.js#apply` owns it afterwards; both run the same maths and `test/sillon.test.mjs`
+  compares their output so the copies cannot drift. `--ac`/`--btn` are the EXACT chosen surface,
+  `--onac`/`--onbtn` are pure black or white (`#0C0C0B` would miss 4.5:1 on a mid grey),
+  and `--ac-text`/`--ac-mark`/`--hrt` are a legible ink variant corrected against the most
+  demanding surface they are drawn on (`--s2` on Encre, `--s1` on Papier), because those tokens
+  are foregrounds (focus ring, hearts, progress). Measured: `#7C5CFF` on Encre gets black text at
+  4.83:1 and a lifted `#8F6AFF` at 4.51:1; `#FFF176` on Papier gets black text at 18.10:1 and a
+  deepened `#736C35` at 5.08:1; a 4 096-colour cube gives a worst label of 4.58:1 and its 8 192
+  theme/ink pairs a worst of 4.50:1. `apply()` clears every inline custom property before a theme
+  switch, so **Pochette keeps `--ac: var(--cover-ac)`** and a custom colour can never freeze the
+  sleeve (`--cover-ac` is never touched). The field refuses a non-colour (`aria-invalid`,
+  `role=alert`), says when the ink was lifted/darkened (`role=status`), and its controls are
+  46 px. The boot script grew to ~6.2 kB raw / 2.5 kB gzipped: the contrast maths cannot wait for
+  the bundle, and it is staged with the shell like the rest of the pre-paint code. In the built
+  app, the first rAF after a reload already had `--ac` with `#app` empty (measured at 390×844).
 - **Typography is self-hosted** (OFL texts beside the files): Bricolage Grotesque 600–800 for titles
   (`-0.03em` on big ones), Instrument Sans 400–700 for the interface, JetBrains Mono 400–500 for
   metadata and the small capitals (`.label-mono`, `letter-spacing:.08em`). latin + latin-ext (French
@@ -97,10 +115,35 @@ discovery level behind one chip, the energy notches under it — `EnergyPicker.s
 `artist_release.tracks`, which the releases watcher fills when it finds a release — `releases._fill_tracklists`,
 `TRACKLISTS_PER_RUN` a run, an outage leaves it for the next run, Deezer answering "gone" keeps `[]`), the favourite
 artists (`/me/artists`: stars + library count + the person's listens, three statements), Pour toi (titles), recently
-played shortcuts, mixes. The library is one page of chips (`/library/<chip>`: Titres, Artistes, Albums, Playlists,
-Podcasts, Téléchargés, Mes fichiers, Indisponibles), its adding actions one "+" menu. A track row is played by its
+played shortcuts, mixes. **The library has two levels** (`components/LibraryNav.svelte`): a Musique / Podcasts
+segmented control, then a leaf strip (`/library/<leaf>`: Titres, Artistes, Albums, Playlists, Téléchargés, Mes
+fichiers; Podcasts → Abonnements), the rare "Indisponibles" list kept on the right as a filter. The leaf is still what
+the URL names, so every deep link, `#/library/artists` from the home and Back keep working; the world is derived from
+it (no second route), and Musique remembers the leaf it was left on (`lastMusic` in the nav screen memory). A hash-only
+move between two library URLs updates the leaf instead of being ignored; a leaf switch uses `replace`, so it raises no
+history entry and does not scroll the page. The leaf strip scrolls sideways under a mask fade on a phone and never
+wraps: the old chip row was 148 px over three rows at 390 px, the two-level nav is 110 px and keeps 3 leaves + the
+filter on screen; 640 px fits all six and the filter; desktop caps the segmented control at 480 px. On touch the
+segment is 44 px, leaves 45 px and the filter 44 px. The podcast grid mounts once and is kept hidden across a world
+switch: its search survives and coming back costs no request (the first open asks `/api/podcasts` once). Adding is ONE
+"+" menu. A track row is played by its
 title too (the whole row is the target), and without a number the play glyph sits on the cover. Starring an artist
 FOLLOWS it; archiving its discography (`on_fav_artist`) is off by default.
+
+**Nouveautés is two shelves, then the per-release list** (`routes/Releases.svelte`,
+`components/ReleaseCard.svelte`, `routes/ReleaseShelf.svelte`). `close_to` splits the payload:
+« Tes artistes » is the person's own (favourites and the artists they listen to), « Découverte »
+the releases Deezer says are close to a favourite. Each card previews SIX titles (40 px sleeve,
+artist, title, duration — never TrackList's album/quality/action columns) and the whole card is ONE
+link to a playlist-like but READ-ONLY page (banner with a cover mosaic, Lire / Mélanger, search and
+sort, headings — no rename, reorder, add or remove). An empty card is not rendered; a lone card
+spans the row and its six titles read in two columns at ≥ 900 px. The `{releases, tracks}` payload
+lives in `Releases.svelte`'s module scope, keyed on the account: a card click paints the shelf from
+memory with **0 API request**, and the shelf's chunk (6.7 kB JS + 4.0 kB CSS) is prefetched
+during idle — measured 157–218 ms from the click to the shelf title under 4x CPU throttle, for a
+payload of 117 kB / 8.2 kB gzip on 8 000 tracks. `/releases/seen` is posted once per fetched feed. "Toutes les sorties"
+is collapsed by default, keeps its state across Back (`rememberScreen`), and opens itself when no
+shelf has a title yet.
 
 **≤ 640 px is a different SHELL, not a narrower desktop** (`src/mobile.css`, `lib/viewport.js`,
 `components/MobileNav.svelte`, `PlayerBar.svelte`'s mobile block, `App.svelte`). One column sized to
@@ -132,6 +175,19 @@ tapped here plays and then its radio (`TrackList radio`). With Deezer out (or no
 the library answers alone: titles, and the artists and albums by NAME that hold a title on disk
 (`webui._local_search_entities`, two statements). Each section carries a "Tout afficher" that switches to its tab.
 
+**A broad search can become a radio** (`lib/queryradio.js`, `routes/Search.svelte`). At **30 distinct results**
+(titles, artists, albums, playlists, shows — each counted once, the fallback's hits only once that source has
+answered, shows only for the admin who sees them) a primary "Lancer la radio" button rides the search field: 44 px,
+full-width under the field on a phone. It opens with the titles **above the search's own bar** (`CATALOGUE_MIN` 0.5,
+`YOUTUBE_MIN` 0.75), strongest first (a library row wins a tie) — the first one plays at once, before any request —
+then one `POST /api/radio/next` seeds from the best title (with its artist, for the catalogue row not in the library
+yet) or from the best artist, and appends what is new. A queue of three titles or fewer is left to
+`Player.svelte#ensureUpcoming`, which tops it up at once anyway: that is what keeps one press to ONE radio request.
+The context is `radio` / `artist-radio` with `title: "Radio de <query>"`, so another playback replaces it like any
+queue. Two clicks in one burst share one launch, a newer search's radio (or any playback started while the top-up
+is in flight) supersedes a late answer instead of having it appended, and no seed is an honest error toast, never a
+silent no-op.
+
 **The YouTube fallback is ON by default and inside the same list** (`lib/searchrank.js#matchScore`,
 `rankSearchResults`). It is asked once the query settles — 800 ms after the last keystroke, at once on Enter, a
 recent term or a deep link, and never when the account lacks `youtube:search` or the source is off: one request
@@ -150,6 +206,21 @@ Découverte, Sources, Compte, Serveur for an admin, Assistance), each a page —
 phone shows the list OR a category (back returns to the list, `replace` on a deep link); ≥ 900 px shows a column beside the
 open category. A link into a setting names its category (`/settings/sources`, `/settings/account`); old `fx`/`quality`
 names are mapped. Benches open the category they test (`#/settings/playback`, `#/settings/downloads`), never bare `#/settings`.
+
+**The Égaliseur card is a picker, a meter and ten faders** (`components/AudioEffects.svelte`,
+`lib/eqpresets.js`). It is its own card under the volume/bass one. The presets are two groups — Intégrés (5)
+and Mes préréglages — as a horizontal snap rail at ≤640 px (44 px chips, the next one clipped as the scroll
+affordance, no scrollbar) and as a vertical scrolling list in two columns on desktop (the 760 px settings
+pane). Every preset is reachable; the active one is highlighted and **revealed when the card mounts** (on a
+ten-preset rail it would otherwise mount out of view). Clicking applies the whole stored chain (EQ, curve,
+bass, normalization). A selected user preset that has been edited says « modifié » and enables « Mettre à
+jour », which writes the ten bands and the bass lift only; a built-in is code, so it offers « Enregistrer
+comme… » instead. Update and delete are undoable toasts, never a confirmation dialog. The live per-band
+meter and its saturation warning sit above the faders; the meter's subscription is scoped to the card being
+on screen and the page visible, and the warning's « Réduire le volume de X dB » lowers the player volume
+optimistically with an undo toast (cost, colours and the peak-hold reset: playback.md). Measured 390x844:
+card 350 px wide, no sideways overflow, chips 44 px, all 15 presets in the DOM and the rail scrollable; at
+1440: 760 px card, bars centred on their frequency labels to 0.01 px.
 
 **Long grids grow as they scroll** (`lib/grow.js`: `STEP`, `use:nearEnd` on a sentinel after the last tile;
 Library's Artistes, Albums, Playlists). 300 followed artists mounted at once cost 1.2 s of main thread on the
@@ -213,6 +284,32 @@ player (a `hashchange` listener). Its requests are keyed on the track's id as a 
 object, handed over again on every progress tick, and a reactive statement reading it asked for the credits four
 times a second (the browser test counts requests).
 
+**The desktop player adds reading columns before the queue gives way** (`DesktopNowPlaying.svelte`,
+`Lyrics.svelte`). The queue card is the one thing that never disappears: at **1200 px** (Material's *large*)
+the lyrics become a persistent left column — synchronised, scrolled to the active line even when the column
+mounts mid-track (`onMount` + `tick`; the old tab opened at the top and stayed there) — and at **1600 px**
+(*extra-large*) `À propos` gets a fourth card to the right of the queue. Space coming back is taken in that
+order: the facts return to the queue card's tab first, then the lyrics. Measured with the animation strip on:
+1920×1080 four columns 340 · 520 · 360 · 360 px; 1600×900 288 · 512 · 360 · 304; 1280×900 three
+columns 269 · 520 · 360; 1200×900 252 · 476 · 360 (the player's floor); 1199×900 two columns 520 + 360
+with all three tabs back. The strip itself keeps 44 px desktop / 40
+px mobile and is centred by auto margins in the empty band under the transport, never against the controls or
+the footer: 1920 y 885–929 with footer at 1022; 1100×900 y 749–793 with footer at 842; 390×844 mobile 670–710
+with the thumb row at 750 (a 34 px stripe at 360×640 became 40 px again with `flex:none`, the sleeve absorbing
+the 6 px). The queue card's tab row is a single dead pill once four columns are up, so it is replaced by the
+same label header the other columns use. **The Flow's steering row is 92 px high** (its Genres door, two
+feedback chips and the energy wrap on two lines in the 520 px player), so under **950 px high** the strip
+yields to it rather than pushing the footer off screen: 1440×900 Flow now ends its footer at 848–882 with the
+strip hidden, 1920×1080 keeps the strip at 44 px, and 1440×900 without Flow keeps it too.
+
+**The phone's lyrics are a view, not a hidden gesture** (`MobileNowPlaying.svelte`): the labelled « Paroles »
+door in the thumb row opens a full-height sheet whose own header names the track and the artist, with a 44 px
+close. One scroller only — the sheet is `overflow:hidden`, `Lyrics.svelte` keeps `overflow-y:auto` and follows
+the active line; opening it scrolls straight to that line even mid-track (the same `onMount` + `tick` as the
+desktop column). It closes the queue sheet when it opens and the queue closes it back; `À propos` closes both.
+Measured 390×844: 30 lines, close 44×44, the list scrolls 169 → 281 as the active line goes 15 → 30; at
+360×640 the five thumb targets span 338 px of 360, no overflow, and the sheet still fills the screen.
+
 **Full credits** (`neezer/trackcredits.py`, `neezer/webui/credits.py`, `GET /api/track/<id>/credits`): the
 performers are `TrackArtist` rows; everybody else on the sleeve (author, composer, producer, publisher…) is a
 `track_credit` row (schema `20261030`): one per person, role and SOURCE — `deezer` (the gateway's
@@ -247,7 +344,10 @@ and builds the new screen synchronously inside it, so nav.js resolves the curren
 (`syncEntry` on every entry point) rather than racing listeners; and a scroll restore must **settle**
 (the offset holding on a page whose height stopped moving) instead of stopping at the first frame it
 fits, because popstate lands one task before hashchange and those first frames can still be
-measuring the page being left.
+measuring the page being left. A reload restarts nav.js's id counter while the entries already in
+the stack keep theirs: `syncEntry` adopts the id it finds (`seq = max(seq, id)`) or the first push
+reused id 1 and two entries shared one offset — measured, Back landed at 0 instead of the 120 px
+the person had left.
 
 **Offline & versioning** (the SPA is an *install*, not a page — treat it as one):
 - `public/sw.js` serves the shell **cache-first** (an instant launch on any network) and stages a new
@@ -344,3 +444,23 @@ line only exists when there is one, the strip and the Flow row give their height
 transport off the screen: 360x640 measures 248 px square (269 without the strip, 212 with the Flow row too),
 390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
 `env(safe-area-inset-*)` fallback until G1's tokens land.
+
+**Explorer is ten parent styles, not a genre search** (`components/ExplorerStyles.svelte`,
+`GET /api/explorer/styles`, `POST|GET /api/explorer/discover`). The landing asks the server for the ten
+PARENT styles of the caller's own taste (`discover.parent_styles`: Boogie is served as Disco/funk); it never
+puts a style name in the search field. A style opens a discovery sheet with a 1–5 slider. The POST starts
+one worker; the GET only reads (`pending`/`ready`/`idle`) and never starts work, so a page cannot trigger a
+Deezer sweep by opening a URL. Poll every 2 s, stop on `idle`, `error`, `429` or `503`; those two carry
+`Retry-After` and the sheet counts it down instead of spinning. One POST is one discovery: measured, a
+budget refusal is **1 POST / 0 GET**, a poll refusal is **1 GET** (the retry in `api.get` would have
+replayed it), and an `idle` answer is **1 GET then 0**. The Flow picker (`FlowPicker.svelte` inside
+`FlowControls.svelte`) shows the selected genres and the diversity level in one sheet on phone and desktop;
+it consumes the existing `flow.js` actions and changes no queue rule.
+
+**A sidebar playlist's thumb is its real cover** (`components/Sidebar.svelte`, `Cover.svelte`,
+`lib/coverqueue.js`). The 26 px tile renders `Cover` with the playlist's `cover` and keeps the deterministic
+groove only while loading or when no cover exists. The shared queue bounds it: **6 requests in flight**, an
+horizon of two viewports, and no request for a playlist without art. On a 61-playlist desktop, the first
+cover painted in **186 ms**, 30 requests for the rows near the viewport, and scrolling to the bottom asked
+15 more (37/60 total, never more than 6 at once); the phone (≤640 px) hides the sidebar and makes **0**
+cover requests.

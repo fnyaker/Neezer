@@ -275,7 +275,10 @@
   const canPinToCar = !REMOTE && carAvailable();
   function pinToCar() {
     if (!data?.playlist) return;
-    if (carPin(id, data.playlist.title))
+    // The count is already in the payload: the native tile can name it before
+    // the first catalogue read (lib/car.js falls back to the two-argument
+    // bridge call when the page does not know it).
+    if (carPin(id, data.playlist.title, data.playlist.nb_tracks))
       toasts.push(`« ${data.playlist.title} » épinglée pour la voiture`);
     else toasts.push("Impossible d'épingler cette playlist", "error");
   }
