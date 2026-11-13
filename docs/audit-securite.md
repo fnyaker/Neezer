@@ -1,5 +1,12 @@
 # Audit de sécurité offensif — Neezer (passe 2, boîte noire)
 
+> **Instantané daté (2026-07-29).** Ce document reste la référence des causes et des correctifs de
+> cette passe ; les règles vivantes sont dans [docs/agents/](agents/) et le prompt `security`.
+> Constats encore ouverts : **NS-21** (planchers de version ; le lockfile et `npm ci` sont faits),
+> **NS-27** (journal d'audit), **NS-04** (protocole du démon, partiel) ; **NS-13/14** sont des
+> contraintes du protocole Subsonic, pas des oublis. **NS-19** a été corrigé depuis, dans la passe
+> Android (`docs/agents/android.md`).
+
 > ## 🛠️ État des corrections (2026-07-29)
 >
 > **28 constats corrigés, 1 partiellement, 7 laissés en l'état.** Le détail
@@ -138,7 +145,7 @@ Les preuves les plus marquantes de cette passe :
 | [NS-18](#ns-18) | SSRF via `stream_url` d'épisode (redirections suivies) | 🟡 Moyen | 🔎 Confirmé | Redirections suivies un saut à la fois, refus des IP privées/loopback/link-local |
 | [NS-19](#ns-19) | Android : cleartext + trust-all SSL + pont JS ouvert | 🟡 Moyen | 🔎 Confirmé | Épinglage TOFU au lieu du trust-all, `NSNative` limité au serveur, clair et cookies limités au serveur (redirections suivies à la main), mixed content refusé, sauvegarde désactivée |
 | [NS-20](#ns-20) | Fuite de l'ARL (conf en clair, env, `ps`) | 🟡 Moyen | 🔎 Confirmé | `umask 077`, conf rendue en `chmod 600`, mot de passe admin via `--password-stdin` |
-| [NS-21](#ns-21) | Supply chain : pas de lockfile, deps flottantes | 🟡 Moyen | 🔎 Confirmé | **Non corrigé** — lockfile npm / planchers de version : décision du mainteneur |
+| [NS-21](#ns-21) | Supply chain : pas de lockfile, deps flottantes | 🟡 Moyen | 🔎 Confirmé | **Partiel** : `package-lock.json` committé et CI en `npm ci` ; planchers de version à vérifier |
 | [NS-22](#ns-22) | CSP `https:` joker, pas de HSTS | 🟡 Moyen | ✅ Confirmé | CSP restreinte aux hôtes réellement utilisés, `object-src 'none'`, HSTS si TLS, Permissions-Policy |
 | [NS-24](#ns-24) | `addChatMessage` non borné (100k accepté) | 🟡 Moyen | ✅ Confirmé | Message tronqué à 512, quota de 20/min par compte, table plafonnée à 1000 |
 | [NS-10](#ns-10) | Quota : TOCTOU (backend concurrent seulement) | 🟡 Moyen | ⚠️ Non reproduit | Inchangé — reste théorique (SQLite sérialise les écritures) |
@@ -747,11 +754,11 @@ trois clés vers l'environnement casse cette chaîne à elle seule.
 - [x] **NS-09** — sémaphore de transcodage, `timeout=` ffmpeg, rate-limit
 - [x] **NS-11** — clés de rate-limit `ip:` + `user:`, succès ne réinitialise que `user:`
 - [x] **NS-12** — `session.clear()`, `session_epoch`, durée réduite
-- [ ] **NS-21** — committer `package-lock.json`, `npm ci`, planchers de version
+- [~] **NS-21** — `package-lock.json` committé et CI en `npm ci` (fait) ; planchers de version à vérifier
 
 ### Moyen terme
 - [~] **NS-04** — socket hors `/tmp` (fait) ; protocole démon JSON (à faire)
-- [ ] **NS-19** — épinglage TOFU Android, shim restreint, pont validé
+- [x] **NS-19** — épinglage TOFU Android, shim restreint, pont validé (passe Android depuis)
 - [x] **NS-18** — garde anti-SSRF sur les récupérations externes
 - [x] **NS-22** — CSP restreinte, HSTS
 - [ ] **NS-27** — journal d'audit

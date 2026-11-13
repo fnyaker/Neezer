@@ -147,8 +147,8 @@ empty body (`looks_like_a_page`) — instead of listing formats it would one day
 
 **Podcasts** are Deezer *shows*/*episodes*, kept in dedicated `PodcastChannel`/`PodcastEpisode` tables
 (not Track rows — episodes have no artist/album and map onto Subsonic's podcast types). The gw methods
-(`deezer.pageShow`, `show.add/deleteFavorite`, `episode.bookmarkSet`) were confirmed from a HAR capture;
-see `docs/plan-podcasts.md`. Episodes stream as **plain MP3 straight from the podcast host** (no FLAC,
+(`deezer.pageShow`, `show.add/deleteFavorite`, `episode.bookmarkSet`) and the public `/podcast` shape were
+confirmed from a HAR capture (2026-07-03): episodes are **plain MP3 straight from the podcast host** (no FLAC,
 no Blowfish — `provider.download_episode_to` just follows redirects), archived under
 `archive_dir/Podcasts/<Show>/` on first play. **That archive is not the user's library**:
 `local.scan_local` never descends into `archive_dir/Podcasts/` and skips any file a
@@ -460,8 +460,7 @@ doesn't). Before that only Subsonic's `scrobble` did, so a library played entire
 app looked untouched — and the cleanup decides what to drop from exactly this data.
 
 **Recommendations, the radio, the Flow and the releases** (`neezer/listening.py`, `neezer/mix.py`,
-`neezer/radio.py`, `neezer/discover.py`, `neezer/releases.py`, `webui/discover.py`; design and sources in
-`/mnt/project-files/algos/refonte-decouverte.md`). Every screen READS the database: no click asks a provider.
+`neezer/radio.py`, `neezer/discover.py`, `neezer/releases.py`, `webui/discover.py`). Every screen READS the database: no click asks a provider.
 - **Taste is PER PERSON** (`listen_event`, schema `20261026`): every track change the player reports (and Subsonic's
   scrobble) is one row, judged by published rules — a listen is half the track or 240 s (Last.fm), a skip is under
   30 s, a track of 30 s or less is never a listen. A title's weight is ACT-R's base-level activation

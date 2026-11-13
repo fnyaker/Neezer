@@ -25,8 +25,10 @@ le code.
 - [ ] **Mono et balance gauche/droite** — accessibilité. Un `StereoPanner` et une sommation mono
   dans `lib/audio/graph.js` ; réglages dans `AudioEffects.svelte`. Attention à la chaîne
   d'analyse rythmique : elle doit continuer à voir le signal stéréo d'origine.
-- [ ] **Mode voiture** — écran plein format, très gros boutons (précédent / lecture / suivant,
-  file, favori), lisible d'un coup d'œil et sans geste fin.
+- [x] **Mode voiture** — écran plein format, très gros boutons (précédent / lecture / suivant,
+  file, favori), lisible d'un coup d'œil et sans geste fin. Livré en overlay natif : tailles,
+  gestes, playlists épinglées, recherche, déclenchement GPS/Bluetooth et démarrage au boot
+  (`docs/agents/android.md`).
 - [ ] **Panneau « sous le lecteur »** — dans le lecteur plein écran, glisser vers le haut fait
   monter une page (crédits, artiste, puis titres similaires tout à la fin) :
   - [x] titres similaires (via l'API Deezer aujourd'hui — `/radio/track/<id>` ; à terme via nos
@@ -43,9 +45,9 @@ le code.
 - [ ] **Radios** — stations par genre. `get_radios_genres` et `get_genre_radios` existent côté
   client ; à brancher sur la file (comme `/radio/track`).
 - [ ] **Vrai historique d'écoute** — un journal de chaque écoute (titre, date, durée écoutée,
-  contexte), pas seulement `play_count` / `last_play`. **Prérequis du Récap** (niveau 3) : à faire
-  avant, et à faire proprement (nouvelle table, migration `SCHEMA_VERSION`, purge possible).
-  Écran « Historique » dans la bibliothèque.
+  contexte), pas seulement `play_count` / `last_play`. Le journal existe déjà (`listen_event`,
+  `neezer/listening.py` : une ligne par changement de titre, écoutes et skips jugés) ; il manque
+  l'écran « Historique » dans la bibliothèque. **Prérequis du Récap** (niveau 3).
 - [x] **Crédits complets** (auteur, compositeur, producteur, label, ISRC…) — `GET /api/track/<id>/credits` :
   le sidecar d'abord, Deezer ensuite (et alors écrit dans le sidecar), la base en dernier recours.
   Affichés dans le panneau sous le lecteur.
@@ -67,12 +69,13 @@ le code.
   de la listen party et du contrôle à distance (identifiant opaque, jeton signé, ne donne accès
   qu'à ce que le propriétaire a publié : la playlist, ses pochettes, ses extraits). À cadrer :
   ce qu'un invité peut écouter de Deezer.
-- [ ] **Import de playlists** — depuis un lien ou un fichier, correspondance des titres par ISRC
-  puis par artiste + titre, avec un écran de revue des titres non trouvés :
-  - [ ] Spotify
-  - [ ] Apple Music
-  - [ ] Deezer (lien de playlist publique, en plus de l'import CLI existant)
-  - [ ] YouTube / YouTube Music
+- [x] **Import de playlists** — depuis un lien ou un fichier, correspondance des titres par ISRC
+  puis par artiste + titre, avec un écran de revue des titres non trouvés (`neezer/linkimport.py`,
+  `neezer/webui/playlist_import.py`, `routes/Import.svelte`) :
+  - [x] Spotify
+  - [x] Apple Music
+  - [x] Deezer (lien de playlist publique, en plus de l'import CLI existant)
+  - [x] YouTube / YouTube Music
 
 ## Niveau 4 — une à deux semaines, vraie conception
 

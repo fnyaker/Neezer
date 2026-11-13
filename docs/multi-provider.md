@@ -1,5 +1,17 @@
 # Passer au multi-fournisseur : plusieurs sources de sons, une seule bibliothèque
 
+> **État (2026-11-13) : livré, sauf §13.** Les lots A à N et P1 à P3 sont fusionnés (interface
+> `Provider`, identité et doublons, échelle de qualité, registre et accès par fonction, comptes
+> personnels, Deezer public sans compte prêté). Le **registre générique de réglages (§13)** reste à
+> écrire : aujourd'hui les clés vivent dans `config.py` et `Meta`, lues au cas par cas par chaque
+> écran. Le reste du document est le contrat de référence (interface, types, erreurs, qualité,
+> doublons, décisions) ; les règles vivantes sont dans [agents/providers.md](agents/providers.md) et
+> [agents/server.md](agents/server.md).
+>
+> Les sections ci-dessous gardent la formulation de l'époque (« à faire », « reste ») : elles
+> décrivent le point de départ et les décisions, pas l'état courant. Pour l'état courant, lire
+> [agents/providers.md](agents/providers.md).
+
 Objectif (demande du propriétaire, 19/10/2026) : une fois détachée de Deezer (plan
 `docs/detachement-deezer.md`, lots A à I fusionnés), l'application ne doit plus être « un proxy
 Deezer avec un repli YouTube » mais **une bibliothèque locale alimentée par plusieurs fournisseurs**,
@@ -12,7 +24,7 @@ avec :
   est un seul titre, avec plusieurs sources, et la meilleure qualité est préférée.
 
 Le plan est un inventaire. Le découpage en lots exécutables (un lot = un agent, une branche, une
-PR) est dans `/mnt/project-files/multi-provider/besoins.md`.
+PR) est décrit ci-dessous, section par section.
 
 ## Ce qui est déjà acquis (point de départ)
 
@@ -240,8 +252,8 @@ archivé sinon.
 - Un fournisseur s'**enregistre** (`registry.register(ProviderClass)`) ; les intégrés le font à la
   création de l'application (`web.py#create_application`), les tiers par le groupe d'entrée
   (`entry_points`) `neezer.providers`, ce qui permet d'ajouter un fournisseur **sans modifier ce
-  dépôt**. Ajouter un fournisseur = un fichier + une ligne ; le gabarit (`docs/providers.md`, écrit au
-  lot J) le montre de bout en bout.
+  dépôt**. Ajouter un fournisseur = un fichier + une ligne ; le gabarit est l'interface décrite au
+  §1 et les adaptateurs de `neezer/providers/` en sont trois exemples complets.
 - `current_app.providers` (le registre) remplace `current_app.deezer`, qui **reste** et pointe sur le
   fournisseur `deezer` pendant toute la transition (une cinquantaine d'appelants).
 - Configuration : `[provider.<id>]` dans `neezer.conf` ; l'ancienne section `[deezer]`, les
@@ -460,7 +472,13 @@ en particulier **toutes les clés d'API** (MusicBrainz/AcoustID, Last.fm, fourni
 **chemins de fichiers** et ce qui doit être connu avant que la base ne s'ouvre (URI de base de
 données, hôte, port) restent dans le fichier de configuration.
 
-- Un **registre de réglages** (`neezer/settings.py`) : chaque réglage déclare sa clé, sa section,
+**État (2026-11-13) : partiel.** Les écrans de Réglages couvrent déjà les comptes et les accès, les
+sources Deezer/YouTube, la découverte, l'analyse et l'enrichissement ; mais chaque écran lit ses
+propres clés dans `config.py` / `Meta`. Le registre générique et le test `FILE_ONLY` décrits
+ci-dessous sont le contrat cible, pas l'état actuel : les clés d'enrichissement (`acoustid_key`,
+`contact`) restent par exemple dans `[enrich]`.
+
+- Un **registre de réglages** (`neezer/settings.py`, à écrire) : chaque réglage déclare sa clé, sa section,
   son type, s'il est secret, son défaut, son validateur, s'il demande un redémarrage et une action de
   test. Les valeurs vivent en base, **lues avant le fichier de configuration, avant l'environnement**
   (comme l'ARL aujourd'hui) : une installation existante continue de marcher sans rien saisir.

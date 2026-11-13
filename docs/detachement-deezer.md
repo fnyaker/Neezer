@@ -1,5 +1,16 @@
 # Se détacher de Deezer : Deezer comme pure source de sons
 
+> **État (2026-11-13) : livré.** Les lots A à I sont fusionnés (identité UUID, sidecar de faits,
+> import ponctuel, Flow/radio locaux, gain et paroles hors Deezer, pages depuis la base, garde-fou
+> `tests/test_detach_guard.py`, enrichissement MusicBrainz). Ce document n'est plus une liste de
+> travail : il reste la référence des décisions et des raisons. Ce qui reste volontairement chez
+> Deezer est en **D18** ; les règles vivantes sont dans [agents/server.md](agents/server.md),
+> [agents/providers.md](agents/providers.md) et [agents/playback.md](agents/playback.md).
+>
+> Les sections ci-dessous gardent la formulation de l'époque (« État actuel », « À faire ») : elles
+> décrivent le point de départ et les décisions, pas l'état courant. Pour l'état courant, lire les
+> notes d'aire liées.
+
 Objectif (demande du propriétaire, 18/10/2026) : Deezer ne doit plus être qu'un **fournisseur de
 fichiers FLAC** et de **faits sur ces fichiers**. Un titre archivé depuis Deezer doit être, pour le
 reste de l'application, **un fichier comme un autre, comme si l'utilisateur l'avait uploadé**. On

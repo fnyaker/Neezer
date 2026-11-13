@@ -56,7 +56,7 @@ def main():
     A, AL, T, PL, SH = args.artist, args.album, args.track, args.playlist, args.show
 
     # Podcasts: Deezer calls them "shows" internally. Method names/args below are
-    # confirmed from a HAR capture of the web player (see docs/plan-podcasts.md).
+    # confirmed from a HAR capture of the web player (docs/agents/server.md).
     # If --episode isn't given, pull one from the show page when it answers.
     EP = args.episode
     if not EP:

@@ -77,6 +77,49 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   a solid `--btn` pill (the purple gradient and its glow are gone). 40 px high on a mouse, 44 under a
   finger (`@media (pointer: coarse)`) — §10's touch rule without changing the desktop rhythm.
 
+**The Sillon handoff (the old `DESIGN.md`, §1–§10), in one place.** Code comments that cite
+`DESIGN §n` mean these rules; the handoff file itself was deleted once the design landed, because
+this is the lasting part and the rest was a one-shot maquette. §1 tokens and §2 type are the bullets
+above. §3 brand: **Neezer is the product, Sillon only the design direction** (the record groove);
+the logo is a lemon disc with two concentric circles and a centre dot; the tagline is « Ton archive
+musicale, gravée à ta façon. » §4 fallbacks are above. §5 layout: **232 px sidebar | content | 340 px
+queue panel** (optional) over a **88 px player**. §6 pages:
+- **Accueil** — full-accent hero « Quelle énergie ce matin ? » with the six energy chips and *Lancer
+  mon Flow*; a *Reprendre* card beside it; then *Par style* chips, a *Nouveautés* cover rail, *Tes
+  artistes* avatars and a dense *Pour toi* list.
+- **Explorer** (ex-Rechercher) — source chips (Ma bibliothèque, Deezer, YouTube, Podcasts), recent
+  searches and style tiles. Never an empty page.
+- **Bibliothèque** — global counters in the header, pill tabs (Titres, Artistes, Albums, Playlists,
+  Podcasts, Hors-ligne, Mes fichiers), *Indisponibles* as a filter; tracks keep the shared list
+  below; artists are a 7-column avatar grid, playlists a card grid; every empty state has a drawing,
+  a sentence and an action.
+- **Liste de titres** (shared) — `36 px | titre + artiste (cover 44 px) | album | qualité (badge
+  mono FLAC/OPUS) | + et cœur (76 px) | durée`. The current track is accent with ▶ in place of its
+  number; **+** opens the playlist modal (§8).
+- **Artiste** — `--s2` banner, 168 px avatar, 88 px name, *Lire* / *Radio* / heart; tabs Aperçu,
+  Titres, Crédits; latest-release rail, top tracks, albums.
+- **Playlist** — 200 px cover, 72 px title; *Lire*, *Mélanger*, *Télécharger*, *Ajouter des titres*,
+  *Modifier*, and ⋯ for the destructive actions (deleting is never a bare icon again).
+- **Nouveautés** — cards grouped by release (132 px cover, Album/Single, track count, *Lire*,
+  *Ajouter aux favoris*).
+- **Réglages** — `200 px | contenu`; fixed groups Écoute (Lecture & son, Apparence, Animations),
+  Bibliothèque (Téléchargements, Découverte), Comptes & serveur (Sources, Compte, Serveur,
+  Assistance), a *Chercher un réglage* field, cards on `--s1`; the Deezer state is a pill with
+  *Tester*. The sections keep their ids (`playback`, `viz`, `downloads`, `discovery`, `sources`,
+  `account`, `server`, `help`) because the benches open them by URL.
+
+§7 player: the 88 px bar is cover 56, title/artist (click = full screen), heart and **+**, transport,
+progress; right side = **clickable quality badge** (FLAC / Opus 320 / 256 / 192 / 128 / 64), devices
+(remote + listen party), queue, volume, ⋯ (sleep timer, share) and full screen. The full screen keeps
+the sleeve ≤ 330 px and a right panel with **File d'attente / Paroles / À propos**; the queue row has
+play, + playlist and ×. §8 playlist modal: 440 px, 60 % veil, `role="dialog"`, × and Échap; a track
+mode with checkboxes that apply at once and a toast, a *new playlist* mode and a *save the queue*
+mode; toast = a `--tx` pill 2.4 s above the player, `role="status"`. §9 mobile ≤ 640 px: a 64 px
+bottom tab bar (Accueil, Explorer, Biblio, Réglages), a 64 px floating mini-player above it, and a
+thumb-centred full screen (≥ 44 px controls). §10 accessibility: real `<button>`/`<a>`, `aria-label`
+on every icon-only control, 44 px touch targets, a visible `--ac-text` focus ring, `aria-pressed` on
+the modal's checkboxes, and no information carried by colour alone.
+
 **Web app** (`webapp/`): Svelte 5 + Vite 7 SPA, hash routing (svelte-spa-router), consuming `/api`.
 Existing components still use the legacy `$:` / `export let` syntax; follow the file you edit.
 Builds into `neezer/webui/dist`. No emoji in the UI — all glyphs go through
@@ -104,7 +147,7 @@ nothing matched or when the service stopped answering. Credentials live in `serv
 `password_clear`, never lent to a remote session. The Spotify PKCE state is kept server-side, not in the
 session: Android opens the consent page in the system browser.
 
-**Navigation, the home and the library** (design and sources: `/mnt/project-files/ui/refonte-navigation.md`).
+**Navigation, the home and the library** (design and sources: the Sillon handoff above).
 Four destinations — Accueil, Rechercher, Bibliothèque, Réglages (Material 3 and Apple's tab-bar rules: five or fewer,
 one-word labels); podcasts live IN the library. **A title on its own plays and then its radio**
 (`actions.playThenRadio`, `TrackList radio`): the queue is that title alone with context `{kind: "radio", id,
@@ -384,6 +427,12 @@ main bundle **656 kB → 457 kB** (223 → 158 kB gzipped), CSS **128 kB → 85 
   only within the first 90 s of a session, otherwise via a notice; guarded against reload loops).
   It also does the **startup-only** Android update check (`window.NSNative.appVersion()` vs
   `/api/version`'s `android.version`).
+- **A cached answer is a success, never a failure.** A failed list fetch must never be stored as the
+  offline copy — a playlists error cached forever turned the offline screen into a permanent empty
+  state — and the service worker never caches an error response. Offline playback is for bytes
+  actually downloaded: a track that only exists as a server-side “local” file is not playable while
+  the device is offline, and the UI says so instead of handing the player a URL that cannot answer.
+  Durations of an hour or more are `h:mm:ss` (`lib/format.js`), never `92:15`.
 - `lib/reconcile.js` merges a refetched list into the one on screen (identity preserved for
   unchanged rows) — playlists and favourites paint from the offline cache first and the network copy
   is reconciled in, never swapped wholesale. `lib/actions.js#warmPlaylists` pulls every playlist's

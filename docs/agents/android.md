@@ -56,7 +56,7 @@ included) — so the page can say "signature différente" (a CI build without th
 instead of an installer error; then the "install unknown apps" permission (settings opened, resumed on return) and
 the system installer (ACTION_VIEW on a FileProvider uri). `NSNative.bridgeVersion()` (2) is what the page may ask of
 an APK: an older one answers nothing and keeps the "Télécharger" link. Progress: `window.__nsUpdate({state,…})`.
-This is the delivery channel for the native audio work (study: `/mnt/project-files/natif/etude-rust-natif.md`).
+This is the delivery channel for the native audio work.
 
 **The native audio core** (`android/nscore`, Rust, `NsCore.kt`; lot N2 of the native-audio plan). The `rhythm`
 crate — the analyser the web app runs in its AudioWorklet — compiled for the device, plus `dsp.rs`: the output chain
