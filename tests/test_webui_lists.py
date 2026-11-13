@@ -218,24 +218,27 @@ class ListsTestCase(unittest.TestCase):
         # A guest's list keeps its order: newest first.
         self.assertEqual(ids, ["5", "3", "1"])
 
-    def test_my_playlists_counts_and_covers_in_four_statements(self):
+    def test_my_playlists_counts_and_covers_in_six_statements(self):
         self._login()
         with count_statements() as counts:
-            pls = self.client.get("/api/me/playlists").get_json()["playlists"]
+            answer = self.client.get("/api/me/playlists").get_json()
+        pls = answer["playlists"]
         by_name = {p["title"]: p for p in pls}
         self.assertEqual(by_name["Big"]["nb_tracks"], 10)
         self.assertEqual(by_name["Big"]["cover"], "/api/cover/" + str(self.tracks[0].album_id))
         # A local first track: its album's cover route, like any other.
         self.assertEqual(by_name["Local first"]["cover"], "/api/cover/" + str(self.tracks[3].album_id))
+        # A playlist that was never ordered: unfiled, and no position at all.
         self.assertEqual(by_name["Empty"], {
             "id": str(self.empty.id), "deezer_id": None, "title": "Empty", "cover": None,
-            "nb_tracks": 0, "editable": True,
+            "nb_tracks": 0, "editable": True, "folder_id": None, "position": None,
         })
+        self.assertEqual(answer["folders"], [])
         # Newest first, as the model path listed them.
         self.assertEqual([p["title"] for p in pls], ["Empty", "Local first", "Big"])
-        # The session, the playlists, their counts, their first tracks — not
-        # two per playlist.
-        self.assertLessEqual(counts["SELECT"], 4, counts)
+        # The session, the playlists, their counts, their first tracks, the
+        # folder list and the folder counts — not two per playlist.
+        self.assertLessEqual(counts["SELECT"], 6, counts)
 
     def test_an_unchanged_answer_is_revalidated_not_resent(self):
         self._login()

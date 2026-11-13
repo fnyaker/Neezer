@@ -263,6 +263,15 @@ POLICY = {
     "favorite": "full",
     "favorite_entity": "full",
     "create_playlist": "full",
+    # Playlist folders are the person's own organisation of their playlists:
+    # the same weight as any playlist edit (a controller with `read` or `queue`
+    # gets 403, like every other mutation). Folder visibility is never widened
+    # by a link: the rows are the owner's own.
+    "create_playlist_folder": "full",
+    "edit_playlist_folder": "full",
+    "delete_playlist_folder": "full",
+    "reorder_playlist_folders": "full",
+    "reorder_container": "full",  # serves <folder_id>/order and root/order
     "import_playlist_save": "full",
     "edit_playlist": "full",
     "delete_playlist": "full",

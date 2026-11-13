@@ -418,6 +418,12 @@ def create_application(config=None):
 
         app.register_blueprint(explorer_api, url_prefix="/api")
 
+        # Playlist folders (a private per-person organisation of playlists):
+        # its own blueprint, like the Explorer, with its own same-origin guard.
+        from .webui.playlist_folders import playlist_folders_api
+
+        app.register_blueprint(playlist_folders_api, url_prefix="/api")
+
         # Remote-control narrowing must cover EVERY /api route, including the
         # ones served by a blueprint other than webapi. The hook lives on the
         # application, not on webapi, so a new blueprint cannot escape it.

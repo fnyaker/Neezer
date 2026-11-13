@@ -3543,8 +3543,11 @@ class WebUIGuestTestCase(unittest.TestCase):
 
     def test_no_owner_playlists(self):
         self._login()
+        # Folders ride in the same answer (a private organisation of the
+        # owner's playlists), so a guest gets two empty arrays, not an error.
         self.assertEqual(
-            self.client.get("/api/me/playlists").get_json(), {"playlists": []}
+            self.client.get("/api/me/playlists").get_json(),
+            {"playlists": [], "folders": []},
         )
 
     def test_telemetry_suppressed(self):

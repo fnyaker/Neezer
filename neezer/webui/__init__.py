@@ -48,6 +48,7 @@ from ..db import (
     Artist,
     Meta,
     Playlist,
+    PlaylistPlacement,
     PlaylistTrack,
     PodcastChannel,
     PodcastEpisode,
@@ -2901,17 +2902,39 @@ def radio_next():
 @login_required
 def my_playlists():
     # The playlists belong to the account owner (admin); guests don't see them.
+    # Folders are per-person organisation of that same list: a guest gets two
+    # empty arrays, so the feature is invisible rather than half-alive.
     if not _is_admin():
-        return jsonify({"playlists": []})
+        return jsonify({"playlists": [], "folders": []})
+    from .playlist_folders import list_shape
+
     query = (
-        Playlist.select(_raw(Playlist.id), Playlist.deezer_id, Playlist.name)
+        Playlist.select(
+            _raw(Playlist.id),
+            Playlist.deezer_id,
+            Playlist.name,
+            # `created` and the caller's placement join the same SELECT: the
+            # rendering order is decided in Python (playlist_folders.list_shape)
+            # and costs no extra statement. A playlist with no placement row is
+            # unfiled and sorts by creation date, which is today's list.
+            Playlist.created,
+            _raw(PlaylistPlacement.folder),
+            PlaylistPlacement.position,
+        )
+        .left_outer_join(
+            PlaylistPlacement,
+            on=(
+                (PlaylistPlacement.playlist == Playlist.id)
+                & (PlaylistPlacement.user == request.webuser.id)
+            ),
+        )
         .where(
             (Playlist.user == request.webuser) | (Playlist.deezer_id.is_null(False))
         )
-        .order_by(Playlist.created.desc())
         .tuples()
     )
     lists = list(query)
+    folders, entries = list_shape(request.webuser, lists)
     # Count + first-track cover only — loading every track of every playlist
     # just for this made the list (refetched after each playlist edit) scale
     # with the whole library. And both in ONE query each for all the
@@ -2952,18 +2975,46 @@ def my_playlists():
             if pid in covers:
                 continue
             covers[pid] = cover_url_for(alid)
-    out = [
-        {
-            "id": _uuid_text(pid),
-            "deezer_id": dz,
-            "title": name,
-            "cover": covers.get(pid),
-            "nb_tracks": counts.get(pid, 0),
-            "editable": True,
-        }
-        for pid, dz, name in lists
-    ]
-    return jsonify({"playlists": out})
+    # The folder counts, one grouped statement for all of them (never one per
+    # folder), and only for playlists this person may see — an inert placement
+    # left in the database must not inflate a badge.
+    counts_by_folder = {}
+    for fid, nb in (
+        PlaylistPlacement.select(
+            _raw(PlaylistPlacement.folder), fn.COUNT(PlaylistPlacement.playlist)
+        )
+        .join(Playlist, on=(PlaylistPlacement.playlist == Playlist.id))
+        .where(
+            (PlaylistPlacement.user == request.webuser)
+            & PlaylistPlacement.folder.is_null(False)
+            & ((Playlist.user == request.webuser) | (Playlist.deezer_id.is_null(False)))
+        )
+        .group_by(PlaylistPlacement.folder)
+        .tuples()
+    ):
+        counts_by_folder[_uuid_text(fid)] = nb
+    for folder in folders:
+        folder["nb_playlists"] = counts_by_folder.get(folder["id"], 0)
+    head = {pid: (dz, name) for pid, dz, name, _created, _fid, _pos in lists}
+    out = []
+    for entry in entries:
+        dz, name = head[entry["pid"]]
+        out.append(
+            {
+                "id": _uuid_text(entry["pid"]),
+                "deezer_id": dz,
+                "title": name,
+                "cover": covers.get(entry["pid"]),
+                "nb_tracks": counts.get(entry["pid"], 0),
+                "editable": True,
+                # Additive only: an older SPA and the Android car overlay ignore
+                # both keys. `folder_id` is null when unfiled, `position` null
+                # when the playlist has no placement row (never ordered).
+                "folder_id": entry["folder_id"],
+                "position": entry["position"],
+            }
+        )
+    return jsonify({"playlists": out, "folders": folders})
 
 
 @webapi.route("/me/favorite-ids")
@@ -3867,23 +3918,45 @@ def favorite_entity(kind):
 @login_required
 @admin_required
 def create_playlist():
+    from .playlist_folders import place_new_playlist, resolve_folder
+
     provider = _provider()
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     if not title:
         return jsonify({"error": "missing title"}), 400
+    # "Nouvelle playlist ici": the optional `folder` is resolved BEFORE anything
+    # is written, so a foreign or malformed folder is a 404/400 that leaves no
+    # half-created playlist behind. Its presence is what asks for a placement
+    # (a `null` means "top of the root"); a request from an older SPA without
+    # the key keeps today's behaviour, with no placement row at all.
+    folder = None
+    wants_placement = "folder" in data
+    if wants_placement:
+        folder, error = resolve_folder(request.webuser, data.get("folder"))
+        if error:
+            return error
     description = data.get("description") or None
     track_rows = _resolve_tracks(provider, data.get("tracks") or [])
     pl = Playlist.create(user=request.webuser, name=title, comment=description)
 
     for track in track_rows:
         pl.add(track)
+    if wants_placement:
+        place_new_playlist(request.webuser, pl, folder)
     from ..deezer import backfill
 
     backfill.archive_tracks(
         current_app._get_current_object(), track_rows, event="on_playlist_add"
     )
-    return jsonify({"ok": True, "id": str(pl.id), "deezer_id": pl.deezer_id})
+    return jsonify(
+        {
+            "ok": True,
+            "id": str(pl.id),
+            "deezer_id": pl.deezer_id,
+            "folder_id": str(folder.id) if folder is not None else None,
+        }
+    )
 
 
 @webapi.route("/playlist/<playlist_id>", methods=["PATCH"])
