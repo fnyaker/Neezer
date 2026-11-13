@@ -102,6 +102,21 @@ Podcasts, Téléchargés, Mes fichiers, Indisponibles), its adding actions one "
 title too (the whole row is the target), and without a number the play glyph sits on the cover. Starring an artist
 FOLLOWS it; archiving its discography (`on_fav_artist`) is off by default.
 
+**Nouveautés is two shelves, then the per-release list** (`routes/Releases.svelte`,
+`components/ReleaseCard.svelte`, `routes/ReleaseShelf.svelte`). `close_to` splits the payload:
+« Tes artistes » is the person's own (favourites and the artists they listen to), « Découverte »
+the releases Deezer says are close to a favourite. Each card previews SIX titles (40 px sleeve,
+artist, title, duration — never TrackList's album/quality/action columns) and the whole card is ONE
+link to a playlist-like but READ-ONLY page (banner with a cover mosaic, Lire / Mélanger, search and
+sort, headings — no rename, reorder, add or remove). An empty card is not rendered; a lone card
+spans the row and its six titles read in two columns at ≥ 900 px. The `{releases, tracks}` payload
+lives in `Releases.svelte`'s module scope, keyed on the account: a card click paints the shelf from
+memory with **0 API request**, and the shelf's chunk (6.7 kB JS + 4.0 kB CSS) is prefetched
+during idle — measured 157–218 ms from the click to the shelf title under 4x CPU throttle, for a
+payload of 117 kB / 8.2 kB gzip on 8 000 tracks. `/releases/seen` is posted once per fetched feed. "Toutes les sorties"
+is collapsed by default, keeps its state across Back (`rememberScreen`), and opens itself when no
+shelf has a title yet.
+
 **≤ 640 px is a different SHELL, not a narrower desktop** (`src/mobile.css`, `lib/viewport.js`,
 `components/MobileNav.svelte`, `PlayerBar.svelte`'s mobile block, `App.svelte`). One column sized to
 `100dvh` (a phone's URL bar makes `vh` lie), its bottom padded by `--mini-h + --tabbar-h + --safe-bottom`;
@@ -247,7 +262,10 @@ and builds the new screen synchronously inside it, so nav.js resolves the curren
 (`syncEntry` on every entry point) rather than racing listeners; and a scroll restore must **settle**
 (the offset holding on a page whose height stopped moving) instead of stopping at the first frame it
 fits, because popstate lands one task before hashchange and those first frames can still be
-measuring the page being left.
+measuring the page being left. A reload restarts nav.js's id counter while the entries already in
+the stack keep theirs: `syncEntry` adopts the id it finds (`seq = max(seq, id)`) or the first push
+reused id 1 and two entries shared one offset — measured, Back landed at 0 instead of the 120 px
+the person had left.
 
 **Offline & versioning** (the SPA is an *install*, not a page — treat it as one):
 - `public/sw.js` serves the shell **cache-first** (an instant launch on any network) and stages a new
