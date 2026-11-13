@@ -29,7 +29,7 @@ from datetime import datetime
 import mediafile
 
 from .. import trackcredits
-from ..db import Album, Artist, Track, User
+from ..db import Album, Artist, PodcastEpisode, Track, User
 from ..filetags import read_file_facts
 from . import ids, library
 
@@ -155,13 +155,45 @@ def import_local_file(path: str, root, owner=None) -> Track | None:
     return track
 
 
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _podcast_archive(archive_dir: str) -> tuple[str, set]:
+    """The podcast archive directory, and the files episodes already own.
+
+    Episodes live under ``<archive>/Podcasts/<Show>/`` and are held by
+    ``PodcastEpisode`` rows, not ``Track`` rows: their audio is not a user file
+    any more than a Deezer FLAC is. Only the paths are read — the directory is
+    never touched here, and nothing is ever deleted.
+    """
+    root = _norm(os.path.join(archive_dir, library.PODCAST_DIR_NAME))
+    paths = set()
+    for (path,) in (
+        PodcastEpisode.select(PodcastEpisode.path)
+        .where(PodcastEpisode.path.is_null(False))
+        .tuples()
+    ):
+        paths.add(_norm(path))
+        paths.add(_norm(os.path.abspath(path)))
+    return root, paths
+
+
 def scan_local(archive_dir: str) -> dict:
     """Import every untracked audio file under ``archive_dir`` as a local track.
 
     Idempotent: files already backing a Track (Deezer or local) are skipped.
     Local tracks whose file vanished are pruned; Deezer rows are never touched.
+    Podcast episodes are NOT user files: their directory and every path a
+    ``PodcastEpisode`` holds are left alone, so an archived episode never
+    becomes a second, listing Track row (which would show up in "Mes fichiers").
     Returns ``{"added": n, "removed": n}``.
     """
+    # The podcast root is made from the SAME string the walk starts at, so a
+    # relative archive_dir in the config still matches (the archive itself is
+    # addressed absolutely everywhere else).
+    archive_dir = os.path.abspath(os.path.expanduser(archive_dir))
+    podcast_root, episode_paths = _podcast_archive(archive_dir)
     root = library.get_root_folder(archive_dir)
     tracked = {
         t.path: t
@@ -174,11 +206,20 @@ def scan_local(archive_dir: str) -> dict:
         # Dot-directories are work in progress (the YouTube downloads are
         # staged in one): a file there is not anybody's upload yet.
         dirs[:] = [d for d in dirs if not d.startswith(".")]
+        if _norm(dirpath) == podcast_root:
+            # Never descend into the podcast archive: everything below it
+            # belongs to a PodcastEpisode and its own route.
+            dirs[:] = []
+            continue
         for fn in files:
             ext = os.path.splitext(fn)[1][1:].lower()
             if ext not in AUDIO_EXTS:
                 continue
             path = os.path.join(dirpath, fn)
+            # An episode archived elsewhere (an older layout, a hand-moved
+            # file) is still claimed by its PodcastEpisode row.
+            if _norm(path) in episode_paths or _norm(os.path.abspath(path)) in episode_paths:
+                continue
             seen.add(path)
             if path in tracked:
                 continue

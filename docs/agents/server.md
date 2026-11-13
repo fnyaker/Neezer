@@ -150,7 +150,13 @@ empty body (`looks_like_a_page`) — instead of listing formats it would one day
 (`deezer.pageShow`, `show.add/deleteFavorite`, `episode.bookmarkSet`) were confirmed from a HAR capture;
 see `docs/plan-podcasts.md`. Episodes stream as **plain MP3 straight from the podcast host** (no FLAC,
 no Blowfish — `provider.download_episode_to` just follows redirects), archived under
-`archive_dir/Podcasts/<Show>/` on first play. Subsonic endpoints live in `neezer/api/podcast.py`
+`archive_dir/Podcasts/<Show>/` on first play. **That archive is not the user's library**:
+`local.scan_local` never descends into `archive_dir/Podcasts/` and skips any file a
+`PodcastEpisode.path` claims (even one moved elsewhere), so an archived episode never becomes a
+second, listing `Track` row; `/api/me/local` and the offline local search leave such rows out too.
+A `Track` an older server's scan made from an episode stays in the database — nothing deletes
+archived audio — it is simply not listed, and the episode keeps its own route.
+Subsonic endpoints live in `neezer/api/podcast.py`
 (`getPodcasts`, `getNewestPodcasts`, `createPodcastChannel`, `refreshPodcasts`, `delete*`,
 `downloadPodcastEpisode`); `media.py` resolves a stream/download id to a Track **or** a `PodcastEpisode`.
 The local channel rows are the source of truth for subscriptions; `importer.sync_podcasts` refreshes them.
@@ -415,6 +421,17 @@ server's own work). Four rules came out of it, each with its number:
   ms**, a 4 000-track playlist **447 → ~110 ms**, byte for byte the same answer
   (`tests/test_webui_lists.py` compares the two paths on every shape a row takes). A query with a
   LIMIT keeps the id lists — MySQL refuses LIMIT inside IN.
+- **A track payload says what its FILE is** (`webui._quality_fields`): `quality` (`FLAC`,
+  `OPUS 320`, `MP3 320`), `bitrate` (kbit/s) and `suffix`, on `_db_track`, `_db_track_rows` (big
+  lists) and `_local_track` (uploads). Only once the row is archived (`last_modification > 0`, or a
+  local upload): before that `Track.bitrate` is the NOMINAL rate of the quality that was asked for,
+  and Deezer may yet answer with a lower format — so an unarchived row carries none of the three
+  rather than claim what nobody hears. YouTube keeps `_youtube_fields`'s own `bitrate` label and is
+  never given a generic `quality` (it would replace "OPUS 133" with a bare "OPUS"). The columns
+  were already in the row (the path and `last_modification` join the same SELECT), so the statement
+  count does not move (3 for 4 000 favourites, 2 for `/me/local`, pinned by
+  `tests/test_webui_quality.py`); the cost is the label itself, ~5.6 ms of CPU per 4 000 rows, and
+  +192 KB of JSON (+3.3 KB gzip, +1.1 %) on that favourites page.
 - **Nothing is counted per row.** `/me/playlists` asked two statements per playlist (122 for sixty,
   90 ms) and is four in all (24 ms); `/me/favorite-ids` hydrated every starred row twice to read one
   id (314 ms) and is one two-column query (19 ms); an artist's album grid and the podcast list counted

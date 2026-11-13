@@ -913,6 +913,54 @@ def _stream_size(stream) -> int:
 # the UI can show a "not on Deezer" badge.
 
 
+# -- what a track's own file is ---------------------------------------------
+# The "Qualité" column of every list. A payload may only claim what the row's
+# own FILE says; before the archive, ``Track.bitrate`` is the NOMINAL rate of
+# the quality that was REQUESTED (``provider.NOMINAL_BITRATE``), not what
+# anybody hears, and the path's extension is not settled either (Deezer may
+# answer with MP3_320 for a track asked in FLAC). So an unarchived row says
+# nothing at all rather than lie.
+#
+# Read from columns the list already carries: the suffix is the row's ``path``,
+# the rate is ``bitrate``, "archived" is ``last_modification`` (0 until the
+# archive stamps it, and reset to 0 by the only code that deletes one). No file
+# is stat'ed and no query is added — ``tools/perf_api.py`` shows the same
+# statement count for every list.
+_QUALITY_NAMES = {
+    "flac": "FLAC", "alac": "ALAC", "wav": "WAV", "wv": "WavPack",
+    "ape": "APE", "aif": "AIFF", "aiff": "AIFF", "aifc": "AIFF", "dsf": "DSD",
+    "opus": "OPUS", "ogg": "VORBIS", "oga": "VORBIS",
+    "m4a": "AAC", "mp4": "AAC", "aac": "AAC", "mp3": "MP3", "mp2": "MP2",
+}
+# Same set as ``providers.quality``'s: a lossless file's rate is not a
+# listening quality, so its label carries the format alone ("FLAC").
+_LOSSLESS_SUFFIXES = frozenset(
+    {"flac", "alac", "wav", "wv", "ape", "aif", "aiff", "aifc", "dsf"}
+)
+
+
+def _quality_fields(path, bitrate, on_disk: bool) -> dict:
+    """``suffix``, ``bitrate`` and ``quality`` of a row whose file is here.
+
+    Short label, the way the player shows it: ``FLAC``, ``OPUS 320``,
+    ``MP3 320``. A lossy file whose rate is unknown keeps its format alone
+    (``MP3``), never a rate nobody measured.
+    """
+    suffix = os.path.splitext(path or "")[1][1:].lower()
+    if not on_disk or not suffix:
+        return {}
+    out = {"suffix": suffix}
+    rate = int(bitrate or 0)
+    if rate > 0:
+        out["bitrate"] = rate
+    name = _QUALITY_NAMES.get(suffix) or suffix.upper()
+    if suffix in _LOSSLESS_SUFFIXES or not rate:
+        out["quality"] = name
+    else:
+        out["quality"] = f"{name} {rate}"
+    return out
+
+
 def _local_track(t: Track) -> dict:
     out = {
         "id": str(t.id),
@@ -938,7 +986,14 @@ def _local_track(t: Track) -> dict:
         },
     }
     if t.youtube_id:
+        # YouTube keeps its own label (play width, or the archived file's
+        # measured rate): `_youtube_fields` owns `bitrate`, and a generic
+        # `quality` here would replace "OPUS 133" with a bare "OPUS".
         _youtube_fields(out, t.youtube_id, t.bitrate)
+    else:
+        # A local row IS its file: the upload endpoint and the scan both import
+        # the file that is already on disk.
+        out.update(_quality_fields(t.path, t.bitrate, True))
     return out
 
 
@@ -960,6 +1015,39 @@ def _youtube_fields(out: dict, video_id, bitrate) -> dict:
     for a in out["artists"]:
         a["deezer_id"] = ""
     return out
+
+
+def _not_from_podcasts():
+    """A Track query's "not a podcast episode" clause.
+
+    Episodes are ``PodcastEpisode`` rows, never user files — but a scan older
+    than that rule may have created Track rows pointing at their audio (they
+    have no Deezer id, so they looked exactly like uploads). Those must not be
+    listed in "Mes fichiers" or the offline search any more; their audio stays
+    exactly where it is (nothing here deletes anything).
+
+    One clause, so a list keeps its statement count: the episodes' own paths as
+    a subquery, and a NOT LIKE on the podcast directory when the archive is
+    configured — both run by the database inside the list's own SELECT.
+    """
+    clause = ~Track.path.in_(
+        PodcastEpisode.select(PodcastEpisode.path).where(
+            PodcastEpisode.path.is_null(False)
+        )
+    )
+    archive_dir = (current_app.config.get("DEEZER") or {}).get("archive_dir")
+    if archive_dir:
+        from ..deezer.library import PODCAST_DIR_NAME, podcast_root_path
+
+        # Both spellings: the absolute one the app writes everywhere, and the
+        # raw config-relative one an older scan could have stored.
+        roots = {
+            podcast_root_path(archive_dir),
+            os.path.normpath(os.path.join(archive_dir, PODCAST_DIR_NAME)),
+        }
+        for root in roots:
+            clause = clause & ~Track.path.startswith(root.rstrip(os.sep) + os.sep)
+    return clause
 
 
 def _local_search_tracks(query: str, limit: int) -> list:
@@ -993,8 +1081,8 @@ def _local_search_tracks(query: str, limit: int) -> list:
                 | (Track.last_modification > 0)
             )
         )
-    ).order_by(Track.title).limit(limit)
-    return _db_tracks(q)
+    )
+    return _db_tracks(q.where(_not_from_podcasts()).order_by(Track.title).limit(limit))
 
 
 def _on_disk_tracks():
@@ -1212,6 +1300,11 @@ def _row_columns():
             Album.deezer_id,
             Album.name,
             Album.cover_md5,
+            # What the row's own file is (see ``_quality_fields``): the path
+            # carries the suffix, `last_modification` says archived. Same
+            # SELECT, not one query more.
+            Track.path,
+            Track.last_modification,
         )
     return _ROW_COLUMNS
 
@@ -1260,7 +1353,7 @@ def _db_track_rows(query) -> list:
     out = []
     for (
         tid, dz, title, duration, gone, gain, ytid, bitrate, released,
-        aid, adz, aname, alid, aldz, alname, md5,
+        aid, adz, aname, alid, aldz, alname, md5, path, modified,
     ) in rows:
         if dz is None:
             uid = _uuid_text(tid)
@@ -1286,31 +1379,33 @@ def _db_track_rows(query) -> list:
             }
             if ytid:
                 _youtube_fields(row, ytid, bitrate)
+            else:
+                row.update(_quality_fields(path, bitrate, True))
             out.append(row)
             continue
         artists = credits.get(tid) or [
             {"deezer_id": str(adz or _uuid_text(aid)), "name": aname, "role": "Main"}
         ]
-        out.append(
-            {
-                "id": _uuid_text(tid),
-                "deezer_id": str(dz),
-                "title": title,
-                "duration": duration or 0,
-                "release_date": released,
-                "explicit": False,
-                "unavailable": bool(gone),
-                "gain": gain,
-                "artist": {"deezer_id": str(adz or ""), "name": aname},
-                "artists": artists,
-                "display_artist": _display_artist(artists, aname),
-                "album": {
-                    "deezer_id": str(aldz or ""),
-                    "title": alname,
-                    "cover": cover_url_for(alid),
-                },
-            }
-        )
+        row = {
+            "id": _uuid_text(tid),
+            "deezer_id": str(dz),
+            "title": title,
+            "duration": duration or 0,
+            "release_date": released,
+            "explicit": False,
+            "unavailable": bool(gone),
+            "gain": gain,
+            "artist": {"deezer_id": str(adz or ""), "name": aname},
+            "artists": artists,
+            "display_artist": _display_artist(artists, aname),
+            "album": {
+                "deezer_id": str(aldz or ""),
+                "title": alname,
+                "cover": cover_url_for(alid),
+            },
+        }
+        row.update(_quality_fields(path, bitrate, bool(modified)))
+        out.append(row)
     return out
 
 
@@ -1324,7 +1419,7 @@ def _db_track(t: Track, credits: list | None = None) -> dict:
     if t.deezer_id is None:
         return _local_track(t)
     artists = _db_credits(t) if credits is None else (credits or _primary_credit(t))
-    return {
+    out = {
         "id": str(t.id),
         "deezer_id": str(t.deezer_id),
         "title": t.title,
@@ -1344,6 +1439,10 @@ def _db_track(t: Track, credits: list | None = None) -> dict:
             "cover": cover_url_for(t.album.id),
         },
     }
+    # Only once the file is here: until then `bitrate` is the nominal rate of
+    # the quality that was ASKED for (see ``_quality_fields``).
+    out.update(_quality_fields(t.path, t.bitrate, t.last_modification > 0))
+    return out
 
 
 # -- DB fallbacks for browse pages (work when Deezer is unreachable) ---------
@@ -2901,7 +3000,11 @@ def my_favorite_ids():
 @webapi.route("/me/local")
 @login_required
 def my_local():
-    """All local (imported/uploaded) tracks — the home of your own files."""
+    """All local (imported/uploaded) tracks — the home of your own files.
+
+    Podcast episodes are not files of yours: they have their own rows and
+    routes, and a Track an older scan made from one is left out here (the
+    audio itself is never touched)."""
     q = _visible_tracks(
         Track.select(Track, Album, Artist)
         .join(Album)
@@ -2909,7 +3012,9 @@ def my_local():
         .join(Artist)
         .switch(Track)
         .where(Track.deezer_id.is_null(True) & Track.youtube_id.is_null(True))
-    ).order_by(Artist.name, Album.name, Track.disc, Track.number).limit(5000)
+    )
+    q = q.where(_not_from_podcasts())
+    q = q.order_by(Artist.name, Album.name, Track.disc, Track.number).limit(5000)
     return jsonify({"tracks": [_local_track(t) for t in q]})
 
 
