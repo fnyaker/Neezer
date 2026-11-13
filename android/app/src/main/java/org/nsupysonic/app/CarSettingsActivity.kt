@@ -557,7 +557,7 @@ class CarSettingsActivity : AppCompatActivity() {
 
         val hint = CarStyle.text(
             this,
-            "Épingle celles que tu veux voir en roulant. « Mon Flow » reste toujours en premier. Tu peux aussi épingler depuis la page d'une playlist dans l'app. Les épinglées restent sur cet appareil, même sans serveur.",
+            "Épingle celles que tu veux voir en roulant. « Favoris » reste toujours en premier. Tu peux aussi épingler depuis la page d'une playlist dans l'app. Les épinglées restent sur cet appareil, même sans serveur.",
             13f,
             CarStyle.DIM,
         ).apply { setLineSpacing(0f, 1.4f) }
