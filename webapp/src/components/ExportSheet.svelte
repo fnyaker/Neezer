@@ -32,19 +32,98 @@
   let sending = false;
   let showMissing = false;
 
+  // The public read-only link (playlists only): read on open, created and
+  // revoked here. A revocation is dead on the very next public request.
+  let link = null;
+  let linkLoading = false;
+  let linkBusy = false;
+  let confirmRevoke = false;
+
   $: target = $exportSheet;
   $: if (target && loadedFor !== target) open(target);
   $: if (!target) started = false;
   $: listable = target && target.kind !== "podcast";
+  $: linkable = target && target.kind === "playlist";
 
   function open(t) {
     loadedFor = t;
     started = false;
     name = t.title || "";
+    link = null;
+    linkLoading = false;
+    confirmRevoke = false;
     if (!job || !job.running) resetJob();
     if (t.kind === "podcast") mode = "audio";
+    if (t.kind !== "playlist" && mode === "link") mode = "audio";
     loadFormats();
     if (t.kind !== "podcast") loadServices(true);
+    if (t.kind === "playlist") loadLink();
+  }
+
+  // -- the public link --
+
+  async function loadLink() {
+    if (!target || target.kind !== "playlist") return;
+    linkLoading = true;
+    try {
+      const r = await api.playlistShare(target.id);
+      link = r.link || null;
+    } catch (e) {
+      link = null;
+      toasts.push(e?.message || "Lien public indisponible");
+    }
+    linkLoading = false;
+  }
+
+  function linkUrl() {
+    if (!link) return "";
+    return window.location.origin + link.url;
+  }
+
+  async function createLink() {
+    if (!target || linkBusy) return;
+    linkBusy = true;
+    try {
+      const r = await api.createPlaylistShare(target.id);
+      link = r.link;
+      toasts.push("Lien public créé");
+    } catch (e) {
+      toasts.push(e?.message || "Création impossible");
+    }
+    linkBusy = false;
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(linkUrl());
+      toasts.push("Lien copié");
+    } catch {
+      toasts.push("Copie impossible");
+    }
+  }
+
+  async function revokeLink() {
+    if (!target || linkBusy) return;
+    linkBusy = true;
+    try {
+      await api.revokePlaylistShare(target.id);
+      link = null;
+      confirmRevoke = false;
+      toasts.push("Lien révoqué");
+    } catch (e) {
+      toasts.push(e?.message || "Révocation impossible");
+    }
+    linkBusy = false;
+  }
+
+  function linkExpiry(expires) {
+    if (!expires) return "Sans expiration";
+    try {
+      const d = new Date(expires);
+      return `Expire le ${d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}`;
+    } catch {
+      return "Expire bientôt";
+    }
   }
 
   async function loadFormats() {
@@ -179,6 +258,9 @@
           <button role="tab" aria-selected={mode === "service"} class:sel={mode === "service"} on:click={() => (mode = "service")}>Service</button>
           <button role="tab" aria-selected={mode === "audio"} class:sel={mode === "audio"} on:click={() => (mode = "audio")}>Audio (ZIP)</button>
           <button role="tab" aria-selected={mode === "list"} class:sel={mode === "list"} on:click={() => (mode = "list")}>Liste</button>
+          {#if linkable}
+            <button role="tab" aria-selected={mode === "link"} class:sel={mode === "link"} on:click={() => (mode = "link")}>Lien public</button>
+          {/if}
         </div>
       {/if}
 
@@ -223,6 +305,56 @@
           Soundiiz, qui le recréent là-bas — l'ISRC qu'il contient rend la
           correspondance exacte.
         </p>
+      {:else if mode === "link"}
+        <p class="muted note">
+          <Icon name="link" size={14} />
+          Toute personne avec ce lien peut voir la playlist et écouter les titres
+          déjà archivés. Rien n'est modifiable.
+        </p>
+        {#if linkLoading}
+          <p class="muted pad">Chargement…</p>
+        {:else if link}
+          <div class="share">
+            <label class="field">
+              <span class="muted">Lien public</span>
+              <div class="copyrow">
+                <input
+                  type="text"
+                  readonly
+                  value={linkUrl()}
+                  aria-label="Lien public"
+                  on:focus={(e) => e.target.select()}
+                />
+                <button class="mini" on:click={copyLink}>
+                  <Icon name="copy" size={15} /> Copier
+                </button>
+              </div>
+            </label>
+            <p class="expiry muted">{linkExpiry(link.expires)}</p>
+            {#if confirmRevoke}
+              <div class="revoke-row">
+                <button class="ghost" on:click={() => (confirmRevoke = false)} disabled={linkBusy}>Annuler</button>
+                <button class="mini danger" on:click={revokeLink} disabled={linkBusy}>
+                  Confirmer la révocation
+                </button>
+              </div>
+            {:else}
+              <button class="linkish" on:click={() => (confirmRevoke = true)}>
+                <Icon name="trash" size={15} /> Révoquer le lien
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <div class="share">
+            <p class="hint muted">
+              Le lien s'ouvre sans compte&nbsp;: lecture des titres archivés uniquement,
+              rien d'autre.
+            </p>
+            <button class="pill create" on:click={createLink} disabled={linkBusy || !$online}>
+              <Icon name="link" size={17} /> Créer un lien public
+            </button>
+          </div>
+        {/if}
       {:else}
         {#if !$services}
           <p class="muted pad">Chargement des services…</p>
@@ -326,6 +458,8 @@
             <Icon name="download" size={17} />
             Télécharger la liste
           </button>
+        {:else if mode === "link"}
+          <button class="pill" on:click={closeExport}>Fermer</button>
         {:else}
           <button class="ghost" on:click={closeExport}>Annuler</button>
           <button class="pill" on:click={start} disabled={!fmt || loading || started || !$online}>
@@ -645,5 +779,76 @@
   }
   .ma {
     font-size: 0.78rem;
+  }
+  /* -- the public link tab -- */
+  .share {
+    padding: 4px 20px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .copyrow {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+  }
+  .copyrow input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--bg-hover);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+    text-overflow: ellipsis;
+  }
+  .copyrow input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .copyrow .mini {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    border-radius: 10px;
+    padding: 0 16px;
+    min-height: 42px;
+  }
+  .expiry {
+    margin: 6px 0 0;
+    font-size: 0.8rem;
+  }
+  .hint {
+    margin: 8px 0 12px;
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+  .pill.create {
+    align-self: flex-start;
+    margin-top: 6px;
+  }
+  .revoke-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .mini.danger {
+    display: inline-flex;
+    align-items: center;
+    border-color: #b3402f;
+    color: #ff8a76;
+  }
+  @media (pointer: coarse) {
+    .copyrow .mini,
+    .mini.danger,
+    .revoke-row .ghost {
+      min-height: 44px;
+    }
   }
 </style>

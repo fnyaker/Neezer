@@ -239,3 +239,49 @@ def remote_link(token: str):
     resp.headers["X-Robots-Tag"] = "noindex"
     resp.headers["Referrer-Policy"] = "no-referrer"
     return resp
+
+
+# A public playlist link, the same way: a short URL and a page a messaging app
+# can preview (the playlist's name and owner, or a calm "no longer valid" note —
+# never a 500). No inline script: the CSP refuses it, so the page forwards with
+# a meta refresh, and the token rides in the FRAGMENT from here on.
+_SHARE_TOKEN = re.compile(r"\A[A-Za-z0-9_-]{16,24}\.[A-Za-z0-9_-]{24}\Z")
+
+
+@spa.route("/pl/<token>")
+@spa.route("/app/pl/<token>")
+def playlist_share_link(token: str):
+    if not _SHARE_TOKEN.fullmatch(token):
+        abort(404)
+    from .playlist_share import preview
+
+    info = preview(token)
+    if info:
+        title, desc = info
+    else:
+        title = "Playlist partagée"
+        desc = "Ce lien n'est plus valide."
+    # The parser strips whitespace before matching: forward the vetted form,
+    # never the raw path segment, and escape it at the page boundary.
+    target = html.escape(_into_app(f"/shared/playlist/{token.strip()}"))
+    page = (
+        "<!doctype html><html lang=fr><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<title>{html.escape(title)}</title>"
+        f"<meta property='og:title' content='{html.escape(title)}'>"
+        f"<meta property='og:description' content='{html.escape(desc)}'>"
+        "<meta property='og:type' content='music.playlist'>"
+        "<meta name=theme-color content='#0f0d13'>"
+        "<meta name=referrer content=no-referrer>"
+        f"<meta http-equiv=refresh content='0;url={target}'>"
+        "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;"
+        "background:#0f0d13;color:#f3f0f7;font:16px system-ui,sans-serif}"
+        "a{color:#f5c518}</style></head>"
+        f"<body><a href='{target}'>{html.escape(title)}</a></body></html>"
+    )
+    resp = make_response(page)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Robots-Tag"] = "noindex"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp

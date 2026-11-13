@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261102"
+SCHEMA_VERSION = "20261113"
 
 
 def now():
@@ -960,6 +960,30 @@ class PlaylistTrack(_Model):
     index = IntegerField()
 
 
+class PlaylistShare(_Model):
+    """A public read-only link to one playlist.
+
+    Whoever holds the link — no account, no session — sees the playlist and can
+    play the tracks that are already archived on the server; nothing else. The
+    row is the capability's IDENTITY, never the capability itself: the token
+    handed out is ``id`` plus an HMAC of it under the app's secret key (see
+    neezer/webui/playlist_share.py), so a copy of this table opens nothing and
+    a secret change kills every link. One live link per playlist is enough;
+    ``revoked`` stamps the owner's cut, which the next public request honours.
+    """
+
+    id = CharField(24, primary_key=True)
+    playlist = ForeignKeyField(Playlist, backref="+", on_delete="CASCADE")
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    created = DateTimeField(default=now)
+    expires = DateTimeField(null=True)
+    revoked = DateTimeField(null=True)
+    last_used = DateTimeField(null=True)
+
+    class Meta:
+        table_name = "playlist_share"
+
+
 class Discovery(_Model):
     """A track the background explorer found on the provider for a genre the
     engine knows, listened to for thirty seconds and VERIFIED to sound like it.
@@ -1732,6 +1756,7 @@ def _migration_order():
         Playlist,
         StarredPlaylist,  # after Playlist and User
         PlaylistTrack,
+        PlaylistShare,  # after Playlist and User: it references both
         TrackNeighbor,  # after Track
         Discovery,
         TrackEnrichment,  # after Track

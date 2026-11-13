@@ -169,6 +169,14 @@ POLICY = {
     "party_leave": "queue",
     "party_cover": "queue",
     "party_chunk": "queue",
+    # a public playlist link: the same — its own capability, no session. Making
+    # and cutting links stays the owner's own hand, like the remote's.
+    "playlist_share": NEVER,
+    "playlist_share_create": NEVER,
+    "playlist_share_revoke": NEVER,
+    "shared_playlist": "queue",
+    "shared_playlist_cover": "queue",
+    "shared_playlist_stream": "queue",
     # reading the library
     "home": "read",
     "search": "read",

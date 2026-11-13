@@ -4684,7 +4684,10 @@ def _serve_embedded_cover(track):
 
         found = find_cover_in_folder(os.path.dirname(track.path))
         if found:
-            return send_file(found, conditional=True)
+            # ``find_cover_in_folder`` answers a ``CoverFile`` (its name and its
+            # score), not a path: joining the name back to the folder is what
+            # turns it into the file send_file can serve.
+            return send_file(os.path.join(os.path.dirname(track.path), found.name), conditional=True)
     except Exception:
         pass
     return jsonify({"error": "no cover"}), 404
@@ -5019,6 +5022,7 @@ from . import discover as _discover_routes  # noqa: E402,F401  isort:skip
 from . import accessapi  # noqa: E402,F401  isort:skip
 from . import myaccounts  # noqa: E402,F401  isort:skip
 from . import sourcesapi  # noqa: E402,F401  isort:skip
+from . import playlist_share  # noqa: E402,F401  isort:skip
 from . import genre_radio  # noqa: E402,F401  isort:skip
 from . import history  # noqa: E402,F401  isort:skip
 from . import moods  # noqa: E402,F401  isort:skip
