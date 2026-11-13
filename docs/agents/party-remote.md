@@ -113,6 +113,17 @@ one shared timeline, Web Audio scheduling. What differs, and why:
   that is under 100 ms: a link the OS already counts would otherwise be counted twice.
   `window.__nsParty.host()` / `.guest()` expose those positions for exactly this check.
 
+**A public playlist link is the THIRD capability** (`neezer/webui/playlist_share.py`, table
+`playlist_share` schema `20261113`, `/pl/<token>` in `spa.py`). Same shape as the remote-control
+link: `<id>.<hmac>` under `secret_key`, a short HTML page with the OG title and a meta refresh into
+the SPA,
+`no-store`/`noindex`/`no-referrer`, a calm dead-link page. It is read-only and ARCHIVED-ONLY: the
+public page lists the playlist and streams only files already on disk, never archives, transcodes or
+asks a provider; another person's private upload is excluded from both the list and the stream. One
+live link per playlist; revocation/expiry is a 404 on the next request. 120 stream requests / 10 min
+per (token, IP). `remote.POLICY`: the three owner routes are `NEVER`, the three public routes
+`queue` — a remote controller never mints or cuts a public link.
+
 **Remote control** (`neezer/webui/remote.py`, `webapp/src/lib/remote/`, `components/RemoteSheet.svelte`,
 `RemoteHostChip.svelte`, `RemoteBanner.svelte`, `routes/RemoteClaim.svelte`). The owner makes a
 link on the device that PLAYS (the remote button next to the party's, in every player view) and

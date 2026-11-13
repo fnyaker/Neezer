@@ -1,3 +1,21 @@
+<script context="module">
+  // The bottom of a playlist asks the server for suggestions, which are the
+  // library's own answer (no provider, see neezer/webui/playlistrecs.py).
+  // Keeping them in module memory means coming back to a playlist paints its
+  // suggestions with the playlist, with no second request; an add or a remove
+  // drops the entry so the next open re-reads them.
+  const recsCache = new Map(); // playlist id -> tracks
+  const recsInflight = new Map(); // playlist id -> promise (one request per open)
+  // A playlist whose suggestions changed while they were being fetched must
+  // not have that older answer cached: the next open asks again.
+  const recsStale = new Set();
+  function forgetRecommendations(id) {
+    const key = String(id);
+    recsCache.delete(key);
+    recsStale.add(key);
+  }
+</script>
+
 <script>
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onDestroy } from "svelte";
@@ -13,7 +31,7 @@
     removePlaylistLocal,
     downloadTracks,
   } from "../lib/actions.js";
-  import { duration as fmtDuration, isLocalId } from "../lib/format.js";
+  import { duration as fmtDuration, artistLine, isLocalId } from "../lib/format.js";
   import { carAvailable, carPin } from "../lib/car.js";
   import { SORTS, createProjector } from "../lib/tracklist.js";
   import { reconcilePayload } from "../lib/reconcile.js";
@@ -63,6 +81,18 @@
   $: if (!manualView && editing) editing = false;
   $: existingIds = new Set((data?.tracks || []).map((t) => trackKey(t)));
 
+  // -- recommendations at the bottom ----------------------------------------
+  // Read-only suggestions from the playlist's own titles. Loaded AFTER the
+  // playlist is on screen (the page never waits for them), one request per
+  // playlist open, and hidden in the two modes where the list below is not the
+  // playlist's own order (edit mode, search) and for a read-only/remote account.
+  let recs = [];
+  let recsState = "idle"; // idle | loading | ready | failed
+  let recsFor = null; // the playlist the rows belong to
+  let recBusy = false; // "Tout ajouter" in flight
+  let recPending = new Set(); // track keys whose own add is in flight
+  $: showRecommendations = editable && !editing && !plQuery.trim();
+
   // Sequence guard: a delayed earlier response must not overwrite the page
   // after a quick navigation to another playlist.
   let loadSeq = 0;
@@ -78,6 +108,10 @@
     plSort = "default";
     plQuery = "";
     plDir = 1;
+    recs = [];
+    recsFor = null;
+    recsState = "idle";
+    recPending = new Set();
     try {
       // Cached copy first, fresh one right after — a big playlist you've opened
       // before is on screen immediately instead of after a full round-trip. The
@@ -90,6 +124,8 @@
         data = reconcilePayload(data, r);
         fav = !!r.playlist?.is_favorite;
         loading = false;
+        // The playlist is on screen; only now does the bottom section ask.
+        if (r.playlist?.editable && $isAdmin && CAN_KEEP) loadRecommendations(plId);
       });
     } catch (e) {
       if (mine === loadSeq && !data) {
@@ -98,6 +134,113 @@
       }
     }
     if (mine === loadSeq) loading = false;
+  }
+
+  async function loadRecommendations(plId, { force = false } = {}) {
+    const key = String(plId);
+    if (force) recsCache.delete(key);
+    else if (recsCache.has(key)) {
+      recs = recsCache.get(key);
+      recsFor = key;
+      recsState = "ready";
+      return;
+    }
+    recsStale.delete(key); // this answer will be the fresh one
+    if (recsInflight.has(key)) {
+      // Already on its way (a quick return to the same playlist): let its own
+      // answer paint when it lands.
+      if (recsFor !== key) {
+        recs = [];
+        recsFor = key;
+        recsState = "loading";
+      }
+      return;
+    }
+    if (recsFor !== key) {
+      recs = [];
+      recsFor = key;
+    }
+    recsState = "loading";
+    const p = api
+      .playlistRecommendations(key, 12)
+      .then((r) => {
+        const list = (r?.tracks || []).filter((t) => t && !existingIds.has(trackKey(t)));
+        if (!recsStale.has(key)) recsCache.set(key, list);
+        if (recsFor === key) {
+          recs = list;
+          recsState = "ready";
+        }
+      })
+      .catch(() => {
+        if (recsFor === key) {
+          recsState = "failed";
+        }
+      })
+      .finally(() => recsInflight.delete(key));
+    recsInflight.set(key, p);
+  }
+
+  // Optimistic, like onAdded itself: the row leaves the suggestions at once
+  // (the playlist below already shows the track) and comes back at its place
+  // if the save failed, which onAdded reports and resyncs.
+  function retryRecommendations() {
+    if (id != null) loadRecommendations(id, { force: true });
+  }
+
+  async function addRecommendation(track) {
+    const key = trackKey(track);
+    if (recBusy || recPending.has(key) || id == null) return;
+    const plId = id;
+    recPending = new Set(recPending).add(key);
+    const at = recs.findIndex((t) => trackKey(t) === key);
+    recs = recs.filter((t) => trackKey(t) !== key);
+    forgetRecommendations(plId);
+    const ok = await onAdded(track);
+    if (ok && plId === id) toasts.push(`« ${track.title} » ajouté à la playlist`, "info", 2400);
+    if (!ok && plId === id) {
+      const restored = recs.filter((t) => trackKey(t) !== key);
+      restored.splice(Math.min(Math.max(at, 0), restored.length), 0, track);
+      recs = restored;
+    }
+    const next = new Set(recPending);
+    next.delete(key);
+    recPending = next;
+  }
+
+  // "Tout ajouter": the visible suggestions, in their order, one request. Never
+  // more than what is on screen — the list is what the person is agreeing to.
+  async function addAllRecommendations() {
+    if (recBusy || !recs.length || id == null) return;
+    const plId = id;
+    const batch = recs.slice();
+    recBusy = true;
+    data.tracks = [...data.tracks, ...batch];
+    data = data;
+    recs = [];
+    forgetRecommendations(plId);
+    const ok = await enqueue(async () => {
+      try {
+        await api.addToPlaylist(plId, batch.map(trackRef));
+        invalidatePlaylists();
+        return true;
+      } catch {
+        toasts.push("Échec de l'ajout des suggestions", "error");
+        await resync(plId);
+        return false;
+      }
+    });
+    recBusy = false;
+    if (ok) {
+      toasts.push(
+        batch.length > 1 ? `${batch.length} titres ajoutés à la playlist` : "Titre ajouté à la playlist",
+        "info",
+        2400,
+      );
+    } else if (plId === id) {
+      // The failed batch may have landed partly: ask the server what is left
+      // rather than trust the optimistic list.
+      loadRecommendations(plId, { force: true });
+    }
   }
 
   function playAll() {
@@ -157,6 +300,7 @@
   let chain = Promise.resolve();
   function enqueue(op) {
     chain = chain.then(op, op);
+    return chain;
   }
 
   // Resync from the server after a failed save (source of truth) — without
@@ -209,6 +353,7 @@
     const plId = id;
     data.tracks = data.tracks.filter((_, i) => i !== index);
     data = data;
+    forgetRecommendations(plId); // the suggestions were computed without it
     // Any pending reorder is queued FIRST: the server resolves the remove
     // index against its own order, which must match what the user saw.
     queueOrder();
@@ -223,17 +368,22 @@
     });
   }
 
+  // Returns a promise of whether the save went through, so the suggestions can
+  // put a row back (and only say "added" once it really is).
   function onAdded(track) {
     const plId = id;
     data.tracks = [...data.tracks, track];
     data = data;
-    enqueue(async () => {
+    return enqueue(async () => {
       try {
         await api.addToPlaylist(plId, [trackRef(track)]);
         invalidatePlaylists();
+        forgetRecommendations(plId);
+        return true;
       } catch {
         toasts.push(`Échec de l'ajout de « ${track.title} »`, "error");
         await resync(plId);
+        return false;
       }
     });
   }
@@ -402,6 +552,57 @@
     {:else}
       <TrackBrowser tracks={data.tracks} context={{ kind: "playlist", id }} />
     {/if}
+
+    {#if showRecommendations}
+      <!-- Where the playlist stops: library titles near its own, loaded after
+           the list is on screen (never in its way). -->
+      <section class="recs" aria-labelledby="recs-title">
+        <div class="rec-head">
+          <h2 class="section-title" id="recs-title">Titres recommandés</h2>
+          {#if recs.length > 1}
+            <button class="btn btn-ghost btn-sm" on:click={addAllRecommendations} disabled={recBusy}>
+              <Icon name="plus" size={15} /> Tout ajouter
+            </button>
+          {/if}
+        </div>
+
+        {#if recsState === "failed"}
+          <div class="rec-state">
+            <span>Impossible de charger les suggestions.</span>
+            <button class="btn btn-ghost btn-sm" on:click={retryRecommendations}>
+              <Icon name="refresh" size={15} /> Réessayer
+            </button>
+          </div>
+        {:else if recs.length}
+          <ul class="rec-list">
+            {#each recs as t (trackKey(t))}
+              <li class="rec">
+                <span class="rec-cover">
+                  <Cover src={t.album?.cover} alt={t.title} size={40} kind="track" fallbackId={trackRef(t)} />
+                </span>
+                <span class="rec-meta">
+                  <span class="rec-title">{t.title}</span>
+                  <span class="rec-artist">{artistLine(t)}</span>
+                </span>
+                <span class="rec-dur mono">{fmtDuration(t.duration)}</span>
+                <button
+                  class="rec-add"
+                  on:click={() => addRecommendation(t)}
+                  disabled={recBusy || recPending.has(trackKey(t))}
+                  aria-label={`Ajouter ${t.title} à la playlist`}
+                  title="Ajouter à la playlist">
+                  <Icon name="plus" size={18} />
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {:else if recsState === "loading"}
+          <p class="rec-state">Recherche de suggestions…</p>
+        {:else if recsState === "ready"}
+          <p class="rec-state">Pas de suggestion pour l'instant</p>
+        {/if}
+      </section>
+    {/if}
   </div>
 
   {#if showAdd}
@@ -567,6 +768,98 @@
   }
   .empty-hint {
     margin-top: 18px;
+  }
+  /* The bottom of a playlist: a section heading with a quiet "Tout ajouter",
+     then compact rows built like AddTracksSheet's (cover 40, two lines, the
+     add button a full 44 px target). It sits AFTER the list, so it never
+     delays it and never moves it while loading. */
+  .recs {
+    margin: 30px 0 10px;
+    padding-top: 18px;
+    border-top: 1px solid var(--ln);
+  }
+  .rec-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .rec-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .rec {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding: 6px 8px;
+    border-radius: 10px;
+  }
+  .rec:hover {
+    background: var(--s2);
+  }
+  .rec-cover {
+    flex: none;
+    width: 40px;
+    height: 40px;
+  }
+  .rec-meta {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .rec-title {
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rec-artist {
+    font-size: 13px;
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rec-dur {
+    flex: none;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .rec-add {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    color: var(--dim);
+  }
+  .rec-add:hover:not(:disabled) {
+    color: var(--tx);
+    background: var(--s2);
+  }
+  .rec-add:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .rec-state {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 6px 8px;
+    color: var(--dim);
+    font-size: 14px;
   }
   @media (max-width: 640px) {
     /* The action pills scroll on ONE line instead of stacking three rows of

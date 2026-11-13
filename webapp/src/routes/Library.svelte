@@ -29,6 +29,7 @@
   import ArtistTile from "../components/ArtistTile.svelte";
   import LibraryNav from "../components/LibraryNav.svelte";
   import Podcasts from "./Podcasts.svelte";
+  import History from "./History.svelte";
   import TrackList from "../components/TrackList.svelte";
   import { SORTS, createProjector } from "../lib/tracklist.js";
   import { STEP, nearEnd } from "../lib/grow.js";
@@ -41,6 +42,7 @@
   export let params = {};
   const MUSIC_TABS = [
     { id: "favorites", label: "Titres" },
+    { id: "history", label: "Historique" },
     { id: "artists", label: "Artistes" },
     { id: "albums", label: "Albums" },
     { id: "playlists", label: "Playlists", admin: true },
@@ -601,6 +603,8 @@
     </div>
     <TrackBrowser tracks={local} context={{ kind: "local" }} downloadable={false} />
   {/if}
+{:else if tab === "history"}
+  <History />
 {/if}
 
 {#if podcastsMounted}

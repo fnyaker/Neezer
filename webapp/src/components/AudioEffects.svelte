@@ -42,6 +42,14 @@
     volumeCutDb,
   } from "../lib/eqpresets.js";
   import { outputPlan, retryNow } from "../lib/audio/output.js";
+  import { REMOTE } from "../lib/remote/mode.js";
+  import {
+    describeBalance,
+    panSettings,
+    resetBalance,
+    setBalance,
+    setMono,
+  } from "../lib/audio/pan.js";
   import {
     nativeAudioAvailable,
     nativeDspAvailable,
@@ -113,6 +121,26 @@
     } catch {
       return "";
     }
+  }
+
+  // -- mono and balance (lib/audio/pan.js) -----------------------------------
+  // These change the AUDIBLE output only: the graph's analysers tap before the
+  // stage, so the rhythm analysis and the visualizer keep the original stereo.
+  // The direct path (the Android app's player included) has no graph to insert
+  // the stage into, hence the disabled state and its short hint.
+  $: pan = $panSettings;
+  $: panDisabled = plan.direct;
+  $: panText = describeBalance(pan.balance);
+  $: panSummary = `${pan.mono ? "Mono" : "Stéréo"} · ${panText}`;
+
+  function onPanMono() {
+    if (!panDisabled) setMono(!pan.mono);
+  }
+  function onPanBalance(e) {
+    setBalance(+e.target.value);
+  }
+  function onPanReset() {
+    if (!panDisabled) resetBalance();
   }
 
   const NORM_LEVELS = [
@@ -602,6 +630,83 @@
     </div>
   {/if}
 </section>
+
+<!-- Mono and LEFT/RIGHT balance: a stage inside the processed graph, after the
+     limiter and before the look-ahead, so the analysers keep the original
+     stereo. Direct playback has no graph to put it in: the controls are
+     disabled and say so. A remote control drives somebody else's output, so
+     the card is not shown there at all. -->
+{#if !REMOTE}
+<section class="card">
+  <h2><Icon name="volume" size={18} /> Mono et balance</h2>
+  <p class="muted sub">
+    Pour écouter avec un seul écouteur, une oreille ou une aide auditive :
+    réunissez les deux canaux, ou déplacez le son vers l'oreille qui entend.
+    Ces réglages ne changent que ce que vous entendez — les animations gardent
+    le stéréo d'origine.
+  </p>
+
+  <div class="block">
+    <button
+      class="toggle pan-toggle"
+      role="switch"
+      aria-checked={pan.mono}
+      aria-describedby="pan-hint"
+      disabled={panDisabled}
+      on:click={onPanMono}
+    >
+      <span class="tg-txt">
+        <span class="tg-title">Mono</span>
+        <span class="tg-hint muted">
+          Réunit les deux canaux dans chaque oreille : plus rien n'est perdu
+          d'un côté, même avec un seul écouteur.
+        </span>
+      </span>
+      <span class="sw" class:on={pan.mono}><span class="knob"></span></span>
+    </button>
+
+    <div class="slider-row pan-balance" class:dim={panDisabled}>
+      <span class="s-label">Gauche</span>
+      <input
+        class="pan-slider"
+        type="range"
+        min="-1"
+        max="1"
+        step="0.01"
+        value={pan.balance}
+        disabled={panDisabled}
+        on:input={onPanBalance}
+        aria-label="Balance gauche-droite"
+        aria-valuetext={panText}
+        aria-describedby="pan-hint"
+      />
+      <span class="s-label pan-right">Droite</span>
+    </div>
+
+    <div class="pan-foot">
+      <span class="pan-value">{panSummary}</span>
+      <button
+        class="chip pan-reset"
+        class:chip-active={pan.balance === 0}
+        aria-pressed={pan.balance === 0}
+        aria-label="Remettre la balance au centre"
+        disabled={panDisabled}
+        on:click={onPanReset}
+      >
+        Centre
+      </button>
+    </div>
+
+    <p id="pan-hint" class="muted pan-hint">
+      {#if panDisabled}
+        Disponible en lecture traitée.
+      {:else}
+        Appliqué immédiatement, sans interrompre la lecture.
+      {/if}
+    </p>
+  </div>
+</section>
+{/if}
 
 <section class="card">
   <h2><Icon name="sliders" size={18} /> Audio</h2>
@@ -1104,6 +1209,52 @@
   }
   .dim {
     opacity: 0.45;
+  }
+  /* -- mono and balance ---------------------------------------------------- */
+  .pan-toggle {
+    align-items: center;
+    min-height: 44px;
+    padding-bottom: 10px;
+  }
+  .pan-toggle:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .pan-toggle:disabled .sw {
+    opacity: 0.7;
+  }
+  .pan-balance {
+    margin-top: 4px;
+  }
+  .pan-right {
+    text-align: right;
+  }
+  .pan-slider {
+    /* A finger needs 44 px of target; the track stays the 4 px line. The
+       padding is hit area only, and background-clip keeps the grey off it. */
+    box-sizing: content-box;
+    padding: 20px 0;
+    background-clip: content-box;
+  }
+  .pan-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 2px;
+  }
+  .pan-value {
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .pan-reset {
+    min-height: 44px;
+  }
+  .pan-hint {
+    margin: 10px 0 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
   }
   .card {
     background: var(--bg-card);
@@ -1849,6 +2000,23 @@
     .padd {
       width: 44px;
       height: 44px;
+    }
+    /* A finger, not a mouse: the switch's whole row, the reset chip, and a
+       thumb big enough to see on the balance's 44 px hit area. */
+    .pan-toggle {
+      min-height: 44px;
+    }
+    .pan-reset {
+      height: 44px;
+      min-height: 44px;
+    }
+    .pan-slider::-webkit-slider-thumb {
+      width: 24px;
+      height: 24px;
+    }
+    .pan-slider::-moz-range-thumb {
+      width: 24px;
+      height: 24px;
     }
   }
   @media (prefers-reduced-motion: reduce) {

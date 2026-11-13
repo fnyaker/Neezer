@@ -12,13 +12,14 @@
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
   import { entityRef, trackEntityRef } from "../lib/entity.js";
-  import { player, recent, openMenu } from "../lib/stores.js";
+  import { player, recent, openMenu, toasts } from "../lib/stores.js";
   import { buildEntityMenu } from "../lib/actions.js";
   import Card from "../components/Card.svelte";
   import Cover from "../components/Cover.svelte";
   import Avatar from "../components/Avatar.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
+  import MoodCard from "../components/MoodCard.svelte";
   import TrackList from "../components/TrackList.svelte";
   import HomeHero from "../components/HomeHero.svelte";
   import StylePicker from "../components/StylePicker.svelte";
@@ -107,10 +108,54 @@
   let mixes = [];
   let homeLoaded = false;
 
+  // -- moods ("Mixes d'ambiance") ---------------------------------------------
+  // The catalog is computed by the server from the measured energy, tempo,
+  // spectral colour and flux of the archived files: one request on mount, one
+  // when a card is played, and nothing whenever Deezer is unreachable.
+  let moods = [];
+  let moodsLoaded = false;
+  let playingMood = null;
+  let playToken = 0;
+  $: readyMoods = moods.filter((m) => m.ready);
+
+  async function playMood(mood) {
+    if (playingMood === mood.id) return;
+    // A newer tap supersedes a slow answer instead of both queues landing.
+    const token = ++playToken;
+    playingMood = mood.id;
+    try {
+      const data = await api.mood(mood.id);
+      if (token !== playToken) return;
+      const tracks = data?.tracks || [];
+      if (!tracks.length) {
+        toasts.push(
+          data?.reason === "not-enough"
+            ? "Pas assez de titres mesurés pour ce mix."
+            : "Ce mix est vide pour l'instant.",
+          "error"
+        );
+        return;
+      }
+      player.playQueue(tracks, 0, {
+        kind: "mood",
+        id: mood.id,
+        title: mood.name,
+      });
+      // A mood mix is a FINITE list: `playQueue` arms the endless radio
+      // continuation for every queue, so it is disarmed here. The 40 titles
+      // still play through; nothing is appended when the last one ends.
+      player.update((s) => (s.context?.kind === "mood" ? { ...s, autoplay: false } : s));
+    } catch {
+      if (token === playToken) toasts.push("Impossible de lancer ce mix. Réessaie.", "error");
+    } finally {
+      if (token === playToken) playingMood = null;
+    }
+  }
+
   // -- what could not be loaded ----------------------------------------------
   let failures = 0;
   function loadAll() {
-    releasesLoaded = artistsLoaded = homeLoaded = recoLoaded = false;
+    releasesLoaded = artistsLoaded = homeLoaded = recoLoaded = moodsLoaded = false;
     failures = 0;
     api.swr("/releases", takeReleases).catch(() => {
       failures += 1;
@@ -134,6 +179,16 @@
         failures += 1;
         homeLoaded = true;
       });
+    api
+      .moods()
+      .then((d) => {
+        moods = d.moods || [];
+        moodsLoaded = true;
+      })
+      .catch(() => {
+        // The row simply stays absent: the rest of the home is unaffected.
+        moodsLoaded = true;
+      });
     loadDiscovery()
       .then((lv) => {
         const path = "/recommend?d=" + encodeURIComponent(Number(lv).toFixed(2));
@@ -153,14 +208,15 @@
     return onDiscoverySettled((lv) => loadReco(lv));
   });
 
-  $: everythingLoaded = releasesLoaded && artistsLoaded && homeLoaded && recoLoaded;
+  $: everythingLoaded = releasesLoaded && artistsLoaded && homeLoaded && recoLoaded && moodsLoaded;
   $: empty =
     everythingLoaded &&
     !newShown.length &&
     !artists.length &&
     !reco?.tracks?.length &&
     !recentAlbums.length &&
-    !mixes.length;
+    !mixes.length &&
+    !readyMoods.length;
   $: allFailed = empty && failures >= 4;
 
   function artistMenu(e, artist) {
@@ -280,6 +336,26 @@
     <Skeleton kind="shelf" />
   {/if}
 
+  {#if readyMoods.length}
+    <section class="mood-section">
+      <div class="section-head">
+        <h2 class="section-title">
+          Mixes d'ambiance
+          <span class="mono count">
+            {readyMoods.length} ambiance{readyMoods.length > 1 ? "s" : ""}
+          </span>
+        </h2>
+      </div>
+      <div class="moods">
+        {#each readyMoods as m (m.id)}
+          <MoodCard mood={m} loading={playingMood === m.id} on:play={() => playMood(m)} />
+        {/each}
+      </div>
+    </section>
+  {:else if !moodsLoaded}
+    <Skeleton kind="shelf" count={6} />
+  {/if}
+
   {#if empty}
     <section class="empty card">
       <span class="empty-icon"><Icon name={allFailed ? "server" : "compass"} size={26} /></span>
@@ -388,6 +464,32 @@
     margin-top: -8px;
     color: var(--dim);
     font-size: 13px;
+  }
+  /* Moods: six sleeves across a desktop, four then three then two as the
+     CONTENT narrows (the queue panel and the sidebar take width, so this is a
+     container query like the releases above). */
+  .mood-section {
+    container-type: inline-size;
+  }
+  .moods {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 16px;
+  }
+  @container (max-width: 900px) {
+    .moods {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  @container (max-width: 640px) {
+    .moods {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @container (max-width: 440px) {
+    .moods {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
   /* Artists: the portrait is the subject, the name the caption (Avatar 104). */
   .artists {
@@ -574,6 +676,9 @@
     /* Caption sizes follow the column count, not the window (the container
        queries above); the gap is the only window rule. */
     .rel-grid {
+      gap: 12px;
+    }
+    .moods {
       gap: 12px;
     }
     /* §6's artists were a rail on a phone, and a rail hides most of them

@@ -141,6 +141,16 @@
   $: rcToken = $location.startsWith("/rc/") ? claimToken("#" + $location) : null;
   $: if (rcToken && !RemoteClaim)
     import("./routes/RemoteClaim.svelte").then((m) => (RemoteClaim = m.default));
+  // A public read-only playlist link (#/shared/playlist/<token>): the holder
+  // may have no account here. It renders before the login, with no app shell
+  // and no global player — the page owns its own <audio> queue.
+  const SHARED_PLAYLIST_PREFIX = "/shared/playlist/";
+  $: sharedPlaylistToken = $location.startsWith(SHARED_PLAYLIST_PREFIX)
+    ? $location.slice(SHARED_PLAYLIST_PREFIX.length).split("/")[0]
+    : null;
+  let SharedPlaylist = null;
+  $: if (sharedPlaylistToken && !SharedPlaylist)
+    import("./routes/SharedPlaylist.svelte").then((m) => (SharedPlaylist = m.default));
   // A remote control on the "queue" level lends the transport and the queue
   // and nothing else: the full-screen player IS the app, with nothing behind.
   const queueOnly = !!REMOTE && !atLeast("read");
@@ -181,7 +191,7 @@
   onMount(async () => {
     // A party guest needs none of the app's own machinery (the library, the
     // offline indexes, the version watch): it is a page, not an install.
-    if (partyId || rcToken) {
+    if (partyId || rcToken || sharedPlaylistToken) {
       authChecked.set(true);
       return;
     }
@@ -404,6 +414,12 @@
 {:else if rcToken}
   {#if RemoteClaim}
     <svelte:component this={RemoteClaim} token={rcToken} />
+  {:else}
+    <div class="loading">…</div>
+  {/if}
+{:else if sharedPlaylistToken}
+  {#if SharedPlaylist}
+    <svelte:component this={SharedPlaylist} token={sharedPlaylistToken} />
   {:else}
     <div class="loading">…</div>
   {/if}

@@ -311,6 +311,9 @@ def main():
         ("GET", "/api/me/favorite-ids", None),
         ("GET", f"/api/playlist/{ids['big']}", None),
         ("GET", f"/api/playlist/{ids['small']}", None),
+        ("GET", f"/api/playlist/{ids['small']}/recommendations", None),
+        ("GET", "/api/history", None),
+        ("GET", "/api/moods", None),
         ("GET", f"/api/album/{ids['album']}", None),
         ("GET", f"/api/artist/{ids['artist']}", None),
         ("GET", "/api/search?q=amour", None),
@@ -333,6 +336,8 @@ def main():
             seed, artist = str(t.id), str(t.artist_id)
         routes += [
             ("GET", "/api/home/mix/techno", None),
+            ("GET", "/api/moods/energie?limit=40", None),
+            ("GET", "/api/radio/genre/Techno", None),
             ("GET", f"/api/radio/track/{seed}", None),
             ("GET", f"/api/radio/artist/{artist}", None),
             ("GET", "/api/flow", None),

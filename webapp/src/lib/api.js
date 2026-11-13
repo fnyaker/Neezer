@@ -299,6 +299,20 @@ export const api = {
   discoverPrefs: () => req("/discover/prefs"),
   setDiscoverLevel: (level) =>
     req("/discover/prefs", { method: "PUT", body: body({ level }) }),
+  // A person's own listening history: the rows the player already reports
+  // (neezer/listening.py), newest first, with a summary of the last 30 days.
+  history: ({ before = null, beforeId = null, limit = 50, outcome = null } = {}) => {
+    const q = new URLSearchParams();
+    if (before) q.set("before", before);
+    if (beforeId != null) q.set("before_id", String(beforeId));
+    q.set("limit", String(limit));
+    if (outcome) q.set("outcome", outcome);
+    return req("/history?" + q.toString());
+  },
+  // Mood mixes built from the measured energy, tempo and spectral colour of
+  // the archived library; no provider is asked.
+  moods: () => req("/moods"),
+  mood: (id) => req("/moods/" + encodeURIComponent(id)),
   muteArtist: (provider, id) =>
     req("/discover/mute", { method: "POST", body: body({ provider, id }) }),
   releases: () => req("/releases"),
@@ -486,6 +500,24 @@ export const api = {
         exclude: exclude.map(String),
       }),
     }),
+  // A genre station: continuous, anchored on one style of the tree. The style
+  // is the node's name (spaces and accents included) and is URL-encoded.
+  genreRadio: (style, level = null) =>
+    req("/radio/genre/" + encodeURIComponent(style) + (level == null ? "" : "?d=" + encodeURIComponent(level))),
+  genreRadioNext: (style, { recent = [], skipped = [], exclude = [] } = {}) =>
+    req("/radio/genre/next", {
+      method: "POST",
+      body: body({
+        style,
+        recent: recent.map(String),
+        skipped: skipped.map(String),
+        exclude: exclude.map(String),
+      }),
+    }),
+  // The bottom of a playlist: library titles near its whole tracklist, minus
+  // what it already holds. Playlist-only, one request per open.
+  playlistRecommendations: (id, limit = 12) =>
+    req("/playlist/" + id + "/recommendations?limit=" + limit),
 
   // podcasts
   podcasts: () => req("/podcasts"),
@@ -627,6 +659,16 @@ export const api = {
     req("/playlist/" + id + "/tracks", { method: "DELETE", body: body({ indexes }) }),
   reorderPlaylist: (id, tracks) =>
     req("/playlist/" + id + "/order", { method: "PUT", body: body({ tracks }) }),
+  // A public read-only link to one playlist: create/rotate, read, revoke. The
+  // link is a capability; the public page reads it without a session.
+  playlistShare: (id) => req("/playlist/" + id + "/share"),
+  createPlaylistShare: (id, ttl = null) =>
+    req("/playlist/" + id + "/share", {
+      method: "POST",
+      body: body(ttl == null ? {} : { ttl }),
+    }),
+  revokePlaylistShare: (id) => req("/playlist/" + id + "/share", { method: "DELETE" }),
+  sharedPlaylist: (token) => req("/shared/playlist/" + encodeURIComponent(token)),
   // `why` says what this archive request IS, so the server can order its queue:
   // "prefetch" is the track about to play, "bulk" (the default) is "archive
   // this playlist/artist, whenever". Never a number — every caller would claim

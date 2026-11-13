@@ -107,6 +107,24 @@ measured 3.78 s landed for 3.79 s expected), and where that cannot land (a live 
 that cannot seek) the next track's load does it, since its new source goes onto a fresh element
 anyway. A failed mid-song hand-over is not retried on the same track (each try is a stream request).
 
+**Mono and left/right balance are for the EARS, never for the analysers** (`lib/audio/pan.js`,
+`graph.js`). The processed chain is `… → limiter → output → [GainNode(channelCount 1, explicit) →
+StereoPannerNode] → look-ahead → destination`; the stage is inserted only while `audio.mono` is on or
+`audio.balance` ≠ 0, and the default graph connects `output` STRAIGHT to the look-ahead (0 extra
+nodes, 0 added latency). `output → analysisBus → analyserLo/Hi / scope / rhythm` is wired BEFORE the
+stage, so the rhythm analyser, the stereo scope and the visualizer keep the ORIGINAL stereo signal —
+a mono fold would erase the two channels the scope exists to draw. Mono is the W3C speaker down-mix
+`0.5·(L+R)`; balance is the W3C stereo-panner law (for a mono source, the equal-power
+`cos/sin((b+1)·π/4)`, centre 1/√2 per side, −3.01 dB, deliberately not made up: the stage is after
+the limiter, and a √2 make-up could clip a hard pan). A live change ramps `pan` (τ 12 ms) and
+enters/leaves the stage through a ~48 ms dry/wet fade whose complementary gains sum to 1; the mono
+channel-count change happens while the wet path is silent, so nothing clicks and a throttled timer
+never leaves silence. The settings are `audio.mono` / `audio.balance` in localStorage (pan.js, not
+stores.js). Direct playback and the Android app's player have no graph to insert the stage into: the
+card disables its controls and says « Disponible en lecture traitée. ». A remote control does not
+mirror these two keys — they are a property of the output that actually plays — so the card is not
+shown there.
+
 The **timekeeper** watches the playing element once a second, in windows of 8 s of uninterrupted
 playback (a seek, a stall, a track change or an implausible tick starts a new one), against four
 clocks: the element's own position (a routed element is pulled by the context: dropped frames make

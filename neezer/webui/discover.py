@@ -20,7 +20,7 @@ import time
 
 from flask import current_app, jsonify, request
 
-from .. import discover, dislikes, energy, genretree, listening, releases
+from .. import discover, dislikes, energy, genretree, listening, moods, releases
 from ..db import (
     Album, Artist, ArtistMute, ArtistRelease, Track, TrackAnalysis, UserTaste, now,
 )
@@ -466,6 +466,10 @@ def discover_mute():
 def _forget_reco(user):
     discover.invalidate(user)
     discover.forget_sessions(user)
+    # A mood mix is built from the same taste: a newly disliked (or restored)
+    # title must leave (or return to) the mixes without waiting for the 60 s
+    # catalog TTL.
+    moods.invalidate(user)
     with _reco_lock:
         for k in [k for k in _reco if k[0] == user.id]:
             _reco.pop(k, None)
