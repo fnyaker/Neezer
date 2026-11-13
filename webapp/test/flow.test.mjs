@@ -163,3 +163,53 @@ test("a Flow queue saved by an older app goes on, in a session of its own", asyn
   assert.equal(get(player).context.id, get(flow.flowSession).sid);
   assert.equal(ids().length, 2);
 });
+
+// -- what the steering panel shows (FlowPicker) -------------------------------
+// Six stops over the ONE discovery level the server stores: the numbers are the
+// contract, the names are the UI's (labels say where the thumb is, and a level
+// written by an older build lands on the nearest stop, never between two).
+
+test("diversity has six stops, ascending, each with a French name and a hint", () => {
+  const steps = flow.DIVERSITY_STEPS;
+  assert.equal(steps.length, 6);
+  assert.equal(steps[0].value, 0);
+  assert.equal(steps[steps.length - 1].value, 1);
+  for (let i = 1; i < steps.length; i++) {
+    assert.ok(steps[i].value > steps[i - 1].value, "the stops ascend");
+    assert.notEqual(steps[i].name, steps[i - 1].name, "two stops never share a name");
+  }
+  for (const s of steps) assert.ok(s.name && s.hint, `"${s.name}" is labelled`);
+  assert.equal(steps[0].name, "Prudent");
+  assert.equal(steps[5].name, "Large");
+});
+
+test("a level lands on the nearest stop, ties upward", () => {
+  assert.equal(flow.diversityStep(0).name, "Prudent");
+  assert.equal(flow.diversityStep(0.35).name, "Voisin", "the stored default (0.35) has a home");
+  assert.equal(flow.diversityStep(0.5).name, "Exploration", "0.5 is equidistant: the wider stop wins");
+  assert.equal(flow.diversityStep(1).name, "Large");
+  assert.equal(flow.diversityStep(-3).name, "Prudent", "a value outside 0…1 is clamped, not invented");
+  assert.equal(flow.diversityStep(9).name, "Large");
+  assert.equal(flow.diversityIndex(NaN), 0, "a missing level starts at the careful end");
+});
+
+test("the aim summary says the genres then the breadth, in two names at most", () => {
+  assert.equal(flow.flowAimSummary([], 0.4), "Tous les styles · Voisin");
+  assert.equal(flow.flowAimSummary(["Techno"], 0.6), "Techno · Exploration");
+  assert.equal(flow.flowAimSummary(["Techno", "House"], 0.8), "Techno, House · Aventure");
+  assert.equal(flow.flowAimSummary(["Techno", "House", "Trance"], 1), "Techno, House +1 · Large");
+  assert.equal(
+    flow.flowAimSummary(["A", "B", "C", "D", "E", "F", "G"], 0),
+    "A, B +4 · Prudent",
+    "never more than STYLES_MAX names, and the chip stays short"
+  );
+  assert.equal(flow.flowAimSummary([null, "", "Pop"], 0.2), "Pop · Proche", "junk is ignored");
+});
+
+test("the short aim keeps the breadth when the genre names run out of room", () => {
+  assert.equal(flow.flowAimShort([], 0.4), "Tous les styles · Voisin");
+  assert.equal(flow.flowAimShort(["Techno"], 0.6), "Techno · Exploration");
+  assert.equal(flow.flowAimShort(["Techno", "House"], 0.8), "Techno, House · Aventure");
+  assert.equal(flow.flowAimShort(["Techno", "House", "Trance"], 0.8), "3 genres · Aventure");
+  assert.equal(flow.flowAimShort(["A", "B", "C", "D", "E", "F", "G"], 1), "6 genres · Large");
+});
