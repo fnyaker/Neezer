@@ -16,7 +16,7 @@
   import TrackList from "../components/TrackList.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
-  import GenreTiles from "../components/GenreTiles.svelte";
+  import ExplorerStyles from "../components/ExplorerStyles.svelte";
   import { fallbackSources, mainSource, iconOf } from "../lib/sources.js";
   import { access } from "../lib/access.js";
   import { playlistLink, importRoute } from "../lib/linkimport.js";
@@ -493,7 +493,7 @@
         d'abord, puis le catalogue, et YouTube quand il a ce que le catalogue n'a pas.
       </p>
     {/if}
-    <GenreTiles on:pick={(e) => useRecent(e.detail)} />
+    <ExplorerStyles />
   </div>
 {/if}
 
