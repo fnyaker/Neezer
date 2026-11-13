@@ -194,7 +194,7 @@ class CarPrefs(context: Context) {
         get() = sp.getBoolean(KEY_INVERT, false)
         set(v) = sp.edit().putBoolean(KEY_INVERT, v).apply()
 
-    /** Pinned playlists, in display order. "Mon Flow" is implicit, never stored. */
+    /** Pinned playlists, in display order. The Favoris tile is implicit, never stored. */
     var pins: List<PinnedPlaylist>
         get() {
             val raw = sp.getString(KEY_PINS, null) ?: return emptyList()

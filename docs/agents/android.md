@@ -346,8 +346,10 @@ inside any WebView — email + password is the supported route. SPA side: `lib/n
 `CarPlaylistsView.kt`, `CarSettingsActivity.kt`). The overlay is native and the WebView still owns
 the queue, so the two sides meet at exactly two hooks, installed once by `App.svelte` (never on a
 party/remote page): `window.__nsCarPlay(kind, id, title, payload)` launches a Flow (`startFlow`), a
-track from its JSON (`player.playQueue`, context `track`), or an entity (`playEntity(kind, id)`) —
-never a second playback path — and returns a boolean the service can report. `window.__nsCarFav()`
+track from its JSON (`player.playQueue`, context `track`), an entity (`playEntity(kind, id)`), or
+the starred tracks (`favorites`: it reads `/api/me/favorites` then
+`player.playQueue(tracks, 0, {kind:"favorites", id:"favorites"})` — still the one player, no second
+engine) — and returns a boolean the service can report. `window.__nsCarFav()`
 exists only while a track is current: it toggles that track's favourite and returns the optimistic
 new state synchronously. `NSNative.carAvailable()` gates the SPA's settings card and the playlist
 page's “Épingler pour la voiture” action (`NSNative.carPin`); an older APK has neither method and the
@@ -360,7 +362,15 @@ boolean (`true` only when the launch was accepted); `lib/car.js` requires `=== t
 from before the return value is reported as "Réglages indisponibles" by the new SPA instead of a
 silent success. Older SPA + newer APK: the extra return value is ignored, and the two-argument
 `carPin` overload is still there — no bridge version bump.
-The playlist panel shows Flow + `CarPrefs.pins`, six 84 dp tiles to a page; its catalogue is
+The playlist panel shows a built-in “Favoris” tile first, then `CarPrefs.pins`, six 84 dp tiles to
+a page. “Mon Flow” is no longer one of its tiles: the `flow` launch kind stays in the bridge for an
+older page, but nothing in the car surfaces it. The Favoris tile is not a playlist — it is never in
+`CarPrefs.pins`, and cannot be removed or reordered — and its count is the length of the light
+`/api/me/favorite-ids` `ids` array (track stars only), read with the same cookie on the same worker
+as the catalogue; a 401, an offline read or a server without the route leaves the count unknown
+(“tes titres aimés”) without touching the other tiles, and `/api/me/favorites` is never fetched
+just for a counter (measured on the 8 000-track bench: 15 ms / 45 KB for 4 000 stars on the light
+route, against 99 ms / 2 MB for the full one). Its catalogue is
 `/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
 (401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
 device remembers. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
@@ -372,15 +382,28 @@ read happen off the UI, then the request is still made without a cookie: its 401
 HTML is more informative than "server down". The states are kept apart — session absente (401),
 hors ligne, délai dépassé, certificat refusé, serveur en erreur (403/5xx), réponse inattendue (HTML)
 — and every failure is retryable; the pinned rows are always announced as local ("épinglées").
-A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`, covers included): the
-overlay is destroyed and recreated on every drop/reattach, and a fresh cache means returning from
-the settings does not cost a second request; a 401 forgets it. The panel labels a cache-served list
+A successful read is cached 60 s process-wide (`CarPlaylistSource.fresh`, covers and star count
+included): the overlay is destroyed and recreated on every drop/reattach, and a fresh cache means
+returning from the settings does not cost a second request; a 401 forgets it. A catalogue read made
+by the settings screen alone keeps the last known count instead of erasing it; a panel that finds a
+cached list with no count re-reads rather than showing “tes titres aimés” for a minute. The panel
+labels a cache-served list
 "catalogue mémorisé", so a stale list never passes for a live one. `CarSettingsActivity` seeds
 its rows from that same cache on open (instant covers, no request), then re-reads on `onResume`
 when the last attempt failed or the last success is older than 60 s, at most once every 2 s; a 401
 there also forgets the process cache. Tapping a tile calls
 `CarHost.launch` only — the service changes to the player and shows the single "Lecture : X" / "Playlist lancée : X" toast
-when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée".
+when `__nsCarPlay` returned true, so the panel no longer adds its own "Playlist lancée". The built-in
+Favoris tile launches the `favorites` kind (`LAUNCH_KINDS` on the service, `KINDS` in `lib/car.js`):
+its read is asynchronous, so the PAGE owns the wording — “Chargement des favoris…” then “Lecture
+des favoris”, or “Aucun favori pour l'instant”, “Session absente” on a 401, “Hors ligne : favoris
+indisponibles”. The service stays silent for `favorites` on success (no “Playlist lancée” before a
+queue exists) and only says “Ouvre Neezer pour lancer tes favoris” when the page refused
+synchronously (older SPA without the path, signed out). Removing the synthetic Flow tile is not a
+library cleanup: playlists named “Deezer · Flow” in `/api/me/playlists` stay ordinary rows,
+pin-able and playable like any other — there is no reliable automatic flag to tell them from a
+person's own playlist of the same name, so the app never deletes or hides a server row on a name
+match.
 The native search (`CarSearchView`) waits **700 ms** after the last key and needs **2 characters**
 before calling `/api/search` (one call fans out to five provider searches), cancels the previous
 `HttpURLConnection` on a new keypress or detach, and lets a late answer from an older generation be
@@ -393,6 +416,7 @@ overlay first), asks overlay, usage-access, location, Bluetooth and microphone t
 gesture and resets the saved slots — all apps, or one row per navigation app that has one —
 immediately, with a toast. `webapp/test/car.test.mjs` drives the hooks
 with injected player functions
-(launch kinds, no session, remote, the favourite hook appearing/disappearing); `npm test` 439 and
+(launch kinds, no session, remote, the favourite hook appearing/disappearing, the asynchronous
+favourites launch and its empty/401/offline answers); `npm test` 455 and
 `npm run build` pass. The Kotlin side is built by CI's `android` workflow; `assembleDebug`,
 `lintDebug` and `testDebugUnitTest` also pass locally with JDK 17/SDK 34.

@@ -70,7 +70,7 @@ class CarModeService : Service(), CarHost {
         // Quoted inside the expression below, so keep it under PlayerService.JS_MAX.
         private const val MAX_LAUNCH_PAYLOAD = 12 * 1024
 
-        private val LAUNCH_KINDS = setOf("flow", "playlist", "album", "artist", "mix", "track")
+        private val LAUNCH_KINDS = setOf("flow", "favorites", "playlist", "album", "artist", "mix", "track")
 
         private const val TICK_MS = 1_000L
         private const val REBIND_MS = 1_000L
@@ -1281,13 +1281,25 @@ class CarModeService : Service(), CarHost {
                     if (answered) return@answer
                     answered = true
                     if (!ok) {
-                        toast(R.string.car_no_player)
+                        toast(
+                            if (kind == "favorites") R.string.car_favorites_launch_failed
+                            else R.string.car_no_player
+                        )
                         return@answer
                     }
                     desiredScreen = CarScreen.PLAYER
                     overlay?.setScreen(CarScreen.PLAYER)
                     // One toast, worded for what was launched: the playlist
                     // panel no longer adds its own "Playlist lancée".
+                    //
+                    // "favorites" is asynchronous on the page (it fetches
+                    // /api/me/favorites before it has a queue), so `true` here
+                    // only means "accepted, loading". The PAGE owns that
+                    // wording — "Chargement des favoris…" then "Lecture des
+                    // favoris", or the honest failure — and the service stays
+                    // silent, so the person never gets "Playlist lancée" for a
+                    // launch that had not happened yet (or for an empty list).
+                    if (kind == "favorites") return@answer
                     toast(
                         if (kind == "playlist") {
                             getString(R.string.car_playlist_launched, label)

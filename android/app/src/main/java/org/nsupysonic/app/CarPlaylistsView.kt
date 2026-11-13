@@ -20,22 +20,25 @@ import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.util.concurrent.Executors
 import javax.net.ssl.SSLException
 import kotlin.math.max
 
 /**
- * The car overlay's playlist panel: "Mon Flow" then the pinned playlists, six
- * 84 dp tiles to a page, two columns, pagination, and a dashed "pin more" tile
- * that opens the settings.
+ * The car overlay's playlist panel: the built-in "Favoris" tile first, then the
+ * pinned playlists, six 84 dp tiles to a page, two columns, pagination, and a
+ * dashed "pin more" tile that opens the settings.
  *
  * The list itself is the SERVER's (`/api/me/playlists`), fetched natively with
  * the WebView's own session cookie through [Net] — the same origin rule, pin
- * and redirect discipline as every other native fetch. The pinned order and
- * titles live in [CarPrefs], so the panel still paints the last known tiles
- * with no network, no session or no server: it says which of those it is, and
- * never invents a playlist.
+ * and redirect discipline as every other native fetch. The favourites count
+ * comes from the light `/api/me/favorite-ids` (never the whole
+ * `/api/me/favorites`), read on the same worker and kept in the same 60 s
+ * cache. The pinned order and titles live in [CarPrefs], so the panel still
+ * paints the last known tiles with no network, no session or no server: it says
+ * which of those it is, and never invents a playlist.
  *
  * Nothing here plays anything: a tap is [CarHost.launch], the only door to the
  * SPA's own `__nsCarPlay`, and the player remains the page's.
@@ -71,18 +74,25 @@ class CarPlaylistsView @JvmOverloads constructor(
         val id: String,
         val title: String,
         val count: Int,
-        val flow: Boolean,
+        val favorites: Boolean,
         val cover: String,
     ) {
         val countLabel: String
             get() = when {
-                flow -> "selon ton écoute"
+                // -1 is "the star count is not known (yet)": say what the tile
+                // is instead of inventing a number.
+                favorites -> when {
+                    count < 0 -> "tes titres aimés"
+                    count == 0 -> "aucun titre aimé"
+                    count == 1 -> "1 titre aimé"
+                    else -> "$count titres aimés"
+                }
                 count <= 0 -> "playlist"
                 count == 1 -> "1 titre"
                 else -> "$count titres"
             }
 
-        val coverSeed: String get() = if (flow) "flow" else id
+        val coverSeed: String get() = if (favorites) FAVORITES_SEED else id
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -94,6 +104,8 @@ class CarPlaylistsView @JvmOverloads constructor(
 
     private var state = Load.IDLE
     private var items: List<CarPlaylistSource.Item> = emptyList()
+    /** The person's starred tracks; -1 = asked and unknown (offline, old server). */
+    private var favoriteCount = -1
     private var page = 0
     private var loadSeq = 0
     private var lastRefreshAt = 0L
@@ -265,7 +277,14 @@ class CarPlaylistsView @JvmOverloads constructor(
     // -- tiles ---------------------------------------------------------------
 
     private fun buildCells(): List<Cell> {
-        val cells = mutableListOf(Cell("", "Mon Flow", 0, true, ""))
+        // "Favoris" is the panel's one built-in tile: it belongs to no server
+        // playlist, is never stored in CarPrefs.pins, and cannot be removed or
+        // reordered. It stays first — the place "Mon Flow" used to hold; the
+        // auto Flow tile is deliberately gone, the `flow` launch kind stays in
+        // the bridge for older pages.
+        val cells = mutableListOf(
+            Cell(FAVORITES_CELL, "Favoris", favoriteCount, true, "")
+        )
         for (pin in prefs.pins) {
             // A pin may be stored under the playlist's UUID or its Deezer id
             // (the page's own id): the catalogue answers both, and the tile
@@ -287,7 +306,7 @@ class CarPlaylistsView @JvmOverloads constructor(
     private fun pageCount(size: Int): Int = max(1, (size + PAGE_SIZE - 1) / PAGE_SIZE)
 
     private fun tile(cell: Cell): View {
-        val accent = cell.flow
+        val accent = cell.favorites
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -386,15 +405,19 @@ class CarPlaylistsView @JvmOverloads constructor(
         }
         // One toast, and only after the page said it started: CarHost.launch
         // changes the screen and announces "Lecture : X". A failed launch
-        // leaves the panel where it is.
-        if (cell.flow) {
-            host.launch("flow", "", "Mon Flow")
+        // leaves the panel where it is. For "favorites" the page fetches
+        // /api/me/favorites (asynchronous) and owns the wording ("Chargement
+        // des favoris…" then "Lecture des favoris"); the service stays silent
+        // for that kind so there is never a second toast.
+        if (cell.favorites) {
+            host.launch("favorites", FAVORITES_LAUNCH_ID, "Favoris")
         } else {
             host.launch("playlist", cell.id, cell.title)
         }
     }
 
     private fun turn(delta: Int) {
+        // Favoris + the pins.
         val pages = pageCount(prefs.pins.size + 1)
         if (pages <= 1) return
         page = ((page + delta) % pages + pages) % pages
@@ -421,11 +444,14 @@ class CarPlaylistsView @JvmOverloads constructor(
         // The overlay is detached and recreated each time the settings screen
         // or a size change drops it: this instance's fields start empty, but
         // the process-wide read may still be fresh. Reuse it instead of
-        // asking /api/me/playlists on every attach.
+        // asking /api/me/playlists on every attach. A cached list with no star
+        // count (the settings read the catalogue alone) does not qualify: the
+        // Favoris tile would stay "tes titres aimés" for a minute.
         if (!force && state == Load.IDLE) {
             val cached = CarPlaylistSource.fresh(now)
-            if (cached != null) {
+            if (cached != null && cached.favorites != null) {
                 items = cached.items
+                favoriteCount = cached.favorites
                 state = Load.READY
                 fromCache = true
                 lastSuccessAt = cached.at
@@ -439,19 +465,21 @@ class CarPlaylistsView @JvmOverloads constructor(
             render()
             return
         }
+        val favoritesUrl = CarPlaylistSource.favoritesEndpoint(server)
         lastRefreshAt = now
         val seq = ++loadSeq
 
         state = Load.LOADING
         updateSubtitle()
         CarPlaylistSource.IO.execute {
-            val outcome = carListOutcome { CarPlaylistSource.load(server, url) }
+            val outcome = carSnapshotOutcome { CarPlaylistSource.loadAll(server, url, favoritesUrl) }
             main.post {
                 if (seq != loadSeq || !isAttachedToWindow) return@post
                 when (val result = outcome) {
                     is CarListOutcome.Ok -> {
                         items = result.items
-                        CarPlaylistSource.remember(result.items)
+                        favoriteCount = result.favorites ?: -1
+                        CarPlaylistSource.remember(result.items, favoriteCount)
                         remember(result.items)
                         fromCache = false
                         lastSuccessAt = SystemClock.elapsedRealtime()
@@ -574,6 +602,14 @@ class CarPlaylistsView @JvmOverloads constructor(
 
     companion object {
         private const val PAGE_SIZE = 6
+
+        /**
+         * The built-in Favoris cell's stable identity. It is not a playlist id
+         * and is never written to CarPrefs.pins; the launch itself needs no id.
+         */
+        const val FAVORITES_CELL = "@favorites"
+        const val FAVORITES_SEED = "favorites"
+        const val FAVORITES_LAUNCH_ID = ""
     }
 }
 
@@ -594,7 +630,12 @@ internal sealed class CarListFailure : Exception() {
 
 /** The result of one catalogue read, as both car screens consume it. */
 internal sealed class CarListOutcome {
-    class Ok(val items: List<CarPlaylistSource.Item>) : CarListOutcome()
+    class Ok(
+        val items: List<CarPlaylistSource.Item>,
+        /** The star count when the read asked for it; null = unknown. */
+        val favorites: Int? = null,
+    ) : CarListOutcome()
+
     class Fail(val failure: CarListFailure) : CarListOutcome()
 }
 
@@ -606,6 +647,17 @@ internal inline fun carListOutcome(read: () -> List<CarPlaylistSource.Item>): Ca
 } catch (error: Exception) {
     CarListOutcome.Fail(carListFailureOf(error))
 }
+
+/** The overlay's read also brings the Favoris count; same failure mapping. */
+internal inline fun carSnapshotOutcome(read: () -> CarPlaylistSource.Snapshot): CarListOutcome =
+    try {
+        val snapshot = read()
+        CarListOutcome.Ok(snapshot.items, snapshot.favorites)
+    } catch (failure: CarListFailure) {
+        CarListOutcome.Fail(failure)
+    } catch (error: Exception) {
+        CarListOutcome.Fail(carListFailureOf(error))
+    }
 
 private val HTTP_CODE = Regex("""\bHTTP (\d{3})\b""")
 
@@ -628,12 +680,15 @@ internal fun carListFailureOf(error: Throwable): CarListFailure {
 
 /**
  * The one reader of `/api/me/playlists` for the car (the overlay and the
- * settings screen). It is the server's own route: no new endpoint, no Deezer
- * call, and the session cookie only ever goes to the configured origin because
+ * settings screen), plus the light `/api/me/favorite-ids` count the Favoris
+ * tile shows. It is the server's own routes: no new endpoint, no Deezer call,
+ * and the session cookie only ever goes to the configured origin because
  * [Net.get] owns that rule.
  */
 internal object CarPlaylistSource {
     const val PATH = "/api/me/playlists"
+    /** The ids only: a few dozen KB for thousands of stars, no track hydration. */
+    const val FAVORITES_PATH = "/api/me/favorite-ids"
     private const val MAX_BYTES = 1024 * 1024
     private const val MAX_ITEMS = 500
 
@@ -645,26 +700,48 @@ internal object CarPlaylistSource {
         val deezerId: String? = null,
     )
 
+    /** One catalogue read and the star count it could get (null = unknown). */
+    data class Snapshot(val items: List<Item>, val favorites: Int?)
+
     /** A cached read, with the instant it was taken (elapsedRealtime). */
-    data class Cached(val items: List<Item>, val at: Long)
+    data class Cached(val items: List<Item>, val at: Long, val favorites: Int? = null)
 
     /** How long a successful read serves every panel without a new request. */
     private const val CACHE_MS = 60_000L
     private var cached: List<Item>? = null
     private var cachedAt = 0L
+    private var cachedFavorites: Int? = null
 
     /** The last good list if it is younger than a minute, else null. */
     @Synchronized
     fun fresh(now: Long): Cached? {
         val list = cached ?: return null
-        return if (now - cachedAt in 0 until CACHE_MS) Cached(list, cachedAt) else null
+        return if (now - cachedAt in 0 until CACHE_MS) {
+            Cached(list, cachedAt, cachedFavorites)
+        } else {
+            null
+        }
     }
 
-    /** Keep a successful read for the next panel instance (attach/reattach). */
+    /**
+     * Keep a successful read for the next panel instance (attach/reattach).
+     * `favorites` null means "not asked here" (the settings screen reads the
+     * catalogue alone): the last known star count is kept rather than erased.
+     * The overlay passes -1 when the count route failed, so a reattach within
+     * the minute does not ask again.
+     */
     @Synchronized
-    fun remember(items: List<Item>) {
+    fun remember(items: List<Item>, favorites: Int? = null) {
+        val now = SystemClock.elapsedRealtime()
+        if (favorites != null) {
+            cachedFavorites = favorites
+        } else if (cached != null && now - cachedAt >= CACHE_MS) {
+            // The previous entry (and its count) is beyond the 60 s window:
+            // keeping the count would resurrect a number the policy expired.
+            cachedFavorites = null
+        }
         cached = items
-        cachedAt = SystemClock.elapsedRealtime()
+        cachedAt = now
     }
 
     /** The session is gone: never serve that list to a reattached panel. */
@@ -672,6 +749,7 @@ internal object CarPlaylistSource {
     fun forget() {
         cached = null
         cachedAt = 0L
+        cachedFavorites = null
     }
 
     /** One daemon thread for both screens; a hung read never blocks the UI. */
@@ -697,6 +775,18 @@ internal object CarPlaylistSource {
     fun endpointFor(baseUrl: String): String? {
         val root = rootOf(baseUrl) ?: return null
         return root + PATH
+    }
+
+    /** `/api/me/favorite-ids` on the same root, or null with no server. */
+    fun favoritesEndpoint(prefs: Prefs): String? {
+        val url = favoritesEndpointFor(prefs.baseUrl()) ?: return null
+        return if (prefs.isServerUrl(url)) url else null
+    }
+
+    /** The pure half of [favoritesEndpoint], held by a JVM test. */
+    fun favoritesEndpointFor(baseUrl: String): String? {
+        val root = rootOf(baseUrl) ?: return null
+        return root + FAVORITES_PATH
     }
 
     /** The server root: the configured base without a trailing `/app`. */
@@ -749,7 +839,23 @@ internal object CarPlaylistSource {
      * without a cookie is still worth making: its 401 or its login-page HTML
      * tells "session absente" from "server down".
      */
-    fun load(prefs: Prefs, url: String): List<Item> {
+    fun load(prefs: Prefs, url: String): List<Item> = loadAll(prefs, url, null).items
+
+    /**
+     * The catalogue AND the star count for the Favoris tile, in one worker
+     * task and with one session read. The count is a separate, light route
+     * (`/api/me/favorite-ids`, never the full `/api/me/favorites`); a failure
+     * or a 401 there leaves it unknown and never fails the catalogue — the
+     * pinned tiles must paint regardless.
+     */
+    fun loadAll(prefs: Prefs, url: String, favoritesUrl: String?): Snapshot {
+        val session = session(url)
+        val items = fetch(prefs, url, session)
+        val favorites = favoritesUrl?.let { fetchFavoriteCount(prefs, it, session) }
+        return Snapshot(items, favorites)
+    }
+
+    private fun session(url: String): String? {
         var session = cookie(url)
         if (session.isNullOrEmpty()) {
             try {
@@ -758,7 +864,7 @@ internal object CarPlaylistSource {
             }
             session = cookie(url)
         }
-        return fetch(prefs, url, session)
+        return session
     }
 
     fun fetch(prefs: Prefs, url: String, cookie: String?): List<Item> {
@@ -768,19 +874,7 @@ internal object CarPlaylistSource {
             throw carListFailureOf(error)
         }
         val text = try {
-            conn.inputStream.use { input ->
-                val out = ByteArrayOutputStream()
-                val buffer = ByteArray(16 * 1024)
-                var total = 0
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    total += read
-                    if (total > MAX_BYTES) throw CarListFailure.Unexpected
-                    out.write(buffer, 0, read)
-                }
-                String(out.toByteArray(), Charsets.UTF_8)
-            }
+            readText(conn)
         } catch (failure: CarListFailure) {
             throw failure
         } catch (error: Exception) {
@@ -812,6 +906,50 @@ internal object CarPlaylistSource {
             out.add(Item(id, title, count, cover, deezerId))
         }
         return out
+    }
+
+    /**
+     * The star count, or null: this is a decoration on the Favoris tile, so
+     * every failure (offline, 401, a proxy page, a server too old for the
+     * route) is swallowed. The request is made only when the catalogue read
+     * succeeded, with its cookie.
+     */
+    fun fetchFavoriteCount(prefs: Prefs, url: String, cookie: String?): Int? {
+        val conn = try {
+            Net.get(prefs, url, cookie, connectTimeout = 6000, readTimeout = 6000)
+        } catch (_: Exception) {
+            return null
+        }
+        return try {
+            favoriteCountOf(readText(conn))
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Body of one 2xx answer, bounded: a runaway answer is not our JSON. */
+    private fun readText(conn: HttpURLConnection): String =
+        conn.inputStream.use { input ->
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(16 * 1024)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > MAX_BYTES) throw CarListFailure.Unexpected
+                out.write(buffer, 0, read)
+            }
+            String(out.toByteArray(), Charsets.UTF_8)
+        }
+
+    /** `{ids: [...]}` and nothing else: the count is the track stars only. */
+    internal fun favoriteCountOf(text: String): Int? = try {
+        JSONObject(text).optJSONArray("ids")?.length()?.coerceAtLeast(0)
+    } catch (_: Exception) {
+        null
     }
 
     /** `optString` renders a JSON null as the word "null": drop it. */
