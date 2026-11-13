@@ -11,6 +11,16 @@ progressive docs need ranges and a length to seek; the OpenSubsonic `transcodeOf
 (`timeOffset`) instead — a later step if waiting for the file proves too long on a slow link (Deezer's FLAC is fetched at link speed, a few
 seconds on a LAN, tens on a mobile link). The app's player has its own held seek (android.md, bridge 7).
 
+**A transport action the person takes always wins.** Play, pause, next, previous and seek are applied
+at once, even while the player is recovering from a refused resume, switching source or chasing a
+stream. Those internal states may gate the *automatic* transport, never the person's command, and each
+recovery/switch/chase handler is cancelled when a newer action lands — `recoverPlayback` used to stay
+true forever after a source that never answered, leaving the icon on “playing” and every pause/play
+press with no effect. The first load gets a grace (a slow start is not a failure), no skip waits on a
+timer, and a pause is effective in under 500 ms in every state, measured by
+`docs/repro/e2e_transport_repro.py`. A visible `playbackStatus` says “reprise”, “changement de
+qualité” or “buffering”, so silence never looks like playing.
+
 **Crossfade + silence trimming** (`components/Player.svelte`, `lib/edges.js`,
 `neezer/webui/edges.py`). Two ideas that need each other: masters carry a beat of digital silence
 at each end, and a crossfade that ignores them fades one track's silence into another's — the gap it

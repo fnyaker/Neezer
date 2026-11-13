@@ -124,7 +124,8 @@ green, merge without asking. No skipped or disabled test to get there.
 | listen party, remote control | [party-remote.md](docs/agents/party-remote.md) |
 | a task that spans several areas, or you delegate to a subagent | [orchestration.md](docs/agents/orchestration.md) |
 
-Plans and studies: `docs/detachement-deezer.md`, `docs/multi-provider.md`, `todo.md`.
+Documentation map: [docs/README.md](docs/README.md). Delivered architecture references:
+`docs/detachement-deezer.md`, `docs/multi-provider.md`; roadmap: `todo.md`.
 
 ## Équipe d'agents (OpenCode)
 

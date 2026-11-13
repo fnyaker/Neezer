@@ -2,9 +2,9 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
-**Providers (multi-provider plan, lot A)** (`neezer/providers/`, `neezer/sources.py`, plan `docs/multi-provider.md`).
-Deezer and YouTube are meant to become two instances of one interface. Lot A lays the ground and
-wires nothing to the hot paths yet:
+**Providers (multi-provider, lots A–N)** (`neezer/providers/`, `neezer/sources.py`, reference `docs/multi-provider.md`).
+Deezer and YouTube are two instances of one interface. Lot A laid the ground; the later lots wired
+it to the hot paths, and the rules below are the current contract:
 
 - `providers/base.py` is the interface (`Provider`: id of at most 16 lowercase letters/digits, `role`
   main|fallback, `capabilities`, `available()` with no network, `health()`, `config_schema()`; values are plain
@@ -26,7 +26,7 @@ wires nothing to the hot paths yet:
   `<provider>:<ref>` beside UUIDs and Deezer ids in at most two statements.
 
 **Providers, lot B: the three built-in adapters** (`providers/{deezer,youtube,local,builtin,http}.py`). They WRAP
-what exists; nothing moved and no route reads them yet (lot E wires `/stream`).
+what exists; `/stream` now goes through them (lot E).
 
 - `DeezerAdapter(get_provider)` calls `app.deezer` through a getter on EVERY use (an admin saving a new ARL swaps the
   object; nothing is re-registered). Translation rule: transport failure (cause chain, `is_transport_failure`) is

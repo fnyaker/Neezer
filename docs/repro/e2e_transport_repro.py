@@ -1,4 +1,5 @@
-# Reproduction harness for the web-player transport bugs (docs/plan-bug-audit.md, P0).
+# Reproduction harness for the web-player transport bugs (docs/agents/playback.md,
+# “A transport action the person takes always wins”).
 #
 # Drives the REAL SPA in Chromium, instruments the JS-created <audio> elements,
 # and simulates slow / dead / failing /api/stream responses to reproduce:

@@ -37,6 +37,26 @@ class AgentDocsTestCase(unittest.TestCase):
         self.assertEqual(linked - present, set(), "a link points at no file")
         self.assertEqual(present - linked, set(), "an area file nobody is told to read")
 
+    def test_root_markdown_stays_intentional(self):
+        allowed = {"README.md", "CLAUDE.md", "AGENTS.md", "todo.md"}
+        present = {f for f in os.listdir(ROOT) if f.endswith(".md")}
+        self.assertEqual(
+            present - allowed,
+            set(),
+            "a one-shot plan or handoff belongs in docs/ and is deleted when its work is done",
+        )
+
+    def test_docs_index_lists_every_top_level_doc(self):
+        index = self.read("docs", "README.md")
+        present = {
+            f
+            for f in os.listdir(os.path.join(ROOT, "docs"))
+            if f.endswith(".md") and f != "README.md"
+        }
+        linked = set(re.findall(r"\]\(([a-z0-9-]+\.md)\)", index))
+        self.assertEqual(present - linked, set(), "a top-level doc nobody is pointed at")
+        self.assertEqual(linked - present, set(), "the docs index points at no file")
+
     def test_relative_links_between_area_files_resolve(self):
         for name in os.listdir(AGENTS_DIR):
             text = self.read("docs", "agents", name)

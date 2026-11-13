@@ -626,6 +626,64 @@ the vectors are stored (7680-byte sidecars) and a simulated model change sends 3
 Not verified: the vector of the REAL extractor against the server's (the browser resamples to 16 kHz, ffmpeg's swr is not the same filter: compare both vectors
 on real tracks with the operator's model before trusting a mixed library; the cosine between them is the number to write here).
 
+## Model accuracy: what was tried, what remains, what never to do
+
+The extractor (`discogs-effnet-bsdynamic-1.onnx`, MusiCNN) is frozen and will never be retrained;
+only the small head on top is learned, from a few hundred hand-tagged tracks. Every accuracy idea is
+therefore either a better **vector** (extraction) or a better **use** of it (aggregation,
+calibration, training). The long survey is gone; this is the part a future change must not lose.
+
+**Settled, and not to be undone casually:**
+- **Calibration by temperature** (`fitTemperature`, validation folds only) makes confidence
+  comparable across tracks, which is what lets `MODEL_MIN_CONFIDENCE`, the margin gate and active
+  learning mean the same thing everywhere. Dividing all logits by one scalar cannot change the
+  argmax, so it is free; measured on the trainer, a bag's held-out logits must be AVERAGED, not
+  summed, or T inflates (~1.2 → 2.00) and the served head turns diffident.
+- **The stored vector is mean + standard deviation of the patches (2×1280), each L2-normalised.**
+  That dimension is the sidecar format version: a v3 (attention pooling, concatenated layers) means
+  re-extracting the whole library, so it is a project, not a tweak.
+- **Active learning**: candidates can be sorted by uncertainty (smallest top−second margin) instead
+  of play count, with a random reserve so the tagger does not loop on the same borderline cluster.
+  `plays` stays the default because tagging what you actually listen to is a product choice; the
+  studio exposes the choice.
+- **Nearest class mean** (cosine to each genre's mean vector, L2-normalised before averaging) is a
+  second opinion in the studio, never the decision: no minimum number of examples, incremental, but
+  no calibrated confidence. It must never compare vectors of different widths (v1 1280 vs v2 2560):
+  a mismatched track gets no opinion, not a false one.
+- **Bagging** averages the *weights* of several heads rather than their probabilities: same variance
+  reduction, same model format, one head sent to the server.
+- **Confusion pairs** are derived from the confusion matrix at training time and shown as a question
+  (“same sound or same name?”), not as an automatic second classifier.
+- **Self-training** is on by default but gated: only untagged tracks whose fold-local head is ≥ 0.9
+  sure, at most 3× a genre's own examples, half weight, and the second head ships only if it beats
+  the first by a point on held-out data. Four tags a genre: 0.537 → 0.625; eight and more: no gain.
+- **One tag per track, admin-only, one shared model**; multi-label is an explicit non-goal (a track
+  tagged both frenchcore and uptempo teaches the head that they are the same sound).
+- **Do not fine-tune the extractor.** A few hundred examples against a model trained on millions
+  degrades what it knows; the literature is unambiguous and `deezer/embedding.py` already says so.
+  Do not add depth or width to the deep head either: `hidden2` exists for the boundaries a plane
+  cannot separate, and 0 is the right default.
+
+**Open, in rough order of value per effort:**
+- **Pseudo-labelling** — self-training is the gated version already shipped; a full teacher/student
+  pass is the next step, and only after the active-learning loop has been measured on a real library.
+- **Attention pooling** and **concatenated intermediate layers** — both need a sidecar v3 and a full
+  re-extraction; attention is the better documented of the two for this extractor. Do them together.
+- **A second extractor (MERT) or a fusion of extractors** — the highest ceiling and the highest cost;
+  only if the cheaper levers plateau.
+- **Domain adaptation / pitch-shift augmentation** — no domain shift on a local library of clean
+  files; reasoned as no gain here, so not pursued.
+- **A hierarchical second classifier** — the audit (confusion pairs) is done and free; the second
+  head adds a model format for a moderate gain, so it waits.
+
+Sources, kept so a future change does not re-litigate them from memory: Guo et al. 2017 (temperature
+scaling); Li et al. 2023 (MERT); *Music auto-tagging in the long tail* (2024, VGGish/OpenL3/PaSST
+fusion); Won et al. 2019 (`musicnn`); Kim et al. 2017 (multi-level aggregation); *Audio Embeddings as
+Teachers* (2023); the Essentia discogs-effnet docs; Weng, *Learning with not Enough Data Part 2*
+(active learning); the ISMIR tutorial *Music Classification: Beyond Supervised Learning*; *Music
+Genre Classification: A Semi-supervised Approach*; *A Hierarchical Approach To Automatic Musical
+Genre Classification*; *Transfer learning for music classification and regression tasks*.
+
 ## What remains
 
 1. Compare the real extractor's vector, browser vs server, on a few real tracks (above).

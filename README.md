@@ -396,7 +396,8 @@ export FLASK_APP="neezer.web:create_application()"; flask run
 rules each subsystem learned the hard way, and the measurements behind them. [todo.md](todo.md) is the roadmap.
 
 [opencode.json](opencode.json) declares the project's subagents (`frontend`, `api`, `audio`,
-`animation`, `security`, `android`, `qa`, `devops`), with their prompts in `.opencode/prompts/`;
+`animation`, `security`, `android`, `android-playback`, `data`, `qa`, `devops`, `batch`), with their
+prompts in `.opencode/prompts/`;
 [docs/agents/orchestration.md](docs/agents/orchestration.md) is the routing and handoff guide.
 
 ## Project layout
@@ -411,7 +412,7 @@ android/              The native Kotlin app
 docker/               Entrypoint and baked default config
 tools/                Parallel test runner, tempo evaluation, API performance bench
 tests/                Python test suite
-docs/                 Notes, plans and README artwork
+docs/                 Engineering notes, delivered plans, repro harnesses and README artwork
 ```
 
 ## Security and privacy
