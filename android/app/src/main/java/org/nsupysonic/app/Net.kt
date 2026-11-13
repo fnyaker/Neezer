@@ -39,15 +39,26 @@ object Net {
     ): HttpURLConnection {
         var current = url
         for (hop in 0..MAX_REDIRECTS) {
-            // Before Prefs, before URL: a refused host never reaches DNS or a
-            // socket, and a hostile URL never reaches the origin parser.
+            // Before the parse: a refused host never reaches DNS, a parser or
+            // a socket.
             if (allow != null && !allow(current)) throw IOException("host refused")
-            val ours = prefs.isServerUrl(current)
-            val scheme = Prefs.originOf(current)?.substringBefore("://")
-                ?: throw IOException("not an http(s) URL")
+            // Parse ONCE. The origin decision, the cleartext rule, the pin and
+            // the connection below all use this one URL object: no second
+            // parser can name another host.
+            val parsed = try {
+                URL(current)
+            } catch (_: Exception) {
+                throw IOException("not an http(s) URL")
+            }
+            val scheme = parsed.protocol.lowercase()
+            if (scheme != "http" && scheme != "https") {
+                throw IOException("not an http(s) URL")
+            }
+            if (parsed.host.isNullOrEmpty()) throw IOException("not an http(s) URL")
+            val ours = prefs.isServerOrigin(parsed.protocol, parsed.host, parsed.port)
             if (scheme == "http" && !ours) throw IOException("cleartext refused off the server")
-            val conn = URL(current).openConnection() as HttpURLConnection
-            Ssl.apply(conn, prefs.verifySsl, if (ours) prefs.pinForUrl(current) else null)
+            val conn = parsed.openConnection() as HttpURLConnection
+            Ssl.apply(conn, prefs.verifySsl, if (ours) prefs.pinFor(prefs.serverOrigin()) else null)
             conn.connectTimeout = connectTimeout
             conn.readTimeout = readTimeout
             conn.instanceFollowRedirects = false
@@ -58,7 +69,7 @@ object Net {
                 val location = conn.getHeaderField("Location")
                 conn.disconnect()
                 if (location.isNullOrEmpty()) throw IOException("redirect without Location")
-                current = URL(URL(current), location).toString()
+                current = URL(parsed, location).toString()
                 continue
             }
             if (code !in 200..299) {
