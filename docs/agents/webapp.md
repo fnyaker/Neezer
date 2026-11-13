@@ -444,3 +444,23 @@ line only exists when there is one, the strip and the Flow row give their height
 transport off the screen: 360x640 measures 248 px square (269 without the strip, 212 with the Flow row too),
 390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
 `env(safe-area-inset-*)` fallback until G1's tokens land.
+
+**Explorer is ten parent styles, not a genre search** (`components/ExplorerStyles.svelte`,
+`GET /api/explorer/styles`, `POST|GET /api/explorer/discover`). The landing asks the server for the ten
+PARENT styles of the caller's own taste (`discover.parent_styles`: Boogie is served as Disco/funk); it never
+puts a style name in the search field. A style opens a discovery sheet with a 1–5 slider. The POST starts
+one worker; the GET only reads (`pending`/`ready`/`idle`) and never starts work, so a page cannot trigger a
+Deezer sweep by opening a URL. Poll every 2 s, stop on `idle`, `error`, `429` or `503`; those two carry
+`Retry-After` and the sheet counts it down instead of spinning. One POST is one discovery: measured, a
+budget refusal is **1 POST / 0 GET**, a poll refusal is **1 GET** (the retry in `api.get` would have
+replayed it), and an `idle` answer is **1 GET then 0**. The Flow picker (`FlowPicker.svelte` inside
+`FlowControls.svelte`) shows the selected genres and the diversity level in one sheet on phone and desktop;
+it consumes the existing `flow.js` actions and changes no queue rule.
+
+**A sidebar playlist's thumb is its real cover** (`components/Sidebar.svelte`, `Cover.svelte`,
+`lib/coverqueue.js`). The 26 px tile renders `Cover` with the playlist's `cover` and keeps the deterministic
+groove only while loading or when no cover exists. The shared queue bounds it: **6 requests in flight**, an
+horizon of two viewports, and no request for a playlist without art. On a 61-playlist desktop, the first
+cover painted in **186 ms**, 30 requests for the rows near the viewport, and scrolling to the bottom asked
+15 more (37/60 total, never more than 6 at once); the phone (≤640 px) hides the sidebar and makes **0**
+cover requests.
