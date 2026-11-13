@@ -46,6 +46,10 @@ const CACHE_PREFIXES = [
   "/artist/",
   "/home/mix/",
   "/home",
+  // The mood mixes' catalog and their track lists: they are built from the
+  // measured library and change slowly, so the Home row and a mood page paint
+  // offline and skip a doomed refetch on a bad link.
+  "/moods",
   // Lyrics are fetched on every track change — caching them makes the Paroles
   // panel work offline and skips the doomed refetch for known tracks.
   "/lyrics/",

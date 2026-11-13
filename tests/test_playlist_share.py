@@ -314,6 +314,24 @@ class PlaylistShareTestCase(unittest.TestCase):
             self._public().get("/api/shared/playlist/not/a/token").status_code, 404
         )
 
+    def test_a_folder_cover_is_served_to_the_public_page(self):
+        # The fallback art (a cover.jpg beside the file, no embedded image) was
+        # the old send_file(CoverFile) bug: the route answered 404/500. The
+        # public page must be able to show it like any other cover.
+        t = self._local_track("Folder Art")
+        folder = os.path.dirname(t.path)
+        with open(os.path.join(folder, "cover.jpg"), "wb") as fh:
+            fh.write(_jpeg())
+        pl = self._playlist(self.alice)
+        pl.add(t)
+        link = self._make_link(self.owner, pl)
+        r = self._public().get(
+            f"/api/shared/playlist/{link['token']}/cover/{t.id}"
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.mimetype, "image/jpeg")
+        self.assertTrue(r.get_data().startswith(b"\xff\xd8\xff"))
+
     def test_the_stream_serves_the_archived_bytes_with_ranges(self):
         t = self._deezer_track("1", "Archived One", archived=True)
         pl = self._playlist(self.alice)
