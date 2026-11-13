@@ -5053,5 +5053,6 @@ from . import sourcesapi  # noqa: E402,F401  isort:skip
 from . import playlist_share  # noqa: E402,F401  isort:skip
 from . import genre_radio  # noqa: E402,F401  isort:skip
 from . import history  # noqa: E402,F401  isort:skip
+from . import recap  # noqa: E402,F401  isort:skip
 from . import moods  # noqa: E402,F401  isort:skip
 from . import playlistrecs  # noqa: E402,F401  isort:skip

@@ -211,6 +211,8 @@ POLICY = {
     "mood_mix": "read",
     "playlist_recommendations": "read",
     "listening_history": "read",
+    "recap_years": "read",
+    "recap_year": "read",
     "discover_prefs": "read",
     "discover_prefs_set": "full",
     "discover_mute": "full",
