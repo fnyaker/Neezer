@@ -20,11 +20,11 @@
 //   preview → normP → fadeP ────┘                              │
 //                                                              ├→ satPre  (the EQ's meter —
 //                                                              ↓            see saturation.js)
-//                                                          limiter → output ─┬→ lookahead → destination
+//                                                          limiter → output ─┬→ [mono gain → panner] → lookahead → destination
 //                                                                             ├→ analysisBus → analyserLo/Hi
 //                                                                             └→ analysisBus → scope, rhythm
 //
-// Two things about that shape are load-bearing:
+// Three things about that shape are load-bearing:
 //
 //  - the normalization gain is PER SOURCE, not shared. A crossfade has two
 //    tracks audible at once and each carries its own ReplayGain, so one shared
@@ -37,6 +37,15 @@
 //  - the analysers tap BEFORE the look-ahead delay. That delay is what lets
 //    the animation engine see the audio slightly before the listener hears it,
 //    which is the whole point of it (see setLookahead).
+//  - the mono/balance stage (`lib/audio/pan.js`) sits AFTER `output` and BEFORE
+//    the look-ahead, and the analysers tap `output` ITSELF: the rhythm
+//    analyser, the stereo scope and the visualizer must keep the ORIGINAL
+//    stereo signal. A mono fold would erase exactly the two different channels
+//    the scope exists to draw, and a balance would move the image the
+//    animation is reading. The stage is bypassed by a direct connection when
+//    mono is off and balance is 0 — no extra node, no extra latency, no extra
+//    CPU on the default path — and entering or leaving it crosses a ~30 ms
+//    dry/wet fade so a setting changed mid-song never clicks (`applyPan`).
 //
 // THE DIRECT PATH (lib/audio/output.js decides when): no element is routed at
 // all. The browser's media pipeline plays it, and what the graph would have
@@ -69,6 +78,7 @@ import {
   vizLookaheadMode,
 } from "../stores.js";
 import { directOutput } from "./output.js";
+import { CENTRE_EPS, clampBalance, panSettings } from "./pan.js";
 
 let ctx = null;
 // How many contexts this page has built: a new number is a fresh context.
@@ -83,6 +93,27 @@ let outputNode = null;
 // path the captured copies of the elements.
 let analysisBus = null;
 let lookaheadNode = null; // DelayNode, 0 s unless the user asks for compensation
+// The mono/balance stage (lib/audio/pan.js): output → panGain → panNode →
+// look-ahead while either setting is on, and a direct output → look-ahead
+// otherwise. `panDry` carries the sound only during the ~30 ms dry/wet fade
+// that enters or leaves the stage (and during the channel-count change of the
+// mono switch), then it is disconnected. The analysers tap `outputNode`, BEFORE
+// all of this: they keep the original stereo signal.
+let panGain = null; // the mono down-mix (channelCount 1) and the wet gain
+let panNode = null; // StereoPannerNode (the balance), when the browser has one
+let panDry = null; // the dry branch of entering/leaving the stage
+let panStageOn = false; // steady state: the sound goes through panGain/panNode
+let panDirectLive = false; // outputNode → lookaheadNode is the active path
+let panDryLive = false; // outputNode → panDry → lookaheadNode is connected
+let panWetLive = false; // outputNode → panGain → panNode → lookaheadNode is connected
+let panMonoSet = false; // the channelCount currently set on panGain
+let panSerial = 0; // invalidates a transition's deferred cleanup
+// The dry/wet fade's time constant. 6 ms settles in ~36 ms: long enough to hide
+// the junction of two paths, short enough that a hand on the switch does not
+// hear a fade. Both gains start at complementary values and share the
+// constant, so they sum to exactly 1 through the whole transition — no +6 dB
+// overlap and no notch in the middle.
+const PAN_FADE_TAU = 0.006;
 let eqFilters = [];
 let bassNode = null;
 // Two-stage protection for the bass lift:
@@ -159,6 +190,10 @@ const fx = {
   crossfade: false,
   lookahead: 0,
   lookaheadAuto: true,
+  // The audible output's mono fold and left/right balance (lib/audio/pan.js).
+  // Off and centred by default: the stage then has no node in the path at all.
+  mono: false,
+  balance: 0,
 };
 
 // IMPORTANT: Deezer's GAIN is the track's *loudness*, NOT the gain to apply.
@@ -201,7 +236,11 @@ function effectsOn() {
     (fx.norm && fx.norm !== "off") ||
     (fx.eq && fx.bands.some((g) => Math.abs(g) > 0.01)) ||
     fx.bass > 0.01 ||
-    fx.crossfade
+    fx.crossfade ||
+    // Mono and balance are heard only through the graph, so they route the
+    // element exactly like an effect does. Off/centre costs nothing.
+    fx.mono ||
+    Math.abs(fx.balance) > CENTRE_EPS
   );
 }
 
@@ -436,6 +475,25 @@ function ensureGraph() {
     node = limiterNode;
     node.connect(outputNode);
     outputNode.connect(lookaheadNode);
+    // The mono/balance stage. `outputNode → lookaheadNode` above is the
+    // BYPASS: the stage's nodes are built here but not inserted unless the
+    // persisted setting asks for them (`applyPan(true)` below wires it before
+    // the first sample, so a fresh graph never starts in the wrong mode).
+    // `analysisBus` taps outputNode, so none of these nodes is visible to the
+    // analysers, the scope or the rhythm tap.
+    panGain = ctx.createGain();
+    panGain.gain.value = 1;
+    panGain.channelInterpretation = "speakers"; // the 0.5·(L+R) down-mix rule
+    panNode = typeof ctx.createStereoPanner === "function" ? ctx.createStereoPanner() : null;
+    if (panNode) panNode.pan.value = clampBalance(fx.balance);
+    panDry = ctx.createGain();
+    panDry.gain.value = 1;
+    panStageOn = false;
+    panDirectLive = true;
+    panDryLive = false;
+    panWetLive = false;
+    panMonoSet = false;
+    panSerial++;
     lookaheadNode.connect(ctx.destination);
     analysisBus = ctx.createGain();
     outputNode.connect(analysisBus);
@@ -443,6 +501,7 @@ function ensureGraph() {
     analysisBus.connect(analyserHi);
 
     applyEffects();
+    applyPan(true);
     // A context rebuilt under a scope that is still on screen (resetContext)
     // gets its tap back.
     if (scopeRefs > 0 && !scopeAnL) buildScope();
@@ -453,6 +512,9 @@ function ensureGraph() {
   } catch {
     ctx = null;
     analysisBus = null;
+    panGain = panNode = panDry = null;
+    panStageOn = panDirectLive = panDryLive = panWetLive = panMonoSet = false;
+    panSerial++;
     return false;
   }
 }
@@ -489,6 +551,344 @@ function applyEffects() {
   // instant jump would click. A track HANDOVER snaps instead — see setTrackGain.
   for (const el of strips.keys()) applyNorm(el, false);
   applyDirectVolumes();
+}
+
+// --- mono and balance (lib/audio/pan.js) -----------------------------------
+//
+// The stage is two nodes in steady state — a GainNode whose channelCount=1
+// down-mixes 0.5·(L+R) when mono is on, and a StereoPannerNode for the balance —
+// plus a third, `panDry`, which only exists during the crossfade that enters or
+// leaves the stage. The stage is bypassed by `outputNode → lookaheadNode` when
+// mono is off and balance is 0, so the default path has no extra node and no
+// extra latency; the analysers keep reading `outputNode`, i.e. the ORIGINAL
+// stereo signal (see the file header).
+//
+// A live change must not click. A gain cannot be ramped through the down-mix
+// itself (channelCount is not automatable), so the structural changes are made
+// behind a dry/wet crossfade: both paths carry the same sound with
+// complementary gains (1-e^-t/τ and e^-t/τ, same τ, sum exactly 1), the change
+// is made while the wet path is silent, and the dry branch is then dropped.
+// `panDry` is never the only path for a deferred step: if a backgrounded page
+// throttles the cleanup timer, the sound is already coming out of the correct
+// branch and only an extra node waits to be disconnected.
+
+// Run `fn` after roughly `seconds` of AUDIO-clock time, falling back to a
+// timer. A timer alone is what a backgrounded WebView throttles (playback.md:
+// "no skip waits on a timer"), so the audio clock is the primary here too.
+function afterAudio(seconds, fn) {
+  const context = ctx;
+  if (!context) return;
+  let done = false;
+  let node = null;
+  let mute = null;
+  const run = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    try {
+      node?.disconnect();
+      mute?.disconnect();
+    } catch {
+      /* already gone */
+    }
+    fn();
+  };
+  const timer = setTimeout(run, Math.max(0, seconds * 1000) + 120);
+  try {
+    node = context.createConstantSource();
+    mute = context.createGain();
+    mute.gain.value = 0;
+    node.connect(mute);
+    mute.connect(context.destination);
+    node.onended = run;
+    const t = context.currentTime;
+    node.start(t);
+    node.stop(t + Math.max(0.001, seconds));
+  } catch {
+    /* the timer alone, then */
+  }
+}
+
+// The crossfade is ~99.97% done after 8 time constants; the deferred call only
+// disconnects a node whose gain is already inaudible.
+function afterPanFade(token, fn) {
+  afterAudio(PAN_FADE_TAU * 8, () => {
+    if (token === panSerial) fn(token);
+  });
+}
+
+// Hold a parameter where it actually is, then approach `to` exponentially.
+// `setTargetAtTime` never jumps and, used from complementary starts with the
+// same τ, keeps two gains summing to 1.
+function rampPan(param, to, t, tau = PAN_FADE_TAU) {
+  holdParam(param, t);
+  param.setTargetAtTime(to, t, tau);
+}
+
+function connectDirect() {
+  if (panDirectLive) return;
+  outputNode.connect(lookaheadNode);
+  panDirectLive = true;
+}
+
+function disconnectDirect() {
+  if (!panDirectLive) return;
+  try {
+    outputNode.disconnect(lookaheadNode);
+  } catch {
+    /* already gone */
+  }
+  panDirectLive = false;
+}
+
+function connectDry() {
+  if (panDryLive || !panDry) return;
+  outputNode.connect(panDry);
+  panDry.connect(lookaheadNode);
+  panDryLive = true;
+}
+
+function disconnectDry() {
+  if (!panDryLive || !panDry) return;
+  panDryLive = false;
+  try {
+    outputNode.disconnect(panDry);
+  } catch {
+    /* already gone */
+  }
+  try {
+    panDry.disconnect(lookaheadNode);
+  } catch {
+    /* already gone */
+  }
+}
+
+function connectWet() {
+  if (panWetLive || !panGain) return;
+  outputNode.connect(panGain);
+  if (panNode) {
+    panGain.connect(panNode);
+    panNode.connect(lookaheadNode);
+  } else {
+    // No StereoPannerNode in this engine: mono still works, balance cannot.
+    panGain.connect(lookaheadNode);
+  }
+  panWetLive = true;
+}
+
+function disconnectWet() {
+  if (!panWetLive || !panGain) return;
+  panWetLive = false;
+  try {
+    outputNode.disconnect(panGain);
+  } catch {
+    /* already gone */
+  }
+  try {
+    panGain.disconnect();
+  } catch {
+    /* already gone */
+  }
+  if (panNode) {
+    try {
+      panNode.disconnect(lookaheadNode);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+// channelCount is not automatable, so it is only ever changed while the wet
+// path is silent. `max` when mono is off keeps a mono source mono (the panner
+// then uses its mono law) instead of up-mixing it and doubling it at a hard
+// pan; `explicit` 1 is the spec's down-mix (0.5·(L+R)).
+function setMonoChannel(on) {
+  on = !!on;
+  if (!panGain || panMonoSet === on) return;
+  try {
+    if (on) {
+      panGain.channelCount = 1;
+      panGain.channelCountMode = "explicit";
+    } else {
+      panGain.channelCount = 2;
+      panGain.channelCountMode = "max";
+    }
+    panMonoSet = on;
+  } catch {
+    /* an engine that refused the count keeps the previous one */
+  }
+}
+
+// The enter fade is over: the wet path carries the sound, the dry branch is
+// already inaudible. Drop it.
+function finishPanStage(token) {
+  if (token !== panSerial || !panStageOn || !panDry) return;
+  const t = ctx ? ctx.currentTime : 0;
+  panDry.gain.cancelScheduledValues(t);
+  setAt(panDry.gain, 0, t);
+  disconnectDry();
+}
+
+// The leave fade is over: the dry branch carries the sound, the wet path is
+// silent. Put the bypass back and let both stage nodes go.
+function finishPanLeave(token) {
+  if (token !== panSerial) return;
+  const t = ctx ? ctx.currentTime : 0;
+  if (panGain) {
+    panGain.gain.cancelScheduledValues(t);
+    setAt(panGain.gain, 0, t);
+  }
+  disconnectWet();
+  if (panDry) {
+    panDry.gain.cancelScheduledValues(t);
+    setAt(panDry.gain, 1, t);
+  }
+  connectDirect();
+  disconnectDry();
+}
+
+function enterPanStage(snap) {
+  const t = ctx.currentTime;
+  const token = ++panSerial;
+  const wasDry = panDryLive;
+  const wasWet = panWetLive;
+
+  // The channel count is only touchable while the wet path is silent: a fresh
+  // connection (gain 0), a snapped rebuild (muted in the same task), or the
+  // dance in rewireMono. A fade being reversed keeps its count until then.
+  if (!wasWet) setMonoChannel(fx.mono);
+  if (panNode) {
+    panNode.pan.cancelScheduledValues(t);
+    setAt(panNode.pan, clampBalance(fx.balance), t);
+  }
+  disconnectDirect();
+  if (!wasDry) {
+    // The dry branch joins at unity: it is exactly the sound already playing.
+    panDry.gain.cancelScheduledValues(t);
+    setAt(panDry.gain, 1, t);
+    connectDry();
+  }
+  if (!wasWet) {
+    // The wet branch joins silent, its pan already in place.
+    panGain.gain.cancelScheduledValues(t);
+    setAt(panGain.gain, 0, t);
+    connectWet();
+  }
+  panStageOn = true;
+
+  if (snap) {
+    panDry.gain.cancelScheduledValues(t);
+    setAt(panDry.gain, 0, t);
+    panGain.gain.cancelScheduledValues(t);
+    setAt(panGain.gain, 0, t);
+    setMonoChannel(fx.mono);
+    setAt(panGain.gain, 1, t);
+    finishPanStage(token);
+    return;
+  }
+  if (wasWet && panMonoSet !== !!fx.mono) {
+    // Reversing a leave fade while the mono switch moved too: the
+    // channel-count dance owns the transition (it overwrites these ramps and
+    // takes a fresh token).
+    rewireMono();
+    return;
+  }
+  rampPan(panDry.gain, 0, t);
+  rampPan(panGain.gain, 1, t);
+  afterPanFade(token, finishPanStage);
+}
+
+function leavePanStage(snap) {
+  const t = ctx.currentTime;
+  const token = ++panSerial;
+  if (!panWetLive) {
+    // Nothing is going through the stage; just restore the bypass.
+    panStageOn = false;
+    connectDirect();
+    disconnectDry();
+    return;
+  }
+  disconnectDirect();
+  if (!panDryLive) {
+    panDry.gain.cancelScheduledValues(t);
+    setAt(panDry.gain, 0, t);
+    connectDry();
+  }
+  panStageOn = false;
+
+  if (snap) {
+    panGain.gain.cancelScheduledValues(t);
+    setAt(panGain.gain, 0, t);
+    panDry.gain.cancelScheduledValues(t);
+    setAt(panDry.gain, 1, t);
+    finishPanLeave(token);
+    return;
+  }
+  rampPan(panGain.gain, 0, t);
+  rampPan(panDry.gain, 1, t);
+  afterPanFade(token, finishPanLeave);
+}
+
+// Mono was toggled while the stage is live: leave through the dry branch,
+// change the channel count while the wet one is silent, come back. The sound
+// keeps playing the dry branch throughout if a timer is ever throttled.
+function rewireMono() {
+  const token = ++panSerial;
+  const t = ctx.currentTime;
+  if (!panWetLive) {
+    setMonoChannel(fx.mono);
+    return;
+  }
+  disconnectDirect();
+  if (!panDryLive) {
+    panDry.gain.cancelScheduledValues(t);
+    setAt(panDry.gain, 0, t);
+    connectDry();
+  }
+  rampPan(panGain.gain, 0, t);
+  rampPan(panDry.gain, 1, t);
+  afterPanFade(token, () => {
+    if (token !== panSerial || !ctx || !panStageOn) return;
+    setMonoChannel(fx.mono);
+    const t2 = ctx.currentTime;
+    rampPan(panDry.gain, 0, t2);
+    rampPan(panGain.gain, 1, t2);
+    afterPanFade(token, finishPanStage);
+  });
+}
+
+/**
+ * Apply the persisted mono/balance setting to the live graph. Safe before the
+ * graph exists (it no-ops). `snap` is for a graph that is being built — nothing
+ * has flowed through it yet, so the stage can be wired without a crossfade.
+ */
+function applyPan(snap = false) {
+  if (!ctx || !panGain) return;
+  const t = ctx.currentTime;
+  const want = fx.mono || Math.abs(fx.balance) > CENTRE_EPS;
+  if (panNode) {
+    if (snap) setParam(panNode.pan, clampBalance(fx.balance), t);
+    else rampPan(panNode.pan, clampBalance(fx.balance), t, 0.012);
+  }
+  if (snap) {
+    if (want) {
+      if (!panStageOn) enterPanStage(true);
+      else setMonoChannel(fx.mono);
+    } else if (panStageOn) {
+      leavePanStage(true);
+    } else {
+      disconnectDry();
+      disconnectWet();
+      connectDirect();
+    }
+    return;
+  }
+  if (want) {
+    if (!panStageOn) enterPanStage(false);
+    else if (panMonoSet !== !!fx.mono) rewireMono();
+  } else if (panStageOn) {
+    leavePanStage(false);
+  }
 }
 
 // Push a source's normalization gain onto its live node. `snap` sets it
@@ -1563,6 +1963,15 @@ function closeContext() {
   ctx = null;
   analyserLo = analyserHi = null;
   inputNode = outputNode = analysisBus = lookaheadNode = null;
+  // The mono/balance stage's nodes lived in the context that is closing; the
+  // next ensureGraph builds them again and re-applies the persisted setting.
+  panGain = panNode = panDry = null;
+  panStageOn = false;
+  panDirectLive = false;
+  panDryLive = false;
+  panWetLive = false;
+  panMonoSet = false;
+  panSerial++; // a pending crossfade cleanup must not touch the new graph
   eqFilters = [];
   bassNode = bassComp = limiterNode = null;
   // Its node lived in the context that is closing; ensureGraph builds it again
@@ -1624,6 +2033,16 @@ export function pathState(el) {
     // The equalizer's meter tap (lib/audio/saturation.js): absent until a
     // meter asks for it, and never a second path for the sound.
     saturation: satPre ? { fft: satPre.fftSize, refs: satRefs } : null,
+    // The audible-output stage (lib/audio/pan.js). `stage` is the steady state;
+    // `nodes` counts what is BETWEEN outputNode and the look-ahead (0 = the
+    // bypass), and `channelCount` is 1 exactly while mono is engaged.
+    pan: {
+      mono: !!fx.mono,
+      balance: fx.balance,
+      stage: panStageOn,
+      nodes: (panWetLive ? (panNode ? 2 : 1) : 0) + (panDryLive ? 1 : 0),
+      channelCount: panStageOn && panGain ? panGain.channelCount : null,
+    },
     level,
   };
 }
@@ -1672,6 +2091,23 @@ normalization.subscribe((v) => {
 crossfadeEnabled.subscribe((v) => {
   fx.crossfade = !!v;
   onFxChange();
+});
+// The mono fold and the balance (lib/audio/pan.js) live on this graph only, so
+// turning one on routes the element exactly like an effect does; once wired,
+// `applyPan` ramps the panner and crosses a dry/wet fade into the stage.
+// Only the transition INTO the stage runs the general effect pass: the balance
+// slider fires on every pointer event, and re-running the ten EQ filters, the
+// look-ahead and every source's normalization for each of them would be work
+// nobody hears.
+panSettings.subscribe((p) => {
+  const mono = !!(p && p.mono);
+  const balance = clampBalance(p && p.balance);
+  const wasOn = fx.mono || Math.abs(fx.balance) > CENTRE_EPS;
+  fx.mono = mono;
+  fx.balance = balance;
+  const isOn = mono || Math.abs(balance) > CENTRE_EPS;
+  if (isOn && !wasOn) onFxChange();
+  applyPan();
 });
 vizLookahead.subscribe((v) => {
   fx.lookahead = Math.max(0, Math.min(LOOKAHEAD_MAX, +v || 0));
