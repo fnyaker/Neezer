@@ -1043,11 +1043,14 @@
       padding: 0 10px;
     }
   }
-  /* A narrow window with the Flow's steering row has no spare height: the
-     strip yields to the row (the row changes what plays; the bars only show
-     it). Same idea as the existing max-height:820 rule, keyed on the width
-     that forces the pills onto a second line. */
-  @media (max-width: 800px) {
+  /* The Flow's steering row is 92 px high in the player (the Genres door, the
+     two feedback chips and the energy wrap onto two lines), against 40 px for
+     the old row. At 900 px high the row and the 44 px strip together push the
+     footer off the screen — measured at 1440x900: footer 879-913 in a 900 px
+     window. The strip is decoration, the row and the footer are not: the bars
+     yield whenever the Flow is live and the window is under 950 px high.
+     1920x1080 keeps them; 1440x900 without Flow keeps them too. */
+  @media (max-height: 949px) {
     .main.steer .viz {
       display: none;
     }
