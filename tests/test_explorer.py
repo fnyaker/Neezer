@@ -337,6 +337,7 @@ class DiscoveryRoutesTestCase(_Library):
     def setUp(self):
         super().setUp()
         W._inflight.clear()
+        W._budget.clear()
         for key in list(Meta.select().where(Meta.key.startswith(W.CACHE_PREFIX))):
             key.delete_instance()
 
@@ -370,6 +371,11 @@ class DiscoveryRoutesTestCase(_Library):
             self.assertEqual(first.json["state"], "pending")
             self.assertEqual(first.json["playlists"], [])
             self.assertTrue(started.wait(10))
+            polling = self.client.get(
+                f"/api/explorer/discover?style={self.STYLE}&level={self.LEVEL}"
+            )
+            self.assertEqual(polling.json["state"], "pending")  # a worker really runs
+            self.assertEqual(len(W._budget), 1)
             thread = W._inflight.get((self.STYLE, self.LEVEL))
             self.assertIsNotNone(thread)
             release.set()
@@ -491,11 +497,18 @@ class DiscoveryRoutesTestCase(_Library):
         try:
             with mock.patch.object(W, "_run", slow), \
                     mock.patch.object(W, "_dz_live", lambda: provider):
-                for style in ("Frenchcore", "Techno", "Hardcore"):
+                for style in ("Frenchcore", "Techno"):
                     r = self.client.post(
                         "/api/explorer/discover", json={"style": style, "level": self.LEVEL}
                     )
                     self.assertEqual(r.json["state"], "pending")
+                third = self.client.post(
+                    "/api/explorer/discover",
+                    json={"style": "Hardcore", "level": self.LEVEL},
+                )
+                self.assertEqual(third.status_code, 503)
+                self.assertEqual(third.headers["Retry-After"], "5")
+                self.assertNotIn("state", third.json)  # never a pending nobody works on
                 self.assertEqual(len(W._inflight), 2)
                 self.assertNotIn(("Hardcore", self.LEVEL), W._inflight)
         finally:
@@ -503,6 +516,106 @@ class DiscoveryRoutesTestCase(_Library):
             for thread in list(W._inflight.values()):
                 thread.join(5)
             W._inflight.clear()
+
+    def test_the_poll_is_idle_cold_and_never_starts_or_spends(self):
+        with mock.patch.object(W, "_dz_live", lambda: self.fail("must not be asked")):
+            r = self.client.get(
+                f"/api/explorer/discover?style={self.STYLE}&level={self.LEVEL}"
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json["state"], "idle")
+        self.assertEqual(r.json["style"], self.STYLE)
+        self.assertEqual(r.json["level"], self.LEVEL)
+        self.assertEqual(r.json["playlists"], [])
+        self.assertEqual(W._inflight, {})
+        self.assertEqual(W._budget, {})
+
+    def test_a_cached_answer_is_free_and_a_second_post_asks_nothing(self):
+        W._cache_write(self.STYLE, self.LEVEL, W._payload(
+            self.STYLE, self.LEVEL, self._ready()))
+        W._budget.clear()
+        r = self.client.post(
+            "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+        )
+        self.assertEqual(r.json["state"], "ready")
+        self.assertEqual(r.json["playlists"], self._ready())
+        self.assertEqual(W._budget, {})
+        self.assertEqual(W._inflight, {})
+
+    def test_the_budget_is_six_per_ten_minutes_and_thirty_per_hour(self):
+        W._budget.clear()
+        for _ in range(6):
+            self.assertEqual(W._budget_take("someone"), (True, 0))
+        allowed, retry = W._budget_take("someone")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(retry, 1)
+        self.assertLessEqual(retry, 600)
+        # another person has their own budget
+        self.assertEqual(W._budget_take("else"), (True, 0))
+        W._budget.clear()
+        with mock.patch.object(W, "BUDGET_WINDOWS", ((3600, 30),)):
+            for _ in range(30):
+                self.assertEqual(W._budget_take("someone"), (True, 0))
+            allowed, retry = W._budget_take("someone")
+            self.assertFalse(allowed)
+            self.assertGreaterEqual(retry, 3590)
+
+    def test_a_spent_budget_answers_429_with_retry_after(self):
+        provider = type("P", (), {"available": lambda self: True})()
+        with mock.patch.object(W, "_dz_live", lambda: provider), \
+                mock.patch.object(W, "_budget_take", lambda uid: (False, 7)):
+            r = self.client.post(
+                "/api/explorer/discover", json={"style": self.STYLE, "level": self.LEVEL}
+            )
+        self.assertEqual(r.status_code, 429)
+        self.assertEqual(r.headers["Retry-After"], "7")
+        self.assertEqual(r.json["retry_after"], 7)
+        self.assertEqual(W._inflight, {})  # nothing was started
+
+    def test_a_body_over_eight_kilobytes_is_refused_before_parsing(self):
+        with mock.patch.object(W, "_dz_live", lambda: self.fail("must not be asked")):
+            r = self.client.post(
+                "/api/explorer/discover", data=b"{" + b"x" * 9000,
+                content_type="application/json",
+            )
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(W._inflight, {})
+        self.assertEqual(W._budget, {})
+
+    def test_a_cache_write_prunes_expired_groups(self):
+        W._cache_write(self.STYLE, self.LEVEL, W._payload(
+            self.STYLE, self.LEVEL, self._ready()))
+        stale = W._cache_key(self.STYLE, self.LEVEL)
+        pointer = Meta.get(Meta.key == stale)
+        value = json.loads(pointer.value)
+        value["at"] = time.time() - W.CACHE_TTL - 1
+        pointer.value = json.dumps(value)
+        pointer.save()
+        W._cache_write("Techno", self.LEVEL, W._payload("Techno", self.LEVEL, []))
+        self.assertIsNone(Meta.get_or_none(Meta.key == stale))
+        self.assertEqual(
+            list(Meta.select().where(Meta.key.startswith(stale + ":"))), []
+        )
+
+    def test_the_cache_is_capped_at_512_groups(self):
+        from neezer.db import db as dbproxy
+
+        now = time.time()
+        rows = [{
+            "key": f"{W.CACHE_PREFIX}{i:08x}:2",
+            "value": json.dumps({"n": 0, "at": now - i, "ttl": W.CACHE_TTL}),
+        } for i in range(W.CACHE_MAX + 1)]
+        with dbproxy.atomic():
+            Meta.insert_many(rows, fields=[Meta.key, Meta.value]).execute()
+        W._prune_cache()
+        self.assertEqual(
+            Meta.select().where(Meta.key.startswith(W.CACHE_PREFIX)).count(),
+            W.CACHE_MAX,
+        )
+        # the oldest group went; the newest stayed
+        self.assertIsNone(Meta.get_or_none(
+            Meta.key == f"{W.CACHE_PREFIX}{W.CACHE_MAX:08x}:2"))
+        self.assertIsNotNone(Meta.get_or_none(Meta.key == f"{W.CACHE_PREFIX}{0:08x}:2"))
 
     def test_junk_is_refused_before_anything_is_scheduled(self):
         with mock.patch.object(W, "_dz_live", lambda: self.fail("must not be asked")):

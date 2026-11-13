@@ -193,6 +193,11 @@ POLICY = {
     "flow_next": "read",
     "explorer_settings": "admin",
     "flow_styles": "read",
+    # The Explorer's own blueprint: reading the parent styles is navigation for
+    # a controller; STARTING a Deezer discovery is work on the owner's server
+    # (Deezer calls, previews, ffmpeg) and is never lent.
+    "explorer_styles": "read",
+    "explorer_discover": NEVER,
     "recommend": "read",
     "discover_prefs": "read",
     "discover_prefs_set": "full",
@@ -334,10 +339,16 @@ POLICY = {
 
 
 def required_level(endpoint, method):
-    """The lowest level that may call ``endpoint`` with ``method``, or None."""
-    if not endpoint or not endpoint.startswith("webapi."):
+    """The lowest level that may call ``endpoint`` with ``method``, or None.
+
+    Policy is keyed by the VIEW FUNCTION name, whatever blueprint serves it:
+    an endpoint added outside ``webapi`` (the Explorer's own blueprint) must be
+    narrowed like the rest. The prefix is therefore dropped, not required.
+    """
+    if not endpoint:
         return None
-    rule = POLICY.get(endpoint[len("webapi."):])
+    key = endpoint.rsplit(".", 1)[-1]
+    rule = POLICY.get(key)
     if isinstance(rule, dict):
         rule = rule.get("GET" if method == "HEAD" else method)
     if rule is None or rule == NEVER:
@@ -468,14 +479,24 @@ def _end_remote_session():
     return {"name": user.name, "admin": user.admin}
 
 
-@webapi.before_request
-def _remote_scope():
+def enforce_remote_scope():
+    """Narrow every ``/api/*`` request made with a lent session.
+
+    Installed ONCE on the application (``neezer/web.py``), not on the ``webapi``
+    blueprint: the Explorer serves /api from another blueprint and used to slip
+    past this guard entirely (a queue controller read the owner's styles and
+    started Deezer work; a revoked link kept answering). The policy key is the
+    view function name without its blueprint prefix.
+    """
+    if not request.path.startswith("/api/"):
+        return None
     link_id = session.get("rc")
     if not link_id:
         return None
+    endpoint = (request.endpoint or "").rsplit(".", 1)[-1]
     # Claiming another link or logging in replaces this session; neither may be
     # held hostage by the one it replaces.
-    if request.endpoint in ("webapi.remote_claim", "webapi.login"):
+    if endpoint in ("remote_claim", "login"):
         return None
     link = live_link(link_id)
     if link is None or str(link.user_id) != str(session.get("uid")):

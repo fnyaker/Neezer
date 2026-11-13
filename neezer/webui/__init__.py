@@ -79,15 +79,17 @@ webapi = Blueprint("webapi", __name__)
 # still holds if SameSite is ignored (old browsers, or a cookie replayed by an
 # embedded webview). Fetch metadata is preferred; Origin is the fallback for
 # clients that don't send Sec-Fetch-*.
-@webapi.before_request
-def reject_cross_site():
+#
+# One function, installed on each /api blueprint: the Explorer has its own
+# blueprint, and a per-blueprint copy would drift from this one.
+def same_origin_guard():
     if request.method in ("GET", "HEAD", "OPTIONS"):
-        return
+        return None
     site = request.headers.get("Sec-Fetch-Site")
     if site is not None:
         if site not in ("same-origin", "none"):
             return jsonify({"error": "cross-site request rejected"}), 403
-        return
+        return None
     origin = request.headers.get("Origin")
     if origin:
         # Compare hosts only: a TLS-terminating proxy that isn't declared with
@@ -96,6 +98,12 @@ def reject_cross_site():
         # attack (a hostile origin always differs by host).
         if urlsplit(origin).netloc != request.host:
             return jsonify({"error": "cross-site request rejected"}), 403
+    return None
+
+
+@webapi.before_request
+def reject_cross_site():
+    return same_origin_guard()
 
 
 # A person waiting in front of the app outranks every background job.
@@ -3586,9 +3594,20 @@ def report_listen():
     track = refs.resolve_track(raw)
     if track is None and not _valid_id(raw):
         try:
-            uuid.UUID(raw)
+            uid = uuid.UUID(raw)
         except ValueError:
             return jsonify({"error": "invalid deezer_id"}), 400
+        # ``refs`` hides a row the caller may not read, so an upload that
+        # belongs to somebody else comes back as None. It still EXISTS, and a
+        # listen on it must be a 404, not a silent 204.
+        hidden = Track.get_or_none(Track.id == uid)
+        if hidden is not None and not _may_access_track(hidden):
+            return jsonify({"error": "not found"}), 404
+    if track is not None and not _may_access_track(track):
+        # Another person's private upload does not exist for this account: a
+        # listen reported on it would write a history row against a file they
+        # may not read.
+        return jsonify({"error": "not found"}), 404
     try:
         listened = int(data.get("listened") or 0)
     except (TypeError, ValueError):
