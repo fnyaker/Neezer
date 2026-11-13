@@ -161,7 +161,11 @@ CREATE TABLE IF NOT EXISTS playlist (
     comment VARCHAR(256),
     public BOOLEAN NOT NULL,
     created TIMESTAMP NOT NULL,
-    deezer_id VARCHAR(32)
+    deezer_id VARCHAR(32),
+    version INTEGER NOT NULL DEFAULT 1,
+    members_version INTEGER NOT NULL DEFAULT 1,
+    last_edited_by VARCHAR(64),
+    last_edited_at TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS index_playlist_user_id_fk ON playlist(user_id);
 
@@ -185,6 +189,37 @@ CREATE TABLE IF NOT EXISTS playlist_share (
 );
 CREATE INDEX IF NOT EXISTS index_playlist_share_playlist_revoked ON playlist_share(playlist_id, revoked);
 CREATE INDEX IF NOT EXISTS index_playlist_share_user_id_fk ON playlist_share(user_id);
+
+CREATE TABLE IF NOT EXISTS playlist_member (
+    playlist_id UUID NOT NULL REFERENCES playlist ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES "user" ON DELETE CASCADE,
+    role VARCHAR(8) NOT NULL,
+    added TIMESTAMP NOT NULL,
+    PRIMARY KEY (playlist_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS index_playlist_member_user_id_fk ON playlist_member(user_id);
+
+CREATE TABLE IF NOT EXISTS playlist_folder (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES "user" ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_playlist_folder_user_position ON playlist_folder(user_id, position);
+CREATE INDEX IF NOT EXISTS index_playlist_folder_user_id_fk ON playlist_folder(user_id);
+
+CREATE TABLE IF NOT EXISTS playlist_placement (
+    user_id UUID NOT NULL REFERENCES "user" ON DELETE CASCADE,
+    playlist_id UUID NOT NULL REFERENCES playlist ON DELETE CASCADE,
+    folder_id UUID REFERENCES playlist_folder ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, playlist_id)
+);
+CREATE INDEX IF NOT EXISTS index_playlist_placement_user_folder_position
+    ON playlist_placement(user_id, folder_id, position);
+CREATE INDEX IF NOT EXISTS index_playlist_placement_playlist_id_fk ON playlist_placement(playlist_id);
+CREATE INDEX IF NOT EXISTS index_playlist_placement_folder_id_fk ON playlist_placement(folder_id);
 
 CREATE TABLE meta (
     key VARCHAR(32) PRIMARY KEY,
@@ -255,6 +290,63 @@ CREATE TABLE IF NOT EXISTS podcast_marker (
 );
 CREATE INDEX IF NOT EXISTS index_podcast_marker_user_id_fk ON podcast_marker(user_id);
 CREATE INDEX IF NOT EXISTS index_podcast_marker_episode_id_fk ON podcast_marker(episode_id);
+
+CREATE TABLE IF NOT EXISTS podcast_chapter (
+    id UUID PRIMARY KEY,
+    episode_id UUID NOT NULL REFERENCES podcast_episode ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER,
+    title VARCHAR(300),
+    source VARCHAR(8) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_chapter_episode_idx
+    ON podcast_chapter(episode_id, idx);
+CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_chapter_episode_start
+    ON podcast_chapter(episode_id, start_ms);
+
+CREATE TABLE IF NOT EXISTS podcast_chapter_scan (
+    episode_id UUID PRIMARY KEY REFERENCES podcast_episode ON DELETE CASCADE,
+    scanned_at TIMESTAMP NOT NULL,
+    source VARCHAR(8) NOT NULL,
+    n_chapters INTEGER NOT NULL DEFAULT 0,
+    error VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS podcast_transcript (
+    episode_id UUID PRIMARY KEY REFERENCES podcast_episode ON DELETE CASCADE,
+    status VARCHAR(10) NOT NULL,
+    language VARCHAR(8),
+    engine VARCHAR(16),
+    model VARCHAR(64),
+    engine_version VARCHAR(32),
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    done_ms INTEGER NOT NULL DEFAULT 0,
+    n_segments INTEGER NOT NULL DEFAULT 0,
+    error_code VARCHAR(24),
+    error_message VARCHAR(300),
+    cancel_requested BOOLEAN NOT NULL DEFAULT false,
+    user_id UUID REFERENCES "user" ON DELETE SET NULL,
+    queued_at TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    updated TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_podcast_transcript_status ON podcast_transcript(status);
+
+CREATE TABLE IF NOT EXISTS podcast_transcript_segment (
+    id SERIAL PRIMARY KEY,
+    transcript_id UUID NOT NULL REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    search_text TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_transcript_segment_idx
+    ON podcast_transcript_segment(transcript_id, idx);
+CREATE INDEX IF NOT EXISTS index_podcast_transcript_segment_start
+    ON podcast_transcript_segment(transcript_id, start_ms);
 
 CREATE TABLE IF NOT EXISTS track_analysis (
     track_id UUID NOT NULL PRIMARY KEY REFERENCES track,

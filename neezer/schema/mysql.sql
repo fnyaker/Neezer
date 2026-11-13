@@ -157,7 +157,11 @@ CREATE TABLE IF NOT EXISTS playlist (
     comment VARCHAR(256),
     public BOOLEAN NOT NULL,
     created DATETIME NOT NULL,
-    deezer_id VARCHAR(32)
+    deezer_id VARCHAR(32),
+    version INT NOT NULL DEFAULT 1,
+    members_version INT NOT NULL DEFAULT 1,
+    last_edited_by VARCHAR(64),
+    last_edited_at DATETIME
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE INDEX index_playlist_user_id_fk ON playlist(user_id);
 
@@ -180,6 +184,42 @@ CREATE TABLE IF NOT EXISTS playlist_share (
     last_used DATETIME,
     INDEX index_playlist_share_playlist_revoked (playlist_id, revoked),
     INDEX index_playlist_share_user_id_fk (user_id)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS playlist_member (
+    playlist_id CHAR(32) NOT NULL,
+    user_id CHAR(32) NOT NULL,
+    role VARCHAR(8) NOT NULL,
+    added DATETIME NOT NULL,
+    CONSTRAINT playlist_member_playlist_fk FOREIGN KEY (playlist_id) REFERENCES playlist(id) ON DELETE CASCADE,
+    CONSTRAINT playlist_member_user_fk FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE,
+    PRIMARY KEY (playlist_id, user_id),
+    INDEX index_playlist_member_user_id_fk (user_id)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS playlist_folder (
+    id CHAR(32) PRIMARY KEY,
+    user_id CHAR(32) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created DATETIME NOT NULL,
+    CONSTRAINT playlist_folder_user_fk FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE,
+    INDEX index_playlist_folder_user_position (user_id, position),
+    INDEX index_playlist_folder_user_id_fk (user_id)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS playlist_placement (
+    user_id CHAR(32) NOT NULL,
+    playlist_id CHAR(32) NOT NULL,
+    folder_id CHAR(32),
+    position INTEGER NOT NULL DEFAULT 0,
+    CONSTRAINT playlist_placement_user_fk FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE,
+    CONSTRAINT playlist_placement_playlist_fk FOREIGN KEY (playlist_id) REFERENCES playlist(id) ON DELETE CASCADE,
+    CONSTRAINT playlist_placement_folder_fk FOREIGN KEY (folder_id) REFERENCES playlist_folder(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, playlist_id),
+    INDEX index_playlist_placement_user_folder_position (user_id, folder_id, position),
+    INDEX index_playlist_placement_playlist_id_fk (playlist_id),
+    INDEX index_playlist_placement_folder_id_fk (folder_id)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE meta (
@@ -251,6 +291,64 @@ CREATE TABLE IF NOT EXISTS podcast_marker (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE INDEX index_podcast_marker_user_id_fk ON podcast_marker(user_id);
 CREATE INDEX index_podcast_marker_episode_id_fk ON podcast_marker(episode_id);
+
+CREATE TABLE IF NOT EXISTS podcast_chapter (
+    id CHAR(32) PRIMARY KEY,
+    episode_id CHAR(32) NOT NULL,
+    idx INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER,
+    title VARCHAR(300),
+    source VARCHAR(8) NOT NULL,
+    CONSTRAINT podcast_chapter_episode_fk FOREIGN KEY (episode_id) REFERENCES podcast_episode(id) ON DELETE CASCADE,
+    UNIQUE INDEX index_podcast_chapter_episode_idx (episode_id, idx),
+    UNIQUE INDEX index_podcast_chapter_episode_start (episode_id, start_ms)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS podcast_chapter_scan (
+    episode_id CHAR(32) PRIMARY KEY,
+    scanned_at DATETIME NOT NULL,
+    source VARCHAR(8) NOT NULL,
+    n_chapters INTEGER NOT NULL DEFAULT 0,
+    error VARCHAR(200),
+    CONSTRAINT podcast_chapter_scan_episode_fk FOREIGN KEY (episode_id) REFERENCES podcast_episode(id) ON DELETE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS podcast_transcript (
+    episode_id CHAR(32) PRIMARY KEY,
+    status VARCHAR(10) NOT NULL,
+    language VARCHAR(8),
+    engine VARCHAR(16),
+    model VARCHAR(64),
+    engine_version VARCHAR(32),
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    done_ms INTEGER NOT NULL DEFAULT 0,
+    n_segments INTEGER NOT NULL DEFAULT 0,
+    error_code VARCHAR(24),
+    error_message VARCHAR(300),
+    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    user_id CHAR(32),
+    queued_at DATETIME,
+    started_at DATETIME,
+    finished_at DATETIME,
+    updated DATETIME NOT NULL,
+    CONSTRAINT podcast_transcript_episode_fk FOREIGN KEY (episode_id) REFERENCES podcast_episode(id) ON DELETE CASCADE,
+    CONSTRAINT podcast_transcript_user_fk FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE SET NULL,
+    INDEX index_podcast_transcript_status (status)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS podcast_transcript_segment (
+    id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    transcript_id CHAR(32) NOT NULL,
+    idx INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    search_text TEXT NOT NULL,
+    CONSTRAINT podcast_transcript_segment_transcript_fk FOREIGN KEY (transcript_id) REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
+    UNIQUE INDEX index_podcast_transcript_segment_idx (transcript_id, idx),
+    INDEX index_podcast_transcript_segment_start (transcript_id, start_ms)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS track_analysis (
     track_id CHAR(32) NOT NULL PRIMARY KEY REFERENCES track(id),

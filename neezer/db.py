@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261113"
+SCHEMA_VERSION = "20261117"
 
 
 def now():
@@ -868,6 +868,15 @@ class Playlist(_Model):
     public = BooleanField(default=False)
     created = DateTimeField(default=now)
     deezer_id = CharField(null=True)
+    # Optimistic concurrency (collaborative playlists). `version` guards the
+    # tracks and the metadata; `members_version` guards who is on the playlist,
+    # so an invite never invalidates a reorder that is in flight.
+    version = IntegerField(default=1)
+    members_version = IntegerField(default=1)
+    # A NAME snapshot, not a user id: it survives the account being deleted and
+    # is what the playlist page shows next to "modifié par".
+    last_edited_by = CharField(null=True)
+    last_edited_at = DateTimeField(null=True)
 
     def as_subsonic_playlist(self, user):
         tracks, duration = self.__tracks_query(
@@ -982,6 +991,64 @@ class PlaylistShare(_Model):
 
     class Meta:
         table_name = "playlist_share"
+
+
+class PlaylistMember(_Model):
+    """One person's role on one playlist. The owner also has a row (backfilled
+    on upgrade, inserted by the web/Subsonic create paths); authorization trusts
+    ``Playlist.user_id`` first and a synthesized owner row for playlists created
+    elsewhere, so a missing owner row can never lock an owner out.
+
+    Roles are ``owner`` | ``editor`` | ``viewer``; the role matrix itself lives
+    in ``neezer/playlist_access.py``, never in the Subsonic serializer.
+    """
+
+    playlist = ForeignKeyField(Playlist, backref="+", on_delete="CASCADE")
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    role = CharField(8, default="viewer")
+    added = DateTimeField(default=now)
+
+    class Meta:
+        table_name = "playlist_member"
+        primary_key = CompositeKey("playlist", "user")
+
+
+class PlaylistFolder(_Model):
+    """A private, per-person folder that groups playlists (never tracks).
+
+    One level in v1: no parent. ``position`` orders the folders of one person;
+    ties are broken by ``created`` then ``id``, so a concurrent create can never
+    make the list ambiguous. The model deliberately does not set an index on
+    ``position``: ``(user, position)`` is declared in the three schema files and
+    in the ``20261114`` migration, like the hand-tuned ones.
+    """
+
+    id = PrimaryKeyField()
+    user = ForeignKeyField(User, backref="playlist_folders", on_delete="CASCADE")
+    name = CharField()
+    position = IntegerField(default=0)
+    created = DateTimeField(default=now)
+
+
+class PlaylistPlacement(_Model):
+    """Where one person filed one playlist, and in what order.
+
+    Keyed by ``(user, playlist)``: a playlist has ONE folder per person, and two
+    people file the same imported playlist independently. ``folder`` NULL means
+    the unfiled root, whose order is stored the same way. No row at all means
+    "never ordered" (sorted after the ordered rows, by creation date) — which is
+    how every playlist starts, so the upgrade needs no data backfill.
+    """
+
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    playlist = ForeignKeyField(Playlist, backref="+", on_delete="CASCADE")
+    folder = ForeignKeyField(
+        PlaylistFolder, null=True, backref="+", on_delete="CASCADE"
+    )
+    position = IntegerField(default=0)
+
+    class Meta:
+        primary_key = CompositeKey("user", "playlist")
 
 
 class Discovery(_Model):
@@ -1173,6 +1240,95 @@ class PodcastEpisode(_Model):
                 or "application/octet-stream"
             )
         return info
+
+
+class PodcastChapter(_Model):
+    """One chapter an episode carries in its own file, as one source stated it
+    (``neezer/deezer/chapters.py``): sidecar, ID3, MP4 or Deezer JSON.
+
+    ``idx`` is the 0-based display order; the unique indexes on
+    ``(episode, idx)`` and ``(episode, start_ms)`` make a re-scan idempotent and
+    refuse two chapters starting at the same millisecond.
+    """
+
+    id = PrimaryKeyField()
+    episode = ForeignKeyField(PodcastEpisode, backref="chapters", on_delete="CASCADE")
+    idx = IntegerField()
+    start_ms = IntegerField()
+    end_ms = IntegerField(null=True)
+    title = CharField(300, null=True)
+    source = CharField(8)  # sidecar|id3|mp4|json
+
+    class Meta:
+        indexes = ((("episode", "idx"), True), (("episode", "start_ms"), True))
+
+
+class PodcastChapterScan(_Model):
+    """What the last chapter scan of one episode found — including that it found
+    nothing. Without this row every show open would re-read the file looking for
+    chapters that do not exist."""
+
+    episode = ForeignKeyField(PodcastEpisode, primary_key=True, on_delete="CASCADE")
+    scanned_at = DateTimeField()
+    source = CharField(8)  # sidecar|id3|mp4|json|none
+    n_chapters = IntegerField(default=0)
+    # Truncated cause, never shown raw to a client.
+    error = CharField(200, null=True)
+
+
+class PodcastTranscript(_Model):
+    """The speech-to-text state of one archived episode (``neezer/transcribe``).
+
+    Derived text only: deleting this row never touches the audio. ``n_segments``
+    is the page count's ``total`` (maintained per chunk), so a transcript page
+    costs the row plus one page, never a COUNT over thousands of segments.
+    ``error_code`` is a stable machine token; ``error_message`` a short cause.
+    """
+
+    episode = ForeignKeyField(
+        PodcastEpisode, primary_key=True, backref="transcript", on_delete="CASCADE"
+    )
+    status = CharField(10)  # queued|running|ready|error|stopped
+    language = CharField(8, null=True)
+    engine = CharField(16, null=True)  # "whisper.cpp"
+    model = CharField(64, null=True)  # basename only, never the path
+    engine_version = CharField(32, null=True)
+    duration_ms = IntegerField(default=0)
+    done_ms = IntegerField(default=0)
+    n_segments = IntegerField(default=0)
+    error_code = CharField(24, null=True)
+    error_message = CharField(300, null=True)
+    cancel_requested = BooleanField(default=False)
+    user = ForeignKeyField(User, null=True, backref="+", on_delete="SET NULL")
+    queued_at = DateTimeField(null=True)
+    started_at = DateTimeField(null=True)
+    finished_at = DateTimeField(null=True)
+    updated = DateTimeField(default=now)
+
+    class Meta:
+        indexes = ((("status",), False),)
+
+
+class PodcastTranscriptSegment(_Model):
+    """One timed line of a transcript. ``search_text`` is the casefolded,
+    accent-folded copy of ``text`` computed once in Python at insert, so a search
+    is one indexed ``contains`` and never a full table scan."""
+
+    id = AutoField()
+    transcript = ForeignKeyField(
+        PodcastTranscript,
+        backref="segments",
+        column_name="transcript_id",
+        on_delete="CASCADE",
+    )
+    idx = IntegerField()
+    start_ms = IntegerField()
+    end_ms = IntegerField()
+    text = TextField()
+    search_text = TextField()
+
+    class Meta:
+        indexes = ((("transcript", "idx"), True), (("transcript", "start_ms"), False))
 
 
 class PodcastProgress(_Model):
@@ -1757,12 +1913,19 @@ def _migration_order():
         StarredPlaylist,  # after Playlist and User
         PlaylistTrack,
         PlaylistShare,  # after Playlist and User: it references both
+        PlaylistMember,  # after Playlist and User: it references both
+        PlaylistFolder,  # after User
+        PlaylistPlacement,  # after Playlist, User and PlaylistFolder
         TrackNeighbor,  # after Track
         Discovery,
         TrackEnrichment,  # after Track
         RadioStation,
         PodcastChannel,
         PodcastEpisode,
+        PodcastChapter,  # after PodcastEpisode
+        PodcastChapterScan,  # after PodcastEpisode
+        PodcastTranscript,  # after PodcastEpisode and User
+        PodcastTranscriptSegment,  # after PodcastTranscript
         PodcastProgress,
         PodcastMarker,
         RemoteLink,  # after User: it references it
