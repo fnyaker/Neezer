@@ -431,4 +431,3 @@ test("index.html loads the boot script blocking, in the head, before the app", (
   assert.ok(!/type="module"/.test(tag), "a module would be deferred");
   assert.ok(indexHtml.indexOf("<head>") < bootAt && bootAt < indexHtml.indexOf("</head>"));
 });
-
