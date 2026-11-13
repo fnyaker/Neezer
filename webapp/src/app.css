@@ -11,6 +11,12 @@
    Old names (--bg-elev, --bg-card, --text, --accent…) are kept as aliases at
    the bottom of the token block: ~600 call sites in the untouched screens
    still speak them, and they must follow the theme.
+
+   A custom accent (Réglages › Apparence) is written INLINE on <html> by
+   public/theme-boot.js and lib/theme.js: --ac/--btn are its exact surface,
+   --onac/--onbtn the pure black or white text that carries 4.5:1 on it, and
+   --ac-text/--ac-mark/--hrt its readable ink variant. It never applies to
+   Pochette, whose --ac is var(--cover-ac), and it never touches --cover-ac.
    ============================================================================ */
 
 :root,
