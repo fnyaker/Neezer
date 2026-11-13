@@ -309,6 +309,12 @@ export const api = {
     if (outcome) q.set("outcome", outcome);
     return req("/history?" + q.toString());
   },
+  // A person's year in review (neezer/recap.py): the years that hold at least
+  // one event, then one bounded year payload. Personal history, so neither call
+  // is cacheable offline (lib/apicache.js refuses `/recap*`). The server's ETag
+  // makes the second visit a 304.
+  recapYears: () => req("/recap/years"),
+  recap: (year) => req("/recap/" + encodeURIComponent(Number(year))),
   // Mood mixes built from the measured energy, tempo and spectral colour of
   // the archived library; no provider is asked.
   moods: () => req("/moods"),

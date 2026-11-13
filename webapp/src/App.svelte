@@ -111,6 +111,10 @@
     }),
     // A person's credits: what they wrote, composed, produced in the library.
     "/credits/:name": wrap({ asyncComponent: () => import("./routes/Credits.svelte") }),
+    // The year in review: one screen for the latest year and for a deep link,
+    // so the two URLs share the same chunk (fetched the first time one opens).
+    "/recap": wrap({ asyncComponent: () => import("./routes/Recap.svelte") }),
+    "/recap/:year": wrap({ asyncComponent: () => import("./routes/Recap.svelte") }),
   };
 
   // The projector renders outside the router (it is a screen, not a route), so

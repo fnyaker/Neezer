@@ -23,7 +23,10 @@
   import TrackList from "../components/TrackList.svelte";
   import HomeHero from "../components/HomeHero.svelte";
   import StylePicker from "../components/StylePicker.svelte";
+  import RecapHomeCard from "../components/RecapHomeCard.svelte";
   import { discoveryLevel, loadDiscovery, onDiscoverySettled } from "../lib/discovery.js";
+  import { advertisedYear } from "../lib/recap.js";
+  import { loadRecapYears, recapYears } from "../lib/recapyears.js";
 
   const NEW_ROWS = 6;
   const RECO_ROWS = 6;
@@ -152,11 +155,17 @@
     }
   }
 
+  // -- the year in review ------------------------------------------------------
+  // Its own small request, once per session: it is an accessory door, so it
+  // never joins `everythingLoaded` and a failure never condemns the home.
+  $: recap = advertisedYear($recapYears || {});
+
   // -- what could not be loaded ----------------------------------------------
   let failures = 0;
   function loadAll() {
     releasesLoaded = artistsLoaded = homeLoaded = recoLoaded = moodsLoaded = false;
     failures = 0;
+    loadRecapYears().catch(() => {});
     api.swr("/releases", takeReleases).catch(() => {
       failures += 1;
       releasesLoaded = true;
@@ -321,6 +330,10 @@
         {/each}
       </div>
     </section>
+  {/if}
+
+  {#if recap}
+    <RecapHomeCard year={recap} />
   {/if}
 
   {#if mixes.length}
