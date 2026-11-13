@@ -36,8 +36,8 @@ Three code layers, from low to high:
      old nightly sync wrote ("Deezer · Flow", smart tracklists, "Nouveautés en vrac") are ordinary
      playlists now: kept, never refreshed or purged.
    - `lyrics.py` — archive synced lyrics as a `.lrc` sidecar next to each archived audio file
-     (+ embedded plain text in the tags), sourced best-first from **Deezer's own** lyrics then the
-     public **LRCLIB** API (https://lrclib.net); synced wins over plain. `ensure_lyrics` is called on
+     (+ embedded plain text in the tags), sourced from the public **LRCLIB** API
+     (https://lrclib.net); synced wins over plain. `ensure_lyrics` is called on
      archive and on first `/api/lyrics` view; `backfill_archived_lyrics` (CLI `deezer lyrics`)
      backfills every already-archived track that lacks a sidecar.
    - `prefetch.py` — background preload of upcoming tracks + the `/api/download` pre-archive worker.

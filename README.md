@@ -174,9 +174,8 @@ A single-page app built for speed, at `/app`:
 - **Home, search, artist / album / playlist pages**, a real queue, and a library with favourites,
   playlists, downloads and your own files. Long lists are windowed, so a 4 000-track favourites page
   scrolls and filters instantly, and accents don't get in the way (*beyonce* finds *Beyoncé*).
-- **Two-way Deezer sync**: your playlists, favourites, Flow and new releases come in on a schedule
-  (on startup, then daily); starring a track or editing a playlist here is mirrored back to your
-  account.
+- **Deezer import, not sync**: your playlists, favourites and new releases come in on a schedule
+  (on startup, then daily) and are then yours. Nothing is written back to the Deezer account.
 - **Flow and mixes**, with **customizable Flow clusters**, track and artist radio, **genre stations**
   from any style of the tree, and an endless queue you can reorder by dragging and clear in one tap.
 - **Mood mixes** built from the measured energy, tempo and spectral colour of your own library, and a
@@ -186,10 +185,10 @@ A single-page app built for speed, at `/app`:
   artist behind it.
 - **Sleep timer** (minutes, or the end of the track, with a fade-out) and **podcast speed**
   remembered per show.
-- **Synced lyrics** in the full-screen player, from Deezer first and [LRCLIB](https://lrclib.net)
-  after, archived beside the audio.
+- **Synced lyrics** in the full-screen player, from [LRCLIB](https://lrclib.net), archived beside
+  the audio.
 - **Podcasts** — subscribe to Deezer shows; episodes are archived on first play, positions are saved
-  on the server and synced with Deezer, and you can drop markers in an episode.
+  on the server (nothing is written to the Deezer account), and you can drop markers in an episode.
 - **Sharing** — send the whole file, an excerpt you select on a zoomable waveform, or one to three
   lyric lines as an image card. A playlist can also be published as a **read-only public link**
   that needs no account and plays only the tracks already archived.
