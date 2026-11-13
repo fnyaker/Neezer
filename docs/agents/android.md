@@ -219,7 +219,14 @@ path built from the URL. A tile asks at its own dp size; the decode is bounded b
 trimmed oldest-first at most once a minute. MINI, FULL and ULTRA ask for the same URL and share one
 transfer (`CoverFanout`; a request from a newer track wins, the older answer is dropped by
 generation). The session cookie is read only for the configured origin and `Net` enforces the same
-rule again on every redirect; a failed URL is remembered for 60 s so a repaint never retries it. A
+rule again on every redirect; a failed URL is remembered for 60 s so a repaint never retries it.
+**A cover URL is attacker-influenced, so it may only make the device fetch the configured origin or
+Deezer's image CDN** (`*.dzcdn.net`, HTTPS only): `Net.get` takes an optional `allow` predicate,
+asked on the first URL and on every `Location` before a socket is opened, and `CarCovers` passes
+`coverAllowed`. A URL with userinfo, a private/loopback/link-local IP literal (`127.0.0.1`, `10/8`,
+`172.16/12`, `192.168/16`, `169.254/16`, `[::1]`, `fc00::/7`, `fe80::/10`), another host, or
+cleartext off the configured server is refused; the cookie still goes only to the configured origin
+and the disk name is still the URL's SHA-256, never a path. A
 closed settings screen cancels its queued loads before any of them opens a connection, and the
 settings list fetches at most 12 sleeves (the pinned rows first): opening a 500-playlist catalogue
 never fans out 500 requests. The request policy is one transfer per distinct URL: a panel page is
