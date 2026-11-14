@@ -626,6 +626,20 @@ leaves `onboarding_step='done'`: only an invitation redeem starts at `artists`. 
 creates zero invitations. Measured: 1 000 existing accounts migrate in 5.3 ms (1.4 ms replay);
 `add` is 2 statements, a duplicate 1, `rename` 2.
 
+**The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
+`GET /api/admin/users` (keyset `after`, `q` folded over `name_key`/`mail`, `limit` 1..200),
+`GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`.
+Every non-admin gets a bare 403 whatever the id, so the dashboard is not an enumeration oracle.
+`UserManager.update_guarded`/`delete_guarded` carry the **at least one active admin** invariant
+(checked in the write and re-checked after it, since SQLite has no row locks), refuse
+self-disable/self-delete and the holder of the server's Deezer account, bump `session_epoch` on
+demotion/disable/re-enable (not on promotion), and reassign `Track.owner` to the acting admin
+before deleting — no file is touched and no upload becomes public. Pending invitations created by
+the deleted account are revoked and its `u:<id>` grants forgotten. Measured at 50 accounts: list
+**3 statements / 8 147 B (1 500 gzip)**, detail 4, promotion 3, demotion 5. The legacy `/user`
+routes and Subsonic `createUser|deleteUser|updateUser` go through the same guards; the CLI keeps
+the right to delete.
+
 **Playlist folders** (`webui/playlist_folders.py`, schema `20261114`): a folder belongs to one
 person and is private; `playlist_placement` is keyed by `(user, playlist)`, so two people file the
 same shared or imported playlist independently. `GET /api/me/playlists` carries `folders` and each
