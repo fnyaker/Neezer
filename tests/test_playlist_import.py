@@ -16,6 +16,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from neezer import linkimport
 from neezer.config import DefaultConfig
@@ -573,12 +574,18 @@ class ImportRouteTestCase(unittest.TestCase):
         )
         self.assertEqual(created, [])
 
-    def test_a_guest_can_listen_but_not_save_and_nobody_else_sees_the_job(self):
+    def test_a_guest_can_save_their_own_import_and_nobody_else_sees_the_job(self):
         self.login("bob", "B0bbb")
         self.pages[SPOTIFY_ID] = spotify_page([sp_track("Bella", "Maître Gims", 231000)])
         jid = self.start(f"https://open.spotify.com/playlist/{SPOTIFY_ID}")
         self.assertEqual(self.status(jid)["items"][0]["track"]["deezer_id"], "3")
-        self.assertEqual(self.client.post(f"/api/import/playlist/{jid}/save", json={}).status_code, 403)
+        with mock.patch(
+            "neezer.deezer.backfill.archive_tracks"
+        ) as archive:
+            rv = self.client.post(f"/api/import/playlist/{jid}/save", json={})
+            self.assertEqual(rv.status_code, 200, rv.get_json())
+            self.assertEqual(self.status(jid)["state"], "saved")
+            archive.assert_not_called()
         self.login()
         self.assertEqual(self.client.get(f"/api/import/playlist/{jid}").status_code, 404)
         self.assertEqual(self.client.post(f"/api/import/playlist/{jid}/save", json={}).status_code, 404)

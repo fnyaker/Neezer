@@ -460,10 +460,11 @@ def _run_save(app, job, ids, title, user_id, admin):
                     )
                     for row in rows:
                         pl.add(row)
-                try:
-                    backfill.archive_tracks(app, rows, event="on_playlist_add")
-                except Exception:
-                    logger.info("Import: archiving the saved playlist failed", exc_info=True)
+                if admin:
+                    try:
+                        backfill.archive_tracks(app, rows, event="on_playlist_add")
+                    except Exception:
+                        logger.info("Import: archiving the saved playlist failed", exc_info=True)
                 _update(job, state="saved", playlist_id=str(pl.id), saved=len(rows))
             finally:
                 close_connection()
@@ -549,7 +550,6 @@ def import_playlist_status(job_id):
 
 @webapi.route("/import/playlist/<job_id>/save", methods=["POST"])
 @login_required
-@admin_required
 def import_playlist_save(job_id):
     """Keep an import as a local playlist. ``{title?, keep?: [item index]}``
     (every matched line when ``keep`` is absent)."""
