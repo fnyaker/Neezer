@@ -31,6 +31,7 @@ import peewee
 from neezer import config as config_module
 from neezer.config import DefaultConfig
 from neezer.db import (
+    Meta,
     PodcastChannel,
     PodcastEpisode,
     PodcastTranscript,
@@ -994,6 +995,16 @@ class AutoTranscribeTestCase(_Base):
         self.assertEqual(PodcastTranscript.select().count(), job.QUEUE_MAX)
         self.assertEqual(job.resume_auto(self.config), 0)
         self.assertEqual(PodcastTranscript.select().count(), job.QUEUE_MAX)
+
+    def test_resume_auto_honours_the_stored_show_backlog(self):
+        channel = self.channel(auto_transcribe=True)
+        for number in range(1, 4):
+            self.episode(number=number, duration=60, channel=channel)
+        key = "tr.bl." + str(channel.id)[:24]
+        Meta.create(key=key, value="none")
+        self.assertEqual(job.resume_auto(self.config), 0)
+        Meta.update(value="all").where(Meta.key == key).execute()
+        self.assertEqual(job.resume_auto(self.config), 3)
 
     def test_the_estimate_says_hours_and_a_nominal_cpu_cost(self):
         channel = self.channel(auto_transcribe=True)

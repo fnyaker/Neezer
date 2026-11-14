@@ -35,6 +35,7 @@ from datetime import timedelta
 from peewee import fn
 
 from ..db import (
+    Meta,
     PodcastChannel,
     PodcastEpisode,
     PodcastTranscript,
@@ -1211,20 +1212,41 @@ def queue_backlog(channel=None, backlog="all", user=None, app=None, limit=None):
     return summary
 
 
+def _stored_backlog(channel):
+    key = "tr.bl." + str(channel.id)[:24]
+    row = Meta.get_or_none(Meta.key == key)
+    value = row.value if row is not None else None
+    return value if value in ("all", "recent", "none") else "all"
+
+
 def resume_auto(app=None):
-    """Fill the free queue slots from marked shows; one query when idle."""
+    """Fill the free queue slots from marked shows, each with its stored backlog."""
     values = settings.load(app)
     if not values["enabled"]:
         return 0
     if values["runner"] == "inline" and not engine.quick_check(settings.paths(app))["ok"]:
         return 0
-    if not PodcastChannel.select().where(PodcastChannel.auto_transcribe == True).exists():  # noqa: E712
+    channels = list(
+        PodcastChannel.select().where(PodcastChannel.auto_transcribe == True)  # noqa: E712
+    )
+    if not channels:
         return 0
     free = QUEUE_MAX - active_count()
     if free <= 0:
         return 0
-    summary = queue_backlog(backlog="all", user=None, app=app, limit=free)
-    return summary["queued"]
+    queued = 0
+    for channel in channels:
+        if queued >= free:
+            break
+        summary = queue_backlog(
+            channel=channel,
+            backlog=_stored_backlog(channel),
+            user=None,
+            app=app,
+            limit=free - queued,
+        )
+        queued += summary["queued"]
+    return queued
 
 
 def sidecar_payload(transcript):
