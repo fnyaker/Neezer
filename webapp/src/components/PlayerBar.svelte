@@ -26,10 +26,12 @@
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
   import { toggleFavorite, buildTrackMenu } from "../lib/actions.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
+  import { chaptersByEpisode } from "../lib/chapters.js";
   import { REMOTE, atLeast } from "../lib/remote/mode.js";
   import { isMobile, onMobileChange } from "../lib/viewport.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import ChapterTicks from "./ChapterTicks.svelte";
   import ImmersivePlayer from "./ImmersivePlayer.svelte";
   import PartyButton from "./PartyButton.svelte";
   import RemoteButton from "./RemoteButton.svelte";
@@ -86,6 +88,9 @@
     ? Math.min(100, Math.max(progress, ($buffered / $player.duration) * 100))
     : 0;
   $: repeatIconName = $player.repeat === "one" ? "repeat1" : "repeat";
+  $: chapterList = $current?.podcast
+    ? $chaptersByEpisode[String($current.id || "")]?.chapters || []
+    : [];
 </script>
 
 <!-- the <audio> elements are created and managed in JS (see makeEl/switchQuality) -->
@@ -140,15 +145,20 @@
     </div>
     <div class="seek">
       <span class="time">{fmtDuration($player.currentTime)}</span>
-      <input
-        type="range"
-        min="0"
-        max={$player.duration || 0}
-        value={$player.currentTime}
-        on:input={seek}
-        style={`--p:${progress}%; --b:${bufferedPct}%`}
-        aria-label="Position dans le titre"
-      />
+      <div class="rail">
+        <input
+          type="range"
+          min="0"
+          max={$player.duration || 0}
+          value={$player.currentTime}
+          on:input={seek}
+          style={`--p:${progress}%; --b:${bufferedPct}%`}
+          aria-label="Position dans le titre"
+        />
+        {#if $current?.podcast}
+          <ChapterTicks chapters={chapterList} duration={$player.duration} thumb={13} />
+        {/if}
+      </div>
       <span class="time">{fmtDuration($player.duration)}</span>
     </div>
   </div>
@@ -357,6 +367,13 @@
     gap: 10px;
     width: 100%;
     max-width: 520px;
+  }
+  .rail {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
   }
   .time {
     font-family: var(--font-mono);

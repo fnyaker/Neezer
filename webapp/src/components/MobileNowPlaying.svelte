@@ -46,6 +46,7 @@
   import { servedStyleLabel } from "../lib/trackverdict.js";
   import Visualizer from "./Visualizer.svelte";
   import { currentLyricLine } from "../lib/lyrics.js";
+  import { chaptersByEpisode, chapterAt, chapterLabel, chapterCountLabel, nextChapter, podcastAbout } from "../lib/chapters.js";
   import Cover from "./Cover.svelte";
   import PartyButton from "./PartyButton.svelte";
   import RemoteButton from "./RemoteButton.svelte";
@@ -60,6 +61,7 @@
   import SpeedButton from "./SpeedButton.svelte";
   import NowPlayingMore from "./NowPlayingMore.svelte";
   import Lyrics from "./Lyrics.svelte";
+  import ChapterTicks from "./ChapterTicks.svelte";
 
   let showQueue = false;
   let showLyrics = false;
@@ -96,6 +98,26 @@
   // audio/engine.js adoptVerdict, and runs no classifier of its own): a track
   // the server has no genre for shows none.
   $: styleLabel = $vizShowStyle ? $servedStyleLabel : "";
+
+  $: podcast = !!$current?.podcast;
+  $: moreAvailable = CAN_BROWSE && !!$current && (!podcast || podcastAbout($current));
+  $: chapterEntry = podcast ? $chaptersByEpisode[String($current?.id || "")] || null : null;
+  $: chapterList = chapterEntry?.chapters || [];
+  $: chapterNow = podcast ? chapterAt(chapterList, $player.currentTime) : null;
+  $: chapterNext = podcast && !chapterNow ? nextChapter(chapterList, $player.currentTime) : null;
+  $: ctxLine = podcast
+    ? chapterNow
+      ? chapterLabel(chapterList, chapterNow.index)
+      : chapterNext
+        ? "Prochain chapitre · " + (chapterNext.chapter.title || "Chapitre " + (chapterNext.index + 1))
+        : ($current?.chapter_count || 0) > 0
+          ? chapterCountLabel($current.chapter_count)
+          : moreAvailable
+            ? "À propos"
+            : "Podcast"
+    : styleLabel;
+  $: if (podcast && showLyrics) showLyrics = false;
+  $: if (!moreAvailable && (more || panelShown)) closeMore();
 
   function onVisibility() {
     if (document.hidden) {
@@ -186,17 +208,20 @@
   const DISMISS_PX = 110;
 
   // -- swipe up: what is under the player ---------------------------------------
-  // Tracks that sound like this one, and the artist. The same vertical gesture as
-  // the dismissal, the other way: the panel follows the finger up from the bottom
-  // edge, and lets go of it open or closed depending on how far it got. Podcasts
-  // and remote controls with nothing to browse have nothing under them.
+  // For music, the credits, the artist and the tracks that sound alike; for a
+  // podcast, the episode's chapters, description and facts. The same vertical
+  // gesture as the dismissal, the other way: the panel follows the finger up
+  // from the bottom edge, and lets go of it open or closed depending on how far
+  // it got. A remote control with nothing to browse has nothing under it.
   let reveal = 0; // px of the panel on screen: 0 = away, panelH() = fully open
   let revealing = false; // a finger is moving it
   let more = false; // settled open
   let panelShown = false; // mounted (it stays mounted while it slides away)
   let hideTimer = null;
+  let panelEl = null;
+  let closeBtn = null;
+  let lastFocus = null;
   const REVEAL_PX = 70;
-  $: moreAvailable = CAN_BROWSE && !!$current && !$current.podcast;
   $: if (reveal > 0) {
     panelShown = true;
     clearTimeout(hideTimer);
@@ -221,11 +246,15 @@
   }
   function openMore() {
     if (!moreAvailable) return;
+    lastFocus = document.activeElement;
     showQueue = false;
     showLyrics = false;
+    clearTimeout(hideTimer);
     more = true;
     revealing = false;
     reveal = panelH();
+    panelShown = true;
+    tick().then(() => closeBtn?.focus({ preventScroll: true }));
   }
   function closeMore() {
     more = false;
@@ -234,7 +263,11 @@
     // Unmounted once it has slid away (the transition is 280 ms).
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
-      if (reveal === 0 && !revealing) panelShown = false;
+      if (reveal === 0 && !revealing) {
+        panelShown = false;
+        if (lastFocus?.isConnected) lastFocus.focus?.({ preventScroll: true });
+        lastFocus = null;
+      }
     }, 320);
   }
   onDestroy(() => clearTimeout(hideTimer));
@@ -283,6 +316,35 @@
     if (!revealing) return;
     revealing = false;
     reveal = more ? panelH() : 0;
+  }
+  function onPanelKey(e) {
+    if (!more) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMore();
+      return;
+    }
+    if (e.key !== "Tab" || !panelEl) return;
+    const focusable = [
+      ...panelEl.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ),
+    ].filter((el) => el.getClientRects().length > 0);
+    if (!focusable.length) {
+      e.preventDefault();
+      panelEl.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === panelEl)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   }
 
   function dismissMove(dy) {
@@ -864,7 +926,21 @@
     {/if}
     <span class="ctx">
       <span class="ctx-k">{$player.context?.kind === "flow" ? "Flow" : "En lecture"}</span>
-      {#if styleLabel}<span class="ctx-s">{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</span>{/if}
+      {#if podcast}
+        {#if moreAvailable}
+          <button
+            class="ctx-s ctx-b"
+            aria-label={ctxLine + ". Ouvrir À propos de l'épisode"}
+            title="Ouvrir À propos de l'épisode"
+            aria-haspopup="dialog"
+            on:click={openMore}
+          >{ctxLine}</button>
+        {:else}
+          <span class="ctx-s">Podcast</span>
+        {/if}
+      {:else if styleLabel}
+        <span class="ctx-s">{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</span>
+      {/if}
     </span>
     <span class="hdr-r">
       {#if $current?.podcast && CAN_KEEP}<SpeedButton align="right" placement="down" />{/if}
@@ -925,7 +1001,12 @@
 
       <div class="seek">
         <span class="time">{fmtDuration($player.currentTime)}</span>
-        <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} aria-label="Progression" style={`--p:${progress}%; --b:${bufferedPct}%`} />
+        <div class="rail">
+          <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} aria-label="Progression" style={`--p:${progress}%; --b:${bufferedPct}%`} />
+          {#if podcast}
+            <ChapterTicks chapters={chapterList} duration={$player.duration} thumb={15} />
+          {/if}
+        </div>
         <span class="time">{fmtDuration($player.duration)}</span>
       </div>
 
@@ -968,10 +1049,12 @@
         <PartyButton size={21} />
         <RemoteButton size={21} />
       {/if}
-      <button class="fb" on:click={openLyrics} aria-label="Paroles" title="Paroles">
-        <Icon name="music" size={21} />
-        <span class="fl">Paroles</span>
-      </button>
+      {#if !podcast}
+        <button class="fb" on:click={openLyrics} aria-label="Paroles" title="Paroles">
+          <Icon name="music" size={21} />
+          <span class="fl">Paroles</span>
+        </button>
+      {/if}
       <!-- The name is exactly "File d'attente": it is the queue's own door (the
            benches click it by that label), the count is what the eye reads. -->
       <button class="fb file" on:click={openQueue} aria-label="File d'attente" title={`File d'attente · ${upcoming} titre${upcoming > 1 ? "s" : ""}`}>
@@ -980,7 +1063,7 @@
       </button>
     </div>
     {#if moreAvailable}
-      <button class="peek" on:click={openMore} aria-label="À propos du titre">
+      <button class="peek" on:click={openMore} aria-label={podcast ? "À propos de l'épisode" : "À propos du titre"}>
         <Icon name="chevronUp" size={16} /> À propos
       </button>
     {/if}
@@ -990,14 +1073,18 @@
     <div
       class="under"
       class:revealing
+      bind:this={panelEl}
       style={`transform:translateY(${panelH() - reveal}px)`}
       role="dialog"
-      aria-label="Crédits, artiste et titres similaires"
+      aria-modal="true"
+      aria-label={podcast ? "À propos de l'épisode" : "Crédits, artiste et titres similaires"}
       aria-hidden={!more}
+      inert={!more}
       on:touchstart={panelStart}
       on:touchmove|nonpassive={panelMove}
       on:touchend={panelEnd}
       on:touchcancel={panelCancel}
+      on:keydown={onPanelKey}
       on:click|capture={(e) => {
         if (swallowClick) {
           e.preventDefault();
@@ -1007,13 +1094,25 @@
     >
       <div class="under-h">
         <span class="grab" aria-hidden="true"></span>
-        <div class="under-t">
-          <span>À propos de ce titre</span>
-          <button class="ic" on:click={closeMore} aria-label="Fermer"><Icon name="chevronDown" size={22} /></button>
-        </div>
+        {#if podcast}
+          <div class="under-t about-h">
+            <div class="lyrics-meta">
+              <span class="lyrics-k">À propos</span>
+              <span class="lyrics-t">{$current.title}</span>
+              <span class="lyrics-a">{$current.album?.title || $current.artist?.name || ""}</span>
+            </div>
+            <button class="ic" bind:this={closeBtn} on:click={closeMore} aria-label="Fermer"><Icon name="chevronDown" size={22} /></button>
+          </div>
+        {:else}
+          <div class="under-t">
+            <span>À propos de ce titre</span>
+            <button class="ic" bind:this={closeBtn} on:click={closeMore} aria-label="Fermer"><Icon name="chevronDown" size={22} /></button>
+          </div>
+        {/if}
       </div>
-      <div class="under-b" bind:this={panelBody}>
-        <NowPlayingMore track={$current} />
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="under-b" bind:this={panelBody} tabindex={podcast ? "0" : undefined}>
+        <NowPlayingMore track={$current} position={$player.currentTime} />
       </div>
     </div>
   {/if}
@@ -1135,6 +1234,27 @@
     font-weight: 500;
     letter-spacing: 0.04em;
     color: var(--tx);
+  }
+  .ctx-b {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    line-height: 44px;
+    max-width: 100%;
+    padding: 0 4px;
+    border-radius: 8px;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: center;
+  }
+  .ctx-b:hover {
+    background: var(--s2);
+  }
+  .ctx-b:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: -2px;
   }
   .ic {
     color: var(--tx);
@@ -1355,6 +1475,13 @@
     align-items: center;
     gap: 10px;
     padding: 0 18px;
+  }
+  .rail {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
   }
   .time {
     font-family: var(--font-mono);
@@ -1718,11 +1845,19 @@
     font-weight: 700;
     color: var(--tx);
   }
+  .under-t.about-h {
+    align-items: flex-start;
+    gap: 12px;
+  }
   .under-b {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 0 14px calc(24px + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
+  }
+  .under-b:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: -2px;
   }
 </style>

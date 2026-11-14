@@ -3,17 +3,22 @@
   import { push } from "svelte-spa-router";
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
   import { api } from "../lib/api.js";
+  import { get } from "svelte/store";
   import { player, currentId, playing, isAdmin, toasts, seekTo, openMenu, openExport } from "../lib/stores.js";
   import { podcastProgress, setResumePoint } from "../lib/podcastProgress.js";
   import { episodeMarkers, loadShowMarkers, removeMarker } from "../lib/markers.js";
+  import { chaptersByEpisode, loadChapters, chapterAt, chapterCountLabel } from "../lib/chapters.js";
   import { buildTrackMenu } from "../lib/actions.js";
   import { downloadTrack } from "../lib/offline.js";
+  import { isMobile } from "../lib/viewport.js";
   import { duration as fmtDuration } from "../lib/format.js";
   import { onDestroy } from "svelte";
   import Cover from "../components/Cover.svelte";
   import GradientHeader from "../components/GradientHeader.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
+  import ChapterList from "../components/ChapterList.svelte";
+  import ChapterSheet from "../components/ChapterSheet.svelte";
 
   export let params = {};
 
@@ -21,6 +26,10 @@
   let data = null;
   let loading = true;
   let expanded = new Set();
+  let chapterOpen = new Set();
+  let chapterPos = {};
+  let chapterCap = {};
+  let sheet = null;
 
   $: if (params.id && params.id !== id) {
     id = params.id;
@@ -34,6 +43,10 @@
     clearTimeout(pollTimer);
     loading = true;
     data = null;
+    chapterOpen = new Set();
+    chapterPos = {};
+    chapterCap = {};
+    sheet = null;
     loadShowMarkers(pid); // fail-soft, fills the markers store as it lands
     try {
       const r = await api.podcast(pid);
@@ -131,6 +144,7 @@
   // first, so the player's load lands exactly there.
   function playAt(i, ep, position) {
     if ($currentId === trackKey(ep)) {
+      player.setProgress(position, ep.duration || 0);
       seekTo.set(position);
       player.play();
       return;
@@ -181,6 +195,29 @@
     const n = new Set(expanded);
     n.has(eid) ? n.delete(eid) : n.add(eid);
     expanded = n;
+  }
+
+  function toggleChapters(ep) {
+    const key = trackKey(ep);
+    const next = new Set(chapterOpen);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+      chapterCap = { ...chapterCap, [key]: isMobile() ? 4 : 8 };
+      chapterPos = { ...chapterPos, [key]: $currentId === key ? get(player).currentTime : 0 };
+      loadChapters(ep.id);
+    }
+    chapterOpen = next;
+  }
+
+  function seekChapter(ep, i, start) {
+    chapterPos = { ...chapterPos, [trackKey(ep)]: start };
+    playAt(i, ep, start);
+  }
+
+  function openChapters(ep, i) {
+    sheet = { ep, i };
   }
 
   async function unsubscribe() {
@@ -307,6 +344,13 @@
           {@const active = $currentId === trackKey(ep)}
           {@const resume = resumeOf(ep)}
           {@const marks = $episodeMarkers[trackKey(ep)] || []}
+          {@const key = trackKey(ep)}
+          {@const cOpen = chapterOpen.has(key)}
+          {@const cEntry = $chaptersByEpisode[String(ep.id)] || null}
+          {@const cList = cEntry?.chapters || []}
+          {@const cCap = chapterCap[key] || 8}
+          {@const cPos = chapterPos[key] || 0}
+          {@const cAt = $currentId === key ? chapterAt(cList, cPos) : null}
           <li class:active>
             <button class="pl" on:click={() => toggle(i, ep)} aria-label="Lire l'épisode">
               <Icon name={active && $playing ? "pause" : "play"} size={18} />
@@ -343,10 +387,66 @@
                 {#if ep.unavailable}
                   · <span class="gone"><Icon name="alert" size={13} /> non archivé</span>
                 {/if}
+                {#if (ep.chapter_count || 0) > 0}
+                  <button
+                    type="button"
+                    class="chapters-chip"
+                    aria-expanded={cOpen}
+                    aria-controls={"echapters-" + key}
+                    title={cOpen ? "Masquer les chapitres" : "Afficher les chapitres"}
+                    on:click={() => toggleChapters(ep)}
+                  >
+                    <Icon name="chapters" size={14} />
+                    <span>{chapterCountLabel(ep.chapter_count)}</span>
+                    <span class="chev" class:rot={cOpen}><Icon name="chevronDown" size={14} /></span>
+                  </button>
+                {/if}
               </div>
               {#if resume && !resume.done}
                 <div class="ebar"><span style={`width:${resume.pct * 100}%`}></span></div>
               {/if}
+              <div
+                class="chblock"
+                id={"echapters-" + key}
+                role="region"
+                aria-label="Chapitres"
+                hidden={!cOpen}
+              >
+                {#if cOpen}
+                  {#if !cEntry || cEntry.state === "loading" || cEntry.state === "idle"}
+                    <p class="ch-note" role="status">Chargement des chapitres…</p>
+                    <ChapterList loading />
+                  {:else if cEntry.state === "error"}
+                    <p class="ch-note">
+                      {cEntry.error?.offline
+                        ? "Hors ligne : les chapitres n'ont pas encore été chargés."
+                        : "Chapitres indisponibles."}
+                    </p>
+                    <button type="button" class="ch-retry" on:click={() => loadChapters(ep.id, { force: true })}>
+                      <Icon name="refresh" size={15} /> Réessayer
+                    </button>
+                  {:else if cEntry.archived === false}
+                    <p class="ch-note">Les chapitres seront lus à la fin de l'archivage.</p>
+                  {:else if !cList.length}
+                    <p class="ch-note">Aucun chapitre pour cet épisode.</p>
+                  {:else}
+                    {#if cEntry.offline}
+                      <p class="ch-note ch-offline"><Icon name="cloudOff" size={14} /> Hors ligne — dernière copie</p>
+                    {/if}
+                    <ChapterList
+                      chapters={cList.slice(0, cCap)}
+                      currentIndex={cAt ? cAt.index : -1}
+                      variant="inline"
+                      onSeek={(start) => seekChapter(ep, i, start)}
+                    />
+                    {#if cList.length > cCap}
+                      <button type="button" class="ch-see" aria-haspopup="dialog" on:click={() => openChapters(ep, i)}>
+                        Voir les {cList.length} chapitres <Icon name="chevronRight" size={15} />
+                      </button>
+                    {/if}
+                  {/if}
+                {/if}
+              </div>
               {#if marks.length}
                 <div class="marks">
                   {#each marks as m (m.id)}
@@ -373,6 +473,24 @@
       </ul>
     {/if}
   </div>
+{/if}
+
+{#if sheet}
+  {@const skey = trackKey(sheet.ep)}
+  {@const sEntry = $chaptersByEpisode[String(sheet.ep.id)] || null}
+  {@const sList = sEntry?.chapters || []}
+  {@const sPos = chapterPos[skey] || 0}
+  {@const sAt = $currentId === skey ? chapterAt(sList, sPos) : null}
+  <ChapterSheet
+    episode={sheet.ep}
+    chapters={sList}
+    currentIndex={sAt ? sAt.index : -1}
+    state={sEntry?.state || "idle"}
+    error={sEntry?.error || null}
+    onSeek={(start) => seekChapter(sheet.ep, sheet.i, start)}
+    onClose={() => (sheet = null)}
+    onRetry={() => loadChapters(sheet.ep.id, { force: true })}
+  />
 {/if}
 
 <style>
@@ -632,7 +750,110 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
+    row-gap: 4px;
     font-size: 0.82rem;
+  }
+  .chapters-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--ln);
+    color: var(--dim);
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .chapters-chip > :global(svg) {
+    color: var(--ac-text);
+  }
+  .chapters-chip:hover {
+    background: var(--s2);
+    color: var(--tx);
+  }
+  .chapters-chip:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
+  }
+  .chev {
+    display: inline-flex;
+    transition: transform 0.15s ease;
+  }
+  .chev.rot {
+    transform: rotate(180deg);
+  }
+  @media (pointer: coarse) {
+    .chapters-chip {
+      height: 44px;
+      padding: 0 14px;
+    }
+  }
+  .chblock {
+    margin-top: 10px;
+    border-top: 1px solid var(--ln);
+    padding-top: 8px;
+  }
+  .chblock[hidden] {
+    display: none;
+  }
+  .ch-note {
+    margin: 6px 2px 8px;
+    font-size: 0.86rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+  .ch-offline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent);
+  }
+  .ch-retry {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 44px;
+    margin: 0 0 6px 2px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--ln);
+    color: var(--ac-text);
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+  .ch-retry:hover {
+    background: var(--s2);
+  }
+  .ch-retry:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
+  }
+  .ch-see {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: 100%;
+    min-height: 44px;
+    margin-top: 2px;
+    color: var(--ac-text);
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+  .ch-see:hover {
+    background: var(--s2);
+  }
+  .ch-see:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: -2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chev {
+      transition: none;
+    }
   }
   .resume {
     color: var(--accent);

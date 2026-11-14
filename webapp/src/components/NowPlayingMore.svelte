@@ -1,6 +1,7 @@
 <script>
   import { entityRef, trackEntityRef } from "../lib/entity.js";
-  // What lives under the full-screen player: the credits of the track, the
+  // What lives under the full-screen player: for a podcast, the episode's
+  // chapters, description and facts; for music, the credits of the track, the
   // artist behind it and — last, because it is the long one — tracks that sound
   // like it. On the phone it is what a swipe up from
   // the player reveals; on the desktop it is a tab beside the queue.
@@ -12,15 +13,19 @@
   import { onMount, onDestroy } from "svelte";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
-  import { player, immersiveOpen, toasts } from "../lib/stores.js";
+  import { player, immersiveOpen, toasts, seekTo } from "../lib/stores.js";
   import { compactNumber } from "../lib/format.js";
   import Card from "./Card.svelte";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import PodcastEpisodePanel from "./PodcastEpisodePanel.svelte";
   import TrackCredits from "./TrackCredits.svelte";
   import TrackList from "./TrackList.svelte";
 
   export let track = null;
+  export let position = 0;
+
+  $: podcast = !!track?.podcast;
 
   // What the mix and the credits are asked by: the row's id (a request names a
   // track by trackRef). An episode has neither.
@@ -126,6 +131,17 @@
 </script>
 
 <div class="more">
+  {#if podcast}
+    <PodcastEpisodePanel
+      episode={track}
+      {position}
+      isCurrent={true}
+      onSeek={(seconds) => {
+        player.setProgress(seconds, $player.duration);
+        seekTo.set(seconds);
+      }}
+    />
+  {:else}
   {#if !id && !artistId && !credits?.credits?.length}
     <p class="muted empty">Rien à afficher pour ce titre : les crédits et les titres similaires viennent de Deezer.</p>
   {/if}
@@ -175,6 +191,7 @@
         {#if similarFailed}<button class="link" on:click={retry}>Réessayer</button>{/if}
       </p>
     {/if}
+  {/if}
   {/if}
 </div>
 
