@@ -27,6 +27,11 @@ docs
 android
 CLAUDE.md
 AGENTS.md
+# The transcription sidecar, its model (hundreds of MB) and its token: the API
+# image never reads them. The sidecar builds from docker/transcribe itself.
+docker/transcribe
+models
+secrets
 # The SPA's test suite and benches: vite never reads them.
 webapp/test
 

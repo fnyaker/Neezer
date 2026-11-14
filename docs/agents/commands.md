@@ -135,6 +135,19 @@ neezer-cli deezer embed --self-test                 # check the mel front-end wi
 # Docker (full stack: builds SPA + python image, runs entrypoint that creates admin + auto-sync)
 docker compose up --build                            # web player at :5722/app, Subsonic at :5722/rest
 docker build -t neezer:dev . && docker/smoke.sh neezer:dev   # what CI checks before pushing
+
+# Transcription sidecar (docker/transcribe): no model in the image, model mounted :ro
+tools/fetch-whisper-model.sh --model large-v3-turbo-q8_0 --dest ./models
+tools/fetch-whisper-model.sh --model small --dest ./models   # NAS / tight RAM
+docker build -t neezer-transcriber:dev docker/transcribe     # context is the sidecar dir
+docker buildx build --platform linux/amd64,linux/arm64 -t neezer-transcriber:dev docker/transcribe
+docker compose -f docker-compose.yml -f docker-compose.transcribe.yml up -d transcriber
+docker compose -f docker-compose.yml -f docker-compose.transcribe.yml logs -f transcriber
+docker compose -f docker-compose.yml -f docker-compose.transcribe.yml \
+    exec transcriber python3 /app/worker.py --check          # model/binaries/token, no API call
+python3 docker/transcribe/test_worker.py -v                  # fake API + fake whisper/ffmpeg, no Docker needed
+                                                     # (covers claim/audio Range/chunk/complete/fail/cancel/backoff;
+                                                     #  the guide is docs/podcast-media.md)
 ```
 
 The project's subagents are declared in `opencode.json`, with their prompts under
