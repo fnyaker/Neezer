@@ -260,11 +260,7 @@ class Artist(_Model):
         # without this they'd be pruned and their credits deleted with them.
         credited = TrackArtist.select(TrackArtist.artist)
 
-        StarredArtist.delete().where(
-            StarredArtist.starred.not_in(album_artists),
-            StarredArtist.starred.not_in(track_artists),
-            StarredArtist.starred.not_in(credited),
-        ).execute()
+        starred = StarredArtist.select(StarredArtist.starred)
 
         return (
             cls.delete()
@@ -272,6 +268,7 @@ class Artist(_Model):
                 cls.id.not_in(album_artists),
                 cls.id.not_in(track_artists),
                 cls.id.not_in(credited),
+                cls.id.not_in(starred),
             )
             .execute()
         )

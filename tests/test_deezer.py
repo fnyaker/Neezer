@@ -436,6 +436,20 @@ class DeezerTestCase(TestBase):
         Artist.prune()
         self.assertTrue(Artist.select().where(Artist.deezer_id == "2").exists())
 
+    def test_a_starred_artist_without_tracks_survives_prune(self):
+        from neezer.db import StarredArtist
+
+        user = User.create(name="sub", password="x", salt="x", mail="s@x")
+        artist = Artist.create(name="Suivie", deezer_id="4242")
+        StarredArtist.create(user=user, starred=artist)
+
+        Artist.prune()
+
+        self.assertTrue(Artist.select().where(Artist.id == artist.id).exists())
+        self.assertTrue(
+            StarredArtist.select().where(StarredArtist.starred == artist.id).exists()
+        )
+
     def test_deleting_a_folder_hierarchy_takes_the_credits_with_it(self):
         from neezer.db import TrackArtist
         from neezer.deezer import library
