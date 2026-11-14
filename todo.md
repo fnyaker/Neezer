@@ -99,10 +99,13 @@ le code.
 - [ ] **Playlists collaboratives** — *mis de côté.* Plusieurs comptes qui écrivent dans une même
   playlist. La difficulté est la synchronisation entre plusieurs comptes et les droits d'écriture ;
   le miroir Deezer n'existe plus.
-- [ ] **Chapitres et transcription de podcasts** — chapitres quand l'épisode en porte
-  (ID3 `CHAP`, ou `podcast:chapters`), transcription en texte avec recherche. Les épisodes
-  arrivent de Deezer en MP3 brut, sans flux RSS : à voir d'où viennent les chapitres. La
-  transcription demande un modèle de reconnaissance vocale.
+- [x] **Chapitres de podcasts** — sidecar, MP4 `chpl`, ID3 `CHAP`/`CTOC`, URL éditeur opt-in ;
+  extraction mutagen, route `GET /api/podcast/episode/<id>/chapters`, `chapter_count` dans le show,
+  panneau « À propos » (Chapitres → Description → Informations), ticks et feuille Show. 64 tests
+  serveur, 14 tests purs, banc visuel 360→1920.
+- [ ] **Transcription de podcasts** — whisper.cpp local, conteneur séparé, sidecars JSON/SRT sur le
+  disque data, reprise/budget, recherche dans les segments, admin seulement pour marquer une
+  émission. Le moteur et l'API sont en cours.
 
 ## Niveau 5 — administration et onboarding (gros chantier)
 
