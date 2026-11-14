@@ -425,7 +425,8 @@ just for a counter (measured on the 8 000-track bench: 15 ms / 45 KB for 4 000 s
 route, against 99 ms / 2 MB for the full one). Its catalogue is
 `/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
 (401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
-device remembers. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
+device remembers. The JSON stays additive for the car: `folders`, `folder_id`, `position`, `role`
+and `owner` are ignored, and the catalogue keeps reading the `playlists` array. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
 SPA's `/app` path (a person pastes the player's address) and the route never lives under it, while a
 reverse-proxied prefix is kept (`https://host/musique/app/` → `https://host/musique/api/me/playlists`);
 `Prefs.isServerUrl` still holds it to the one origin definition. If the jar has no cookie yet (the
