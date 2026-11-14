@@ -71,7 +71,9 @@ linking or unlinking one links or unlinks the other); the holder of the server a
 account lists — followed artists, loved tracks, saved albums, playlists — is read through `library(kind)` and made into
 THEIR rows: artists starred (so followed for Nouveautés; a YouTube channel matched by name to an existing artist and its
 ref kept in `entity_ref`, which `youtube._artist_row` then reuses), tracks starred, albums with their tracklist,
-playlists merged (one of the same id that is somebody else's is never touched). Rules: each item is imported ONCE
+playlists merged (one of the same id that is somebody else's is never touched). Membership in a
+Neezer playlist is not a provider grant: groups never widen it, and an account import writes an
+`owner` member row only for its own holder. Rules: each item is imported ONCE
 (`library_item`), so the local library counts after that; one unticked in the picker (`excluded`) is never imported and
 an artist's or album's star comes off; nothing is written to the account and nothing is downloaded. **One DEFAULT
 platform per person** (`options.primary`, `PUT /me/accounts/default`, Réglages → Mes comptes): only that account is

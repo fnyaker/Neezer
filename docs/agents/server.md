@@ -637,6 +637,24 @@ The core measures 6 statements for `/me/playlists` at 61 lists, 3/95 B for `/ver
 for a 4 000-title page, and two concurrent writers at the same version produce exactly one 200 and
 one 409.
 
+The same authority closes the other doors. `/rest` **reads** a playlist for owner/editor/viewer/admin
+(and a public playlist for any account) but answers **error 50** to a non-member; `getPlaylists`
+lists owned + public + memberships, `songCount`/`duration`/`entry` count only the caller's visible
+rows, and `createPlaylist`/`updatePlaylist`/`deletePlaylist` are owner/admin only (error 50
+otherwise). `songIndexToRemove` is remapped through the visible list, so a hidden private upload
+cannot shift the wrong row. The Deezer importer and `libraryimport` create the `owner` member row in
+the playlist's transaction, bump `version` on an overwrite or a merge that adds rows, and a second
+account importing the same canonical Deezer id gets a derived id — it never adopts somebody else's
+row. `replace_everywhere`/`_remove_everywhere` touch owned **or edited** playlists and stamp
+`version` in one UPDATE. `/api/export/playlist/<id>` and `/api/services/list/playlist/<id>` answer
+**404** to a non-member and export only visible rows; the share GET/POST/DELETE is 404 to a
+non-member and 403 without `can_manage`, while the public token payload stays read-only and carries
+no members, versions or `last_edited_*`. `ratelimit.WindowLimiter` is a bounded, thread-safe LRU
+(no Flask import): playlist creation is **60/h/account** and member writes **30/10 min**, returning
+429 with `Retry-After`. Subsonic `getPlaylists` at 61 playlists is 66 statements (one owner join
+saved 61 reads; the per-playlist aggregate remains in `db.py`), a ZIP export 8, a file list 4 and a
+public page 6.
+
 **A public playlist link** (`webui/playlist_share.py`, table `playlist_share` schema `20261113`,
 `/pl/<token>` in `spa.py`): the token is `<id>.<hmac>` under the app secret (the remote-link
 pattern), so a copy of the table opens nothing; one live link per playlist, revoked or expired means
