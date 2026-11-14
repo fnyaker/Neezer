@@ -11,6 +11,8 @@ python -m unittest tests.test_webui.SomeClass.test_x # one test
 # The 2026-11 discovery/history/mood/share lots, together (all offline):
 python tools/partest.py tests.test_genre_radio tests.test_history tests.test_moods \
     tests.test_playlist_recs tests.test_playlist_share
+python tools/partest.py tests.test_recap tests.test_playlist_folders tests.test_playlist_collab_core
+                                                     # the 2026-11 recap / folders / collaborative core lots
 python -m unittest tests.net.suite                   # network tests (hit real services; weekly in CI)
 
 # Same suite across processes — ~12s on 4 cores. Takes the same test ids. What CI runs.
@@ -86,6 +88,9 @@ cd webapp && node test/requests/run.mjs             # what playing costs in requ
 cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen player from 700x900 to 1920x1080: every control on screen,
                                                      # inside its column and the element a click at its centre lands on
                                                      # (the four browser tests above start tools/perf_api.py --serve; PYTHON=<venv python>, SHOTS=<dir> keeps pictures)
+cd webapp && node test/recap/run.mjs                 # the recap stories: 2 requests cold / 1 warm / 0 per card, 9 cards maximum,
+                                                     # share poster 1080x1350, 390/360/641/1440 px, auto-advance and privacy
+                                                     # (starts tools/perf_api.py --serve with the recap seed)
 
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works
@@ -95,8 +100,9 @@ neezer-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for 
 neezer-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo + style for archived tracks
 neezer-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
 python tools/tempo_eval.py --render /tmp/tempo          # the server's file tempo on the 28 arranged records + beatless tones
-python tools/perf_api.py [--tracks 20000] [--serve]     # every screen's /api route timed on a big synthetic library (Deezer off):
-                                                     # median ms, SQL statement count, bytes and gzip bytes per route
+python tools/perf_api.py [--tracks 20000] [--serve] [--recap]   # every screen's /api route timed on a big synthetic library
+                                                     # (Deezer off): median ms, SQL statement count, bytes and gzip per route;
+                                                     # --recap seeds 37 000 listen events and times /api/recap/years + /<year>
 neezer-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
 neezer-cli deezer embed --self-test                 # check the mel front-end without a reference
 

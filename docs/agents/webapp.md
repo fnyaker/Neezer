@@ -189,6 +189,21 @@ AND a word (Écouté / Passé / Partiel), never colour alone; a failure is `Load
 `localStorage` nor to the offline `/api` cache. Measured 390/641/768/900/1024/1200+panel/1440+panel:
 no sideways overflow; the tops stack under 720 px of content.
 
+**« Récap » is a stories screen** (`routes/Recap.svelte`, `components/RecapStory.svelte`,
+`RecapSlide.svelte`, `RecapShare.svelte`, `lib/recap.js`, `lib/recapyears.js`): `#/recap` resolves the
+latest year and `replace`s to `#/recap/<year>`, which is a reloadable deep link. Opening costs 2
+requests cold (`/years` + the year) and 1 warm, a year change 1, a card advance 0; the bridge mounts
+only the active slide and the next one, 9 cards maximum. Auto-advance is 7 s only at ≤ 900 px and
+not under `prefers-reduced-motion`, and pauses on touch-hold, page hide, focus loss and share. The
+cards sit on a 488 px minimum bridge; at 390×844 the bottom is 700 px and the mini-player starts at
+708 px, while 360×640 scrolls the page ~176 px rather than clipping a card. The two-column desktop
+layout triggers on a **760 px content container**, not on a 900 px window (the 232 px sidebar would
+not fit otherwise). The share poster is 1080×1350, drawn locally from `offlineCovers` only, 0
+requests, `toBlob` 17.6 ms at 1440×900 / 19.3 ms at 390×844 (54.8 ms under 4× CPU), PNG ≤ 2 MB.
+Like History, a recap never enters `localStorage` or the offline `/api` cache. The Home card appears
+only for `nowYear` or `nowYear - 1` from `/years` (never the device clock), costs one `/years` per
+session, and draws four deterministic Sillon grooves because `/years` carries no covers.
+
 **Nouveautés is two shelves, then the per-release list** (`routes/Releases.svelte`,
 `components/ReleaseCard.svelte`, `routes/ReleaseShelf.svelte`). `close_to` splits the payload:
 « Tes artistes » is the person's own (favourites and the artists they listen to), « Découverte »

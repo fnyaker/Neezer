@@ -581,6 +581,48 @@ second, skips included) and the top 5 artists/titles by number of LISTENS. The p
 query plus one batched `_db_tracks`; **9 statements** for 50 events, 36 kB / 1.4 kB gzip (135 kB /
 3.4 kB at the 200 ceiling). `request.webuser` only: an admin never sees another person's history.
 
+**The year in review** (`neezer/recap.py`, `webui/recap.py`, `routes/Recap.svelte`) is the same
+history aggregated over a **server-local half-open year**: `GET /api/recap/years` is 1 statement
+(one entry per year with at least one event, no `KEEP_DAYS` floor) and `GET /api/recap/<year>` is
+**4 statements** (1 for an empty year) — daily `GROUP BY date(at)`, one per-track/style aggregate,
+then batched `_db_tracks` payloads. `request.webuser` only, no `?user=`, no provider, no write, no
+schema. `enough` means **20 listens or 30 minutes and at least one listen**; tops are by listens;
+genres come only from `track_analysis.style` at confidence ≥ 0.4 rolled up through
+`discover.lift_style`, with coverage printed and the card absent below 34 %. The process cache keeps
+aggregates only (60 s for the current year, 1 h for a past one, 32 entries); ETag 304 is free.
+Measured on the plan's 8 000-title bench: years 25 ms / 265 B, year 38 ms cold and 1.8 ms warm /
+7 042 B, 2 and 5 statements on the wire (session included), empty year 1 040 B. The SPA opens with
+2 requests cold, 1 warm, then 0 per card and 0 for the share poster.
+
+**Playlist folders** (`webui/playlist_folders.py`, schema `20261114`): a folder belongs to one
+person and is private; `playlist_placement` is keyed by `(user, playlist)`, so two people file the
+same shared or imported playlist independently. `GET /api/me/playlists` carries `folders` and each
+playlist's `folder_id`/`position` in the same answer — **6 statements at 61 playlists**, 8 at 500
+(the two chunked pairs double), and a playlist with no placement row is unfiled and sorts by
+creation date, so an upgrade needs no backfill. The container order PUT is the complete desired
+order but **additive**: ids are filed/moved in that order, a resident the client omitted is
+appended, duplicates collapse, unknown ids are ignored, positions renormalise to `0..n-1` in one
+transaction; 500 ids cost 6 statements. Deleting a folder returns its playlists to the root and
+never deletes one. A container holds 2 000 ids, a person 500 folders; only own or shared playlists
+can be filed. `/rest` is untouched. The blueprint installs its own same-origin guard (a Flask
+blueprint does not inherit `webapi`'s).
+
+**Collaborative playlists** (`playlist_access.py`, `webui/playlist_members.py`, schema `20261115`):
+roles are `owner` / `editor` / `viewer`, plus the admin override. The owner is computed from
+`Playlist.user_id` **first**, so a missing member row can never lock them out; `role_for` is the
+single authorization authority (never the Subsonic serializer or a component). Every order-sensitive
+mutation carries `version` (tracks and metadata) or `members_version` (roles); the compare-and-swap
+`UPDATE … WHERE version = expected` runs inside the write transaction and a mismatch returns **409**
+`{error:"conflict", scope, version, members_version, last_edited_by, last_edited_at}` — **135 B**,
+never the track list — after which the client resyncs with one GET and says who changed it. Editors
+add/remove/reorder tracks only; rename, delete, invite, role changes and the public link are
+owner/admin. `/api/me/playlists` returns the caller's own lists plus their memberships, never an
+admin firehose. Private uploads are filtered per viewer from tracks, counts, cover and recommendation
+seeds through `Track.visible_clause`; hidden rows stay in the playlist and are anchored for reorder.
+The core measures 6 statements for `/me/playlists` at 61 lists, 3/95 B for `/version`, 7 statements
+for a 4 000-title page, and two concurrent writers at the same version produce exactly one 200 and
+one 409.
+
 **A public playlist link** (`webui/playlist_share.py`, table `playlist_share` schema `20261113`,
 `/pl/<token>` in `spa.py`): the token is `<id>.<hmac>` under the app secret (the remote-link
 pattern), so a copy of the table opens nothing; one live link per playlist, revoked or expired means
