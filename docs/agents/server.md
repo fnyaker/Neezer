@@ -203,6 +203,23 @@ alternative. `settings.load` merges defaults < config file < UI, while `paths()`
 only. `transcribe_settings` being `NEVER` also hides the card from an admin remote controller
 (deliberate; change to `{"GET": "admin", "PUT": NEVER}` if that is wanted).
 
+The **worker protocol** is `webui/transcribe_worker.py` (blueprint `transcribe_worker_api`) and is
+how the sidecar transcribes without a database or an archive mount. An admin creates a worker with
+`POST /api/transcribe/workers` (`name`, `kind=server|client`); the response shows the token
+`<worker-uuid>.<32-byte secret>` **once**, and the database keeps it encrypted with the server's
+`password_secret` (never in a GET, never in a log). The worker sends `Authorization: Bearer …` and
+the lease in `X-NS-Lease`; the lease itself is stored only as SHA-256. `POST /worker/claim` returns
+one job plus `audio_url`, duration, language, chunk size and start; `heartbeat` returns
+`cancel|pause|done_ms`; `chunk` appends an ordered piece; `complete`, `fail` and `release` close or
+requeue it. `GET /worker/audio/<eid>` serves the archived file with `Range`/206, `no-store`, and
+403 without the matching lease; no payload ever contains a filesystem path. The sidecar is written
+by a daemon thread, never inside the request, and a late flush only updates `transcript_path` and
+`updated` (it can never revert a `ready` row). Worker routes are `NEVER` for remote sessions; the
+three admin worker routes are `admin` (a remote admin link can create/revoke a worker — deliberate,
+confirm if that is too broad). Measured: workers list 3 statements/184 B, create 4/207 B, claim
+11/316 B, heartbeat 4/78 B, chunk 8/49 B, complete 6/51 B, fail 6/31 B, audio 6 statements plus the
+bytes. A revoked or disabled worker gets 403 before the queue is read; 32 live workers is the cap.
+
 **Unavailable tracks** (`neezer/webui/availability.py`): Deezer drops tracks from its catalogue,
 and `Track.unavailable` (a timestamp, so a verdict expires and is re-tested) records the ones we
 have confirmed dead. The verdict is only ever set from `TrackUnavailable` — the dedicated exception
