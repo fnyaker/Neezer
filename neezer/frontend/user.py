@@ -16,12 +16,32 @@ from urllib.parse import urlsplit
 from ..db import ClientPrefs, User
 from ..lastfm import LastFm
 from ..listenbrainz import ListenBrainz
-from ..managers.user import UserManager
+from ..managers.user import (
+    InvalidUserName,
+    UserActionRefused,
+    UserManager,
+    UserNameTaken,
+)
 from ..ratelimit import auth_limiter
 
 from . import admin_only, csrf_token, frontend
 
 logger = logging.getLogger(__name__)
+
+_REFUSALS = {
+    "last_admin": "Can't remove the last active administrator.",
+    "self_delete": "You can't delete your own account.",
+    "self_disable": "You can't disable your own account.",
+    "server_account_holder": (
+        "This account holds the server's Deezer account. "
+        "Change the holder before deleting it."
+    ),
+}
+
+
+def _refusal(exc):
+    return _REFUSALS.get(getattr(exc, "code", ""), str(exc))
+
 
 _TRUTHY = ("on", "true", "1", "yes", "checked", "selected")
 
@@ -185,24 +205,25 @@ def change_username_post(uid):
     if username in ("", None):
         flash("The username is required", "danger")
         return render_template("change_username.html", user=user)
-    if user.name != username:
-        try:
-            User.get(name=username)
-            flash("This name is already taken", "danger")
-            return render_template("change_username.html", user=user)
-        except User.DoesNotExist:
-            pass
 
     admin = _checkbox(request.form.get("admin"))
+    renamed = user.name != username
+    role = user.admin != admin
 
-    if user.name != username or user.admin != admin:
-        if user.admin != admin:
-            # Revoke the user's outstanding sessions so a downgraded admin
-            # doesn't keep admin rights until their cookie expires.
-            user.session_epoch = (user.session_epoch or 0) + 1
-        user.name = username
-        user.admin = admin
-        user.save()
+    if renamed:
+        try:
+            UserManager.rename(user, username)
+        except (InvalidUserName, UserNameTaken):
+            flash("This name is already taken", "danger")
+            return render_template("change_username.html", user=user)
+    if role:
+        try:
+            UserManager.update_guarded(user.id, request.user, admin=admin)
+        except UserActionRefused as exc:
+            flash(_refusal(exc), "danger")
+            return render_template("change_username.html", user=user)
+
+    if renamed or role:
         flash(f"User '{username}' updated.", "success")
     else:
         flash(f"No changes for '{username}'.")
@@ -318,12 +339,18 @@ def add_user_post():
 @admin_only
 def del_user(uid):
     try:
-        UserManager.delete(uid)
-        flash("Deleted user", "success")
+        moved = UserManager.delete_guarded(uid, request.user)
+    except UserActionRefused as exc:
+        flash(_refusal(exc), "danger")
     except ValueError as e:
         flash(str(e), "danger")
     except User.DoesNotExist:
         flash("No such user", "danger")
+    else:
+        if moved:
+            flash(f"Deleted user ({moved} uploaded file(s) reassigned to you)", "success")
+        else:
+            flash("Deleted user", "success")
 
     return redirect(url_for("frontend.user_index"))
 

@@ -9,10 +9,13 @@
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
 import string
+import threading
+import time
 import unicodedata
 import uuid
 
@@ -27,8 +30,10 @@ except ImportError:  # pycryptodomex
     from Cryptodome.Cipher import AES
     from Cryptodome.Random import get_random_bytes
 
-from ..db import User
+from ..db import Invite, ProviderAccount, Track, User, db, now
 from ..utils import get_secret_key
+
+logger = logging.getLogger(__name__)
 
 # Password hashing: argon2id for everything new. Legacy users carry a 40-char
 # SHA1(salt+password) hash and are transparently upgraded on next login.
@@ -151,6 +156,40 @@ class UserNameTaken(ValueError):
     pass
 
 
+class UserActionRefused(ValueError):
+    """An administrative action the server refuses on purpose."""
+
+    code = "refused"
+
+
+class SelfDelete(UserActionRefused):
+    code = "self_delete"
+
+
+class SelfDisable(UserActionRefused):
+    code = "self_disable"
+
+
+class LastAdmin(UserActionRefused):
+    code = "last_admin"
+
+
+class ServerAccountHolder(UserActionRefused):
+    code = "server_account_holder"
+
+
+class WeakPassword(ValueError):
+    pass
+
+
+class PasswordMismatch(ValueError):
+    pass
+
+
+INVITE_MIN_PASSWORD = 12
+INVITE_MAX_PASSWORD = 128
+
+
 def fold_name(name):
     """The lookup key of a user name: NFKD, diacritics dropped, lowercase."""
     if not isinstance(name, str):
@@ -170,6 +209,23 @@ def validate_name(name, reserved=False):
     if reserved and key in _RESERVED_NAMES:
         raise InvalidUserName("This name is reserved")
     return key
+
+
+def check_invite_password(name_key, password):
+    """The stronger policy of accounts created by an invitation.
+
+    Length and a blocklist (NIST SP 800-63B, OWASP), no composition rule, and
+    no password that carries the account name in either direction.
+    """
+    if not isinstance(password, str) or not (
+        INVITE_MIN_PASSWORD <= len(password) <= INVITE_MAX_PASSWORD
+    ):
+        raise WeakPassword("The password is too weak")
+    if password.strip().lower() in BANNED_PASSWORDS:
+        raise WeakPassword("This password is too common, pick another one")
+    folded = fold_name(password)
+    if name_key in folded or name_key[::-1] in folded:
+        raise WeakPassword("The password contains the user name")
 
 
 class UserManager:
@@ -234,6 +290,39 @@ class UserManager:
             raise UserNameTaken(f"User '{name}' exists") from exc
 
     @staticmethod
+    def create_from_invite(name, password, password_confirm=None, at=None):
+        """The one account a redeemed invitation creates: never an admin,
+        always at the first onboarding step."""
+        key = validate_name(name, reserved=True)
+        check_invite_password(key, password)
+        if password_confirm is not None and (
+            not isinstance(password_confirm, str)
+            or not hmac.compare_digest(
+                password.encode("utf-8"), password_confirm.encode("utf-8")
+            )
+        ):
+            raise PasswordMismatch("The passwords do not match")
+        if UserManager._name_taken(key):
+            raise UserNameTaken(f"User '{name}' exists")
+
+        crypt, salt = UserManager._hash_fields(password)
+        try:
+            return User.create(
+                name=key,
+                name_key=key,
+                password=crypt,
+                salt=salt,
+                password_clear=encrypt_password(password),
+                admin=False,
+                jukebox=False,
+                disabled=False,
+                onboarding_step="artists",
+                last_login=at or now(),
+            )
+        except IntegrityError as exc:
+            raise UserNameTaken(f"User '{name}' exists") from exc
+
+    @staticmethod
     def rename(user_or_name, new_name):
         if isinstance(user_or_name, User):
             user = user_or_name
@@ -280,6 +369,149 @@ class UserManager:
         user.delete_instance(recursive=True)
 
     @staticmethod
+    def _active_admin_ids(exclude=None, lock=False):
+        """The ids of the admins that are not disabled (the ones a server cannot
+        lose), optionally locking those rows inside a write transaction."""
+        query = User.select(User.id).where(
+            (User.admin == True) & (User.disabled == False)
+        )
+        if exclude is not None:
+            query = query.where(User.id != exclude)
+        if lock and db.obj.for_update:
+            query = query.for_update()
+        return [row[0] for row in query.tuples()]
+
+    @staticmethod
+    def _locked(uid):
+        query = User.select().where(User.id == uid)
+        if db.obj.for_update:
+            query = query.for_update()
+        user = query.first()
+        if user is None:
+            raise User.DoesNotExist(uid)
+        return user
+
+    @staticmethod
+    def update_guarded(uid, actor, *, admin=None, disabled=None):
+        """Change a role and/or the disabled state, with the last-active-admin
+        invariant and the session revocation rules. The invariant is counted
+        inside the write and re-checked after it, because SQLite has no row
+        locks. Returns the fresh row."""
+        if admin is None and disabled is None:
+            raise ValueError("Nothing to change")
+        for name, value in (("admin", admin), ("disabled", disabled)):
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"'{name}' must be a boolean")
+        if actor is None:
+            raise ValueError("An acting admin is required")
+        uid = uuid.UUID(str(uid))
+
+        with db.atomic():
+            target = UserManager._locked(uid)
+            if disabled is True and target.id == actor.id:
+                raise SelfDisable("Can't disable your own account")
+            was_active_admin = target.admin and not target.disabled
+            demote = admin is False and target.admin
+            disable = disabled is True and not target.disabled
+            enable = disabled is False and target.disabled
+            if was_active_admin and (demote or disable):
+                if not UserManager._active_admin_ids(exclude=target.id, lock=True):
+                    raise LastAdmin("Can't remove the last active administrator")
+
+            changed = False
+            if admin is not None and admin != target.admin:
+                target.admin = admin
+                changed = True
+            if disabled is not None and disabled != target.disabled:
+                target.disabled = disabled
+                changed = True
+            if not changed:
+                return target
+            if demote or disable or enable:
+                target.session_epoch = (target.session_epoch or 0) + 1
+            target.save()
+            if was_active_admin and (demote or disable):
+                if not UserManager._active_admin_ids(lock=True):
+                    raise LastAdmin("Can't remove the last active administrator")
+            return target
+
+    @staticmethod
+    def delete_guarded(uid, actor):
+        """Delete an account, refusing to lock the server out, to publish the
+        account's private uploads, or to cut the server's Deezer account.
+        Returns the number of uploads reassigned to the actor."""
+        if actor is None:
+            raise ValueError("An acting admin is required")
+        uid = uuid.UUID(str(uid))
+
+        from .. import access
+
+        with db.atomic():
+            target = UserManager._locked(uid)
+            was_active_admin = target.admin and not target.disabled
+            if target.id == actor.id:
+                raise SelfDelete("Can't delete your own account")
+            if was_active_admin:
+                if not UserManager._active_admin_ids(exclude=target.id, lock=True):
+                    raise LastAdmin("Can't remove the last active administrator")
+            if (
+                ProviderAccount.select()
+                .where(
+                    (ProviderAccount.user == target.id)
+                    & (ProviderAccount.mode == access.SERVER)
+                )
+                .exists()
+            ):
+                raise ServerAccountHolder(
+                    "This account holds the server's Deezer account"
+                )
+
+            stamp = now()
+            Invite.update(revoked_at=stamp).where(
+                (Invite.created_by == target.id)
+                & Invite.used_at.is_null(True)
+                & Invite.revoked_at.is_null(True)
+                & (Invite.expires > stamp)
+            ).execute()
+            access.forget_subject(f"u:{target.id}")
+            moved = (
+                Track.update(owner=actor.id).where(Track.owner == target.id).execute()
+            )
+            target.delete_instance(recursive=True)
+            if was_active_admin and not UserManager._active_admin_ids(lock=True):
+                raise LastAdmin("Can't remove the last active administrator")
+            logger.info(
+                "admin %s deleted account %s (uploads reassigned: %s)",
+                actor.name,
+                target.name,
+                moved,
+            )
+        return moved
+
+    _last_login_touch = {}
+    _last_login_lock = threading.Lock()
+    LAST_LOGIN_EVERY = 3600.0
+
+    @staticmethod
+    def touch_last_login(user):
+        """Write ``last_login`` at most once an hour per account."""
+        stamp = time.monotonic()
+        with UserManager._last_login_lock:
+            previous = UserManager._last_login_touch.get(user.id)
+            if previous is not None and stamp - previous < UserManager.LAST_LOGIN_EVERY:
+                return False
+            UserManager._last_login_touch[user.id] = stamp
+        at = now()
+        User.update(last_login=at).where(User.id == user.id).execute()
+        user.last_login = at
+        return True
+
+    @staticmethod
+    def reset_last_login_cache():
+        with UserManager._last_login_lock:
+            UserManager._last_login_touch.clear()
+
+    @staticmethod
     def try_auth(name, password):
         user = User.get_or_none(name=name)
         if user is None:
@@ -291,18 +523,21 @@ class UserManager:
             return None
         if not UserManager._verify_password(user, password):
             return None
+        if user.disabled:
+            return None
         # Backfill the recoverable password so token auth works for users
         # created before that was added (after one password login).
         if not user.password_clear:
             user.password_clear = encrypt_password(password)
             user.save()
+        UserManager.touch_last_login(user)
         return user
 
     @staticmethod
     def try_auth_token(name, token, salt):
         """Subsonic token auth: token == md5(password + salt)."""
         user = User.get_or_none(name=name)
-        if user is None or not user.password_clear:
+        if user is None or user.disabled or not user.password_clear:
             return None
         try:
             password = decrypt_password(user.password_clear)
@@ -310,6 +545,7 @@ class UserManager:
             return None
         expected = hashlib.md5((password + salt).encode("utf-8")).hexdigest()
         if hmac.compare_digest(expected, str(token).lower()):
+            UserManager.touch_last_login(user)
             return user
         return None
 
