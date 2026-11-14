@@ -369,7 +369,20 @@ for our own embeddings later). On the phone a swipe UP is the mirror of the swip
 from the cover; the panel follows the finger and settles open or shut; a swipe down drags it back down from anywhere
 on it — the header always, the body once it is scrolled to the top and the finger's first move is down, so a
 scroll or a sideways shelf keeps its gesture; a cancelled gesture decides nothing). On the desktop it is the *À propos* tab. Following any link from in there leaves the
-player (a `hashchange` listener). Its requests are keyed on the track's id as a STRING: `track` is the store's
+player (a `hashchange` listener). **For a podcast the same door becomes the episode's dossier**:
+Chapitres → Description → Informations, with no separate “Épisode” tab; the empty “Paroles” door/column
+disappears for a podcast on both mobile and desktop, while the swipe-up hint stays. `lib/chapters.js`
+is the only store (keyed by episode **id string**, deduped, 40 entries); openings cost **0 requests
+before the door, 1 on the first open, 0 per tick and 0 on reopen**. Rows are 60 px touch / 56 px
+desktop, the current one carries `aria-current="step"`, and above 60 chapters the shared `VirtualList`
+mounts 18 rows at 100 (13 after scrolling, ≤ 33). Ticks appear on the full-screen and desktop rail
+only, `aria-hidden`, and only when `(width − thumb) / N ≥ 7 px` (2 ticks for 3 chapters, 0 for 100 on
+239 px). The Show page chip costs one request per expanded episode, unfolds 4 rows ≤ 640 px / 8 above,
+then “Voir les N chapitres” opens a body-portalled sheet that returns focus to the chip. A
+non-archived episode, an empty scan and a network failure each say so; no chapter is invented.
+Chapters are deliberately not in the offline `/api` cache.
+
+Its requests are keyed on the track's id as a STRING: `track` is the store's
 object, handed over again on every progress tick, and a reactive statement reading it asked for the credits four
 times a second (the browser test counts requests).
 
