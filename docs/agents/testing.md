@@ -110,6 +110,10 @@ the code under it was broken:
   found. It is also where the phantom tempo of a held note was recorded, as an `expectedFailure`
   with its numbers, until the attack gate fixed it — now it pins the gate from both sides: held
   tones and a chord measure no tempo, a kick train mastered flat (tail at −2.2 dB) keeps its 150.
+- **Real chapter fixtures** (`tests/test_chapters.py`): ffmpeg writes a 1 h MP3 carrying ID3
+  `CHAP`/`CTOC` and an M4A carrying `chpl`; the mutagen extractor is measured on both (0.25 ms per
+  file) instead of trusting a hand-built tag dict. The same suite pins that a corrupt tag, a
+  symlinked sidecar outside `Podcasts/` and a hostile chapter URL all answer `none`, never a 500.
 - **Check the test by breaking the code.** Every test added for these rules was run against a
   deliberate mutation of the line it guards; a test that survives its mutant is decoration.
 - **Isolate optional providers.** A test that builds a source order or a list must switch off the
