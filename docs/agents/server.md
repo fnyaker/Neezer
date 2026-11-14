@@ -610,6 +610,22 @@ cannot fit the plan's 700 B), **2 and 5 statements on the wire** (session includ
 (the aggregates are cached, the title payload is re-read to compute the ETag; a 304 body is empty).
 The SPA opens with 2 requests cold, 1 warm, then 0 per card and 0 for the share poster.
 
+**Users, identities and invitations** (`managers/user.py`, schema `20261118`):
+`User.name_key` is the folded lookup key (NFKD, diacritics dropped, lowercase) with a unique
+nullable index; `User.disabled`, `User.last_login` and `User.onboarding_step`
+(`artists|account|done`) are additive. The `invite` table stores only the SHA-256 of a
+`<id>.<HMAC>` token (never the clear token), plus `created_by`, `expires`, `used_by`, `used_at`,
+`revoked_at` and a note; `used_at` is the single source of truth for a consumed invitation.
+`UserManager.add`/`rename` validate the 3–32 `[a-z0-9_.-]` form, compute `name_key`, keep the
+spelling the person typed (CLI/Docker and `sync_user` still look up by exact name), and turn an
+uniqueness race into `UserNameTaken`. A historical `Alice`/`alice` pair keeps both accounts able
+to log in with their own spelling; the loser's `name_key` is NULL (the unique index allows many
+NULLs), while `_name_taken` still reserves the folded name for every new account. `UserManager.add`
+leaves `onboarding_step='done'`: only an invitation redeem starts at `artists`. Migration
+`20261118` is idempotent on all three engines, backfills `name_key` and `onboarding_step`, and
+creates zero invitations. Measured: 1 000 existing accounts migrate in 5.3 ms (1.4 ms replay);
+`add` is 2 statements, a duplicate 1, `rename` 2.
+
 **Playlist folders** (`webui/playlist_folders.py`, schema `20261114`): a folder belongs to one
 person and is private; `playlist_placement` is keyed by `(user, playlist)`, so two people file the
 same shared or imported playlist independently. `GET /api/me/playlists` carries `folders` and each
