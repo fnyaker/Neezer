@@ -199,10 +199,13 @@ cards sit on a 488 px minimum bridge; at 390×844 the bottom is 700 px and the m
 708 px, while 360×640 scrolls the page ~176 px rather than clipping a card. The two-column desktop
 layout triggers on a **760 px content container**, not on a 900 px window (the 232 px sidebar would
 not fit otherwise). The share poster is 1080×1350, drawn locally from `offlineCovers` only, 0
-requests, `toBlob` 17.6 ms at 1440×900 / 19.3 ms at 390×844 (54.8 ms under 4× CPU), PNG ≤ 2 MB.
-Like History, a recap never enters `localStorage` or the offline `/api` cache. The Home card appears
-only for `nowYear` or `nowYear - 1` from `/years` (never the device clock), costs one `/years` per
-session, and draws four deterministic Sillon grooves because `/years` carries no covers.
+requests, `toBlob` 17.6–181 ms depending on the card and CPU (54.8 ms under 4× CPU on the first
+card), PNG **887 705 B** in the bench and ≤ 2 MB. The first card mounts 4 covers, the nine cards 14
+at most, 5 in flight; those are the payload's own `/api/cover` URLs, not the shell's playlist
+thumbnails. Like History, a recap never enters `localStorage` or the offline `/api` cache. The Home
+card appears only for `nowYear` or `nowYear - 1` from `/years` (never the device clock), costs one
+`/years` per session, and draws four deterministic Sillon grooves because `/years` carries no
+covers.
 
 **Nouveautés is two shelves, then the per-release list** (`routes/Releases.svelte`,
 `components/ReleaseCard.svelte`, `routes/ReleaseShelf.svelte`). `close_to` splits the payload:

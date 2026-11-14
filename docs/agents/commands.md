@@ -89,8 +89,8 @@ cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen pl
                                                      # inside its column and the element a click at its centre lands on
                                                      # (the four browser tests above start tools/perf_api.py --serve; PYTHON=<venv python>, SHOTS=<dir> keeps pictures)
 cd webapp && node test/recap/run.mjs                 # the recap stories: 2 requests cold / 1 warm / 0 per card, 9 cards maximum,
-                                                     # share poster 1080x1350, 390/360/641/1440 px, auto-advance and privacy
-                                                     # (starts tools/perf_api.py --serve with the recap seed)
+                                                     # share poster 1080x1350 + real PNG download, 390/360/641/1440 px, auto-advance,
+                                                     # all states and privacy; needs a build (DIST=/tmp/... for one outside dist)
 
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works
@@ -105,6 +105,7 @@ python tools/tempo_eval.py --render /tmp/tempo          # the server's file temp
 python tools/perf_api.py [--tracks 20000] [--serve] [--recap]   # every screen's /api route timed on a big synthetic library
                                                      # (Deezer off): median ms, SQL statement count, bytes and gzip per route;
                                                      # --recap seeds 37 000 listen events and times /api/recap/years + /<year>
+                                                     # cold/warm/304 with exact totals; --dist serves a build outside dist
 neezer-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
 neezer-cli deezer embed --self-test                 # check the mel front-end without a reference
 

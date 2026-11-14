@@ -604,9 +604,11 @@ schema. `enough` means **20 listens or 30 minutes and at least one listen**; top
 genres come only from `track_analysis.style` at confidence ≥ 0.4 rolled up through
 `discover.lift_style`, with coverage printed and the card absent below 34 %. The process cache keeps
 aggregates only (60 s for the current year, 1 h for a past one, 32 entries); ETag 304 is free.
-Measured on the plan's 8 000-title bench: years 25 ms / 265 B, year 38 ms cold and 1.8 ms warm /
-7 042 B, 2 and 5 statements on the wire (session included), empty year 1 040 B. The SPA opens with
-2 requests cold, 1 warm, then 0 per card and 0 for the share poster.
+Measured on the plan's 8 000-title bench: years **22.7 ms / 265 B**, a full year **37.8 ms cold**
+and **2.0 ms warm / 7.3 kB**, an empty year **1.5 ms / 1 040 B** (351 B gzip — the 12-month shape
+cannot fit the plan's 700 B), **2 and 5 statements on the wire** (session included) and **3 warm**
+(the aggregates are cached, the title payload is re-read to compute the ETag; a 304 body is empty).
+The SPA opens with 2 requests cold, 1 warm, then 0 per card and 0 for the share poster.
 
 **Playlist folders** (`webui/playlist_folders.py`, schema `20261114`): a folder belongs to one
 person and is private; `playlist_placement` is keyed by `(user, playlist)`, so two people file the

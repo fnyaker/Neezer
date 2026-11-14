@@ -113,6 +113,10 @@ the code under it was broken:
 - **A canonical id already owned by another account** (`tests/test_playlist_collab_edges.py`):
   the second importer must get a derived id and leave the first row's tracks, members and version
   untouched; the same suite pins the 60/h creation and 30/10 min member-write limits.
+- **Playwright routing bypasses Chromium's HTTP cache** (`webapp/test/recap/run.mjs`): a
+  304/revalidation bench must run without `page.route` interceptors, and `request.headers()`
+  hides `If-None-Match` where `allHeaders()` shows it. Count covers **by the URL the screen's
+  payload names**, never globally: the shell's playlist thumbnails otherwise inflate the number.
 - **Real chapter fixtures** (`tests/test_chapters.py`): ffmpeg writes a 1 h MP3 carrying ID3
   `CHAP`/`CTOC` and an M4A carrying `chpl`; the mutagen extractor is measured on both (0.25 ms per
   file) instead of trusting a hand-built tag dict. The same suite pins that a corrupt tag, a
