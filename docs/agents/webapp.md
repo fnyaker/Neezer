@@ -189,6 +189,22 @@ AND a word (Écouté / Passé / Partiel), never colour alone; a failure is `Load
 `localStorage` nor to the offline `/api` cache. Measured 390/641/768/900/1024/1200+panel/1440+panel:
 no sideways overflow; the tops stack under 720 px of content.
 
+**The onboarding** (`routes/Onboarding.svelte`, `components/OnboardingArtistCard.svelte`,
+`OnboardingAccount.svelte`, `lib/onboarding.js`) is a branch **before the app shell**: the server's
+`user.onboarding` (and `GET /api/onboarding`) decides `artists|account|done`, the URL only names
+the visible step (`#/onboarding/artists`, `#/onboarding/accounts`), a `done` account is sent to
+`/`, and an old session without the field never enters it. The shell's connectivity/nav/version
+side effects and the network badge are suspended; finishing reloads `/` so the shell boots. The
+artist grid mounts **36 tiles first** (2/3/4/5/6 columns at 360/641/1440), then one GET per 36 by
+`after`; a like paints in the frame (11–21 ms at 4×), inserts **2** similar tiles (never a
+duplicate, cap 12), sends one POST, and polls read-only at most five times when the server answers
+`pending`. The account step costs **0 requests** on entry (its three cards come from the same
+`/api/onboarding`), an import is 1 POST + 1 GET/1.5 s while visible, and every card can be skipped.
+Offline likes go to a per-account `sessionStorage` queue and are flushed sequentially on return.
+« Terminer » waits for the queue, POSTs `artists/done`, then `accounts`; the two-attempt
+“Passer pour l'instant” only appears when the server says the feed is unavailable. 44 px, roving
+tab index, `aria-pressed`, `role=status`, no emoji, no comment.
+
 **The invitation page** (`routes/Invite.svelte`, `lib/invite.js`) is public and renders before
 the login and before the app shell, exactly like a public playlist: `#/invite/<token>` keeps the
 token in the fragment and sends it only in the JSON body of `POST /api/invites/inspect|redeem`.
