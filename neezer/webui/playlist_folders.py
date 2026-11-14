@@ -53,6 +53,7 @@ folder ids cannot be probed.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import unicodedata
 import uuid
@@ -77,6 +78,7 @@ MAX_FOLDERS = 500
 #: One container's desired order (a phone can hold 500 playlists; 2 000 is the
 #: ceiling that still fits a single request and a few chunked statements).
 MAX_PLAYLISTS = 2000
+MAX_BODY = 256 * 1024
 #: IN lists are chunked like the rest of ``webui`` (SQLite's default cap is 999
 #: bound parameters on older builds); inserts follow ``reorder_playlist``'s
 #: pattern but at 240 rows, because a placement carries FOUR columns per row
@@ -116,7 +118,22 @@ def _json_body():
     An empty body, a non-JSON body and a JSON array all answer 400 — never a
     500 (the /api coverage walk POSTs every route with no body at all).
     """
-    data = request.get_json(silent=True)
+    given = request.content_length
+    if given is not None and given > MAX_BODY:
+        return None, (jsonify({"error": "body too large"}), 413)
+    if given is None:
+        try:
+            raw = request.stream.read(MAX_BODY + 1)
+        except Exception:
+            return None, (jsonify({"error": "invalid body"}), 400)
+        if len(raw) > MAX_BODY:
+            return None, (jsonify({"error": "body too large"}), 413)
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return None, (jsonify({"error": "invalid body"}), 400)
+    else:
+        data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return None, (jsonify({"error": "invalid body"}), 400)
     return data, None
@@ -151,7 +168,7 @@ def _title(data):
     title = raw.strip()
     if len(title) > MAX_TITLE:
         return None, (jsonify({"error": "title too long"}), 400)
-    if any(unicodedata.category(c) == "Cc" for c in title):
+    if any(unicodedata.category(c) in {"Cc", "Cf", "Zl", "Zp"} for c in title):
         return None, (jsonify({"error": "invalid title"}), 400)
     return title, None
 
@@ -458,6 +475,13 @@ def create_playlist_folder():
         # the caller is already in one, so a clash rolls back just this insert
         # (``deezer.library.create_or_get`` states the rule for every upsert).
         with db.atomic():
+            if (
+                PlaylistFolder.select()
+                .where(PlaylistFolder.user == user)
+                .count()
+                >= MAX_FOLDERS
+            ):
+                return jsonify({"error": "folder limit"}), 409
             folder = PlaylistFolder.create(
                 id=new_id,
                 user=user,

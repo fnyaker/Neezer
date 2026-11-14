@@ -2768,7 +2768,6 @@ def playlist(playlist_id):
             "cover": _db_playlist_cover(tracks),
             "nb_tracks": len(tracks),
             "owner": members[0]["name"] if members else pl.user.name,
-            "owner_id": str(pl.user_id),
             "is_favorite": _starred("playlist", row=pl),
             "role": role,
             "admin": is_admin,
@@ -4188,6 +4187,7 @@ PLAYLIST_MAX_INDEX = 10000
 #: body is a few dozen bytes.
 PLAYLIST_BODY_TRACKS = 256 * 1024
 PLAYLIST_BODY_METADATA = 16 * 1024
+PLAYLIST_MAX_VERSION = 2**31 - 1
 
 _LIMITERS = {}
 
@@ -4327,7 +4327,12 @@ def _playlist_expected(data, key):
     if key not in data:
         return None, None
     value = data.get(key)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+        or value > PLAYLIST_MAX_VERSION
+    ):
         return None, (jsonify({"error": "invalid " + key}), 400)
     return value, None
 
@@ -4483,11 +4488,11 @@ def create_playlist():
         folder, error = resolve_folder(user, data.get("folder"))
         if error:
             return error
-    if Playlist.select().where(Playlist.user == user).count() >= PLAYLIST_MAX_PER_USER:
-        return jsonify({"error": "playlist limit"}), 409
     provider = _provider()
     track_rows = _addable_tracks(provider, refs)
     with db.atomic():
+        if Playlist.select().where(Playlist.user == user).count() >= PLAYLIST_MAX_PER_USER:
+            return jsonify({"error": "playlist limit"}), 409
         pl = Playlist.create(user=user, name=title, comment=description)
         PlaylistMember.create(
             playlist=pl, user=user, role="owner", added=pl.created

@@ -44,6 +44,7 @@ from __future__ import annotations
 import uuid
 
 from flask import jsonify, request
+from peewee import IntegrityError
 
 from ..db import PlaylistMember, User, db, now
 from .. import playlist_access as placcess
@@ -220,9 +221,18 @@ def playlist_invite(playlist_id):
                 )
                 if members >= PLAYLIST_MAX_MEMBERS:
                     raise _MemberLimit()
-                PlaylistMember.create(
-                    playlist=pl, user=target, role=role, added=now()
-                )
+                try:
+                    PlaylistMember.create(
+                        playlist=pl, user=target, role=role, added=now()
+                    )
+                except IntegrityError:
+                    row = PlaylistMember.get_or_none(
+                        (PlaylistMember.playlist == pl.id)
+                        & (PlaylistMember.user == target.id)
+                    )
+                    if row is not None and row.role != role:
+                        row.role = role
+                        row.save(only=(PlaylistMember.role,))
             elif row.role != role:
                 row.role = role
                 row.save(only=(PlaylistMember.role,))

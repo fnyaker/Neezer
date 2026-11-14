@@ -374,6 +374,14 @@ class SubsonicMatrixTestCase(_EdgesCase):
         self.assertEqual(sum(stmts.values()), 66, dict(stmts))
 
 
+class PayloadPrivacyTestCase(_EdgesCase):
+    def test_a_public_playlist_has_no_owner_id(self):
+        pl = self._playlist(self.alice, public=True)
+        rv = self.bob_client.get(f"/api/playlist/{pl.id}")
+        self.assertEqual(rv.status_code, 200, rv.get_json())
+        self.assertNotIn("owner_id", rv.get_json()["playlist"])
+
+
 class ImporterEdgesTestCase(_EdgesCase):
     """The importers own what they import and nothing else."""
 
@@ -449,6 +457,19 @@ class ImporterEdgesTestCase(_EdgesCase):
             )],
             [self.chloe.id],
         )
+
+    def test_a_version_above_the_32_bit_column_is_a_400(self):
+        pl = self._playlist(self.alice)
+        too_big = 2**31
+        rv = self.client.patch(
+            f"/api/playlist/{pl.id}", json={"version": too_big, "title": "X"}
+        )
+        self.assertEqual(rv.status_code, 400, rv.get_json())
+        rv = self.client.post(
+            f"/api/playlist/{pl.id}/members",
+            json={"username": "bob", "role": "viewer", "members_version": too_big},
+        )
+        self.assertEqual(rv.status_code, 400, rv.get_json())
 
     def test_a_numeric_deezer_id_resolves_to_the_callers_own_copy(self):
         mine = Playlist.create(user=self.alice, name="Mine", deezer_id="123")

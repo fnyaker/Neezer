@@ -159,6 +159,28 @@ class FolderCrudTestCase(_FolderCase):
         )
         self.assertEqual(PlaylistFolder.select().count(), 1)
 
+    def test_a_501st_folder_is_refused(self):
+        self._bulk(0, 500)
+        rv = self.client.post("/api/playlist-folders", json={"title": "Trop"})
+        self.assertEqual(rv.status_code, 409)
+        self.assertEqual(rv.get_json(), {"error": "folder limit"})
+        self.assertEqual(PlaylistFolder.select().count(), 500)
+
+    def test_a_body_above_256_kib_is_refused(self):
+        rv = self.client.post(
+            "/api/playlist-folders", json={"title": "x" * (300 * 1024)}
+        )
+        self.assertEqual(rv.status_code, 413)
+        self.assertEqual(rv.get_json(), {"error": "body too large"})
+        self.assertEqual(PlaylistFolder.select().count(), 0)
+
+    def test_bidi_and_line_separator_titles_are_refused(self):
+        for raw in ("Tra\u202evil", "Tra\u2028vail", "Tra\u2066vail"):
+            rv = self.client.post("/api/playlist-folders", json={"title": raw})
+            self.assertEqual(rv.status_code, 400, raw)
+            self.assertEqual(rv.get_json(), {"error": "invalid title"})
+        self.assertEqual(PlaylistFolder.select().count(), 0)
+
     def test_a_retried_create_returns_the_same_folder(self):
         """The id is the client's, so a POST retried after a timeout is not a
         second folder — the one thing an optimistic UI cannot reconcile."""
