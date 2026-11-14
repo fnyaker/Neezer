@@ -1,7 +1,8 @@
 <script>
-  import Router from "svelte-spa-router";
+  import Router, { replace } from "svelte-spa-router";
   import { wrap } from "svelte-spa-router/wrap";
   import { onMount } from "svelte";
+  import { onboardingTarget, stepFor, stepFromPath } from "./lib/onboarding.js";
   import { user, authChecked, nowPlayingOpen, player } from "./lib/stores.js";
   import { api } from "./lib/api.js";
   import { initConnectivity, online } from "./lib/net.js";
@@ -162,6 +163,18 @@
   let Invite = null;
   $: if (inviteToken && !Invite)
     import("./routes/Invite.svelte").then((m) => (Invite = m.default));
+  // A brand-new invited account finishes its setup full screen, before the
+  // shell: nothing to play yet, and the tabs would lead nowhere. The server's
+  // step is the source of truth; the URL only names the step being shown.
+  let Onboarding = null;
+  $: onboardingRequired = !REMOTE && !!$user && stepFor($user.onboarding) !== "done";
+  $: onboardingLeaf = stepFromPath($location) || "artists";
+  $: if (onboardingRequired && !Onboarding)
+    import("./routes/Onboarding.svelte").then((m) => (Onboarding = m.default));
+  $: if ($authChecked && !REMOTE) {
+    const target = onboardingTarget($user && $user.onboarding, $location);
+    if (target) replace(target);
+  }
   // A remote control on the "queue" level lends the transport and the queue
   // and nothing else: the full-screen player IS the app, with nothing behind.
   const queueOnly = !!REMOTE && !atLeast("read");
@@ -263,7 +276,7 @@
         return;
       }
       user.set(r.user);
-      loadFavorites();
+      if (r.user.onboarding === "done" || !r.user.onboarding) loadFavorites();
     } catch (e) {
       // Network failure with a known session -> stay logged in (offline); a real
       // 401/expired session clears it.
@@ -293,7 +306,9 @@
   }
 
   // Reload favorites + pull the server-side podcast positions at login.
-  $: if ($user && !REMOTE) {
+  // Nothing of the shell starts while a new account is still onboarding: those
+  // requests have no screen to feed and would compete with the first one.
+  $: if ($user && !REMOTE && !onboardingRequired) {
     loadFavorites();
     initPodcastProgress();
     startHealthWatch();
@@ -383,7 +398,7 @@
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable)
       return;
-    if (inviteToken || !$user) return;
+    if (inviteToken || !$user || onboardingRequired) return;
     switch (e.key) {
       case " ":
         e.preventDefault();
@@ -444,6 +459,12 @@
   <div class="loading">…</div>
 {:else if !$user}
   <Login />
+{:else if onboardingRequired}
+  {#if Onboarding}
+    <svelte:component this={Onboarding} step={onboardingLeaf} />
+  {:else}
+    <div class="loading">…</div>
+  {/if}
 {:else if queueOnly}
   <!-- Remote control, "queue" level: the player and its queue, full screen.
        Until the controlled player has a track, a quiet wait. -->
@@ -490,7 +511,7 @@
 <CreditsSheet />
 {#if GenreBulkSheet}<svelte:component this={GenreBulkSheet} />{/if}
 <ExportSheet />
-{#if !partyId && !inviteToken}
+{#if !partyId && !inviteToken && !onboardingRequired}
   {#if PartySheet}<svelte:component this={PartySheet} />{/if}
   {#if RemoteSheet && !REMOTE}<svelte:component this={RemoteSheet} />{/if}
   <NetworkIndicator />
