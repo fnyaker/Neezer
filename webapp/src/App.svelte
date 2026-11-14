@@ -155,6 +155,13 @@
   let SharedPlaylist = null;
   $: if (sharedPlaylistToken && !SharedPlaylist)
     import("./routes/SharedPlaylist.svelte").then((m) => (SharedPlaylist = m.default));
+  const INVITE_PREFIX = "/invite/";
+  $: inviteToken = $location.startsWith(INVITE_PREFIX)
+    ? $location.slice(INVITE_PREFIX.length).split("/")[0]
+    : null;
+  let Invite = null;
+  $: if (inviteToken && !Invite)
+    import("./routes/Invite.svelte").then((m) => (Invite = m.default));
   // A remote control on the "queue" level lends the transport and the queue
   // and nothing else: the full-screen player IS the app, with nothing behind.
   const queueOnly = !!REMOTE && !atLeast("read");
@@ -195,7 +202,7 @@
   onMount(async () => {
     // A party guest needs none of the app's own machinery (the library, the
     // offline indexes, the version watch): it is a page, not an install.
-    if (partyId || rcToken || sharedPlaylistToken) {
+    if (partyId || rcToken || sharedPlaylistToken || inviteToken) {
       authChecked.set(true);
       return;
     }
@@ -376,7 +383,7 @@
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable)
       return;
-    if (!$user) return;
+    if (inviteToken || !$user) return;
     switch (e.key) {
       case " ":
         e.preventDefault();
@@ -424,6 +431,12 @@
 {:else if sharedPlaylistToken}
   {#if SharedPlaylist}
     <svelte:component this={SharedPlaylist} token={sharedPlaylistToken} />
+  {:else}
+    <div class="loading">…</div>
+  {/if}
+{:else if inviteToken}
+  {#if Invite}
+    <svelte:component this={Invite} token={inviteToken} savedAccount={bootSaved} />
   {:else}
     <div class="loading">…</div>
   {/if}
@@ -477,7 +490,7 @@
 <CreditsSheet />
 {#if GenreBulkSheet}<svelte:component this={GenreBulkSheet} />{/if}
 <ExportSheet />
-{#if !partyId}
+{#if !partyId && !inviteToken}
   {#if PartySheet}<svelte:component this={PartySheet} />{/if}
   {#if RemoteSheet && !REMOTE}<svelte:component this={RemoteSheet} />{/if}
   <NetworkIndicator />
