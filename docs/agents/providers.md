@@ -73,7 +73,10 @@ THEIR rows: artists starred (so followed for Nouveautés; a YouTube channel matc
 ref kept in `entity_ref`, which `youtube._artist_row` then reuses), tracks starred, albums with their tracklist,
 playlists merged (one of the same id that is somebody else's is never touched). Membership in a
 Neezer playlist is not a provider grant: groups never widen it, and an account import writes an
-`owner` member row only for its own holder. Rules: each item is imported ONCE
+`owner` member row only for its own holder. The onboarding account step reuses the same
+`myaccounts.link_deezer`/`link_youtube_headers` engines, says `deezer_disabled`, `deezer_denied`,
+`absent` or `disabled` instead of pretending the option exists, and never writes to the provider.
+Rules: each item is imported ONCE
 (`library_item`), so the local library counts after that; one unticked in the picker (`excluded`) is never imported and
 an artist's or album's star comes off; nothing is written to the account and nothing is downloaded. **One DEFAULT
 platform per person** (`options.primary`, `PUT /me/accounts/default`, Réglages → Mes comptes): only that account is
