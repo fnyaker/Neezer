@@ -189,6 +189,18 @@ AND a word (Écouté / Passé / Partiel), never colour alone; a failure is `Load
 `localStorage` nor to the offline `/api` cache. Measured 390/641/768/900/1024/1200+panel/1440+panel:
 no sideways overflow; the tops stack under 720 px of content.
 
+**The invitation page** (`routes/Invite.svelte`, `lib/invite.js`) is public and renders before
+the login and before the app shell, exactly like a public playlist: `#/invite/<token>` keeps the
+token in the fragment and sends it only in the JSON body of `POST /api/invites/inspect|redeem`.
+A valid token costs **1 inspect**; an expired, revoked, used or unknown one gets the same generic
+message and 0 POST; a success costs **1 inspect + 1 redeem**, opens the server session and
+`replace`s to `#/onboarding`, removing the token from the URL. The form folds the name as it is
+typed, enforces the 3–32 `[a-z0-9_.-]` shape and a 12–128 password with a four-step meter, keeps a
+10-minute `sessionStorage` draft (token, name, stable `request_id`, **never** the password), and
+replays the same request after a refresh. A signed-in person is offered « Retour à l'application »
+rather than a second account. 48 px fields, 44 px secondary targets, no sideways overflow at
+360/390/641/1440.
+
 **« Récap » is a stories screen** (`routes/Recap.svelte`, `components/RecapStory.svelte`,
 `RecapSlide.svelte`, `RecapShare.svelte`, `lib/recap.js`, `lib/recapyears.js`): `#/recap` resolves the
 latest year and `replace`s to `#/recap/<year>`, which is a reloadable deep link. Opening costs 2
