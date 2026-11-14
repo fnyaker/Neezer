@@ -22,6 +22,10 @@ import {
   openReplace,
   openGenreTag,
   openCredits,
+  playlistFolders,
+  openFolders,
+  notices,
+  openMoveToFolder,
 } from "./stores.js";
 import { downloadTrack, removeTrack, isDownloaded } from "./offline.js";
 import { addMarkerAt } from "./markers.js";
@@ -30,6 +34,7 @@ import { entityRef, trackEntityRef } from "./entity.js";
 import { reconcileList } from "./reconcile.js";
 import { cacheAge } from "./apicache.js";
 import { online } from "./net.js";
+import { containerIds, idsOf, orderContainer, orderFolders } from "./playlistfolders.js";
 
 // Quality choices offered in the "download as…" submenu.
 export const DL_QUALITIES = [
@@ -92,6 +97,7 @@ export async function userPlaylists(force = false) {
     .then((r) => {
       const list = r.playlists || [];
       playlists.set(list);
+      playlistFolders.set(r.folders || []);
       warmPlaylists(list);
       return list;
     })
@@ -164,6 +170,249 @@ function bumpPlaylistCount(id, delta) {
     return next;
   });
 }
+
+const OFFLINE_FOLDERS = "Hors ligne : impossible de modifier les dossiers";
+const FOLDER_ORDER_DELAY = 400;
+const folderOrderTimers = new Map();
+
+function folderIdOf(value) {
+  return value == null ? null : String(value);
+}
+
+function openFolderLocally(id) {
+  const fid = folderIdOf(id);
+  if (!fid) return;
+  openFolders.update((ids) => {
+    const list = ids || [];
+    return list.some((x) => String(x) === fid) ? list : [...list, fid];
+  });
+}
+
+function closeFolderLocally(id) {
+  const fid = folderIdOf(id);
+  if (!fid) return;
+  openFolders.update((ids) => (ids || []).filter((x) => String(x) !== fid));
+}
+
+function offlineFolders() {
+  toasts.push(OFFLINE_FOLDERS, "error");
+}
+
+function newFolderId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function putOrder(key, run) {
+  const noticeId = "folder-order:" + key;
+  try {
+    await run();
+    notices.dismiss(noticeId);
+  } catch {
+    notices.push({
+      id: noticeId,
+      kind: "error",
+      message: "Ordre non enregistré",
+      actionLabel: "Réessayer",
+      action: () => putOrder(key, run),
+    });
+  }
+}
+
+function scheduleOrder(key, run) {
+  const previous = folderOrderTimers.get(key);
+  if (previous) clearTimeout(previous.timer);
+  const timer = setTimeout(() => {
+    folderOrderTimers.delete(key);
+    putOrder(key, run);
+  }, FOLDER_ORDER_DELAY);
+  folderOrderTimers.set(key, { timer, run });
+}
+
+export async function flushPlaylistFolderOrders() {
+  const pending = [...folderOrderTimers.entries()];
+  folderOrderTimers.clear();
+  await Promise.all(
+    pending.map(([key, { timer, run }]) => {
+      clearTimeout(timer);
+      return putOrder(key, run);
+    })
+  );
+}
+
+export async function createFolder(title) {
+  const name = (title || "").trim();
+  if (!name) return null;
+  if (!get(online)) {
+    offlineFolders();
+    return null;
+  }
+  const id = newFolderId();
+  const folders = get(playlistFolders) || [];
+  const folder = {
+    id,
+    title: name,
+    position: folders.reduce((max, f) => Math.max(max, Number(f.position) || 0), -1) + 1,
+    nb_playlists: 0,
+  };
+  playlistFolders.set([...folders, folder]);
+  openFolderLocally(id);
+  try {
+    const r = await api.createPlaylistFolder(name, id);
+    if (r?.position != null) {
+      playlistFolders.update((list) =>
+        (list || []).map((f) => (String(f.id) === id ? { ...f, position: r.position } : f))
+      );
+    }
+    return { ...folder, position: r?.position ?? folder.position };
+  } catch (e) {
+    playlistFolders.update((list) => (list || []).filter((f) => String(f.id) !== id));
+    closeFolderLocally(id);
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de créer le dossier", "error");
+    return null;
+  }
+}
+
+export async function renameFolder(id, title) {
+  const fid = folderIdOf(id);
+  const name = (title || "").trim();
+  const folders = get(playlistFolders) || [];
+  const folder = folders.find((f) => String(f.id) === fid);
+  if (!folder || !name) return false;
+  if (!get(online)) {
+    offlineFolders();
+    return false;
+  }
+  const previous = folder.title;
+  playlistFolders.update((list) =>
+    (list || []).map((f) => (String(f.id) === fid ? { ...f, title: name } : f))
+  );
+  try {
+    await api.renamePlaylistFolder(fid, name);
+    return true;
+  } catch (e) {
+    playlistFolders.update((list) =>
+      (list || []).map((f) => (String(f.id) === fid ? { ...f, title: previous } : f))
+    );
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de renommer le dossier", "error");
+    return false;
+  }
+}
+
+export async function deleteFolder(id) {
+  const fid = folderIdOf(id);
+  const folders = get(playlistFolders) || [];
+  const folder = folders.find((f) => String(f.id) === fid);
+  if (!folder) return false;
+  if (!get(online)) {
+    offlineFolders();
+    return false;
+  }
+  const list = get(playlists) || [];
+  const placed = list.filter((p) => folderIdOf(p.folder_id) === fid);
+  const order = idsOf(placed);
+  const wasOpen = (get(openFolders) || []).some((x) => String(x) === fid);
+  const remaining = folders.filter((f) => String(f.id) !== fid);
+  const rootOrder = [...containerIds(list, folders, null), ...order];
+  const optimisticallyUnfiled = list.map((p) =>
+    folderIdOf(p.folder_id) === fid ? { ...p, folder_id: null, position: null } : p
+  );
+  playlistFolders.set(remaining);
+  playlists.set(orderContainer(optimisticallyUnfiled, remaining, null, rootOrder));
+  closeFolderLocally(fid);
+  try {
+    const r = await api.deletePlaylistFolder(fid);
+    const restoredOrder = r?.playlists || order;
+    const count = restoredOrder.length;
+    const moved = count
+      ? ` · ${count} playlist${count > 1 ? "s" : ""} déplacée${count > 1 ? "s" : ""} dans « Sans dossier »`
+      : "";
+    toasts.push(`Dossier supprimé${moved} · Annuler`, "info", 8000, {
+      label: "Annuler",
+      run: () => restoreFolder(folder, restoredOrder),
+    });
+    return true;
+  } catch (e) {
+    playlistFolders.set(folders);
+    playlists.set(list);
+    if (wasOpen) openFolderLocally(fid);
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de supprimer le dossier", "error");
+    return false;
+  }
+}
+
+async function restoreFolder(folder, order) {
+  if (!get(online)) {
+    offlineFolders();
+    return;
+  }
+  try {
+    await api.createPlaylistFolder(folder.title, folder.id);
+    playlistFolders.update((list) => [...(list || []), { ...folder, nb_playlists: order.length }]);
+    openFolderLocally(folder.id);
+    const folders = get(playlistFolders) || [];
+    playlists.update((list) => {
+      const replaced = (list || []).map((p) =>
+        order.includes(String(p.id)) ? { ...p, folder_id: String(folder.id) } : p
+      );
+      return orderContainer(replaced, folders, folder.id, order);
+    });
+    if (order.length) await api.reorderPlaylistContainer(folder.id, order);
+    toasts.push("Dossier restauré");
+  } catch {
+    toasts.push("Impossible de restaurer le dossier", "error");
+  }
+}
+
+export function reorderFolders(ids) {
+  const folders = get(playlistFolders) || [];
+  if (!folders.length) return;
+  const next = orderFolders(folders, ids);
+  playlistFolders.set(next);
+  playlists.update((list) => orderContainer(list || [], next, null, []));
+  scheduleOrder("folders", () => api.reorderPlaylistFolders(idsOf(next)));
+}
+
+export function reorderContainer(folderId, ids) {
+  const fid = folderIdOf(folderId);
+  const folders = get(playlistFolders) || [];
+  playlists.update((list) => orderContainer(list || [], folders, fid, ids));
+  scheduleOrder(fid || "root", () => api.reorderPlaylistContainer(fid, ids));
+}
+
+export async function movePlaylistTo(playlistId, folderId) {
+  const pid = folderIdOf(playlistId);
+  const target = folderIdOf(folderId);
+  const folders = get(playlistFolders) || [];
+  if (target && !folders.some((f) => String(f.id) === target)) return false;
+  const list = get(playlists) || [];
+  const item = list.find((p) => String(p.id) === pid);
+  if (!item) return false;
+  if (folderIdOf(item.folder_id) === target) return true;
+  if (!get(online)) {
+    offlineFolders();
+    return false;
+  }
+  const nextIds = [...containerIds(list, folders, target).filter((id) => id !== pid), pid];
+  const moved = list.map((p) =>
+    String(p.id) === pid ? { ...p, folder_id: target, position: null } : p
+  );
+  playlists.set(orderContainer(moved, folders, target, nextIds));
+  if (target) openFolderLocally(target);
+  try {
+    await api.reorderPlaylistContainer(target, nextIds);
+    return true;
+  } catch (e) {
+    playlists.set(list);
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de déplacer la playlist", "error");
+    return false;
+  }
+}
+
 
 // -- offline warming ---------------------------------------------------------
 // Knowing your playlists exist is useless offline if their track lists aren't
@@ -476,8 +725,8 @@ export function addTrackToPlaylist(playlistId, trackId, playlistTitle) {
 // the picker that is currently open over a screen that will not remount), and
 // let the debounced refetch confirm the server's copy. Throws on failure: the
 // caller owns the toast, because only it knows what the playlist was for.
-async function postNewPlaylist(title, refs) {
-  const r = await api.createPlaylist(title, refs);
+async function postNewPlaylist(title, refs, folder = null) {
+  const r = await api.createPlaylist(title, refs, folder);
   const list = refs || [];
   if (r?.id) {
     upsertPlaylistLocal({
@@ -485,6 +734,7 @@ async function postNewPlaylist(title, refs) {
       title,
       deezer_id: r.deezer_id,
       nb_tracks: list.length,
+      folder_id: r.folder_id ?? folder,
     });
     if (list.length) lastPlaylist.set({ id: String(r.id), title });
   }
@@ -497,12 +747,12 @@ const countLabel = (n) => `${n} titre${n > 1 ? "s" : ""}`;
 // Create a playlist from the picker (a title, or a title + the track being
 // added). Optimistic on the LIST, not on the tracks: the server is the one
 // that decides the rows, and the answer is what closes the form.
-export async function createPlaylistFrom(title, refs = []) {
+export async function createPlaylistFrom(title, refs = [], folder = null) {
   const name = (title || "").trim();
   const list = (refs || []).filter(Boolean);
   if (!name) return null;
   try {
-    const r = await postNewPlaylist(name, list);
+    const r = await postNewPlaylist(name, list, folder);
     if (list.length === 1) toasts.push(`Ajouté à « ${name} »`, "info", 2400);
     else if (list.length > 1) toasts.push(`${countLabel(list.length)} ajoutés à « ${name} »`, "info", 2400);
     else toasts.push(`Playlist « ${name} » créée`, "info", 2400);
@@ -510,7 +760,7 @@ export async function createPlaylistFrom(title, refs = []) {
   } catch {
     toasts.push(`Impossible de créer « ${name} »`, "error", 6000, {
       label: "Réessayer",
-      run: () => createPlaylistFrom(name, list),
+      run: () => createPlaylistFrom(name, list, folder),
     });
     return null;
   }
@@ -640,6 +890,22 @@ export function buildEntityMenu(kind, item, nav) {
     { label: "Lire", icon: "play", action: () => playEntity(kind, routeId) },
     { label: "Ouvrir", icon: "open", action: () => nav(route + routeId) },
   ];
+  if (kind === "playlist" && CAN_KEEP) {
+    const mine = (get(playlists) || []).find((p) => String(p.id) === String(item.id));
+    if (mine) {
+      items.push({
+        label: "Déplacer vers un dossier…",
+        icon: "folderMove",
+        action: () => openMoveToFolder({ playlist: mine }),
+      });
+      if (mine.folder_id)
+        items.push({
+          label: "Retirer du dossier",
+          icon: "folderMinus",
+          action: () => movePlaylistTo(mine.id, null),
+        });
+    }
+  }
   if ((kind === "album" || kind === "playlist") && !REMOTE)
     items.push({
       label: "Télécharger",

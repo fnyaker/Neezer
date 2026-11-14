@@ -652,11 +652,27 @@ export const api = {
       method: "POST",
       body: body({ ...meta, [/^[0-9]+$/.test(String(ref)) ? "deezer_id" : "id"]: ref, on }),
     }),
-  createPlaylist: (title, tracks) =>
-    req("/playlists", { method: "POST", body: body({ title, tracks }) }),
+  createPlaylist: (title, tracks, folder = null) =>
+    req("/playlists", { method: "POST", body: body({ title, tracks, folder }) }),
   editPlaylist: (id, fields) =>
     req("/playlist/" + id, { method: "PATCH", body: body(fields) }),
   deletePlaylist: (id) => req("/playlist/" + id, { method: "DELETE" }),
+  createPlaylistFolder: (title, id) =>
+    req("/playlist-folders", {
+      method: "POST",
+      body: body(id ? { id, title } : { title }),
+    }),
+  renamePlaylistFolder: (id, title) =>
+    req("/playlist-folders/" + id, { method: "PATCH", body: body({ title }) }),
+  deletePlaylistFolder: (id) =>
+    req("/playlist-folders/" + id, { method: "DELETE" }),
+  reorderPlaylistFolders: (folders) =>
+    req("/playlist-folders/order", { method: "PUT", body: body({ folders }) }),
+  reorderPlaylistContainer: (folderId, playlists) =>
+    req(folderId ? "/playlist-folders/" + folderId + "/order" : "/playlist-folders/root/order", {
+      method: "PUT",
+      body: body({ playlists }),
+    }),
   addToPlaylist: (id, tracks) =>
     req("/playlist/" + id + "/tracks", { method: "POST", body: body({ tracks }) }),
   removeFromPlaylist: (id, tracks) =>

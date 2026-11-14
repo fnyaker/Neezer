@@ -304,6 +304,27 @@ export function deleteFxPreset(id) {
 // null = never loaded yet (skeleton), [] = loaded and empty.
 export const playlists = writable(null);
 
+export const playlistFolders = writable(null);
+export const openFolders = persisted("playlistfolders.open", []);
+export const closedSections = persisted("playlistfolders.closed", []);
+
+export const folderSheet = writable(null);
+export function openFolderSheet(payload) {
+  folderSheet.set(payload || { mode: "create" });
+}
+export function closeFolderSheet() {
+  folderSheet.set(null);
+}
+
+export const moveToFolder = writable(null);
+export function openMoveToFolder(payload) {
+  if (payload?.playlist?.id) moveToFolder.set({ playlist: payload.playlist });
+}
+export function closeMoveToFolder() {
+  moveToFolder.set(null);
+}
+
+
 // -- offline / downloads ----------------------------------------------------
 
 // Default quality used when downloading a track to the device (overridable per

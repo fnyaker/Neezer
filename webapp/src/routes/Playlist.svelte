@@ -22,7 +22,18 @@
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
-  import { player, isAdmin, toasts, lastPlaylist, openExport, openGenreBulk, openMenu } from "../lib/stores.js";
+  import {
+    player,
+    isAdmin,
+    toasts,
+    lastPlaylist,
+    openExport,
+    openGenreBulk,
+    openMenu,
+    playlistFolders,
+    playlists,
+    openMoveToFolder,
+  } from "../lib/stores.js";
   import {
     toggleEntityFavorite,
     entityMeta,
@@ -30,6 +41,7 @@
     upsertPlaylistLocal,
     removePlaylistLocal,
     downloadTracks,
+    movePlaylistTo,
   } from "../lib/actions.js";
   import { duration as fmtDuration, artistLine, isLocalId } from "../lib/format.js";
   import { carAvailable, carPin } from "../lib/car.js";
@@ -76,7 +88,8 @@
     load(id);
   }
 
-  $: editable = !!data?.playlist?.editable && $isAdmin && CAN_KEEP;
+  $: editable = !!data?.playlist?.editable && CAN_KEEP;
+  $: canManage = !!data?.playlist?.can_manage && CAN_KEEP;
   // A sort/search can't coexist with the drag-reorder edit mode.
   $: if (!manualView && editing) editing = false;
   $: existingIds = new Set((data?.tracks || []).map((t) => trackKey(t)));
@@ -125,7 +138,7 @@
         fav = !!r.playlist?.is_favorite;
         loading = false;
         // The playlist is on screen; only now does the bottom section ask.
-        if (r.playlist?.editable && $isAdmin && CAN_KEEP) loadRecommendations(plId);
+        if (r.playlist?.editable && CAN_KEEP) loadRecommendations(plId);
       });
     } catch (e) {
       if (mine === loadSeq && !data) {
@@ -404,6 +417,10 @@
   }
 
   $: total = (data?.tracks || []).reduce((s, t) => s + (t.duration || 0), 0);
+  $: myEntry = ($playlists || []).find((p) => String(p.id) === String(id)) || null;
+  $: myFolder = myEntry?.folder_id
+    ? ($playlistFolders || []).find((f) => String(f.id) === String(myEntry.folder_id)) || null
+    : null;
   // The facts line, assembled as ONE string: separators written around an
   // {#if} get their surrounding whitespace trimmed by the compiler.
   $: facts = data?.playlist
@@ -437,6 +454,27 @@
     const items = [];
     if (CAN_KEEP)
       items.push({ label: "Exporter", icon: "archive", action: () => openExport("playlist", id, data.playlist.title) });
+    if (CAN_KEEP && myEntry) {
+      items.push({
+        label: "Déplacer vers un dossier…",
+        icon: "folderMove",
+        action: () =>
+          openMoveToFolder({
+            playlist: {
+              id,
+              title: data.playlist.title,
+              deezer_id: data.playlist.deezer_id,
+              folder_id: myEntry.folder_id ?? null,
+            },
+          }),
+      });
+      if (myEntry.folder_id)
+        items.push({
+          label: "Retirer du dossier",
+          icon: "folderMinus",
+          action: () => movePlaylistTo(id, null),
+        });
+    }
     if (canPinToCar)
       items.push({ label: "Épingler pour la voiture", icon: "pin", action: pinToCar });
     if ($isAdmin && CAN_KEEP && data.tracks.length)
@@ -445,7 +483,7 @@
         icon: "tag",
         action: () => openGenreBulk({ kind: "playlist", title: data.playlist.title, cover: data.playlist.cover, tracks: data.tracks }),
       });
-    if (editable) {
+    if (canManage) {
       items.push({ label: "Renommer", icon: "edit", action: openMeta });
       items.push({ label: "Supprimer la playlist", icon: "trash", action: deletePlaylist });
     }
@@ -478,6 +516,9 @@
           <span class="kind">{facts}</span>
           <h1>{data.playlist.title}</h1>
           {#if data.playlist.description}<p class="desc muted">{data.playlist.description}</p>{/if}
+          {#if myFolder}
+            <a class="folder-link" href="#/library/playlists">Dossier · {myFolder.title}</a>
+          {/if}
         {/if}
       </div>
     </header>
@@ -658,6 +699,17 @@
     margin: 0;
     font-size: 14px;
     line-height: 1.45;
+  }
+  .folder-link {
+    width: fit-content;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--ac-text);
+    border-radius: 6px;
+  }
+  .folder-link:hover {
+    text-decoration: underline;
   }
   .title-input {
     font-family: var(--font-display);
