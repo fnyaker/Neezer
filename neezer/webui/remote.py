@@ -373,6 +373,15 @@ POLICY = {
     "flush_cache": "admin",
 }
 
+INVITE_POLICY = {
+    "admin_invites_list": "admin",
+    "admin_invite_create": "admin",
+    "admin_invite_revoke": "admin",
+    "admin_invite_renew": "admin",
+    "invite_inspect": NEVER,
+    "invite_redeem": NEVER,
+}
+
 
 def required_level(endpoint, method):
     """The lowest level that may call ``endpoint`` with ``method``, or None.

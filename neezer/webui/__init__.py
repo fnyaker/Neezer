@@ -482,6 +482,9 @@ def login_required(f):
         if session.get("epoch", 0) != (user.session_epoch or 0):
             session.clear()
             return jsonify({"error": "unauthorized"}), 401
+        if user.disabled:
+            session.clear()
+            return jsonify({"error": "unauthorized"}), 401
         request.webuser = user
         return f(*args, **kwargs)
 
@@ -570,6 +573,8 @@ DEEZER_FEATURE = {
     "export_zip": "stream",
     "genre_reference_import": "stream",
     # not gated
+    "login": None,
+    "me": None,
     "get_settings": None,
     "set_settings": None,
     "deezer_status": None,
@@ -594,6 +599,17 @@ DEEZER_FEATURE = {
     # the database's own credits: no Deezer behind them
     "person_credits": None,
     "credits_backfill": None,
+    "onboarding_get": None,
+    "onboarding_artists": None,
+    "onboarding_like": None,
+    "onboarding_unlike": None,
+    "onboarding_related": None,
+    "onboarding_artists_done": None,
+    "onboarding_account_done": None,
+    "onboarding_feed_retry": None,
+    "onboarding_account_options": None,
+    "onboarding_account_link": None,
+    "onboarding_account_import": None,
 }
 
 
@@ -1922,7 +1938,7 @@ def login():
     if throttled and auth_limiter.is_blocked_any(request.remote_addr, username):
         return jsonify({"error": "too many attempts, try again later"}), 429
     user = UserManager.try_auth(username, password) if username and password else None
-    if user is None:
+    if user is None or user.disabled:
         logger.error(
             "Failed web login for user %s (IP: %s)", username, request.remote_addr
         )
@@ -1947,6 +1963,7 @@ def login():
             "user": {
                 "name": user.name,
                 "admin": user.admin,
+                "onboarding": user.onboarding_step or "done",
                 "access": me_access(user),
                 "sources": sources_brief(),
             }
@@ -1981,6 +1998,7 @@ def me():
         "user": {
             "name": u.name,
             "admin": u.admin,
+            "onboarding": u.onboarding_step or "done",
             "access": me_access(u),
             "sources": sources_brief(),
         }
