@@ -596,12 +596,21 @@ export function closeGenreTag() {
 }
 
 // -- export sheet ------------------------------------------------------------
-// { kind: "playlist" | "album" | "favorites", id, title } | null — pick a format
-// and download the whole thing as a ZIP. Mounted once in App.svelte.
+// { kind: "playlist" | "album" | "favorites", id, title, canManage } | null —
+// pick a format and download the whole thing as a ZIP. Mounted once in
+// App.svelte. `canManage` is the playlist's own capability: only the owner or
+// an admin is offered the « Lien public » tab (the server answers 403 to an
+// editor, so the client never shows a control that would fail).
 
 export const exportSheet = writable(null);
-export function openExport(kind, id, title = "") {
-  if (kind && id) exportSheet.set({ kind, id: String(id), title });
+export function openExport(kind, id, title = "", options = {}) {
+  if (kind && id)
+    exportSheet.set({
+      kind,
+      id: String(id),
+      title,
+      canManage: kind === "playlist" && !!options.canManage,
+    });
 }
 export function closeExport() {
   exportSheet.set(null);

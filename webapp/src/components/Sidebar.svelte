@@ -24,7 +24,7 @@
   } from "../lib/stores.js";
   import { online } from "../lib/net.js";
   import { api } from "../lib/api.js";
-  import { userPlaylists, runDeezerSync, deleteFolder, flushPlaylistFolderOrders } from "../lib/actions.js";
+  import { userPlaylists, runDeezerSync, deleteFolder, flushPlaylistFolderOrders, isSharedPlaylist } from "../lib/actions.js";
   import { isLocalId } from "../lib/format.js";
   import { grooveTint } from "../lib/sillon.js";
   import { groupPlaylists } from "../lib/playlistfolders.js";
@@ -39,8 +39,11 @@
   $: if ($user) userPlaylists();
   $: grouped = groupPlaylists($playlists || [], $playlistFolders || []);
   $: folders = grouped.groups;
-  $: own = grouped.unfiled;
-  $: auto = grouped.imported;
+  // A shared, unfiled playlist gets its own group; one filed in a folder stays
+  // there (that placement is the person's own organisation).
+  $: shared = [...grouped.unfiled, ...grouped.imported].filter(isSharedPlaylist);
+  $: own = grouped.unfiled.filter((p) => !isSharedPlaylist(p));
+  $: auto = grouped.imported.filter((p) => !isSharedPlaylist(p));
   $: openSet = new Set(($openFolders || []).map(String));
   // Collapsed by default: local disclosure state, no store, nothing persisted.
   let deezerOpen = false;
@@ -288,10 +291,46 @@
               </li>
             {/each}
           </ul>
-        {:else if $playlists && !folders.length && !auto.length}
+        {:else if $playlists && !folders.length && !auto.length && !shared.length}
           <!-- An empty answer, said plainly; while it is still null the list is
                simply not there yet (a failure leaves it null, not empty). -->
           <p class="pl-empty">Aucune playlist pour l'instant</p>
+        {/if}
+
+        {#if shared.length}
+          <div class="pl-sub label-mono">Partagées avec moi</div>
+          <ul class="pl-list">
+            {#each shared as p (p.id)}
+              <li>
+                <a
+                  use:link
+                  href={"/playlist/" + p.id}
+                  class="pl-row"
+                  class:active={isOn("/playlist/" + p.id)}
+                  title={p.owner ? `Partagée par ${p.owner}` : "Partagée avec vous"}
+                >
+                  <span
+                    class="thumb"
+                    style={p.cover ? undefined : `background-image:${thumb(p)}`}
+                    aria-hidden="true"
+                  >
+                    {#if p.cover}
+                      <Cover
+                        src={p.cover}
+                        alt=""
+                        size={26}
+                        kind="playlist"
+                        fallbackId={isLocalId(p.id) ? p.id : null}
+                      />
+                    {/if}
+                  </span>
+                  <span class="pl-name">{p.title}</span>
+                  <span class="pl-shared" aria-hidden="true"><Icon name="users" size={13} /></span>
+                  <span class="pl-n mono">{p.nb_tracks || 0}</span>
+                </a>
+              </li>
+            {/each}
+          </ul>
         {/if}
 
         {#if auto.length}
@@ -538,6 +577,12 @@
     font-size: 11px;
     color: var(--dim);
     flex: none;
+  }
+  .pl-shared {
+    flex: none;
+    display: grid;
+    place-items: center;
+    color: var(--dim);
   }
   .fold {
     gap: 8px;

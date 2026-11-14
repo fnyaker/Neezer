@@ -60,12 +60,15 @@
   else if (!picker && opened) leave();
 
   $: all = $playlists;
-  $: shown = filterList(all, q, pinned);
+  // Only a playlist the person may WRITE to is a target: a shared viewer list
+  // would answer 403. The create form below stays open to every account.
+  $: editableList = all ? all.filter((p) => p.editable) : all;
+  $: shown = filterList(editableList, q, pinned);
   // Bounded: a person with hundreds of playlists still gets a sheet that opens
   // at once; the filter (shown above six) is how they reach the rest.
   $: visible = shown ? shown.slice(0, LIST_MAX) : shown;
   $: truncated = !!shown && shown.length > LIST_MAX;
-  $: manyPlaylists = (all?.length || 0) > 6;
+  $: manyPlaylists = (editableList?.length || 0) > 6;
   $: suggestion = suggestName(all);
   $: formTitle = mode === "track" ? "Créer et ajouter" : "Créer";
 
@@ -149,6 +152,13 @@
   function countOf(p) {
     const n = p.nb_tracks || 0;
     return `${n} titre${n > 1 ? "s" : ""}`;
+  }
+
+  // A shared playlist says whose it is, so the target is never ambiguous.
+  function subtitleOf(p) {
+    return p.role && p.role !== "owner" && p.owner
+      ? `${countOf(p)} · ${p.owner}`
+      : countOf(p);
   }
 
   function isAdded(p) {
@@ -305,7 +315,9 @@
             {/if}
           {:else if !shown.length}
             <p class="state">
-              {#if q.trim()}Aucune playlist ne correspond à « {q.trim()} ».{:else}Aucune playlist pour l'instant.{/if}
+              {#if q.trim()}Aucune playlist ne correspond à « {q.trim()} ».
+              {:else if all?.length}Aucune playlist que vous pouvez modifier.
+              {:else}Aucune playlist pour l'instant.{/if}
             </p>
           {:else}
             {#each visible as p (p.id)}
@@ -326,7 +338,7 @@
                     <span class="nm">{p.title}</span>
                     {#if String(pinned?.id) === String(p.id)}<span class="recent">récente</span>{/if}
                   </span>
-                  <span class="count mono">{countOf(p)}</span>
+                  <span class="count mono">{subtitleOf(p)}</span>
                 </span>
                 <span class="box" class:on={isAdded(p)} aria-hidden="true">
                   {#if isAdded(p)}<Icon name="check" size={14} />{/if}

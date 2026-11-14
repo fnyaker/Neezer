@@ -30,6 +30,7 @@
     reorderContainer,
     flushPlaylistFolderOrders,
     invalidatePlaylists,
+    isSharedPlaylist,
   } from "../lib/actions.js";
   import { listDownloads } from "../lib/offline.js";
   import { api } from "../lib/api.js";
@@ -158,6 +159,14 @@
         : allGrouped.groups.find((g) => String(g.id) === organizeContainer)?.playlists || [];
 
   function buildSections(grouped, filtering) {
+    // A shared, unfiled list gets its own section, imported or not; one filed
+    // in a folder stays in that folder.
+    const shared = [
+      ...grouped.unfiled.filter(isSharedPlaylist),
+      ...grouped.imported.filter(isSharedPlaylist),
+    ];
+    const root = grouped.unfiled.filter((p) => !isSharedPlaylist(p));
+    const imported = grouped.imported.filter((p) => !isSharedPlaylist(p));
     const out = grouped.groups.map((group) => ({
       kind: "folder",
       key: "folder:" + group.id,
@@ -166,15 +175,23 @@
       count: group.count,
       group,
     }));
-    if (grouped.unfiled.length)
-      out.push({ kind: "root", key: "root", title: "Sans dossier", rows: grouped.unfiled, count: grouped.unfiled.length });
-    if (grouped.imported.length)
+    if (root.length)
+      out.push({ kind: "root", key: "root", title: "Sans dossier", rows: root, count: root.length });
+    if (shared.length)
+      out.push({
+        kind: "shared",
+        key: "shared",
+        title: "Partagées avec moi",
+        rows: shared,
+        count: shared.length,
+      });
+    if (imported.length)
       out.push({
         kind: "imported",
         key: "imported",
         title: "Depuis Deezer",
-        rows: grouped.imported,
-        count: grouped.imported.length,
+        rows: imported,
+        count: imported.length,
       });
     return filtering ? out.filter((section) => section.rows.length) : out;
   }

@@ -84,12 +84,17 @@ export async function runDeezerSync() {
 // the array still get it back; callers that need to STAY current subscribe to
 // the store instead (that is the whole point — see stores.js).
 let playlistsInFlight = null;
+// When the list was last asked for, successful or not. The focus refresh below
+// is bounded by this: a flaky link must not turn "come back to the tab" into a
+// request per visit.
+let playlistsTouchedAt = 0;
 
 export async function userPlaylists(force = false) {
   const cached = get(playlists);
   if (cached && !force) return cached;
   // Several views mount at once on a cold start; they must share one request.
   if (playlistsInFlight && !force) return playlistsInFlight;
+  playlistsTouchedAt = Date.now();
   // This IS the refresh a pending invalidation was waiting for.
   cancelPlaylistRefresh();
   const p = api
@@ -132,6 +137,119 @@ export function invalidatePlaylists() {
     playlistRefreshTimer = null;
     userPlaylists(true).catch(() => {});
   }, PLAYLIST_REFRESH_DELAY);
+}
+
+// A list shared while this tab was in the background must appear without a
+// reload: one request at most a minute, never offline, never twice at once.
+const PLAYLIST_FOCUS_AGE = 60 * 1000;
+
+export function refreshPlaylistsIfStale() {
+  if (typeof document !== "undefined" && document.hidden) return;
+  if (!get(online) || get(playlists) === null) return;
+  if (playlistsInFlight) return;
+  if (Date.now() - playlistsTouchedAt < PLAYLIST_FOCUS_AGE) return;
+  userPlaylists(true).catch(() => {});
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", refreshPlaylistsIfStale);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshPlaylistsIfStale();
+  });
+}
+
+// -- collaborative playlists: the shapes the UI decides on -------------------
+// The server enforces the matrix; these helpers only read what it answered, once
+// (lib/api.js attaches the parsed 409 body to `err.body`).
+
+/** A list somebody else owns, from `/me/playlists` or the playlist payload. */
+export function isSharedPlaylist(p) {
+  return !!p && !!p.role && p.role !== "owner";
+}
+
+/** The words the collaborator controls use, in one place. */
+export function roleLabel(role) {
+  if (role === "owner") return "Propriétaire";
+  if (role === "editor") return "Peut modifier";
+  if (role === "viewer") return "Lecture seule";
+  if (role === "admin") return "Administrateur";
+  return "";
+}
+
+/** The 409 body of an optimistic-concurrency mismatch, or null (an "owner" 409
+ *  is not a conflict: nothing was reloaded). */
+export function conflictOf(err) {
+  if (!err || err.status !== 409 || !err.body || err.body.error !== "conflict") return null;
+  return err.body;
+}
+
+/** What a conflict says: who moved the playlist, and which half of it. */
+export function conflictNotice(body) {
+  if (!body) return "La playlist a changé entre-temps — rechargée.";
+  if (body.scope === "members") return "La liste des collaborateurs a changé — rechargée.";
+  return body.last_edited_by
+    ? `Modifiée par ${body.last_edited_by} — rechargée.`
+    : "La playlist a changé entre-temps — rechargée.";
+}
+
+/** Why a membership call failed, in words a person can act on. */
+export function memberError(err, username = "") {
+  if (!err) return "";
+  if (err.offline || err.status === 0) return "Hors ligne : la modification n'a pas été enregistrée.";
+  const code = (err.body && err.body.error) || "";
+  if (err.status === 429) {
+    const seconds = Math.max(1, Math.trunc(Number(err.body && err.body.retry_after) || 1));
+    return `Trop d'invitations d'un coup — réessayez dans ${seconds} s.`;
+  }
+  if (err.status === 409) {
+    if (code === "owner") return "Cette personne est déjà propriétaire de la playlist.";
+    if (code === "member limit") return "Cette playlist a atteint sa limite de 100 collaborateurs.";
+    if (code === "playlist limit") return "Ce compte a atteint sa limite de playlists.";
+    if (code === "conflict") return conflictNotice(err.body);
+    return "La playlist a changé entre-temps — réessayez.";
+  }
+  if (err.status === 404) {
+    if (code === "unknown user") return `Aucun compte ne s'appelle « ${username} » sur ce serveur.`;
+    return "Cette playlist ne vous est plus accessible.";
+  }
+  if (err.status === 403) return "Vous n'avez plus le droit de gérer les collaborateurs.";
+  if (err.status === 400) {
+    if (code === "self") return "C'est votre propre compte.";
+    if (code === "invalid role") return "Rôle invalide.";
+    if (code === "invalid username") return "Indiquez un nom d'utilisateur.";
+    return "Demande invalide.";
+  }
+  return "Impossible de modifier les collaborateurs.";
+}
+
+// One resync per (playlist, scope) at a time: a second 409 arriving during the
+// reload waits for the same GET instead of starting a loop. The entry is
+// dropped once it settles, so a later conflict asks again.
+const resyncs = new Map();
+
+export function resyncOnce(key, run) {
+  const k = String(key);
+  const pending = resyncs.get(k);
+  if (pending) return pending;
+  const p = Promise.resolve().then(run);
+  resyncs.set(k, p);
+  const done = () => {
+    if (resyncs.get(k) === p) resyncs.delete(k);
+  };
+  p.then(done, done);
+  return p;
+}
+
+/** What the 30 s probe means: the members list moved, the content moved, and
+ *  whether the page may take the truth NOW or must offer the pill instead. */
+export function probeDecision(seen, next, { editing = false, busy = false } = {}) {
+  const members = !!next && next.members_version !== seen?.members_version;
+  const content = !!next && next.version !== seen?.version;
+  return {
+    members,
+    reload: content && !editing && !busy,
+    stale: content && (editing || busy),
+  };
 }
 
 // Merge a playlist the user just created or renamed into the store NOW. The
@@ -694,21 +812,35 @@ export async function startTrackRadio(track) {
 
 // Optimistic: the toast and the "last playlist" shortcut update INSTANTLY —
 // the server call (which may include a Deezer round-trip) runs in the
-// background, and only a failure surfaces afterwards.
-export function addTrackToPlaylist(playlistId, trackId, playlistTitle) {
+// background, and only a failure surfaces afterwards. `version` is the content
+// counter of the playlist the caller has on screen; the cross-screen picker
+// sends none (an append is commutative, plan §8.5).
+export function addTrackToPlaylist(playlistId, trackId, playlistTitle, version = null) {
   lastPlaylist.set({ id: String(playlistId), title: playlistTitle });
   // 2,4 s: the duration the design system gives a confirmation pill.
   toasts.push(`Ajouté à « ${playlistTitle} »`, "info", 2400);
   bumpPlaylistCount(playlistId, 1);
   return api
-    .addToPlaylist(playlistId, [String(trackId)])
+    .addToPlaylist(playlistId, [String(trackId)], version)
     .then(() => {
       // The lists show track counts — refresh them (debounced).
       invalidatePlaylists();
       return true;
     })
-    .catch(() => {
+    .catch((e) => {
       bumpPlaylistCount(playlistId, -1); // the optimistic count was wrong
+      // The playlist moved under the caller: say who, reload the list, and let
+      // the person ask again — the retry retries WITHOUT the stale counter, so
+      // it can land instead of conflicting a second time.
+      const conflict = conflictOf(e);
+      if (conflict) {
+        invalidatePlaylists();
+        toasts.push(conflictNotice(conflict), "error", 6000, {
+          label: "Réessayer",
+          run: () => addTrackToPlaylist(playlistId, trackId, playlistTitle),
+        });
+        return false;
+      }
       // A mutation that failed can be retried from the toast itself: the
       // person does not have to reopen the sheet and find the playlist again.
       toasts.push(`Échec de l'ajout à « ${playlistTitle} »`, "error", 6000, {
@@ -982,12 +1114,19 @@ export function buildTrackMenu(track, nav) {
     { label: "Lire ensuite", icon: "next", action: () => player.playNext([track]) },
     { label: "Ajouter à la file", icon: "queue", action: () => player.addToQueue([track]) },
   ];
-  // Adding to a playlist edits the owner's Deezer playlists — admin-only.
+  // Adding to a playlist is every account's business now: a playlist shared
+  // with an editor is a legitimate target, so these entries follow CAN_KEEP
+  // instead of the admin flag. The one-tap shortcut only shows when the store
+  // says that playlist is writable — a viewer's list is not a target.
   // `trackRef` names the track the way the server resolves it: the row UUID, or
   // the Deezer id of a catalogue result the playlist will make a row for.
-  if (admin) {
+  if (CAN_KEEP) {
     const last = get(lastPlaylist);
-    if (last && last.id)
+    const entry =
+      last && last.id
+        ? (get(playlists) || []).find((p) => String(p.id) === String(last.id))
+        : null;
+    if (entry && entry.editable)
       items.push({
         label: `Ajouter à « ${last.title} »`,
         icon: "plus",
@@ -1000,6 +1139,8 @@ export function buildTrackMenu(track, nav) {
       icon: "music",
       action: () => openPlaylistPicker(track),
     });
+  }
+  if (admin) {
     // Swap this track for another one everywhere it appears. Always offered —
     // a track can also be simply *wrong* (bad master, wrong version), not only
     // dead — but it leads the list when we already know it's unplayable.
