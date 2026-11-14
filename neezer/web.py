@@ -424,6 +424,14 @@ def create_application(config=None):
 
         app.register_blueprint(playlist_folders_api, url_prefix="/api")
 
+        from .webui.admin_users import admin_users_api
+
+        app.register_blueprint(admin_users_api, url_prefix="/api")
+
+        from .webui.invites import invites_api
+
+        app.register_blueprint(invites_api, url_prefix="/api")
+
         # The chapters an archived episode carries in its own file: its own
         # blueprint, read-only, registered under the same /api prefix.
         from .webui.podcast_chapters import chapters_api

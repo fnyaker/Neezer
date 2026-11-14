@@ -119,6 +119,10 @@ POLICY = {
     "group_create": "admin",
     "group_update": "admin",
     "group_delete": "admin",
+    "admin_users_list": "admin",
+    "admin_user_get": "admin",
+    "admin_user_patch": "admin",
+    "admin_user_delete": "admin",
     # the controller's own channel
     "remote_claim": "queue",
     "remote_leave": "queue",

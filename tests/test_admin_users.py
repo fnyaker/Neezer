@@ -85,7 +85,8 @@ class AdminUsersTestCase(unittest.TestCase):
                 )
 
         self.app = create_application(Config())
-        self.app.register_blueprint(admin_users_api, url_prefix="/api")
+        if "admin_users_api" not in self.app.blueprints:
+            self.app.register_blueprint(admin_users_api, url_prefix="/api")
         self.alice = UserManager.add("alice", "Alic3", admin=True)
         self.bob = UserManager.add("bob", "B0b")
         self.client = self.app.test_client()
