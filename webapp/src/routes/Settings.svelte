@@ -43,6 +43,7 @@
   import ServicesSettings from "../components/ServicesSettings.svelte";
   import DiscoverySlider from "../components/DiscoverySlider.svelte";
   import DislikedTracks from "../components/DislikedTracks.svelte";
+  import AdminUsers from "../components/AdminUsers.svelte";
 
   const QUALITIES = [
     { id: "FLAC", label: "FLAC", hint: "Sans perte — lourd" },
@@ -88,6 +89,7 @@
     { id: "discovery", label: "Découverte", icon: "compass", hint: "Flow, titres que vous n'aimez pas, nouveautés" },
     ...(REMOTE ? [] : [{ id: "sources", label: "Sources", icon: "link", hint: "Ordre des sources, vos comptes, et qui peut s'en servir" }]),
     { id: "account", label: REMOTE ? "Contrôle" : "Compte", icon: "user", hint: REMOTE ? "Le lecteur que vous pilotez" : "Votre compte, l'export vers d'autres services" },
+    ...($user?.admin && ADMIN() ? [{ id: "users", label: "Utilisateurs", icon: "users", hint: "Comptes, rôles et invitations" }] : []),
     ...($user?.admin && ADMIN() ? [{ id: "server", label: "Serveur", icon: "archive", hint: "Archive, nettoyage, stockage, quotas" }] : []),
     { id: "help", label: "Assistance", icon: "info", hint: "Recharger l'application, journal de diagnostic" },
   ];
@@ -103,7 +105,7 @@
   const IN_GROUP = {
     listen: ["playback", "appearance", "viz"],
     library: ["downloads", "discovery"],
-    accounts: ["sources", "account", "server", "help"],
+    accounts: ["sources", "account", "users", "server", "help"],
   };
 
   // -- the menu's own filter -------------------------------------------------
@@ -681,7 +683,7 @@
 </div>
 {/if}
 {#if tab}
-<div class="pane">
+<div class="pane" class:admin={tab === "users"}>
 {#if !wide}
   <div class="head sub-head">
     <button class="back" on:click={back} aria-label="Retour aux réglages">
@@ -853,6 +855,10 @@
 </section>
 <ServicesSettings />
 {/if}
+{/if}
+
+{#if tab === "users" && $user?.admin && ADMIN()}
+  <AdminUsers />
 {/if}
 
 {#if tab === "server"}
@@ -1617,6 +1623,9 @@
   .pane {
     min-width: 0;
     max-width: 760px;
+  }
+  .pane.admin {
+    max-width: 1100px;
   }
   .pane-title {
     font-family: var(--font-display);
