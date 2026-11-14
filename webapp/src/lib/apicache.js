@@ -61,11 +61,21 @@ const CACHE_PREFIXES = [
 // small, asked again on every visit, and worth having on the device offline.
 const CREDITS = /^\/track\/[^/]+\/credits$/;
 
+// Live or personal endpoints that only look content-shaped: the playlist
+// version probe, the account/administration surfaces and an episode's chapters
+// (they change when the episode is archived). Never served off disk.
+const LIVE_PATHS = [
+  /^\/playlist\/[^/]+\/version$/,
+  /^\/(?:admin|invites|onboarding)(?:\/|$)/,
+  /^\/podcast\/episode\/[^/]+\/chapters$/,
+];
+
 export function isCacheable(path) {
   // A remote control reads somebody else's library: never into this device's
   // offline copy of its own.
   if (REMOTE) return false;
   const p = String(path).split("?")[0];
+  if (LIVE_PATHS.some((re) => re.test(p))) return false;
   return CREDITS.test(p) || CACHE_PREFIXES.some((pre) => p === pre || p.startsWith(pre));
 }
 

@@ -70,3 +70,65 @@ test("no module of the web app names a key twice in one object", () => {
   }
   assert.deepEqual(faults, []);
 });
+
+test("the client contract's new keys are each declared once", () => {
+  const source = readFileSync(join(SRC, "lib", "api.js"), "utf8");
+  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  let keys = null;
+  (function walk(node) {
+    if (!node || typeof node.type !== "string" || keys) return;
+    if (
+      node.type === "VariableDeclarator" &&
+      node.id.type === "Identifier" &&
+      node.id.name === "api" &&
+      node.init &&
+      node.init.type === "ObjectExpression"
+    ) {
+      keys = node.init.properties.map(keyOf).filter((k) => k !== null);
+      return;
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(walk);
+      else if (value && typeof value === "object" && typeof value.type === "string") walk(value);
+    }
+  })(ast);
+  assert.ok(keys, "the api object was not found");
+  for (const name of [
+    "playlistVersion",
+    "playlistMembers",
+    "invitePlaylistMember",
+    "setPlaylistMemberRole",
+    "removePlaylistMember",
+    "leavePlaylist",
+    "episodeChapters",
+    "onboardingState",
+    "onboardingArtists",
+    "onboardingSearch",
+    "onboardingLike",
+    "onboardingUnlike",
+    "onboardingRelated",
+    "onboardingArtistsDone",
+    "onboardingFeedRetry",
+    "onboardingAccountOptions",
+    "onboardingAccountLink",
+    "onboardingAccountImport",
+    "onboardingAccountDone",
+    "inviteInspect",
+    "inviteRedeem",
+    "adminUsers",
+    "adminUser",
+    "adminUserPatch",
+    "adminUserDelete",
+    "adminInvites",
+    "adminInviteCreate",
+    "adminInviteRevoke",
+    "adminInviteRenew",
+    "createPlaylistFolder",
+    "renamePlaylistFolder",
+    "deletePlaylistFolder",
+    "reorderPlaylistFolders",
+    "reorderPlaylistContainer",
+  ]) {
+    assert.equal(keys.filter((k) => k === name).length, 1, name);
+  }
+});

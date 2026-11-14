@@ -29,6 +29,12 @@
   {:else if name === "search"}
     <circle cx="11" cy="11" r="8" />
     <path d="m21 21-4.3-4.3" />
+  {:else if name === "searchText"}
+    <path d="M21 6H3" />
+    <path d="M10 12H3" />
+    <path d="M10 18H3" />
+    <circle cx="17" cy="15" r="3" />
+    <path d="m21 19-1.9-1.9" />
   {:else if name === "library"}
     <path d="M21 15V6" />
     <path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" />
@@ -80,6 +86,11 @@
     <line x1="3" y1="12" x2="16" y2="12" />
     <line x1="3" y1="18" x2="12" y2="18" />
     <path d="m16 14 5 4-5 4" />
+  {:else if name === "chapters"}
+    <path d="M12 12H3" />
+    <path d="M16 6H3" />
+    <path d="M12 18H3" />
+    <path d="m16 12 5 3-5 3v-6Z" />
   {:else if name === "volume"}
     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19" fill="currentColor" stroke="none" />
     <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
@@ -270,6 +281,10 @@
     <path d="M5 10a7 7 0 0 0 14 0" />
     <line x1="12" y1="17" x2="12" y2="21" />
     <line x1="8" y1="21" x2="16" y2="21" />
+  {:else if name === "transcript"}
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    <path d="M13 8H7" />
+    <path d="M17 12H7" />
   {:else if name === "tag"}
     <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
     <circle cx="7.5" cy="7.5" r="1" fill="currentColor" stroke="none" />
@@ -296,6 +311,15 @@
     <circle cx="9" cy="7" r="4" />
     <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  {:else if name === "people"}
+    <path d="M18 21a8 8 0 0 0-16 0" />
+    <circle cx="10" cy="8" r="5" />
+    <path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3" />
+  {:else if name === "personAdd"}
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <line x1="19" y1="8" x2="19" y2="14" />
+    <line x1="22" y1="11" x2="16" y2="11" />
   {:else if name === "copy"}
     <rect x="8" y="8" width="14" height="14" rx="2" />
     <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />

@@ -151,6 +151,7 @@ async function req(path, opts = {}, attempt = 0, wasOnline = null) {
         code,
         message: info.error || res.statusText,
         retryIn: info.retry_in || 0,
+        body: info,
       };
     }
     if (retriable && TRANSIENT.has(res.status) && attempt < 3) {
@@ -158,13 +159,14 @@ async function req(path, opts = {}, attempt = 0, wasOnline = null) {
       return req(path, opts, attempt + 1, true); // the server IS reachable
     }
     if (res.status >= 500) reportServerError(res.status, path);
-    let message = res.statusText;
+    let info = null;
     try {
-      message = (await res.json()).error || message;
+      info = await res.json();
     } catch {
       /* ignore */
     }
-    throw { status: res.status, message };
+    const message = (info && info.error) || res.statusText;
+    throw { status: res.status, message, body: info };
   }
   if (res.status === 204) return null;
   // The offline cache stores the response's TEXT (apicache.js#cachePut): a
@@ -185,6 +187,16 @@ async function req(path, opts = {}, attempt = 0, wasOnline = null) {
 }
 
 const body = (b) => (b === undefined ? undefined : JSON.stringify(b));
+
+const artistRef = (artist) => {
+  if (artist && typeof artist === "object")
+    return String(artist.deezer_id || artist.id || artist.entity_id || "");
+  return artist == null ? "" : String(artist);
+};
+
+export function apiError(err) {
+  return (err && err.body) || null;
+}
 
 // A page only Deezer has, asked while Deezer is out (see `X-NS-Error` above):
 // a screen says "Deezer est injoignable" instead of "introuvable".
@@ -563,12 +575,91 @@ export const api = {
     }),
   showMarkers: (channelId) => req("/podcast/" + channelId + "/markers"),
   episodeMarkers: (episodeId) => req("/podcast/episode/" + episodeId + "/markers"),
+  episodeChapters: (id) => req("/podcast/episode/" + encodeURIComponent(id) + "/chapters"),
   addMarker: (episodeId, position, label = null) =>
     req("/podcast/episode/" + episodeId + "/markers", {
       method: "POST",
       body: body({ position, label }),
     }),
   deleteMarker: (markerId) => req("/podcast/marker/" + markerId, { method: "DELETE" }),
+
+  onboardingState: () => req("/onboarding"),
+  onboardingArtists: ({ after = null, limit = null, cursor = null, q = "" } = {}) => {
+    if (q) {
+      const search = new URLSearchParams({ q: String(q) });
+      if (limit != null) search.set("limit", String(limit));
+      return req("/onboarding/search?" + search.toString());
+    }
+    const qs = new URLSearchParams();
+    const pos = after == null ? cursor : after;
+    if (pos != null && pos !== "") qs.set("after", String(pos));
+    if (limit != null) qs.set("limit", String(limit));
+    const s = qs.toString();
+    return req("/onboarding/artists" + (s ? "?" + s : ""));
+  },
+  onboardingSearch: (q, limit = null) => {
+    const qs = new URLSearchParams({ q: String(q == null ? "" : q) });
+    if (limit != null) qs.set("limit", String(limit));
+    return req("/onboarding/search?" + qs.toString());
+  },
+  onboardingLike: (artist, seen = null) => {
+    const payload = { deezer_id: artistRef(artist) };
+    if (Array.isArray(seen) && seen.length) payload.seen = seen.map(String);
+    return req("/onboarding/artists/like", { method: "POST", body: body(payload) });
+  },
+  onboardingUnlike: (artist) =>
+    req("/onboarding/artists/" + encodeURIComponent(artistRef(artist)) + "/like", {
+      method: "DELETE",
+    }),
+  onboardingRelated: (id, seen = null) => {
+    const list = Array.isArray(seen) ? seen.map(String).filter(Boolean) : [];
+    return req(
+      "/onboarding/artists/" + encodeURIComponent(id) + "/related" +
+        (list.length ? "?seen=" + encodeURIComponent(list.join(",")) : "")
+    );
+  },
+  onboardingArtistsDone: () => req("/onboarding/artists/done", { method: "POST" }),
+  onboardingFeedRetry: () => req("/onboarding/feed/retry", { method: "POST" }),
+  onboardingAccountOptions: () => req("/onboarding/account/options"),
+  onboardingAccountLink: (payload) =>
+    req("/onboarding/account/link", { method: "POST", body: body(payload) }),
+  onboardingAccountImport: (payload) =>
+    req("/onboarding/account/import", { method: "POST", body: body(payload) }),
+  onboardingAccountDone: () => req("/onboarding/account/done", { method: "POST" }),
+
+  inviteInspect: (token) =>
+    req("/invites/inspect", { method: "POST", body: body({ token }) }),
+  inviteRedeem: (payload) =>
+    req("/invites/redeem", { method: "POST", body: body(payload) }),
+
+  adminUsers: ({ q = "", after = null, limit = 50 } = {}) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set("q", q);
+    if (after != null && after !== "") qs.set("after", String(after));
+    qs.set("limit", String(limit));
+    return req("/admin/users?" + qs.toString());
+  },
+  adminUser: (id) => req("/admin/users/" + encodeURIComponent(id)),
+  adminUserPatch: (id, payload) =>
+    req("/admin/users/" + encodeURIComponent(id), { method: "PATCH", body: body(payload) }),
+  adminUserDelete: (id) =>
+    req("/admin/users/" + encodeURIComponent(id), { method: "DELETE" }),
+  adminInvites: ({ state = null, limit = 50, afterCreated = null, afterId = null } = {}) => {
+    const qs = new URLSearchParams();
+    if (state) qs.set("state", state);
+    qs.set("limit", String(limit));
+    if (afterCreated && afterId) {
+      qs.set("after_created", afterCreated);
+      qs.set("after_id", afterId);
+    }
+    return req("/admin/invites?" + qs.toString());
+  },
+  adminInviteCreate: (payload) =>
+    req("/admin/invites", { method: "POST", body: body(payload) }),
+  adminInviteRevoke: (id) =>
+    req("/admin/invites/" + encodeURIComponent(id) + "/revoke", { method: "POST" }),
+  adminInviteRenew: (id) =>
+    req("/admin/invites/" + encodeURIComponent(id) + "/renew", { method: "POST" }),
 
   // remote control — the OWNER's side (links onto one of their players). The
   // live traffic (the player's publish/poll, the controller's state/commands)
@@ -654,9 +745,16 @@ export const api = {
     }),
   createPlaylist: (title, tracks, folder = null) =>
     req("/playlists", { method: "POST", body: body({ title, tracks, folder }) }),
-  editPlaylist: (id, fields) =>
-    req("/playlist/" + id, { method: "PATCH", body: body(fields) }),
-  deletePlaylist: (id) => req("/playlist/" + id, { method: "DELETE" }),
+  editPlaylist: (id, fields, version = null) =>
+    req("/playlist/" + id, {
+      method: "PATCH",
+      body: body(version == null ? fields : { ...fields, version }),
+    }),
+  deletePlaylist: (id, version = null) =>
+    req("/playlist/" + id, {
+      method: "DELETE",
+      ...(version == null ? {} : { body: body({ version }) }),
+    }),
   createPlaylistFolder: (title, id) =>
     req("/playlist-folders", {
       method: "POST",
@@ -673,14 +771,50 @@ export const api = {
       method: "PUT",
       body: body({ playlists }),
     }),
-  addToPlaylist: (id, tracks) =>
-    req("/playlist/" + id + "/tracks", { method: "POST", body: body({ tracks }) }),
-  removeFromPlaylist: (id, tracks) =>
-    req("/playlist/" + id + "/tracks", { method: "DELETE", body: body({ tracks }) }),
-  removePlaylistIndexes: (id, indexes) =>
-    req("/playlist/" + id + "/tracks", { method: "DELETE", body: body({ indexes }) }),
-  reorderPlaylist: (id, tracks) =>
-    req("/playlist/" + id + "/order", { method: "PUT", body: body({ tracks }) }),
+  addToPlaylist: (id, tracks, version = null) =>
+    req("/playlist/" + id + "/tracks", {
+      method: "POST",
+      body: body(version == null ? { tracks } : { tracks, version }),
+    }),
+  removeFromPlaylist: (id, tracks, version = null) =>
+    req("/playlist/" + id + "/tracks", {
+      method: "DELETE",
+      body: body(version == null ? { tracks } : { tracks, version }),
+    }),
+  removePlaylistIndexes: (id, indexes, version = null) =>
+    req("/playlist/" + id + "/tracks", {
+      method: "DELETE",
+      body: body(version == null ? { indexes } : { indexes, version }),
+    }),
+  reorderPlaylist: (id, tracks, version = null) =>
+    req("/playlist/" + id + "/order", {
+      method: "PUT",
+      body: body(version == null ? { tracks } : { tracks, version }),
+    }),
+  playlistVersion: (id) => req("/playlist/" + id + "/version"),
+  playlistMembers: (id) => req("/playlist/" + id + "/members"),
+  invitePlaylistMember: (id, username, role, membersVersion = null) =>
+    req("/playlist/" + id + "/members", {
+      method: "POST",
+      body: body(
+        membersVersion == null ? { username, role } : { username, role, members_version: membersVersion }
+      ),
+    }),
+  setPlaylistMemberRole: (id, userId, role, membersVersion = null) =>
+    req("/playlist/" + id + "/members/" + encodeURIComponent(userId), {
+      method: "PATCH",
+      body: body(
+        membersVersion == null ? { role } : { role, members_version: membersVersion }
+      ),
+    }),
+  removePlaylistMember: (id, userId, membersVersion = null) =>
+    req("/playlist/" + id + "/members/" + encodeURIComponent(userId), {
+      method: "DELETE",
+      ...(membersVersion == null
+        ? { body: body({}) }
+        : { body: body({ members_version: membersVersion }) }),
+    }),
+  leavePlaylist: (id) => req("/playlist/" + id + "/leave", { method: "POST", body: body({}) }),
   // A public read-only link to one playlist: create/rotate, read, revoke. The
   // link is a capability; the public page reads it without a session.
   playlistShare: (id) => req("/playlist/" + id + "/share"),
