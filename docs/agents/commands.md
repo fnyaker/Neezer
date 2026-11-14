@@ -24,6 +24,17 @@ python tools/partest.py -j8 tests.test_webui
 python tools/partest.py --coverage && coverage combine
 NS_REQUIRE_FFMPEG=1 python tools/partest.py          # fail, don't skip, if ffmpeg is missing
 
+# The upgrade path on the engines production runs (PostgreSQL/MySQL). Each case
+# drops EVERY table of the named database, so the name must contain "test".
+pip install -e .[postgresql]                         # or .[mysql]; MySQL 8's
+                                                     # caching_sha2 also needs `cryptography`
+NEEZER_TEST_DATABASE=postgresql://postgres:postgres@localhost:5432/neezer_test \
+    python -m unittest tests.test_schema_external
+NEEZER_TEST_DATABASE=mysql://neezer:neezer@localhost:3306/neezer_test \
+    python -m unittest tests.test_schema_external
+NS_REQUIRE_DATABASE=1 NEEZER_TEST_DATABASE=... python -m unittest tests.test_schema_external
+                                                     # fail instead of skip without a URI (what CI sets)
+
 # Dev install (a project .venv is expected)
 pip install -e . && pip install lxml coverage        # == ci-requirements.txt
 
@@ -141,12 +152,14 @@ argon2 for cheap parameters (hashing was half the wall clock; `tests.managers.te
 pins the production defaults), and it compiles each distinct werkzeug URL builder once per process
 instead of once per rule per app (~95% of every `create_application`; `tests.test_harness` checks
 every rule's URLs against a fresh werkzeug compilation). CI runs seven workflows:
-- `tests.yaml` — two jobs, not a version matrix: **image** (Python 3.13, what the Docker image
+- `tests.yaml` — three jobs, not a version matrix: **image** (Python 3.13, what the Docker image
   ships, with numpy, `NS_REQUIRE_FFMPEG=1`, under coverage, and the image's OWN ffmpeg binary —
   the job reads the pinned `FROM mwader/static-ffmpeg…` line out of the Dockerfile and copies
-  `/ffmpeg` from it) and **minimal** (Python 3.10, the oldest `setup.cfg` accepts, bare install).
-  Both via `tools/partest.py`, packed by the previous run's timings (Actions cache). A test that
-  needs ffmpeg or numpy must RUN in the image job — a skip there is the suite testing less than it
+  `/ffmpeg` from it) and **minimal** (Python 3.10, the oldest `setup.cfg` accepts, bare install),
+  both via `tools/partest.py`, packed by the previous run's timings (Actions cache) — and
+  **database** (`matrix`: PostgreSQL 16 and MySQL 8.4 service containers, the engine's extra
+  installed, `NS_REQUIRE_DATABASE=1` and `tests/test_schema_external.py`). A test that needs
+  ffmpeg or numpy must RUN in the image job — a skip there is the suite testing less than it
   claims.
 - `webapp.yaml` — `npm ci`, `npm test`, `npm run build`.
 - `docker.yaml` — a PR builds amd64 only (no QEMU) and runs `docker/smoke.sh` on it; master and

@@ -121,6 +121,15 @@ the code under it was broken:
   `CHAP`/`CTOC` and an M4A carrying `chpl`; the mutagen extractor is measured on both (0.25 ms per
   file) instead of trusting a hand-built tag dict. The same suite pins that a corrupt tag, a
   symlinked sidecar outside `Podcasts/` and a hostile chapter URL all answer `none`, never a 500.
+- **The engine production runs cannot be rehearsed on SQLite** (`tests/test_schema_external.py`):
+  the SQLite suite rebuilds database files with `sqlite3`; it never parses a PostgreSQL or MySQL
+  migration, never measures its backfill, and never reads the shape through `information_schema`.
+  The external module boots a real PostgreSQL 16 and MySQL 8, replays `20261114..20261121` twice
+  on populated tables, upgrades seeded `20261113` and `20261118` databases, and drops the shape to
+  exercise the boot repair. It drops every table between cases and refuses a database whose name
+  lacks "test". Measured: 7 tests in 0.88 s on PostgreSQL 18.6 locally; the MySQL leg is CI's
+  proof. `NS_REQUIRE_DATABASE=1` turns an absent URI into a failure, so the database job can never
+  pass by skipping.
 - **Check the test by breaking the code.** Every test added for these rules was run against a
   deliberate mutation of the line it guards; a test that survives its mutant is decoration.
 - **Isolate optional providers.** A test that builds a source order or a list must switch off the
