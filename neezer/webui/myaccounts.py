@@ -22,6 +22,10 @@ they bring into that person's library (the engine is neezer/libraryimport.py).
 
 Every credential stays the holder's: no route here names or returns one, and
 none is open to a remote-control session (``remote.POLICY``: NEVER).
+
+The onboarding's account step links through ``link_deezer`` and
+``link_youtube_headers`` rather than through its own copy, so the server-account
+guards and the encryption exist once.
 """
 
 from __future__ import annotations
@@ -80,6 +84,25 @@ def link_youtube(user_id, label=None):
         row.save()
     access.bump()
     return row, created
+
+
+def link_youtube_headers(user, raw):
+    """Link ``user``'s YouTube Music from the headers of a signed-in ``browse``
+    request: verified, encrypted at rest, then imported. Returns
+    ``(status, payload)`` like :func:`link_deezer`; no header reaches a log."""
+    from ..services import ServiceError, ytmusic
+    from . import services as web_services
+
+    try:
+        headers_json = ytmusic.parse_headers(raw)
+        account = ytmusic.Client(headers_json).account()
+    except ServiceError as exc:
+        return 400, {"error": str(exc), "code": "invalid_headers"}
+    web_services._store(user.id, "youtube", headers_json, account)
+    row, _created = link_youtube(user.id, account)
+    li.forget_client(row.id)
+    li.start(current_app._get_current_object(), row.id)
+    return 200, {"account": _account_json(row, _default_id(user))}
 
 
 def unlink(row):
@@ -229,41 +252,47 @@ def _server_deezer_user_id():
         return ""
 
 
-@webapi.route("/me/accounts/deezer", methods=["POST"])
-@login_required
-def my_accounts_link_deezer():
+def link_deezer(user, data):
+    """Link ``user``'s own Deezer with an ARL (typed, or read from Deezer's own
+    login page by the Android app). ``(status, payload)``: the account, or the
+    cause in words. Only the failure's kind is logged, never the credential."""
     from ..managers.user import encrypt_password
 
-    me = _me()
-    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
     arl = "".join(str(data.get("arl") or "").split())
     if not arl or len(arl) > ARL_MAX or not arl.isalnum():
-        return jsonify({"error": "Cet ARL n'a pas la forme d'un ARL."}), 400
+        return 400, {"error": "Cet ARL n'a pas la forme d'un ARL.", "code": "invalid_arl"}
     row = ProviderAccount.get_or_none(
-        (ProviderAccount.provider == "deezer") & (ProviderAccount.user == me.id)
+        (ProviderAccount.provider == "deezer") & (ProviderAccount.user == user.id)
     )
     if row is not None and row.mode == access.SERVER:
-        return jsonify(
-            {"error": "Votre compte Deezer est celui du serveur : son ARL se change dans Compte Deezer."}
-        ), 409
+        return 409, {
+            "error": "Votre compte Deezer est celui du serveur : son ARL se change dans Compte Deezer.",
+            "code": "server_account_holder",
+        }
     try:
         who = _deezer_login(arl)
     except ProviderAuth:
-        return jsonify({"error": "Deezer refuse cet ARL (expiré, révoqué ou mal copié)."}), 400
+        return 400, {"error": "Deezer refuse cet ARL (expiré, révoqué ou mal copié).", "code": "provider_refused"}
     except ProviderUnavailable:
-        return jsonify({"error": "Deezer ne répond pas : réessayez dans un moment."}), 503
-    except ProviderError:
-        logger.warning("linking a Deezer account failed", exc_info=True)
-        return jsonify({"error": "Deezer a refusé la connexion pour une autre raison : réessayez plus tard."}), 502
+        return 503, {"error": "Deezer ne répond pas : réessayez dans un moment.", "code": "provider_unreachable"}
+    except ProviderError as exc:
+        logger.warning("linking a Deezer account failed: %s", type(exc).__name__)
+        return 502, {
+            "error": "Deezer a refusé la connexion pour une autre raison : réessayez plus tard.",
+            "code": "provider_error",
+        }
     if who["id"] and who["id"] == _server_deezer_user_id():
-        return jsonify(
-            {"error": "C'est le compte Deezer du serveur : demandez à son titulaire de vous le prêter (Sources)."}
-        ), 409
+        return 409, {
+            "error": "C'est le compte Deezer du serveur : demandez à son titulaire de vous le prêter (Sources).",
+            "code": "server_account",
+        }
     blob = encrypt_password(arl)
     mode = "browser" if data.get("mode") == "browser" else "arl"
     if row is None:
         row = ProviderAccount.create(
-            provider="deezer", user=me.id, label=who["name"][:64], secret=blob, mode=mode,
+            provider="deezer", user=user.id, label=who["name"][:64], secret=blob, mode=mode,
             status="ok", checked=now(), created=now(),
         )
     else:
@@ -273,14 +302,21 @@ def my_accounts_link_deezer():
     opts = li.options(row)
     opts["lossless"] = who.get("lossless", False)
     li._save_options(row, opts)
-    li.keep_default(me.id, row.id)
+    li.keep_default(user.id, row.id)
     access.bump()
-    default = li.default_account(me.id)
+    default = li.default_account(user.id)
     if default is not None and default.id == row.id:
         # Only the default platform syncs the favourites (and a first account is
         # the default until its holder chooses).
         li.start(current_app._get_current_object(), row.id)
-    return jsonify({"account": _account_json(row, default.id if default is not None else None)})
+    return 200, {"account": _account_json(row, default.id if default is not None else None)}
+
+
+@webapi.route("/me/accounts/deezer", methods=["POST"])
+@login_required
+def my_accounts_link_deezer():
+    status, payload = link_deezer(_me(), request.get_json(silent=True) or {})
+    return jsonify(payload), status
 
 
 @webapi.route("/me/accounts/<account_id>", methods=["DELETE"])
@@ -308,8 +344,8 @@ def my_accounts_options(account_id):
     return jsonify({"account": _account_json(row, _default_id())})
 
 
-def _default_id():
-    default = li.default_account(_me().id)
+def _default_id(user=None):
+    default = li.default_account((user or _me()).id)
     return default.id if default is not None else None
 
 

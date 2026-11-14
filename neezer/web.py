@@ -446,6 +446,10 @@ def create_application(config=None):
 
         app.register_blueprint(onboarding_api, url_prefix="/api")
 
+        from .webui.onboarding_account import onboarding_account_api
+
+        app.register_blueprint(onboarding_account_api, url_prefix="/api")
+
         # Remote-control narrowing must cover EVERY /api route, including the
         # ones served by a blueprint other than webapi. The hook lives on the
         # application, not on webapi, so a new blueprint cannot escape it.

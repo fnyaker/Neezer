@@ -517,12 +517,13 @@ class AdminUsersTestCase(unittest.TestCase):
         self._login()
         # 4 reads (session, target, guard, server account), then the invite
         # revocation, the grants, the upload reassignment and Peewee's cascades
-        # over every table that names a user. Deletion is rare; nothing here is
-        # per-row except the uploads, which are one UPDATE.
+        # over every table that names a user (including the transcription
+        # worker lease). Deletion is rare; nothing here is per-row except the
+        # uploads, which are one UPDATE.
         with count_statements() as counts:
             response = self.client.delete(f"/api/admin/users/{self.bob.id}")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 51, dict(counts))
+        self.assertEqual(sum(counts.values()), 52, dict(counts))
 
     # -- the legacy /user routes use the same guards --------------------------
 

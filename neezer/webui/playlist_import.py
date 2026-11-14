@@ -53,7 +53,6 @@ from . import (
     _provider,
     _track_api,
     _valid_id,
-    admin_required,
     login_required,
     webapi,
 )
@@ -481,35 +480,53 @@ def _comment(job) -> str:
 
 
 def _start(target, args, name):
-    worker = threading.Thread(target=target, args=args, name=name, daemon=True)
+    app = args[0]
+
+    def work():
+        if not app.testing:
+            try:
+                from ..deezer import workload
+
+                workload.renice()
+            except Exception:
+                logger.debug("Import: renice failed", exc_info=True)
+        target(*args)
+
+    worker = threading.Thread(target=work, name=name, daemon=True)
     worker.start()
-    if args[0].testing:
+    if app.testing:
         worker.join()  # tests read the outcome straight after the request
 
 
-@webapi.route("/import/playlist", methods=["POST"])
-@login_required
-def import_playlist_start():
-    """Start reading + matching a shared link. ``{url}`` → ``{id}`` (a job)."""
-    data = request.get_json(silent=True) or {}
-    text = data.get("url")
+def start_link(text, user):
+    """Start reading + matching a pasted link, as ``user``. ``(status,
+    payload)``: the job's id, or the cause in words (``missing_url``,
+    ``invalid_link``, ``deezer_unavailable``, ``import_running``). Only the
+    parsed id of a link is ever fetched, never the pasted text
+    (``linkimport``)."""
     if not isinstance(text, str) or not text.strip():
-        return jsonify({"error": "missing url"}), 400
+        return 400, {"error": "missing url", "code": "missing_url"}
     link = linkimport.parse(text)
     if link is None:
-        return jsonify(
-            {"error": "Lien non reconnu : colle le lien d'une playlist Deezer, Spotify, YouTube ou Apple Music"}
-        ), 400
+        return 400, {
+            "error": "Lien non reconnu : colle le lien d'une playlist Deezer, Spotify, YouTube ou Apple Music",
+            "code": "invalid_link",
+        }
     if link["source"] == "deezer" and _provider() is None:
-        return jsonify({"error": "Deezer n'est pas configuré sur ce serveur"}), 400
+        return 400, {
+            "error": "Deezer n'est pas configuré sur ce serveur",
+            "code": "deezer_unavailable",
+        }
 
-    user = request.webuser
     now = time.time()
     with _lock:
         _prune(now)
         running = sum(1 for j in _jobs.values() if j["user_id"] == user.id and j["state"] in _RUNNING)
         if running >= RUNNING_PER_USER:
-            return jsonify({"error": "Un import est déjà en cours, attends qu'il finisse"}), 429
+            return 429, {
+                "error": "Un import est déjà en cours, attends qu'il finisse",
+                "code": "import_running",
+            }
         jid = secrets.token_urlsafe(12)
         job = {
             "id": jid,
@@ -536,7 +553,57 @@ def import_playlist_start():
     app = current_app._get_current_object()
     args = (app, job, link, user.id, bool(user.admin))
     _start(_run_import, args, "playlist-import")
-    return jsonify({"id": jid})
+    return 200, {"id": jid}
+
+
+def snapshot(job_id, user_id):
+    """A job of ``user_id``, as a poll reads it, or None (somebody else's job
+    does not exist)."""
+    with _lock:
+        job = _jobs.get(str(job_id))
+    if job is None or job["user_id"] != user_id:
+        return None
+    return _snapshot(job)
+
+
+def newest_running(user_id):
+    """The caller's newest import still running, in the shape a poll reads
+    (no items, no link), or None."""
+    with _lock:
+        live = [
+            j for j in _jobs.values() if j["user_id"] == user_id and j["state"] in _RUNNING
+        ]
+        if not live:
+            return None
+        job = max(live, key=lambda j: j["created"])
+        return {
+            "id": job["id"],
+            "state": job["state"],
+            "source": job["source"],
+            "source_label": job["source_label"],
+            "kind": job["kind"],
+            "name": job["name"],
+            "total": job["total"],
+            "truncated": job["truncated"],
+            "done": job["done"],
+            "matched": job["matched"],
+            "error": job["error"],
+            "counts": dict(job["counts"]),
+        }
+
+
+@webapi.route("/import/playlist", methods=["POST"])
+@login_required
+def import_playlist_start():
+    """Start reading + matching a shared link. ``{url}`` → ``{id}`` (a job)."""
+    data = request.get_json(silent=True)
+    text = data.get("url") if isinstance(data, dict) else None
+    status, payload = start_link(text, request.webuser)
+    response = jsonify(payload)
+    response.status_code = status
+    if status == 429:
+        response.headers["Retry-After"] = "5"
+    return response
 
 
 @webapi.route("/import/playlist/<job_id>")
