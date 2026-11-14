@@ -443,7 +443,7 @@ def _rows_for(provider, ids, user_id, admin) -> list:
 
 
 def _run_save(app, job, ids, title, user_id, admin):
-    from ..db import User, close_connection, open_connection
+    from ..db import PlaylistMember, User, close_connection, db, open_connection
     from ..deezer import backfill
 
     try:
@@ -453,9 +453,13 @@ def _run_save(app, job, ids, title, user_id, admin):
                 rows = _rows_for(getattr(app, "deezer", None), ids, user_id, admin)
                 if not rows:
                     raise RuntimeError("no playable track")
-                pl = Playlist.create(user=User[user_id], name=title, comment=_comment(job))
-                for row in rows:
-                    pl.add(row)
+                with db.atomic():
+                    pl = Playlist.create(user=User[user_id], name=title, comment=_comment(job))
+                    PlaylistMember.create(
+                        playlist=pl, user=User[user_id], role="owner", added=pl.created
+                    )
+                    for row in rows:
+                        pl.add(row)
                 try:
                     backfill.archive_tracks(app, rows, event="on_playlist_add")
                 except Exception:

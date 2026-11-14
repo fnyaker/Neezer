@@ -1681,6 +1681,13 @@ def _resolve_db_playlist(pid):
             return Playlist[ids.playlist_uuid(sid)]
         except Playlist.DoesNotExist:
             pass
+        me = getattr(request, "webuser", None)
+        if me is not None:
+            own = Playlist.select().where(
+                (Playlist.deezer_id == sid) & (Playlist.user == me)
+            ).first()
+            if own is not None:
+                return own
         return Playlist.select().where(Playlist.deezer_id == sid).first()
     return None
 

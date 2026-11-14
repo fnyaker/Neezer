@@ -450,6 +450,13 @@ class ImporterEdgesTestCase(_EdgesCase):
             [self.chloe.id],
         )
 
+    def test_a_numeric_deezer_id_resolves_to_the_callers_own_copy(self):
+        mine = Playlist.create(user=self.alice, name="Mine", deezer_id="123")
+        Playlist.create(user=self.bob, name="Theirs", deezer_id="123")
+        rv = self.client.get("/api/playlist/123")
+        self.assertEqual(rv.status_code, 200, rv.get_json())
+        self.assertEqual(rv.get_json()["playlist"]["id"], str(mine.id))
+
     def test_the_personal_import_writes_the_owner_row_in_the_same_transaction(self):
         first, second = self._track("1"), self._track("2")
         playlist = libraryimport._save_playlist(self.bob, uuid.uuid4(), "Mine", None, [first])

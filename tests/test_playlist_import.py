@@ -19,7 +19,7 @@ import unittest
 
 from neezer import linkimport
 from neezer.config import DefaultConfig
-from neezer.db import Playlist, release_database
+from neezer.db import Playlist, PlaylistMember, release_database
 from neezer.managers.user import UserManager
 from neezer.web import create_application
 from neezer.webui import playlist_import
@@ -565,6 +565,12 @@ class ImportRouteTestCase(unittest.TestCase):
         self.assertEqual(pl.name, "Mon import")
         self.assertIsNone(pl.deezer_id)
         self.assertEqual([t.title for t in pl.get_tracks()], ["Bella"])
+        self.assertEqual(
+            [(m.user_id, m.role) for m in PlaylistMember.select().where(
+                PlaylistMember.playlist == pl
+            )],
+            [(pl.user_id, "owner")],
+        )
         self.assertEqual(created, [])
 
     def test_a_guest_can_listen_but_not_save_and_nobody_else_sees_the_job(self):

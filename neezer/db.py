@@ -879,9 +879,11 @@ class Playlist(_Model):
     last_edited_at = DateTimeField(null=True)
 
     def as_subsonic_playlist(self, user):
-        tracks, duration = self.__tracks_query(
-            fn.count("*"), fn.sum(Track.duration)
-        ).scalar(as_tuple=True)
+        counts = self.__tracks_query(fn.count("*"), fn.sum(Track.duration))
+        visible = Track.visible_clause(user)
+        if visible is not None:
+            counts = counts.where(visible)
+        tracks, duration = counts.scalar(as_tuple=True)
         info = {
             "id": str(self.id),
             "name": (
