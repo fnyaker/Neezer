@@ -363,6 +363,19 @@ def _finalize_episode(episode: PodcastEpisode, path: str, provider=None) -> None
                         library.save_show_cover(provider.archive_dir, channel, art)
         except Exception as exc:
             logger.debug("Could not archive show art: %s", exc)
+    # A new episode of a show marked auto_transcribe joins the queue. This is a
+    # row write and a wake-up, never the engine: a transcription error must not
+    # fail the archive, and archiving must not wait for one.
+    try:
+        from ..transcribe import auto_enqueue
+
+        auto_enqueue(episode)
+    except Exception:
+        logger.debug(
+            "Could not queue the transcript of episode %s",
+            episode.deezer_id,
+            exc_info=True,
+        )
 
 
 def find_local_episode(episode_id) -> PodcastEpisode | None:

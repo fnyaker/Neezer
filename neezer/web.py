@@ -203,6 +203,10 @@ def create_application(config=None):
 
     _onboarding.start(app)
 
+    from . import transcribe as _transcribe
+
+    _transcribe.start(app)
+
     # What each person's own accounts bring into their library, once a day.
     from . import libraryimport as _libraryimport
 

@@ -99,6 +99,15 @@ neezer-cli deezer sync                            # import playlists/favorites/n
 neezer-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for archived tracks
 neezer-cli podcast chapters [--force] [--urls] [--limit N]  # extract chapters from archived podcast
                                                      # episodes (sidecar/tags, optionally publisher URL); resumable
+neezer-cli podcast transcribe --episode <id>          # queue one archived episode (manual priority; repeatable)
+neezer-cli podcast transcribe --all [--limit N]       # queue the backlog of marked shows (budgeted, resumable)
+neezer-cli podcast transcribe --status                # queue counts, active progress, causes and budget
+neezer-cli podcast transcribe --stop [--episode <id>] # stop queued/running work
+neezer-cli transcribe rebuild [--limit N]             # recreate the DB index from the .transcript.json sidecars
+python -m unittest tests.test_transcribe              # fake whisper.cpp, fake ffmpeg, real SQLite
+NS_WHISPER=1 NS_WHISPER_BIN=/usr/local/bin/whisper-cli NS_WHISPER_MODEL=/models/ggml-small.bin \
+    NS_WHISPER_AUDIO=/tmp/opencode/extrait-60s.wav \
+    python -m unittest tests.test_transcribe.RealEngineTestCase   # opt-in, real engine, real speech
 neezer-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo + style for archived tracks
 neezer-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
 python tools/tempo_eval.py --render /tmp/tempo          # the server's file tempo on the 28 arranged records + beatless tones

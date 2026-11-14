@@ -305,10 +305,6 @@ class AnalysisThreadNiceTest(unittest.TestCase):
         self.assertEqual(order[0][1], order[1][1])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ThrottleTestCase(unittest.TestCase):
     """The zero-impact gate library maintenance goes through (workload.Throttle):
     nothing runs while anybody listens or a download is awaited, the machine is
@@ -373,3 +369,69 @@ class ThrottleTestCase(unittest.TestCase):
         self.slept.clear()
         self._throttle(duty=1.0).spent(5.0)
         self.assertEqual(self.slept, [])  # full speed: no rest
+
+
+class OpenStreamsTestCase(unittest.TestCase):
+    """`listening_for` is a timestamp, and a one-hour episode is ONE request, so
+    45 s after it started every background job came back. The open-stream count
+    is what actually holds them off for the whole episode."""
+
+    def setUp(self):
+        workload.reset_streams()
+        self.addCleanup(workload.reset_streams)
+        workload._last_listen = 0.0
+        self.addCleanup(setattr, workload, "_last_listen", 0.0)
+
+    def test_two_streams_count_and_close(self):
+        self.assertEqual(workload.streams_active(), 0)
+        workload.note_stream_open()
+        workload.note_stream_open()
+        self.assertEqual(workload.streams_active(), 2)
+        workload.note_stream_close()
+        self.assertEqual(workload.streams_active(), 1)
+        workload.note_stream_close()
+        self.assertEqual(workload.streams_active(), 0)
+        # A double close (a teardown after a generator's finally) never goes
+        # negative and never makes the gate think work is running.
+        workload.note_stream_close()
+        self.assertEqual(workload.streams_active(), 0)
+
+    def test_the_context_manager_closes_on_an_exception(self):
+        with self.assertRaises(ZeroDivisionError):
+            with workload.stream():
+                self.assertEqual(workload.streams_active(), 1)
+                1 / 0
+        self.assertEqual(workload.streams_active(), 0)
+
+    def test_a_background_stream_never_counts(self):
+        with workload.stream(background=True):
+            self.assertEqual(workload.streams_active(), 0)
+        self.assertEqual(workload.streams_active(), 0)
+
+    def test_the_throttle_waits_for_a_whole_episode(self):
+        workload.note_stream_open()
+        seen = []
+        t = workload.Throttle(sleep=lambda _s: None, listen_quiet=45.0)
+
+        def sleep_and_close(_seconds):
+            seen.append(t.reason)
+            workload.note_stream_close()
+
+        t._sleep = sleep_and_close
+        with mock.patch.object(workload, "load_per_core", lambda: 0.0):
+            self.assertTrue(t.wait())
+        self.assertEqual(seen, ["stream"])
+
+    def test_a_stream_outranks_a_recent_listen_and_a_download(self):
+        workload.touch_listening()
+        workload.note_stream_open()
+        try:
+            with workload.foreground():
+                t = workload.Throttle(sleep=lambda _s: None)
+                self.assertEqual(t._blocked(), "stream")
+        finally:
+            workload.note_stream_close()
+
+
+if __name__ == "__main__":
+    unittest.main()

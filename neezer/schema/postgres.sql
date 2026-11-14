@@ -268,7 +268,9 @@ CREATE TABLE IF NOT EXISTS podcast_channel (
     error_message VARCHAR(256),
     subscribed BOOLEAN NOT NULL DEFAULT true,
     gone TIMESTAMP,
-    auto_archive BOOLEAN NOT NULL DEFAULT false
+    auto_archive BOOLEAN NOT NULL DEFAULT false,
+    auto_transcribe BOOLEAN NOT NULL DEFAULT false,
+    transcribe_language VARCHAR(8)
 );
 CREATE INDEX IF NOT EXISTS index_podcast_channel_user_id_fk ON podcast_channel(user_id);
 
@@ -347,6 +349,9 @@ CREATE TABLE IF NOT EXISTS podcast_transcript (
     error_code VARCHAR(24),
     error_message VARCHAR(300),
     cancel_requested BOOLEAN NOT NULL DEFAULT false,
+    source VARCHAR(8) NOT NULL DEFAULT 'server',
+    worker_name VARCHAR(64),
+    transcript_path VARCHAR(4096),
     user_id UUID REFERENCES "user" ON DELETE SET NULL,
     queued_at TIMESTAMP,
     started_at TIMESTAMP,
@@ -368,6 +373,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_transcript_segment_idx
     ON podcast_transcript_segment(transcript_id, idx);
 CREATE INDEX IF NOT EXISTS index_podcast_transcript_segment_start
     ON podcast_transcript_segment(transcript_id, start_ms);
+
+CREATE TABLE IF NOT EXISTS transcribe_worker (
+    id UUID PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    kind VARCHAR(8) NOT NULL,
+    token TEXT NOT NULL,
+    scopes VARCHAR(32) NOT NULL DEFAULT 'transcribe',
+    created TIMESTAMP NOT NULL,
+    last_seen TIMESTAMP,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    revoked TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS podcast_transcript_lease (
+    episode_id UUID PRIMARY KEY REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
+    worker_id UUID NOT NULL REFERENCES transcribe_worker(id) ON DELETE CASCADE,
+    lease_token_hash CHAR(64) NOT NULL,
+    acquired_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    heartbeat_at TIMESTAMP NOT NULL,
+    chunk_start_ms INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error VARCHAR(200)
+);
+CREATE INDEX IF NOT EXISTS index_transcribe_lease_expires
+    ON podcast_transcript_lease(expires_at);
+CREATE INDEX IF NOT EXISTS index_transcribe_lease_worker
+    ON podcast_transcript_lease(worker_id);
 
 CREATE TABLE IF NOT EXISTS track_analysis (
     track_id UUID NOT NULL PRIMARY KEY REFERENCES track,

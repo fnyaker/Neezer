@@ -285,6 +285,42 @@ sync_interval = 0
 
 
 ; ---------------------------------------------------------------------------
+; Transcription of podcast episodes (speech-to-text)
+; ---------------------------------------------------------------------------
+;
+; Off by default. When enabled, whisper.cpp runs on THIS machine's CPU, one
+; chunk at a time, behind everything a person is doing (it pauses while a
+; stream is open). The audio never leaves the server and no model is ever
+; downloaded at runtime: point `bin` and `model` at files you installed.
+; A model is chosen among the known names in the model's directory:
+; large-v3-turbo-q8_0 with >= 2.5 GB free, otherwise turbo-q5_0 or small.
+;
+; Mark a show "Transcrire automatiquement les nouveaux épisodes" on its page
+; for new archived episodes to be queued. `neezer-cli podcast transcribe
+; --all` queues the backlog; `neezer-cli transcribe rebuild` rebuilds the
+; database index from the .transcript.json sidecars next to the episodes.
+;
+;[transcribe]
+;enabled = no
+; Absolute path to the whisper.cpp CLI (e.g. /usr/local/bin/whisper-cli).
+;bin = /usr/local/bin/whisper-cli
+; Absolute path to a GGML model file (never downloaded by neezer).
+;model = /models/ggml-large-v3-turbo-q8_0.bin
+; inline (this process, for a bare install) or external (the sidecar
+; container; jobs wait until a worker enrols). Default: inline
+;runner = inline
+; Minutes of audio per rolling 24 h that automatic jobs may reserve.
+; 0 = unlimited. Default: 120
+;daily_minutes = 120
+; Segments the library-wide search may scan (future route). Default: 1200000
+;search_segments = 1200000
+; Longest episode transcribed, in minutes (5-1440). Default: 360
+;max_minutes = 360
+; Default language: auto, or fr, en, es, de, it, pt... Default: auto
+;language = auto
+
+
+; ---------------------------------------------------------------------------
 ; Server secrets (environment only — never set in this file)
 ; ---------------------------------------------------------------------------
 ;

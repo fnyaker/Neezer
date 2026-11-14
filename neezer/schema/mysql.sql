@@ -271,7 +271,9 @@ CREATE TABLE IF NOT EXISTS podcast_channel (
     error_message VARCHAR(256),
     subscribed BOOLEAN NOT NULL DEFAULT true,
     gone DATETIME,
-    auto_archive BOOLEAN NOT NULL DEFAULT false
+    auto_archive BOOLEAN NOT NULL DEFAULT false,
+    auto_transcribe BOOLEAN NOT NULL DEFAULT false,
+    transcribe_language VARCHAR(8)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE INDEX index_podcast_channel_user_id_fk ON podcast_channel(user_id);
 
@@ -350,6 +352,9 @@ CREATE TABLE IF NOT EXISTS podcast_transcript (
     error_code VARCHAR(24),
     error_message VARCHAR(300),
     cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    source VARCHAR(8) NOT NULL DEFAULT 'server',
+    worker_name VARCHAR(64),
+    transcript_path VARCHAR(4096),
     user_id CHAR(32),
     queued_at DATETIME,
     started_at DATETIME,
@@ -371,6 +376,34 @@ CREATE TABLE IF NOT EXISTS podcast_transcript_segment (
     CONSTRAINT podcast_transcript_segment_transcript_fk FOREIGN KEY (transcript_id) REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
     UNIQUE INDEX index_podcast_transcript_segment_idx (transcript_id, idx),
     INDEX index_podcast_transcript_segment_start (transcript_id, start_ms)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS transcribe_worker (
+    id CHAR(32) PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    kind VARCHAR(8) NOT NULL,
+    token TEXT NOT NULL,
+    scopes VARCHAR(32) NOT NULL DEFAULT 'transcribe',
+    created DATETIME NOT NULL,
+    last_seen DATETIME,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    revoked DATETIME
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS podcast_transcript_lease (
+    episode_id CHAR(32) PRIMARY KEY,
+    worker_id CHAR(32) NOT NULL,
+    lease_token_hash CHAR(64) NOT NULL,
+    acquired_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+    heartbeat_at DATETIME NOT NULL,
+    chunk_start_ms INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error VARCHAR(200),
+    CONSTRAINT podcast_transcript_lease_episode_fk FOREIGN KEY (episode_id) REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
+    CONSTRAINT podcast_transcript_lease_worker_fk FOREIGN KEY (worker_id) REFERENCES transcribe_worker(id) ON DELETE CASCADE,
+    INDEX index_transcribe_lease_expires (expires_at),
+    INDEX index_transcribe_lease_worker (worker_id)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS track_analysis (

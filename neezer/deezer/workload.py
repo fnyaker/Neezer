@@ -235,6 +235,89 @@ def touch_listening() -> None:
     _last_listen = time.monotonic()
 
 
+# --- open streams -----------------------------------------------------------
+# `touch_listening` is a timestamp: a one-hour episode is ONE request, so forty
+# seconds after it started `listening_for` says nobody is listening and the
+# heavy jobs come back. What actually holds the machine is a stream whose body
+# is still being written, so this counts those. web.py opens it when a 200/206
+# body starts and closes it in the generator's `finally` (PEP 380 propagates
+# `close()`); background streams (`X-NS-Background`) do not count.
+
+_streams = 0
+_stream_lock = threading.Lock()
+
+
+def note_stream_open() -> None:
+    global _streams
+    with _stream_lock:
+        _streams += 1
+
+
+def note_stream_close() -> None:
+    global _streams
+    with _stream_lock:
+        if _streams > 0:  # a teardown may run after a double close
+            _streams -= 1
+
+
+def streams_active() -> int:
+    with _stream_lock:
+        return _streams
+
+
+class _Stream:
+    def __init__(self, background=False):
+        self.background = bool(background)
+        self.counted = False
+
+    def __enter__(self):
+        if not self.background:
+            note_stream_open()
+            self.counted = True
+        return self
+
+    def __exit__(self, *exc):
+        if self.counted:
+            note_stream_close()
+            self.counted = False
+        return False
+
+
+def stream(background=False):
+    """Mark a response body as an open stream; a background one does not count.
+
+    ``background=True`` is for the prefetch/offline clients (``X-NS-Background``
+    or ``bg=1``): they must never hold the machine as "somebody is listening".
+    """
+    return _Stream(background=background)
+
+
+def counted_response(response, background=False):
+    if response is None or background:
+        return response
+    if getattr(response, "status_code", 200) not in (200, 206):
+        return response
+    original = getattr(response, "response", None)
+    if original is None:
+        return response
+
+    def body():
+        note_stream_open()
+        try:
+            yield from original
+        finally:
+            note_stream_close()
+
+    response.response = body()
+    return response
+
+
+def reset_streams() -> None:
+    global _streams
+    with _stream_lock:
+        _streams = 0
+
+
 def listening_for() -> float:
     """Seconds since audio was last requested (inf when never)."""
     import time
@@ -301,6 +384,8 @@ class Throttle:
         self.reason = None  # why it is waiting right now (for the studio)
 
     def _blocked(self):
+        if streams_active() > 0:
+            return "stream"
         if foreground_busy():
             return "download"
         if listening_for() < self.listen_quiet:

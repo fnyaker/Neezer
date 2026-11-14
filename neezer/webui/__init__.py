@@ -132,6 +132,18 @@ def _is_background_request() -> bool:
     return request.args.get("bg") == "1"
 
 
+def _count_stream_response(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        from ..deezer import workload
+
+        return workload.counted_response(
+            view(*args, **kwargs), background=_is_background_request()
+        )
+
+    return wrapped
+
+
 @webapi.before_request
 def _admit_by_priority():
     from ..deezer import workload
@@ -5584,6 +5596,7 @@ def stream_ready(deezer_id):
 
 @webapi.route("/stream/<deezer_id>")
 @login_required
+@_count_stream_response
 def stream(deezer_id):
     """Stream a track. Always FLAC-archived; lower qualities are Opus transcodes
     of that archived master, cached (so repeat plays are instant and seekable).

@@ -30,7 +30,9 @@ from neezer.db import (
     PodcastChapter,
     PodcastChapterScan,
     PodcastTranscript,
+    PodcastTranscriptLease,
     PodcastTranscriptSegment,
+    TranscribeWorker,
     Track,
     db,
     init_database,
@@ -141,6 +143,8 @@ class SchemaVersionTestCase(unittest.TestCase):
                 PodcastChapterScan,
                 PodcastTranscript,
                 PodcastTranscriptSegment,
+                TranscribeWorker,
+                PodcastTranscriptLease,
             ):
                 table = model._meta.table_name
                 m = re.search(
@@ -1223,7 +1227,20 @@ class NewTablesMigrateDatabaseTestCase(unittest.TestCase):
         PodcastChapterScan.create(
             episode=episode, scanned_at=datetime(2026, 1, 2), source="id3", n_chapters=1
         )
-        PodcastTranscript.create(episode=episode, status="ready", n_segments=1)
+        transcript = PodcastTranscript.create(
+            episode=episode, status="ready", n_segments=1
+        )
+        worker = TranscribeWorker.create(
+            name="Bureau", kind="client", token="encrypted", scopes="transcribe"
+        )
+        PodcastTranscriptLease.create(
+            episode=transcript,
+            worker=worker,
+            lease_token_hash="c" * 64,
+            acquired_at=datetime(2026, 1, 2),
+            expires_at=datetime(2026, 1, 2, 0, 15),
+            heartbeat_at=datetime(2026, 1, 2),
+        )
         PodcastTranscriptSegment.create(
             transcript=PodcastTranscript.get(),
             idx=0,
@@ -1239,6 +1256,10 @@ class NewTablesMigrateDatabaseTestCase(unittest.TestCase):
         self.assertEqual(copied["playlist_member"], 1)
         self.assertEqual(copied["playlist_placement"], 2)
         self.assertEqual(copied["podcast_transcript_segment"], 1)
+        self.assertEqual(copied["transcribe_worker"], 1)
+        self.assertEqual(copied["podcast_transcript_lease"], 1)
+        self.assertEqual(TranscribeWorker.get().name, "Bureau")
+        self.assertEqual(PodcastTranscriptLease.get().attempts, 0)
         moved = Playlist.get(Playlist.name == "Shared")
         self.assertEqual((moved.version, moved.members_version), (7, 3))
         self.assertEqual(moved.last_edited_by, "alice")
@@ -1267,6 +1288,246 @@ class NewTablesMigrateDatabaseTestCase(unittest.TestCase):
             search_text="encore",
         )
         self.assertEqual(second.id, 2)
+
+
+class TranscriptionSchemaTestCase(unittest.TestCase):
+    """20261121: the transcript sidecar path, the per-show switches and the
+    worker/lease tables. Additive on every engine, and a fresh install never
+    runs migrations, so the base schemas must carry the same shape."""
+
+    CHANNEL_COLUMNS = ("auto_transcribe", "transcribe_language")
+    TRANSCRIPT_COLUMNS = ("source", "worker_name", "transcript_path")
+    WORKER_COLUMNS = (
+        "id",
+        "name",
+        "kind",
+        "token",
+        "scopes",
+        "created",
+        "last_seen",
+        "enabled",
+        "revoked",
+    )
+    LEASE_COLUMNS = (
+        "episode_id",
+        "worker_id",
+        "lease_token_hash",
+        "acquired_at",
+        "expires_at",
+        "heartbeat_at",
+        "chunk_start_ms",
+        "attempts",
+        "last_error",
+    )
+
+    def _schema(self, provider):
+        path = os.path.join(
+            os.path.dirname(dbmod.__file__), "schema", f"{provider}.sql"
+        )
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def _body(self, sql, table):
+        m = re.search(
+            r'CREATE TABLE(?: IF NOT EXISTS)? "?%s"? \((.*?)\n\)' % table, sql, re.S
+        )
+        self.assertIsNotNone(m, f"{table} missing")
+        return m.group(1)
+
+    def test_every_engine_has_the_columns_and_the_tables(self):
+        for provider in PROVIDERS:
+            sql = self._schema(provider)
+            channel = self._body(sql, "podcast_channel")
+            for column in self.CHANNEL_COLUMNS:
+                self.assertRegex(channel, r"\b%s\b" % column, f"{provider} channel")
+            transcript = self._body(sql, "podcast_transcript")
+            for column in self.TRANSCRIPT_COLUMNS:
+                self.assertRegex(transcript, r"\b%s\b" % column, f"{provider} transcript")
+            worker = self._body(sql, "transcribe_worker")
+            for column in self.WORKER_COLUMNS:
+                self.assertRegex(worker, r"\b%s\b" % column, f"{provider} worker")
+            lease = self._body(sql, "podcast_transcript_lease")
+            for column in self.LEASE_COLUMNS:
+                self.assertRegex(lease, r"\b%s\b" % column, f"{provider} lease")
+            self.assertIn("index_transcribe_lease_expires", sql, provider)
+            self.assertIn("index_transcribe_lease_worker", sql, provider)
+
+    def test_every_engine_ships_the_migration(self):
+        for provider in PROVIDERS:
+            folder = os.path.join(MIGRATION_ROOT, provider)
+            names = {os.path.splitext(n)[0] for n in os.listdir(folder)}
+            self.assertIn("20261121", names, provider)
+
+    def test_the_source_has_a_default_so_existing_rows_migrate(self):
+        for provider in PROVIDERS:
+            body = self._body(self._schema(provider), "podcast_transcript")
+            self.assertRegex(
+                body,
+                r"source[^,\n]*NOT NULL DEFAULT 'server'",
+                f"{provider} would leave old transcripts without a source",
+            )
+            channel = self._body(self._schema(provider), "podcast_channel")
+            self.assertRegex(
+                channel,
+                r"auto_transcribe[^,\n]*NOT NULL DEFAULT (?:false|0)",
+                f"{provider} would make the show switch undefined",
+            )
+
+
+class TranscriptionUpgradeTestCase(_TempDatabaseTestCase):
+    """A 20261118 server keeps its shows, its archived episodes and its
+    transcripts; the four columns and the two tables appear, nothing else moves.
+    The migration is replayed twice (as the boot repair does) without loss."""
+
+    def _seed(self):
+        from neezer.db import PodcastEpisode, User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        UserManager.add("alice", "Alic3", admin=True)
+        alice = User.get(User.name == "alice")
+        channel = PodcastChannel.create(
+            user=alice, url="u", title="Show", auto_archive=True
+        )
+        episode = PodcastEpisode.create(
+            channel=channel,
+            title="Episode",
+            duration=3600,
+            path=os.path.join(self.path + "-archive", "Podcasts", "Show", "ep.mp3"),
+            status="completed",
+        )
+        transcript = PodcastTranscript.create(
+            episode=episode,
+            status="ready",
+            language="fr",
+            engine="whisper.cpp",
+            model="ggml-small.bin",
+            duration_ms=3_600_000,
+            done_ms=3_600_000,
+            n_segments=2,
+        )
+        for idx, text in enumerate(("Bonjour", "Au revoir")):
+            PodcastTranscriptSegment.create(
+                transcript=transcript,
+                idx=idx,
+                start_ms=idx * 1000,
+                end_ms=(idx + 1) * 1000,
+                text=text,
+                search_text=text.lower(),
+            )
+        return channel, episode, transcript
+
+    def _strip_shape(self):
+        self._sql(
+            "DROP TABLE IF EXISTS podcast_transcript_lease",
+            "DROP TABLE IF EXISTS transcribe_worker",
+            "ALTER TABLE podcast_transcript DROP COLUMN source",
+            "ALTER TABLE podcast_transcript DROP COLUMN worker_name",
+            "ALTER TABLE podcast_transcript DROP COLUMN transcript_path",
+            "ALTER TABLE podcast_channel DROP COLUMN auto_transcribe",
+            "ALTER TABLE podcast_channel DROP COLUMN transcribe_language",
+        )
+
+    def test_an_upgraded_server_keeps_its_data_and_gets_the_shape(self):
+        channel, episode, transcript = self._seed()
+        release_database()
+        self._strip_shape()
+        self._rewind("20261118")
+        cols = {r[1] for r in self._sql("PRAGMA table_info(podcast_transcript)")[0]}
+        self.assertNotIn("transcript_path", cols)
+
+        init_database(self.uri)
+
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(dbmod.Meta["schema_version"].value, SCHEMA_VERSION)
+        self.assertEqual(TranscribeWorker.select().count(), 0)
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+        again_channel = PodcastChannel.get(PodcastChannel.id == channel.id)
+        self.assertFalse(again_channel.auto_transcribe)
+        self.assertIsNone(again_channel.transcribe_language)
+        again = PodcastTranscript.get(PodcastTranscript.episode == episode.id)
+        self.assertEqual(again.status, "ready")
+        self.assertEqual(again.language, "fr")
+        self.assertEqual(again.source, "server")
+        self.assertIsNone(again.worker_name)
+        self.assertIsNone(again.transcript_path)
+        self.assertEqual(again.n_segments, 2)
+        self.assertEqual(
+            [s.text for s in again.segments.order_by(PodcastTranscriptSegment.idx)],
+            ["Bonjour", "Au revoir"],
+        )
+        self.assertEqual(again.episode.title, "Episode")
+
+    def test_the_migration_replays_without_duplicating(self):
+        self._seed()
+        release_database()
+        self._strip_shape()
+        import importlib
+
+        module = importlib.import_module("neezer.schema.migration.sqlite.20261121")
+        for _ in range(2):
+            module.apply({"database": self.path})
+        init_database(self.uri)
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(PodcastTranscriptSegment.select().count(), 2)
+
+    def test_the_repair_path_puts_the_shape_back_on_a_current_database(self):
+        _channel, episode, _transcript = self._seed()
+        release_database()
+        self._sql(
+            "DROP TABLE podcast_transcript_lease",
+            "DROP TABLE transcribe_worker",
+            "ALTER TABLE podcast_transcript DROP COLUMN transcript_path",
+            "ALTER TABLE podcast_channel DROP COLUMN auto_transcribe",
+        )
+        init_database(self.uri)
+        self.assertEqual(dbmod._missing_columns(), [])
+        row = PodcastTranscript.get(PodcastTranscript.episode == episode.id)
+        self.assertEqual(row.transcript_path, None)
+        self.assertEqual(PodcastChannel.get().auto_transcribe, False)
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+
+
+class TranscriptionLeaseSchemaTestCase(_TempDatabaseTestCase):
+    """The lease follows its transcript and its worker; the worker's token is
+    not a secret the API may read back, but the row must hold every field the
+    protocol uses."""
+
+    def test_a_lease_follows_its_transcript_and_its_worker(self):
+        from neezer.db import PodcastEpisode, User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        UserManager.add("alice", "Alic3", admin=True)
+        alice = User.get(User.name == "alice")
+        channel = PodcastChannel.create(user=alice, url="u", title="Show")
+        episode = PodcastEpisode.create(channel=channel, title="Episode", duration=60)
+        transcript = PodcastTranscript.create(episode=episode, status="queued")
+        worker = TranscribeWorker.create(
+            name="Bureau", kind="client", token="encrypted", scopes="transcribe"
+        )
+        lease = PodcastTranscriptLease.create(
+            episode=transcript,
+            worker=worker,
+            lease_token_hash="a" * 64,
+            expires_at=datetime.now(),
+            heartbeat_at=datetime.now(),
+            attempts=1,
+        )
+        self.assertEqual(lease.episode.episode_id, transcript.episode_id)
+        transcript.delete_instance()
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+
+        transcript = PodcastTranscript.create(episode=episode, status="queued")
+        PodcastTranscriptLease.create(
+            episode=transcript,
+            worker=worker,
+            lease_token_hash="b" * 64,
+            expires_at=datetime.now(),
+            heartbeat_at=datetime.now(),
+        )
+        worker.delete_instance()
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
 
 
 if __name__ == "__main__":

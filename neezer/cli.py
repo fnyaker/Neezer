@@ -964,6 +964,209 @@ def podcast_chapters(config, force, urls, limit):
     _echo_failures(stats)
 
 
+@cli.group("transcribe")
+def transcribe_group():
+    """Speech-to-text management commands"""
+    pass
+
+
+def _admin_user():
+    admin = User.select().where(User.admin == True).order_by(User.id).first()  # noqa: E712
+    if admin is None:
+        raise ClickException(
+            "Aucun compte admin : la transcription manuelle a besoin d'un "
+            "demandeur (créez-en un avec 'neezer-cli user add')."
+        )
+    return admin
+
+
+def _mmss(milliseconds):
+    seconds = max(0, int(milliseconds or 0)) // 1000
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _print_transcribe_status(state):
+    click.echo(
+        "Transcription : {state} (runner {runner}{reason}).".format(
+            state="activée" if state["enabled"] else "désactivée",
+            runner=state["runner"],
+            reason="" if state["available"] else f", indisponible : {state['reason']}",
+        )
+    )
+    counts = state["counts"]
+    click.echo(
+        "File : {queued} en attente, {leased} loués, {running} en cours, "
+        "{ready} prêts, {error} en échec, {stopped} arrêtés.".format(**counts)
+    )
+    budget = state["budget"]
+    if budget["limit_ms"]:
+        click.echo(
+            "Budget automatique : {used:.0f} / {limit:.0f} min sur 24 h.".format(
+                used=budget["used_ms"] / 60000.0,
+                limit=budget["limit_ms"] / 60000.0,
+            )
+        )
+    else:
+        click.echo("Budget automatique : illimité.")
+    for item in state["active"]:
+        click.echo(
+            "  {status:<8} {progress:>5.1f}%  {done}/{duration}  {title}".format(
+                status=item["status"],
+                progress=(item["progress"] or 0.0) * 100.0,
+                done=_mmss(item["done_ms"]),
+                duration=_mmss(item["duration_ms"]),
+                title=item["title"],
+            )
+        )
+        if item.get("error"):
+            click.echo(f"           cause : {item['error']}")
+
+
+def _print_episode_status(item):
+    line = "{title} : {status}".format(
+        title=item.get("title") or item["episode_id"], status=item["status"]
+    )
+    if item.get("duration_ms"):
+        line += " ({progress:.1f} %, {done}/{duration}, {n} segments)".format(
+            progress=(item.get("progress") or 0.0) * 100.0,
+            done=_mmss(item.get("done_ms")),
+            duration=_mmss(item.get("duration_ms")),
+            n=item.get("n_segments") or 0,
+        )
+    click.echo(line)
+    if item.get("language"):
+        click.echo(f"  langue {item['language']}, moteur {item.get('engine') or '?'}")
+    if item.get("error"):
+        click.echo(f"  cause : {item['error']} {item.get('error_message') or ''}".rstrip())
+    if item.get("transcript_path"):
+        click.echo(f"  sidecar : {item['transcript_path']}")
+
+
+@podcast_group.command("transcribe")
+@click.option("--all", "all_", is_flag=True,
+              help="Mettre en file le fonds des émissions marquées (budget et reprise).")
+@click.option("--episode", "episodes", multiple=True, metavar="ID",
+              help="Mettre en file cet épisode archivé (répétable).")
+@click.option("--stop", is_flag=True, help="Arrêter ce qui est en file ou en cours.")
+@click.option("--status", is_flag=True, help="Afficher la file et les causes d'échec.")
+@click.option("--limit", type=int, default=None,
+              help="Avec --all : ne mettre en file que N épisodes.")
+@click.pass_obj
+def podcast_transcribe(config, all_, episodes, stop, status, limit):
+    """Queue or inspect podcast transcription (never runs the engine).
+
+    The work happens on the background runner: a new archived episode of a show
+    marked "Transcrire automatiquement" is queued on its own, and this command
+    is the explicit catch-up. `--all` queues the backlog as an automatic
+    (budgeted, resumable) job; `--episode` queues a manual one, which passes
+    ahead of the automatic jobs. Re-running either is idempotent.
+    """
+    from .deezer import workload
+    from .transcribe import job, settings
+
+    workload.renice(15)
+    if status:
+        state = job.queue_status()
+        _print_transcribe_status(state)
+        for episode_id in episodes:
+            _print_episode_status(job.episode_status(episode_id))
+        return
+    if stop:
+        if episodes:
+            for episode_id in episodes:
+                try:
+                    out = job.stop(episode_id)
+                except job.QueueError as exc:
+                    click.echo(f"{episode_id} : rien à arrêter ({exc.code}).")
+                else:
+                    click.echo(f"{episode_id} : {out['status']}.")
+            return
+        out = job.stop_all()
+        click.echo(
+            "Arrêt : {stopped} en file arrêtés, {stopping} en cours avertis.".format(**out)
+        )
+        return
+    if not all_ and not episodes:
+        raise ClickException(
+            "Indiquez --episode <id>, --all, --stop ou --status."
+        )
+    if episodes:
+        admin = _admin_user()
+        for episode_id in episodes:
+            try:
+                out = job.enqueue(episode_id, user=admin)
+            except job.QueueError as exc:
+                click.echo(f"{episode_id} : refusé ({exc.code}) — {exc.message}")
+                continue
+            if out["status"] == "queued":
+                click.echo(
+                    f"{episode_id} : en file (position {out.get('position') or '?'}"
+                    f"{', en attente d’un runner' if out.get('waiting') else ''})."
+                )
+            else:
+                click.echo(f"{episode_id} : déjà {out['status']}.")
+        return
+    values = settings.load()
+    if not values["enabled"]:
+        raise ClickException(
+            "La transcription est désactivée : activez [transcribe] enabled et "
+            "installez whisper.cpp + un modèle (chemins dans le fichier de configuration)."
+        )
+    estimate = job.estimate()
+    click.echo(
+        "{episodes} épisode(s) archivé(s) à transcrire : {hours} h d'audio, "
+        "environ {cpu} h de CPU à 2× le temps réel.".format(
+            episodes=estimate["episodes"],
+            hours=estimate["audio_hours"],
+            cpu=estimate["cpu_hours"],
+        )
+    )
+    if not estimate["episodes"]:
+        click.echo("Rien à mettre en file.")
+        return
+    summary = job.queue_backlog(backlog="all", user=None, limit=limit)
+    click.echo(
+        "Mis en file : {queued}. Ignorés : {skipped}.".format(
+            queued=summary["queued"],
+            skipped=", ".join(
+                f"{reason}={number}" for reason, number in sorted(summary["skipped"].items())
+            )
+            or "aucun",
+        )
+    )
+    click.echo(
+        "Le runner reprend le fonds au fur et à mesure ; "
+        "'podcast transcribe --status' montre l'avancement."
+    )
+
+
+@transcribe_group.command("rebuild")
+@click.option("--limit", type=int, default=None,
+              help="S'arrêter après N transcriptions reconstruites.")
+@click.pass_obj
+def transcribe_rebuild(config, limit):
+    """Rebuild the database index from the .transcript.json sidecars.
+
+    The text lives next to the episode on the data disk; this recreates the
+    rows and segments of a fresh database without touching the audio, and never
+    deletes a sidecar whose episode it does not know. Safe to run again.
+    """
+    from .deezer import workload
+    from .transcribe import job
+
+    workload.renice(15)
+    try:
+        stats = job.rebuild(limit=limit)
+    except job.QueueError as exc:
+        raise ClickException(exc.message) from exc
+    click.echo(
+        "Sidecars lus : {scanned}, reconstruits : {rebuilt}, "
+        "ignorés : {skipped}, en échec : {failed}.".format(**stats)
+    )
+    for reason, number in sorted(stats["failure_reasons"].items(), key=lambda kv: -kv[1]):
+        click.echo(f"  {number:>5}x  {reason}")
+
+
 @cli.group("db")
 def db_group():
     """Database management commands"""

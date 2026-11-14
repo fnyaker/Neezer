@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261118"
+SCHEMA_VERSION = "20261121"
 
 
 def now():
@@ -1175,6 +1175,11 @@ class PodcastChannel(_Model):
     # Archive every NEW episode as the subscription refresh finds it (the
     # show's own switch, off by default: a daily show is a lot of disk).
     auto_archive = BooleanField(default=False)
+    # Transcribe every NEW archived episode of this show (``neezer/transcribe``),
+    # also off by default: an hour of audio is hours of CPU on a small server.
+    # ``transcribe_language`` overrides the global language; NULL means auto.
+    auto_transcribe = BooleanField(default=False)
+    transcribe_language = CharField(8, null=True)
 
     def as_subsonic_channel(self, user, prefs=None, include_episodes=True):
         info = {
@@ -1330,6 +1335,13 @@ class PodcastTranscript(_Model):
     error_code = CharField(24, null=True)
     error_message = CharField(300, null=True)
     cancel_requested = BooleanField(default=False)
+    # Where the text came from: ``server`` (the inline runner or the sidecar
+    # container) or ``client`` (an enrolled device). ``worker_name`` is the
+    # device's display name after the fact; ``transcript_path`` is the canonical
+    # sidecar on the data disk. Neither is a client-supplied value.
+    source = CharField(8, default="server")
+    worker_name = CharField(64, null=True)
+    transcript_path = CharField(4096, null=True)
     user = ForeignKeyField(User, null=True, backref="+", on_delete="SET NULL")
     queued_at = DateTimeField(null=True)
     started_at = DateTimeField(null=True)
@@ -1360,6 +1372,56 @@ class PodcastTranscriptSegment(_Model):
 
     class Meta:
         indexes = ((("transcript", "idx"), True), (("transcript", "start_ms"), False))
+
+
+class TranscribeWorker(_Model):
+    """A device allowed to claim transcripts (``neezer/transcribe``).
+
+    ``token`` is the device's credential, encrypted at rest like every other
+    capability here; it is never returned by a read and never logged. A worker
+    is ``server`` (the sidecar container) or ``client`` (a person's machine);
+    revoking stamps ``revoked`` and every later claim or heartbeat answers 403.
+    """
+
+    id = PrimaryKeyField()
+    name = CharField(64)
+    kind = CharField(8)  # server|client
+    token = TextField()
+    scopes = CharField(32, default="transcribe")
+    created = DateTimeField(default=now)
+    last_seen = DateTimeField(null=True)
+    enabled = BooleanField(default=True)
+    revoked = DateTimeField(null=True)
+
+
+class PodcastTranscriptLease(_Model):
+    """The right to work one transcript, held by an external worker.
+
+    The row is per episode: it carries who holds it, when it expires, and how
+    many attempts it took, so an expired lease is requeued (three times, then
+    ``error lease_lost``) without touching the text already stored. Only the
+    SHA-256 of the token is kept — the server compares a hash, it never needs
+    the token itself.
+    """
+
+    episode = ForeignKeyField(
+        PodcastTranscript,
+        primary_key=True,
+        backref="+",
+        column_name="episode_id",
+        on_delete="CASCADE",
+    )
+    worker = ForeignKeyField(TranscribeWorker, backref="leases", on_delete="CASCADE")
+    lease_token_hash = CharField(64)
+    acquired_at = DateTimeField(default=now)
+    expires_at = DateTimeField()
+    heartbeat_at = DateTimeField(default=now)
+    chunk_start_ms = IntegerField(default=0)
+    attempts = IntegerField(default=0)
+    last_error = CharField(200, null=True)
+
+    class Meta:
+        indexes = ((("expires_at",), False), (("worker",), False))
 
 
 class PodcastProgress(_Model):
@@ -1958,6 +2020,8 @@ def _migration_order():
         PodcastChapterScan,  # after PodcastEpisode
         PodcastTranscript,  # after PodcastEpisode and User
         PodcastTranscriptSegment,  # after PodcastTranscript
+        TranscribeWorker,
+        PodcastTranscriptLease,  # after PodcastTranscript and TranscribeWorker
         PodcastProgress,
         PodcastMarker,
         RemoteLink,  # after User: it references it

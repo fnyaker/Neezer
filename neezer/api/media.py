@@ -16,6 +16,7 @@ import re
 import shlex
 import subprocess
 import zlib
+from functools import wraps
 
 from flask import request, Response, send_file
 from flask import current_app
@@ -205,7 +206,24 @@ def prepare_transcoding_cmdline(
     return ret
 
 
+def _count_media_response(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        from ..deezer import workload
+
+        background = (
+            request.headers.get("X-NS-Background") == "1"
+            or request.values.get("bg") == "1"
+        )
+        return workload.counted_response(
+            view(*args, **kwargs), background=background
+        )
+
+    return wrapped
+
+
 @api_routing("/stream")
+@_count_media_response
 def stream_media():
     res = _resolve_stream_entity()
 
@@ -384,6 +402,7 @@ def stream_media():
 
 
 @api_routing("/download")
+@_count_media_response
 def download_media():
     id = request.values["id"]
 
