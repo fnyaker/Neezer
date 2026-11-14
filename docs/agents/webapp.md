@@ -296,6 +296,22 @@ phone shows the list OR a category (back returns to the list, `replace` on a dee
 open category. A link into a setting names its category (`/settings/sources`, `/settings/account`); old `fx`/`quality`
 names are mapped. Benches open the category they test (`#/settings/playback`, `#/settings/downloads`), never bare `#/settings`.
 
+**The admin user dashboard** (`components/AdminUsers.svelte`, `InviteSheet.svelte`,
+`lib/adminusers.js`) is a category **Utilisateurs**, mounted only for a local admin — never for a
+remote controller and never for a member. The pane widens to 1100 px: a real table at ≥ 1280 px,
+cards below. It loads **2 GET** (one account page + pending invitations), then **1 GET** per
+search or « Charger plus », **0** for a local state/role filter, **2** for Rafraîchir, and **1**
+per mutation; it never polls, keeps a 60 s memory copy, and caps the loaded set at 250 accounts /
+200 invitations. Because the server page has no `state`/`role` parameter yet, those filters apply
+to the loaded rows and the screen says so; the client is ready for a server filter when it lands.
+Pending invitations are rows of the same list (`kind:"invite"`), with their state and expiry, and
+the token is shown **once** in `InviteSheet` (copy with a manual fallback, revoke, renew). Deleting
+an account asks for its exact name and shows the upload/playlist counts; the server's 403
+`self_disable`/`self_delete` and 409 `last_admin`/`server_account_holder` are translated to French
+administrative sentences. The account's own row pre-disables destructive actions, but the server
+remains the only authority. Layout: 390/641 cards (no sideways overflow), 1280/1440 table, 44 px
+controls.
+
 **The Égaliseur card is a picker, a meter and ten faders** (`components/AudioEffects.svelte`,
 `lib/eqpresets.js`). It is its own card under the volume/bass one. The presets are two groups — Intégrés (5)
 and Mes préréglages — as a horizontal snap rail at ≤640 px (44 px chips, the next one clipped as the scroll
