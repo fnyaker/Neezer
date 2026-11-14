@@ -419,29 +419,48 @@ def expire_leases(at=None):
             continue
         lease.attempts = int(lease.attempts or 0) + 1
         lease.last_error = "lease_expired"
+        eid = transcript.episode_id
+        still_leased = (PodcastTranscript.episode == eid) & (
+            PodcastTranscript.status == "leased"
+        )
         if transcript.cancel_requested:
-            transcript.status = "stopped"
-            transcript.finished_at = moment
-            transcript.updated = moment
-            transcript.save()
+            moved = (
+                PodcastTranscript.update(
+                    status="stopped", finished_at=moment, updated=moment
+                )
+                .where(still_leased)
+                .execute()
+            )
             lease.delete_instance()
         elif lease.attempts >= LEASE_ATTEMPTS:
-            transcript.status = "error"
-            transcript.error_code = "lease_lost"
-            transcript.error_message = "lease expiré sans heartbeat"
-            transcript.finished_at = moment
-            transcript.updated = moment
-            transcript.save()
+            moved = (
+                PodcastTranscript.update(
+                    status="error",
+                    error_code="lease_lost",
+                    error_message="lease expiré sans heartbeat",
+                    finished_at=moment,
+                    updated=moment,
+                )
+                .where(still_leased)
+                .execute()
+            )
             lease.delete_instance()
         else:
-            transcript.status = "queued"
-            transcript.started_at = None
-            transcript.updated = moment
-            transcript.save()
-            lease.expires_at = moment
-            lease.heartbeat_at = moment
-            lease.save()
-        changed += 1
+            moved = (
+                PodcastTranscript.update(
+                    status="queued", started_at=None, updated=moment
+                )
+                .where(still_leased)
+                .execute()
+            )
+            if moved:
+                lease.expires_at = moment
+                lease.heartbeat_at = moment
+                lease.save()
+            else:
+                lease.delete_instance()
+        if moved:
+            changed += 1
     return changed
 
 
@@ -805,6 +824,62 @@ def release(episode_id, worker, token):
     transcript.save()
     lease.delete_instance()
     return {"status": status, "done_ms": transcript.done_ms}
+
+
+def lease_audio(episode_id, worker, token, app=None):
+    """The archived file of the leased episode, for the worker holding it.
+
+    ``None`` means there is no lease at all (the caller answers 404); a lease
+    held by somebody else, an expired lease or a revoked worker raises
+    :class:`LeaseError` (the caller answers 403). The path never leaves this
+    process except as bytes: the route streams the file.
+    """
+    eid = episode_key(episode_id)
+    if PodcastTranscriptLease.get_or_none(
+        PodcastTranscriptLease.episode == eid
+    ) is None:
+        return None
+    lease = _lease_for(eid, worker, token)
+    transcript = _transcript_for(lease)
+    if transcript is None:
+        return None
+    return archive_file(transcript.episode, settings.archive_root(app))
+
+
+def drop_worker_leases(worker):
+    """Free what a revoked worker held: its jobs go back to the queue."""
+    if isinstance(worker, TranscribeWorker):
+        holder = worker
+    else:
+        holder = TranscribeWorker.get_or_none(TranscribeWorker.id == worker)
+    if holder is None:
+        return 0
+    when = now()
+    released = 0
+    with db.atomic():
+        for lease in list(
+            PodcastTranscriptLease.select().where(
+                PodcastTranscriptLease.worker == holder
+            )
+        ):
+            transcript = _transcript_for(lease)
+            if transcript is not None and transcript.status == "leased":
+                updates = {"updated": when, "started_at": None, "status": "queued"}
+                if transcript.cancel_requested:
+                    updates = {"updated": when, "status": "stopped"}
+                    updates["finished_at"] = when
+                moved = (
+                    PodcastTranscript.update(**updates)
+                    .where(
+                        (PodcastTranscript.episode == transcript.episode_id)
+                        & (PodcastTranscript.status == "leased")
+                    )
+                    .execute()
+                )
+                if moved:
+                    released += 1
+            lease.delete_instance()
+    return released
 
 
 def mark_error(episode_id, code, message="", app=None):
@@ -1268,7 +1343,12 @@ def sidecar_payload(transcript):
 
 
 def flush_sidecar(episode_id, app=None):
-    """Write the sidecar from the database; never from a request thread."""
+    """Write the sidecar from the database; never from a request thread.
+
+    Only ``transcript_path`` and ``updated`` are written by a targeted UPDATE:
+    a background flush that finishes after a completion or a failure must not
+    put the row back to the state it read before the disk write.
+    """
     transcript = _transcript_of(episode_key(episode_id))
     if transcript is None:
         return None
@@ -1282,9 +1362,9 @@ def flush_sidecar(episode_id, app=None):
     except (OSError, sidecar.SidecarError) as exc:
         logger.info("Could not write the transcript sidecar: %s", exc)
         return None
-    transcript.transcript_path = path
-    transcript.updated = now()
-    transcript.save()
+    PodcastTranscript.update(
+        transcript_path=path, updated=now()
+    ).where(PodcastTranscript.episode == transcript.episode_id).execute()
     return path
 
 

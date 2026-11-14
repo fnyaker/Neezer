@@ -458,6 +458,10 @@ def create_application(config=None):
 
         app.register_blueprint(transcribe_api, url_prefix="/api")
 
+        from .webui.transcribe_worker import transcribe_worker_api
+
+        app.register_blueprint(transcribe_worker_api, url_prefix="/api")
+
         # Remote-control narrowing must cover EVERY /api route, including the
         # ones served by a blueprint other than webapi. The hook lives on the
         # application, not on webapi, so a new blueprint cannot escape it.
