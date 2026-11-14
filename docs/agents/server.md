@@ -626,6 +626,20 @@ leaves `onboarding_step='done'`: only an invitation redeem starts at `artists`. 
 creates zero invitations. Measured: 1 000 existing accounts migrate in 5.3 ms (1.4 ms replay);
 `add` is 2 statements, a duplicate 1, `rename` 2.
 
+**Invitations** (`neezer/invites.py`, `webui/invites.py`, table `invite` schema `20261118`):
+`POST /api/admin/invites` shows the `<id>.<mac>` token **once** and stores only its SHA-256; the
+list is keyset `(created, id)` with `state=pending|used|expired|revoked`, and revoking or renewing
+keeps the row (the token is never returned by a GET). 20 creations/h/admin (`WindowLimiter`) and
+200 live invitations, both 429 with `Retry-After`. The public `POST /api/invites/inspect|redeem`
+take the token in the JSON body (8 KiB, same-origin, 60 inspects/5 min and 5 failures/15 min per
+IP and per token hash), answer the **same 404** for every invalid token, and redeem consumes it
+with a conditional `UPDATE` in the account transaction (`onboarding_step='artists'`, never admin,
+session opened). Measured: creation 4 statements / 206 B, list of 50 3 statements / 3 736 B
+(612 B gzip), inspect 1 / 68 B, redeem 5 / 217 B, renew 6 / 194 B. `last_login` is written at most
+once an hour; a disabled account gets the generic 401 and its sessions are cut. When
+`NEEZER_SECRETS_ENV_ONLY=1`, `NEEZER_SECRET_INVITE_SECRET` holds the token secret; rotating it
+invalidates every pending invitation.
+
 **The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
 `GET /api/admin/users` (keyset `after`, `q` folded over `name_key`/`mail`, `limit` 1..200),
 `GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`.
