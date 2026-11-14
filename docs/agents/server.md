@@ -640,6 +640,23 @@ once an hour; a disabled account gets the generic 401 and its sessions are cut. 
 `NEEZER_SECRETS_ENV_ONLY=1`, `NEEZER_SECRET_INVITE_SECRET` holds the token secret; rotating it
 invalidates every pending invitation.
 
+**Onboarding artists** (`neezer/onboarding.py`, `neezer/deezer/onboarding_pool.py`,
+`webui/onboarding.py`): the feed is built in a background BULK worker, never in a request, and
+cached atomically for 24 h. The primary source is **21 public Deezer calls** — the global chart,
+the editorial charts and the nine “Top <country>” playlists (FR, GB, US, DE, BR, MX, JP, KR, NG) —
+not an undocumented country endpoint; the last good pool is kept when a rebuild fails. If Deezer
+is absent or fails and the local library has fewer than 24 artists, **YouTube Music** adds 10
+charts (`ZZ` + the nine countries) in 10 calls, cached (132 kB) and proxied through
+`/api/onboarding/picture/...` so Google never enters the CSP. A like writes only `Artist` +
+`StarredArtist` (idempotent, 5 statements warm, plus `EntityRef` for YouTube), removes an
+`ArtistMute`, invalidates the taste profile and **never** creates a `Track`, archives, prefetches or
+calls a provider; `Artist.prune` keeps a starred artist alive with no archived track. Related
+artists (3–5, the provider's order, filtered for duplicates and diversity) are inserted just after
+the liked card; a cold cache answers `pending` and a single worker fills it. Search is one provider
+call cold (0 cached); the page is 3 statements / ~5 kB. `GET /api/onboarding/artists?limit=24` is
+24 cards, `POST /artists/done` requires one artist unless every source failed, and
+`POST /account/done` finishes the step.
+
 **The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
 `GET /api/admin/users` (keyset `after`, `q` folded over `name_key`/`mail`, `limit` 1..200),
 `GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`.
