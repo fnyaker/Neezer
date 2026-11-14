@@ -981,7 +981,9 @@ class AutoTranscribeTestCase(_Base):
             self.episode(number=number, duration=60, channel=channel)
         with count_statements() as counts:
             self.assertEqual(job.resume_auto(self.config), 0)
-        self.assertEqual(sum(counts.values()), 1)
+        # The effective settings read their ``tr.*`` overrides, then the marked
+        # shows are asked once: two statements on an idle server.
+        self.assertEqual(sum(counts.values()), 2)
 
     def test_resume_auto_fills_the_free_slots_and_does_not_duplicate(self):
         channel = self.channel(auto_transcribe=True)

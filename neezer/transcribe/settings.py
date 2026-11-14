@@ -3,21 +3,34 @@
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""What the transcription engine may use, read from the configuration file.
+"""What the transcription engine may use.
 
 Paths stay file-only (``bin``, ``model``): no request may name one. The other
 values have safe defaults so a server without whisper.cpp boots with the feature
-off and a named reason, never an exception. Runtime overrides in ``Meta`` are a
-later lot; this module only merges the ``[transcribe]`` section over the
-defaults and validates every value.
+off and a named reason, never an exception. The order is defaults < the
+``[transcribe]`` configuration section < ``Meta`` rows written by the admin
+route (``tr.*``), so a setting changed from the web UI outlives a restart and no
+process depends on which one wrote it.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 
 from . import engine, sidecar
+
+logger = logging.getLogger(__name__)
+
+META_PREFIX = "tr."
+META_KEYS = (
+    "enabled",
+    "daily_minutes",
+    "search_segments",
+    "max_minutes",
+    "language",
+)
 
 DEFAULTS = {
     "enabled": False,
@@ -86,9 +99,28 @@ def _as_text(value):
     return text or None
 
 
+def _meta_values():
+    """The ``tr.*`` rows an admin wrote, or nothing when the base is not ready."""
+    from ..db import Meta
+
+    try:
+        rows = Meta.select(Meta.key, Meta.value).where(
+            Meta.key.startswith(META_PREFIX)
+        )
+        return {
+            row.key[len(META_PREFIX) :]: row.value
+            for row in rows
+            if row.key[len(META_PREFIX) :] in META_KEYS
+        }
+    except Exception:
+        logger.debug("Could not read the transcription overrides", exc_info=True)
+        return {}
+
+
 def load(app=None):
     values = dict(DEFAULTS)
     values.update(_sections(app)[0])
+    values.update(_meta_values())
     runner = str(values.get("runner") or "inline").strip().lower()
     values["enabled"] = _as_bool(values.get("enabled"), DEFAULTS["enabled"])
     values["runner"] = runner if runner in RUNNERS else "inline"
@@ -115,13 +147,14 @@ def load(app=None):
 
 def paths(app=None):
     _transcribe, deezer, webapp = _sections(app)
-    values = load(app)
+    values = dict(DEFAULTS)
+    values.update(_transcribe)
     archive = _as_text(deezer.get("archive_dir"))
     cache = _as_text(webapp.get("cache_dir"))
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     return {
-        "bin": values["bin"],
-        "model": values["model"],
+        "bin": _as_text(values.get("bin")),
+        "model": _as_text(values.get("model")),
         "ffmpeg": ffmpeg,
         "archive": archive,
         "cache": cache,

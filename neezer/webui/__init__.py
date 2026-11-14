@@ -56,6 +56,7 @@ from ..db import (
     PodcastEpisode,
     PodcastMarker,
     PodcastProgress,
+    PodcastTranscript,
     StarredTrack,
     Track,
     TrackArtist,
@@ -3459,6 +3460,47 @@ def _channel_counts(ids: list) -> dict:
     return out
 
 
+def _transcript_cards(ids: list) -> dict:
+    """{episode id: transcription state} in one grouped query per 400 ids."""
+    from ..transcribe import job as _job
+
+    out = {}
+    for start in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[start : start + _IN_CHUNK]
+        for row in (
+            PodcastTranscript.select(
+                PodcastTranscript.episode,
+                PodcastTranscript.status,
+                PodcastTranscript.done_ms,
+                PodcastTranscript.duration_ms,
+                PodcastTranscript.language,
+                PodcastTranscript.source,
+                PodcastTranscript.error_code,
+                PodcastTranscript.n_segments,
+            )
+            .where(PodcastTranscript.episode << chunk)
+            .tuples()
+        ):
+            eid, status, done, duration, language, source, code, count = row
+            if status == "ready":
+                progress = 1.0
+            elif status in ("running", "leased"):
+                progress = _job.progress(eid)
+            elif duration:
+                progress = max(0.0, min(1.0, int(done or 0) / int(duration)))
+            else:
+                progress = 0.0
+            out[eid] = {
+                "status": status,
+                "progress": float(progress or 0.0),
+                "language": language,
+                "source": source,
+                "error": {"code": code} if code else None,
+                "segment_count": int(count or 0),
+            }
+    return out
+
+
 def _channel(c, with_episodes=False, counts=None):
     """A podcast channel for the SPA. `counts` is (episodes, archived) from
     ``_channel_counts``; without it this channel is counted on its own."""
@@ -3492,6 +3534,9 @@ def _channel(c, with_episodes=False, counts=None):
         # The show's own "archive new episodes automatically" switch: what the
         # archive keeps of it (backfill.collect / archive_show).
         "auto_archive": bool(c.auto_archive),
+        # Its transcription switch and language override (NULL means auto).
+        "auto_transcribe": bool(c.auto_transcribe),
+        "transcribe_language": c.transcribe_language or "auto",
     }
     if with_episodes:
         from ..deezer.chapters import counts_for as _chapter_counts
@@ -3502,21 +3547,32 @@ def _channel(c, with_episodes=False, counts=None):
             )
         )
         chapter_counts = _chapter_counts([e.id for e in episodes])
+        transcripts = _transcript_cards([e.id for e in episodes])
+        info["transcribed_count"] = sum(
+            1 for card in transcripts.values() if card["status"] == "ready"
+        )
         info["episodes"] = [
-            _episode(e, c, chapter_count=chapter_counts.get(e.id, 0))
+            _episode(
+                e,
+                c,
+                chapter_count=chapter_counts.get(e.id, 0),
+                transcript=transcripts.get(e.id),
+            )
             for e in episodes
         ]
     return info
 
 
-def _episode(e, channel=None, chapter_count=0):
+def _episode(e, channel=None, chapter_count=0, transcript=None):
     """A podcast episode shaped like a playable track for the web player.
 
     Its universal stream id (``deezer_id``) is the episode UUID — the same
     convention local tracks use — so the existing queue/player machinery plays
     it unchanged via ``/api/stream/<uuid>``. ``chapter_count`` is the number
     of chapters the archived file carries (0 when there is none); the list
-    itself is only fetched when a person expands the episode.
+    itself is only fetched when a person expands the episode. ``transcript``
+    is the episode's transcription state, or None when it has never been asked
+    for — never its sidecar path.
     """
     channel = channel or e.channel
     archived = bool(e.path and os.path.isfile(e.path))
@@ -3541,6 +3597,7 @@ def _episode(e, channel=None, chapter_count=0):
         "unavailable": gone,
         "explicit": False,
         "chapter_count": int(chapter_count or 0),
+        "transcript": transcript,
         "channel_id": str(channel.id),
         "artist": {"deezer_id": str(channel.id), "name": channel.title or ""},
         "album": {
