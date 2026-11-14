@@ -60,7 +60,7 @@ import uuid
 from flask import Blueprint, jsonify, request
 from peewee import Case, IntegrityError, fn
 
-from ..db import Playlist, PlaylistFolder, PlaylistPlacement, db
+from ..db import Playlist, PlaylistFolder, PlaylistMember, PlaylistPlacement, db
 
 from . import _uuid_text, login_required, same_origin_guard
 
@@ -326,6 +326,13 @@ def place_new_playlist(user, playlist, folder=None):
     return position
 
 
+def _fileable(user):
+    member = PlaylistMember.select(PlaylistMember.playlist).where(
+        PlaylistMember.user == user.id
+    )
+    return (Playlist.user == user) | Playlist.id.in_(member)
+
+
 def _residents(user, fid):
     """``(folder exists, rows)`` for one container — ONE statement.
 
@@ -333,16 +340,16 @@ def _residents(user, fid):
     person may see that are currently in the container (the folder when ``fid``
     is given, the unfiled root when it is None), in container order (position,
     then creation date, then id). The visibility filter is the same one
-    ``/api/me/playlists`` uses: the caller's own lists, or a Deezer import. A
-    placement left pointing at a playlist they can no longer see is inert and
-    is not carried over (it is dropped by the rewrite).
+    ``/api/me/playlists`` uses: the caller's own lists or a playlist shared
+    with them. A placement left pointing at a playlist they can no longer see
+    is inert and is not carried over (it is dropped by the rewrite).
 
     For a folder the ownership check rides in the same SELECT (a LEFT JOIN off
     ``playlist_folder``): an existing folder with no playlist still yields one
     all-NULL row, so "empty" and "not yours" are told apart without a second
     round trip.
     """
-    visible = (Playlist.user == user) | (Playlist.deezer_id.is_null(False))
+    visible = _fileable(user)
     if fid is None:
         rows = list(
             PlaylistPlacement.select(Playlist.id, Playlist.created, PlaylistPlacement.position)
@@ -379,7 +386,7 @@ def _residents(user, fid):
 
 
 def _visible(user, ids):
-    """The subset of ``ids`` this person may file: own, or a Deezer import.
+    """The subset of ``ids`` this person may file: own or shared with them.
 
     Exactly what ``/api/me/playlists`` lists. One statement per 400 ids; an id
     the caller cannot see is simply left out of the order (never a 403, and
@@ -392,10 +399,7 @@ def _visible(user, ids):
             pid
             for pid, in (
                 Playlist.select(Playlist.id)
-                .where(
-                    Playlist.id.in_(chunk)
-                    & ((Playlist.user == user) | (Playlist.deezer_id.is_null(False)))
-                )
+                .where(Playlist.id.in_(chunk) & _fileable(user))
                 .tuples()
             )
         )

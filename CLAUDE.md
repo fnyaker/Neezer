@@ -151,7 +151,7 @@ avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@and
   commit/PR/merge. Un sous-agent ne commit pas, ne pousse pas et ne fusionne pas.
 - Un seul agent écrivain par fichier à la fois. `security` (audit) et `explore` peuvent lire en
   parallèle du travail d'écriture.
-- Jusqu'à **10 `batch` en parallèle**, sur des fichiers **disjoints** uniquement (un seul écrivain
+- Jusqu'à **20 `batch` en parallèle**, sur des fichiers **disjoints** uniquement (un seul écrivain
   par fichier) ; les autres sous-agents restent séquentiels dès qu'ils partagent une zone.
 - **Toute commande de plus de quelques secondes et tout sous-agent se lancent en arrière-plan**
   (`background`), jamais en bloquant la session : le primary continue sur une zone disjointe et

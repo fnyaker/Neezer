@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from neezer.db import (
     Playlist,
     PlaylistFolder,
+    PlaylistMember,
     PlaylistPlacement,
     User,
 )
@@ -321,6 +322,24 @@ class FolderOwnershipTestCase(_FolderCase):
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(rv.get_json()["playlists"], [str(imported.id)])
         self.assertEqual(self._placements(), {(str(imported.id), folder["id"]): 0})
+
+    def test_a_playlist_shared_with_the_caller_can_be_filed(self):
+        shared = self._playlist("De bob", user=self.bob)
+        with self.app.app_context():
+            PlaylistMember.create(playlist=shared, user=self.alice, role="viewer")
+        folder = self._folder("Partagées")
+        rv = self.client.put(
+            "/api/playlist-folders/%s/order" % folder["id"],
+            json={"playlists": [str(shared.id)]},
+        )
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_json()["playlists"], [str(shared.id)])
+        self.assertEqual(self._placements(), {(str(shared.id), folder["id"]): 0})
+        listed = self.client.get("/api/me/playlists").get_json()["playlists"]
+        self.assertEqual(
+            [(p["title"], p["folder_id"]) for p in listed],
+            [("De bob", folder["id"])],
+        )
 
 
 # -- the same-origin guard ----------------------------------------------------
