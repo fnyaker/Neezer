@@ -16,7 +16,7 @@ from .daemon.client import DaemonClient
 from .daemon.exceptions import DaemonUnavailableError
 from .db import Folder, User, init_database, release_database
 from .managers.folder import FolderManager
-from .managers.user import UserManager
+from .managers.user import InvalidUserName, UserManager, UserNameTaken
 from .scanner import Scanner
 
 
@@ -363,18 +363,11 @@ def user_rename(name, newname):
         return
 
     try:
-        user = User.get(name=name)
+        UserManager.rename(name, newname)
     except User.DoesNotExist as e:
         raise ClickException("No such user") from e
-
-    try:
-        User.get(name=newname)
-        raise ClickException("This name is already taken")
-    except User.DoesNotExist:
-        pass
-
-    user.name = newname
-    user.save()
+    except (InvalidUserName, UserNameTaken) as e:
+        raise ClickException(str(e)) from e
     click.echo(f"User '{name}' renamed to '{newname}'")
 
 
