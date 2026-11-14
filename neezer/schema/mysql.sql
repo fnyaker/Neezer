@@ -63,6 +63,7 @@ CREATE INDEX index_track_root_folder_id_fk ON track(root_folder_id);
 CREATE TABLE IF NOT EXISTS user (
     id CHAR(32) PRIMARY KEY,
     name VARCHAR(64) NOT NULL,
+    name_key VARCHAR(64),
     mail VARCHAR(256),
     password VARCHAR(255) NOT NULL,
     salt CHAR(6) NOT NULL,
@@ -70,14 +71,36 @@ CREATE TABLE IF NOT EXISTS user (
     admin BOOLEAN NOT NULL,
     jukebox BOOLEAN NOT NULL,
     session_epoch INTEGER NOT NULL DEFAULT 0,
+    disabled BOOLEAN NOT NULL DEFAULT FALSE,
+    last_login DATETIME,
+    onboarding_step VARCHAR(16) NOT NULL DEFAULT 'done',
     listenbrainz_session CHAR(36),
     listenbrainz_status BOOLEAN NOT NULL,
     lastfm_session CHAR(32),
     lastfm_status BOOLEAN NOT NULL,
     last_play_id CHAR(32) REFERENCES track(id),
-    last_play_date DATETIME
+    last_play_date DATETIME,
+    UNIQUE INDEX index_user_name_key (name_key)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE INDEX index_user_last_play_id_fk ON user(last_play_id);
+
+CREATE TABLE IF NOT EXISTS invite (
+    id VARCHAR(24) PRIMARY KEY,
+    token_hash CHAR(64) NOT NULL,
+    created_by CHAR(32),
+    created DATETIME NOT NULL,
+    expires DATETIME NOT NULL,
+    used_by CHAR(32),
+    used_at DATETIME,
+    revoked_at DATETIME,
+    note VARCHAR(64),
+    CONSTRAINT invite_created_by_fk FOREIGN KEY (created_by) REFERENCES user(id) ON DELETE SET NULL,
+    CONSTRAINT invite_used_by_fk FOREIGN KEY (used_by) REFERENCES user(id) ON DELETE SET NULL,
+    UNIQUE INDEX index_invite_token_hash (token_hash),
+    INDEX index_invite_expires (expires),
+    INDEX index_invite_created_by (created_by),
+    INDEX index_invite_used_by (used_by)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS client_prefs (
     user_id CHAR(32) NOT NULL REFERENCES user(id),

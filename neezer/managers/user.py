@@ -10,12 +10,15 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import string
+import unicodedata
 import uuid
 
 from argon2 import PasswordHasher
 from argon2.exceptions import Argon2Error
+from peewee import IntegrityError
 
 try:  # pycryptodome
     from Crypto.Cipher import AES
@@ -111,6 +114,64 @@ def _min_password_length() -> int:
         return 0
 
 
+_RESERVED_NAMES = frozenset(
+    {
+        "admin",
+        "administrator",
+        "anonymous",
+        "api",
+        "app",
+        "guest",
+        "invite",
+        "login",
+        "logout",
+        "me",
+        "neezer",
+        "none",
+        "null",
+        "rest",
+        "root",
+        "server",
+        "settings",
+        "static",
+        "support",
+        "system",
+        "undefined",
+    }
+)
+
+_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9_.-]{1,30}[a-z0-9])")
+
+
+class InvalidUserName(ValueError):
+    pass
+
+
+class UserNameTaken(ValueError):
+    pass
+
+
+def fold_name(name):
+    """The lookup key of a user name: NFKD, diacritics dropped, lowercase."""
+    if not isinstance(name, str):
+        raise TypeError("Invalid user name")
+    decomposed = unicodedata.normalize("NFKD", name)
+    stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return stripped.strip().lower()
+
+
+def validate_name(name, reserved=False):
+    """Return the folded name, or raise InvalidUserName."""
+    key = fold_name(name)
+    if len(name.strip()) > 64 or not _NAME_RE.fullmatch(key):
+        raise InvalidUserName(
+            "The name must be 3 to 32 characters: a-z, 0-9, dot, dash, underscore"
+        )
+    if reserved and key in _RESERVED_NAMES:
+        raise InvalidUserName("This name is reserved")
+    return key
+
+
 class UserManager:
     @staticmethod
     def check_password_policy(password):
@@ -152,17 +213,60 @@ class UserManager:
         if unknown:
             raise ValueError("Unknown field: " + ", ".join(sorted(unknown)))
 
-        if User.select().where(User.name == name).exists():
-            raise ValueError(f"User '{name}' exists")
+        key = validate_name(name)
+        if UserManager._name_taken(key):
+            raise UserNameTaken(f"User '{name}' exists")
 
         UserManager.check_password_policy(password)
         crypt, salt = UserManager._hash_fields(password)
-        return User.create(
-            name=name,
-            password=crypt,
-            salt=salt,
-            password_clear=encrypt_password(password),
-            **kwargs,
+        try:
+            return User.create(
+                name=name.strip(),
+                name_key=key,
+                password=crypt,
+                salt=salt,
+                password_clear=encrypt_password(password),
+                disabled=False,
+                onboarding_step="done",
+                **kwargs,
+            )
+        except IntegrityError as exc:
+            raise UserNameTaken(f"User '{name}' exists") from exc
+
+    @staticmethod
+    def rename(user_or_name, new_name):
+        if isinstance(user_or_name, User):
+            user = user_or_name
+        elif isinstance(user_or_name, str):
+            user = User.get_or_none(name=user_or_name)
+            if user is None:
+                user = User.get_or_none(name_key=fold_name(user_or_name))
+            if user is None:
+                raise User.DoesNotExist(user_or_name)
+        else:
+            raise TypeError("Requires a User instance or a user name (string)")
+
+        key = validate_name(new_name)
+        if user.name_key != key or user.name != new_name.strip():
+            if UserManager._name_taken(key, exclude=user.id):
+                raise UserNameTaken(f"User '{new_name}' exists")
+            user.name = new_name.strip()
+            user.name_key = key
+            try:
+                user.save()
+            except IntegrityError as exc:
+                raise UserNameTaken(f"User '{new_name}' exists") from exc
+        return user
+
+    @staticmethod
+    def _name_taken(key, exclude=None):
+        query = User.select(User.id, User.name, User.name_key).where(
+            (User.name_key == key) | (User.name_key.is_null(True))
+        )
+        if exclude is not None:
+            query = query.where(User.id != exclude)
+        return any(
+            row.name_key == key or fold_name(row.name or "") == key for row in query
         )
 
     @staticmethod

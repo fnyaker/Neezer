@@ -65,6 +65,7 @@ CREATE INDEX IF NOT EXISTS index_track_root_folder_id_fk ON track(root_folder_id
 CREATE TABLE IF NOT EXISTS "user" (
     id UUID PRIMARY KEY,
     name VARCHAR(64) NOT NULL,
+    name_key VARCHAR(64),
     mail VARCHAR(256),
     password VARCHAR(255) NOT NULL,
     salt CHAR(6) NOT NULL,
@@ -72,6 +73,9 @@ CREATE TABLE IF NOT EXISTS "user" (
     admin BOOLEAN NOT NULL,
     jukebox BOOLEAN NOT NULL,
     session_epoch INTEGER NOT NULL DEFAULT 0,
+    disabled BOOLEAN NOT NULL DEFAULT false,
+    last_login TIMESTAMP,
+    onboarding_step VARCHAR(16) NOT NULL DEFAULT 'done',
     listenbrainz_session CHAR(36),
     listenbrainz_status BOOLEAN NOT NULL,
     lastfm_session CHAR(32),
@@ -80,8 +84,25 @@ CREATE TABLE IF NOT EXISTS "user" (
     last_play_date TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS index_user_last_play_id_fk ON "user"(last_play_id);
+CREATE UNIQUE INDEX IF NOT EXISTS index_user_name_key ON "user"(name_key);
 -- track and "user" reference each other: the owner's key is added once both exist.
 ALTER TABLE track ADD FOREIGN KEY (owner_id) REFERENCES "user";
+
+CREATE TABLE IF NOT EXISTS invite (
+    id VARCHAR(24) PRIMARY KEY,
+    token_hash CHAR(64) NOT NULL,
+    created_by UUID REFERENCES "user" ON DELETE SET NULL,
+    created TIMESTAMP NOT NULL,
+    expires TIMESTAMP NOT NULL,
+    used_by UUID REFERENCES "user" ON DELETE SET NULL,
+    used_at TIMESTAMP,
+    revoked_at TIMESTAMP,
+    note VARCHAR(64)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_invite_token_hash ON invite(token_hash);
+CREATE INDEX IF NOT EXISTS index_invite_expires ON invite(expires);
+CREATE INDEX IF NOT EXISTS index_invite_created_by ON invite(created_by);
+CREATE INDEX IF NOT EXISTS index_invite_used_by ON invite(used_by);
 
 CREATE TABLE IF NOT EXISTS client_prefs (
     user_id UUID NOT NULL REFERENCES "user",

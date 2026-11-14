@@ -65,6 +65,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS index_track_path ON track(path_hash);
 CREATE TABLE IF NOT EXISTS user (
     id CHAR(36) PRIMARY KEY,
     name VARCHAR(64) NOT NULL,
+    name_key VARCHAR(64),
     mail VARCHAR(256),
     password VARCHAR(255) NOT NULL,
     salt CHAR(6) NOT NULL,
@@ -72,6 +73,9 @@ CREATE TABLE IF NOT EXISTS user (
     admin BOOLEAN NOT NULL,
     jukebox BOOLEAN NOT NULL,
     session_epoch INTEGER NOT NULL DEFAULT 0,
+    disabled BOOLEAN NOT NULL DEFAULT 0,
+    last_login DATETIME,
+    onboarding_step VARCHAR(16) NOT NULL DEFAULT 'done',
     listenbrainz_session CHAR(36),
     listenbrainz_status BOOLEAN NOT NULL,
     lastfm_session CHAR(32),
@@ -80,6 +84,23 @@ CREATE TABLE IF NOT EXISTS user (
     last_play_date DATETIME
 );
 CREATE INDEX IF NOT EXISTS index_user_last_play_id_fk ON user(last_play_id);
+CREATE UNIQUE INDEX IF NOT EXISTS index_user_name_key ON user(name_key);
+
+CREATE TABLE IF NOT EXISTS invite (
+    id VARCHAR(24) PRIMARY KEY,
+    token_hash CHAR(64) NOT NULL,
+    created_by CHAR(36) REFERENCES user ON DELETE SET NULL,
+    created DATETIME NOT NULL,
+    expires DATETIME NOT NULL,
+    used_by CHAR(36) REFERENCES user ON DELETE SET NULL,
+    used_at DATETIME,
+    revoked_at DATETIME,
+    note VARCHAR(64)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_invite_token_hash ON invite(token_hash);
+CREATE INDEX IF NOT EXISTS index_invite_expires ON invite(expires);
+CREATE INDEX IF NOT EXISTS index_invite_created_by ON invite(created_by);
+CREATE INDEX IF NOT EXISTS index_invite_used_by ON invite(used_by);
 
 CREATE TABLE IF NOT EXISTS client_prefs (
     user_id CHAR(36) NOT NULL REFERENCES user,

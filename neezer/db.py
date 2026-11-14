@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261117"
+SCHEMA_VERSION = "20261118"
 
 
 def now():
@@ -590,6 +590,7 @@ class Track(PathMixin, _Model):
 class User(_Model):
     id = PrimaryKeyField()
     name = CharField(64, unique=True)
+    name_key = CharField(64, null=True, unique=True)
     mail = CharField(null=True)
     # argon2id hashes (~97 chars) for new/updated passwords; legacy SHA1 hashes
     # (40 chars) are transparently rehashed on the next successful login.
@@ -606,6 +607,10 @@ class User(_Model):
     # moves on, which is what makes a signed (otherwise unrevocable) session
     # cookie die on a password change or an admin downgrade.
     session_epoch = IntegerField(default=0)
+
+    disabled = BooleanField(default=False)
+    last_login = DateTimeField(null=True)
+    onboarding_step = CharField(16, default="done")
 
     lastfm_session = FixedCharField(32, null=True)
     lastfm_status = BooleanField(
@@ -637,6 +642,33 @@ class User(_Model):
             "jukeboxRole": self.admin or self.jukebox,
             "shareRole": False,
         }
+
+
+class Invite(_Model):
+    """A single-use invitation to create one account.
+
+    The row is the invitation's identity, never the token: only
+    ``token_hash`` (SHA-256 of the token handed out once) is stored, so a copy
+    of this table opens nothing. ``created_by`` and ``used_by`` are nullable
+    with ON DELETE SET NULL so removing an account keeps the audit trail.
+    """
+
+    id = CharField(24, primary_key=True)
+    token_hash = CharField(64, unique=True)
+    created_by = ForeignKeyField(
+        User, null=True, backref="+", on_delete="SET NULL", column_name="created_by"
+    )
+    created = DateTimeField(default=now)
+    expires = DateTimeField()
+    used_by = ForeignKeyField(
+        User, null=True, backref="+", on_delete="SET NULL", column_name="used_by"
+    )
+    used_at = DateTimeField(null=True)
+    revoked_at = DateTimeField(null=True)
+    note = CharField(64, null=True)
+
+    class Meta:
+        table_name = "invite"
 
 
 class ClientPrefs(_Model):
@@ -1900,6 +1932,7 @@ def _migration_order():
         TrackTag,  # after Track and GenreTag: it references both
         GenreModel,
         User,
+        Invite,
         ClientPrefs,
         StarredFolder,
         StarredArtist,

@@ -89,7 +89,7 @@ class SchemaVersionTestCase(unittest.TestCase):
         """The plans initially gave the three slices the same dates; the merge
         resolved them to 20261114..20261117, one slice per date, on every
         engine. A duplicate date would silently skip one slice's migration."""
-        self.assertEqual(SCHEMA_VERSION, "20261117")
+        self.assertGreaterEqual(SCHEMA_VERSION, "20261117")
         for date in ("20261114", "20261115", "20261116", "20261117"):
             for provider in PROVIDERS:
                 folder = os.path.join(MIGRATION_ROOT, provider)
@@ -897,6 +897,255 @@ class PodcastDerivedDataUpgradeTestCase(_TempDatabaseTestCase):
         self.assertEqual(PodcastChannel.select().count(), 1)  # the show stays
 
 
+class AccountOnboardingSchemaTestCase(unittest.TestCase):
+    """20261118: the invitation table, the folded-name uniqueness and the
+    account state columns. A fresh install never runs migrations, so the three
+    base schemas must carry the same shape as the migration."""
+
+    COLUMNS = ("name_key", "disabled", "last_login", "onboarding_step")
+    INVITE_COLUMNS = (
+        "id",
+        "token_hash",
+        "created_by",
+        "created",
+        "expires",
+        "used_by",
+        "used_at",
+        "revoked_at",
+        "note",
+    )
+
+    def _schema(self, provider):
+        path = os.path.join(
+            os.path.dirname(dbmod.__file__), "schema", f"{provider}.sql"
+        )
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def _table_body(self, sql, table):
+        m = re.search(
+            r'CREATE TABLE(?: IF NOT EXISTS)? "?%s"? \((.*?)\n\)' % table, sql, re.S
+        )
+        self.assertIsNotNone(m, f"{table} missing")
+        return m.group(1)
+
+    def test_every_engine_has_the_user_columns(self):
+        for provider in PROVIDERS:
+            body = self._table_body(self._schema(provider), "user")
+            for column in self.COLUMNS:
+                self.assertRegex(
+                    body,
+                    r"\b%s\b" % column,
+                    f"user.{column} missing from {provider}.sql",
+                )
+            self.assertRegex(
+                self._schema(provider),
+                r"index_user_name_key",
+                f"the unique name index missing from {provider}.sql",
+            )
+
+    def test_every_engine_has_the_invite_table(self):
+        for provider in PROVIDERS:
+            body = self._table_body(self._schema(provider), "invite")
+            for column in self.INVITE_COLUMNS:
+                self.assertRegex(
+                    body,
+                    r"\b%s\b" % column,
+                    f"invite.{column} missing from {provider}.sql",
+                )
+            self.assertNotRegex(body, r"\btoken\b", "the clear token is never stored")
+            self.assertNotRegex(body, r"\bmac\b", "the token mac is never stored")
+
+    def test_every_engine_ships_an_idempotent_migration(self):
+        for provider in PROVIDERS:
+            path = os.path.join(MIGRATION_ROOT, provider, "20261118.py")
+            self.assertTrue(os.path.exists(path), path)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertIn("invite", text)
+            self.assertIn("name_key", text)
+
+    def test_the_migration_fold_matches_the_application_fold(self):
+        import importlib
+
+        from neezer.managers.user import fold_name
+
+        module = importlib.import_module("neezer.schema.migration.sqlite.20261118")
+        for name in ("Élodie", "ALICE", "Jean-Luc", "  Bob ", "Álice"):
+            self.assertEqual(module._fold(name), fold_name(name), name)
+
+
+class AccountOnboardingUpgradeTestCase(_TempDatabaseTestCase):
+    """20261118 on an existing database: accounts keep their passwords and
+    names, get a folded key, and are all marked done (they never see the
+    onboarding). Replaying the migration must not duplicate or lose a row."""
+
+    def _strip_shape(self):
+        self._sql(
+            "DROP TABLE IF EXISTS invite",
+            "DROP INDEX IF EXISTS index_user_name_key",
+            "ALTER TABLE user DROP COLUMN name_key",
+            "ALTER TABLE user DROP COLUMN disabled",
+            "ALTER TABLE user DROP COLUMN last_login",
+            "ALTER TABLE user DROP COLUMN onboarding_step",
+        )
+
+    def _apply(self):
+        import importlib
+
+        module = importlib.import_module("neezer.schema.migration.sqlite.20261118")
+        module.apply({"database": self.path})
+
+    def test_a_fresh_install_can_query_the_new_models(self):
+        from neezer.db import Invite, User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        self.assertEqual(Invite.select().count(), 0)
+        self.assertEqual(dbmod._missing_columns(), [])
+        user = UserManager.add("Élodie", "Alic3")
+        self.assertEqual(user.name_key, "elodie")
+        self.assertEqual(user.onboarding_step, "done")
+        self.assertFalse(user.disabled)
+        self.assertIsNone(user.last_login)
+        self.assertEqual(User.select().count(), 1)
+
+    def test_the_migration_runs_twice_without_duplicating(self):
+        from neezer.db import Invite
+
+        init_database(self.uri)
+        release_database()
+        self._strip_shape()
+        for _ in range(2):
+            self._apply()
+        init_database(self.uri)
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(Invite.select().count(), 0)
+        self.assertEqual(
+            [c.name for c in db.get_columns("user")][-4:],
+            ["name_key", "disabled", "last_login", "onboarding_step"],
+        )
+
+    def test_the_repair_path_puts_the_shape_back(self):
+        from neezer.db import Invite, User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        UserManager.add("alice", "Alic3", admin=True)
+        release_database()
+        self._strip_shape()
+
+        init_database(self.uri)
+
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(Invite.select().count(), 0)
+        alice = User.get(User.name == "alice")
+        self.assertEqual(alice.name_key, "alice")
+        self.assertEqual(alice.onboarding_step, "done")
+        self.assertFalse(alice.disabled)
+
+    def test_a_missing_invite_table_alone_is_repaired(self):
+        from neezer.db import Invite, User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        UserManager.add("Alice", "Alic3", admin=True)
+        release_database()
+        self._sql("DROP TABLE invite")
+
+        init_database(self.uri)
+
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(Invite.select().count(), 0)
+        alice = User.get(User.name == "Alice")
+        self.assertEqual(alice.name_key, "alice")
+        self.assertEqual(alice.onboarding_step, "done")
+
+    def test_an_upgraded_database_keeps_its_accounts_and_marks_them_done(self):
+        from neezer.db import User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        UserManager.add("Alice", "Alic3", admin=True)
+        UserManager.add("bob", "B0bbb", mail="b@example.com")
+        before = {
+            u.name: (u.password, u.salt, u.password_clear, u.admin, u.mail)
+            for u in User.select()
+        }
+        release_database()
+        self._strip_shape()
+        self._rewind("20261117")
+
+        init_database(self.uri)
+
+        users = {u.name: u for u in User.select()}
+        self.assertEqual(set(users), set(before))
+        for name, user in users.items():
+            self.assertEqual(
+                (user.password, user.salt, user.password_clear, user.admin, user.mail),
+                before[name],
+            )
+            self.assertEqual(user.onboarding_step, "done")
+            self.assertFalse(user.disabled)
+            self.assertIsNone(user.last_login)
+        self.assertEqual(users["Alice"].name_key, "alice")
+        self.assertEqual(users["bob"].name_key, "bob")
+        self.assertIsNotNone(UserManager.try_auth("Alice", "Alic3"))
+        self.assertIsNotNone(UserManager.try_auth("bob", "B0bbb"))
+        self.assertEqual(dbmod.Meta["schema_version"].value, SCHEMA_VERSION)
+
+    def test_historical_case_duplicates_keep_one_key_and_their_logins(self):
+        from neezer.db import User
+        from neezer.managers.user import UserManager, encrypt_password
+
+        init_database(self.uri)
+        alice = UserManager.add("Alice", "Alic3", admin=True)
+        crypt, salt = UserManager._hash_fields("Other1")
+        User.create(
+            name="alice",
+            password=crypt,
+            salt=salt,
+            password_clear=encrypt_password("Other1"),
+        )
+        self.assertEqual(User.select().count(), 2)
+        release_database()
+        self._strip_shape()
+        self._rewind("20261117")
+
+        init_database(self.uri)
+
+        users = {u.name: u for u in User.select()}
+        self.assertEqual(set(users), {"Alice", "alice"})
+        self.assertEqual(
+            sorted(u.name_key for u in users.values() if u.name_key), ["alice"]
+        )
+        self.assertEqual(
+            [u.name_key for u in users.values()].count(None), 1
+        )
+        self.assertEqual(users["Alice"].id, alice.id)
+        self.assertIsNotNone(UserManager.try_auth("Alice", "Alic3"))
+        self.assertIsNotNone(UserManager.try_auth("alice", "Other1"))
+
+        with self.assertRaises(ValueError):
+            UserManager.add("ALICE", "An0ther")
+        with self.assertRaises(ValueError):
+            UserManager.add("Álice", "An0ther")
+
+        loser = next(u for u in users.values() if u.name_key is None)
+        UserManager.rename(loser, "alice2")
+        self.assertEqual(User.get(User.id == loser.id).name_key, "alice2")
+
+    def test_name_key_is_unique(self):
+        from neezer.db import User
+        from neezer.managers.user import UserManager
+
+        init_database(self.uri)
+        UserManager.add("alice", "Alic3")
+        with self.assertRaises(IntegrityError):
+            User.create(name="other", name_key="alice", password="x", salt="xxxxxx")
+        self.assertEqual(User.select().count(), 1)
+
+
 class NewTablesMigrateDatabaseTestCase(unittest.TestCase):
     """``migrate_database`` walks ``_migration_order()``: a new table missing
     from it is silently left behind when an operator moves SQLite to Postgres.
@@ -917,6 +1166,33 @@ class NewTablesMigrateDatabaseTestCase(unittest.TestCase):
                 os.remove(path)
             except OSError:
                 pass
+
+    def test_the_invite_table_is_copied(self):
+        from neezer.db import Invite, User, migrate_database
+        from neezer.managers.user import UserManager
+
+        init_database(self.src_uri)
+        UserManager.add("alice", "Alic3", admin=True)
+        alice = User.get(User.name == "alice")
+        Invite.create(
+            id="AbC",
+            token_hash="a" * 64,
+            created_by=alice,
+            created=datetime(2026, 1, 2, 3, 4, 5),
+            expires=datetime(2026, 1, 9, 3, 4, 5),
+            note="pour Léa",
+        )
+        release_database()
+
+        copied = migrate_database(self.src_uri, self.dst_uri)
+
+        self.assertEqual(copied["invite"], 1)
+        moved = Invite.get()
+        self.assertEqual((moved.id, moved.note), ("AbC", "pour Léa"))
+        self.assertEqual(moved.token_hash, "a" * 64)
+        self.assertEqual(moved.created_by.name, "alice")
+        self.assertIsNone(moved.used_at)
+        self.assertIsNone(moved.revoked_at)
 
     def test_every_new_table_is_copied(self):
         from neezer.db import PodcastEpisode, User, migrate_database
