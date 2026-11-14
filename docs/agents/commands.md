@@ -13,6 +13,9 @@ python tools/partest.py tests.test_genre_radio tests.test_history tests.test_moo
     tests.test_playlist_recs tests.test_playlist_share
 python tools/partest.py tests.test_recap tests.test_playlist_folders tests.test_playlist_collab_core
                                                      # the 2026-11 recap / folders / collaborative core lots
+python tools/partest.py tests.test_invites tests.test_admin_users tests.test_onboarding \
+    tests.test_onboarding_import
+                                                     # invites, guarded accounts, artist onboarding, account/import
 python -m unittest tests.net.suite                   # network tests (hit real services; weekly in CI)
 
 # Same suite across processes — ~12s on 4 cores. Takes the same test ids. What CI runs.
