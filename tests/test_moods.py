@@ -29,7 +29,7 @@ from neezer.db import Album, Artist, Track, TrackAnalysis, User
 from .test_deezer import count_statements
 from .test_detach_a import _AppCase
 
-DAY = "2026-11-13"
+DAY = moods.now().date().isoformat()
 
 
 def measures(*, loud, centroid, flux):
