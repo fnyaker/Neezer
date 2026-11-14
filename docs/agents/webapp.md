@@ -490,6 +490,22 @@ main bundle **656 kB → 457 kB** (223 → 158 kB gzipped), CSS **128 kB → 85 
   `removePlaylistLocal` show a create/rename/delete instantly; `invalidatePlaylists` then refetches
   (debounced — `/me/playlists` counts every playlist's tracks, and the edit paths call it per
   operation).
+- **Playlist folders** (`lib/playlistfolders.js`, `FolderSheet.svelte`,
+  `MoveToFolderSheet.svelte`) are a per-person view of that same store: the sidebar shows the
+  folders collapsed by default (state kept per device in `localStorage`), then the unfiled lists,
+  then the Deezer import fold; the Library's Playlists tab renders one section per folder plus
+  « Sans dossier » and « Depuis Deezer ». Every signed-in account loads its own + shared lists
+  (no `$isAdmin` gate); a shared card carries its owner and only `editable`/`can_manage` open the
+  edit paths — moving it to one's own folder stays allowed, it is the viewer's organisation.
+  First paint is bounded to **8 sections × 12 cards = 96** (500 playlists / 20 folders at 390×844:
+  96 cards, no sideways overflow); each scroll step adds 12 per section and 8 sections. Creation,
+  rename, move, reorder and delete are **one request each** (undo is 2: recreate + order); opening
+  a folder is 0. The Organiser mounts all rows only up to 60 — above that the shared `VirtualList`
+  takes over: a 500-playlist folder opened in **287 ms at 4× CPU with 11 rows mounted**, against
+  956 ms cold / 1 225 ms at 4× without it. The two sheets are mounted once at the end of
+  `Sidebar.svelte` and portalled to `<body>`; do not mount a second copy in `App.svelte`. Offline,
+  a folder mutation fails fast with « Hors ligne : impossible de modifier les dossiers » and never
+  paints a false success.
 - **ReplayGain is preloaded, never fetched from under a playing track** (`lib/gaincache.js`).
   Normalization is STATIC — `loadTrack` picks the gain at the source handover and holds it for the
   whole track — so a gain that lands one request later is not a refinement, it is the volume moving
