@@ -69,8 +69,11 @@ le code.
   (4 statements, cache process, aucun fournisseur), écran `#/recap/:year`, carte saisonnière sur
   l'Accueil, partage d'affiche 1080×1350 dessinée localement. 29 tests serveur, 19 tests JS purs,
   banc navigateur de 102 assertions (`webapp/test/recap/run.mjs`).
-- [ ] **Dossiers de playlists** — regrouper les playlists dans la barre latérale et la
-  bibliothèque. Table locale (ni Deezer ni Subsonic n'ont ce concept), ordre libre.
+- [x] **Dossiers de playlists** — regrouper les playlists dans la barre latérale et la
+  bibliothèque. Table locale (ni Deezer ni Subsonic n'ont ce concept), ordre libre. Deux tables
+  (`playlist_folder`, `playlist_placement`), vue par personne, place aussi les playlists partagées ;
+  sidebar, onglet Playlists, mode Organiser (boutons, clavier, VirtualList au-delà de 60 lignes),
+  feuilles de création/déplacement, annulation. 38 tests serveur, 12 tests purs, 576 tests SPA.
 - [x] **Lien public en lecture seule vers une playlist** — capacité signée (`/pl/<token>`), un lien
   vivant par playlist, révocable et mort à la requête suivante. La page publique n'a ni compte ni
   session : elle liste la playlist et joue uniquement les fichiers déjà archivés, jamais un appel
