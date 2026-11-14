@@ -64,9 +64,11 @@ le code.
 
 ## Niveau 3 — quelques jours, avec migration de base de données
 
-- [ ] **Récap** (type Spotify Wrapped / Apple Replay) — top titres, artistes, genres, minutes
-  écoutées, par mois et par année, en « stories ». L'historique d'écoute est désormais livré
-  (niveau 2) ; il reste à construire l'écran et ses agrégats.
+- [x] **Récap** (type Spotify Wrapped / Apple Replay) — top titres, artistes, genres, minutes
+  écoutées, par mois et par année, en « stories ». `GET /api/recap/years` + `/api/recap/<year>`
+  (4 statements, cache process, aucun fournisseur), écran `#/recap/:year`, carte saisonnière sur
+  l'Accueil, partage d'affiche 1080×1350 dessinée localement. 29 tests serveur, 19 tests JS purs,
+  banc navigateur de 102 assertions (`webapp/test/recap/run.mjs`).
 - [ ] **Dossiers de playlists** — regrouper les playlists dans la barre latérale et la
   bibliothèque. Table locale (ni Deezer ni Subsonic n'ont ce concept), ordre libre.
 - [x] **Lien public en lecture seule vers une playlist** — capacité signée (`/pl/<token>`), un lien
