@@ -665,6 +665,19 @@ call cold (0 cached); the page is 3 statements / ~5 kB. `GET /api/onboarding/art
 24 cards, `POST /artists/done` requires one artist unless every source failed, and
 `POST /account/done` finishes the step.
 
+**The onboarding account step** (`webui/onboarding_account.py`, blueprint
+`onboarding_account_api`): `GET /api/onboarding/account/options` returns what the person can
+actually do — Deezer (ARL or native, linked or not), YouTube Music (available/absent/disabled),
+and the four public playlist imports — in **2 SELECT / ~931 B**, never a secret and never a
+provider call. `POST .../link` reuses `myaccounts.link_deezer`/`link_youtube_headers`; a rejected
+credential is a 400 `provider_refused`, an unreachable provider a 503 with `Retry-After`, and no
+failure changes `onboarding_step`. `POST .../import` starts the existing `playlist_import` job
+(202 `{id, job}`, progress at `/api/import/playlist/<id>`), reniced and behind the foreground; a
+non-admin member may save the result but it is **not** bulk-archived. The tokens/ARL never enter a
+log. `POST .../account/done` stays in the artists blueprint; every option is skippable. Measured:
+options 2 statements / 931 B (391 B gzip), import request 2 statements / 1 980 B, link limited to
+10 attempts/15 min/account, bodies capped at 8 KiB.
+
 **The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
 `GET /api/admin/users` (keyset `after`, `q` folded over `name_key`/`mail`, `limit` 1..200),
 `GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`.
