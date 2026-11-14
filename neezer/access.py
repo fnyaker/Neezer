@@ -71,6 +71,8 @@ class Snapshot:
         self.groups = {}
         # account ids whose credential was last seen refused: they serve nobody
         self.refused = frozenset()
+        # users whose account is disabled: they serve nobody
+        self.disabled = frozenset()
 
     def has_server_account(self):
         return any(m == SERVER for _a, _o, m in self.accounts.get("deezer", ()))
@@ -104,6 +106,8 @@ class Snapshot:
         (lot P3): their own account, then the server's (held or lent), then
         somebody else's that is lent to them, then the provider's anonymous
         use (``ANONYMOUS``) where the feature needs no account. Account ids."""
+        if user_id and user_id in self.disabled:
+            return []
         if F.is_personal(feature):
             # Their own favourites and playlists: the holder of an account, no one else.
             if not user_id:
@@ -192,7 +196,7 @@ def invalidate():
 
 
 def _load():
-    from .db import ProviderAccount, ProviderGrant, UserGroupMember
+    from .db import ProviderAccount, ProviderGrant, User, UserGroupMember
 
     snap = Snapshot()
     for provider, account, feature, subject in ProviderGrant.select(
@@ -218,6 +222,9 @@ def _load():
     for group, user in UserGroupMember.select(UserGroupMember.group, UserGroupMember.user).tuples():
         groups.setdefault(str(user), set()).add(str(group))
     snap.groups = {u: frozenset(g) for u, g in groups.items()}
+    snap.disabled = frozenset(
+        str(uid) for uid, in User.select(User.id).where(User.disabled == True).tuples()
+    )
     return snap
 
 

@@ -462,7 +462,13 @@ def live_link(link_id):
             if len(_link_cache) > 4096:
                 _link_cache.clear()
             _link_cache[link_id] = (t, row)
-    return row if _alive(row) else None
+    if not _alive(row):
+        return None
+    from ..db import User
+
+    if User.select(User.disabled).where(User.id == row.user_id).scalar():
+        return None
+    return row
 
 
 def _device_links(uid: str, device: str):

@@ -208,7 +208,13 @@ def _get(pid: str) -> "Party | None":
         return None
     with _lock:
         _prune_parties(time.monotonic())
-        return _parties.get(pid)
+        party = _parties.get(pid)
+    if party is not None:
+        from ..db import User
+
+        if User.select(User.disabled).where(User.id == party.owner_id).scalar():
+            return None
+    return party
 
 
 def _not_found():

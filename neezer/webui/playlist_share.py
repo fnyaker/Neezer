@@ -109,7 +109,13 @@ def _live_row(share_id):
     """The share row if it still grants anything, else None. Deliberately not
     cached: a revocation must be dead on the very next public request."""
     row = PlaylistShare.get_or_none(PlaylistShare.id == share_id)
-    return row if _alive(row) else None
+    if not _alive(row):
+        return None
+    from ..db import User
+
+    if User.select(User.disabled).where(User.id == row.user_id).scalar():
+        return None
+    return row
 
 
 _touched: dict = {}

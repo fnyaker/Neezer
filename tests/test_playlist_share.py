@@ -300,12 +300,12 @@ class PlaylistShareTestCase(unittest.TestCase):
         self.assertEqual(m["mid"], str(mine.id))  # a local row: its UUID
         self.assertTrue(m["local"])
         self.assertTrue(m["streamable"])
-        # The public page costs 5 statements whatever the playlist holds: the
-        # share row, the playlist, one tuples SELECT of the tracks, one batched
-        # credits query, and the owner's name.
+        # The public page costs 6 statements whatever the playlist holds: the
+        # share row, the owner's disabled flag, the playlist, one tuples SELECT
+        # of the tracks, one batched credits query, and the owner's name.
         with count_statements() as stmts:
             public.get(f"/api/shared/playlist/{link['token']}")
-        self.assertEqual(sum(stmts.values()), 5, dict(stmts))
+        self.assertEqual(sum(stmts.values()), 6, dict(stmts))
 
     def test_a_tampered_token_is_404(self):
         pl = self._playlist(self.alice)
