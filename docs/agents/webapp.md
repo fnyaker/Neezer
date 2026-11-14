@@ -205,6 +205,23 @@ Offline likes go to a per-account `sessionStorage` queue and are flushed sequent
 “Passer pour l'instant” only appears when the server says the feed is unavailable. 44 px, roving
 tab index, `aria-pressed`, `role=status`, no emoji, no comment.
 
+**A shared playlist is role-driven** (`routes/Playlist.svelte`, `PlaylistMembersSheet.svelte`,
+`lib/actions.js`): `editable`/`can_manage`/`role` come from the payload, never `$isAdmin`. The owner
+sees rename/delete/collaborators/public link; an editor adds/removes/reorders and may leave; a
+viewer reads and is told to ask the owner; an admin keeps the override without appearing in the
+member list. The header shows the owner, an avatar stack (3 × 22 px + `+N`) opening the sheet,
+« Modifié par X · date » and a stale pill. Opening the sheet costs **0 requests**; 100 members are
+windowed to **20 rows**; invite/role/remove/leave are one request each. Every mutation carries
+`version` or `members_version`; a **409** discards the queued operation, does **one GET per scope**
+(never a replay), keeps the audio queue untouched and says who changed it. The `/version` probe costs
+**0 in a solo playlist** and runs 30 s / 10 s on focus only when the playlist has more than one
+member; if the page is not editing it reloads, otherwise it offers « actualiser ». The sidebar and
+Library gain a « Partagées avec moi » group (owner subtitle), the picker offers only `editable`
+lists while creation stays open to every account, and `ExportSheet` shows the public link only with
+`can_manage`. `/me/playlists` is refetched at most once a minute on focus. Measured: 2 requests to
+open an editable page, 1 for a reader, 1 GET per 30 s probe, 0 per solo, 1 per mutation; no sideways
+overflow at 360/390/768/1280/1920, 44 px touch targets (40 px pointer) and 60 px rows.
+
 **The invitation page** (`routes/Invite.svelte`, `lib/invite.js`) is public and renders before
 the login and before the app shell, exactly like a public playlist: `#/invite/<token>` keeps the
 token in the fragment and sends it only in the JSON body of `POST /api/invites/inspect|redeem`.
