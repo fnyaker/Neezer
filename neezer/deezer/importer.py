@@ -21,12 +21,13 @@ from __future__ import annotations
 import logging
 import os.path
 from datetime import timedelta
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 from peewee import fn
 
 from ..db import (
     Playlist,
+    PlaylistMember,
     PlaylistTrack,
     PodcastChannel,
     Track,
@@ -34,6 +35,7 @@ from ..db import (
     db,
     now,
 )
+from ..playlist_access import bump_version
 from . import ids, library
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,19 @@ class DeezerImporter:
             )
         return out
 
+    def _own_playlist_id(self, local_id):
+        """The id this import writes under: another account's playlist is never
+        merged into, adopted or deleted. The second importer of one Deezer
+        playlist gets a per-account id (the same rule as ``libraryimport``)."""
+        existing = Playlist.get_or_none(Playlist.id == local_id)
+        if existing is None or existing.user_id == self.user.id:
+            return local_id
+        derived = uuid5(local_id, str(self.user.id))
+        existing = Playlist.get_or_none(Playlist.id == derived)
+        if existing is None or existing.user_id == self.user.id:
+            return derived
+        return uuid4()
+
     def _materialize_playlist(
         self, local_id, name, deezer_id, raw_tracks, comment=None, merge=False
     ):
@@ -82,19 +97,28 @@ class DeezerImporter:
         ``merge`` keeps an existing local playlist as it is (name, comment and
         every track in place) and only appends the tracks it does not hold yet:
         once the account is imported, the local playlist is the one that counts.
+
+        The playlist is always the importing account's: its ``owner`` member row
+        is written with the playlist, so the list and the collaborators sheet
+        agree from the first sync, and a foreign row under the same id is left
+        untouched.
         """
+        local_id = self._own_playlist_id(local_id)
         dz = str(deezer_id) if deezer_id else None
         with db.atomic():
             if merge:
                 existing = Playlist.get_or_none(Playlist.id == local_id)
                 if existing is not None:
                     return self._merge_playlist(existing, raw_tracks)
-            # Collapse split-brain duplicates: stray rows pointing at the same
-            # Deezer playlist under a different (e.g. client-generated) id, from
-            # before client-created playlists adopted the canonical uuid5 id.
+            # Collapse split-brain duplicates: stray rows of THIS account pointing
+            # at the same Deezer playlist under a different (e.g. client-generated)
+            # id, from before client-created playlists adopted the canonical uuid5
+            # id. Another account's row is never this account's to delete.
             if dz:
                 for stray in Playlist.select().where(
-                    (Playlist.deezer_id == dz) & (Playlist.id != local_id)
+                    (Playlist.deezer_id == dz)
+                    & (Playlist.id != local_id)
+                    & (Playlist.user == self.user.id)
                 ):
                     stray.delete_instance(recursive=True)
 
@@ -134,10 +158,18 @@ class DeezerImporter:
                 playlist.deezer_id = dz
                 playlist.clear()
                 playlist.save()
+                replaced = True
             except Playlist.DoesNotExist:
                 playlist = Playlist.create(
                     id=local_id, user=self.user, name=name, comment=comment, deezer_id=dz
                 )
+                PlaylistMember.create(
+                    playlist=playlist,
+                    user=self.user,
+                    role="owner",
+                    added=playlist.created,
+                )
+                replaced = False
 
             # Deezer's current order first, then the preserved-but-vanished
             # archived tracks appended (their original slot is unknown once
@@ -154,6 +186,8 @@ class DeezerImporter:
             ]
             if rows:
                 PlaylistTrack.insert_many(rows).execute()
+            if replaced:
+                bump_version(playlist, None, self.user)
         return playlist, len(final)
 
     def _merge_playlist(self, playlist, raw_tracks):
@@ -182,6 +216,7 @@ class DeezerImporter:
             )
         if rows:
             PlaylistTrack.insert_many(rows).execute()
+            bump_version(playlist, None, self.user)
         return playlist, len(have)
 
     # -- playlists -------------------------------------------------------

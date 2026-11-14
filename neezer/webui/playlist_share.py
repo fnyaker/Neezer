@@ -202,24 +202,34 @@ _stream_limiter = _RequestLimiter(max_requests=120, window=600)
 
 
 def _owned_playlist(pid):
-    """The playlist, when the caller is its owner or an admin. Somebody else's
-    playlist reads exactly like one that does not exist."""
+    """``(playlist, error)`` for the owner side of a public link.
+
+    A non-member reads nothing: the playlist looks exactly like one that does
+    not exist (404). A member without ``can_manage`` — an editor or a viewer —
+    demonstrably has it but may not publish or revoke the link (403), so a
+    direct call from the console holds the same matrix as the sheet. An admin
+    keeps the override.
+    """
+    from .. import playlist_access as placcess
+
     pl = _resolve_db_playlist(pid)
     if pl is None:
-        return None
-    user = request.webuser
-    if not (user.admin or pl.user_id == user.id):
-        return None
-    return pl
+        return None, (jsonify({"error": "not found"}), 404)
+    role = placcess.role_for(pl, request.webuser)
+    if role is None:
+        return None, (jsonify({"error": "not found"}), 404)
+    if not placcess.role_can_manage(role):
+        return None, (jsonify({"error": "forbidden"}), 403)
+    return pl, None
 
 
 @webapi.route("/playlist/<playlist_id>/share")
 @login_required
 def playlist_share(playlist_id):
     """The playlist's live public link, or ``link: null``."""
-    pl = _owned_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
+    pl, error = _owned_playlist(playlist_id)
+    if error:
+        return error
     row = (
         PlaylistShare.select()
         .where(PlaylistShare.playlist == pl)
@@ -237,9 +247,9 @@ def playlist_share_create(playlist_id):
     """Create the public link (``ttl`` seconds, 3600..30 days, null = forever),
     or hand back the live link that already exists — one per playlist is
     enough."""
-    pl = _owned_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
+    pl, error = _owned_playlist(playlist_id)
+    if error:
+        return error
     ttl = None
     data = request.get_json(silent=True)
     if data is None:
@@ -277,9 +287,9 @@ def playlist_share_create(playlist_id):
 @login_required
 def playlist_share_revoke(playlist_id):
     """Revoke every live link for this playlist. Dead on the next request."""
-    pl = _owned_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
+    pl, error = _owned_playlist(playlist_id)
+    if error:
+        return error
     n = (
         PlaylistShare.update(revoked=now())
         .where(PlaylistShare.playlist == pl, PlaylistShare.revoked.is_null(True))

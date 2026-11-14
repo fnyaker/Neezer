@@ -64,6 +64,7 @@ from .db import (
     EntityRef,
     LibraryItem,
     Playlist,
+    PlaylistMember,
     PlaylistTrack,
     ProviderAccount,
     ServiceLink,
@@ -76,6 +77,7 @@ from .db import (
     now,
     open_connection,
 )
+from .playlist_access import bump_version
 from .providers.errors import ProviderAuth, ProviderError, ProviderUnavailable
 
 logger = logging.getLogger(__name__)
@@ -305,11 +307,17 @@ def _save_playlist(user, local_id, name, comment, tracks, deezer_ref=None):
         local_id = uuid.uuid5(local_id, str(user.id))
         existing = Playlist.get_or_none(Playlist.id == local_id)
         deezer_ref = None
+    if existing is not None and existing.user_id != user.id:
+        local_id, existing = uuid.uuid4(), None
+    created = existing is None
     with db.atomic():
         if existing is None:
             existing = Playlist.create(
                 id=local_id, user=user, name=(name or "Playlist")[:255],
                 comment=(comment or None) and comment[:255], deezer_id=deezer_ref,
+            )
+            PlaylistMember.create(
+                playlist=existing, user=user, role="owner", added=existing.created
             )
             have, index = set(), -1
         else:
@@ -331,6 +339,8 @@ def _save_playlist(user, local_id, name, comment, tracks, deezer_ref=None):
             rows.append({"id": uuid.uuid4(), "playlist": existing.id, "track": t.id, "index": index})
         for i in range(0, len(rows), CHUNK):
             PlaylistTrack.insert_many(rows[i : i + CHUNK]).execute()
+        if rows and not created:
+            bump_version(existing, None, user)
     return existing
 
 

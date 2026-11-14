@@ -151,10 +151,22 @@ def _transcode(path, args):
 
 
 def _playlist_tracks(ident):
-    """(title, tracks) for a playlist id — a local UUID or a Deezer id."""
+    """(title, tracks) for a playlist id — a local UUID or a Deezer id.
+
+    A local playlist is the caller's whole world: a non-member gets nothing
+    (the route answers 404) and a member's private uploads of other people are
+    absent from the archive, exactly as they are from the playlist page.
+    """
+    from .. import playlist_access as placcess
+
     pl = _resolve_db_playlist(ident)
     if pl is not None:
-        return pl.name, [_db_track(t) for t in _db_playlist_track_rows(pl)]
+        if not placcess.can_read(pl, request.webuser):
+            return None, None
+        return pl.name, [
+            _db_track(t)
+            for t in _db_playlist_track_rows(pl, request.webuser)
+        ]
     if not _valid_id(ident):
         return None, None
     provider, err = _need_provider()

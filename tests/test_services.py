@@ -429,8 +429,15 @@ class ServicesTestCase(unittest.TestCase):
     def test_exports_are_private_to_their_user(self):
         self._configure()
         self._link_spotify()
+        # A playlist that is not his is not even confirmed to exist.
         self.assertEqual(
             self.bob.post("/api/services/spotify/export", json={"kind": "playlist", "id": str(self.pl.id)}).status_code,
+            404, "a non-member cannot export somebody else's playlist",
+        )
+        mine = Playlist.create(user=User.get(name="bob"), name="Bob's")
+        PlaylistTrack.create(playlist=mine, track=self.tracks[0], index=0)
+        self.assertEqual(
+            self.bob.post("/api/services/spotify/export", json={"kind": "playlist", "id": str(mine.id)}).status_code,
             409, "bob has no Spotify linked: alice's is not his",
         )
         self.fake.catalogue = [("spotify:track:papa", "Papaoutai", ["Stromae"], 232, None)]

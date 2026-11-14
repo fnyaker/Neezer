@@ -78,11 +78,13 @@ class PlaylistTestCase(FrontendTestBase):
         self.assertIn("Invalid", rv.data)
         rv = self.client.post("/playlist/" + str(uuid.uuid4()), follow_redirects=True)
         self.assertIn("Unknown", rv.data)
+        # A non-member is told the playlist does not exist, exactly like an
+        # unknown id: the legacy page must not confirm somebody else's playlist.
         rv = self.client.post(
             "/playlist/" + str(self.playlistid), follow_redirects=True
         )
         self.assertNotIn("updated", rv.data)
-        self.assertIn("not allowed", rv.data)
+        self.assertIn("Unknown", rv.data)
         self._logout()
 
         self._login("alice", "Alic3")
@@ -115,7 +117,8 @@ class PlaylistTestCase(FrontendTestBase):
         rv = self.client.post(
             "/playlist/del/" + str(self.playlistid), follow_redirects=True
         )
-        self.assertIn("not allowed", rv.data)
+        self.assertNotIn("deleted", rv.data)
+        self.assertIn("Unknown", rv.data)
         self.assertEqual(Playlist.select().count(), 1)
         self._logout()
 

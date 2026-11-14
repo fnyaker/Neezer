@@ -29,9 +29,11 @@ from ..db import (
     Album,
     Artist,
     Playlist,
+    PlaylistMember,
     PlaylistTrack,
     StarredTrack,
     Track,
+    User,
     db,
     now,
 )
@@ -201,18 +203,33 @@ def unavailable_tracks():
 
 
 def _unavailable_entry(t: Track) -> dict:
-    """A track payload for the replacement UI, plus where it is still used."""
+    """A track payload for the replacement UI, plus where it is still used.
+
+    Only the playlists the caller can open are named: a guest used to learn the
+    name and id of every account's private playlist from a dead track that
+    happened to sit in one.
+    """
     out = _local_track(t) if not t.deezer_id else _archived_track_api(t)
     out["unavailable"] = True
-    out["playlists"] = [
-        {"id": str(p.id), "title": p.name}
-        for p in (
-            Playlist.select()
-            .join(PlaylistTrack, on=(PlaylistTrack.playlist == Playlist.id))
-            .where(PlaylistTrack.track == t.id)
-            .distinct()
+    query = (
+        Playlist.select(Playlist.id, Playlist.name)
+        .join(PlaylistTrack, on=(PlaylistTrack.playlist == Playlist.id))
+        .where(PlaylistTrack.track == t.id)
+        .distinct()
+        .order_by(Playlist.name)
+    )
+    user = request.webuser
+    if not getattr(user, "admin", False):
+        query = query.where(
+            (Playlist.user == user.id)
+            | Playlist.public
+            | Playlist.id.in_(
+                PlaylistMember.select(PlaylistMember.playlist).where(
+                    PlaylistMember.user == user.id
+                )
+            )
         )
-    ]
+    out["playlists"] = [{"id": str(p.id), "title": p.name} for p in query]
     return out
 
 
@@ -513,24 +530,59 @@ def replace_track():
     return jsonify({"ok": True, "job": job_id})
 
 
+def _editable_playlists(user_id, admin):
+    """The playlists a replacement or a deletion may rewrite for this caller.
+
+    The owner's own rows, then the ``editor`` member rows — the same authority
+    as ``playlist_access`` (a ``viewer`` row is read-only, and a stored role it
+    would not accept is not trusted). ``admin`` answers ``None``: every row.
+    """
+    if admin:
+        return None
+    return (Playlist.user == user_id) | Playlist.id.in_(
+        PlaylistMember.select(PlaylistMember.playlist).where(
+            (PlaylistMember.user == user_id) & (PlaylistMember.role == "editor")
+        )
+    )
+
+
+def _stamp_playlists(touched, actor):
+    """One UPDATE for every playlist a background write changed.
+
+    The SPA's 30 s probe watches ``Playlist.version``: a replacement or a
+    deletion that left it alone was invisible until a full reload. One
+    statement, whatever the playlist count, and the last editor is named.
+    """
+    if not touched:
+        return
+    Playlist.update(
+        version=Playlist.version + 1,
+        last_edited_by=getattr(actor, "name", None),
+        last_edited_at=now(),
+    ).where(Playlist.id.in_(list(touched))).execute()
+
+
 def replace_everywhere(app, source, target, user_id, admin):
     """Put ``target`` wherever ``source`` is; ``(playlists, favorites)`` touched.
 
-    Only playlists the caller may edit (their own; every one for an admin) and
-    their favourites (everyone's for an admin). Mirrored to Deezer for the
-    admin, fail-soft; the source row is retired when nothing uses it any more.
-    Shared by a person's replacement and the auto-match.
+    Only playlists the caller may edit (their own and the ones shared with them
+    as an editor; every one for an admin) and their favourites (everyone's for
+    an admin). Mirrored to Deezer for the admin, fail-soft; the source row is
+    retired when nothing uses it any more. Shared by a person's replacement and
+    the auto-match.
     """
     rows = (
         PlaylistTrack.select(PlaylistTrack, Playlist)
         .join(Playlist, on=(PlaylistTrack.playlist == Playlist.id))
         .where(PlaylistTrack.track == source.id)
     )
-    if not admin:
-        rows = rows.where(Playlist.user == user_id)
+    scope = _editable_playlists(user_id, admin)
+    if scope is not None:
+        rows = rows.where(scope)
 
     touched = set()
     favorites = 0
+    actor = User.get_or_none(User.id == user_id) if user_id else None
     with db.atomic():
         for row in rows:
             # In place, at the same position: a replacement must not
@@ -555,6 +607,8 @@ def replace_everywhere(app, source, target, user_id, admin):
                 StarredTrack.create(user=star.user_id, starred=target.id, date=star.date)
             star.delete_instance()
             favorites += 1
+
+        _stamp_playlists(touched, actor)
 
     _retire_replaced(source)
     return len(touched), favorites
@@ -686,10 +740,12 @@ def _remove_everywhere(app, track, user_id, admin):
         .join(Playlist, on=(PlaylistTrack.playlist == Playlist.id))
         .where(PlaylistTrack.track == track.id)
     )
-    if not admin:
-        rows = rows.where(Playlist.user == user_id)
+    scope = _editable_playlists(user_id, admin)
+    if scope is not None:
+        rows = rows.where(scope)
     touched = {row.playlist_id for row in rows}
 
+    actor = User.get_or_none(User.id == user_id) if user_id else None
     with db.atomic():
         for pid in touched:
             pl = Playlist.get_or_none(Playlist.id == pid)
@@ -709,6 +765,8 @@ def _remove_everywhere(app, track, user_id, admin):
         favorites = starred.count()
         for star in starred:
             star.delete_instance()
+
+        _stamp_playlists(touched, actor)
 
         if admin:
             # recursive: the ArtistCredit rows, ratings and any

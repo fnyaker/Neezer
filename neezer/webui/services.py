@@ -376,7 +376,11 @@ def _source(kind, ident):
     The library first (Track rows: the ISRC is on disk beside them); a Deezer
     page that is not in it — a recommendation, an editorial playlist, an album
     nobody played — is listed through the ZIP export's own readers (dicts).
+    A local playlist is read through ``playlist_access`` with the caller's
+    visibility: a non-member reads nothing, a member's list stops at what they
+    can see.
     """
+    from .. import playlist_access as placcess
     from . import export
 
     if kind == "favorites":
@@ -384,7 +388,9 @@ def _source(kind, ident):
     if kind == "playlist":
         pl = _resolve_db_playlist(ident)
         if pl is not None:
-            return pl.name, list(_db_playlist_track_rows(pl))
+            if not placcess.can_read(pl, request.webuser):
+                return None, None
+            return pl.name, list(_db_playlist_track_rows(pl, request.webuser))
         return export._playlist_tracks(ident) if _valid_id(ident) else (None, None)
     if kind == "album":
         name, rows = _album_rows(ident)

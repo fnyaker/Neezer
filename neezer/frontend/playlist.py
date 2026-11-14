@@ -12,7 +12,8 @@ from flask import Response, flash, redirect, render_template, request, url_for
 from functools import wraps
 from urllib.parse import quote
 
-from ..db import Playlist, PlaylistTrack
+from .. import playlist_access as placcess
+from ..db import Playlist, PlaylistTrack, db
 
 from . import frontend
 
@@ -41,22 +42,49 @@ def resolve_and_inject_playlist(func):
             flash("Unknown playlist", "warning")
             return redirect(url_for("frontend.playlist_index"))
 
+        if not placcess.can_read(playlist, request.user):
+            flash("Unknown playlist", "warning")
+            return redirect(url_for("frontend.playlist_index"))
+
         return func(uid, playlist)
 
     return decorated
 
 
+class _VisiblePlaylist:
+    """A playlist as one person sees it: private uploads of others are absent."""
+
+    def __init__(self, playlist, user):
+        self._playlist = playlist
+        self._user = user
+
+    def __getattr__(self, name):
+        return getattr(self._playlist, name)
+
+    def get_tracks(self):
+        return [
+            track
+            for track in self._playlist.get_tracks()
+            if track.readable_by(self._user)
+        ]
+
+
 @frontend.route("/playlist/<uid>")
 @resolve_and_inject_playlist
 def playlist_details(uid, playlist):
-    return render_template("playlist.html", playlist=playlist)
+    return render_template(
+        "playlist.html", playlist=_VisiblePlaylist(playlist, request.user)
+    )
 
 
 @frontend.route("/playlist/<uid>/export")
 @resolve_and_inject_playlist
 def playlist_export(uid, playlist):
     return Response(
-        render_template("playlist_export.m3u", playlist=playlist),
+        render_template(
+            "playlist_export.m3u",
+            playlist=_VisiblePlaylist(playlist, request.user),
+        ),
         mimetype="audio/mpegurl",
         # The name is the user's: a quote, a semicolon or a newline in it must
         # not reach the header raw. RFC 6266 form, with an ASCII fallback.
@@ -73,7 +101,7 @@ def playlist_export(uid, playlist):
 @frontend.route("/playlist/<uid>", methods=["POST"])
 @resolve_and_inject_playlist
 def playlist_update(uid, playlist):
-    if playlist.user_id != request.user.id:
+    if not placcess.can_manage(playlist, request.user):
         flash("You're not allowed to edit this playlist", "danger")
     elif not request.form.get("name"):
         flash("Missing playlist name", "danger")
@@ -87,7 +115,9 @@ def playlist_update(uid, playlist):
             "on",
             "checked",
         )
-        playlist.save()
+        with db.atomic():
+            playlist.save()
+            placcess.bump_version(playlist, None, request.user)
         flash("Playlist updated.", "success")
 
     return playlist_details(str(uid))
@@ -96,11 +126,12 @@ def playlist_update(uid, playlist):
 @frontend.route("/playlist/del/<uid>", methods=["POST"])
 @resolve_and_inject_playlist
 def playlist_delete(uid, playlist):
-    if playlist.user_id != request.user.id:
+    if not placcess.can_manage(playlist, request.user):
         flash("You're not allowed to delete this playlist", "danger")
     else:
-        PlaylistTrack.delete().where(PlaylistTrack.playlist == playlist).execute()
-        playlist.delete_instance()
+        with db.atomic():
+            PlaylistTrack.delete().where(PlaylistTrack.playlist == playlist).execute()
+            playlist.delete_instance()
         flash("Playlist deleted", "success")
 
     return redirect(url_for("frontend.playlist_index"))
