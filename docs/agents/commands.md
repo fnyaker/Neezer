@@ -97,6 +97,8 @@ neezer-cli deezer login-test                      # check the ARL works
 neezer-cli deezer import <deezer-url|track|album|playlist <id>>
 neezer-cli deezer sync                            # import playlists/favorites/new releases
 neezer-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for archived tracks
+neezer-cli podcast chapters [--force] [--urls] [--limit N]  # extract chapters from archived podcast
+                                                     # episodes (sidecar/tags, optionally publisher URL); resumable
 neezer-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo + style for archived tracks
 neezer-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
 python tools/tempo_eval.py --render /tmp/tempo          # the server's file tempo on the 28 arranged records + beatless tones

@@ -59,6 +59,9 @@ sync_user = admin
 ; Refresh subscribed podcasts (shows) on each sync + episodes kept per show.
 sync_podcasts = yes
 podcast_episodes = 30
+; Chapters from the archived file/sidecar, and (off by default) the publisher URL
+chapters = yes
+chapter_urls = no
 ; Import audio files dropped into archive_dir as local library tracks. Default: yes
 scan_local = yes
 preload = yes

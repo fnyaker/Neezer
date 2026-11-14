@@ -164,6 +164,20 @@ Per-user playback state is server-side: `PodcastProgress` (auto-saved position, 
 `PodcastMarker` (manual bookmarks) via `/api/podcast/progress` + marker CRUD; the SPA merges them with
 its localStorage copy newest-wins (`webapp/src/lib/podcastProgress.js`); nothing is sent to Deezer.
 
+**Podcast chapters** (`neezer/deezer/chapters.py`, `webui/podcast_chapters.py`, tables
+`podcast_chapter*` schema `20261116`): Deezer supplies neither chapters nor a transcript, so the
+source precedence is sidecar `<episode>.chapters.json` → MP4 `chpl` → ID3 `CHAP`/`CTOC` → the
+publisher URL embedded as a tag (only with `chapter_urls` on, **off by default**) → none. Extraction
+is mutagen-only (no ffprobe), **0.25 ms** for a 57.6 MB / 1 h file, at archive finalize, lazily on
+the route for an older archive, by a one-shot resumable boot backfill and by
+`neezer-cli podcast chapters`. Episode rows store milliseconds, the API answers seconds;
+`GET /api/podcast/episode/<eid>/chapters` is 200 even for an unarchived episode (`archived:false`)
+or one with no chapters (`scanned:true`, `source:"none"`, never an invented chapter), 404 for an
+unknown id, and **2 SELECT warm**. The show payload gains `chapter_count` in one grouped query
+(+18.5 B/episode raw, +0.19 B gzip). The publisher URL is fetched only on a BULK worker, validated
+on every redirect hop (public address only, pinned, 256 KiB cap, JSON only, no cookies) and a
+failure is recorded without failing the episode.
+
 **Unavailable tracks** (`neezer/webui/availability.py`): Deezer drops tracks from its catalogue,
 and `Track.unavailable` (a timestamp, so a verdict expires and is re-tested) records the ones we
 have confirmed dead. The verdict is only ever set from `TrackUnavailable` — the dedicated exception

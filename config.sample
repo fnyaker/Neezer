@@ -201,6 +201,12 @@ enabled = no
 ;on_fav_artist = yes
 ;on_playlist_add = yes
 ;on_podcast = yes
+; Read chapters from an archived episode's own file (ID3 CHAP/CTOC or MP4 chpl)
+; and from a sidecar next to it. Default: yes
+;chapters = yes
+; Follow the chapter URL the publisher put in the file (SSRF-guarded, off by
+; default because it is a network fetch to a third-party host).
+;chapter_urls = no
 
 ; How much of a favorited artist to take.
 ;   all      - the whole discography (default)
