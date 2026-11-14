@@ -249,6 +249,7 @@ POLICY = {
     "podcast_progress": "read",
     "channel_markers": "read",
     "episode_markers": "read",
+    "episode_chapters": "read",
     "download_status": "read",
     "upload_usage": "read",
     "track_analysis": "read",

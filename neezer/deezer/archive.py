@@ -342,6 +342,13 @@ def _finalize_episode(episode: PodcastEpisode, path: str, provider=None) -> None
     episode.bitrate = _bitrate_for(path, "MP3_128", episode.duration)
     episode.status = "completed"
     episode.save()
+    # A file read, off the play path: the chapters the episode itself carries.
+    try:
+        from . import chapters
+
+        chapters.ensure(episode)
+    except Exception:
+        logger.debug("Could not read the chapters of episode %s", episode.deezer_id, exc_info=True)
     # Archive the show's art alongside its audio. Once the episodes are local the
     # picture has to be too, or a show that leaves Deezer keeps its episodes and
     # loses its face. Best-effort, once per show.

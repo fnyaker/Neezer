@@ -3456,21 +3456,29 @@ def _channel(c, with_episodes=False, counts=None):
         "auto_archive": bool(c.auto_archive),
     }
     if with_episodes:
-        info["episodes"] = [
-            _episode(e, c)
-            for e in c.episodes.order_by(
+        from ..deezer.chapters import counts_for as _chapter_counts
+
+        episodes = list(
+            c.episodes.order_by(
                 PodcastEpisode.publish_date.desc(), PodcastEpisode.created.desc()
             )
+        )
+        chapter_counts = _chapter_counts([e.id for e in episodes])
+        info["episodes"] = [
+            _episode(e, c, chapter_count=chapter_counts.get(e.id, 0))
+            for e in episodes
         ]
     return info
 
 
-def _episode(e, channel=None):
+def _episode(e, channel=None, chapter_count=0):
     """A podcast episode shaped like a playable track for the web player.
 
     Its universal stream id (``deezer_id``) is the episode UUID — the same
     convention local tracks use — so the existing queue/player machinery plays
-    it unchanged via ``/api/stream/<uuid>``.
+    it unchanged via ``/api/stream/<uuid>``. ``chapter_count`` is the number
+    of chapters the archived file carries (0 when there is none); the list
+    itself is only fetched when a person expands the episode.
     """
     channel = channel or e.channel
     archived = bool(e.path and os.path.isfile(e.path))
@@ -3494,6 +3502,7 @@ def _episode(e, channel=None):
         "archived": archived,
         "unavailable": gone,
         "explicit": False,
+        "chapter_count": int(chapter_count or 0),
         "channel_id": str(channel.id),
         "artist": {"deezer_id": str(channel.id), "name": channel.title or ""},
         "album": {

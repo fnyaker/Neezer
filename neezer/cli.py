@@ -931,6 +931,46 @@ def deezer_scan_local(config):
     click.echo(f"Local scan: {out['added']} added, {out['removed']} removed.")
 
 
+@cli.group("podcast")
+def podcast_group():
+    """Podcast management commands"""
+    pass
+
+
+@podcast_group.command("chapters")
+@click.option("--force", is_flag=True, help="Scan again even episodes already scanned.")
+@click.option(
+    "--urls",
+    is_flag=True,
+    help="Also follow the chapters URL the publisher embedded in the file.",
+)
+@click.option("--limit", type=int, default=None, help="Stop after N scanned episodes.")
+@click.pass_obj
+def podcast_chapters(config, force, urls, limit):
+    """Extract the chapters of every archived podcast episode.
+
+    Reads the archived file itself (sidecar, MP4 chpl, ID3 CHAP/CTOC), never a
+    provider, and does not depend on the Réglages extraction switch: the command
+    is explicit. Safe to interrupt and to run again: an episode already scanned
+    is skipped unless --force. --urls makes one SSRF-guarded request per episode
+    whose file names a chapters URL, off unless asked here or switched on in
+    Réglages.
+    """
+    from .db import PodcastChapter
+    from .deezer import chapters
+
+    click.echo("Extracting podcast chapters...")
+    job = chapters.make_job(force=force, allow_url=urls, page_size=50)
+    job.run(limit=limit)
+    stats = job.snapshot()
+    click.echo(
+        "Done. scanned={done} failed={failed} chapters={n}.".format(
+            **stats, n=PodcastChapter.select().count()
+        )
+    )
+    _echo_failures(stats)
+
+
 @cli.group("db")
 def db_group():
     """Database management commands"""

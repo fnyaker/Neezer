@@ -424,6 +424,12 @@ def create_application(config=None):
 
         app.register_blueprint(playlist_folders_api, url_prefix="/api")
 
+        # The chapters an archived episode carries in its own file: its own
+        # blueprint, read-only, registered under the same /api prefix.
+        from .webui.podcast_chapters import chapters_api
+
+        app.register_blueprint(chapters_api, url_prefix="/api")
+
         # Remote-control narrowing must cover EVERY /api route, including the
         # ones served by a blueprint other than webapi. The hook lives on the
         # application, not on webapi, so a new blueprint cannot escape it.
@@ -436,6 +442,13 @@ def create_application(config=None):
             from .webui.spa import spa
 
             app.register_blueprint(spa)
+
+    # Archives that predate the chapter feature carry no scan row: one query at
+    # boot, then a one-shot resumable walk (nothing under test: it returns the
+    # job unstarted, so a test drives it itself).
+    from .deezer import chapters as _chapters
+
+    _chapters.start_backfill(app)
 
     if not app.testing:
         close_connection()

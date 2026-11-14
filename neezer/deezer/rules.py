@@ -78,6 +78,12 @@ DEFAULTS = {
     "on_fav_artist": False,
     "on_playlist_add": True,
     "on_podcast": True,
+    # Chapters are a property of the episode's own file, never of the catalogue.
+    # The extraction reads the archive locally and is on; following the URL the
+    # publisher embedded in the file makes ONE third-party request per episode,
+    # so it is opt-in.
+    "chapters": True,
+    "chapter_urls": False,
     # artists
     "artist_scope": "all",
     "artist_limit": 5,
