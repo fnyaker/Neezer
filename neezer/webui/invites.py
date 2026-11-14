@@ -27,7 +27,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, current_app, jsonify, request, session
 
 from .. import invites
 from ..db import Invite, User, db, now
@@ -495,6 +495,9 @@ def invite_redeem():
     _remember_redeem(row.id, request_id, user.id)
     redeem_limiter.reset_user(token_key)
     logger.info("invite %s redeemed by user %s", row.id, user.id)
+    from .. import onboarding as _onboarding
+
+    _onboarding.warm_feed(current_app._get_current_object(), user)
     return _session_response(user, 201)
 
 

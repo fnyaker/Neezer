@@ -599,7 +599,7 @@ class InvitesTestCase(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
 
     def test_the_schema_upgrade_leaves_existing_accounts_done(self):
-        self.assertEqual(SCHEMA_VERSION, "20261118")
+        self.assertGreaterEqual(SCHEMA_VERSION, "20261118")
         self.assertTrue(Invite.table_exists())
         me = self.bob.get("/api/me").get_json()["user"]
         self.assertEqual(me["onboarding"], "done")

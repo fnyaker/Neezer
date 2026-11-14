@@ -601,6 +601,8 @@ DEEZER_FEATURE = {
     "credits_backfill": None,
     "onboarding_get": None,
     "onboarding_artists": None,
+    "onboarding_search": None,
+    "onboarding_picture": None,
     "onboarding_like": None,
     "onboarding_unlike": None,
     "onboarding_related": None,

@@ -199,6 +199,10 @@ def create_application(config=None):
 
     _explorer.start(app)
 
+    from . import onboarding as _onboarding
+
+    _onboarding.start(app)
+
     # What each person's own accounts bring into their library, once a day.
     from . import libraryimport as _libraryimport
 
@@ -437,6 +441,10 @@ def create_application(config=None):
         from .webui.podcast_chapters import chapters_api
 
         app.register_blueprint(chapters_api, url_prefix="/api")
+
+        from .webui.onboarding import onboarding_api
+
+        app.register_blueprint(onboarding_api, url_prefix="/api")
 
         # Remote-control narrowing must cover EVERY /api route, including the
         # ones served by a blueprint other than webapi. The hook lives on the
