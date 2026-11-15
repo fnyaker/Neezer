@@ -60,7 +60,11 @@ it). Groups are the admin's (`user_group`, `user_group_member`). `access.snapsho
 `acc.v` moves (checked at most once a second): a check is dictionary lookups, no statement. The FIRST run on a server
 (`acc.boot`) grants the server's Deezer account (a `provider_account` row of mode `server`, its
 ARL encrypted in that row's `secret`)
-and YouTube's anonymous use to `all`, so an upgrade changes nothing. Enforcement: `webui._provider()` through the
+and YouTube's anonymous use to `all`, so an upgrade changes nothing. A server account that already existed
+BEFORE the grants (or whose rows were written before this default) is lent to `all` once by
+`access.ensure_default_server_grant()` (Meta `acc.server_grant`), on the next snapshot after the upgrade:
+without it a newly invited member could not even fetch a sound the admin had just linked. An admin who
+closes the account afterwards stays closed — the key is written once. Enforcement: `webui._provider()` through the
 `DEEZER_FEATURE` endpoint table (a refused person gets the route's local answer; a Deezer-only page is a 403
 `X-NS-Error: deezer-denied`), `webui/youtube.allowed`, and Subsonic's stream (`api/media._may_use`). `/api/me` carries
 `access` and the SPA hides what would be refused (`lib/access.js`). `tests/test_access.py`.
