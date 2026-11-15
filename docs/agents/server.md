@@ -44,6 +44,14 @@ Three code layers, from low to high:
    - `scheduler.py` — auto-sync: full sync on startup (after ~20s) then daily at `sync_at` (04:00)
      or every `sync_interval`, whenever a `sync_user` exists.
 
+**Never save a whole row that was read before a long request.** Peewee's `save()` writes
+every column the instance loaded, so a `/rest/stream` that holds `request.user` for the
+duration of a first FLAC fetch would write back a stale `disabled`/`session_epoch`/
+`password`, and a `Track` would write back a stale `play_count`/`gain`/`unavailable`/
+`last_modification`. Use a targeted `UPDATE` (`Track.update(play_count=Track.play_count + 1,
+…)`) or `save(only=(…))`; the same rule covers `TranscribeWorker` and `PodcastChannel`. A
+revoked worker is checked in the `UPDATE` itself, not only on the instance read earlier.
+
 **Resilience rules (learned from a production outage — do not regress).** The governing rule:
 **Deezer is optional to the app running.** Everything on disk — playing archived music, browsing,
 playlists, favourites, uploads, the SPA itself — must keep working at full speed while Deezer is
