@@ -175,7 +175,9 @@ server can address, so every answer says which of the three things it is, and th
   a sibling `.part` (a second download, or one a killed process left) can never hide a finished
   archive, and one stale file cannot block every seek of that track for ever. A file written in
   place by an outside process (a copy landing in a scanned library) cannot be told apart;
-  archives can, and they are what the app fetches.
+  archives can, and they are what the app fetches. That `streaming` now ends in **download** time,
+  not in listening time: the fetch has its own thread (*Archive completeness*, below), so a player
+  that stops reading while it chases a seek does not hold the archive back.
 
 **A seek into a source that is on disk but that is not served as a file** (the Opus transcode of an
 archived track, or a FLAC one wants from a moment) is a **`start=<seconds>`** parameter on
@@ -438,10 +440,23 @@ that outlives the session.
 **Archive completeness** (`neezer/deezer/backfill.py`, `neezer/webui/storage.py`) is
 **event-driven, never polled**. Archiving happens the moment something becomes yours:
 
-- *playing* it (the FLAC stream is teed to disk by `archive.open_live_stream`, `on_abort` re-queues
-  it if the client disconnects; a cold Opus request is that same live stream piped through ffmpeg
-  as it downloads (`webui._opus_live_generator`: a feeder thread owns the source, 100 ms Ogg pages,
-  first audio 0.26 s at 512 KB/s where it used to wait for the whole FLAC);
+- *playing* it (the FLAC download runs on a thread of its own — `archive.open_live_stream`, one
+  `_LiveArchive` per track, shared by every listener — and the response **tails** the growing
+  `.part` instead of fetching it: a client that stops reading (a full buffer, a paused tab, a seek,
+  a skip) no longer stops the fetch, which is the difference between an archive that lands in
+  seconds and one that stayed a `.part` for minutes. Measured on a 6.6 MB FLAC whose listener read
+  1 MB then nothing: **complete in 1.2 s** with the producer thread, **never** (30 s cap) when the
+  same generator fetched and yielded; and a reload while it downloads **joins** it — **1 Deezer
+  connection instead of 2**. The file is published (tagged COPY, atomic rename, row finalised) as
+  soon as the download ends; a reader keeps reading the raw `.part` and so never sees a file being
+  retagged, and that `.part` goes with its last reader. When the last listener leaves the download
+  keeps full speed for **1.5 s** (the player's chase reads `/ready` at 600 ms then every second, so
+  a seek reload joins it and clears the pace), then hands back all but **~160 KB/s** (measured
+  128 KB/s) for the rest of a **10 s** grace, then stops and `on_abort` gives the rest to the
+  background queue at PREFETCH — an orphan must not take the link from the track the person moved
+  on to. A cold Opus request is that same live stream piped through ffmpeg as it downloads
+  (`webui._opus_live_generator`: a feeder thread owns the source, 100 ms Ogg pages, first audio
+  0.26 s at 512 KB/s where it used to wait for the whole FLAC);
   `api/media.py::_ensure_deezer_archived` calls `ensure_archived` outright; podcast episodes archive
   on first play too). An archive is TAGGED BEFORE IT IS PUBLISHED (`archive._tag_archive`): tagging
   rewrites the file in place, and a published file is being served;

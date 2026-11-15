@@ -31,6 +31,7 @@
   import { nameOf } from "../lib/sources.js";
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
   import { createBackdrop } from "../lib/backdrop.js";
+  import { rgb } from "../lib/color.js";
   import { api } from "../lib/api.js";
 
   // Blurred backdrop — crossfading layers driven by lib/backdrop.js (shared
@@ -40,10 +41,12 @@
   // The second argument is the same-origin, server-cached copy of the same art,
   // used only if the (Deezer CDN) URL turns out to be unreachable — the backdrop
   // used to just keep the previous track's blur forever in that case.
-  $: bg.set(
-    resolveCover($offlineCovers, $current?.album?.cover),
-    trackRef($current) ? api.coverUrl(trackRef($current)) : ""
-  );
+  $: if (!$ecoMode)
+    bg.set(
+      resolveCover($offlineCovers, $current?.album?.cover),
+      trackRef($current) ? api.coverUrl(trackRef($current)) : ""
+    );
+  $: glow = $bg.length ? $bg[$bg.length - 1].glow : null;
   import {
     vizMode,
     vizWorld,
@@ -310,9 +313,11 @@
 {/snippet}
 
 <div class="d" transition:fade={{ duration: 150 }}>
-  {#each $ecoMode ? $bg.slice(-1) : $bg as layer (layer.id)}
-    <div class="bg" class:eco={$ecoMode} style={`background-image:${cssUrl(layer.src)}`}></div>
-  {/each}
+  {#if !$ecoMode}
+    {#each $bg as layer (layer.id)}
+      <div class="bg" style={`background-image:${cssUrl(layer.src)}`}></div>
+    {/each}
+  {/if}
   <div class="scrim"></div>
 
   {#if fullBleed}
@@ -378,11 +383,9 @@
       </div>
 
       <div class="cover" bind:this={coverBox}>
-        <div class="glow-wrap">
-          {#each $ecoMode ? $bg.slice(-1) : $bg as layer (layer.id)}
-            <div class="glow" class:eco={$ecoMode} style={`background-image:${cssUrl(layer.src)}`}></div>
-          {/each}
-        </div>
+        {#if !$ecoMode}
+          <div class="glow" style={glow ? `--glow-c:${rgb(glow)}` : ""}></div>
+        {/if}
         {#key trackKey($current)}
           <div class="cover-fade" in:fade={{ duration: 260 }} out:fade={{ duration: 260 }}>
             <!-- 1000px: 1500 is 2-3× the bytes for a marginal gain, and the CDN
@@ -557,10 +560,6 @@
     transform: scale(1.25);
     animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
   }
-  .bg.eco,
-  .glow.eco {
-    animation: none;
-  }
   @keyframes bg-in {
     from {
       opacity: 0;
@@ -570,6 +569,7 @@
     .bg,
     .glow {
       animation: none;
+      transition: none;
     }
   }
   .scrim {
@@ -670,6 +670,10 @@
     gap: 18px;
     container-type: inline-size;
     container-name: nowmain;
+    /* The strip's height, raised where the column has the room (below): the
+       visualizer fills whatever its host gives it, and the extra 12 px comes
+       out of the free band the auto margins leave, never off the footer. */
+    --viz-strip-h: 44px;
   }
 
   /* The reading columns (Sillon's raised card, same as the queue's). They only
@@ -723,21 +727,20 @@
     margin: 0 auto;
     flex: none;
   }
-  .glow-wrap {
-    position: absolute;
-    inset: -6%;
-    opacity: 0.55;
-    border-radius: 28%;
-    z-index: -1;
-  }
+  /* The sleeve's halo: the cover's dominant colour in a radial mask, NOT a
+     second blurred image — it costs one paint, transitions as a colour, and
+     leaves the blurred backdrop the only `filter: blur` in the player. */
   .glow {
     position: absolute;
-    inset: 0;
-    background-size: cover;
-    background-position: center;
-    filter: blur(40px) saturate(1.5);
+    inset: -6%;
     border-radius: 28%;
-    animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
+    z-index: -1;
+    background: var(--glow-c, transparent);
+    -webkit-mask-image: radial-gradient(closest-side, #000 38%, transparent 78%);
+    mask-image: radial-gradient(closest-side, #000 38%, transparent 78%);
+    opacity: 0.5;
+    transition: background-color 600ms cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
   }
   /* keyed crossfade: old + new overlap during the transition */
   .cover-fade {
@@ -997,9 +1000,24 @@
   .viz {
     position: relative;
     width: 100%;
-    height: 44px;
+    height: var(--viz-strip-h, 44px);
     flex: none;
     opacity: 0.9;
+  }
+  /* Taller bars where the column can pay for them: 56 px from 880 px of window
+     height without a Flow, and only from 1060 with one, whose steering row
+     already takes the band (measured: 900/880 is the fixed rows' budget, and
+     with Flow the footer still leaves the bottom padding at 1040). Below those
+     the strip keeps 44 px, and under 821 px it is not drawn at all. */
+  @media (min-height: 880px) {
+    .main:not(.steer) {
+      --viz-strip-h: 56px;
+    }
+  }
+  @media (min-height: 1060px) {
+    .main.steer {
+      --viz-strip-h: 56px;
+    }
   }
   /* The strip lives in the empty band between the transport and the footer
      instead of hugging the controls: the flexible auto margins put it in the

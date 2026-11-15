@@ -100,12 +100,10 @@ export function createBarsScene(opts = {}) {
     if (!bars || !w || !h) return;
     const full = layout === "full";
     const ink = false; // the oracle's frames never carry the Papier option
-    if (full) {
-      g.fillStyle = hsl(pal.hue, pal.sat * 0.4, 0.045, 0.72);
-      g.fillRect(0, 0, w, h);
-    } else {
-      g.clearRect(0, 0, w, h);
-    }
+    // The app draws no field of its own in either layout (the row sits on the
+    // page's blurred cover); the oracle follows that, and the comparison stays
+    // about where the capsules were put.
+    g.clearRect(0, 0, w, h);
     const bw = w / bars;
     const body = Math.max(2, Math.min(bw * 0.64, h * 0.55));
     const r = body / 2;

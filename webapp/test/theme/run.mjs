@@ -100,7 +100,7 @@ for (const [track, png] of [
     if (id) COVER.set(`/api/cover/${id}`, png);
 say(`« ${first.title} » (${GREEN} → ${GREEN_AC}) → « ${second.title} » (${RED} → ${RED_AC})`);
 
-async function context({ width, height, phone, reduced }) {
+async function context({ width, height, phone, reduced, eco }) {
   const ctx = await browser.newContext({
     viewport: { width, height },
     deviceScaleFactor: phone ? 2 : 1,
@@ -117,13 +117,14 @@ async function context({ width, height, phone, reduced }) {
     const png = COVER.get(new URL(r.request().url()).pathname) || GREY_PNG;
     r.fulfill({ status: 200, contentType: "image/png", body: png });
   });
-  await ctx.addInitScript(() => {
+  await ctx.addInitScript((eco) => {
     try {
       localStorage.setItem("ui.theme", JSON.stringify("pochette"));
+      localStorage.setItem("viz.eco", eco ? "true" : "false");
     } catch {
       /* no storage */
     }
-  });
+  }, !!eco);
   return ctx;
 }
 
@@ -142,10 +143,9 @@ async function openPlayer(ctx, { phone }) {
   if (phone) {
     await page.locator("footer.player").click({ position: { x: 4, y: 4 } });
     await page.locator(".m").waitFor({ state: "visible", timeout: 20000 });
-    await page.waitForSelector(".m .bg", { timeout: 20000 });
   } else {
     await page.locator('button[aria-label="Plein écran"]').first().click();
-    await page.waitForSelector(".d .bg", { timeout: 20000 });
+    await page.waitForSelector(".d .controls .pp", { timeout: 20000 });
   }
   await page.waitForTimeout(1400);
   return page;
@@ -197,10 +197,15 @@ async function sample(page, { twice }) {
         gaps.push(now - last);
         last = now;
         const raw = getComputedStyle(document.documentElement).getPropertyValue("--cover-ac").trim();
+        const blurred = [...document.querySelectorAll(".d .bg, .m .bg")].filter((e) => {
+          const cs = getComputedStyle(e);
+          return cs.backgroundImage !== "none" && (cs.filter || "").includes("blur");
+        }).length;
         rows.push({
           t: +(now - t0).toFixed(1),
           ac: toRgb(raw),
           raw,
+          blurred,
           op: [...document.querySelectorAll(".d .bg, .m .bg")].map((e) => +getComputedStyle(e).opacity),
         });
         if (twice && !clicked && now - t0 >= 240) {
@@ -219,6 +224,23 @@ async function sample(page, { twice }) {
   page.off("request", onReq);
   return { ...out, requests };
 }
+
+const countBackdrop = () => {
+  const root = document.querySelector(".d") || document.querySelector(".m");
+  if (!root) return { layers: 0, blurred: 0, glow: 0, glowBlur: 0, glowImage: 0 };
+  const bgs = [...root.querySelectorAll(".bg")];
+  const glows = [...root.querySelectorAll(".glow")];
+  return {
+    layers: bgs.length,
+    blurred: bgs.filter((e) => {
+      const cs = getComputedStyle(e);
+      return cs.backgroundImage !== "none" && (cs.filter || "").includes("blur");
+    }).length,
+    glow: glows.length,
+    glowBlur: glows.filter((e) => (getComputedStyle(e).filter || "").includes("blur")).length,
+    glowImage: glows.filter((e) => getComputedStyle(e).backgroundImage !== "none").length,
+  };
+};
 
 const readAccent = () => {
   const canvas = document.createElement("canvas");
@@ -248,6 +270,10 @@ for (const [label, size, phone] of [
 ]) {
   const ctx = await context({ ...size, reduced: false });
   const page = await openPlayer(ctx, { phone });
+
+  const rest = await page.evaluate(countBackdrop);
+  check(rest.layers === 1 && rest.blurred === 1, `${label} : UNE image de fond floutée au repos`, JSON.stringify(rest));
+  check(rest.glowBlur === 0 && rest.glowImage === 0, `${label} : le halo n'est ni une image ni un flou`, JSON.stringify(rest));
 
   const start = await page.evaluate(readAccent);
   const run = await sample(page, { twice: false });
@@ -285,18 +311,30 @@ for (const [label, size, phone] of [
     hole.slice(0, 3).map((r) => `${r.t}ms ${r.op}`).join(" ; ")
   );
   const maxLayers = Math.max(...rows.map((r) => r.op.length));
-  check(maxLayers <= 8, `${label} : au plus 8 couches de fond (${maxLayers} montées)`, "");
+  const maxBlurred = Math.max(...rows.map((r) => r.blurred));
+  check(maxLayers <= 2, `${label} : au plus 2 couches de fond (${maxLayers} montées)`, "");
+  check(
+    maxBlurred <= 2 && maxBlurred >= 2,
+    `${label} : DEUX images floutées pendant le fondu (${maxBlurred} au plus)`,
+    rows.map((r) => r.blurred).join("")
+  );
+  check(rows.at(-1)?.blurred === 1, `${label} : le fond revient à une seule image`, `${rows.at(-1)?.blurred}`);
   const gap = Math.max(...gaps);
   check(gap < 250, `${label} : aucun gel de l'interface (${gap.toFixed(1)} ms max)`, `longtasks ${long.toFixed(1)} ms`);
   say(
     `${label} : accent ${start} → ${end}, posé à ${Math.round(settled?.t || 0)} ms, milieu ${midColour}, ` +
-      `cadres ${rows.length}, couches ≤ ${maxLayers}, pas max ${gap.toFixed(1)} ms, longtask ${long.toFixed(1)} ms`
+      `cadres ${rows.length}, couches ≤ ${maxLayers}, floutées ≤ ${maxBlurred}, ` +
+      `pas max ${gap.toFixed(1)} ms, longtask ${long.toFixed(1)} ms`
   );
 
   const mine = [pathOf(first.album.cover), pathOf(second.album.cover)];
   const covers = requests.filter((r) => mine.includes(pathOf(r.url))).length;
   const tail = requests.filter((r) => r.at > Date.now() - 700);
-  check(covers <= 3, `${label} : ${covers} requête(s) pour les deux pochettes du saut`, requests.map((r) => r.url).join(" ; "));
+  check(
+    covers <= 6,
+    `${label} : ${covers} requête(s) pour les deux pochettes du saut (fond, manche et rangées de la file)`,
+    requests.map((r) => r.url).join(" ; ")
+  );
   check(
     tail.length === 0,
     `${label} : plus aucune requête une fois posé (${tail.length} en fin de fenêtre)`,
@@ -329,9 +367,14 @@ for (const [label, size, phone] of [
       .join(" ; ")
   );
   check(
-    Math.max(...twice.rows.map((r) => r.op.length)) <= 8,
-    `${label} : la rafale reste bornée à 8 couches`,
+    Math.max(...twice.rows.map((r) => r.op.length)) <= 2,
+    `${label} : la rafale reste bornée à 2 couches`,
     `${Math.max(...twice.rows.map((r) => r.op.length))}`
+  );
+  check(
+    Math.max(...twice.rows.map((r) => r.blurred)) <= 2,
+    `${label} : la rafale ne floute jamais plus de 2 images`,
+    `${Math.max(...twice.rows.map((r) => r.blurred))}`
   );
   await rapid.close();
 }
@@ -355,6 +398,68 @@ for (const [label, size, phone] of [
   );
   const hole = rows.filter((r) => Math.max(...r.op, 0) < 0.99);
   check(hole.length === 0, "reduced motion : le fond reste opaque", `${hole.length}`);
+  await ctx.close();
+}
+
+// Eco mode: a flat theme ground. No blurred image, no filter, no image fade.
+for (const [label, size, phone] of [
+  ["éco bureau 1280", { width: 1280, height: 800, phone: false }, false],
+  ["éco téléphone 390", { width: 390, height: 844, phone: true }, true],
+]) {
+  const ctx = await context({ ...size, reduced: false, eco: true });
+  const page = await openPlayer(ctx, { phone });
+  const flat = await page.evaluate(() => {
+    const root = document.querySelector(".d") || document.querySelector(".m");
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ix = canvas.getContext("2d", { willReadFrequently: true });
+    const toRgb = (css) => {
+      ix.fillStyle = "#000000";
+      ix.fillStyle = css;
+      ix.clearRect(0, 0, 1, 1);
+      ix.fillRect(0, 0, 1, 1);
+      const d = ix.getImageData(0, 0, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+    const bgs = [...root.querySelectorAll(".bg")];
+    const glows = [...root.querySelectorAll(".glow")];
+    const filtered = [...root.querySelectorAll("*")].filter((e) => (getComputedStyle(e).filter || "").includes("blur")).length;
+    const animated = [...root.querySelectorAll(".bg")].filter((e) => getComputedStyle(e).animationName !== "none").length;
+    return {
+      bgs: bgs.length,
+      glows: glows.length,
+      filtered,
+      animated,
+      ground: toRgb(getComputedStyle(root).backgroundColor),
+      theme: toRgb(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()),
+    };
+  });
+  check(flat.bgs === 0, `${label} : aucune image de fond`, `${flat.bgs}`);
+  check(flat.glows === 0, `${label} : aucun halo`, `${flat.glows}`);
+  check(flat.filtered === 0, `${label} : aucun filter: blur dans le lecteur`, `${flat.filtered}`);
+  check(flat.animated === 0, `${label} : aucun fondu d'image`, `${flat.animated}`);
+  check(
+    !!flat.ground && !!flat.theme && flat.ground.join() === flat.theme.join(),
+    `${label} : fond plat du thème`,
+    `${flat.ground} / ${flat.theme}`
+  );
+  const before = await page.evaluate(readAccent);
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".d button, .m button")].find((x) => x.getAttribute("aria-label") === "Suivant");
+    b?.click();
+  });
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => {
+    const root = document.querySelector(".d") || document.querySelector(".m");
+    return {
+      bgs: root.querySelectorAll(".bg").length,
+      filtered: [...root.querySelectorAll("*")].filter((e) => (getComputedStyle(e).filter || "").includes("blur")).length,
+      accent: getComputedStyle(document.documentElement).getPropertyValue("--cover-ac").trim(),
+    };
+  });
+  check(after.bgs === 0 && after.filtered === 0, `${label} : toujours rien après un saut`, JSON.stringify(after));
+  check(after.accent !== "", `${label} : l'accent Pochette vit encore (${before} → ${after.accent.slice(0, 22)})`, "");
+  if (SHOTS) await page.screenshot({ path: resolve(SHOTS, `theme-eco-${phone ? "phone" : "desktop"}.png`) });
   await ctx.close();
 }
 

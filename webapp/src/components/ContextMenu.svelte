@@ -191,11 +191,10 @@
     min-width: 220px;
     max-height: 70vh;
     overflow-y: auto;
-    background: var(--s1);
-    border: 1px solid var(--ln);
-    border-radius: 10px;
+    /* Tier 2 of the glass ladder: app.css owns the material (fill, hairline,
+       shadow and the one blur). This sheet only lays the menu out. */
+    border-radius: 12px;
     padding: 6px;
-    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.4);
     color: var(--tx);
     font-size: 0.9rem;
   }
@@ -214,7 +213,7 @@
     color: inherit;
   }
   .item:hover {
-    background: var(--bg-hover);
+    background: var(--glass-hover);
   }
   .item.danger {
     color: var(--accent-2);

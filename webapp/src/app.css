@@ -59,6 +59,10 @@
   --onbtn: #0c0c0b;
   --hrt: #d2ff3c;
   --cover-ac: #ff6b4a;
+  /* The two shadow steps of the ladder: on a near-black theme the shadow is
+     the only depth cue a translucent surface has. */
+  --glass-shadow: 0 8px 24px color-mix(in srgb, #000 42%, transparent);
+  --glass-shadow-2: 0 22px 56px color-mix(in srgb, #000 55%, transparent);
   color-scheme: dark;
 }
 
@@ -77,6 +81,9 @@
   --onbtn: #f3f0e8;
   --hrt: #14130f;
   --cover-ac: #ff6b4a;
+  /* A warm, short shadow: ink on cream has to stay dust, not a grey box. */
+  --glass-shadow: 0 6px 20px color-mix(in srgb, #14130f 10%, transparent);
+  --glass-shadow-2: 0 20px 48px color-mix(in srgb, #14130f 16%, transparent);
   color-scheme: light;
 }
 
@@ -96,6 +103,8 @@
   --btn: var(--ac);
   --onbtn: #0c0c0b;
   --hrt: var(--ac);
+  --glass-shadow: 0 8px 24px color-mix(in srgb, #000 45%, transparent);
+  --glass-shadow-2: 0 22px 56px color-mix(in srgb, #000 58%, transparent);
   color-scheme: dark;
 }
 
@@ -127,6 +136,30 @@
   --font-body:
     "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* The glass ladder's shared half (the shadows are per theme, below: a dark
+     theme needs a darker, heavier shadow for the same depth). Everything here
+     reads a theme token, so a theme switch repaints the surfaces too. */
+  --glass-bg: color-mix(in srgb, var(--s1) 72%, transparent);
+  --glass-bg-2: color-mix(in srgb, var(--s1) 86%, transparent);
+  /* The one surface content SCROLLS UNDER: a sticky bar has to hide the rows
+     passing behind it, so it is the thickest tint of the set (Spotify's own
+     tab bar is rgba(18,18,18,0.92); Apple's HIG asks for the thick material
+     wherever there is text to keep legible). */
+  --glass-bg-strong: color-mix(in srgb, var(--s1) 93%, transparent);
+  --glass-hover: color-mix(in srgb, var(--tx) 9%, var(--glass-bg-2));
+  --glass-border: color-mix(in srgb, var(--tx) 13%, transparent);
+  /* The ladder's blur, one step per tier: 1 never blurs (a static surface has
+     no backdrop worth a render pass), 2 is a popover, 3 a sheet. The unsuffixed
+     `--glass-blur` / `--glass-sat` are tier 1's aliases: a component that wants
+     "the base material" should not have to know it is tier 1. */
+  --glass-blur-1: 0px;
+  --glass-blur-2: 14px;
+  --glass-blur-3: 22px;
+  --glass-sat-1: 140%;
+  --glass-sat-2: 140%;
+  --glass-sat-3: 145%;
+  --glass-blur: var(--glass-blur-1);
+  --glass-sat: var(--glass-sat-1);
 }
 
 /* Narrow desktop windows: trim the sidebar so the main content keeps room
@@ -231,12 +264,26 @@ body {
   /* kill the browser's pull-to-refresh / overscroll bounce (it fired on the
      mobile player's swipe-down-to-dismiss and on list overscroll) */
   overscroll-behavior-y: none;
-  background: var(--bg);
   color: var(--tx);
   font-family: var(--font-body);
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The theme's ground is the CANVAS (html), and <body> stays transparent: the
+   cover ground of GlobalBackdrop paints its fixed layers at `z-index:-1` in
+   the ROOT stacking context, i.e. above the canvas and below every piece of
+   page content — but only while <body> paints no opaque background over them.
+   With an opaque body the ground was hidden under the page, and the only way
+   to see it was to lift it with `isolation: isolate`, which put it ABOVE the
+   in-flow text and washed every title (measured: 190/255 instead of 17). See
+   components/GlobalBackdrop.svelte and "the glass ladder" below. */
+html {
+  background: var(--bg);
+}
+body {
+  background: transparent;
 }
 
 a {
@@ -616,10 +663,166 @@ main:has(> .notices) .gh {
   opacity: 1;
 }
 
+/* surfaces — the glass ladder ----------------------------------------------
+   THE ONE PLACE TRANSLUCENCY IS DEFINED. Three tiers, one implementation, and
+   no component invents a value of its own (a sheet that wants a material reads
+   these tokens; it does not pick its own blur):
+
+     tier 1  `--glass-bg`      72 % of --s1, NO blur.
+             Static surfaces: cards, blocks, the sidebar, the player bar, the
+             phone's tab bar. A grid of a hundred cards must not be a hundred
+             render passes — a card never blurs its own backdrop.
+     tier 2  `--glass-bg-2`    86 % + blur(14px) saturate(140 %): floating
+             POPOVERS and ALERTS — the contextual menu, the quality list, the
+             sleep and speed menus, the transcript menu, a notice.
+     tier 3  `--glass-bg-2`    86 % + blur(22px) saturate(145 %): SHEETS and
+             MODALS, over the veil their own scrim already paints (60 %).
+             The same fill as tier 2 on purpose: the veil already darkens what
+             is behind a sheet, so a third value would be a fourth invention.
+     plus    `--glass-bg-strong` 93 %, still no blur: the sticky TOP BAR and
+             the notices' strip, the only surfaces a row scrolls behind.
+             Measured ghosting at 82 % was a faint duplicate of the leaf tabs
+             under the search field; at 93 % it is gone and the bar still
+             shows the ground.
+
+   The app has exactly ONE blurred IMAGE: the cover ground
+   (components/GlobalBackdrop.svelte), a fixed layer with one `filter: blur()`
+   rasterised per sleeve. One open overlay is the only other GPU pass, and only
+   one overlay is open at a time (that is the existing behaviour: a menu closes
+   on Escape, a sheet is one dialog). The scrims under those sheets used to
+   carry their own `blur(2px)`/`blur(6px)`: same work, ten implementations, and
+   they are flattened below.
+
+   WHY THESE NUMBERS (measured: test/glass/run.mjs, on the painted pixels).
+   The ground is already scrimmed to 86–91 % of --bg, so the worst a sleeve can
+   put behind a surface is a bright pane; a 72 % tint over it leaves `--dim` at
+   6.4:1 and `--tx` at 14:1 on Encre (Papier 6.5:1 and 16:1). A 20–30 % pane —
+   the glassmorphism default — measures 1.5–2.8:1 (The Crit's Liquid Glass
+   audit; NN/g's Glassmorphism guide), which is not a taste question. Menus and
+   sheets carry the densest text, so they are the most opaque. Blur cost is the
+   captured area times the radius and every filter function is a further pass
+   (Will Chan), and a backdrop-filter over moving content is re-run on every
+   frame (Dimensa measured 29 → 61 fps when one header's blur went): 14/22 px
+   on ONE overlay is bounded, 2 px on ten scrims was not.
+   -------------------------------------------------------------------------- */
+
 .card {
-  background: var(--s1);
-  border: 1px solid var(--ln);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-card);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Tier 1 — translucent tints, never a blurred backdrop. A component whose own
+   scoped rule paints `var(--s1)`/`var(--bg-card)` reads the tints through these
+   aliases instead of a second definition. */
+.card {
+  --s1: var(--glass-bg);
+  --bg-elev: var(--glass-bg);
+  --bg-card: var(--glass-bg-2);
+  --bg-hover: var(--glass-hover);
+  --ln: var(--glass-border);
+}
+
+/* Tier 2 — popovers. `!important` on the fill and the filter is deliberate: a
+   component's own scoped `background: var(--s1|--s2)` IS the second definition
+   this contract removes. Hover/selection rules are left alone, so every menu
+   keeps the state contrast it already had. */
+.menu {
+  background-color: var(--glass-bg-2) !important;
+  border: 1px solid var(--glass-border);
+  --ln: var(--glass-border);
+  box-shadow: var(--glass-shadow-2);
+  backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+}
+
+/* Tier 3 — sheets and modals. */
+.sheet,
+.dialog {
+  background-color: var(--glass-bg-2) !important;
+  border: 1px solid var(--glass-border);
+  --ln: var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
+}
+
+/* The named tiers, for a component that has no class of its own yet. */
+.glass-1 {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+.glass-2 {
+  background: var(--glass-bg-2);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow-2);
+  backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+}
+.glass-3 {
+  background: var(--glass-bg-2);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow-2);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
+}
+
+/* Two SHELL surfaces paint `var(--s1)` in their own sheet (components/
+   MobileNav.svelte for the phone's tab bar, NowPlaying.svelte for the desktop
+   queue column). They are neither a card nor a popover, so they take tier 1 by
+   aliasing the tint here: one definition, no second copy of the same two
+   lines, and no edit to a file this change does not own. */
+.mobilenav,
+.np {
+  --s1: var(--glass-bg);
+  --ln: var(--glass-border);
+}
+
+/* A veil is a veil: the sheet above it carries the material, the scrim carries
+   the dimming. These four used to run their own 2–6 px blur, under a blurred
+   sheet, for the same pixels. */
+.overlay,
+.backdrop,
+.lc-backdrop,
+.rs-backdrop {
+  backdrop-filter: none !important;
+}
+
+/* ECO and REDUCED TRANSPARENCY: the ladder collapses onto the theme's own two
+   surfaces — --s1 everywhere, --s2 for a hover — and nothing blurs anything.
+   `data-eco="1"` is written on <html> by App.svelte (watchEco); the media query
+   is the system setting (MDN: prefers-reduced-transparency). */
+html[data-eco="1"] {
+  --glass-bg: var(--s1);
+  --glass-bg-2: var(--s1);
+  --glass-bg-strong: var(--s1);
+  --glass-hover: var(--s2);
+  --glass-border: var(--ln);
+  --glass-blur-2: 0px;
+  --glass-blur-3: 0px;
+  --glass-shadow: none;
+  --glass-shadow-2: none;
+}
+html[data-eco="1"] *,
+html[data-eco="1"] *::before,
+html[data-eco="1"] *::after {
+  backdrop-filter: none !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-bg: var(--s1);
+    --glass-bg-2: var(--s1);
+    --glass-bg-strong: var(--s1);
+    --glass-hover: var(--s2);
+    --glass-border: var(--ln);
+    --glass-blur-2: 0px;
+    --glass-blur-3: 0px;
+    --glass-shadow: none;
+    --glass-shadow-2: none;
+  }
+  *,
+  *::before,
+  *::after {
+    backdrop-filter: none !important;
+  }
 }
 
 /* the primary pill the older screens still use (Lire, Créer…). Solid accent:

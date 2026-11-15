@@ -656,3 +656,58 @@ test("the volume a store hands over can never throw inside a flush", () => {
   el.volume = 3;
   assert.equal(el.volume, 1);
 });
+
+test("a state the app has not applied a play to does not pause the page", async () => {
+  const sent = app({ version: 11 });
+  const el = N.createNativeElement();
+  const seen = [];
+  for (const t of ["pause", "play", "playing"]) el.addEventListener(t, () => seen.push(t));
+  S.nativePlayer.set(true);
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  await flush();
+  const srcC = sent.find((m) => m.op === "src").c;
+  const playC = sent.find((m) => m.op === "play").c;
+  assert.ok(playC > srcC);
+  // ExoPlayer reports BUFFERING from inside prepare(), before playWhenReady is
+  // set: the state says "paused" while its applied number is still the src's.
+  report(el, { c: playC, pc: srcC, tc: srcC, st: N.ST_BUFFERING, p: false, t: 0, d: 200, sk: true, sc: true });
+  await flush();
+  assert.equal(el.paused, false, "the page's play stands");
+  assert.deepEqual(seen, ["play"], "no pause reached the player");
+  report(el, { c: playC, pc: playC, tc: srcC, st: N.ST_READY, p: true, t: 0.25, d: 200, sk: true, sc: true });
+  await flush();
+  assert.deepEqual(seen, ["play", "playing"], "and the applied one starts it");
+  // A pause the app makes on its own is still news: its applied number is the
+  // page's own play, so nothing hides it.
+  report(el, { c: playC, pc: playC, tc: srcC, ev: "tick", st: N.ST_READY, p: false, t: 0.5, d: 200 });
+  await flush();
+  assert.deepEqual(seen.slice(-1), ["pause"]);
+  assert.equal(el.paused, true);
+  S.nativePlayer.set(false);
+});
+
+test("a seek the app has received but not applied does not move the bar", async () => {
+  app({ version: 11 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  report(el, { c: el._seq, pc: el._pSeq, tc: el._srcSeq, st: 3, p: true, t: 10, d: 200, sk: true, sc: true });
+  await flush();
+  const seen = [];
+  el.addEventListener("seeked", () => seen.push("seeked"));
+  el.currentTime = 60;
+  const seekC = el._seq;
+  report(el, { c: seekC, pc: el._pSeq, tc: el._srcSeq, ev: "seeked", st: 3, p: true, t: 10.2, d: 200 });
+  await flush();
+  assert.equal(el.seeking, true, "the seek is still pending");
+  assert.deepEqual(seen, [], "no seeked event for a position the app has not applied");
+  assert.ok(el.currentTime >= 59.9, "the bar keeps its target");
+  report(el, { c: seekC, pc: el._pSeq, tc: seekC, ev: "seeked", st: 3, p: true, t: 60, d: 200 });
+  await flush();
+  assert.deepEqual(seen, ["seeked"]);
+  assert.equal(el.seeking, false);
+  assert.ok(Math.abs(el.currentTime - 60) < 0.3);
+});

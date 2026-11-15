@@ -68,11 +68,10 @@
     seekPlan,
     seekableAt,
     bufferedAt,
-    seekLost,
-    seekBounced,
     readiness,
     trackTimeOf,
     elementTimeOf,
+    seekVerdict,
     SEEK_LAND_MS,
     SEEK_WAIT_MS,
   } from "../lib/audio/seekplan.js";
@@ -215,6 +214,10 @@
       t: audio ? audio.currentTime : null,
       paused: audio ? audio.paused : null,
       volume: audio ? audio.volume : null,
+      // The transport the element last applied, for the desync diagnosis: a
+      // state the app has received but not applied must not undo it.
+      seq: audio && isNativeEl(audio) ? audio._pSeq : null,
+      srcSeq: audio && isNativeEl(audio) ? audio._srcSeq : null,
     });
     // MainActivity.onStop/onStart tell the page when the activity is stopped:
     // the WebView is deliberately not paused, so visibilitychange alone cannot
@@ -575,6 +578,7 @@
       failCurrentTrack(); // permanently broken stream — move on
       return;
     }
+    cancelSeekWatch();
     recovering = true;
     recoverAttempts++;
     setPlaybackStatus("recovering", { attempt: recoverAttempts, max: RECOVER_MAX });
@@ -680,6 +684,7 @@
     // Freeze the OS playhead at the exact pause position — with positionState
     // only sent on jumps, skipping this would leave it stuck at the last one.
     if (!loadingTrack && !chasing) pushPositionState();
+    if (loadingTrack) return; // a load silences the player itself: not a pause
     if (!get(player).playing) return; // already paused in the store (our own doing)
     if (audio.ended) return; // end-of-track is handled by onEnded, not here
     if (chasing) return; // our own programmatic pause while chasing a seek
@@ -688,6 +693,8 @@
       pauseMirrorTimer = null;
       // Still paused, still active, not at the end and still meant to be playing
       // → a real pause (a rebuffer would have fired `play` and cancelled this).
+      // The element reports the app's APPLIED playWhenReady, so a buffering
+      // player (which keeps it true) can never reach this line.
       if (audio && audio.paused && !audio.ended && get(player).playing) player.pause();
     }, 300);
   }
@@ -1304,6 +1311,7 @@
     const dur = get(player).duration;
     t = Math.max(0, dur ? Math.min(t, Math.max(0, dur - 0.2)) : t);
     cancelSeekChase(); // a new seek supersedes a chase in progress
+    cancelPendingSeek(); // ...and a target still waiting for metadata
     // Reflect the intent on the bar right away (also stops the thumb snapping
     // back under the pointer between input events while dragging).
     player.setProgress(t, dur);
@@ -1325,11 +1333,11 @@
   let seekWatch = null;
   function cancelSeekWatch() {
     if (!seekWatch) return;
-    const { el, timer, lost } = seekWatch;
+    const { el, timer, check } = seekWatch;
     seekWatch = null;
     clearTimeout(timer);
-    el.removeEventListener("seeked", lost);
-    el.removeEventListener("timeupdate", lost);
+    el.removeEventListener("seeked", check);
+    el.removeEventListener("timeupdate", check);
   }
   function watchSeek(t, dur = 0) {
     cancelSeekWatch();
@@ -1337,21 +1345,32 @@
     if (!el || curIsBlob) return;
     const at = Date.now();
     const elT = elementTime(t);
-    const lost = () => {
+    const check = () => {
       if (el !== audio || seekWatch?.el !== el) {
         cancelSeekWatch();
         return;
       }
-      const bounced = seekBounced(el, elT) && el.readyState >= 2;
-      if (!bounced && !seekLost(el, elT, at)) return;
+      const verdict = seekVerdict({
+        position: el.currentTime,
+        target: elT,
+        startedAt: at,
+        now: Date.now(),
+        readyState: el.readyState,
+      });
+      if (verdict === "landed") {
+        // A seek that arrived is over: later positions are playback, not a miss.
+        cancelSeekWatch();
+        return;
+      }
+      if (verdict !== "lost") return;
       cancelSeekWatch();
       logInfo("audio", `seek to ${t.toFixed(1)} s did not land: chasing`, null, { important: true });
       startSeekChase(t, dur);
     };
-    const timer = setTimeout(lost, SEEK_LAND_MS + 50);
-    seekWatch = { el, timer, lost };
-    el.addEventListener("seeked", lost);
-    el.addEventListener("timeupdate", lost);
+    const timer = setTimeout(check, SEEK_LAND_MS + 50);
+    seekWatch = { el, timer, check };
+    el.addEventListener("seeked", check);
+    el.addEventListener("timeupdate", check);
   }
 
   function startSeekChase(t, dur = 0, opts = {}) {
@@ -1882,7 +1901,7 @@
       }
     };
     pendingSeek = { el, fn: apply };
-    el.addEventListener("loadedmetadata", apply);
+    el.addEventListener("loadedmetadata", apply, { once: true });
   }
 
   // Reflect transport state onto the element, but ONLY on a real mismatch.
@@ -2968,6 +2987,8 @@
 
   async function onEnded(e) {
     logInfo("audio", "ended", null, { important: true });
+    // The track a watch belongs to is over: its target means nothing here.
+    cancelSeekWatch();
     // Mid-crossfade the outgoing element reaches its own end while still
     // ramping down. That is expected and harmless: its ramp finishes on its
     // timer, and the queue has already advanced. Acting on it here would

@@ -229,8 +229,11 @@
     align-items: center;
     gap: 16px;
     padding: 0 20px;
-    background: var(--s1);
-    border-top: 1px solid var(--ln);
+    /* Tier 1: the shell reserves the bar's height (--player-h) in the page's
+       bottom padding, so nothing scrolls under it — only the ground shows
+       through. */
+    background: var(--glass-bg);
+    border-top: 1px solid var(--glass-border);
     z-index: 50;
   }
 
@@ -597,10 +600,10 @@
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: 6px;
-      border: 1px solid var(--ln);
+      border: 1px solid var(--glass-border);
       border-radius: 16px;
-      background: var(--s2);
-      box-shadow: 0 10px 28px color-mix(in srgb, var(--onac) 24%, transparent);
+      background: var(--glass-bg-2);
+      box-shadow: var(--glass-shadow-2);
       overflow: hidden;
     }
     /* Everything the desktop bar carries is gone; the card is the sleeve, the

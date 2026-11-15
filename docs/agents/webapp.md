@@ -69,16 +69,120 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   `DesktopNowPlaying`/`MobileNowPlaying`). `--cover-ac` is a registered `<color>` (`@property`), so
   Pochette's whole accent — `--ac`, `--btn`, `--hrt`, `--ac-mark`, which are `var(--cover-ac)` —
   transitions in CSS over 600 ms: no timer, no JavaScript, a change that arrives mid-fade is
-  retargeted from where it is, and `prefers-reduced-motion` turns it off at once. The blurred ground
-  is a stack of layers each fading in with the same 600 ms curve (the cover glow crossfades with
-  them); `lib/backdrop.js` only drops a layer once the one above it has been opaque for `fadeMs`
-  (720 ms) — dropping the OPAQUE base the moment a second cover arrived was the dark flash on a
-  skip, measured at 90 % of the page colour showing through even on ONE skip (the play cache emits
-  the same art twice), 0 % now. Eco mode keeps its instant swap. Measured (`test/theme/run.mjs`,
+  retargeted from where it is, and `prefers-reduced-motion` turns it off at once.
+- **ONE blurred image at rest, TWO while a cover fades IN — the full-screen player's whole blur budget**
+  (the app's ground below is a separate single pass, and the two are never on screen together; the
+  sheet/menu glass below is the only other pass). `lib/backdrop.js` keeps at most two layers: the one
+  on screen and the one fading in with the same 600 ms curve. A cover that arrives while a fade runs
+  is QUEUED (the newest wins) and painted once the incoming layer is opaque (`fadeMs` 720) — a third
+  layer, or dropping the opaque base, is what used to show the dark page through a skip (measured at
+  90 % of the colour showing, even on one skip: the play cache emits the same art twice; the `proxyUrl`
+  is now the cover's IDENTITY, so the blob does not fade the same picture again). The sleeve's halo
+  is the cover's dominant colour in a `radial-gradient` MASK (`--glow-c`, read from the image already
+  decoded for the backdrop — no second request), never a second `filter: blur`: 1 blur pass at rest
+  and 2 in a fade, against **2 at rest and 4–6 on one/two skips** before (the glow was a blurred image
+  per layer, and the cap was 8). Measured at 1280×900, one then two skips 250 ms apart: TaskDuration
+  1900/1774 ms → 882/1135 ms over the same 2 s window, long tasks 57/332 ms → 50/56 ms, worst frame
+  gap 72.6/133.5 ms → 55.7/67.1 ms; at 390×844, layers 1/2/3 → 1/2/2 (mobile has no halo). **Eco mode
+  renders no backdrop at all** — no `.bg`, no halo, no `filter`, no image fade, one flat `--bg`
+  ground, and `bg.set` is not even called (no request for a picture nobody sees); every sheet and
+  menu loses its `backdrop-filter` through the shared `html[data-eco="1"]` rule (below).
+  The **party guest screen** (`routes/Party.svelte`) follows the same rule outside the player: one
+  layer at rest and two in its fade (the shared store), and in eco **no `.bg` and no scrim at all** —
+  one flat `--bg`, the backdrop never pointed at the art (measured 390/1280: 0 `new Image()` in eco
+  against 1 outside, 0 `filter: blur`).
+  `prefers-reduced-motion` keeps the images and drops only the movement. Measured (`test/theme/run.mjs`,
   1280 and 390): the accent is green→red with mid colours between the two and settles in 600–660 ms,
-  ≤3 layers for a skip and ≤5 for two 250 ms apart, no frame over 51 ms, 2 cover requests and 0
-  after it settles, the first frame after a reload already the stored accent. `DIST=<dir>` (a
-  `vite build --outDir` elsewhere) points any bench at a build of its own (`test/harness.mjs`).
+  1 blurred layer at rest, 2 in a fade (the frame-by-frame count is `1…12…1`), 0 in eco with the flat
+  ground equal to `--bg`, no frame over 51 ms, no cover request after it settles, the first frame
+  after a reload already the stored accent. `DIST=<dir>` (a `vite build --outDir` elsewhere) points
+  any bench at a build of its own (`test/harness.mjs`).
+- **Every screen sits on the playing sleeve** (`components/GlobalBackdrop.svelte`, `lib/globalbackdrop.js`,
+  `lib/coverpalette.js`). Accueil, Bibliothèque, Rechercher, Réglages and a page all share ONE fixed
+  layer behind them: a 500px cover stretched to the viewport with a single `filter: blur(44px)
+  saturate(1.3)`, the sleeve's tint, and a scrim. It is not the full-screen player's backdrop and is
+  never displayed at the same time: `$immersiveOpen` removes it (`display:none`), so exactly ONE
+  blurred image is on screen, and `data-eco` removes it entirely. No `backdrop-filter` here — the
+  surfaces' glass ladder is the only other pass. The URL is the 500px art the lists and the play cache
+  already fetch (`baseCover`, resolved through `offlineCovers`), so the ground adds ZERO requests to a
+  screen and works offline from the stored blob; a track with NO art returns to the theme's flat
+  ground (a sleeve that FAILS to load keeps the previous one — a flaky CDN must not blank the page).
+  STACKING IS THE FRAGILE PART: the element must create NO stacking context (no `isolation`, no
+  `position`, no `z-index`) and its layers carry `z-index:-1`, so they paint above `html`'s canvas
+  (app.css) and BELOW every card, row and title of the page, because `<body>` is transparent.
+  `isolation: isolate` there put the ground over the in-flow text and washed the titles out (the
+  glass bench measured a washed title at 190/255; this bench's probe now reads 228/255 against an
+  ink of 241). The other half is app.css's `body { background: transparent }`. The ladder used to
+  force `.gb { isolation: auto !important }` from app.css while the component isolated itself; that
+  override is GONE (the component declares no stacking context any more, and the glass bench stays
+  green without it). Re-adding a stacking context to `.gb` puts every page's text back under the
+  ground.
+  A sleeve change is a 640 ms walk, not a cut: fade the group out over 220 ms, swap the art and its
+  tint at the invisible point, fade back over 420 ms; the scrim never moves, so there is no flash, and
+  `prefers-reduced-motion` swaps at once. The tint is `coverpalette.js`'s `dominant` colour — ONE
+  64×64 decode per cover URL, cached by URL with concurrent callers sharing the in-flight promise and
+  failures not stored (`colour` extractors must import it, never decode the sleeve again). Measured
+  (`test/backdrop/run.mjs` on `tools/perf_api.py --serve`, 1280×900 and 390×844, 7 routes each):
+  1 blurred element and 0 `backdrop-filter` on every route with no overlay open, 0 cover requests
+  while navigating, 1 load of the new sleeve on a skip (the player bar's Cover and the play cache
+  account for the other 3–4 requests to that same URL), 0 after it settles; fade out at 25–66 ms,
+  new art at 228–245 ms, full at 578–603 ms, worst frame gap 17–33 ms, 0–56 ms of long tasks. Over a
+  PURE-WHITE sleeve (the worst case) the scrim keeps `--dim` at 5.00:1 on Encre and 5.96:1 on
+  Papier, `--tx` at 11.8:1 and 16.3:1. Eco mode: no image, no palette decode, no blur, no scrim —
+  the theme's flat ground — and the attribute `data-eco="1"` is set on `<html>` before the shell
+  renders and REMOVED (never `"0"`) when eco ends.
+- **Everything above the ground wears ONE glass ladder** (`src/app.css`, *surfaces — the glass
+  ladder*; `test/glass.test.mjs` reads the source, `test/glass/run.mjs` measures the pixels). Three
+  tints and three blurs, and no component invents a value of its own:
+  **tier 1** `--glass-bg` = 72 % of `--s1`, NO blur — cards/blocks (`.card`, so Réglages, Podcasts
+  and `Card.svelte` all follow), the sidebar, the player bar, the phone's tab bar
+  (`.mobilenav`), the desktop queue column (`.np`), the mobile mini-player card;
+  **tier 2** `--glass-bg-2` = 86 % + `blur(var(--glass-blur-2))` (14 px) + `saturate(140 %)` —
+  popovers: the contextual menu, the quality list, the sleep/speed/transcript menus, the
+  remote-control chips, the public playlist's sticky bar, the projector's chips (a notice takes the
+  same fill with NO blur — it is a single card, and a filter would buy a render pass for nothing);
+  the notices' strip itself has no fill, so the ground shows around the cards;
+  **tier 3** the same fill + `blur(var(--glass-blur-3))` (22 px) + `saturate(145 %)` — every `.sheet`
+  and `.dialog` (the app's eighteen modal components), over the 60 % veil their own scrim paints.
+  A fourth step, `--glass-bg-strong` (93 %, still no blur), is the sticky TOP BAR and the notices'
+  strip: the only surfaces a row scrolls BEHIND (at 82 % the library's leaf tabs ghosted under the
+  search field; 93 % hides them and still shows the ground). `--glass-border` (13 % of `--tx`) is the
+  hairline, `--glass-shadow`/`-2` the depth (per theme: Papier's is ink at 10/16 %, the dark themes'
+  is black at 42–58 %), `--glass-hover` the row hover (9 % of `--tx` over the fill, so a hover is a
+  step of the same material instead of a solid colour).
+  **A static surface NEVER blurs its own backdrop.** `backdrop-filter` re-reads and re-filters what
+  is behind the element on every frame that backdrop changes, and the captured area grows by ~3×
+  the radius on each side (Will Chan; Dimensa measured one header's blur costing 29 → 61 fps;
+  Jaeyonging went 20 → 60 fps by dropping 12 of 16 of them), so a 96-card grid would be 96 passes.
+  It is allowed on the two OVERLAY tiers only, and only one overlay is open at a time — measured
+  `1` `backdrop-filter` + the ground's single image, never 2. The scrims under sheets used to run
+  their own `blur(2px)`/`blur(6px)`, i.e. ten implementations of the same work *under* a blurred
+  sheet: they are flat veils now. **No `backdrop-filter` literal is left in `src/`** — the app had 19
+  declarations in 16 files with 7 distinct pixel values (2, 6, 8, 10, 14, 16, 18 px) and now has
+  `--glass-blur-2` and `--glass-blur-3` only (`MobileNowPlaying`'s 16/18 px moved onto tier 3).
+  **ECO and REDUCED TRANSPARENCY collapse the ladder onto the theme's own surfaces**: `--glass-bg`,
+  `-2`, `-strong` → `--s1`, `--glass-hover` → `--s2`, `--glass-blur-2/3` → `0px`, the shadows →
+  `none`, plus a `backdrop-filter: none !important` kill switch for anything a component adds back
+  (`html[data-eco="1"]`, and `@media (prefers-reduced-transparency: reduce)` for the OS setting,
+  MDN). `prefers-reduced-motion` adds nothing to turn off: the ladder has no transition of its own.
+  Measured (`test/glass/run.mjs`, 3 themes × 1280×900 and 390×900, 45 surfaces, on the painted
+  pixels): **69 contrasts, worst 5.09:1** — the top bar's 11 px `⌘K` hint on the search field
+  (5.10–6.17 by theme), which measures the same in eco because it is the theme's own `--dim` on its
+  own field; the pairs the translucency actually moves are a card's 13 px `--dim` subtitle over the
+  sleeve ground at **5.44 / 5.27 / 5.79:1** (Encre / Papier / Pochette) and a sheet's 11 px count at
+  6.73 / 5.34 / 7.17:1. The composite behind a line of text matches
+  `alpha·surface + (1−alpha)·backdrop` to **3/255** on all 45 surfaces, so the tint really is the
+  token's. Cost at 4× CPU, headless (SwiftShader: the GPU work runs on the CPU; medians of 5, each
+  state paired against the same open with the blur forced off): a contextual menu **48.7 ms vs
+  48.4** (+0.3 ms), a desktop sheet **111.2 vs 103.1** (+8.1 ms), a phone sheet **83.5 vs 83.1**
+  (+0.4 ms) — across runs the sheet's own share moved between 8 and 30 ms with the machine's load
+  and the menu's stayed under 2 ms; a scroll of the card grid is **16.7 ms median** in glass and in
+  eco alike, i.e. the tint costs no frame (the old full-viewport `blur(2px)` scrim read ~1.18 M
+  pixels a frame; a 440×700 sheet at 22 px reads ~0.48 M, so the pass got stronger and cheaper). States: `none` with nothing open,
+  **exactly one** `backdrop-filter` (+ the ground's one image) while a menu or a sheet is open, and
+  **3 values in the whole app** (`none`, `blur(14px) saturate(1.4)`, `blur(22px) saturate(1.45)`).
+  Before this change: every one of those surfaces measured `alpha 1`, and `src/` carried 19
+  `backdrop-filter` declarations with 7 distinct radii.
 - **The sleeve-derived header gradient fades too** (`components/GradientHeader.svelte`, used by a
   show, an import job and the credits page): `--gh-c` is the second registered `<color>`, and the
   gradient is built from it with `color-mix` — 90 % of the sleeve at 0 %, 45 % of it mixed with black
@@ -108,6 +212,11 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   `.card`, `.field`, `.section-title`, `.page-title`, `.mono`, `.label-mono`, `.kbd`; `.pill` is now
   a solid `--btn` pill (the purple gradient and its glow are gone). 40 px high on a mouse, 44 under a
   finger (`@media (pointer: coarse)`) — §10's touch rule without changing the desktop rhythm.
+- **A component's own class must not borrow a design-system name.** `routes/Party.svelte` put
+  `class="field"` on its join form, and the global `.field` pill (40 px, `align-items:center`)
+  clipped the label-over-input column so the name input ran under « Rejoindre l'écoute ». It is
+  `.party-field` now — measured 390×844: the field is 76 px (19 px label + 6 px gap + 51 px input),
+  the input ends 14 px above the button, no overflow; 360×640 the same.
 
 **The Sillon handoff (the old `DESIGN.md`, §1–§10), in one place.** Code comments that cite
 `DESIGN §n` mean these rules; the handoff file itself was deleted once the design landed, because
@@ -497,15 +606,22 @@ mounts mid-track (`onMount` + `tick`; the old tab opened at the top and stayed t
 order: the facts return to the queue card's tab first, then the lyrics. Measured with the animation strip on:
 1920×1080 four columns 340 · 520 · 360 · 360 px; 1600×900 288 · 512 · 360 · 304; 1280×900 three
 columns 269 · 520 · 360; 1200×900 252 · 476 · 360 (the player's floor); 1199×900 two columns 520 + 360
-with all three tabs back. The strip itself keeps 44 px desktop / 40
-px mobile and is centred by auto margins in the empty band under the transport, never against the controls or
-the footer: 1920 y 885–929 with footer at 1022; 1100×900 y 749–793 with footer at 842; 390×844 mobile 670–710
-with the thumb row at 750 (a 34 px stripe at 360×640 became 40 px again with `flex:none`, the sleeve absorbing
-the 6 px). The queue card's tab row is a single dead pill once four columns are up, so it is replaced by the
-same label header the other columns use. **The Flow's steering row is 92 px high** (its Genres door, two
-feedback chips and the energy wrap on two lines in the 520 px player), so under **950 px high** the strip
-yields to it rather than pushing the footer off screen: 1440×900 Flow now ends its footer at 848–882 with the
-strip hidden, 1920×1080 keeps the strip at 44 px, and 1440×900 without Flow keeps it too.
+with all three tabs back. The strip itself is **44 px, and 56 px where the column can pay for it**
+(`--viz-strip-h` on `.main`): from 880 px of window height without a Flow, and only from 1060 with
+one, whose 92 px steering row takes the band first. It is centred by auto margins in the empty band
+under the transport, never against the controls or the footer: measured at 56 px, 1280×900 y 757–813
+with the transport ending at 728 and the footer at 842–876 (the footer keeps its 24 px of stage
+padding — the 12 px come out of the free band, not off the bottom); 1440×900 and 1920×1080 the same;
+1280×870 falls back to 44; 641×900 (the narrow side-panel layout) does not draw it at all. The mobile
+strip stays 40 px between the transport and the thumb row (390×844: 662–702, thumbs at 750; a 34 px
+stripe at 360×640 became 40 px again with `flex:none`, the sleeve absorbing the 6 px).
+`test/vizstrip/run.mjs` holds the geometry and the canvas — `520 × 56`, the visualizer sizes itself
+from its host. The queue card's tab row is a single dead pill once four columns are up, so it is
+replaced by the same label header the other columns use. **The Flow's steering row is 92 px high**
+(its Genres door, two feedback chips and the energy wrap on two lines in the 520 px player), so under
+**950 px high** the strip yields to it rather than pushing the footer off screen: 1440×900 Flow now
+ends its footer at 848–882 with the strip hidden, 1920×1080 keeps the strip at 56 px, and 1440×900
+without Flow keeps it too.
 
 **The phone's lyrics are a view, not a hidden gesture** (`MobileNowPlaying.svelte`): the labelled « Paroles »
 door in the thumb row opens a full-height sheet whose own header names the track and the artist, with a 44 px
@@ -705,7 +821,12 @@ thumb row: add to a playlist, listen party, remote, lyrics, « File · N » — 
 line only exists when there is one, the strip and the Flow row give their height back) rather than pushing the
 transport off the screen: 360x640 measures 248 px square (269 without the strip, 212 with the Flow row too),
 390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
-`env(safe-area-inset-*)` fallback until G1's tokens land.
+`env(safe-area-inset-*)` fallback until G1's tokens land. **The three sheets (queue, lyrics, the
+slid-up About panel) wear the glass ladder's tier 3** — `--glass-bg-2` and
+`blur(var(--glass-blur-3)) saturate(var(--glass-sat-3))`, measured `blur(22px) saturate(1.45)` at
+390×844 — and lose the filter in eco through the shared `html[data-eco="1"]` collapse (measured
+`backdrop-filter: none`, `--s1` ground). No component px value of their own: the old ad-hoc 16/18 px
+are gone. At 1280 the mobile player is not mounted at all, so those sheets are not either.
 
 **Explorer is ten parent styles, not a genre search** (`components/ExplorerStyles.svelte`,
 `GET /api/explorer/styles`, `POST|GET /api/explorer/discover`). The landing asks the server for the ten

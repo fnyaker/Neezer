@@ -86,6 +86,70 @@ def fake_flac(size: int, seed: int = 0) -> bytes:
     return b"fLaC" + random.Random(seed).randbytes(size - 4)
 
 
+def wait_until(predicate, timeout=15.0, step=0.02) -> bool:
+    """Bounded poll of an observable state, the way a client waits for it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(step)
+    return bool(predicate())
+
+
+def live_threads() -> list:
+    return [t for t in threading.enumerate() if t.name == "live-archive" and t.is_alive()]
+
+
+def _need_ffmpeg() -> None:
+    if shutil.which("ffmpeg"):
+        return
+    if os.environ.get("NS_REQUIRE_FFMPEG") == "1":
+        raise RuntimeError("NS_REQUIRE_FFMPEG=1 but ffmpeg is not on PATH")
+    raise unittest.SkipTest("ffmpeg not installed")
+
+
+def music_flac(directory) -> bytes:
+    """Ten seconds of stereo pink noise as FLAC: ~1.6 MB, a real track's
+    bitrate. The 15 KB of silence above is smaller than the 32 KB ffmpeg
+    reads before it emits anything, so it could not show a stream that
+    starts before its download ends."""
+    import subprocess
+
+    path = Path(directory) / "music.flac"
+    subprocess.run(
+        ["ffmpeg", "-v", "0", "-f", "lavfi", "-i", "anoisesrc=d=10:c=pink:a=0.3:seed=7",
+         "-ac", "2", "-ar", "44100", "-y", str(path)],
+        check=True,
+    )
+    data = path.read_bytes()
+    path.unlink()
+    return data
+
+
+def decoded_seconds(body: bytes) -> float:
+    """How much audio a body carries, by decoding it (no header trust)."""
+    import subprocess
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as fp:
+        fp.write(body)
+        path = fp.name
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-v", "info", "-i", path, "-f", "null", "-"],
+            capture_output=True, text=True,
+        ).stderr
+    finally:
+        os.remove(path)
+    total = 0.0
+    for line in out.replace("\r", "\n").splitlines():
+        marker = line.find("time=")
+        if marker < 0:
+            continue
+        hours, minutes, seconds = line[marker + 5 :].split(" ")[0].split(":")
+        total = max(total, int(hours) * 3600 + int(minutes) * 60 + float(seconds))
+    return total
+
+
 class Cdn:
     """A local stand-in for Deezer's CDN.
 
@@ -435,6 +499,9 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        enrich = mock.patch("neezer.enrich.queue.queue_track", lambda *a, **k: None)
+        enrich.start()
+        self.addCleanup(enrich.stop)
         root = library.get_root_folder(self.archive_dir)
         self.track = library.upsert_track(gw_info(self.SID), root, "FLAC")
         self.aborted = 0
@@ -451,6 +518,15 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
 
     def _leftovers(self):
         return [f for f in self._files(self.archive_dir) if ".part" in f]
+
+    def _part_bytes(self) -> int:
+        total = 0
+        for rel in self._leftovers():
+            try:
+                total += os.path.getsize(os.path.join(self.archive_dir, rel))
+            except OSError:
+                pass
+        return total
 
     def test_a_cold_track_plays_while_it_downloads_and_is_kept(self):
         self.cdn.gate.clear()
@@ -524,16 +600,212 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertEqual(tags.getall("USLT"), [])
         self.assertEqual(Track[ids.track_uuid(self.SID)].path, self.track.path)
 
-    def test_a_listener_who_leaves_early_leaves_no_archive_and_it_is_fetched_again(self):
+    def test_a_listener_who_leaves_does_not_stop_the_download(self):
         self._resolve_to(self.cdn.serve("live-leave", encrypt_like_deezer(FLAC, self.SID), "chunked"))
         _mimetype, stream = self._open()
         next(stream)
         stream.close()  # what the WSGI server does when the client hangs up
-        self.assertFalse(os.path.exists(self.track.path))
-        self.assertEqual(self._leftovers(), [])
+        self.assertTrue(
+            wait_until(lambda: os.path.exists(self.track.path)),
+            "the archive waited for a listener that had gone",
+        )
+        audio = mutagen.flac.FLAC(self.track.path)
+        original = mutagen.flac.FLAC(ASSETS / "formats" / "silence.flac")
+        self.assertEqual(audio.info.md5_signature, original.info.md5_signature)
+        self.assertTrue(wait_until(lambda: not self._leftovers(), timeout=5))
+        self.assertTrue(
+            wait_until(lambda: Track[ids.track_uuid(self.SID)].last_modification > 0)
+        )
+        self.assertEqual(self.aborted, 0)
+        self.assertEqual(self.analysed, [Track[ids.track_uuid(self.SID)].id])
+
+    def test_a_client_that_stops_reading_does_not_pace_the_download(self):
+        """The reported bug: the browser buffers enough and stops reading, and the
+        fetch stopped with it — the archive stayed a .part for minutes."""
+        music = self._music_flac()
+        self.cdn.gate.clear()
+        self.cdn.rest_sent.clear()
+        self._resolve_to(
+            self.cdn.serve(
+                "live-stall", encrypt_like_deezer(music, self.SID), "gated", head=256 * 1024
+            )
+        )
+        _mimetype, stream = self._open()
+        first = next(stream)
+        self.assertTrue(first)
+        self.cdn.gate.set()
+        self.assertFalse(self.cdn.rest_sent.is_set())
+        # The listener reads NOTHING more from here on (a full buffer, a paused
+        # tab): the archive must still complete on its own.
+        self.assertTrue(
+            wait_until(lambda: os.path.exists(self.track.path), timeout=25),
+            "the download was paced by the listener",
+        )
+        self.assertTrue(
+            wait_until(lambda: Track[ids.track_uuid(self.SID)].last_modification > 0)
+        )
+        audio = mutagen.flac.FLAC(self.track.path)
+        self.assertEqual(audio.info.total_samples, 441000)
+        self.assertEqual(audio["title"], ["Harder (Live)"])
+        self.assertEqual(self.cdn.hits.count("/live-stall"), 1)
+        self.assertEqual(self.aborted, 0)
+        # The .part is the stalled listener's copy: it goes when that listener does.
+        stream.close()
+        self.assertTrue(wait_until(lambda: not self._leftovers(), timeout=5))
+        self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
+
+    def test_a_reload_during_the_grace_reuses_the_same_download(self):
+        music = self._music_flac()
+        opened = []
+        resolved = []
+
+        def slow(url, tid):
+            opened.append(url)
+            step = max(1, len(music) // 40)
+            for offset in range(0, len(music), step):
+                yield music[offset : offset + step]
+                time.sleep(0.03)
+
+        self.provider.iter_decrypted = slow
+        self.provider.resolve = lambda sng_id, quality=None: (
+            resolved.append(sng_id) or ("http://127.0.0.1:1/never-read", "FLAC", gw_info(self.SID), self.SID)
+        )
+        _mimetype, first = self._open()
+        self.assertTrue(next(first))
+        first.close()  # the chase reload drops the response...
+        _mimetype, second = self._open()  # ...and asks for the same track again
+        self.assertEqual(b"".join(second), music)
+        self.assertEqual(len(opened), 1, "the reload started a second download")
+        self.assertEqual(len(resolved), 1, "the reload asked Deezer for the stream again")
+        self.assertTrue(wait_until(lambda: os.path.exists(self.track.path)))
+        self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
+        self.assertEqual(self.aborted, 0)
+
+    def test_an_abandoned_download_stops_after_the_grace_and_leaves_nothing(self):
+        music = self._music_flac()
+
+        def slow(url, tid):
+            step = max(1, len(music) // 60)
+            for offset in range(0, len(music), step):
+                yield music[offset : offset + step]
+                time.sleep(0.05)
+
+        self.provider.iter_decrypted = slow
+        self._resolve_to("http://127.0.0.1:1/never-read")
+        _mimetype, stream = self._open()
+        next(stream)
+        with mock.patch.object(archive, "LIVE_GRACE_SECONDS", 0.4):
+            stream.close()  # the person skipped to something else
+            held = self._part_bytes()
+            self.assertTrue(
+                wait_until(lambda: self._part_bytes() > held, timeout=5),
+                "the download stopped with the listener instead of finishing the grace",
+            )
+            self.assertTrue(
+                wait_until(lambda: not self._leftovers(), timeout=20),
+                "the orphaned download never stopped",
+            )
+            self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
         self.assertEqual(self.aborted, 1)
+        self.assertFalse(os.path.exists(self.track.path))
         self.assertEqual(Track[ids.track_uuid(self.SID)].last_modification, 0)
-        self.assertEqual(self.analysed, [])
+
+    def test_an_abandoned_download_yields_the_link_to_the_next_track(self):
+        chunk = b"x" * 65536
+        served = []
+
+        def fast_source(url, tid):
+            while len(served) < 100:
+                served.append(1)
+                yield chunk
+                time.sleep(0.01)
+
+        self.provider.iter_decrypted = fast_source
+        self._resolve_to("http://127.0.0.1:1/never-read")
+        _mimetype, stream = self._open()
+        next(stream)
+        with mock.patch.object(archive, "LIVE_GRACE_SECONDS", 0.9), mock.patch.object(
+            archive, "LIVE_REUSE_SECONDS", 0.2
+        ), mock.patch.object(archive, "LIVE_ORPHAN_PACE", 0.3):
+            stream.close()
+            self.assertTrue(wait_until(lambda: not live_threads(), timeout=20))
+        self.assertLess(
+            len(served),
+            40,
+            "an abandoned download kept taking the link at full speed",
+        )
+        self.assertGreaterEqual(len(served), 2, "it stopped before its grace was over")
+        self.assertEqual(self.aborted, 1)
+
+    def test_a_file_that_already_exists_is_served_without_a_download(self):
+        Path(self.track.path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.track.path).write_bytes(FLAC)
+        self.provider.resolve = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("a file on disk needed no Deezer call")
+        )
+        _mimetype, stream = self._open()
+        self.assertEqual(b"".join(stream), FLAC)
+        self.assertEqual(self.cdn.hits.count("/live-present"), 0)
+        self.assertFalse(live_threads())
+
+    def test_a_slow_reader_hears_the_audio_unchanged_while_it_is_published(self):
+        """The archive is a tagged COPY: a reader still on the raw file must hear
+        exactly what was downloaded, not a file being retagged under it."""
+        music = self._music_flac()
+        self._resolve_to(self.cdn.serve("live-slow", encrypt_like_deezer(music, self.SID), "chunked"))
+        _mimetype, stream = self._open()
+        heard = bytearray(next(stream))
+        self.assertTrue(wait_until(lambda: os.path.exists(self.track.path), timeout=15))
+        for chunk in stream:
+            heard += chunk
+        self.assertEqual(bytes(heard), music)
+        self.assertEqual(mutagen.flac.FLAC(self.track.path).info.total_samples, 441000)
+        self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
+
+    def test_a_download_that_has_decided_to_stop_is_not_joined(self):
+        music = self._music_flac()
+
+        def slow(url, tid):
+            step = max(1, len(music) // 60)
+            for offset in range(0, len(music), step):
+                yield music[offset : offset + step]
+                time.sleep(0.05)
+
+        self.provider.iter_decrypted = slow
+        self._resolve_to("http://127.0.0.1:1/never-read")
+        _mimetype, stream = self._open()
+        next(stream)
+        live = archive._live_downloads[archive._live_key(self.provider, self.track)]
+        with live._cond:
+            live._stopping = True
+        try:
+            self.assertFalse(live.running)
+            self.assertIsNone(archive._live_lookup(live._key))
+        finally:
+            with mock.patch.object(archive, "LIVE_GRACE_SECONDS", 0.2):
+                stream.close()
+                self.assertTrue(wait_until(lambda: not live_threads(), timeout=20))
+
+    def test_a_stalled_source_fails_the_response_instead_of_hanging_it(self):
+        music = self._music_flac()
+
+        def stuck(url, tid):
+            yield music[:65536]
+            time.sleep(5)
+
+        self.provider.iter_decrypted = stuck
+        self._resolve_to("http://127.0.0.1:1/never-read")
+        _mimetype, stream = self._open()
+        self.assertTrue(next(stream))
+        with mock.patch.object(archive, "LIVE_STALL_SECONDS", 0.2), mock.patch.object(
+            archive, "LIVE_GRACE_SECONDS", 0.2
+        ):
+            started = time.monotonic()
+            with self.assertRaises(DeezerError):
+                next(stream)
+            self.assertLess(time.monotonic() - started, 3)
+            stream.close()
+            self.assertTrue(wait_until(lambda: not live_threads(), timeout=10))
 
     # -- the same live download, transcoded to Opus as it arrives -------------
     # The Opus path used to archive the WHOLE FLAC before its first byte went
@@ -541,27 +813,14 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
     # 13 s of silence against 0.77 s now.
 
     def _ffmpeg(self):
-        if not shutil.which("ffmpeg"):
-            if os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
-                raise RuntimeError("NS_REQUIRE_FFMPEG=1 but ffmpeg is not on PATH")
-            self.skipTest("ffmpeg not installed")
+        _need_ffmpeg()
 
     def _music_flac(self):
         """Ten seconds of stereo pink noise as FLAC: ~1.6 MB, a real track's
         bitrate. The 15 KB of silence above is smaller than the 32 KB ffmpeg
         reads before it emits anything, so it could not show a stream that
         starts before its download ends."""
-        import subprocess
-
-        path = Path(self.archive_dir) / "music.flac"
-        subprocess.run(
-            ["ffmpeg", "-v", "0", "-f", "lavfi", "-i", "anoisesrc=d=10:c=pink:a=0.3:seed=7",
-             "-ac", "2", "-ar", "44100", "-y", str(path)],
-            check=True,
-        )
-        data = path.read_bytes()
-        path.unlink()
-        return data
+        return music_flac(self.archive_dir)
 
     def _opus(self, bitrate=64):
         from neezer.webui import _opus_live_generator
@@ -606,23 +865,25 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertEqual(self._leftovers(), [])
         self.assertEqual(self.aborted, 0)
 
-    def test_an_opus_listener_who_leaves_early_leaves_no_archive_and_it_is_fetched_again(self):
+    def test_an_opus_listener_who_leaves_keeps_the_flac_archive(self):
         self._ffmpeg()
         self.cdn.gate.clear()
-        # Held back mid-file: the listener leaves while it is still downloading
-        # (a download that had already finished would rightly be kept).
+        # Held back mid-file: the listener leaves while it is still downloading.
         self._resolve_to(
             self.cdn.serve("live-opus-leave", encrypt_like_deezer(self._music_flac(), self.SID), "gated", head=256 * 1024)
         )
-        opus, aborted = self._opus()
+        opus, _aborted = self._opus()
         next(opus)
         opus.close()  # the client hangs up: ffmpeg is killed, its feeder stops
         self.cdn.gate.set()
-        self.assertTrue(aborted.wait(10), "the archive was not handed to the background queue")
-        self.assertFalse(os.path.exists(self.track.path))
-        self.assertEqual(self._leftovers(), [])
-        self.assertEqual(self.aborted, 1)
-        self.assertEqual(Track[ids.track_uuid(self.SID)].last_modification, 0)
+        self.assertTrue(
+            wait_until(lambda: os.path.exists(self.track.path)),
+            "the FLAC download stopped with the Opus listener",
+        )
+        self.assertEqual(mutagen.flac.FLAC(self.track.path).info.total_samples, 441000)
+        self.assertTrue(wait_until(lambda: not self._leftovers(), timeout=5))
+        self.assertEqual(self.aborted, 0)
+        self.assertGreater(Track[ids.track_uuid(self.SID)].last_modification, 0)
 
     def test_a_download_that_breaks_off_is_never_kept(self):
         self._resolve_to(self.cdn.serve("live-cut", encrypt_like_deezer(FLAC, self.SID), "length-truncated"))
@@ -822,6 +1083,9 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
         patcher = mock.patch("neezer.deezer.analysis.queue_analysis", lambda *a, **k: None)
         patcher.start()
         self.addCleanup(patcher.stop)
+        enrich = mock.patch("neezer.enrich.queue.queue_track", lambda *a, **k: None)
+        enrich.start()
+        self.addCleanup(enrich.stop)
 
         root = library.get_root_folder(self.archive_dir)
         self.track = library.upsert_track(gw_info(self.SID), root, "FLAC")
@@ -886,17 +1150,62 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
         response.close()
         self.assertEqual(log, ["closed"])
 
-    def test_a_listener_who_leaves_mid_stream_gets_the_archive_queued(self):
+    def test_a_listener_who_leaves_mid_stream_does_not_queue_a_second_download(self):
         self._resolve_to(self.cdn.serve("route-leave", encrypt_like_deezer(FLAC, self.SID)))
         rv = self.client.get(f"/api/stream/{self.SID}", buffered=False)
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(next(iter(rv.response)), FLAC[:2048])
         rv.close()  # the WSGI server, when the client hangs up
-        self.assertEqual(self.queued, [(self.SID, self.prefetch_priority)])
-        self.assertFalse(os.path.exists(self.track.path))
-        self.assertEqual(
-            [f for f in self._files(self.archive_dir) if f.endswith(".part")], []
+        self.assertTrue(
+            wait_until(lambda: os.path.exists(self.track.path)),
+            "the archive stopped with the listener",
         )
+        self.assertTrue(wait_until(lambda: Track[ids.track_uuid(self.SID)].last_modification > 0))
+        self.assertEqual(self.queued, [])
+        self.assertTrue(
+            wait_until(
+                lambda: not [
+                    f for f in self._files(self.archive_dir) if f.endswith(".part")
+                ]
+            )
+        )
+
+    def test_ready_and_a_seek_land_while_the_listener_stopped_reading(self):
+        _need_ffmpeg()
+        music = music_flac(self.archive_dir)
+        self.cdn.gate.clear()
+        self.cdn.rest_sent.clear()
+        self._resolve_to(
+            self.cdn.serve(
+                "route-stall", encrypt_like_deezer(music, self.SID), "gated", head=256 * 1024
+            )
+        )
+        rv = self.client.get(f"/api/stream/{self.SID}", buffered=False)
+        self.assertEqual(rv.status_code, 200)
+        first = next(iter(rv.response))
+        self.assertTrue(first)
+        self.cdn.gate.set()
+        # From here the listener reads nothing more — a full buffer, a paused tab.
+        self.assertTrue(
+            wait_until(
+                lambda: self.client.get(
+                    f"/api/stream/{self.SID}/ready"
+                ).get_json()["ready"],
+                timeout=25,
+            ),
+            "ready waited for the listener to read",
+        )
+        payload = self.client.get(f"/api/stream/{self.SID}/ready").get_json()
+        self.assertEqual(payload["ranges"], "bytes")
+        self.assertTrue(payload["offset"])
+        self.assertEqual(payload["bytes"], os.path.getsize(self.track.path))
+        rv.close()
+        rv = self.client.get(f"/api/stream/{self.SID}?start=2")
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.headers["X-NS-Start"], "2.000")
+        self.assertEqual(rv.headers["Accept-Ranges"], "none")
+        self.assertAlmostEqual(decoded_seconds(rv.get_data()), 8.0, delta=0.15)
+        self.assertEqual(self.cdn.hits.count("/route-stall"), 1)
 
 
 class EnsureArchivedTestCase(_CdnMixin, TestBase):

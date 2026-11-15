@@ -69,8 +69,11 @@
     text-align: left;
     padding: 12px;
     border-radius: var(--r-card);
-    border: 1px solid var(--ln);
-    background: var(--s1);
+    /* Tier 1 of the glass ladder: a tint, never a blurred backdrop — a grid of
+       cards must not be a grid of render passes. */
+    border: 1px solid var(--glass-border);
+    background: var(--glass-bg);
+    box-shadow: var(--glass-shadow);
     color: var(--tx);
     transition:
       background-color 0.14s ease,
@@ -88,8 +91,8 @@
   }
   .card:hover,
   .card:focus-visible {
-    background: var(--s2);
-    border-color: var(--s2);
+    background: var(--glass-hover);
+    border-color: var(--glass-border);
   }
   .cv {
     position: relative;

@@ -875,7 +875,6 @@
     place-items: center;
     padding: 20px;
     background: rgba(8, 6, 12, 0.6);
-    backdrop-filter: blur(6px);
     touch-action: none;
     overscroll-behavior: contain;
   }

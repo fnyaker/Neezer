@@ -18,11 +18,14 @@
 //   travels along the bands so a breakdown is a groove breathing, not fifty
 //   dead dashes. It is a clock in BEATS (uClock.x), and prefers-reduced-motion
 //   holds it still.
-//   THE COLOUR. A gradient across the row (the palette's low register at the
-//   bass, its high register at the top) and a gradient along each capsule: a
-//   pale, hot core on the axis and the band's own colour warmed at the tips —
-//   the warm end is the band's colour through a warm gel, not a second palette.
-//   The bloom does the halo; nothing is painted on to fake one.
+//   THE COLOUR. The sleeve's OWN colours, walked left to right: `uZone` is the
+//   artwork's vertical zones (lib/coverpalette.js through palette.js#zones), so
+//   the bass end takes the colour of the cover under it and the treble takes
+//   the cover's other end. No artwork, or a palette source that is not the
+//   cover, falls back to the palette's low -> high walk (`pal`). Along each
+//   capsule: a pale, hot core on the axis and the band's own colour warmed at
+//   the tips — the warm end is the band's colour through a warm gel, not a
+//   second palette. The bloom does the halo; nothing is painted on to fake one.
 //   THE LEVEL. The three zone gains keep every register alive (one gain across
 //   the spectrum parks the bass: the mids and highs drive it down), but the
 //   heights are also scaled by the track's own DYNAMICS, so a breakdown is a
@@ -37,29 +40,41 @@
 //   strip does not draw it: over a player's artwork that ghost read as a smudge,
 //   and dropping it saves the 8 history taps a pixel per picture.
 //
-//   ON PAPER. Papier's player scrim is cream, not near-black, so a lemon row
-//   there is 1.02:1 and disappears. The transparent strip draws the band's own
-//   hue at an INK value with a pale axis core instead; the full scene stays a
-//   dark room on every theme. The flag arrives in uCtl.w (see scenes/gl.js).
+// NO FIELD, NO FRAME. Full screen used to lay a deep palette-tinted room behind
+// the row, with the light the row cast along its own axis. That field WAS the
+// rectangle the critique saw sitting on the artwork: the app has one blurred
+// backdrop and the bars are a row of light over it, nothing else. So the world
+// now writes COLOUR AND ALPHA everywhere — the beads, their afterglow, and
+// nothing in between — and the page's own backdrop shows through. There is no
+// vignette, no border and no glow layer of this world's: the engine's bloom is
+// the only halo, and it is off in eco.
 //
-// Full screen the row runs along the middle of the frame, over a light the
-// bars themselves cast; with the artwork in front, one row fills the band
-// under it and one the band above, so they frame it instead of growing up
-// behind it. In the player's strip (the `strip` layout) the background is
-// transparent and the row sits on the blurred artwork.
+// ON PAPER. Papier's player scrim is cream, not near-black, so a lemon row
+// there is 1.02:1 and disappears. The transparent strip draws the band's own
+// colour at an INK value with a pale axis core instead; a full-screen row stays
+// the light one, because the screen it is on (the projector, the settings
+// preview) is a dark field on every theme. The flag arrives in uCtl.w.
+//
+// Full screen the row runs along the middle of the frame; with the artwork in
+// front, one row fills the band under it and one the band above, so they frame
+// it instead of growing up behind it. In the player's strip (the `strip`
+// layout) the row sits nearer the edges of its 40-64 px band.
 //
 // Parameters:
-//   width    capsule width as a share of its pitch   glow   the axis light
-//   curve    loudness gamma (higher = more contrast)  trail  the afterglow
+//   width    capsule width as a share of its pitch   trail  the afterglow
+//   curve    loudness gamma (higher = more contrast)
 //   pitch    CSS px per band in the strip (fewer, rounder capsules = larger)
 
 export default {
   id: "spectrum",
   uses: ["sdf"],
-  params: { width: 0.64, curve: 1.8, glow: 1, trail: 1, pitch: 16 },
+  params: { width: 0.64, curve: 1.8, trail: 1, pitch: 16 },
   // No lens fringe: on thin light lines it reads as a colour-fringed LCD, and
-  // on a 40 px strip it split every capsule into three.
-  look: { exposure: 1, bloom: 1.0, threshold: 0.68, saturation: 1.08, ca: 0 },
+  // on a 40 px strip it split every capsule into three. `transparent` says this
+  // world writes its own coverage instead of an opaque field: the engine grades
+  // it as premultiplied light, so whatever the page puts behind the canvas is
+  // what the row sits on.
+  look: { exposure: 1, bloom: 1.0, threshold: 0.68, saturation: 1.08, ca: 0, transparent: true },
 
   fragment: `
 // The zone gains (uS0.xyz: bass, mid, high), interpolated between the zone
@@ -97,9 +112,30 @@ vec3 warmTip(vec3 c) {
   return mix(c, c * vec3(1.16, 1.0, 0.72) * 1.12, 0.45);
 }
 
+// The sleeve's zones arrive as sRGB; the engine's light is linear, and the
+// palette's own colours arrive luminance-normalised so a pale sleeve and a dark
+// one expose the same. The zones do the same, to the same 0.26 the block uses.
+vec3 coverLight(vec3 c) {
+  vec3 l = vec3(
+    c.r <= 0.04045 ? c.r / 12.92 : pow((c.r + 0.055) / 1.055, 2.4),
+    c.g <= 0.04045 ? c.g / 12.92 : pow((c.g + 0.055) / 1.055, 2.4),
+    c.b <= 0.04045 ? c.b / 12.92 : pow((c.b + 0.055) / 1.055, 2.4));
+  return l * clamp(0.26 / max(luma(l), 1e-4), 0.5, 3.5);
+}
+
+// The colour at a band's position across the row: the cover's own zone under
+// it when there is one, else the palette's walk. Seven zones, six spans.
+vec3 zoneAt(float t) {
+  if (uZoneOK < 0.5) return pal(t);
+  float x = clamp(t, 0.0, 1.0) * 6.0;
+  float i = min(floor(x), 5.0);
+  vec3 a = uZone[int(i)].rgb;
+  vec3 b = uZone[int(i) + 1].rgb;
+  return coverLight(mix(a, b, x - i));
+}
+
 void main() {
   vec2 frag = gl_FragCoord.xy;
-  vec2 uv = frag / uRes;
   bool strip = uCtl.z > 0.5;
   float N = max(8.0, uS0.w);
   float pitchPx = uRes.x / N;
@@ -160,9 +196,9 @@ void main() {
   vec2 q = vec2(frag.x - cx, frag.y - axis);
   float sd = capsule(q, halfW, hh);
   float cover = clamp(0.5 - sd, 0.0, 1.0);
-  // A gradient across the row (bass -> treble) and along each capsule (hot
-  // core at the axis, the band's colour warmed at the tips).
-  vec3 base = pal(f);
+  // The band's own colour at this position across the row, and along each
+  // capsule: hot core at the axis, the band's colour warmed at the tips.
+  vec3 base = zoneAt(f);
   vec3 core = mix(base, vec3(1.0), 0.45);
   vec3 tip = warmTip(base);
   float along = clamp(abs(q.y) / max(hh, 1.0), 0.0, 1.0);
@@ -171,71 +207,53 @@ void main() {
   // The tips melt into the bloom instead of ending on a hard edge.
   c *= 1.0 - 0.14 * smoothstep(0.72, 1.0, along);
   // Papier is the one theme whose player scrim is paper, not a dark room, so
-  // the transparent strip becomes ink there. The full scene is a dark room on
-  // every theme: it is the picture, not the page it is printed on.
+  // the transparent STRIP becomes ink there. A full-screen row stays the light
+  // one: the screen behind it is the projector's own dark page on every theme.
   bool pale = strip && uCtl.w > 0.5;
 
-  if (strip) {
-    // Transparent, over the blurred artwork. The colour goes out unmultiplied:
-    // the post pass multiplies it by the alpha itself.
-    // Papier is the one theme whose player scrim is CREAM, not near-black. A
-    // light row would vanish into it — the design says the lemon is a
-    // highlighter there, never ink — so the strip draws the band's own hue at
-    // an ink value, with only the axis kept as a lit core. On Encre and
-    // Pochette the same row is the light one. This is a change of VALUE, not
-    // of palette: the source the user picked still decides the hue.
-    vec3 stripC = c;
-    if (pale) {
-      // A deep, SATURATED version of the band's colour — not a grey — with a
-      // pale core on the axis. On cream it reads as ink that still belongs to
-      // the sleeve.
-      vec3 ink = base * 0.38;
-      vec3 inkCore = mix(ink, vec3(1.0), 0.32);
-      stripC = mix(inkCore, warmTip(ink) * 1.05, smoothstep(0.0, 1.0, along));
-      stripC *= 0.9 + 0.25 * vv;
-    }
-    // A quiet band is a little translucent, a loud one solid: the row reads
-    // as light over the artwork rather than stickers on it. On paper the ink
-    // goes out nearly opaque, because contrast is the whole point there.
-    float aBody = cover * (pale ? 0.96 : (0.82 + 0.18 * smoothstep(0.0, 0.5, vv)));
-    // No shadow, no outline, and no afterglow in the strip: a dark rim round
-    // a light capsule is a 2005 sticker, and a peak ghost over a pale sleeve
-    // reads as a smudge. The row is one clean object here; the afterglow is a
-    // full-screen detail and stays there.
-    emitA(stripC * uEnergy, aBody);
-    return;
+  vec3 body = c;
+  if (pale) {
+    // A deep, SATURATED version of the band's colour — not a grey — with a
+    // pale core on the axis. On cream it reads as ink that still belongs to
+    // the sleeve. This is a change of VALUE, not of palette: the source the
+    // user picked still decides the hue.
+    vec3 ink = base * 0.38;
+    vec3 inkCore = mix(ink, vec3(1.0), 0.32);
+    body = mix(inkCore, warmTip(ink) * 1.05, smoothstep(0.0, 1.0, along));
+    body *= 0.9 + 0.25 * vv;
   }
+  // A quiet band is a little translucent, a loud one solid: the row reads as
+  // light over the artwork rather than stickers on it. On paper the ink goes
+  // out nearly opaque, because contrast is the whole point there.
+  float aBody = cover * (pale ? 0.96 : (0.82 + 0.18 * smoothstep(0.0, 0.5, vv)));
 
   // The afterglow, full screen: the highest this band has been in the last two
   // beats, falling 0.045 per sixteenth. Stateless, and it falls in musical
-  // time. Not computed for the strip, which draws no ghost.
-  float cap = v;
-  for (int k = 1; k < 8; k++) {
-    float fk = float(k);
-    cap = max(cap, shape(histAt(f, fk), f) * loud - fk * 0.045);
+  // time. Not computed for the strip, which draws no ghost — and not in eco,
+  // where P_TRAIL is zeroed.
+  vec3 outC = body;
+  float outA = aBody;
+  if (!strip) {
+    float cap = v;
+    for (int k = 1; k < 8; k++) {
+      float fk = float(k);
+      cap = max(cap, shape(histAt(f, fk), f) * loud - fk * 0.045);
+    }
+    float hg = max(minHalf, cap * reach);
+    float ghost = clamp(0.5 - capsule(q, halfW, hg), 0.0, 1.0) * (1.0 - cover);
+    vec3 g = mix(tip, base, 0.5) * (0.45 + 0.55 * cap);
+    float ga = ghost * 0.2 * P_TRAIL;
+    // The ghost hangs BEHIND the bead and never inside it, so the two layers
+    // resolve as one straight colour and one coverage — what the engine's final
+    // pass expects of a transparent world.
+    float k2 = ga * (1.0 - aBody);
+    outA = aBody + k2;
+    outC = (body * aBody + g * k2) / max(outA, 1e-4);
   }
-  float hg = max(minHalf, cap * reach);
-  float ghost = clamp(0.5 - capsule(q, halfW, hg), 0.0, 1.0) * (1.0 - cover);
-  vec3 g = mix(tip, base, 0.5) * (0.45 + 0.55 * cap);
-  float ga = ghost * 0.2 * P_TRAIL;
 
-  // --- the room -------------------------------------------------------------
-  // A deep field, and the light the row casts along its own axis: tinted band
-  // by band, swelling with the low end and on the kick. No floor, no mirror.
-  vec3 col = uPalBg.rgb * (0.82 + 0.22 * uv.y);
-  float dy = abs(frag.y - axis) / uRes.y;
-  float spill = exp(-dy * 8.0) * (0.025 + 0.06 * uMood.y + 0.1 * weight) * P_GLOW * loud;
-  col += pal(uv.x) * spill;
-  col += pal(uv.x) * exp(-dy * 38.0) * 0.04 * P_GLOW * loud;
-  // The weight of the low register, as a broad light behind the left end: the
-  // drop is felt there before it is read in the tips.
-  vec2 hp = (frag - vec2(0.16 * uRes.x, axis)) / uRes.y;
-  float halo = exp(-dot(hp * vec2(1.25, 2.1), hp * vec2(1.25, 2.1)) * 2.2);
-  col += mix(uPalLow.rgb, uPalHigh.rgb, 0.3) * halo * (0.02 + 0.1 * sub + 0.06 * kick) * P_GLOW * loud;
-  col = mix(col, g, ga);
-  col = mix(col, c, cover);
-  col += (uPalHigh.rgb * 0.2) * uHit2.w;
-  emit(col * mix(1.0, uEnergy, 0.5));
+  // No field, no spill, no halo behind the row: the page's backdrop is the
+  // picture this light is drawn on. Alpha is the row's own coverage.
+  emitA(outC * uEnergy, outA);
 }
 `,
 

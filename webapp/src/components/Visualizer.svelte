@@ -38,6 +38,14 @@
   // busy would mean a missed flash. Painting happens on rAF, capped by the
   // user's setting. A scene therefore never misses an event and never paints
   // more often than the screen (or the user) wants.
+  //
+  // THE HOST ADDS NOTHING TO THE PICTURE. No background, no frame, no blur, no
+  // image layer: the host is two canvases and (for the canvas fallback) the
+  // post pass, and a scene draws its own light over whatever the page puts
+  // behind the element. The one blurred cover in the app belongs to the
+  // backdrop's own layer, not to this component — and the sleeve's colours
+  // reach the scenes through `lib/coverpalette.js`, the decoder that layer
+  // already uses, so nothing here decodes an image a second time.
   import { trackRef } from "../lib/trackkey.js";
   import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
@@ -49,7 +57,7 @@
   import { createScene, createFallback, levelFor, needsWave } from "../lib/viz/index.js";
   import { glAvailable } from "../lib/viz/glstatus.js";
   import { createGeometry } from "../lib/viz/geometry.js";
-  import { createPalette } from "../lib/viz/palette.js";
+  import { createPalette, zonesOfPalette } from "../lib/viz/palette.js";
   import { resolveTier, tierPreset, createGovernor, TIERS } from "../lib/viz/quality.js";
   import { createPost, grainDataUrl, withPostGain, POST } from "../lib/viz/post.js";
 
@@ -85,6 +93,13 @@
   // The smart engine's world ("auto" = the genre decides) and the flash policy.
   export let world = "auto";
   export let flash = "soft";
+  // Energy saving. The app already keeps the whole visualizer off when eco is
+  // on (`effectiveMode` returns "off", and this component's host draws nothing)
+  // — that is the cheapest picture there is. This flag exists for the paths that
+  // still can draw one (a preview, a projector, a host that has not caught up):
+  // it asks the scene for its flat grade — no bloom, no grain, no fringe, no
+  // glow, no afterglow, a reduced render scale — and stops the canvas post pass.
+  export let eco = false;
 
   let canvas; // 2D
   let glSlot; // the WebGL2 canvas in the template, replaced by a pooled one
@@ -175,6 +190,7 @@
       flash,
       fps,
       light,
+      eco,
     };
   }
 
@@ -220,7 +236,9 @@
     if (!next) return;
     sizeCanvas();
     next.setOptions?.(sceneOptions());
-    if (next.kind === "gl" && lastCoverUrl) next.setCover?.(lastCoverUrl);
+    // Only a smart scene can land on a world that paints with the artwork (see
+    // useCover): the fixed modes never fetch it as a texture.
+    if (next.kind === "gl" && lastCoverUrl && mode === "smart") next.setCover?.(lastCoverUrl);
   }
 
   function readLight() {
@@ -275,7 +293,9 @@
     }
     g = canvas.getContext("2d", { alpha: true });
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    posting = post.resize(canvas, bloomCanvas, pw, ph, tier);
+    // Eco: no post pass at all — no bloom, no fringe, no grain. The scene's own
+    // drawing is the picture, and the canvas stays transparent over the page.
+    posting = eco ? false : post.resize(canvas, bloomCanvas, pw, ph, tier);
     ensureGrain();
     // A scene keeps trails by washing over the previous frame, so a resize —
     // which clears the backing store — has to start from a clean state.
@@ -331,7 +351,7 @@
     if (!g) return;
     const t0 = performance.now();
     scene.draw(g, cssW, cssH, pal.out, geometry.out);
-    post.run();
+    if (!eco) post.run();
     governor?.sample(performance.now() - t0, fps > 0 ? 1000 / fps : 16.7);
   }
 
@@ -499,11 +519,21 @@
       flash,
       fps,
       light,
+      eco,
     };
   }
-  $: applyOptions(intensity, reduced, scopeOrientation, scopeColour, world, flash, fps);
+  $: applyOptions(intensity, reduced, scopeOrientation, scopeColour, world, flash, fps, eco);
   function applyOptions() {
     scene?.setOptions?.(sceneOptions());
+  }
+  // Eco is a GRADE, not a scene: it is pushed into the live scene and the
+  // canvas post pass follows it. Nothing is rebuilt, so flipping it never
+  // resets an envelope.
+  let ecoApplied = null;
+  $: if (eco !== ecoApplied) {
+    ecoApplied = eco;
+    scene?.setOptions?.(sceneOptions());
+    sizeCanvas();
   }
   $: if (glCanvas) {
     glCanvas.classList.toggle("dim", dimmed);
@@ -512,17 +542,63 @@
   $: pal.setMode(palette);
   $: applyPaused(paused, active);
 
-  // The artwork: its dominant colour for the palette, and — for the worlds
-  // that draw WITH it — a small copy as a texture. The projector is handed
-  // both over the bridge; everywhere else they are resolved from the track.
+  // The artwork: its dominant colour for the palette, its vertical zones for the
+  // row of bars, and — for the worlds that draw WITH it — a small copy as a
+  // texture. The projector is handed both over the bridge; everywhere else they
+  // are resolved from the track.
   let lastCoverUrl = "";
   function useCover(url) {
-    if (!url || url === lastCoverUrl) return;
+    if (!url) return;
+    const fresh = url !== lastCoverUrl;
     lastCoverUrl = url;
-    if (scene?.kind === "gl") scene.setCover?.(url);
+    // The artwork is a TEXTURE only for the worlds that draw WITH it, and all
+    // four of those live in the smart catalogue (`artwork`, `stage`, `static`,
+    // `vinyl`): the fixed bars, pulse, aurora and scope never sample uCover, so
+    // they do not make the browser fetch a second image per track on a mobile
+    // link. A change of mode pushes it then — see replaceScene.
+    if (scene?.kind === "gl" && (fresh || mode === "smart")) scene.setCover?.(url);
   }
+
+  // THE APP'S ONE COVER DECODER (`lib/coverpalette.js`, the blurred backdrop's
+  // own): one decode per URL, one bounded cache, and the same answer for the
+  // ground and for the bars. It is resolved through a glob rather than a static
+  // import so this view still builds and draws if that module is ever moved or
+  // absent — and so that nothing about a sleeve is ever decoded twice here.
+  const coverModules = import.meta.glob("../lib/coverpalette*.js");
+  let coverPaletteFn;
+  async function coverPalette(url) {
+    if (coverPaletteFn === undefined) {
+      coverPaletteFn = null;
+      const load = coverModules["../lib/coverpalette.js"];
+      if (load) {
+        try {
+          const m = await load();
+          const fn = m.paletteFor || m.default?.paletteFor || (typeof m.default === "function" ? m.default : null);
+          if (typeof fn === "function") coverPaletteFn = fn;
+        } catch {
+          coverPaletteFn = null;
+        }
+      }
+    }
+    if (!coverPaletteFn) return null;
+    try {
+      return (await coverPaletteFn(url)) || null;
+    } catch {
+      return null;
+    }
+  }
+
   $: if (coverRgb) pal.setCover(coverRgb);
   $: if (coverUrl) useCover(loResCover(coverUrl, 256) || coverUrl);
+  // The PROJECTOR is told the artwork over the bridge (its colour and its URL)
+  // rather than resolving it from a track: its zones come from the same shared
+  // decoder, from the URL it already carries, so a beamer's row is coloured by
+  // the sleeve exactly as the player's is.
+  let externalFor = null;
+  $: if (external && coverUrl && coverUrl !== externalFor) {
+    externalFor = coverUrl;
+    loadCoverUrl(coverUrl);
+  }
   // Once per TRACK: `$current` is handed over again on every progress tick
   // (four times a second), and this asked for the artwork and re-set the
   // palette on each one — measured, thirteen requests for a cover in three
@@ -541,12 +617,31 @@
       resolveCover(get(offlineCovers), t.album?.cover) ||
       (trackRef(t) ? api.coverUrl(trackRef(t)) : "");
     if (!url) return;
+    loadCoverUrl(url);
+  }
+
+  async function loadCoverUrl(url) {
     useCover(loResCover(url, 256) || url);
-    try {
-      pal.setCover(await dominantColor(url));
-    } catch {
-      /* the palette keeps whatever it had */
+    // One decode of the sleeve: its horizontal zones colour the row band by
+    // band, and its vivid colour is the accent the rest of the palette draws
+    // with. The old extractor is only asked when the shared module is not in
+    // the tree — there is never a second decode of the same artwork — and a
+    // sleeve that cannot be READ goes back to the accent rather than keeping
+    // the last track's colours (the app's documented fallback).
+    const palette = await coverPalette(url);
+    if (palette) {
+      pal.setZones(zonesOfPalette(palette));
+      pal.setCover(palette.vivid || palette.dominant || palette.average);
+      return;
     }
+    pal.setZones(null);
+    if (!coverPaletteFn) {
+      try {
+        pal.setCover(await dominantColor(url));
+      } catch {
+        pal.setCover(null);
+      }
+    } else pal.setCover(null);
   }
 </script>
 

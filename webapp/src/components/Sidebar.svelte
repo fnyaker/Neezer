@@ -402,9 +402,12 @@
 <MoveToFolderSheet />
 
 <style>
+  /* Tier 1 of the glass ladder (app.css, "the glass ladder"): a translucent
+     tint over the app's ground, no blur — the column borders the page, nothing
+     scrolls under it. */
   .sidebar {
-    background: var(--s1);
-    border-right: 1px solid var(--ln);
+    background: var(--glass-bg);
+    border-right: 1px solid var(--glass-border);
     padding: 20px 12px 12px;
     display: flex;
     flex-direction: column;

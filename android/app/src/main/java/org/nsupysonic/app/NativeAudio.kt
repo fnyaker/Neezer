@@ -331,6 +331,9 @@ class NativeAudio(
                 for (s in slots.values) s.player.playWhenReady = false
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                // Not held any more: the next `play` (a skip included) asks
+                // again, instead of resuming into another app's audio.
+                hasFocus = false
                 for (s in slots.values) if (s.player.playWhenReady) {
                     pausedByFocus.add(s.id)
                     s.player.playWhenReady = false
@@ -381,6 +384,12 @@ class NativeAudio(
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         private var lastCmd = 0L
+        // The page's number of the last command THIS field has applied. lastCmd
+        // only says what ARRIVED: ExoPlayer reports BUFFERING from inside
+        // prepare(), and that state, read before playWhenReady was set, told the
+        // page "paused" for every skip — the page then paused and resumed.
+        private var pc = 0L
+        private var tc = 0L
         private var hasItem = false
         private var prepared = false
         private var pendingSeek = false
@@ -483,6 +492,8 @@ class NativeAudio(
                     player.setMediaItem(MediaItem.fromUri(url))
                     hasItem = true
                     if (o.optBoolean("pre", true)) prepare()
+                    pc = lastCmd
+                    tc = lastCmd
                     send(null)
                 }
                 "clear" -> {
@@ -501,6 +512,8 @@ class NativeAudio(
                     player.clearMediaItems()
                     hasItem = false
                     prepared = false
+                    pc = lastCmd
+                    tc = lastCmd
                     send(null)
                 }
                 "play" -> start()
@@ -543,11 +556,10 @@ class NativeAudio(
         // from a headset and a pause from the page leave the player in one state.
 
         private fun start() {
-            if (hasItem) prepare()
-            if (chaseMs < 0 && player.playbackState == Player.STATE_ENDED) {
-                proc.startAt = 0.0
-                player.seekTo(0)
-            }
+            // Before prepare(): it reports BUFFERING from inside the call, and a
+            // state read before playWhenReady was set said "paused" to a page
+            // whose `play` was already on the wire.
+            player.playWhenReady = true
             requestFocus()
             pausedByFocus.remove(id)
             retryCount = 0
@@ -556,13 +568,19 @@ class NativeAudio(
             // incoming track of a crossfade, the one the page names.
             analysis?.analysed = id
             lastPlayed = id
-            player.playWhenReady = true
+            if (hasItem) prepare()
+            if (chaseMs < 0 && player.playbackState == Player.STATE_ENDED) {
+                proc.startAt = 0.0
+                player.seekTo(0)
+            }
+            pc = lastCmd
             send(null)
         }
 
         private fun pauseNow() {
             pausedByFocus.remove(id)
             player.playWhenReady = false
+            pc = lastCmd
             send(null)
         }
 
@@ -571,6 +589,7 @@ class NativeAudio(
                 send("seeked")
                 return
             }
+            tc = lastCmd
             prepare()
             if (knownUnseekable()) {
                 startChase(ms)
@@ -679,6 +698,7 @@ class NativeAudio(
             proc.startAt = curAtMs / 1000.0
             player.seekTo(curAtMs)
             player.playWhenReady = true
+            pc = lastCmd
             send(null)
         }
 
@@ -929,6 +949,8 @@ class NativeAudio(
             val chasing = chaseMs >= 0
             val o = JSONObject()
                 .put("c", lastCmd)
+                .put("pc", pc)
+                .put("tc", tc)
                 .put("st", player.playbackState)
                 .put("p", player.playWhenReady)
                 // A held seek reads as the element's would: at its target.

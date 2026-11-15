@@ -242,7 +242,6 @@
     inset: 0;
     z-index: 300;
     background: rgba(8, 6, 12, 0.62);
-    backdrop-filter: blur(6px);
     display: grid;
     place-items: center;
     padding: 18px;

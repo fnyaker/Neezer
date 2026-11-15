@@ -335,10 +335,11 @@ replaced them, for any world:
 - **Level is information here too.** The spectrum's zone gains keep every register alive, but its
   heights are also scaled by the track's dynamics, so a breakdown is a row of small capsules instead
   of the drop renormalised to the same height.
-- **The strip renders at full resolution** (`scenes/gl.js#gq`): it is 40 px tall, cheaper than any
+- **The strip renders at full resolution** (`scenes/gl.js#gq`): it is 40-64 px tall, cheaper than any
   full-screen world at its floor, and its capsules are a few pixels wide — a governed scale smeared
-  every edge into the next. The canvas twin (`scenes/bars.js`) draws the same capsules with flat
-  fills (no gradient object and no `shadowBlur` per bar in the fallback's loop).
+  every edge into the next (eco drops every other grade but keeps this one). The canvas twin
+  (`scenes/bars.js`) draws the same capsules with flat fills (no gradient object and no `shadowBlur`
+  per bar in the fallback's loop).
 
 **THE BAR ROW IS SILLON'S (the 2026-11 visual pass).** The picture is no longer a row of evenly
 spaced thin sticks. It is one groove: thick fully-rounded capsules mirrored about the axis, at a
@@ -350,28 +351,87 @@ behind the left end. At rest the row BREATHES — one cycle per bar, in beats (`
 wave travelling along the bands; `prefers-reduced-motion` holds it still. The colour is the palette's
 own low→high walk across the row, a pale hot core on the axis and the band's colour through a warm
 gel at the tips (no second palette); the cover source's fallback is the Sillon lemon's own hue (73.8°, full
-saturation), so a track with no artwork draws the accent rather than an arbitrary violet. The tint is pinned by
-`viz.test.mjs` (the strip 24 / 33, full 31 / 70, low 40) and `npm test` passes 451.
+saturation), so a track with no artwork draws the accent rather than an arbitrary violet. (The row's
+colour is the SLEEVE's own zones since the second round below, when the palette source is the cover;
+the low→high walk is what remains with no artwork or another source.) The tint is pinned by
+`viz.test.mjs` (the strip 24 / 33, full 31 / 70, low 40).
+
+**THE ROW IS THE SLEEVE'S, AND THERE IS NOTHING BEHIND IT (the same pass, second round).** Two things
+the reader named outright, and both were structural.
+
+- **No field, no frame.** Full screen laid a deep palette-tinted room behind the row — a `fillRect` on
+  the canvas, `uPalBg` plus a wide spill in the shader — and that rectangle WAS the rectangle that
+  looked posed on the artwork. Both paths now CLEAR their canvas in every layout and the world writes
+  colour AND alpha (`emitA`): the row is the only thing the scene draws, and the page's own backdrop
+  (its one blurred cover layer; the projector's page) is what it sits on. `scenes/gl.js` takes the
+  transparent grade from the WORLD's own `look.transparent`, so a world that writes coverage asks for
+  it, and a dissolve carries alpha with colour — an opaque world arriving over the row stays opaque
+  until it is alone. The engine's bloom is the only halo: the world paints no spill, no frosted plate
+  and no border, and the visualizer adds no blur, filter or image layer of its own anywhere.
+- **Its colours are the artwork's, band by band.** The row is as wide as the sleeve, so it is coloured
+  by the sleeve. `lib/coverpalette.js` — the app's ONE decoder, shared with the blurred backdrop —
+  decodes the cover once (64 px, bounded cache); its 3×3 `cells` are read COLUMN BY COLUMN, taking the
+  most SATURATED cell of each, because a column mean mixes a blue sky over an amber field into olive —
+  a colour that is nowhere in the artwork and sits wrong on the blurred copy of it. `palette.js#setZones`
+  resamples the three anchors to **7 stops** in HSL, with the same saturation floor `setCover` applies
+  and a value band (0.5-0.72) so a black corner is a deeper bead rather than an invisible one.
+  `colourAt(x)` walks them and BOTH consumers use it: the canvas row (`scenes/bars.js`) and the GL world
+  (`worlds/spectrum.js`). On the GPU it is `uZone[7]` + `uZoneOK` — PER-PROGRAM uniforms set once a
+  picture, not a slot in the Music block, so there is no wasm rebuild and no layout two sides must
+  agree on; the world converts the sRGB stops to linear and normalises their luminance to the 0.26 the
+  block's own palette uses. There is deliberately **no tempo drift on a zoned row**: the drift exists
+  so a one-colour palette does not sit still, and rotating the sleeve's colours away from the sleeve
+  behind them drew a violet row on a blue cover (measured: 53° of drift over one arrangement).
+- **The fallback is untouched.** No artwork, or a palette source that is not the cover (Néon, Braise,
+  Glace, Monochrome, Spectre), and the row draws its old low→high walk — which is exactly what the
+  parity oracle (`test/reference/bars.js`) pins against the Rust levelling, picture by picture.
+
+Measured on this machine, and the numbers the rules are worth: the canvas row at **520×56** costs
+**0.205 ms a frame** (0.195 before the zone walk: the lookup is +0.010 ms), **0.383 ms** at
+**1280×56** with 72 beads, and **0.151 ms** at the phone's 390×40; **eco takes those to 0.051,
+0.098 and 0.046 ms** — a 4× saving on the fallback, where the old code ignored the flag (0.415 /
+0.149). The zone code adds **2.0 kB minified / 0.93 kB gzipped** to the palette module (main bundle)
+and 216 / 114 B to util.js; the GL side adds **28 floats per bound program per picture** and no wasm
+change. `--check` on the spectrum over the RAW canvas (640×360, no backdrop): **mean 0.167, clip 0 %,
+detail 0.069, cover 0 %, tempo ×1.53** — the transparent row puts **0 %** of its light behind the
+artwork on the phone, against 13-23 % for the worlds that paint a field (the two rows sit in the free
+bands by construction). The whole check sweep is green on 49 of 50 worlds; `wobble` reads **30 %** of
+its light behind the cover, which it does identically at `HEAD` (measured in a clean worktree:
+mean 0.208, cover 30 % — a pre-existing contract failure of that world, not of the bars).
+
+**Eco is a GRADE of the scene, not a scene.** The app already means "no animation at all" by eco mode
+(`effectiveMode` returns `off`, no canvas anywhere), and that is the cheapest picture there is. The
+scenes still carry the grade for the paths that can draw one (a preview, a projector, a host that has
+not caught up): `eco` zeroes the worlds' `glow`/`trail` parameters, turns the engine's bloom, film
+grain and lens fringe off, drops the render scale to 0.55 (the strip keeps its full resolution — its
+beads are a few pixels wide) and makes the canvas row ONE flat fill per bead, with no inner gradient,
+no axis core and no peak ghost. Nothing about the music changes; the finish does.
 
 **Papier's strip is ink, not light.** The player's scrim is the theme's `--bg`, so on Papier the strip
 sits on cream, not near-black; a lemon bar there is 1.02:1 and disappears. `Visualizer.svelte` reads
 `data-theme` and passes a `light` flag; `gl.js` puts it in `uCtl.w` (the one unused component of the
 control slot, so the block layout is unchanged) and the strip draws the band's hue at an ink value
 with a pale axis core. Measured on the real player over the cream scrim: the ink body is **3.5:1**
-and the treble **4.8:1**, against **10.7:1** for the light row on Encre; the full scene stays the
-dark room on every theme. The `light` strip also turns the bloom off and raises the threshold
-(`look.bloom = 0`, `threshold × 2.2`), because a bloom of ink is a smudge and the sheet itself must
-not enter the bright pass.
+and the treble **4.8:1**, against **10.7:1** for the light row on Encre. The `light` strip also turns
+the bloom off and raises the threshold (`look.bloom = 0`, `threshold × 2.2`), because a bloom of ink
+is a smudge and the sheet itself must not enter the bright pass. This is the STRIP's business only: a
+full-screen row is transparent over the page's backdrop and stays the light one, because the screen it
+is on (the projector, the settings preview) is a dark field on every theme.
 
 **The strip no longer draws an afterglow, and that is also a saving.** The peak ghost was a dark
 patch around short bars over a light backdrop and read as a 2005 sticker; the full row keeps its
 afterglow, the strip is one clean object. Moving the history loop below the strip branch removed
-**8 texture taps per pixel** from the 40 px strip (183k fewer taps a frame at 520×44, 1.65M at dpr 3).
+**8 texture taps per pixel** from the strip (183k fewer taps a frame at 520×44, 1.65M at dpr 3).
 Measured on the real full-screen player in headless Chromium (SwiftShader): **60 fps at 1440×900 and
-at 390×844**, median frame **16.7 ms**, p95 **16.8 ms**, with the strip canvas at 520×44 and 346×40.
-The bench photographs the strip on Papier's cream scrim with `--strip --light`; the default
-`--strip` keeps Encre's dark one. `--light` only changes the STRIP: the full scene is a dark room
-on every theme.
+at 390×844**, median frame **16.7 ms**, p95 **16.8 ms**, with the strip canvas at 520×44 and 346×40
+(the desktop strip is now 56 px where the window is ≥880 px tall — `DesktopNowPlaying`'s
+`--viz-strip-h`, 44 below that and 40 on the phone; re-measured on the same player with the taller
+strip: **60 fps at 1440×900 and at 641×900, median 16.7 ms, p95 16.7 ms**, the strip canvas at
+**520×56**, and the fullscreen bench re-ran every one of its eleven window sizes, **641×900 and the
+Flow included**, with every control still on screen and clickable). The bench photographs the strip
+on Papier's cream scrim with `--strip --light`; the default `--strip` keeps Encre's dark one.
+`--light` only changes the STRIP: the full scene is a transparent row over the page's own backdrop on
+every theme.
 - **Light things; don't outline them.** `stairs` was neon wireframe slabs round a black void,
   every edge flashed on the kick — a 2000s screensaver. Its slabs are matte stone now, LIT by the
   column they turn round (diffuse falling off with distance, a hemisphere ambient, a soft sheen), the
@@ -461,10 +521,17 @@ at a time. `webapp/test/post.test.mjs` pins it.
   runs on its OWN defaults (`fixed`), which is what the contracts are about; `--skin` pins it the
   way the smart engine does, so it wears `--genre`'s skin — the only way to see a shape switch
   (`tunnel` as ebm's helix, as peaktime's dashes) before a user does. `--pscale 2` renders the phone
-  layout at twice the size, to read detail. `--strip` photographs the players' 40 px bar strip
-  instead (390×40 CSS px at `--pscale` density, default 3, over the blurred cover under its scrim —
-  a transparent layout can only be judged on what it sits on; `--light` puts it on Papier's cream
-  scrim), and `--nograin` turns the post pass's film grain off, to tell a world's own noise from the grain laid over every world.
+  layout at twice the size, to read detail. `--strip` photographs the players' bar strip instead
+  (`--size` sets it, default `390x40` — the phone's; `1280x56` is the desktop's — at `--pscale`
+  density, default 3, over the blurred cover under its scrim, because a transparent layout can only
+  be judged on what it sits on; `--light` puts it on Papier's cream scrim). The strip
+  shot walks the SLEEVE's palette by default (`--palette cover`): `--cover striped` swaps the neutral
+  fixture for a sleeve whose left, middle and right are nothing alike, which is the one picture that
+  answers "does the row follow the artwork under it?" — and the report line prints the three anchors
+  the decoder found and the seven stops the row walked. `--eco` photographs the scene's energy-saving
+  grade, `--bars2d` times the canvas fallback on a real 2D canvas (520×56, best of three passes, with
+  and without eco), and `--nograin` turns the post pass's film grain off, to tell a world's own noise
+  from the grain laid over every world.
 - **`webapp/test/viz.test.mjs` and `musical.test.mjs`** (node, in `npm test`) pin everything that can
   be decided without a GPU and that a GPU would only ever report as a black screen: the loader, the
   catalogue and the skins agree; every classifier family resolves by id AND by French label, and
@@ -479,6 +546,14 @@ at a time. `webapp/test/post.test.mjs` pins it.
   diverging spring and the unbounded clocks. The oscilloscope's own tests (the trace against real
   samples) are unchanged and live there too. Both load the animation core from the shipped binary
   (`vizCoreFromBytes`): the reading every driver is handed is the Rust one.
+
+  What the bars' two rounds added to that file: the palette WALKS the sleeve's zones and only when
+  the source is the cover (and a grey band borrows the sleeve's hue), the decoder's zones are the
+  colours the artwork CONTAINS (the most saturated cell of each column, never the muddy mean), the
+  canvas row takes its colour per bead from `colourAt` and keeps the old low→high walk with no
+  artwork, eco draws ONE flat fill per bead with no field behind it, and the GL engine hands the world
+  the seven `uZone` vec4s, `uZoneOK = 0` with no palette, the transparent grade for the spectrum and
+  the eco zeroes (bloom, grain, fringe, the `trail` param).
 
 **No constant that should be musical** (`lib/viz/musical.js`) is still the layer every driver reads:
 `m.overBeats(n)` is a lifetime, `m.perBeat(n)` a rate, `m.ease(v, target, beats, dt)` a smoothing,

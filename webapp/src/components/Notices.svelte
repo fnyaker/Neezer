@@ -50,18 +50,25 @@
     flex-direction: column;
     gap: 8px;
     padding: 6px 0 10px;
-    background: var(--bg);
+    /* NO fill of its own: the strip is only the cards' column. An opaque band
+       here painted a rectangle over the cover ground (a hard edge under the
+       cards, measured at 390 with a purple sleeve) — the notices are the
+       surfaces, and a notice is the one material the HIG wants thick, so it
+       reads as an alert even while rows pass between two of them. */
+    background: none;
   }
   .notice {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 11px 12px 11px 14px;
-    border-radius: var(--radius);
-    background: var(--s1);
-    border: 1px solid var(--ln);
+    /* Tier 2 without the blur: an alert carries a lot of text and floats over a
+       list, so it takes the popover's tint — the strip behind it is already the
+       page's own ground. */
+    background: var(--glass-bg-2);
+    border: 1px solid var(--glass-border);
     border-radius: var(--r-card);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--glass-shadow-2);
     font-size: 0.9rem;
     line-height: 1.35;
   }

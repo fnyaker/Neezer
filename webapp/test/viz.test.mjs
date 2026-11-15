@@ -26,7 +26,7 @@ import { createGeometry } from "../src/lib/viz/geometry.js";
 import { vizCoreFromBytes } from "../src/lib/viz/core.js";
 import { createScene, createFallback, MODES, effectiveMode, levelFor } from "../src/lib/viz/index.js";
 import { tierPreset, TIERS } from "../src/lib/viz/quality.js";
-import { createPalette } from "../src/lib/viz/palette.js";
+import { createPalette, zonesOfPalette } from "../src/lib/viz/palette.js";
 import { FAMILY_LIST, GROOVES, genreOf, grooveOf, familyLook, tempoRangeFor } from "../src/lib/audio/style.js";
 import { WORLD_META, GROUPS, worldFor } from "../src/lib/viz/worlds/catalogue.js";
 import { worldIds, loadWorld, hasWorld, instrumentIds } from "../src/lib/viz/worlds/index.js";
@@ -1074,4 +1074,344 @@ test("neighbours sharing a world are told apart by a SHAPE switch, not a brightn
     const differ = keys.some((k) => (sa.p?.[k] ?? "default") !== (sb.p?.[k] ?? "default"));
     assert.ok(differ, `${a} and ${b} differ on no shape switch of ${sa.world} (${keys.join(", ")})`);
   }
+});
+
+// --- the sleeve's own colours -------------------------------------------------
+//
+// A row of bars runs across the whole width of the frame, so its colours come
+// from the whole width of the artwork: the cover decoder answers with the
+// sleeve's horizontal zones (lib/coverpalette.js, one decode), the palette walks
+// them, and BOTH paths — the canvas fallback and the GL world — draw with the
+// same numbers. What is pinned here is the walk and the two consumers; the
+// extraction itself is `test/coverpalette.test.mjs`'s.
+
+const hslOf = (s) => {
+  const m = String(s).match(/hsla?\(\s*([-\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*,\s*([\d.]+)\s*\)/);
+  return m ? { h: +m[1], s: +m[2] / 100, l: +m[3] / 100, a: +m[4] } : null;
+};
+
+// A canvas that keeps the FILL STYLE in force at every fill: the bars' colours
+// are exactly what this catches, and the shared recorder does not look at them
+// (it is about where things are drawn). `beads` is one entry per fill call, so
+// the strip's three layers per band arrive in the order the scene drew them.
+function colourRecorder(w, h) {
+  const out = { beads: [], clears: 0, fills: 0, full: 0 };
+  let last = "";
+  const g = {
+    canvas: { width: w, height: h },
+    get fillStyle() {
+      return last;
+    },
+    set fillStyle(v) {
+      last = v;
+    },
+    clearRect() {
+      out.clears++;
+    },
+    fillRect(x, y, rw, rh) {
+      if (x <= 0.5 && y <= 0.5 && rw >= w - 1 && rh >= h - 1) out.full++;
+    },
+    beginPath() {},
+    closePath() {},
+    moveTo() {},
+    lineTo() {},
+    quadraticCurveTo() {},
+    fill() {
+      out.fills++;
+      const c = hslOf(last);
+      if (c) out.beads.push(c);
+    },
+  };
+  out.g = g;
+  return out;
+}
+
+const blueGreenOrange = [
+  [30, 80, 220],
+  [40, 200, 120],
+  [250, 150, 40],
+];
+
+test("the palette walks the cover's zones, and only when the source is the cover", () => {
+  const pal = createPalette("cover");
+  const frame = makeFrame(0);
+  pal.setCover([250, 140, 40]);
+  pal.setZones(blueGreenOrange);
+  pal.update(frame, 1 / 60);
+  assert.equal(pal.out.hasZones, true, "the zones were not taken");
+  assert.equal(pal.out.zones.length, 21, "seven zones of h, s, l");
+  assert.equal(pal.out.zoneRgb.length, 28, "seven vec4 the GL engine can upload");
+
+  // The ends of the row are the two ends of the sleeve. The hue carries the
+  // tempo's drift and the genre's lean, both applied after one frame, so the
+  // comparison allows for that (it is a fraction of a degree on the first).
+  const at0 = [0, 0, 0];
+  const at1 = [0, 0, 0];
+  assert.equal(pal.colourAt(0, at0), true);
+  assert.equal(pal.colourAt(1, at1), true);
+  assert.ok(Math.abs(at0[0] - 226) < 6, `the left end is ${at0[0].toFixed(1)}°`);
+  assert.ok(Math.abs(at1[0] - 36) < 6, `the right end is ${at1[0].toFixed(1)}°`);
+  // Three anchors resampled to seven stops: the middle of the row is the
+  // middle of the sleeve, not an interpolation of the two ends.
+  const mid = [0, 0, 0];
+  pal.colourAt(0.5, mid);
+  assert.ok(Math.abs(mid[0] - 150) < 8, `the middle is ${mid[0].toFixed(1)}°`);
+  // The walk is monotonic in value: no zone is outside the row's own band.
+  for (let i = 0; i < 7; i++) {
+    const l = pal.out.zones[i * 3 + 2];
+    assert.ok(l >= 0.5 && l <= 0.72, `zone ${i} has value ${l}`);
+    const rgb = Array.from(pal.out.zoneRgb.subarray(i * 4, i * 4 + 3));
+    assert.ok(rgb.every((c) => c >= 0 && c <= 1), `zone ${i} is not sRGB: ${rgb}`);
+    assert.equal(pal.out.zoneRgb[i * 4 + 3], 1);
+  }
+
+  // The PALETTE SOURCE is the user's choice: a neon row is not repainted by the
+  // sleeve, and going back to the cover brings the zones back untouched.
+  pal.setMode("neon");
+  pal.update(frame, 1 / 60);
+  assert.equal(pal.out.hasZones, false, "the zones overrode the chosen source");
+  const none = [0, 0, 0];
+  assert.equal(pal.colourAt(0, none), false);
+  pal.setMode("cover");
+  pal.update(frame, 1 / 60);
+  assert.equal(pal.out.hasZones, true, "the zones did not come back");
+
+  // A grey band borrows the sleeve's hue: a row of grey beads on a coloured
+  // sleeve reads as a bug, not as a palette.
+  const grey = createPalette("cover");
+  grey.setCover([255, 0, 0]);
+  grey.setZones([
+    [128, 128, 128],
+    [136, 136, 136],
+    [120, 120, 120],
+  ]);
+  grey.update(frame, 1 / 60);
+  const g0 = [0, 0, 0];
+  grey.colourAt(0, g0);
+  assert.ok(Math.min(Math.abs(g0[0]), 360 - Math.abs(g0[0])) < 6, `a grey sleeve walks ${g0[0]}°`);
+  assert.ok(g0[1] > 0.34, "a washed-out sleeve still has colour");
+  // A sleeve with no hue at all gets the Sillon accent, never hue 0 (red).
+  const greyCover = createPalette("cover");
+  greyCover.setCover([128, 128, 128]);
+  greyCover.update(frame, 1 / 60);
+  assert.ok(Math.abs(greyCover.out.hue - 73.8) < 2, `a grey sleeve walks ${greyCover.out.hue}°`);
+  // ...and a sleeve that cannot be read at all comes back to it too, rather
+  // than keeping the previous track's colour (the documented fallback).
+  greyCover.setCover([20, 60, 200]);
+  for (let i = 0; i < 40; i++) greyCover.update(frame, 1 / 60);
+  assert.ok(greyCover.out.hue > 150, `a blue sleeve walks ${greyCover.out.hue}°`);
+  greyCover.setCover(null);
+  for (let i = 0; i < 180; i++) greyCover.update(frame, 1 / 60);
+  assert.ok(Math.abs(greyCover.out.hue - 73.8) < 16, `a lost sleeve walks ${greyCover.out.hue}°`);
+});
+
+test("the sleeve's zones are the colours it CONTAINS, not its column means", () => {
+  // The decoder hands back a 3x3 grid of means. Averaging a column's top with
+  // its bottom is how a blue sky over an amber field comes out olive — a
+  // colour that is nowhere in the artwork and that sits wrong on the blurred
+  // backdrop. The walk takes the most SATURATED cell of each column instead.
+  const cells = [
+    [16, 22, 74], // top-left: night sky
+    [230, 226, 214], // top-middle: cream
+    [10, 12, 20], // top-right: black
+    [22, 54, 160], // middle-left: blue
+    [200, 60, 48], // middle-middle: red
+    [255, 183, 3], // middle-right: amber
+    [18, 40, 120], // bottom-left: blue
+    [160, 60, 50], // bottom-middle: red
+    [250, 170, 20], // bottom-right: amber
+  ];
+  const decoded = {
+    cells,
+    zones: { left: [20, 40, 120], center: [180, 110, 100], right: [140, 120, 60] },
+    middles: [cells[3], cells[4], cells[5]],
+    average: [120, 100, 90],
+    dominant: [22, 54, 160],
+  };
+  const zones = zonesOfPalette(decoded);
+  assert.equal(zones.length, 3);
+  // Each zone is one of its column's cells — a colour the sleeve actually has —
+  // and never the column mean (which for these is 22,40,120 / 197,115,104 /
+  // 140,120,60: a muddy set that appears nowhere in the artwork).
+  for (let c = 0; c < 3; c++) {
+    const column = [cells[c], cells[3 + c], cells[6 + c]];
+    assert.ok(
+      column.some((cell) => cell[0] === zones[c][0] && cell[1] === zones[c][1] && cell[2] === zones[c][2]),
+      `zone ${c} is ${zones[c]}, which is not one of its column's colours`
+    );
+  }
+  // ...and it is the usable one: blue, red, amber, not the darkest cell.
+  assert.ok(zones[0][2] > zones[0][0], "the left zone is not the blue the sleeve has");
+  assert.ok(zones[1][0] > zones[1][1] + 60, "the middle zone is not the red the sleeve has");
+  assert.ok(zones[2][0] > zones[2][1] && zones[2][1] > zones[2][2], "the right zone is not the amber");
+  // A decoder with no grid keeps working: columns, then the middle row, then
+  // nothing at all.
+  assert.deepEqual(zonesOfPalette({ zones: { left: [1, 2, 3], center: [4, 5, 6], right: [7, 8, 9] } }), [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9],
+  ]);
+  assert.deepEqual(zonesOfPalette({ middles: [[4, 5, 6]] }), [[4, 5, 6]]);
+  assert.equal(zonesOfPalette(null), null);
+  assert.equal(zonesOfPalette({}), null);
+});
+
+test("the canvas bars take their colours from the sleeve, band by band", () => {
+  const preset = tierPreset("high");
+  const W = 520;
+  const H = 56;
+  const run = ({ zones = true, eco = false, light = false } = {}) => {
+    const scene = makeScene("bars", { layout: "strip", light, eco });
+    scene.resize(W, H, preset);
+    const pal = createPalette("cover");
+    if (zones) {
+      pal.setCover([250, 140, 40]);
+      pal.setZones(blueGreenOrange);
+    } else {
+      pal.setCover([250, 140, 40]);
+    }
+    const rec = colourRecorder(W, H);
+    const dt = 1 / 60;
+    let frame;
+    for (let i = 0; i < 30; i++) {
+      frame = makeFrame(i * dt);
+      pal.update(frame, dt);
+      scene.update(frame, dt);
+    }
+    scene.draw(rec.g, W, H, pal.out);
+    const bars = scene.bars;
+    scene.dispose();
+    return { rec, bars, pal };
+  };
+
+  const zoned = run({ zones: true });
+  assert.equal(zoned.rec.clears, 1, "the strip must clear, never wash");
+  assert.equal(zoned.rec.full, 0, "the strip drew a field");
+  // One rounded shape per bead at least (the strip draws the body, its lit
+  // inside and the axis core, in that order), and the hues walk left -> right.
+  assert.ok(zoned.rec.beads.length >= zoned.bars * 3 - 2, `${zoned.rec.beads.length} fills for ${zoned.bars} beads`);
+  const bodies = zoned.rec.beads.filter((_, i) => i % 3 === 0);
+  assert.ok(bodies.length >= zoned.bars - 1, `${bodies.length} bodies for ${zoned.bars} beads`);
+  const leftHue = bodies[0].h;
+  const rightHue = bodies[bodies.length - 1].h;
+  assert.ok(Math.abs(leftHue - 234) < 12, `the bass end is ${leftHue.toFixed(0)}°`);
+  assert.ok(Math.abs(rightHue - 44) < 12, `the treble end is ${rightHue.toFixed(0)}°`);
+  const distinct = new Set(bodies.map((b) => Math.round(b.h / 10)));
+  assert.ok(distinct.size >= 4, `only ${distinct.size} hues across the row`);
+  // The middle of the row is the middle of the sleeve.
+  const middle = bodies[Math.floor(bodies.length / 2)];
+  assert.ok(Math.abs(middle.h - 158) < 16, `the middle of the row is ${middle.h.toFixed(0)}°`);
+  // The value stays in the row's band: a dark sleeve's zone is a deeper bead,
+  // never a black one.
+  for (const b of bodies) assert.ok(b.l >= 0.48 && b.l <= 0.73, `a body has value ${b.l}`);
+
+  // No zones (no artwork, or another palette source): the palette's own
+  // low -> high walk, which is what the row drew before the sleeve existed.
+  const plain = run({ zones: false });
+  const plainBodies = plain.rec.beads.filter((_, i) => i % 3 === 0);
+  const pLeft = plainBodies[0].h;
+  const pRight = plainBodies[plainBodies.length - 1].h;
+  assert.ok(Math.abs(pLeft - (plain.pal.out.low + 14)) < 0.5, "the fallback walk changed");
+  assert.ok(Math.abs(pRight - (plain.pal.out.high + 14)) < 0.5, "the fallback walk changed");
+
+  // Eco: the same row in ONE flat fill per bead — no inside, no axis core, no
+  // peak ghost — and still no field behind it.
+  const eco = run({ zones: true, eco: true });
+  assert.equal(eco.rec.full, 0, "eco drew a field");
+  assert.equal(eco.rec.beads.length, eco.bars, `eco drew ${eco.rec.beads.length} shapes for ${eco.bars} beads`);
+  const alphas = new Set(eco.rec.beads.map((b) => b.a));
+  assert.equal(alphas.size, 1, "eco's row is not flat");
+  const ecoHues = new Set(eco.rec.beads.map((b) => Math.round(b.h / 10)));
+  assert.ok(ecoHues.size >= 4, "eco's row lost the sleeve's colours");
+});
+
+test("the GL engine gives the worlds the sleeve's zones, and the row is transparent", async () => {
+  // The GL half has no GPU here, so what is pinned is what the ENGINE hands the
+  // world: the zone uniforms (28 floats), the transparency flag, the eco grade,
+  // and the spectrum's own trail parameter at zero in eco.
+  const { createGLScene } = await import("../src/lib/viz/scenes/gl.js");
+  const frame = makeFrame(0);
+  let simT = 0;
+
+  async function run({ zones = true, eco = false } = {}) {
+    const seen = { look: null, uniforms: {} };
+    const h = {
+      f: (n, v) => (seen.uniforms[n] = v),
+      v2: () => {},
+      v4: (n, ...v) => (seen.uniforms[n] = v),
+      v4a: (n, arr) => (seen.uniforms[n] = Array.from(arr)),
+      use: () => {},
+      ready: true,
+    };
+    const target = { a: true, out: null, fresh: true, dispose() {} };
+    const renderer = {
+      lost: false,
+      gpuMs: 0,
+      program: () => ({ ready: true, use: () => {}, failed: false }),
+      worldTarget: () => target,
+      dataTexture: () => ({ upload() {}, dispose() {} }),
+      setSize() {},
+      setCover() {},
+      clear() {},
+      beginFrame: () => true,
+      drawWorld: (_h, _t, fill) => {
+        fill(h);
+        return true;
+      },
+      present: (_a, _b, _t, _seed, look) => {
+        seen.look = { ...look };
+        return true;
+      },
+    };
+    const scene = createGLScene({
+      preset: tierPreset("high"),
+      fixed: "spectrum",
+      now: () => simT,
+      fps: 60,
+      flash: "soft",
+      layout: "full",
+      eco,
+      core: vizCoreFromBytes(readFileSync(new URL("../src/lib/audio/rhythm.wasm", import.meta.url))),
+    });
+    const pal = createPalette("cover");
+    if (zones) {
+      pal.setCover([250, 140, 40]);
+      pal.setZones(blueGreenOrange);
+    }
+    scene.attach(renderer);
+    scene.resize(640, 360, tierPreset("high"), createGeometry().out, 1);
+    pal.update(frame, 1 / 60);
+    scene.update(frame, 1 / 60);
+    await loadWorld("spectrum");
+    await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < 12; i++) {
+      simT += 1 / 60;
+      scene.draw(null, 640, 360, pal.out, null);
+    }
+    scene.dispose();
+    return seen;
+  }
+
+  const on = await run({ zones: true });
+  assert.ok(on.look, "the frame never reached the post pass");
+  assert.equal(on.look.transparent, true, "the spectrum's row is not transparent");
+  assert.ok(on.look.bloom > 0, "the engine's bloom was lost outside eco");
+  assert.equal(on.uniforms.uZoneOK, 1, "the world was not told there are zones");
+  assert.ok(Array.isArray(on.uniforms["uZone[0]"]), "no zone uniform was uploaded");
+  assert.equal(on.uniforms["uZone[0]"].length, 28, "seven vec4, one per zone");
+  // The left end of the sleeve is the first zone: hue 226° at s ~0.76, l ~0.49.
+  const [r0, g0, b0] = on.uniforms["uZone[0]"].slice(0, 3);
+  assert.ok(b0 > r0 && b0 > g0, `the first zone is not the blue one (${r0}, ${g0}, ${b0})`);
+
+  const off = await run({ zones: false });
+  assert.equal(off.uniforms.uZoneOK, 0, "a palette with no zones still claimed some");
+
+  const eco = await run({ zones: true, eco: true });
+  assert.equal(eco.look.bloom, 0, "eco kept the bloom");
+  assert.equal(eco.look.grain, 0, "eco kept the grain");
+  assert.equal(eco.look.ca, 0, "eco kept the fringe");
+  assert.equal(eco.look.transparent, true);
+  // The spectrum's params are width, curve, trail, pitch — in eco the trail is
+  // the first thing a flat picture gives up.
+  assert.equal(eco.uniforms.uP0?.[2], 0, `eco left the afterglow at ${eco.uniforms.uP0?.[2]}`);
 });

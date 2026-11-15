@@ -142,6 +142,14 @@ uniform sampler2D uCover; // the artwork, when there is one
 uniform sampler2D uData;  // a world's own data from the CPU (the scope's trace), RG32F
 uniform float uHistHead;  // the newest history row, 0..1
 uniform float uCoverOK;   // 1 once the artwork has been uploaded
+// The cover's own palette, one sRGB colour per VERTICAL zone, left to right
+// (lib/viz/palette.js#zones). Per-program rather than a slot in the Music
+// block: it is the page's own palette, no arithmetic of the core's, and only
+// the row of bars reads it. uZoneOK is 0 when there is nothing to walk (no
+// artwork, or the user's palette source is not the cover), and then the world
+// uses its pal() walk exactly as before.
+uniform vec4 uZone[7];
+uniform float uZoneOK;
 uniform float uHeadroom;  // 1, or 1/4 on a device with no float targets
 `;
 

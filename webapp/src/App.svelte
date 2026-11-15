@@ -1,7 +1,7 @@
 <script>
   import Router, { replace } from "svelte-spa-router";
   import { wrap } from "svelte-spa-router/wrap";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { onboardingTarget, stepFor, stepFromPath } from "./lib/onboarding.js";
   import { user, authChecked, nowPlayingOpen, player } from "./lib/stores.js";
   import { api, failureCause } from "./lib/api.js";
@@ -29,6 +29,10 @@
   import MobileNav from "./components/MobileNav.svelte";
   import Player from "./components/Player.svelte";
   import NowPlaying from "./components/NowPlaying.svelte";
+  // The app's ground: one blurred sleeve behind every screen (own file: the
+  // one place a blur is allowed in the shell).
+  import GlobalBackdrop from "./components/GlobalBackdrop.svelte";
+  import { watchEco } from "./lib/globalbackdrop.js";
   import Toasts from "./components/Toasts.svelte";
   import Notices from "./components/Notices.svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
@@ -39,7 +43,7 @@
   import CreditsSheet from "./components/CreditsSheet.svelte";
   import ExportSheet from "./components/ExportSheet.svelte";
   import { maybeResumeHosting } from "./lib/party/hostbridge.js";
-  import { partySheet, genreBulkSheet, remoteSheet, immersiveOpen, current } from "./lib/stores.js";
+  import { partySheet, genreBulkSheet, remoteSheet, immersiveOpen, current, ecoMode } from "./lib/stores.js";
   import { REMOTE, atLeast, claimToken, rememberRemote, forgetRemote, reloadHome } from "./lib/remote/mode.js";
   import { initRemoteHost, remoteHost } from "./lib/remote/hoststate.js";
   import PlayerBar from "./components/PlayerBar.svelte";
@@ -117,6 +121,13 @@
     "/recap": wrap({ asyncComponent: () => import("./routes/Recap.svelte") }),
     "/recap/:year": wrap({ asyncComponent: () => import("./routes/Recap.svelte") }),
   };
+
+  // The eco contract, put on <html> before the shell renders: `data-eco="1"`
+  // tells every translucent surface to drop its backdrop blur, and the ground
+  // (GlobalBackdrop) to paint no image at all. Owned by App rather than by the
+  // shell so it also holds on the login, party and onboarding screens.
+  const stopEco = watchEco(ecoMode);
+  onDestroy(stopEco);
 
   // The projector renders outside the router (it is a screen, not a route), so
   // it is loaded by hand when this tab turns out to be one.
@@ -530,6 +541,10 @@
   <PlayerBar />
   {#if RemoteBanner}<svelte:component this={RemoteBanner} />{/if}
 {:else}
+  <!-- The ground of every screen, behind the shell and under the player bar.
+       It is the FIRST child so its negative-z layers paint under the rest;
+       the full-screen player hides it while it is open. -->
+  <GlobalBackdrop />
   <div class="layout" class:np-open={$nowPlayingOpen}>
     <Sidebar />
     <main bind:this={mainEl}>

@@ -103,6 +103,10 @@ async function main() {
   const phone = !!arg("phone") || check;
   const tempo = !!arg("tempo") || check;
   const shots = arg("shots") ? String(arg("shots")).split(",") : undefined;
+  // --eco: the scene's own energy-saving grade — no bloom, no grain, no fringe,
+  // no glow, the reduced render scale. Photographed and timed so "it stays
+  // clean" is a picture, not a promise.
+  const eco = !!arg("eco");
   // --skin: draw the world the way the smart engine does for --genre — pinned,
   // so it wears the genre's skin (its palette lean AND, when the genre lives on
   // this world, its shape parameters). Without it the world runs on its own
@@ -117,6 +121,9 @@ async function main() {
   const strip = !!arg("strip");
   // --light: the strip over Papier's cream scrim instead of Encre's dark one.
   const light = !!arg("light");
+  // --cover striped: the sleeve fixture whose left, middle and right are
+  // unalike — the picture that shows whether the row follows the artwork.
+  const coverKind = String(arg("cover", "default"));
 
   const { createServer } = await import("vite");
   const server = await createServer({
@@ -152,12 +159,37 @@ async function main() {
   const save = (name, dataUrl) =>
     writeFileSync(join(out, name), Buffer.from(dataUrl.split(",")[1], "base64"));
 
+  if (arg("bars2d")) {
+    // The canvas fallback's own stopwatch: the row a device with no WebGL2
+    // draws, at the strip's real size, with and without the energy-saving grade.
+    const bw = arg("size") ? w : 520;
+    const bh = arg("size") ? h : 56;
+    for (const eco of [false, true]) {
+      for (const light of [false, true]) {
+        const r = await page.evaluate((o) => window.bench.bars2d(o), { w: bw, h: bh, eco, light });
+        console.log(
+          `bars2d ${bw}x${bh}  ${eco ? "eco " : "full"}${light ? " papier" : " encre "}  ${r.ms.toFixed(3)} ms a frame  ${r.beads} beads`
+        );
+      }
+    }
+    await browser.close();
+    await server.close();
+    return;
+  }
+
   if (strip) {
     const S = Math.max(1, +arg("pscale", 3) || 3);
+    // The strip's own size: 390x40 is the phone's, and the desktop's is taller
+    // (DesktopNowPlaying raises it to 56 px where the window has the room), so
+    // `--size 1280x56` photographs the row a PC actually draws.
+    const [sw, sh] = String(arg("size", "390x40")).split("x").map(Number);
     const res = await run({
-      world: "spectrum", genre, bpm, w: 390, h: 40, dpr: S, tier, palette, skin: false,
+      world: "spectrum", genre, bpm, w: sw, h: sh, dpr: S, tier,
+      // The shipped palette source is the sleeve's own colours; the strip is
+      // photographed walking them unless another source is asked for.
+      palette: arg("palette", "cover"), skin: false,
       shots: ["breakdown", "build", "impact", "drop", "dropOff"], cols: 1,
-      layout: "strip", backdrop: true, grain: true, light,
+      layout: "strip", backdrop: true, grain: true, light, eco, coverKind,
     });
     save("strip.png", res.sheet);
     if (res.errors?.length) console.log(res.errors.join("\n"));
@@ -171,15 +203,21 @@ async function main() {
     const t0 = Date.now();
     const r = { world };
     try {
-      const wide = await run({ world, genre, bpm, w, h, tier, palette, shots, skin, grain, light });
+      // `backdrop`: the sheet is composited over the app's blurred cover. It
+      // only changes what a TRANSPARENT world looks like — an opaque one covers
+      // it — and it is how a row of beads over the sleeve is meant to be read.
+      const wide = await run({ world, genre, bpm, w, h, tier, palette, shots, skin, grain, light, eco, coverKind, backdrop: true });
       save(`${world}.png`, wide.sheet);
       r.wide = wide.frames;
       r.cost = wide.costMs;
       r.errors = wide.errors;
+      r.transparent = wide.transparent;
+      r.zones = wide.zones;
+      r.anchors = wide.anchors;
       if (phone) {
         const ph = await run({
           world, genre, bpm, w: PHONE.w, h: PHONE.h, hole: phoneHole(), tier, palette,
-          shots: ["breakdown", "drop", "dropOff"], cols: 3, skin, light,
+          shots: ["breakdown", "drop", "dropOff"], cols: 3, skin, light, eco, coverKind,
         });
         save(`${world}-phone.png`, ph.sheet);
         r.phone = ph.frames;
@@ -233,7 +271,11 @@ async function main() {
       // SUPPOSED to be bright, and grading it alone would outlaw the strobe.
       const off = r.wide?.find((f) => f.name === "dropOff")?.m;
       const mean = off ? (drop.mean + off.mean) / 2 : drop.mean;
-      if (mean < 0.035) fail(`the drop is nearly black (mean ${fmt(mean)})`);
+      // A transparent world (the spectrum's row) draws light on the page's own
+      // backdrop and paints no field, so "nearly black" means "almost no light
+      // of its own", not "no field". It still has to be a picture.
+      const floor = r.transparent ? 0.004 : 0.035;
+      if (mean < floor) fail(`the drop is nearly black (mean ${fmt(mean)})`);
       if (mean > 0.45) fail(`the drop is washed out (mean ${fmt(mean)})`);
       if (drop.clipped > 0.12) fail(`${fmt(drop.clipped * 100, 1)}% of the drop clips`);
     }
@@ -260,6 +302,8 @@ async function main() {
       `${fmt(r.seconds, 1)}s`,
     ].filter(Boolean);
     console.log(line.join("  "));
+    if (r.zones?.length) console.log(`  zones ${r.zones.join(" ")}`);
+    if (r.anchors?.length) console.log(`  anchors ${r.anchors.map((c) => c.join(",")).join(" | ")}`);
   }
 
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 1));

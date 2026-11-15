@@ -123,10 +123,9 @@
     list-style: none;
     margin: 0;
     padding: 6px;
-    background: var(--s2);
-    border: 1px solid var(--ln);
+    /* Tier 2 of the glass ladder (app.css): the list is a popover, so it reads
+       the shared material rather than a colour of its own. */
     border-radius: 16px;
-    box-shadow: 0 16px 44px color-mix(in srgb, var(--bg) 65%, transparent);
     z-index: 40;
   }
   .menu.up {
@@ -153,7 +152,7 @@
     text-align: left;
   }
   .menu button:hover {
-    background: var(--s1);
+    background: var(--glass-hover);
   }
   .menu button.sel {
     color: var(--ac-text);

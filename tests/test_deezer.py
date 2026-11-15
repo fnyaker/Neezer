@@ -831,11 +831,16 @@ class DeezerTestCase(TestBase):
         _mime, gen = archive.open_live_stream(self.provider, track)
         body = b"".join(gen)
 
+        from .test_deezer_stream import wait_until
+
         self.assertEqual(len(body), 4100)
         self.assertEqual(seen, [(False, False, ".flac")])
-        self.assertTrue(os.path.isfile(track.path))
+        self.assertTrue(
+            wait_until(lambda: os.path.isfile(track.path)),
+            "the download never published the archive",
+        )
         folder = os.path.dirname(track.path)
-        self.assertEqual([n for n in os.listdir(folder) if n.endswith(".part")], [])
+        self.assertTrue(wait_until(lambda: not [n for n in os.listdir(folder) if n.endswith(".part")]))
 
     def test_ensure_archived_writes_file_and_updates_row(self):
         from neezer.deezer import library

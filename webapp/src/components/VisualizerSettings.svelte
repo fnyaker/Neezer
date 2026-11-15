@@ -211,6 +211,7 @@
         intensity={$vizIntensity}
         fps={$vizFps}
         layout="full"
+        eco={$ecoMode}
         paused={!previewLive}
         scopeOrientation={$vizScopeOrientation}
         scopeColour={$vizScopeColour}

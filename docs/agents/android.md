@@ -230,6 +230,19 @@ so a JS exception can no longer abort Svelte's flush and freeze every control (t
 player won't close" symptom). No timer was added to the recovery path: it is triggered by an ack, an
 advance, a tick mismatch, the playback watchdog, or an error.
 
+**A state carries the command it has APPLIED, not the one it received** (`NativeAudio.kt` `pc`/`tc`,
+`nativeplayer.js`). A skip used to micro-pause: `start()` called `prepare()` before setting
+`playWhenReady = true`, so ExoPlayer emitted a synchronous `BUFFERING` state with `p=false` under the
+sequence number of the `play` the page had **already sent**. The page adopted it as an app-made pause,
+armed its 300 ms pause mirror, and when the renderer was busy after a skip (queue re-naming, gain,
+art) the real play arrived too late: the mirror paused the store, the pause command reached ExoPlayer,
+then the next state resumed it — a fraction-of-a-second cut after every skip. States now report `pc`
+(the last **applied** transport command) and `tc` (position), the element gates `p`/`t`/`seeked`/`ENDED`
+on them, and `start()` sets `playWhenReady` before preparing. Measured in `test/native/run.mjs` B4:
+**0 pause commands**, store stays playing, the sound runs 1.25 → 2.24 s through the state; a real
+`AUDIOFOCUS_LOSS_TRANSIENT` still pauses. `onElPause` also ignores a pause while a load is in flight.
+An old APK without `pc`/`tc` falls back to `c` (the old behaviour); the fix needs bridge 11.
+
 **Mono and balance in the native player** (`PanAudio.kt`, `PanProcessor`, after `NsProcessor` in the
 same `DefaultAudioSink`; bridge 11). 16-bit stereo in, **same format out** (no AudioTrack reopen, no
 gap, no click): mono is `0.5·(L+R)`, balance follows the W3C StereoPannerNode law exactly like

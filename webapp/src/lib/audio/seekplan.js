@@ -64,6 +64,26 @@ export function seekLost(el, target, startedAt, now = Date.now()) {
   return ready >= 2 || seekBounced(el, target);
 }
 
+// What a seek that is being watched has done: LANDED ends the watch for good
+// (the caller must disarm it — a seek that arrived must never be chased later),
+// LOST starts ONE chase, WAITING keeps the watch armed until the deadline.
+export function seekVerdict({
+  position,
+  target,
+  startedAt,
+  now = Date.now(),
+  readyState = 0,
+  tolerance = SEEK_TOLERANCE,
+  deadline = SEEK_LAND_MS,
+}) {
+  const p = Number.isFinite(+position) ? +position : 0;
+  const t = Number.isFinite(+target) ? +target : 0;
+  if (Math.abs(p - t) <= tolerance) return "landed";
+  if (readyState >= 2 && seekBounced({ currentTime: p }, t)) return "lost";
+  if (now - startedAt >= deadline && readyState >= 2) return "lost";
+  return "waiting";
+}
+
 export const SEEK_WAIT_MS = 1000;
 export const SEEK_WAIT_STREAMING_MS = 1500;
 

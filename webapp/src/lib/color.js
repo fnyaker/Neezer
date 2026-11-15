@@ -17,6 +17,54 @@ function remember(url, value) {
   cache.set(url, value);
 }
 
+// The colour of an image ALREADY loaded in the page: drawn once into a 24 px
+// canvas and scored for the most saturated, mid-bright pixel (a basically
+// grayscale sleeve gets its average instead). `null` when the canvas cannot
+// read it at all — a cross-origin image without CORS, or no DOM.
+export function dominantOfImage(img) {
+  if (typeof document === "undefined" || !img) return null;
+  try {
+    const size = 24;
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    let best = FALLBACK;
+    let bestScore = -1;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const a = data[i + 3];
+      if (a < 200) continue;
+      const cr = data[i];
+      const cg = data[i + 1];
+      const cb = data[i + 2];
+      r += cr;
+      g += cg;
+      b += cb;
+      n++;
+      // Prefer saturated, mid-bright pixels for the accent.
+      const max = Math.max(cr, cg, cb);
+      const min = Math.min(cr, cg, cb);
+      const sat = max === 0 ? 0 : (max - min) / max;
+      const lum = max / 255;
+      const score = sat * (1 - Math.abs(lum - 0.55));
+      if (score > bestScore) {
+        bestScore = score;
+        best = [cr, cg, cb];
+      }
+    }
+    // If the image is basically grayscale, use the average instead.
+    return bestScore > 0.15 && n ? best : n ? [r / n, g / n, b / n].map(Math.round) : FALLBACK;
+  } catch {
+    return null;
+  }
+}
+
 export function dominantColor(url) {
   if (!url) return Promise.resolve(FALLBACK);
   if (cache.has(url)) return Promise.resolve(cache.get(url));
@@ -36,48 +84,13 @@ export function dominantColor(url) {
     if (!sameOrigin(fetchUrl)) img.crossOrigin = "anonymous";
     img.referrerPolicy = "no-referrer";
     img.onload = () => {
-      try {
-        const size = 24;
-        const c = document.createElement("canvas");
-        c.width = size;
-        c.height = size;
-        const ctx = c.getContext("2d", { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0, size, size);
-        const { data } = ctx.getImageData(0, 0, size, size);
-        let best = FALLBACK;
-        let bestScore = -1;
-        let r = 0;
-        let g = 0;
-        let b = 0;
-        let n = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          const a = data[i + 3];
-          if (a < 200) continue;
-          const cr = data[i];
-          const cg = data[i + 1];
-          const cb = data[i + 2];
-          r += cr;
-          g += cg;
-          b += cb;
-          n++;
-          // Prefer saturated, mid-bright pixels for the accent.
-          const max = Math.max(cr, cg, cb);
-          const min = Math.min(cr, cg, cb);
-          const sat = max === 0 ? 0 : (max - min) / max;
-          const lum = max / 255;
-          const score = sat * (1 - Math.abs(lum - 0.55));
-          if (score > bestScore) {
-            bestScore = score;
-            best = [cr, cg, cb];
-          }
-        }
-        // If the image is basically grayscale, use the average instead.
-        const result = bestScore > 0.15 && n ? best : n ? [r / n, g / n, b / n].map(Math.round) : FALLBACK;
-        remember(url, result);
-        resolve(result);
-      } catch {
+      const found = dominantOfImage(img);
+      if (!found) {
         resolve(FALLBACK);
+        return;
       }
+      remember(url, found);
+      resolve(found);
     };
     // No colour to extract (CDN drop, 404): DON'T memoize the fallback — the
     // next visit should get a real colour once the art is reachable again.

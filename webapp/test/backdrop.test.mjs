@@ -1,4 +1,5 @@
-// The full-screen backdrop (lib/backdrop.js) on a cover that fails to load.
+// The full-screen backdrop (lib/backdrop.js): a cover that fails to load, and
+// the ONE blurred image at rest / TWO during a crossfade the app is held to.
 //
 // A CDN image that fails is worth retrying: the Deezer image CDN drops
 // requests. A blob: that fails is not — its bytes are already in the page, so
@@ -56,39 +57,41 @@ test("a failing CDN image is still retried before falling back", async () => {
   bg.destroy();
 });
 
-test("a skip during a fade keeps the opaque layer underneath", async () => {
-  const bg = createBackdrop({ fadeMs: 1000 });
+test("a skip during a fade queues the cover instead of stacking a third layer", async () => {
+  const bg = createBackdrop({ fadeMs: 300 });
   bg.set("https://cdn/cover/a.jpg");
-  await wait(20);
+  await wait(15);
   bg.set("https://cdn/cover/b.jpg");
-  await wait(20);
+  await wait(15);
   bg.set("https://cdn/cover/c.jpg");
-  await wait(20);
+  await wait(15);
   assert.deepEqual(
     get(bg).map((l) => l.url),
-    ["https://cdn/cover/a.jpg", "https://cdn/cover/b.jpg", "https://cdn/cover/c.jpg"],
-    "dropping A while B is still translucent is the dark ground showing through"
+    ["https://cdn/cover/a.jpg", "https://cdn/cover/b.jpg"],
+    "the outgoing and the incoming cover, and nothing else"
   );
+  await wait(340);
+  assert.deepEqual(
+    get(bg).map((l) => l.url),
+    ["https://cdn/cover/b.jpg", "https://cdn/cover/c.jpg"],
+    "once B is opaque, A goes and the cover that waited is painted"
+  );
+  await wait(340);
+  assert.deepEqual(get(bg).map((l) => l.url), ["https://cdn/cover/c.jpg"]);
   bg.destroy();
 });
 
-test("a burst keeps every layer that is still fading", async () => {
-  const bg = createBackdrop({ fadeMs: 600 });
+test("a burst never mounts more than two layers and settles on the newest", async () => {
+  const bg = createBackdrop({ fadeMs: 120 });
+  const most = [];
   for (const c of ["a", "b", "c", "d", "e"]) {
     bg.set(`https://cdn/cover/${c}.jpg`);
     await wait(10);
+    most.push(get(bg).length);
   }
-  assert.equal(get(bg).length, 5, "none of them is opaque yet");
-  bg.destroy();
-});
-
-test("a long burst is capped", async () => {
-  const bg = createBackdrop({ fadeMs: 600 });
-  for (let k = 0; k < 12; k++) {
-    bg.set(`https://cdn/cover/${k}.jpg`);
-    await wait(5);
-  }
-  assert.equal(get(bg).length, 8, "at most eight full-screen blurred layers");
+  assert.ok(Math.max(...most) <= 2, `at most two blurred images (saw ${most.join(", ")})`);
+  await wait(400);
+  assert.deepEqual(get(bg).map((l) => l.url), ["https://cdn/cover/e.jpg"]);
   bg.destroy();
 });
 
@@ -99,6 +102,20 @@ test("the stack settles on the newest cover once it is opaque", async () => {
   bg.set("https://cdn/cover/b.jpg");
   await wait(80);
   assert.deepEqual(get(bg).map((l) => l.url), ["https://cdn/cover/b.jpg"]);
+  bg.destroy();
+});
+
+test("the same art through the offline cache is one fade, not two", async () => {
+  const bg = createBackdrop({ fadeMs: 20 });
+  requested.length = 0;
+  bg.set("https://cdn/cover/a.jpg", "/api/cover/track-a");
+  await wait(20);
+  const painted = get(bg).length;
+  bg.set("blob:http://x/abc", "/api/cover/track-a");
+  await wait(30);
+  assert.equal(painted, 1);
+  assert.equal(get(bg).length, 1, "the blob is the same cover: no second fade");
+  assert.deepEqual(requested, ["https://cdn/cover/a.jpg"], "and no extra request");
   bg.destroy();
 });
 

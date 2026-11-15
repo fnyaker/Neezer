@@ -5899,10 +5899,11 @@ def stream(deezer_id):
 
         if not os.path.isfile(track.path):
             # Stream the archive AS it downloads so playback starts almost
-            # instantly — as FLAC, or through ffmpeg into Opus; the archive is
-            # finalized when the download completes. If the client disconnects
-            # early, on_abort queues a normal background archive so it still
-            # caches.
+            # instantly — as FLAC, or through ffmpeg into Opus; the download
+            # runs on its own thread and is finalised when it ends, whatever
+            # this listener does (see archive.open_live_stream). A listener
+            # that leaves only stops the feed: the archive still completes, and
+            # an orphan is given back to the background queue after a grace.
             pf = getattr(current_app, "deezer_prefetch", None)
             # They were listening to it and the connection dropped: finish
             # the archive ahead of anything bulk, not behind it.

@@ -1,4 +1,5 @@
-// The full-screen player's blurred backdrop, as a stack of crossfading layers.
+// The full-screen player's blurred backdrop, as ONE layer at rest and at most
+// TWO while a cover crossfades in — the whole app's only blurred images.
 //
 // Shared by MobileNowPlaying and DesktopNowPlaying, which render the layers
 // identically — the logic below used to be copy-pasted in both, so a fix landed
@@ -8,6 +9,9 @@
 // ON TOP of the previous layer (which stays painted meanwhile) — so a skip on a
 // slow network never leaves a bare backdrop with the page showing through. The
 // caller resolves the URL through the offline cache, so it also works offline.
+// A cover that arrives while a fade is running is QUEUED (the newest wins) and
+// painted once the incoming layer is opaque: a third layer, or dropping the
+// opaque base, is what used to show the dark page through the fade.
 //
 // The one rule everything else follows from: `wanted` is the ONLY authority on
 // what belongs on screen. Every load, retry and timeout re-checks it before
@@ -19,6 +23,7 @@
 // the wrong cover until the next track change.
 
 import { writable } from "svelte/store";
+import { dominantOfImage } from "./color.js";
 import { logInfo } from "./log.js";
 
 // URLs are long and noisy; the tail is the part that identifies the art.
@@ -30,16 +35,19 @@ export function createBackdrop({
   timeoutMs = 7000, // an image request can hang forever with no error
   retries = 2,
 } = {}) {
-  // [{ id, src, url }] — `src` is what gets painted (possibly cache-busted),
-  // `url` the logical cover it stands for.
+  // [{ id, src, url, glow }] — `src` is what gets painted (possibly
+  // cache-busted), `url` the logical cover it stands for, `glow` its dominant
+  // colour (read from the image already decoded here, never a second request).
   const { subscribe, set } = writable([]);
-  let layers = [];
+  let layers = []; // 0, 1 at rest, 2 while fading
+  let pending = null; // the newest cover waiting for the fade to finish
   let seq = 0;
   let wanted = ""; // the cover the CURRENT track wants on screen
+  let wantedKey = ""; // its identity (the track's proxy URL when there is one)
   let loader = null; // Image() preloading `wanted`
   let retryTimer = null;
   let watchdog = null;
-  let dropTimer = null; // removes the covered-up layer after the fade
+  let dropTimer = null; // ends the fade and paints what waited for it
   let destroyed = false;
   let fallback = ""; // same-origin proxy for `wanted`, tried when it fails
 
@@ -64,12 +72,17 @@ export function createBackdrop({
     watchdog = null;
   }
 
-  function pushLayer(src, url) {
+  function pushLayer(src, url, glow) {
+    if (layers.length >= 2) {
+      // The fade owns both slots; a third blurred image is what the contract
+      // forbids. Remember the newest cover and paint it once the incoming one
+      // is opaque — the base is never dropped, so no dark flash.
+      pending = { src, url, glow };
+      logInfo("bg", `queued ${tag(url)}`);
+      return;
+    }
     const id = ++seq;
-    // The layers under the incoming one stay until it is opaque (a layer
-    // dropped mid-fade is the dark ground showing through); the cap bounds a
-    // burst of skips.
-    layers = [...layers.slice(-7), { id, src, url, at: now() }];
+    layers = [...layers, { id, src, url, glow, at: now() }];
     set(layers);
     logInfo("bg", `painted ${tag(url)}`);
     arm();
@@ -77,14 +90,18 @@ export function createBackdrop({
 
   function prune() {
     dropTimer = null;
-    const t = now();
-    let dropped = false;
-    while (layers.length > 1 && layers[1].at + fadeMs <= t) {
-      layers = layers.slice(1);
-      dropped = true;
+    if (layers.length > 1 && layers[1].at + fadeMs <= now()) {
+      layers = layers.slice(-1);
+      set(layers);
     }
-    if (dropped) set(layers);
-    arm();
+    if (layers.length > 1) {
+      arm();
+      return;
+    }
+    if (!pending) return;
+    const next = pending;
+    pending = null;
+    pushLayer(next.src, next.url, next.glow);
   }
 
   function arm() {
@@ -131,7 +148,7 @@ export function createBackdrop({
       }
       if (destroyed || forUrl !== wanted) return;
       if (ok) {
-        pushLayer(src, forUrl);
+        pushLayer(src, forUrl, dominantOfImage(im));
         return;
       }
       // The image CDN fails transiently; back off and try again. A blob: is
@@ -181,14 +198,19 @@ export function createBackdrop({
      * Point the backdrop at `url` (falsy = this track has no art).
      *
      * `proxyUrl` is an optional same-origin, server-cached copy of the same art
-     * (`/api/cover/<id>`), used only if `url` turns out to be unreachable.
+     * (`/api/cover/<id>`), used only if `url` turns out to be unreachable — and
+     * it is also this cover's IDENTITY: the same art resolved through the
+     * offline cache arrives as a `blob:` a moment later, and that must not be
+     * a second fade of the same picture.
      */
     set(url, proxyUrl = "") {
       url = url || "";
       if (destroyed) return;
-      if (url === wanted) return;
+      const key = url ? proxyUrl || url : "";
+      if (url === wanted || (key && key === wantedKey)) return;
       logInfo("bg", `want ${tag(url)}`);
       wanted = url;
+      wantedKey = key;
       fallback = proxyUrl || "";
       cancelLoad(); // whatever the previous track started is now irrelevant
       if (!url) {
@@ -208,6 +230,7 @@ export function createBackdrop({
 
     destroy() {
       destroyed = true;
+      pending = null;
       cancelLoad();
       clearTimeout(dropTimer);
       dropTimer = null;

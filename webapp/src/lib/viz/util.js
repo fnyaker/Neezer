@@ -37,6 +37,26 @@ export function hsl(h, s, l, a = 1) {
   return `hsla(${((h % 360) + 360) % 360},${(s * 100).toFixed(1)}%,${(l * 100).toFixed(1)}%,${a})`;
 }
 
+// HSL → RGB, written into `out` at `at` (0..1 each, hue in turns). The inverse
+// of the function below, and the only conversion the palette needs to hand a
+// colour to a GL uniform without allocating one array per zone per frame.
+export function hslToRgb(h, s, l, out = [0, 0, 0], at = 0) {
+  h = ((h % 1) + 1) % 1;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t) => {
+    t = ((t % 1) + 1) % 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 0.5) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  out[at] = f(h + 1 / 3);
+  out[at + 1] = f(h);
+  out[at + 2] = f(h - 1 / 3);
+  return out;
+}
+
 // RGB → HSL, for turning a cover's dominant colour into something a scene can
 // rotate and re-saturate.
 export function rgbToHsl([r, g, b]) {

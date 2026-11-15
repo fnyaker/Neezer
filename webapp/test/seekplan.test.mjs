@@ -10,6 +10,7 @@ const {
   readiness,
   trackTimeOf,
   elementTimeOf,
+  seekVerdict,
   SEEK_LAND_MS,
 } = await import("../src/lib/audio/seekplan.js");
 
@@ -142,4 +143,74 @@ test("a live stream that claims to be seekable everywhere is not", () => {
   assert.equal(seekPlan(live, 42), "chase");
   const file = el({ duration: 240, readyState: 4, seekable: ranges([[0, 240]]) });
   assert.equal(seekableAt(file, 42), true);
+});
+
+
+// A model of Player.svelte#watchSeek: one watch at a time, disarmed the moment
+// the seek lands, one chase when it is lost.
+function watcher() {
+  let w = null;
+  const chases = [];
+  return {
+    seek(target, at) {
+      w = { target, at };
+    },
+    tick(position, now, readyState = 4) {
+      if (!w) return;
+      const v = seekVerdict({ position, target: w.target, startedAt: w.at, now, readyState });
+      if (v === "landed") {
+        w = null;
+        return;
+      }
+      if (v !== "lost") return;
+      chases.push(w.target);
+      w = null;
+    },
+    get armed() {
+      return w !== null;
+    },
+    chases,
+  };
+}
+
+test("a seek that arrived is disarmed, and never chased back to later", () => {
+  const m = watcher();
+  m.seek(30, 0);
+  m.tick(30.2, 120); // it landed
+  assert.equal(m.armed, false, "the watch ends at the landing");
+  m.tick(32, 5_000); // five seconds later the person is simply 2 s past it
+  assert.deepEqual(m.chases, [], "no chase, no jump back to 30");
+  // The trap this replaces: the verdict alone still says "lost" long after the
+  // seek arrived, which is why the caller MUST disarm on "landed".
+  assert.equal(seekVerdict({ position: 32, target: 30, startedAt: 0, now: 5_000, readyState: 4 }), "lost");
+});
+
+test("a seek that never lands is chased once, then the bar is the real position", () => {
+  const m = watcher();
+  m.seek(30, 0);
+  m.tick(2, 1_000); // still where it was, deadline not reached
+  assert.deepEqual(m.chases, []);
+  assert.equal(m.armed, true);
+  m.tick(2, 4_200); // past the deadline
+  assert.deepEqual(m.chases, [30], "one chase");
+  m.tick(2.5, 9_000); // the chase failed: nothing is armed any more
+  assert.deepEqual(m.chases, [30], "no second chase, no loop");
+  assert.equal(m.armed, false);
+});
+
+test("a source that re-fetched itself from 0 is chased at once", () => {
+  const m = watcher();
+  m.seek(30, 0);
+  m.tick(0.2, 300); // a rangeless stream restarted from the first byte
+  assert.deepEqual(m.chases, [30]);
+});
+
+test("a seek the element has not applied yet is only waited for", () => {
+  const m = watcher();
+  m.seek(30, 0);
+  m.tick(2, 2_000, 1); // metadata only: not a miss, not a landing
+  assert.deepEqual(m.chases, []);
+  assert.equal(m.armed, true);
+  assert.equal(seekVerdict({ position: 30, target: 30, startedAt: 0, now: 0, readyState: 4 }), "landed");
+  assert.equal(seekVerdict({ position: 0, target: 30, startedAt: 0, now: 4_100, readyState: 1 }), "waiting");
 });

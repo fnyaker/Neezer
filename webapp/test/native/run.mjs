@@ -103,7 +103,7 @@ function fakeApp() {
   function slot(id) {
     const el = new Real();
     el.preload = "auto";
-    const sl = { id, el, c: 0, item: false, prepared: false, pwr: false, seek: false, ended: false, tick: null, next: [], key: "", url: "", rep: "off", lastNeedAt: 0, faultMsg: null };
+    const sl = { id, el, c: 0, pc: 0, tc: 0, item: false, prepared: false, pwr: false, seek: false, ended: false, tick: null, next: [], key: "", url: "", rep: "off", lastNeedAt: 0, faultMsg: null };
     // A first play: generated as it is sent, no seek map (NativeAudio.kt holds the seek).
     const unseekable = (sl.unseekable = () => localStorage.getItem("__unseekable") === "1" && !sl.whole);
     const st = () => {
@@ -114,7 +114,7 @@ function fakeApp() {
     sl.send = (ev) => {
       if (sl.dead) return;
       const bridge7 = version() >= 7;
-      const s = { c: sl.c, st: st(), p: sl.pwr, t: el.currentTime, b: el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0, sk: sl.item && !unseekable() };
+      const s = { c: sl.c, pc: sl.pc, tc: sl.tc, st: st(), p: sl.pwr, t: el.currentTime, b: el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0, sk: sl.item && !unseekable() };
       if (bridge7) s.sc = true;
       if (version() >= 8) s.bg = window.__fake.bg;
       if (sl.chase != null) s.t = sl.chase;
@@ -168,6 +168,8 @@ function fakeApp() {
       sl.end = n.e || 0;
       sl.key = n.k || "-";
       sl.url = n.url;
+      sl.pc = sl.c;
+      sl.tc = sl.c;
       window.__fake.advanced = (window.__fake.advanced || 0) + 1;
       if (!window.__fake.validUrl) window.__fake.validUrl = n.url;
       el.src = playable(n.url);
@@ -192,12 +194,14 @@ function fakeApp() {
           el.currentTime = 0;
         }
         sl.pwr = true;
+        sl.pc = sl.c;
         el.play().catch(() => {});
         sl.send(null);
         return true;
       }
       if (c === "pause") {
         sl.pwr = false;
+        sl.pc = sl.c;
         el.pause();
         sl.send(null);
         return true;
@@ -205,6 +209,7 @@ function fakeApp() {
       if (c === "seek") {
         sl.ended = false;
         sl.seek = true;
+        sl.tc = sl.c;
         el.currentTime = +value;
         sl.send(null);
         return true;
@@ -330,6 +335,8 @@ function fakeApp() {
             break;
           case "src":
             sl.srcs = (sl.srcs || 0) + 1;
+            sl.pc = sl.c;
+            sl.tc = sl.c;
             sl.next = [];
             sl.end = 0;
             sl.key = "";
@@ -349,6 +356,8 @@ function fakeApp() {
             sl.send(null);
             break;
           case "clear":
+            sl.pc = sl.c;
+            sl.tc = sl.c;
             sl.item = false;
             el.pause();
             el.removeAttribute("src");
@@ -356,6 +365,7 @@ function fakeApp() {
             sl.send(null);
             break;
           case "play":
+            sl.pc = sl.c;
             window.__fake.lastPlayed = id;
             if (sl.ended) {
               sl.ended = false;
@@ -366,11 +376,13 @@ function fakeApp() {
             sl.send(null);
             break;
           case "pause":
+            sl.pc = sl.c;
             sl.pwr = false;
             el.pause();
             sl.send(null);
             break;
           case "seek":
+            sl.tc = sl.c;
             sl.ended = false;
             window.__fake.seeks = (window.__fake.seeks || 0) + 1;
             if (sl.unseekable()) {
@@ -425,6 +437,46 @@ function fakeApp() {
     }
     return n;
   };
+  // One state, with the applied numbers the test chooses: the BUFFERING report
+  // ExoPlayer makes from inside prepare() carries the PREVIOUS applied play, a
+  // pause the app made itself carries the page's own.
+  window.__fake.emitState = (o = {}) => {
+    const sl =
+      slots.get(window.__fake.lastPlayed) ||
+      [...slots.values()].find((x) => !x.el.paused) ||
+      [...slots.values()][0];
+    if (!sl) return null;
+    emit(sl.id, {
+      c: sl.c,
+      pc: o.pc != null ? o.pc : sl.pc,
+      tc: o.tc != null ? o.tc : sl.tc,
+      st: o.st != null ? o.st : 3,
+      p: o.p != null ? o.p : sl.pwr,
+      t: sl.el.currentTime,
+      d: sl.el.duration || 0,
+      b: 0,
+      sk: true,
+      sc: true,
+      ev: o.ev,
+    });
+    return sl.id;
+  };
+  // A pause the app makes on its own while the page runs: audio focus lost, a
+  // headset unplugged. ExoPlayer sets playWhenReady=false, which pauses the
+  // element and reports it (`pc` is the last command it applied).
+  window.__fake.focusLoss = () => {
+    const sl =
+      slots.get(window.__fake.lastPlayed) ||
+      [...slots.values()].find((x) => !x.el.paused) ||
+      [...slots.values()][0];
+    if (!sl) return null;
+    clearInterval(sl.tick);
+    sl.pwr = false;
+    sl.pc = sl.c;
+    sl.el.pause();
+    sl.send(null);
+    return sl.id;
+  };
   // The page's own <audio> elements, counted (what the setting OFF uses).
   window.__pageEls = 0;
   // assets/nsshim.js, the half of the bridge that lives in the page: it replaces
@@ -450,6 +502,7 @@ function fakeApp() {
   } catch (_) {
     /* the bench's Chromium allows it */
   }
+  window.__fake.session = pageShim;
   window.__nsNativeCmd = (cmd, value) => {
     const map = { play: "play", pause: "pause", next: "nexttrack", prev: "previoustrack", seek: "seekto" };
     const h = pageHandlers[map[cmd] || cmd];
@@ -1082,6 +1135,99 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
   check(seconds >= 5 && seconds <= 8 && !at.paused && at.title === "Song 1",
     "the bar shows the position asked for, and the sound is there",
     `${shown} (element ${at.el?.toFixed(2)}, ${at.title})`);
+  await ctx.close();
+}
+
+{
+  // B3: a seek that landed is not chased back. The watch stayed armed on
+  // `timeupdate` for the rest of the track: four seconds later the playback had
+  // simply moved on, `seekLost` read that as a miss, and the page re-chased the
+  // OLD target — the sound jumped back to where it had been seeked to.
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await open(ctx, { "audio.native": false }, queue);
+  await page.locator("footer.player .pp").click();
+  await page.waitForTimeout(2500);
+  const ready = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/ready")) ready.push(r.url());
+  });
+  const bar = page.locator("footer.player input[type=range]").first();
+  const box = await bar.boundingBox();
+  await page.mouse.click(box.x + box.width * 0.06, box.y + box.height / 2);
+  await page.waitForTimeout(1000);
+  const landed = await page.evaluate(() => window.__nsAudioPath().t);
+  await page.waitForTimeout(5200);
+  const after = await page.evaluate(() => ({
+    t: window.__nsAudioPath().t,
+    paused: window.__nsAudioPath().paused,
+    title: document.querySelector("footer.player .info .t")?.textContent,
+  }));
+  check(landed >= 0.1 && landed <= 1.8, "the seek lands where it was asked", `${landed?.toFixed(2)} s`);
+  check(after.title === "Song 1" && after.t > landed + 4 && !after.paused,
+    "and playback goes on from there, never back to the target",
+    `${landed?.toFixed(2)} → ${after.t?.toFixed(2)} s`);
+  check(ready.length === 0, "no chase was started after the landing", `${ready.length} /ready`);
+  await ctx.close();
+}
+
+{
+  // B4: a state the app has NOT applied a play to must pause nothing. After a
+  // skip ExoPlayer reports BUFFERING from inside prepare(), before playWhenReady
+  // is set: the page took that for a pause, mirrored it into the store and
+  // paused the player — the micro-pause heard after every skip.
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await open(ctx, { __bridge: 10 }, queue);
+  await page.locator("footer.player .pp").click();
+  await page.waitForTimeout(1300);
+  const before = await page.evaluate(() => window.__fake.cmds.filter((c) => c === "pause").length);
+  await page.locator('footer.player button[aria-label="Suivant"]').first().click();
+  await page.waitForTimeout(1300);
+  const skip = await page.evaluate(() => ({
+    pauses: window.__fake.cmds.filter((c) => c === "pause").length,
+    session: window.__fake.session.playbackState,
+    paused: window.__nsAudioPath().paused,
+    t: window.__nsAudioPath().t,
+    title: document.querySelector("footer.player .info .t")?.textContent,
+  }));
+  check(skip.pauses === before && skip.session === "playing" && !skip.paused,
+    "a skip pauses nothing: no pause command, the session stays playing",
+    `${skip.pauses - before} pause(s), session ${skip.session}, ${skip.title} at ${skip.t?.toFixed(2)}`);
+  const transient = await page.evaluate(async () => {
+    const t0 = window.__nsAudioPath().t;
+    const pauses0 = window.__fake.cmds.filter((c) => c === "pause").length;
+    window.__fake.emitState({ p: false, st: 2, pc: 0 });
+    await new Promise((r) => setTimeout(r, 500));
+    const mid = {
+      session: window.__fake.session.playbackState,
+      paused: window.__nsAudioPath().paused,
+      pauses: window.__fake.cmds.filter((c) => c === "pause").length,
+    };
+    window.__fake.emitState({ p: true, st: 3 });
+    await new Promise((r) => setTimeout(r, 500));
+    return { t0, mid, t1: window.__nsAudioPath().t, pauses0 };
+  });
+  check(transient.mid.session === "playing" && transient.mid.paused === false &&
+    transient.mid.pauses === transient.pauses0,
+    "a BUFFERING state the app has not applied changes nothing",
+    `session ${transient.mid.session}, paused ${transient.mid.paused}, ${transient.mid.pauses - transient.pauses0} pause(s)`);
+  check(transient.t1 > transient.t0 + 0.4, "and the sound never stopped",
+    `${transient.t0?.toFixed(2)} → ${transient.t1?.toFixed(2)} s`);
+  const real = await page.evaluate(async () => {
+    const slot = window.__fake.slots.get(window.__fake.lastPlayed);
+    const before = { c: slot && slot.c, pc: slot && slot.pc, pwr: slot && slot.pwr };
+    window.__fake.focusLoss();
+    await new Promise((r) => setTimeout(r, 700));
+    return {
+      before,
+      session: window.__fake.session.playbackState,
+      paused: window.__nsAudioPath().paused,
+      seq: window.__nsAudioPath().seq,
+      srcSeq: window.__nsAudioPath().srcSeq,
+    };
+  });
+  check(real.session === "paused" && real.paused === true,
+    "a pause the app applied itself (AUDIOFOCUS_LOSS_TRANSIENT) still pauses",
+    `session ${real.session}, paused ${real.paused} (slot c=${real.before.c} pc=${real.before.pc}, page seq=${real.seq} src=${real.srcSeq})`);
   await ctx.close();
 }
 

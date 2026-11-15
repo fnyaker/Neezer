@@ -160,10 +160,11 @@
   // The second argument is the same-origin, server-cached copy of the same art,
   // used only if the (Deezer CDN) URL turns out to be unreachable — the backdrop
   // used to just keep the previous track's blur forever in that case.
-  $: bg.set(
-    resolveCover($offlineCovers, $current?.album?.cover),
-    trackRef($current) ? api.coverUrl(trackRef($current)) : ""
-  );
+  $: if (!$ecoMode)
+    bg.set(
+      resolveCover($offlineCovers, $current?.album?.cover),
+      trackRef($current) ? api.coverUrl(trackRef($current)) : ""
+    );
 
   $: q = $player.queue;
   $: idx = $player.index;
@@ -918,9 +919,11 @@
   on:touchcancel={onTouchCancel}
   transition:fade={{ duration: 140 }}
 >
-  {#each $ecoMode ? $bg.slice(-1) : $bg as layer (layer.id)}
-    <div class="bg" class:eco={$ecoMode} style={`background-image:${cssUrl(layer.src)}`}></div>
-  {/each}
+  {#if !$ecoMode}
+    {#each $bg as layer (layer.id)}
+      <div class="bg" style={`background-image:${cssUrl(layer.src)}`}></div>
+    {/each}
+  {/if}
   <div class="scrim"></div>
 
   {#if fullBleed}
@@ -1214,9 +1217,6 @@
     filter: blur(60px) saturate(1.25);
     transform: scale(1.3);
     animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
-  }
-  .bg.eco {
-    animation: none;
   }
   @keyframes bg-in {
     from {
@@ -1750,13 +1750,13 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* queue bottom sheet */
+  /* queue bottom sheet — the glass ladder's tier 3 (a sheet over the player) */
   .sheet {
     position: absolute;
     inset: 0;
     z-index: 3;
-    background: color-mix(in srgb, var(--s1) 97%, transparent);
-    backdrop-filter: blur(16px);
+    background: var(--glass-bg-2);
+    backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
     display: flex;
     flex-direction: column;
   }
@@ -1860,8 +1860,8 @@
     z-index: 4;
     display: flex;
     flex-direction: column;
-    background: color-mix(in srgb, var(--s1) 98%, transparent);
-    backdrop-filter: blur(18px);
+    background: var(--glass-bg-2);
+    backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
     border-radius: 18px 18px 0 0;
     box-shadow: 0 -14px 44px color-mix(in srgb, var(--bg) 70%, transparent);
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);

@@ -77,7 +77,7 @@
     background: rgba(18, 16, 24, 0.92);
     border: 1px solid rgba(31, 163, 255, 0.35);
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
     max-width: calc(100vw - 24px);
     color: #fff;
   }
@@ -180,7 +180,7 @@
     place-items: center;
     padding: 24px;
     background: rgba(8, 6, 12, 0.82);
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
   }
   .card {
     width: min(420px, 100%);

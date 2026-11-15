@@ -7,6 +7,7 @@
   import { fade } from "svelte/transition";
   import { createBackdrop } from "../lib/backdrop.js";
   import { cssUrl, duration as fmtDuration } from "../lib/format.js";
+  import { ecoMode } from "../lib/stores.js";
   import { joinParty, peekParty, rememberName, savedName } from "../lib/party/guest.js";
   import { loadAppCore } from "../lib/appcore/core.js";
   import Icon from "../components/Icon.svelte";
@@ -37,7 +38,7 @@
   const bg = createBackdrop();
   $: st = $view && $view.state ? $view.state : peek;
   $: track = st && st.track;
-  $: bg.set(track ? track.cover : "", "");
+  $: if (!$ecoMode) bg.set(track ? track.cover : "", "");
   $: if ($view && $view.phase !== "joining" && $view.phase !== "live") phase = $view.phase;
   $: if ($view && $view.phase === "live" && phase === "joining") phase = "live";
   $: listeners = st && st.listeners ? st.listeners.length : 0;
@@ -136,10 +137,12 @@
 </script>
 
 <div class="party">
-  {#each $bg as layer (layer.id)}
-    <div class="bg" style={`background-image:${cssUrl(layer.src)}`} in:fade={{ duration: 420 }}></div>
-  {/each}
-  <div class="scrim"></div>
+  {#if !$ecoMode}
+    {#each $bg as layer (layer.id)}
+      <div class="bg" style={`background-image:${cssUrl(layer.src)}`} in:fade={{ duration: 420 }}></div>
+    {/each}
+    <div class="scrim"></div>
+  {/if}
 
   <div class="frame">
     <header class="top">
@@ -194,7 +197,7 @@
 
         {#if phase === "landing"}
           <form class="join" on:submit|preventDefault={join}>
-            <label class="field">
+            <label class="party-field">
               <span class="muted">Votre prénom (visible par l'hôte)</span>
               <input bind:value={name} maxlength="32" placeholder="Invité" autocomplete="given-name" />
             </label>
@@ -260,6 +263,8 @@
     background: var(--bg);
     color: var(--text);
   }
+  /* Eco: the party is a flat --bg page — no blurred cover, no scrim, and the
+     backdrop never asks for the art (see the gate above). */
   .bg {
     position: absolute;
     inset: 0;
@@ -443,13 +448,16 @@
     flex-direction: column;
     gap: 14px;
   }
-  .field {
+  /* `field` is the design system's pill (app.css): a party form is a label over
+     its input, not a search box — the local class is its own, so the global
+     rule cannot clip the column to 40 px and push the input over the button. */
+  .party-field {
     display: flex;
     flex-direction: column;
     gap: 6px;
     font-size: 0.82rem;
   }
-  .field input {
+  .party-field input {
     padding: 13px 14px;
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -457,7 +465,7 @@
     color: var(--text);
     font-size: 1rem;
   }
-  .field input:focus {
+  .party-field input:focus {
     outline: none;
     border-color: var(--accent);
   }
@@ -631,7 +639,6 @@
     align-content: center;
     gap: 14px;
     background: rgba(8, 6, 12, 0.78);
-    backdrop-filter: blur(8px);
     color: #fff;
     font-weight: 700;
     font-size: 1.05rem;

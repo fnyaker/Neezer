@@ -144,8 +144,12 @@
     height: var(--topbar-h, 68px);
     margin: 0 calc(-1 * var(--page-x, 32px)) var(--page-y, 32px);
     padding: 0 var(--page-x, 32px);
-    background: var(--bg);
-    border-bottom: 1px solid var(--ln);
+    /* The ladder's thick step: this bar is sticky, so list rows really do pass
+       under it while the page scrolls, and the tint is what keeps them from
+       ghosting through the labels (measured: 82 % left a faint copy of the
+       library's leaf tabs under the search field, 93 % does not). */
+    background: var(--glass-bg-strong);
+    border-bottom: 1px solid var(--glass-border);
   }
   .back-slot {
     /* Laid out as if the button were the bar's own child: no reserved gutter

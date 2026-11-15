@@ -540,6 +540,13 @@ export class NativeAudioElement extends EventTarget {
   _onState(s) {
     if (this._webOn || this._released) return;
     const c = +s.c || 0;
+    // `c` is what the app has RECEIVED; `pc`/`tc` are what it has APPLIED for
+    // playWhenReady and for the position. ExoPlayer reports BUFFERING from
+    // inside prepare(), so a state read between a `play` arriving and being
+    // applied says "paused" while the page's play is already on the wire: only
+    // the applied number may undo the page's own transport or position.
+    const pc = typeof s.pc === "number" ? +s.pc : c;
+    const tc = typeof s.tc === "number" ? +s.tc : c;
     if (s.ev === "error") {
       this._settleAck(Infinity);
       this._err = { code: [1, 2, 3, 4].includes(s.code) ? s.code : 2, message: String(s.msg || "") };
@@ -602,16 +609,16 @@ export class NativeAudioElement extends EventTarget {
     if (typeof s.b === "number") this._buf = s.b;
     this._seekable = !!s.sk;
     let pauseFlip = null;
-    if (c >= this._pSeq && typeof s.p === "boolean" && s.p === this._paused && this._st !== ST_ENDED) {
+    if (pc >= this._pSeq && typeof s.p === "boolean" && s.p === this._paused && this._st !== ST_ENDED) {
       // The native side changed it on its own: audio focus lost, headphones out.
       this._paused = !s.p;
       pauseFlip = this._paused ? "pause" : "play";
     }
-    if (c >= this._tSeq && typeof s.t === "number" && isFinite(s.t)) {
+    if (tc >= this._tSeq && typeof s.t === "number" && isFinite(s.t)) {
       this._t = Math.max(0, s.t);
       this._at = now();
     }
-    if (s.ev === "seeked" && c >= this._tSeq) {
+    if (s.ev === "seeked" && tc >= this._tSeq) {
       this._seeking = false;
       this._lastOut = this._t;
       this._fire("timeupdate");
@@ -652,7 +659,7 @@ export class NativeAudioElement extends EventTarget {
       this._fire("waiting");
     }
     if (this._buf !== prevBuf) this._fire("progress");
-    if (this._st === ST_ENDED && prevSt !== ST_ENDED && c >= this._tSeq) {
+    if (this._st === ST_ENDED && prevSt !== ST_ENDED && tc >= this._tSeq) {
       this._ended = true;
       if (isFinite(this._d)) this._t = this._d;
       this._fire("timeupdate");

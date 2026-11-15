@@ -11,7 +11,8 @@
 import { createRenderer } from "../../src/lib/viz/gl/renderer.js";
 import { createGLScene } from "../../src/lib/viz/scenes/gl.js";
 import { createGeometry } from "../../src/lib/viz/geometry.js";
-import { createPalette } from "../../src/lib/viz/palette.js";
+import { createPalette, zonesOfPalette } from "../../src/lib/viz/palette.js";
+import { analyse } from "../../src/lib/coverpalette.js";
 import { tierPreset } from "../../src/lib/viz/quality.js";
 import { loadWorld } from "../../src/lib/viz/worlds/index.js";
 import { loadVizCore } from "../../src/lib/viz/core.js";
@@ -212,10 +213,41 @@ function fakeCover() {
   return c;
 }
 
+// A sleeve whose three VERTICAL bands are nothing alike: the one fixture that
+// answers "does the row follow the artwork under it?" with a picture. Cold on
+// the left, pale in the middle, hot on the right — the case a zoned palette
+// exists for, where a single dominant colour could only ever be wrong.
+function stripedCover() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 256;
+  const g = c.getContext("2d");
+  const lin = g.createLinearGradient(0, 0, 256, 0);
+  lin.addColorStop(0, "#14206b");
+  lin.addColorStop(0.34, "#1e7fd0");
+  lin.addColorStop(0.48, "#e9e4d6");
+  lin.addColorStop(0.58, "#c8362b");
+  lin.addColorStop(1, "#ffb703");
+  g.fillStyle = lin;
+  g.fillRect(0, 0, 256, 256);
+  // A dark band across the top and a pale disc, so the decode has structure to
+  // average and is not simply a horizontal ramp.
+  g.fillStyle = "rgba(8,8,14,0.75)";
+  g.fillRect(0, 0, 256, 64);
+  g.fillStyle = "rgba(255,255,255,0.35)";
+  g.beginPath();
+  g.arc(128, 150, 46, 0, Math.PI * 2);
+  g.fill();
+  return c;
+}
+
+const COVERS = { default: fakeCover, striped: stripedCover };
+
 // The players' backdrop: the cover blown up and blurred, under the scrim
 // (MobileNowPlaying.svelte's .bg + .scrim), seen through a strip-sized window.
 let backdropCache = null;
 let backdropLight = false;
+// The sleeve the run is drawn with (`--cover default|striped`).
+let coverNow = fakeCover;
 function paintBackdrop(g, w, h, light = false) {
   if (!backdropCache || backdropCache.width !== w || backdropCache.height !== h || backdropLight !== light) {
     const c = document.createElement("canvas");
@@ -224,7 +256,7 @@ function paintBackdrop(g, w, h, light = false) {
     const cg = c.getContext("2d");
     cg.filter = `blur(${Math.max(8, Math.round(w / 12))}px) saturate(1.4)`;
     const side = w * 1.6;
-    cg.drawImage(fakeCover(), (w - side) / 2, h / 2 - side * 0.62, side, side);
+    cg.drawImage(coverNow(), (w - side) / 2, h / 2 - side * 0.62, side, side);
     cg.filter = "none";
     // Papier's scrim is the page's own cream at 68-92%, so the strip sits on a
     // PALE field — the one backdrop a light-emitting row can disappear into.
@@ -234,6 +266,26 @@ function paintBackdrop(g, w, h, light = false) {
     backdropLight = light;
   }
   g.drawImage(backdropCache, 0, 0);
+}
+
+// The app's cover palette, as the app gets it: ONE decode of the sleeve by the
+// shared module (lib/coverpalette.js), here on the bench's own fixture. The
+// pure half is used on a 64x64 reduction — exactly the size the app's decoder
+// reads — so what a world is drawn with in the bench is the same kind of answer
+// the player's palette walks. Not a second decoder: the real one.
+let zonesCache = null;
+let zonesDone = false;
+function fixtureZones() {
+  if (zonesDone) return zonesCache;
+  zonesDone = true;
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(coverNow(), 0, 0, 64, 64);
+  const { data } = g.getImageData(0, 0, 64, 64);
+  const p = analyse(data, 64, 64);
+  zonesCache = p ? { zones: zonesOfPalette(p), cover: p.vivid || p.dominant } : null;
+  return zonesCache;
 }
 
 /**
@@ -278,7 +330,15 @@ async function run(opts) {
     light = false,
     // Device pixels per CSS pixel: the strip is judged at a phone's density.
     dpr = 1,
+    // Energy saving: the scene's flat grade (no bloom, grain, fringe or glow).
+    eco = false,
+    // Which sleeve fixture to draw: the neutral one, or the striped one whose
+    // left, middle and right are unalike (the zoned palette's own test).
+    coverKind = "default",
   } = opts;
+  coverNow = COVERS[coverKind] || fakeCover;
+  backdropCache = null;
+  zonesDone = false;
   // The animation core (Rust): the scope's trace runs through it.
   await loadVizCore();
   // A feedback world is its own history: judge it after it has had time to
@@ -309,13 +369,24 @@ async function run(opts) {
     flash: "full",
     layout,
     light,
+    eco: !!eco,
   });
   scene.attach(renderer);
-  if (cover) renderer.setCover(fakeCover());
+  if (cover) renderer.setCover(coverNow());
   const geometry = createGeometry();
   geometry.set(w, h, hole);
   scene.resize(w, h, preset, geometry.out, dpr);
   const pal = createPalette(palette);
+  // The sleeve's own zones, through the real decoder (see fixtureZones): the
+  // palette SOURCE (`--palette cover`) decides whether the row walks them, as in
+  // the app — any other source ignores them.
+  const fixture = fixtureZones();
+  if (fixture) {
+    pal.setZones(fixture.zones);
+    pal.setCover(fixture.cover);
+  }
+  // What the row is coloured with, for the report: the zones the palette walks.
+  const zoneReadout = () => Array.from(pal.out.zones || []).map((v, i) => (i % 3 === 0 ? Math.round(v) : +v.toFixed(2)));
   const track = createTrack({ bpm, genre, loud });
   const times = shots.map((name) => [name, track.moments[name]]).sort((a, b) => a[1] - b[1]);
   const dt = 1 / ANALYSIS_HZ;
@@ -440,8 +511,67 @@ async function run(opts) {
     frames: frames.map((f) => ({ name: f.name, m: f.m })),
     errors,
     costMs: costN ? cost / costN : 0,
+    // A world that writes its own coverage instead of an opaque field (the
+    // spectrum's row): its picture is judged on its light, over whatever the
+    // page puts behind it, so the exposure floor is not the same as a world
+    // that paints the whole frame.
+    transparent: !!def?.look?.transparent,
+    // The sleeve's zones the row walked, as [hue, s, l] per stop — the picture
+    // is worth nothing if the colours did not come from the artwork.
+    zones: pal.out.hasZones ? zoneReadout() : null,
+    // ...and the decoder's three anchors (sRGB), before the palette's own
+    // saturation/lightness policy: the sleeve's left, middle and right.
+    anchors: pal.out.hasZones ? fixture?.zones || null : null,
     hdr: true,
   };
 }
 
-window.bench = { run, ready: true };
+/**
+ * The canvas fallback, timed on a real 2D canvas: the row the devices without
+ * WebGL2 get (the spectrum's canvas twin). The clock is taken around 300 draws
+ * after the pipeline has been forced, best of three passes, at the size the
+ * player actually uses.
+ */
+async function bars2d(opts = {}) {
+  const { w = 520, h = 56, eco = false, light = false, frames = 300 } = opts;
+  const { createBarsScene } = await import("../../src/lib/viz/scenes/bars.js");
+  await loadVizCore();
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  document.body.appendChild(canvas);
+  const g = canvas.getContext("2d", { alpha: true });
+  const preset = tierPreset("high");
+  const scene = createBarsScene({ layout: "strip", light, eco, preset });
+  scene.resize(w, h, preset);
+  const bars = scene.bars;
+  const pal = createPalette("cover");
+  const fixture = fixtureZones();
+  if (fixture) {
+    pal.setZones(fixture.zones);
+    pal.setCover(fixture.cover);
+  }
+  const track = createTrack({ bpm: 128, genre: "techno", loud: 1 });
+  const dt = 1 / 94;
+  let t = 0;
+  const pass = () => {
+    const t0 = performance.now();
+    for (let i = 0; i < frames; i++) {
+      t += dt;
+      const f = track.frameAt(t);
+      pal.update(f, dt);
+      scene.update(f, dt);
+      scene.draw(g, w, h, pal.out);
+    }
+    // Force the queued work before reading the clock, or this measures how
+    // long it took to ASK for the drawing.
+    g.getImageData(0, 0, 1, 1);
+    return performance.now() - t0;
+  };
+  const best = Math.min(pass(), pass(), pass());
+  scene.dispose();
+  canvas.remove();
+  return { ms: best / frames, beads: bars };
+}
+
+window.bench = { run, bars2d, ready: true };

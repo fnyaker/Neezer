@@ -113,6 +113,10 @@ export function createGLScene(opts = {}) {
     // unused component of the control slot (see pack below), so the block's
     // layout does not change.
     light: !!opts.light,
+    // Energy saving: the same world at a reduced grade — no bloom, no grain,
+    // no lens fringe, no particle share, and the worlds' own glow/trail
+    // parameters at zero. Nothing about the music changes; the finish does.
+    eco: !!opts.eco,
   };
   // Injectable, so the render bench can run the scene on a simulated clock and
   // photograph an exact instant of an exact bar.
@@ -141,6 +145,14 @@ export function createGLScene(opts = {}) {
   let seed = 0;
   let firstFade = 0;
   let wantKey = "";
+  // The cover's zones, uploaded per program once a picture: 7 vec4 of sRGB plus
+  // a flag. `pack` fills them from the palette; the world that reads them is the
+  // spectrum, and every other program simply does not declare `uZone` (the
+  // renderer's uniform lookup is a no-op then). Per-program rather than a slot
+  // in the Music block because they are the page's palette, not the core's
+  // arithmetic — no wasm rebuild, no change to the block two sides must agree on.
+  let zoneRef = null;
+  let zoneOK = 0;
 
   // --- timing -------------------------------------------------------------------
   let lastDrawAt = 0;
@@ -167,14 +179,50 @@ export function createGLScene(opts = {}) {
   // the next, which is exactly the soft, dated look it must not have.
   let gqFor = null;
   let gqStrip = null;
+  let gqEcoFrom = null;
+  let gqEco = null;
+  let gqEcoStripFrom = null;
+  let gqEcoStrip = null;
+  // Eco is a grade of its own: the lowest scale the tier allows and no post
+  // pass at all, so a picture that survives it costs what a fallback does. The
+  // strip keeps its full resolution even then — it is a 40-64 px band whose
+  // beads are a few pixels wide, and a governed scale smears every edge.
+  const ecoPost = (g) => ({
+    ...g,
+    particles: Math.min(g.particles ?? 1, 0.35),
+    bloom: 0,
+    ca: 0,
+    grain: 0,
+  });
+  function ecoGear(g) {
+    if (gqEcoFrom !== g) {
+      gqEcoFrom = g;
+      gqEco = {
+        ...ecoPost(g),
+        scale: Math.min(g.scale ?? 1, 0.55),
+        min: Math.min(g.min ?? 0.5, 0.4),
+        max: Math.min(g.max ?? 1, 0.55),
+      };
+    }
+    return gqEco;
+  }
+  function ecoStripGear(g) {
+    if (gqEcoStripFrom !== g) {
+      gqEcoStripFrom = g;
+      gqEcoStrip = ecoPost(g);
+    }
+    return gqEcoStrip;
+  }
   const gq = () => {
     const g = o.preset.gl || {};
-    if (o.layout !== "strip") return g;
-    if (gqFor !== g) {
-      gqFor = g;
-      gqStrip = { ...g, scale: 1, min: 1, max: 1 };
+    if (o.layout === "strip") {
+      if (gqFor !== g) {
+        gqFor = g;
+        gqStrip = { ...g, scale: 1, min: 1, max: 1 };
+      }
+      return o.eco ? ecoStripGear(gqStrip) : gqStrip;
     }
-    return gqStrip;
+    return o.eco ? ecoGear(g) : g;
   };
   let scale = 1;
   let scaleAt = 0;
@@ -282,6 +330,9 @@ export function createGLScene(opts = {}) {
       h.v4a("uS0", s0);
       h.v4a("uS1", s1);
       h.v4a("uEv", st.ev);
+      // The cover's zones (see `zoneRef`): one upload, two stages at most.
+      h.f("uZoneOK", zoneOK);
+      if (zoneOK && zoneRef) h.v4a("uZone[0]", zoneRef);
     };
     loadWorld(worldId)
       .then((def) => {
@@ -295,15 +346,33 @@ export function createGLScene(opts = {}) {
     return st;
   }
 
+  // A stage's parameters: the world's defaults, the skin's own values on top,
+  // and — in eco — its light switched off at the source. Kept apart from
+  // `build` because eco can be toggled on a live scene, and rebuilding the
+  // world for that would reset every envelope on screen.
+  function resolveParams(st) {
+    const names = Object.keys(st.def?.params || {});
+    const params = { ...(st.def?.params || {}) };
+    const sp = st.skin?.p || {};
+    for (const k of names) if (Number.isFinite(sp[k])) params[k] = sp[k];
+    // Eco: whatever a world calls its own light — a glow, a trail, an
+    // afterglow — is switched off at the source, so the picture keeps its
+    // shapes and loses its finish. These are the catalogue's two recurring
+    // names; a world without them is unaffected.
+    if (o.eco) {
+      for (const k of ["glow", "trail"]) if (k in params) params[k] = 0;
+    }
+    st.params = params;
+    st.paramNames = names;
+    for (let i = 0; i < 16; i++) st.packed[i] = i < names.length ? +params[names[i]] || 0 : 0;
+  }
+
   function build(st) {
     const def = st.def;
     if (!def || !renderer || st.prog) return;
-    const names = Object.keys(def.params || {});
-    const params = { ...(def.params || {}) };
-    const sp = st.skin?.p || {};
-    for (const k of names) if (Number.isFinite(sp[k])) params[k] = sp[k];
-    st.params = params;
-    for (let i = 0; i < 16; i++) st.packed[i] = i < names.length ? +params[names[i]] || 0 : 0;
+    resolveParams(st);
+    const names = st.paramNames;
+    const params = st.params;
     const defines = paramDefines(names);
     st.prog = renderer.program(
       "w:" + def.id,
@@ -545,6 +614,11 @@ export function createGLScene(opts = {}) {
     p[P.P_INTENSITY] = o.intensity;
     p[P.P_REDUCED] = o.reducedMotion ? 1 : 0;
     p[P.P_STRIP] = o.layout === "strip" ? 1 : 0;
+    // The cover's own palette, by vertical zone: the row of bars is coloured by
+    // the part of the artwork under each band. Zeroed when the palette source is
+    // not the cover or there is no artwork, and then the world walks `pal()`.
+    zoneRef = pal.zoneRgb || null;
+    zoneOK = pal.hasZones && zoneRef ? 1 : 0;
     const q = gq();
     p[P.P_STEPS] = q.steps ?? 1;
     p[P.P_PARTICLES] = q.particles ?? 1;
@@ -694,10 +768,12 @@ export function createGLScene(opts = {}) {
     const k = prev ? dissolve : 1;
     look.exposure = mixLook(lp, lc, k, "exposure", 1) * (prev ? 1 : firstFade);
     // In the strip on paper the picture is printed, not lit: no bloom to
-    // smudge the ink, and a threshold out of reach of the pale row. The full
-    // scene is a dark room on every theme, so nothing changes there.
+    // smudge the ink, and a threshold out of reach of the pale row. A
+    // full-screen row of bars is transparent over the page's backdrop, so the
+    // pale theme is the strip's business only. Eco turns the whole post grade
+    // off, whatever the world asked for.
     const pale = o.light && o.layout === "strip";
-    look.bloom = mixLook(lp, lc, k, "bloom", 1) * (q.bloomK ?? 1) * (pale ? 0 : 1);
+    look.bloom = mixLook(lp, lc, k, "bloom", 1) * (q.bloomK ?? 1) * (pale || o.eco ? 0 : 1);
     look.threshold = mixLook(lp, lc, k, "threshold", 0.9) * (pale ? 2.2 : 1);
     look.knee = mixLook(lp, lc, k, "knee", 0.6);
     look.saturation = mixLook(lp, lc, k, "saturation", 1.15);
@@ -706,10 +782,16 @@ export function createGLScene(opts = {}) {
     // a hair all the time, and a permanent red/cyan edge on every thin line
     // is the single cheapest-looking thing a render can do.
     const hitCA = Math.max(env(m.stamp.big, 0.5), env(m.stamp.drop, 1.5));
-    look.ca = (q.ca ?? 0) * (mixLook(lp, lc, k, "ca", 1) * (0.007 * hitCA * (o.reducedMotion ? 0 : 1)));
-    look.grain = (q.grain ?? 0) * mixLook(lp, lc, k, "grain", 1);
+    look.ca = o.eco
+      ? 0
+      : (q.ca ?? 0) * (mixLook(lp, lc, k, "ca", 1) * (0.007 * hitCA * (o.reducedMotion ? 0 : 1)));
+    look.grain = o.eco ? 0 : (q.grain ?? 0) * mixLook(lp, lc, k, "grain", 1);
     look.lift = flash * 0.35;
-    look.transparent = o.layout === "strip";
+    // A world may declare itself TRANSPARENT: it writes its own coverage and
+    // the page's backdrop is the field behind it (the spectrum's row of beads).
+    // A dissolve carries alpha with its colour, so an opaque world arriving
+    // over a transparent one stays opaque until it is alone on screen.
+    look.transparent = o.layout === "strip" || lc.transparent === true || lp.transparent === true;
     look.time = clockSeconds;
     renderer.present(prev ? prev.target : null, cur.target, dissolve, seed, look);
   }
@@ -756,6 +838,15 @@ export function createGLScene(opts = {}) {
     if (next.light != null) o.light = !!next.light;
     if (next.orientation) o.orientation = next.orientation;
     if (next.colour) o.colour = next.colour;
+    // Eco is a change of GRADE, not of scene: the worlds' light parameters are
+    // re-resolved in place and the render scale follows on the next picture, so
+    // flipping it never resets an envelope or recompiles a shader.
+    if (next.eco != null && !!next.eco !== o.eco) {
+      o.eco = !!next.eco;
+      gqEco = null;
+      for (const st of [cur, prev, pending]) if (st?.def) resolveParams(st);
+      applySize();
+    }
     if (next.world && next.world !== o.world) {
       o.world = next.world;
       wantKey = ""; // re-resolve on the next analysis frame

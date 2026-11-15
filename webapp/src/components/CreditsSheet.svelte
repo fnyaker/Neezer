@@ -115,7 +115,6 @@
     display: grid;
     place-items: center;
     padding: 20px;
-    backdrop-filter: blur(2px);
   }
   .sheet {
     width: min(520px, 100%);

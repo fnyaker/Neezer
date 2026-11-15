@@ -15,8 +15,13 @@ stream, and treating that as a real range made every chase "land" without ever a
 the seek restarted the stream from 0. A direct seek that comes back to the start is chased after 4 s.
 Measured: FLAC 80 % seek = 1 request, 930 836 B, TTFB 2.9 ms, Chromium lands at 240.24 s / 300;
 Opus `?start=240` = 1 116 423 B, TTFB 98 ms, exact sample (silence 1.000 s at `-ss 119`, none at
-`-ss 121`). The server contract is in [server.md](server.md); the native player's seek uses the same
-plan, and its own held path is in [android.md](android.md).
+`-ss 121`). A seek is watched only until it **lands** (`seekVerdict`: landed / lost / waiting, then
+`watchSeek` disarms): leaving the watch on `timeupdate` made a position 4 s later look like a missed
+seek and chase the OLD target — the "it jumps back to where I clicked 10–20 s ago" report. One chase
+maximum if it never lands, then the bar is the real position; a new seek and `onEnded` cancel the
+watch. `test/native/run.mjs` B3: seek 0.92 s, playback reaches 6.16 s, **0 `/ready` after landing**.
+The server contract is in [server.md](server.md); the native player's seek uses the same plan, and its
+own held path is in [android.md](android.md).
 
 **A transport action the person takes always wins.** Play, pause, next, previous and seek are applied
 at once, even while the player is recovering from a refused resume, switching source or chasing a

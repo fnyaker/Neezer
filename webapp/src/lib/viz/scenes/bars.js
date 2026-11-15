@@ -23,6 +23,23 @@
 // toward the tips. The 2D path is what a device without WebGL2 gets, so it is
 // drawn with flat fills — no gradient object, no shadowBlur per bar, no
 // allocation in the loop — and its halo comes from post.js exactly as before.
+//
+// NO FIELD AND NO FRAME. The row is drawn on a CLEARED canvas: what sits behind
+// it — the player's blurred cover, the projector's own backdrop — is the
+// picture, and a `fillRect` of a deep palette-tinted field was exactly the
+// rectangle the critique saw sitting on the artwork. The app has ONE blurred
+// layer (the backdrop's), and this scene adds neither a background, nor a
+// border, nor a blur of its own.
+//
+// AND ITS COLOURS ARE THE COVER'S. `pal.colourAt(t)` walks the sleeve's own
+// vertical zones when the palette's source is the cover (see palette.js), so
+// the bass end is coloured by the left of the artwork and the treble by its
+// right; with no artwork — or another palette source — the row keeps the
+// palette's low -> high walk, which is what the parity oracle pins.
+//
+// ECO. `opts.eco` draws the same row in one flat fill per bead: no inner
+// gradient, no axis core, no peak ghost, no breath. Same heights, same colours,
+// no finish — and the host runs no post pass over it.
 
 import { clamp, hsl, roundRect } from "../util.js";
 import { BarsCore, vizCore } from "../core.js";
@@ -35,8 +52,11 @@ export function createBarsScene(opts = {}) {
   const layout = opts.layout || "strip"; // "strip" (centred) | "full" (grounded)
   let reduced = !!opts.reducedMotion;
   // Papier's player scrim is cream: the transparent strip draws ink there so
-  // the row keeps its contrast. The full scene is a dark room on every theme.
+  // the row keeps its contrast. Full screen is a dark room on every theme (the
+  // projector's own page), so only the strip takes the ink path.
   let light = !!opts.light;
+  // Energy saving: the row, flat. See the header.
+  let eco = !!opts.eco;
   const core = opts.core || vizCore();
   if (!core) throw new Error("bars: the animation core is not loaded");
   const rb = new BarsCore(core);
@@ -46,6 +66,9 @@ export function createBarsScene(opts = {}) {
   // continuous position (`beatIndex + phase`), so this needs no clock of its
   // own and pauses with the music.
   let beats = 0;
+  // The colour of the band being drawn — one scratch array for the whole
+  // scene, so a frame allocates nothing.
+  const zl = [0, 0, 0];
 
   function setCount(n) {
     if (n === bars) return;
@@ -75,15 +98,10 @@ export function createBarsScene(opts = {}) {
     if (!bars || !w || !h) return;
     const full = layout === "full";
     const ink = !full && light;
-    // The strip draws no background of its own — it sits over the blurred
-    // cover — so the canvas has to be cleared rather than washed. Full screen
-    // is a scene, and gets the same deep, palette-tinted field as the GL world.
-    if (full) {
-      g.fillStyle = hsl(pal.hue, pal.sat * 0.4, 0.045, 0.72);
-      g.fillRect(0, 0, w, h);
-    } else {
-      g.clearRect(0, 0, w, h);
-    }
+    // Nothing behind the row: the canvas is cleared, never washed (see the
+    // header). This is what lets the artwork's own blurred backdrop show
+    // through on every layout.
+    g.clearRect(0, 0, w, h);
     const bw = w / bars;
     const body = Math.max(2, Math.min(bw * 0.64, h * 0.55));
     const r = body / 2;
@@ -95,6 +113,7 @@ export function createBarsScene(opts = {}) {
     // renormalised to the same height. `rb.level` is the one slow envelope the
     // core already keeps for every canvas caller.
     const loud = 0.3 + 0.7 * clamp(rb.level * 1.5, 0, 1);
+    const breathe = !reduced && !eco;
 
     for (let i = 0; i < bars; i++) {
       const t = i / (bars - 1 || 1);
@@ -103,17 +122,25 @@ export function createBarsScene(opts = {}) {
       const taper = 1.06 - 0.26 * t;
       const weight = Math.max(0, 1 - t * 2.5) * Math.min(1, v * 1.4);
       const halfW = Math.min(r * taper * (0.88 + 0.22 * Math.min(1, v / 0.9) + 0.18 * weight), bw * 0.46);
-      const breath = reduced ? 0 : Math.sin(TAU * (beats / BREATH_BEATS + t * 0.55));
+      const breath = breathe ? Math.sin(TAU * (beats / BREATH_BEATS + t * 0.55)) : 0;
       const rest = 1 - 0.65 * clamp((v - 0.05) / 0.65, 0, 1);
       const minHalf = halfW * (1 + 0.46 * (0.5 + 0.5 * breath) * rest);
       const half = Math.max(minHalf, v * reach);
       const x = i * bw + (bw - halfW * 2) / 2;
-      // Hue walks the palette's spread across the row, so the low end and the
-      // top end are visibly different registers rather than one flat colour.
-      const hue = pal.low + (pal.high - pal.low) * t;
+      // The band's colour: the sleeve's zone under this position when the
+      // palette is walking the cover, else the palette's own low -> high walk
+      // (so the low end and the top end stay visibly different registers).
+      let hue = pal.low + (pal.high - pal.low) * t;
+      let sat = pal.sat;
+      let val = pal.light;
+      if (pal.colourAt && pal.colourAt(t, zl)) {
+        hue = zl[0];
+        sat = zl[1];
+        val = zl[2];
+      }
       const ph = Math.max(minHalf, peaks[i] * reach * loud);
-      if (full && ph > half + 1.5) {
-        g.fillStyle = hsl(hue + 12, pal.sat * 0.9, pal.light, 0.16);
+      if (full && !eco && ph > half + 1.5) {
+        g.fillStyle = hsl(hue + 12, sat * 0.9, val, 0.16);
         roundRect(g, x, axis - ph, halfW * 2, ph * 2, halfW);
         g.fill();
       }
@@ -122,25 +149,27 @@ export function createBarsScene(opts = {}) {
       // per frame is garbage the fallback cannot afford. On paper the same
       // two fills carry the band's hue at an ink value, with a pale axis.
       g.fillStyle = ink
-        ? hsl(hue + 8, pal.sat, 0.3, 0.95)
-        : hsl(hue + 14, pal.sat, Math.min(0.9, pal.light - 0.01), 0.92);
+        ? hsl(hue + 8, sat, 0.3, 0.95)
+        : hsl(hue + 14, sat, Math.min(0.9, val - 0.01), 0.92);
       roundRect(g, x, axis - half, halfW * 2, half * 2, halfW);
       g.fill();
+      // Eco stops there: one flat shape per band is the whole object.
+      if (eco) continue;
       const inset = Math.min(1.4, halfW * 0.3);
       const iw = halfW * 2 - inset * 2;
       const ih = half * 2 - inset * 2;
       if (iw > 0.6 && ih > 0.6) {
         g.fillStyle = ink
-          ? hsl(hue, pal.sat * 0.75, 0.44, 0.92)
-          : hsl(hue, pal.sat * 0.85, Math.min(0.92, pal.light + 0.1 + 0.22 * v), 0.74 + 0.26 * Math.min(1, v / 0.6));
+          ? hsl(hue, sat * 0.75, 0.44, 0.92)
+          : hsl(hue, sat * 0.85, Math.min(0.92, val + 0.1 + 0.22 * v), 0.74 + 0.26 * Math.min(1, v / 0.6));
         roundRect(g, x + inset, axis - half + inset, iw, ih, Math.max(0.5, halfW - inset));
         g.fill();
       }
       // A pale bead on the axis — the hot core, not a specular stripe.
       const coreH = Math.max(1, Math.min(half, halfW * 1.7));
       g.fillStyle = ink
-        ? hsl(hue, pal.sat * 0.45, 0.76, 0.3 + 0.25 * Math.min(1, v / 0.6))
-        : hsl(hue, pal.sat * 0.3, 0.9, 0.2 + 0.3 * Math.min(1, v / 0.6));
+        ? hsl(hue, sat * 0.45, 0.76, 0.3 + 0.25 * Math.min(1, v / 0.6))
+        : hsl(hue, sat * 0.3, 0.9, 0.2 + 0.3 * Math.min(1, v / 0.6));
       roundRect(g, x + inset, axis - coreH, Math.max(0.6, halfW * 2 - inset * 2), coreH * 2, Math.max(0.5, halfW - inset));
       g.fill();
     }
@@ -151,6 +180,7 @@ export function createBarsScene(opts = {}) {
   function setOptions(next = {}) {
     if (next.reducedMotion != null) reduced = !!next.reducedMotion;
     if (next.light != null) light = !!next.light;
+    if (next.eco != null) eco = !!next.eco;
   }
 
   function dispose() {

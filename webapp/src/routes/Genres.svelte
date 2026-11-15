@@ -2268,7 +2268,6 @@
     display: grid;
     place-items: center;
     background: rgba(8, 8, 10, 0.72);
-    backdrop-filter: blur(6px);
     color: #fff;
     transition: transform 0.16s, background 0.16s;
   }

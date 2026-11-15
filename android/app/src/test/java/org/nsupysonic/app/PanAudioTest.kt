@@ -1,6 +1,10 @@
 package org.nsupysonic.app
 
+import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.util.UnstableApi
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,6 +21,7 @@ import kotlin.math.sin
  * the W3C algorithm lib/audio/pan.js already runs: the same laws, the same
  * level, and a ramp instead of a step.
  */
+@OptIn(UnstableApi::class)
 class PanAudioTest {
     private fun buffer(frames: Int, left: Short, right: Short): ByteBuffer {
         val buf = ByteBuffer.allocate(frames * 4).order(ByteOrder.nativeOrder())
@@ -135,5 +140,46 @@ class PanAudioTest {
         assertFalse(panSuits(C.ENCODING_PCM_16BIT, 1))
         assertFalse(panSuits(C.ENCODING_PCM_16BIT, 6))
         assertFalse(panSuits(C.ENCODING_PCM_FLOAT, 2))
+    }
+
+    @Test
+    fun anIdleProcessorIsBitForBitTransparent() {
+        val pan = PanProcessor({ false }, { 0f })
+        val fmt = AudioProcessor.AudioFormat(48_000, 2, C.ENCODING_PCM_16BIT)
+        assertEquals(fmt, pan.configure(fmt))
+        val frames = 1_024
+        val samples = ShortArray(frames * 2) { (((it * 37) % 2000) - 1000).toShort() }
+        val buf = ByteBuffer.allocateDirect(frames * 4).order(ByteOrder.nativeOrder())
+        for (v in samples) buf.putShort(v)
+        buf.flip()
+        pan.queueInput(buf)
+        val out = pan.getOutput() ?: throw AssertionError("no output")
+        val got = ShortArray(out.remaining() / 2)
+        val src = out.order(ByteOrder.nativeOrder())
+        for (i in got.indices) got[i] = src.getShort(i * 2)
+        assertArrayEquals("mono off and balance at the centre: the very same samples", samples, got)
+        assertEquals("every byte was consumed", 0, buf.remaining())
+    }
+
+    @Test
+    fun consecutiveBuffersLoseNoSampleAndAddNone() {
+        val pan = PanProcessor({ true }, { 0.4f })
+        pan.configure(AudioProcessor.AudioFormat(48_000, 2, C.ENCODING_PCM_16BIT))
+        var fed = 0
+        var drained = 0
+        repeat(20) {
+            val frames = 512
+            val buf = ByteBuffer.allocateDirect(frames * 4).order(ByteOrder.nativeOrder())
+            repeat(frames) {
+                buf.putShort(1_000)
+                buf.putShort(-1_000)
+            }
+            buf.flip()
+            pan.queueInput(buf)
+            fed += frames
+            val out = pan.getOutput() ?: return@repeat
+            drained += out.remaining() / 4
+        }
+        assertEquals("one frame in, one frame out, on every buffer", fed, drained)
     }
 }
