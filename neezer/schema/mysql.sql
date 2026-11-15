@@ -660,6 +660,7 @@ CREATE TABLE IF NOT EXISTS provider_grant (
     feature VARCHAR(16) NOT NULL,
     subject VARCHAR(40) NOT NULL,
     PRIMARY KEY (provider, account, feature, subject)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE TABLE IF NOT EXISTS listen_event (
     id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
     user_id CHAR(32) NOT NULL,
