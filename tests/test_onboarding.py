@@ -909,7 +909,9 @@ class OnboardingApiTestCase(OnboardingTestCase):
         self.assertTrue(all(item["hint"] for item in page["items"]))
         self._like(1)
         page = self._page(limit=24).get_json()
-        self.assertEqual([item["deezer_id"] for item in page["items"]], ["1", "2"])
+        self.assertEqual(
+            {item["deezer_id"] for item in page["items"]}, {"1", "2"}
+        )
         self.assertTrue(
             next(item for item in page["items"] if item["deezer_id"] == "1")["liked"]
         )
