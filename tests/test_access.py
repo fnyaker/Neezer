@@ -191,6 +191,46 @@ class UpgradeBehaviourTestCase(_Case):
         self.assertEqual(sum(c.values()), 0, dict(c))
 
 
+class LegacyServerGrantTestCase(_Case):
+    def test_a_server_account_from_before_grants_is_lent_to_a_new_member(self):
+        acc = self.server_account()
+        ProviderGrant.delete().where(
+            ProviderGrant.provider == "deezer",
+            ProviderGrant.account == str(acc.id),
+        ).execute()
+        Meta.delete().where(Meta.key == access.SERVER_GRANT_KEY).execute()
+        access.bump()
+        self.as_bob()
+        self.assertFalse(self.denied_page())
+        me = self.client.get("/api/me").get_json()
+        self.assertIn("stream", me["user"]["access"]["deezer"])
+        self.assertEqual(
+            {(g.feature, g.subject) for g in ProviderGrant.select().where(
+                ProviderGrant.account == str(acc.id)
+            )},
+            {("*", "all")},
+        )
+
+    def test_an_archived_track_plays_for_a_member_with_no_provider_grant(self):
+        from neezer.db import Track
+        from neezer.deezer import library
+
+        from .test_deezer import raw_track
+
+        self.as_alice()
+        self.grant("*", [])
+        root = library.get_root_folder(self.archive)
+        track = library.upsert_track(raw_track(1), root)
+        track.path = os.path.join(self.archive, "member-play.flac")
+        track.save(only=(Track.path,))
+        with open(track.path, "wb") as handle:
+            handle.write(b"archive")
+        self.as_bob()
+        rv = self.client.get(f"/api/stream/{track.id}")
+        self.assertEqual(rv.status_code, 200, rv.get_data(as_text=True))
+        rv.close()
+
+
 class GrantsTestCase(_Case):
     def make_group(self, name, members):
         self.as_alice()

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 VERSION_KEY = "acc.v"
 BOOT_KEY = "acc.boot"
+SERVER_GRANT_KEY = "acc.server_grant"
 CACHE_SECONDS = 1.0
 ALL = "all"
 SERVER = "server"
@@ -279,6 +280,9 @@ def snapshot() -> Snapshot:
             ensure_server_account()
             version = _meta_get(VERSION_KEY)
             snap = _load()
+        if ensure_default_server_grant():
+            version = _meta_get(VERSION_KEY)
+            snap = _load()
     except Exception as exc:
         # No table yet (a tool on an old database) or no database at all: keep
         # the last grants this process read, and close everything when it never
@@ -395,6 +399,42 @@ def ensure_server_account(owner=None, grant_all=True):
             ).on_conflict_ignore().execute()
     bump()
     return row
+
+
+def ensure_default_server_grant() -> bool:
+    """Lend the server's Deezer account to everybody, once per database.
+
+    The account existed before the grant system on some servers (and
+    ``ensure_server_account`` returned early when it already had a holder), so
+    a new member could not even fetch a sound the admin had just linked. This
+    is the one-time repair; a later deliberate restriction stays removed
+    because the key is written only once.
+    """
+    from .db import ProviderAccount, ProviderGrant, db
+
+    if _meta_get(SERVER_GRANT_KEY) is not None:
+        return False
+    row = (
+        ProviderAccount.select()
+        .where(
+            (ProviderAccount.provider == "deezer")
+            & (ProviderAccount.mode == SERVER)
+        )
+        .first()
+    )
+    changed = False
+    with db.atomic():
+        if _meta_get(SERVER_GRANT_KEY) is not None:
+            return False
+        if row is not None:
+            ProviderGrant.insert(
+                provider="deezer", account=str(row.id), feature=F.ANY, subject=ALL
+            ).on_conflict_ignore().execute()
+            changed = True
+        _meta_set(SERVER_GRANT_KEY, "1")
+    if changed:
+        bump()
+    return changed
 
 
 def bootstrap():
