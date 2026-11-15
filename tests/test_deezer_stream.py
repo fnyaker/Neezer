@@ -619,6 +619,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertEqual(self.aborted, 0)
         self.assertEqual(self.analysed, [Track[ids.track_uuid(self.SID)].id])
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_a_client_that_stops_reading_does_not_pace_the_download(self):
         """The reported bug: the browser buffers enough and stops reading, and the
         fetch stopped with it — the archive stayed a .part for minutes."""
@@ -654,6 +655,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertTrue(wait_until(lambda: not self._leftovers(), timeout=5))
         self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_a_reload_during_the_grace_reuses_the_same_download(self):
         music = self._music_flac()
         opened = []
@@ -681,6 +683,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
         self.assertEqual(self.aborted, 0)
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_an_abandoned_download_stops_after_the_grace_and_leaves_nothing(self):
         music = self._music_flac()
 
@@ -748,6 +751,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertEqual(self.cdn.hits.count("/live-present"), 0)
         self.assertFalse(live_threads())
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_a_slow_reader_hears_the_audio_unchanged_while_it_is_published(self):
         """The archive is a tagged COPY: a reader still on the raw file must hear
         exactly what was downloaded, not a file being retagged under it."""
@@ -762,6 +766,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertEqual(mutagen.flac.FLAC(self.track.path).info.total_samples, 441000)
         self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_a_download_that_has_decided_to_stop_is_not_joined(self):
         music = self._music_flac()
 
@@ -786,6 +791,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
                 stream.close()
                 self.assertTrue(wait_until(lambda: not live_threads(), timeout=20))
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
     def test_a_stalled_source_fails_the_response_instead_of_hanging_it(self):
         music = self._music_flac()
 
