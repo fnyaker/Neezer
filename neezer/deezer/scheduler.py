@@ -109,9 +109,18 @@ def _run_sync(app, scan_local=True) -> bool:
     The local scan is NOT postponed: importing files the user dropped into the
     archive has nothing to do with Deezer, and is exactly the kind of thing that
     must keep working while Deezer is down.
+
+    Runs on a worker thread (the scheduler's, or the one the manual route
+    starts): it is reniced and its Deezer calls take the bulk lane. Called from
+    the main thread — the CLI, a test — it does neither.
     """
     from ..db import close_connection, open_connection
     from .importer import DeezerImporter
+
+    if threading.current_thread() is not threading.main_thread():
+        from . import workload
+
+        workload.renice(10)
 
     # Skip if a sync (scheduled or manual) is already in flight — never run two.
     if not _sync_lock.acquire(blocking=False):

@@ -34,6 +34,8 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
+import time
 import uuid
 
 from flask import current_app, jsonify, request
@@ -49,6 +51,18 @@ DEEZER_LINK = WindowLimiter(10, 900)
 
 ARL_MAX = 512
 NAMES = {"deezer": "Deezer", "youtube": "YouTube Music"}
+
+#: How long the listing of one account and kind is reused before a background
+#: refresh. A listing is expensive (Deezer: one gateway call plus one per 200
+#: liked tracks; YouTube: the user's own paginated session), and the picker is
+#: opened, scrolled and ticked over minutes, so it is not rebuilt on every open.
+LISTING_REFRESH_EVERY = 300.0
+#: A refresh that FAILED may be tried again this much later: a person pressing
+#: "Réessayer" is not a reason to rebuild a listing in a loop, but a minute-old
+#: answer is not worth showing either.
+LISTING_RETRY = 60.0
+#: (account, kind) pairs remembered; the picker is per linked account.
+LISTING_KEYS_MAX = 512
 
 
 def _me():
@@ -112,6 +126,7 @@ def link_youtube_headers(user, raw):
 
 def unlink(row):
     li.forget_account(row.id)
+    _forget_listing(row.id)
     access.forget_account(row.id)
     if row.provider == "youtube":
         ServiceLink.delete().where(
@@ -435,28 +450,159 @@ def my_accounts_import(account_id):
     return jsonify({"started": started, "account": _account_json(row, _default_id())}), 202
 
 
-def _provider_error(exc):
+def _error_body(exc):
+    """The cause of a provider failure, in words, and its kind."""
+    if isinstance(exc, ProviderAuth):
+        return {
+            "error": "Le compte refuse la connexion : reliez-le à nouveau.",
+            "reason": "auth",
+        }
+    if isinstance(exc, ProviderUnavailable):
+        return {
+            "error": "Le service ne répond pas : réessayez dans un moment.",
+            "reason": "network",
+        }
+    return {
+        "error": "Le service a répondu par une erreur : réessayez plus tard.",
+        "reason": "error",
+    }
+
+
+def _error_status(reason):
     # 424, not 503: the web app retries a 5xx GET three times, and the
     # provider's own calls have already retried within their budget.
-    if isinstance(exc, ProviderAuth):
-        return jsonify({"error": "Le compte refuse la connexion : reliez-le à nouveau.", "reason": "auth"}), 409
-    if isinstance(exc, ProviderUnavailable):
-        return jsonify({"error": "Le service ne répond pas : réessayez dans un moment.", "reason": "network"}), 424
-    logger.warning("reading an account's library failed: %r", exc)
-    return jsonify({"error": "Le service a répondu par une erreur : réessayez plus tard.", "reason": "error"}), 502
+    return {"auth": 409, "network": 424}.get(reason, 502)
+
+
+# -- the listing, and the one refresh behind it -------------------------------
+
+_listing_lock = threading.Lock()
+_listing_last = {}  # (account id, kind) -> (monotonic start, failed)
+_listing_jobs = {}  # (account id, kind) -> {"done": Event, "error":..., "reason":...}
+_last_error = {}  # (account id, kind) -> {"error":..., "reason":...}
+
+
+def listing_job(account_id, kind):
+    """The listing refresh in flight for that account and kind, or None."""
+    with _listing_lock:
+        return _listing_jobs.get((str(account_id), kind))
+
+
+def listing_failure(account_id, kind):
+    """``{"error", "reason"}`` of the last refresh when it failed, else None."""
+    key = (str(account_id), kind)
+    with _listing_lock:
+        if key in _listing_jobs:
+            return None
+        found = _last_error.get(key)
+        return dict(found) if found else None
+
+
+def _forget_listing(account_id):
+    account = str(account_id)
+    with _listing_lock:
+        for table in (_listing_last, _listing_jobs, _last_error):
+            for key in [k for k in table if k[0] == account]:
+                table.pop(key, None)
+
+
+def start_listing_refresh(app, account_id, kind) -> bool:
+    """Start the one refresh of that account and kind; False when not due or
+    already running."""
+    key = (str(account_id), kind)
+    started = time.monotonic()
+    with _listing_lock:
+        if key in _listing_jobs:
+            return False
+        last = _listing_last.get(key)
+        if last is not None:
+            at, failed = last
+            if started - at < (LISTING_RETRY if failed else LISTING_REFRESH_EVERY):
+                return False
+        _listing_last[key] = (started, False)
+        while len(_listing_last) > LISTING_KEYS_MAX:
+            _listing_last.pop(next(iter(_listing_last)))
+        job = {"done": threading.Event(), "error": None, "reason": None}
+        _listing_jobs[key] = job
+    threading.Thread(
+        target=_run_listing_refresh,
+        args=(app, key, job),
+        name=f"account-listing-{key[1]}",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _run_listing_refresh(app, key, job):
+    from ..db import ProviderAccount, close_connection, open_connection
+    from ..deezer import workload
+
+    account_id, kind = key
+    failed = False
+    try:
+        workload.renice(10)
+        with app.app_context():
+            open_connection(reuse=True)
+            row = ProviderAccount.get_or_none(ProviderAccount.id == account_id)
+            if row is not None:
+                li.listing(app, row, kind, fresh=True)
+    except ProviderError as exc:
+        failed = True
+        job.update(_error_body(exc))
+        if not isinstance(exc, (ProviderAuth, ProviderUnavailable)):
+            logger.warning("listing of account %s failed: %r", account_id, exc)
+    except Exception as exc:
+        failed = True
+        job.update(_error_body(exc))
+        logger.warning("listing of account %s crashed: %s", account_id, exc)
+    finally:
+        try:
+            close_connection()
+        except Exception:
+            pass
+        with _listing_lock:
+            _listing_jobs.pop(key, None)
+            last = _listing_last.get(key)
+            if last is not None:
+                _listing_last[key] = (last[0], failed)
+                if failed:
+                    _last_error[key] = {"error": job["error"], "reason": job["reason"]}
+                else:
+                    _last_error.pop(key, None)
+        job["done"].set()
 
 
 @webapi.route("/me/accounts/<account_id>/library/<kind>")
 @login_required
 def my_accounts_library(account_id, kind):
+    """What that account lists, from the last listing, and a refresh behind it.
+
+    ``fresh=1`` asks for a new listing: it goes through the same single worker
+    and the same limit, so it never rebuilds it in the request and never fans
+    out. The answer carries ``refreshing`` (a worker is on it) and, when the
+    last one failed, its cause.
+    """
     row = _row(account_id)
     if row is None or kind not in li.PICKABLE:
         return jsonify({"error": "introuvable"}), 404
-    try:
-        items = li.listing(current_app._get_current_object(), row, kind, fresh=request.args.get("fresh") == "1")
-    except ProviderError as exc:
-        return _provider_error(exc)
-    return jsonify({"items": items})
+    app = current_app._get_current_object()
+    fresh = request.args.get("fresh") == "1"
+    held = li.held_listing(row, kind)
+    at = li.held_at(row, kind)
+    if held is None or fresh or time.monotonic() - (at or 0) > li.LISTING_TTL:
+        start_listing_refresh(app, row.id, kind)
+    payload = {"items": li.decorate(row, kind, held or [])}
+    if listing_job(row.id, kind) is not None:
+        payload["refreshing"] = True
+    if held is not None and at is not None and time.monotonic() - at > li.LISTING_TTL:
+        payload["stale"] = True
+    failure = listing_failure(row.id, kind)
+    if failure:
+        if held is None:
+            # Nothing at all to show: answer the cause as this route always did.
+            return jsonify(failure), _error_status(failure["reason"])
+        payload.update(failure)
+    return jsonify(payload)
 
 
 @webapi.route("/me/accounts/<account_id>/library/<kind>", methods=["PUT"])

@@ -288,18 +288,19 @@ class Deezer:
                 },
                 headers = self.http_headers
             )
-            if request.status_code == 429 or request.status_code >= 500:
-                # media.deezer.com is unwell, not answering about the track.
-                # Returning [] here made every quality resolve to "no URL",
-                # which is what the caller reads as "this track has no source"
-                # — an outage must never condemn a track.
+            if request.status_code >= 400:
+                # media.deezer.com is the EDGE, not the catalogue: a 401 (our
+                # media token went stale), a 403 (a WAF or a geolocation rule on
+                # OUR address), a 408, a 429 or a 5xx says nothing about any
+                # track. Returning [] here made every quality resolve to "no
+                # URL", which the caller reads as "this track has no source" —
+                # and that verdict is offered to the person as replace-or-delete.
+                # Only the response BODY can say a track has none (the errors
+                # below); an HTTP status never must.
                 raise DeezerUnavailable(
                     f"media.deezer.com answered {request.status_code}"
                 )
-            request.raise_for_status()
             response = request.json()
-        except requests.exceptions.HTTPError:
-            return []
         except ValueError as exc:
             raise DeezerUnavailable("media.deezer.com returned a non-JSON body") from exc
 

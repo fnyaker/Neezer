@@ -892,6 +892,30 @@ class WebUITestCase(unittest.TestCase):
             backfill._sweep_lock.release()
         self.assertFalse(backfill.is_sweeping())
 
+    def test_the_backfill_button_runs_behind_everything_else(self):
+        """The button's thread is background work like the nightly sweep it
+        shares a lock with: reniced, and its Deezer calls in the bulk lane."""
+        from deezerpy import _throttle
+        from neezer.deezer import backfill
+
+        seen = []
+
+        def sweep_for(provider, user, scope, on_event=None, on_total=None):
+            seen.append((os.nice(0), _throttle.current_priority()))
+            return dict(backfill.IDLE)
+
+        self._login()
+        with mock.patch.object(backfill, "sweep_for", sweep_for):
+            rv = self.client.post("/api/archive/backfill", json={"scope": "all"})
+            self.assertEqual(rv.status_code, 200)
+            deadline = time.monotonic() + 10
+            while not seen and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertTrue(seen, "the button never started its sweep")
+        nice, lane = seen[0]
+        self.assertGreaterEqual(nice, 10, f"the backfill thread ran at nice {nice}")
+        self.assertEqual(lane, _throttle.BULK)
+
     def test_backfill_is_admin_only(self):
         self._login()
         self.assertEqual(
@@ -2518,6 +2542,81 @@ class WebUITestCase(unittest.TestCase):
             cfg["android_url"] = None
             cfg["android_apk"] = None
             os.remove(apk)
+
+    def test_two_devices_share_one_apk_download(self):
+        """The first tap starts the fetch and answers at once; a second device
+        arriving during it is told to come back instead of queueing behind a
+        global lock, and the file is served as soon as it is there."""
+        import zipfile
+
+        from neezer.webui import androidapk
+
+        cfg = self.app.config["WEBAPP"]
+        apk = os.path.join(cfg["cache_dir"], "t.apk")
+        with zipfile.ZipFile(apk, "w") as z:
+            z.writestr("AndroidManifest.xml", b"x")
+        with open(apk, "rb") as fh:
+            body = fh.read()
+        os.remove(apk)
+
+        class SlowResp:
+            def __init__(self, url, data):
+                self.url, self._data = url, data
+                self.status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                time.sleep(0.5)
+                yield self._data
+
+        self._login()
+        cfg["android_version"] = "v1.4.0"
+        cfg["android_url"] = None
+        cfg["android_apk"] = None
+        androidapk._apk_jobs.clear()
+        asset = "https://objects.githubusercontent.com/x"
+        try:
+            with mock.patch.object(
+                androidapk.requests, "get", return_value=SlowResp(asset, body)
+            ) as get:
+                started = time.monotonic()
+                first = self.client.get("/api/android/apk")
+                first_elapsed = time.monotonic() - started
+                started = time.monotonic()
+                second = self.client.get("/api/android/apk")
+                second_elapsed = time.monotonic() - started
+                self.assertEqual(first.status_code, 202, first.get_data(as_text=True))
+                self.assertEqual(first.get_json()["state"], "fetching")
+                self.assertEqual(second.status_code, 202)
+                self.assertGreaterEqual(int(second.headers["Retry-After"]), 1)
+                self.assertLess(
+                    first_elapsed, 0.2, f"the first client waited {first_elapsed:.3f}s"
+                )
+                self.assertLess(
+                    second_elapsed, 0.2, f"the second client waited {second_elapsed:.3f}s"
+                )
+                androidapk.apk_job(cfg)["thread"].join(10)
+                self.assertEqual(get.call_count, 1, "two devices, one download")
+                served = self.client.get("/api/android/apk")
+                self.assertEqual(served.status_code, 200)
+                self.assertEqual(served.data, body)
+                self.assertEqual(served.headers["X-NS-Version"], "v1.4.0")
+                served.close()
+            self.assertEqual(get.call_count, 1)
+        finally:
+            androidapk._apk_jobs.clear()
+            cfg["android_version"] = None
+            cfg["android_url"] = None
+            if os.path.exists(apk):
+                os.remove(apk)
 
     def test_android_apk_falls_back_to_the_pre_rebrand_asset(self):
         """A release published before the rename only has nsupysonic.apk; a 404

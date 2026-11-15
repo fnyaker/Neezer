@@ -33,6 +33,14 @@ three different places:
    be the first thing the kernel deschedules, never the stream. `renice` asks
    for exactly that.
 
+4. **Deezer's own rate limit.** Every Deezer call of the process shares one
+   sliding window (`deezerpy._throttle`), so a bulk job's burst used to put a
+   person's search behind it for a whole window (up to 5 s). The window has
+   lanes; `renice` puts the calling thread in ``BULK`` — a thread that asked to
+   be behind everything else is background work, whatever it is doing — and
+   `deezer_lane` names a lane per item where one worker serves several
+   urgencies.
+
 Nothing here is a throttle. Background work still runs flat out — it simply runs
 in what the foreground is not using.
 """
@@ -42,6 +50,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+
+from deezerpy import _throttle
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +78,27 @@ def priority_from_name(name, default=Priority.BULK) -> int:
     how urgent it is — otherwise every caller would claim 0.
     """
     return PRIORITY_NAMES.get(str(name or "").strip().lower(), default)
+
+
+_DEEZER_LANES = {
+    Priority.USER: _throttle.USER,
+    Priority.PREFETCH: _throttle.PREFETCH,
+    Priority.BULK: _throttle.BULK,
+}
+
+
+def deezer_priority(level: int) -> int:
+    """The Deezer limiter's lane for a download priority."""
+    return _DEEZER_LANES.get(int(level), _throttle.BULK)
+
+
+def deezer_lane(level: int):
+    """``with deezer_lane(priority)``: this thread's Deezer calls take that lane.
+
+    For a worker that serves several urgencies from one queue: the item's own
+    priority says whether the call is somebody's tap or a background listing.
+    """
+    return _throttle.priority(deezer_priority(level))
 
 
 # --- request admission ------------------------------------------------------
@@ -192,7 +223,12 @@ def renice(delta: int = 10) -> None:
     the one serving a stream — wait for a time slice. Unavailable or refused
     (a container without the capability, a non-Linux host) is not an error: the
     work still runs, it is simply not deprioritised.
+
+    It also puts this thread's Deezer calls in the ``BULK`` lane of the shared
+    rate limiter: a thread that asked to be behind everything else is background
+    work, so it must lose to a person's request when the next slot frees.
     """
+    _throttle.set_priority(_throttle.BULK)
     try:
         os.nice(delta)
     except (AttributeError, OSError, PermissionError):

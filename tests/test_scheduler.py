@@ -14,6 +14,7 @@ through a recorded fake.
 """
 
 import threading
+import os
 import unittest
 from datetime import datetime
 from unittest import mock
@@ -122,6 +123,7 @@ class RunSyncTestCase(TestBase):
         self.scans = []
         self.syncs = []
         self.sweeps = []
+        self.lanes = []
 
         test = self
 
@@ -130,7 +132,10 @@ class RunSyncTestCase(TestBase):
                 self.user = user
 
             def sync(self, cfg):
+                from deezerpy import _throttle
+
                 test.syncs.append(self.user)
+                test.lanes.append((os.nice(0), _throttle.current_priority()))
                 if getattr(test, "sync_raises", False):
                     raise RuntimeError("deezer exploded")
                 return {"tracks": 1}
@@ -198,6 +203,25 @@ class RunSyncTestCase(TestBase):
         finally:
             scheduler._sync_lock.release()
         self.assertEqual((self.scans, self.syncs), ([], []))
+
+    def test_a_sync_on_a_worker_thread_runs_behind_everything_else(self):
+        """The scheduler's own thread, and the one the manual route starts, are
+        background work: reniced, and their Deezer calls in the bulk lane."""
+        from deezerpy import _throttle
+
+        # A thread's niceness and lane are its own for life: the main thread is
+        # where the CLI and the tests run, and a sync there must touch neither.
+        nice_before, lane_before = os.nice(0), _throttle.current_priority()
+        self.assertTrue(scheduler._run_sync(_App(_Provider())))
+        self.assertEqual((os.nice(0), _throttle.current_priority()), (nice_before, lane_before))
+
+        thread = threading.Thread(target=scheduler._run_sync, args=(_App(_Provider()),))
+        thread.start()
+        thread.join(10)
+        self.assertFalse(thread.is_alive())
+        nice, lane = self.lanes[-1]
+        self.assertGreaterEqual(nice, 10, f"the sync thread ran at nice {nice}")
+        self.assertEqual(lane, _throttle.BULK)
 
 
 class OutageRetryTestCase(unittest.TestCase):

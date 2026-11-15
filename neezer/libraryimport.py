@@ -777,10 +777,35 @@ _listings: dict = {}  # (account id, kind) -> (time, items)
 _listing_lock = threading.Lock()
 
 
+def held_listing(row, kind):
+    """The last listing of that account and kind, as the provider gave it.
+
+    None when this process never listed it. Never asks anybody and never
+    expires: a page serves what it has while a refresh runs in the background,
+    so a phone coming back a day later still shows the last list it saw rather
+    than an empty picker.
+    """
+    with _listing_lock:
+        held = _listings.get((str(row.id), kind))
+    return list(held[1]) if held is not None else None
+
+
+def held_at(row, kind):
+    """When that listing was fetched (monotonic), or None."""
+    with _listing_lock:
+        held = _listings.get((str(row.id), kind))
+    return held[0] if held is not None else None
+
+
 def listing(app, row, kind, fresh=False):
     """The account's items of ``kind``, each with ``on`` (not unticked) and
     ``in_library`` (starred here / the playlist exists). Kept ten minutes: the
-    picker is opened, scrolled and ticked without asking again."""
+    picker is opened, scrolled and ticked without asking again.
+
+    This ASKS the provider when nothing is held (or on ``fresh``), so it is a
+    worker's job, never a route's: see ``webui/myaccounts`` for the route that
+    serves what is held and refreshes behind it.
+    """
     key = (str(row.id), kind)
     with _listing_lock:
         held = _listings.get(key)
@@ -789,7 +814,11 @@ def listing(app, row, kind, fresh=False):
         held = (time.monotonic(), items)
         with _listing_lock:
             _listings[key] = held
-    items = held[1]
+    return decorate(row, kind, held[1])
+
+
+def decorate(row, kind, items):
+    """One listing as the picker shows it: ``on``, ``imported``, ``in_library``."""
     known = _known(row.id, kind)
     source_cls = SOURCES[row.provider]
     local = source_cls.local_ids(kind, [str(i["ref"]) for i in items])
