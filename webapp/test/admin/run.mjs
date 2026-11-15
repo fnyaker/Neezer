@@ -122,9 +122,22 @@ console.log("\n-- 1440x900: the list, search, pagination, invitations, accounts"
   await loginVia(ctx, "bench", "Bench1");
   const page = await ctx.newPage();
   const requests = trackAdmin(page);
+  const allPaths = [];
+  page.on("request", (request) => {
+    try {
+      allPaths.push(new URL(request.url()).pathname);
+    } catch {}
+  });
   page.on("pageerror", (e) => console.log("pageerror:", e.message));
 
   await openUsers(page);
+  const serverCards = allPaths.filter((path) =>
+    /^\/api\/(settings|archive\/|storage|releases\/settings)/.test(path)
+  );
+  check(
+    serverCards.length === 0,
+    `1440: opening the users category loads no server card (measured ${serverCards.length}: ${serverCards.join(", ")})`
+  );
   const initial = requests.slice();
   check(
     initial.length === 2 &&
