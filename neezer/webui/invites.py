@@ -439,7 +439,7 @@ def invite_redeem():
     token = token if isinstance(token, str) else ""
     ip = _client_ip()
     token_key = _token_key(token)
-    if redeem_limiter.is_blocked_any(ip, token_key):
+    if redeem_limiter.is_blocked(redeem_limiter.user_key(token_key)):
         return _rate_limited(redeem_limiter.window)
 
     row = invites.find_any(token)

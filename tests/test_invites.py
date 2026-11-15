@@ -516,6 +516,24 @@ class InvitesTestCase(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "rate_limited")
         self.assertTrue(response.headers.get("Retry-After"))
 
+    def test_bogus_tokens_do_not_block_a_valid_invite_from_the_same_ip(self):
+        _invite, token = self._create()
+        for _ in range(5):
+            response = self.app.test_client().post(
+                "/api/invites/redeem", json={"token": "nope"}
+            )
+            self.assertEqual(response.status_code, 404)
+        valid = self.app.test_client().post(
+            "/api/invites/redeem",
+            json={
+                "token": token,
+                "username": "nouveau",
+                "password": "Cheval-Pile-Agrafe-9",
+                "password_confirm": "Cheval-Pile-Agrafe-9",
+            },
+        )
+        self.assertEqual(valid.status_code, 201, valid.get_json())
+
     def test_a_disabled_account_gets_the_generic_401_and_loses_its_session(self):
         User.update(disabled=True).where(User.name == "bob").execute()
         response = self.app.test_client().post(
