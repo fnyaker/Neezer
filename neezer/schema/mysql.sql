@@ -506,10 +506,10 @@ CREATE TABLE IF NOT EXISTS track_neighbor (
     track_id CHAR(32) NOT NULL REFERENCES track(id) ON DELETE CASCADE,
     neighbor_id CHAR(32) NOT NULL REFERENCES track(id) ON DELETE CASCADE,
     score DOUBLE NOT NULL,
-    rank INTEGER NOT NULL,
+    `rank` INTEGER NOT NULL,
     PRIMARY KEY (track_id, neighbor_id)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE INDEX index_track_neighbor_track_id_rank ON track_neighbor(track_id, rank);
+CREATE INDEX index_track_neighbor_track_id_rank ON track_neighbor(track_id, `rank`);
 CREATE INDEX index_track_neighbor_neighbor_id_fk ON track_neighbor(neighbor_id);
 
 CREATE TABLE IF NOT EXISTS track_enrichment (
