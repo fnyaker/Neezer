@@ -432,6 +432,15 @@ class EngineTestCase(_Base):
         )
         self.assertEqual(engine.probe(self.paths(tiny))["reason"], "model_invalid")
 
+    def test_a_paused_process_does_not_consume_the_timeout(self):
+        started = time.monotonic()
+        engine.run_process(
+            [sys.executable, "-c", "import time; time.sleep(1.2)"],
+            timeout=0.6,
+            paused=lambda: time.monotonic() - started < 0.8,
+        )
+        self.assertGreaterEqual(time.monotonic() - started, 1.1)
+
     def test_the_model_follows_the_memory_that_is_actually_free(self):
         q8 = write_model(os.path.join(self.model_dir, "ggml-large-v3-turbo-q8_0.bin"))
         q5 = write_model(os.path.join(self.model_dir, "ggml-large-v3-turbo-q5_0.bin"))

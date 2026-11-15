@@ -305,6 +305,7 @@ class InlineRunner(JobQueue):
                     cancel=stop_when,
                     on_tick=gate.tick,
                     on_start=gate.attach,
+                    paused=lambda: gate.paused,
                 )
                 if detected:
                     language = detected
@@ -381,6 +382,7 @@ class InlineRunner(JobQueue):
                     cancel=stop_when,
                     on_tick=gate.tick,
                     on_start=gate.attach,
+                    paused=lambda: gate.paused,
                 )
                 raw, detected = engine.recognize(
                     paths,
@@ -395,6 +397,7 @@ class InlineRunner(JobQueue):
                     ),
                     on_tick=gate.tick,
                     on_start=gate.attach,
+                    paused=lambda: gate.paused,
                 )
             finally:
                 gate.detach()

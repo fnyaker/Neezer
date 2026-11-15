@@ -346,7 +346,7 @@ def _terminate(proc):
 
 
 def run_process(cmd, timeout, cancel=None, on_stderr=None, on_tick=None,
-                on_start=None):
+                on_start=None, paused=None):
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
@@ -378,6 +378,7 @@ def run_process(cmd, timeout, cancel=None, on_stderr=None, on_tick=None,
     reader = threading.Thread(target=read_stderr, daemon=True)
     reader.start()
     deadline = time.monotonic() + max(1.0, float(timeout))
+    last = time.monotonic()
     code = None
     try:
         while True:
@@ -392,6 +393,14 @@ def run_process(cmd, timeout, cancel=None, on_stderr=None, on_tick=None,
                     on_tick()
                 except Exception:
                     logger.debug("process tick failed", exc_info=True)
+            moment = time.monotonic()
+            if paused is not None and moment > last:
+                try:
+                    if paused():
+                        deadline += moment - last
+                except Exception:
+                    logger.debug("pause hook failed", exc_info=True)
+            last = moment
             if time.monotonic() > deadline:
                 _terminate(proc)
                 raise TimedOut()
@@ -409,7 +418,7 @@ def run_process(cmd, timeout, cancel=None, on_stderr=None, on_tick=None,
 
 
 def extract_chunk(paths, audio, start_ms, duration_ms, out_wav, cancel=None,
-                  on_tick=None, on_start=None):
+                  on_tick=None, on_start=None, paused=None):
     ffmpeg = paths.get("ffmpeg") or shutil.which("ffmpeg") or "ffmpeg"
     seconds = max(0.001, duration_ms / 1000.0)
     cmd = [
@@ -443,6 +452,7 @@ def extract_chunk(paths, audio, start_ms, duration_ms, out_wav, cancel=None,
             cancel=cancel,
             on_tick=on_tick,
             on_start=on_start,
+            paused=paused,
         )
     except Cancelled:
         raise
@@ -476,7 +486,8 @@ def parse_json(path):
 
 
 def recognize(paths, wav, out_prefix, language, thread_count, duration_ms,
-              cancel=None, on_progress=None, on_tick=None, on_start=None):
+              cancel=None, on_progress=None, on_tick=None, on_start=None,
+              paused=None):
     language = normalize_language(language) or "auto"
     cmd = [
         paths["bin"],
@@ -512,6 +523,7 @@ def recognize(paths, wav, out_prefix, language, thread_count, duration_ms,
         on_stderr=stderr,
         on_tick=on_tick,
         on_start=on_start,
+        paused=paused,
     )
     return parse_json(out_prefix + ".json")
 
@@ -520,7 +532,7 @@ run_chunk = recognize
 
 
 def detect_language(paths, audio, work_dir, duration_ms, thread_count,
-                    cancel=None, on_tick=None, on_start=None):
+                    cancel=None, on_tick=None, on_start=None, paused=None):
     """One detection for the whole episode, never one per 30 s window."""
     if duration_ms < 5000:
         return None, None
@@ -540,6 +552,7 @@ def detect_language(paths, audio, work_dir, duration_ms, thread_count,
                 cancel=cancel,
                 on_tick=on_tick,
                 on_start=on_start,
+                paused=paused,
             )
         except (Cancelled, TimedOut):
             raise
@@ -576,6 +589,7 @@ def detect_language(paths, audio, work_dir, duration_ms, thread_count,
                 on_stderr=stderr,
                 on_tick=on_tick,
                 on_start=on_start,
+                paused=paused,
             )
         except (Cancelled, TimedOut):
             raise
