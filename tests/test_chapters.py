@@ -117,6 +117,7 @@ def write_sidecar(path, document):
     return sidecar
 
 
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is not installed")
 class RealFileChapterTestCase(unittest.TestCase):
     """The shapes the publishers' files really have, written by ffmpeg.
 

@@ -2488,13 +2488,14 @@ class WebUITestCase(unittest.TestCase):
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp(asset, b"<html>")) as get:
                 rv = self.client.get("/api/android/apk")
-                self.assertEqual(rv.status_code, 202)
-                self.assertTrue(int(rv.headers["Retry-After"]) >= 1)
-                self.assertEqual(rv.get_json()["state"], "fetching")
-                job = androidapk.apk_job(cfg)
-                job["thread"].join(10)
-                rv.close()
-                rv = self.client.get("/api/android/apk")
+                # A worker that fails instantly may already be "failed" on the
+                # very first answer; either way the cause arrives at once.
+                if rv.status_code == 202:
+                    self.assertTrue(int(rv.headers["Retry-After"]) >= 1)
+                    self.assertEqual(rv.get_json()["state"], "fetching")
+                    androidapk.apk_job(cfg)["thread"].join(10)
+                    rv.close()
+                    rv = self.client.get("/api/android/apk")
                 self.assertEqual(rv.status_code, 502)
                 self.assertEqual(rv.get_json()["state"], "failed")
                 rv.close()
