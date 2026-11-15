@@ -51,6 +51,15 @@ test("the remembered account owns its queue and recents", () => {
   assert.equal(scopedKey("player.session").includes(ownerPrefix(B)), false);
 });
 
+test("two accounts with the same name but different ids own different keys", () => {
+  const first = accountOwner({ id: "11111111-1111-1111-1111-111111111111", name: "bob" });
+  const second = accountOwner({ id: "22222222-2222-2222-2222-222222222222", name: "bob" });
+  assert.notEqual(first, second);
+  assert.ok(first.includes("11111111"));
+  assert.ok(second.includes("22222222"));
+  assert.ok(accountOwner({ name: "bob" }).endsWith("/bob"));
+});
+
 test("a switch deletes the account that left, not the one arriving", () => {
   globalThis.localStorage.setItem(scopedKey("recent.tracks"), JSON.stringify([{ id: "t9" }]));
   const out = switchAccount({ name: "b" });

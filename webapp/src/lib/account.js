@@ -54,7 +54,9 @@ export function savedUser() {
 }
 
 export function accountOwner(user) {
-  const name = user && typeof user === "object" && user.name ? String(user.name) : "";
+  if (!user || typeof user !== "object") return null;
+  if (user.id != null && String(user.id)) return origin() + "/id:" + String(user.id);
+  const name = user.name ? String(user.name) : "";
   return name ? origin() + "/" + name : null;
 }
 

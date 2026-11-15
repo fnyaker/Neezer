@@ -47,6 +47,7 @@ from flask import current_app, jsonify, request
 
 from .. import linkimport
 from ..db import Album, Artist, Playlist, Track
+from ..ratelimit import WindowLimiter
 from ..utils import like_term
 from . import (
     _db_tracks,
@@ -65,8 +66,10 @@ JOB_TTL = 3 * 3600     # s a finished import stays listenable without saving it
 RUNNING_PER_USER = 2   # imports one user may have running at once
 MATCH_WORKERS = 4      # searches in flight for one import (Deezer allows ~10/s)
 TITLE_MAX = 200
+IMPORT_HOURLY = 10     # imports one account may start per hour
 
 _jobs: "OrderedDict[str, dict]" = OrderedDict()
+hourly = WindowLimiter(IMPORT_HOURLY, 3600)
 _lock = threading.Lock()
 
 
@@ -516,6 +519,14 @@ def start_link(text, user):
         return 400, {
             "error": "Deezer n'est pas configuré sur ce serveur",
             "code": "deezer_unavailable",
+        }
+
+    allowed, retry_after = hourly.allow(f"u:{user.id}")
+    if not allowed:
+        return 429, {
+            "error": "Trop d'imports lancés : réessaie dans un moment.",
+            "code": "rate_limited",
+            "retry_in": retry_after,
         }
 
     now = time.time()

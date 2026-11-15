@@ -41,7 +41,7 @@ from ..managers.user import (
     validate_name,
 )
 from ..ratelimit import RateLimiter, WindowLimiter
-from . import _is_admin, login_required, same_origin_guard
+from . import _is_admin, _uuid_text, login_required, same_origin_guard
 from .remote import INVITE_POLICY, POLICY
 
 logger = logging.getLogger(__name__)
@@ -398,6 +398,7 @@ def _session_response(user, status):
     resp = jsonify(
         {
             "user": {
+                "id": _uuid_text(user.id),
                 "name": user.name,
                 "admin": user.admin,
                 "onboarding": user.onboarding_step or "done",

@@ -1976,6 +1976,7 @@ def login():
     return jsonify(
         {
             "user": {
+                "id": _uuid_text(user.id),
                 "name": user.name,
                 "admin": user.admin,
                 "onboarding": user.onboarding_step or "done",
@@ -2011,6 +2012,7 @@ def me():
     # their order, so that no screen writes a source's name itself.
     out = {
         "user": {
+            "id": _uuid_text(u.id),
             "name": u.name,
             "admin": u.admin,
             "onboarding": u.onboarding_step or "done",

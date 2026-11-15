@@ -20,7 +20,7 @@ from unittest import mock
 
 from neezer import linkimport
 from neezer.config import DefaultConfig
-from neezer.db import Playlist, PlaylistMember, release_database
+from neezer.db import Playlist, PlaylistMember, User, release_database
 from neezer.managers.user import UserManager
 from neezer.web import create_application
 from neezer.webui import playlist_import
@@ -205,6 +205,27 @@ class FakeSession:
 
     def close(self):
         pass
+
+
+class PageRedirectTestCase(unittest.TestCase):
+    def test_a_page_redirect_stays_on_the_same_service(self):
+        first = "https://open.spotify.com/embed/playlist/" + SPOTIFY_ID
+        second = "https://open.spotify.com/intl-fr/embed/playlist/" + SPOTIFY_ID
+        s = FakeSession(
+            {
+                first: FakeResponse(302, second),
+                second: FakeResponse(200, body=b"<html>ok</html>"),
+            }
+        )
+        self.assertEqual(linkimport._get_page(s, first, "Spotify"), "<html>ok</html>")
+        self.assertEqual(s.asked, [first, second])
+
+    def test_a_page_redirect_to_a_foreign_host_is_refused(self):
+        first = "https://open.spotify.com/embed/playlist/" + SPOTIFY_ID
+        s = FakeSession({first: FakeResponse(302, "http://169.254.169.254/latest")})
+        with self.assertRaises(linkimport.LinkError):
+            linkimport._get_page(s, first, "Spotify")
+        self.assertEqual(s.asked, [first])
 
 
 class ShortLinkTestCase(unittest.TestCase):
@@ -415,6 +436,7 @@ class ImportRouteTestCase(unittest.TestCase):
         self.app.config["DEEZER"]["archive_dir"] = self.archive
         self.client = self.app.test_client()
         playlist_import._jobs.clear()
+        playlist_import.hourly.clear()
 
         self.pages = {}
         self._orig = (linkimport.read_spotify, linkimport.read_apple)
@@ -544,6 +566,20 @@ class ImportRouteTestCase(unittest.TestCase):
         self.assertEqual(job["name"], "Ma playlist Deezer")
         self.assertEqual([i["track"]["deezer_id"] for i in job["items"]], ["3"])
         self.assertEqual(self.api.queries, [])
+
+    def test_an_account_cannot_start_imports_without_a_hourly_quota(self):
+        self.login()
+        bob = User.get(User.name == "bob")
+        for _ in range(playlist_import.IMPORT_HOURLY):
+            playlist_import.hourly.allow(f"u:{bob.id}")
+        self.login("bob", "B0bbb")
+        rv = self.client.post(
+            "/api/import/playlist",
+            json={"url": f"https://open.spotify.com/playlist/{SPOTIFY_ID}"},
+        )
+        self.assertEqual(rv.status_code, 429, rv.get_json())
+        self.assertEqual(rv.get_json()["code"], "rate_limited")
+        self.assertTrue(rv.headers.get("Retry-After"))
 
     def test_save_makes_a_local_playlist_never_a_deezer_one(self):
         self.login()
