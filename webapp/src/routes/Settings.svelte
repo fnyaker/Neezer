@@ -43,8 +43,7 @@
   import ServicesSettings from "../components/ServicesSettings.svelte";
   import DiscoverySlider from "../components/DiscoverySlider.svelte";
   import DislikedTracks from "../components/DislikedTracks.svelte";
-  import AdminUsers from "../components/AdminUsers.svelte";
-  import TranscribeSettings from "../components/TranscribeSettings.svelte";
+
 
   const QUALITIES = [
     { id: "FLAC", label: "FLAC", hint: "Sans perte — lourd" },
@@ -859,7 +858,9 @@
 {/if}
 
 {#if tab === "users" && $user?.admin && ADMIN()}
-  <AdminUsers />
+  {#await import("../components/AdminUsers.svelte") then { default: AdminUsers }}
+    <AdminUsers />
+  {/await}
 {/if}
 
 {#if tab === "server"}
@@ -1036,7 +1037,9 @@
 {/if}
 
 {#if $user?.admin && CAN_ADMIN}
-  <TranscribeSettings />
+  {#await import("../components/TranscribeSettings.svelte") then { default: TranscribeSettings }}
+    <TranscribeSettings />
+  {/await}
 {/if}
 
 {#if $user?.admin && CAN_ADMIN && rules}
