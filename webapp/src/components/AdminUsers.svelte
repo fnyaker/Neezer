@@ -657,7 +657,7 @@
 
     if (kind === "delete") {
       try {
-        const data = await api.adminUserDelete(row.id);
+        const data = await api.adminUserDelete(row.id, confirm.typed);
         removeUser(row.id);
         finishConfirm();
         toasts.push(

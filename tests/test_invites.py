@@ -319,6 +319,25 @@ class InvitesTestCase(unittest.TestCase):
         self.assertEqual(User.select().where(User.name_key == "elodie").count(), 1)
         self.assertEqual(self._redeem(token, request_id="other").status_code, 404)
 
+    def test_a_replay_never_resurrects_a_revoked_session(self):
+        _invite, token = self._create()
+        first = self._redeem(token, request_id="retry-7")
+        self.assertEqual(first.status_code, 201)
+        created = User.get(User.name_key == "elodie")
+        User.update(disabled=True, session_epoch=created.session_epoch + 1).where(
+            User.id == created.id
+        ).execute()
+        disabled = self._redeem(token, request_id="retry-7")
+        self.assertEqual(disabled.status_code, 404)
+        self.assertIsNone(disabled.headers.get("Set-Cookie"))
+
+        User.update(disabled=False, session_epoch=created.session_epoch + 2).where(
+            User.id == created.id
+        ).execute()
+        replayed = self._redeem(token, request_id="retry-7")
+        self.assertEqual(replayed.status_code, 404)
+        self.assertIsNone(replayed.headers.get("Set-Cookie"))
+
     def test_two_concurrent_redeems_make_one_account(self):
         _invite, token = self._create()
         barrier = threading.Barrier(2)

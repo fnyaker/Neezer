@@ -114,6 +114,14 @@ class AdminUsersTestCase(unittest.TestCase):
     def _add(self, name, admin=False):
         return UserManager.add(name, "Quiet9-Meadow", admin=admin)
 
+    def _delete(self, name, confirm=None, client=None):
+        target = User.get(User.name == name)
+        asked = name if confirm is None else confirm
+        return (client or self.client).delete(
+            f"/api/admin/users/{target.id}",
+            json={} if asked is False else {"confirm": asked},
+        )
+
     def _upload(self, owner):
         root = Folder.create(root=True, name="Music", path=self.archive)
         artist = Artist.create(name="Artist")
@@ -360,7 +368,7 @@ class AdminUsersTestCase(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "self_disable")
         self.assertFalse(User[self.alice.id].disabled)
 
-        response = self.client.delete(f"/api/admin/users/{self.alice.id}")
+        response = self._delete("alice")
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["code"], "self_delete")
         self.assertIsNotNone(User.get_or_none(User.id == self.alice.id))
@@ -423,11 +431,27 @@ class AdminUsersTestCase(unittest.TestCase):
 
     # -- deletion -------------------------------------------------------------
 
+    def test_delete_requires_the_exact_account_name(self):
+        self._login()
+        for body in (None, {}, {"confirm": "bobby"}, {"confirm": ""}):
+            response = (
+                self.client.delete(f"/api/admin/users/{self.bob.id}")
+                if body is None
+                else self.client.delete(
+                    f"/api/admin/users/{self.bob.id}", json=body
+                )
+            )
+            self.assertEqual(response.status_code, 400, body)
+            self.assertEqual(response.get_json()["code"], "confirm_mismatch")
+            self.assertIsNotNone(User.get_or_none(User.id == self.bob.id))
+        self.assertEqual(self._delete("bob").status_code, 200)
+        self.assertIsNone(User.get_or_none(User.id == self.bob.id))
+
     def test_delete_reassigns_uploads_and_deletes_no_file(self):
         track, path = self._upload(self.bob)
         Playlist.create(user=self.bob, name="Bob's")
         self._login()
-        response = self.client.delete(f"/api/admin/users/{self.bob.id}")
+        response = self._delete("bob")
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(response.get_json(), {"deleted": True, "uploads_reassigned": 1})
         self.assertIsNone(User.get_or_none(User.id == self.bob.id))
@@ -463,7 +487,7 @@ class AdminUsersTestCase(unittest.TestCase):
         )
         self._login()
         self.assertEqual(
-            self.client.delete(f"/api/admin/users/{self.bob.id}").status_code, 200
+            self._delete("bob").status_code, 200
         )
         self.assertIsNotNone(Invite[pending.id].revoked_at)
         self.assertIsNone(Invite[used.id].revoked_at)
@@ -482,7 +506,7 @@ class AdminUsersTestCase(unittest.TestCase):
         )
         self._login()
         self.assertEqual(
-            self.client.delete(f"/api/admin/users/{self.bob.id}").status_code, 200
+            self._delete("bob").status_code, 200
         )
         subjects = {row.subject for row in ProviderGrant.select()}
         self.assertNotIn(f"u:{self.bob.id}", subjects)
@@ -499,7 +523,7 @@ class AdminUsersTestCase(unittest.TestCase):
         )
         self._login()
         self.assertEqual(
-            self.client.delete(f"/api/admin/users/{self.bob.id}").status_code, 200
+            self._delete("bob").status_code, 200
         )
         self.assertFalse(
             ProviderAccount.select().where(ProviderAccount.id == row.id).exists()
@@ -513,7 +537,7 @@ class AdminUsersTestCase(unittest.TestCase):
             provider="deezer", user=self.bob, mode="server", status="ok"
         )
         self._login()
-        response = self.client.delete(f"/api/admin/users/{self.bob.id}")
+        response = self._delete("bob")
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json()["code"], "server_account_holder")
         self.assertIsNotNone(User.get_or_none(User.id == self.bob.id))
@@ -535,15 +559,17 @@ class AdminUsersTestCase(unittest.TestCase):
             expires=now() + timedelta(days=1),
         )
         self._login()
-        # 5 reads (session, target, guard, server account, provider accounts), then the invite
+        # 7 reads (session, target for the name confirmation, target for the
+        # guard, server account, provider accounts, and the two cascades Peewee
+        # checks), then the invite
         # revocation, the grants, the upload reassignment and Peewee's cascades
         # over every table that names a user (including the transcription
         # worker lease). Deletion is rare; nothing here is per-row except the
         # uploads, which are one UPDATE.
         with count_statements() as counts:
-            response = self.client.delete(f"/api/admin/users/{self.bob.id}")
+            response = self._delete("bob")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 53, dict(counts))
+        self.assertEqual(sum(counts.values()), 55, dict(counts))
 
     # -- the legacy /user routes use the same guards --------------------------
 

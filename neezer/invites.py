@@ -8,8 +8,11 @@
 A token is ``<id>.<mac>``: a 22-character URL-safe id (16 random bytes) and a
 24-character HMAC-SHA256 of ``"invite:" + id`` under the server's
 ``invite_secret``. The row stores only ``SHA-256(token)`` in ``token_hash``, so
-a copy of the database opens nothing: the mac cannot be forged without the
-secret and the hash cannot be reversed without the token.
+a copy of the ``invite`` table cannot replay a token: the hash cannot be
+reversed and ``used_at`` refuses a consumed one. The HMAC secret still decides
+whether a live token can be forged, so a copy of the WHOLE database opens a
+pending invitation unless ``NEEZER_SECRETS_ENV_ONLY`` keeps the secret out of
+it (``NEEZER_SECRET_INVITE_SECRET``).
 
 ``used_at`` is the source of truth for consumption (never ``used_by``, which
 ``ON DELETE SET NULL`` may clear). ``claim`` is one conditional ``UPDATE`` so

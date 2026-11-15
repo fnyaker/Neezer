@@ -16,6 +16,7 @@ admin, the caller, or the holder of the server's Deezer account.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import uuid
@@ -301,6 +302,18 @@ def admin_user_delete(uid):
     target = _id(uid)
     if target is None:
         return _not_found()
+    row = User.get_or_none(User.id == target)
+    if row is None:
+        return _not_found()
+    payload = request.get_json(silent=True)
+    asked = payload.get("confirm") if isinstance(payload, dict) else None
+    if not isinstance(asked, str) or not hmac.compare_digest(
+        asked.strip(), row.name
+    ):
+        return (
+            jsonify({"error": "confirm_mismatch", "code": "confirm_mismatch"}),
+            400,
+        )
     try:
         moved = UserManager.delete_guarded(target, request.webuser)
     except User.DoesNotExist:

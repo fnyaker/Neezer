@@ -301,12 +301,12 @@ def _replay_key(invite_id, request_id):
     return invite_id + ":" + digest
 
 
-def _remember_redeem(invite_id, request_id, user_id):
+def _remember_redeem(invite_id, request_id, user_id, epoch):
     if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
         return
     key = _replay_key(invite_id, request_id)
     with _replays_lock:
-        _replays[key] = (user_id, time.monotonic() + REPLAY_TTL)
+        _replays[key] = (user_id, epoch, time.monotonic() + REPLAY_TTL)
         _replays.move_to_end(key)
         while len(_replays) > REPLAY_MAX:
             _replays.popitem(last=False)
@@ -322,14 +322,19 @@ def _replay_user(row, request_id):
         entry = _replays.get(key)
         if entry is None:
             return None
-        user_id, expires = entry
+        user_id, epoch, expires = entry
         if expires < time.monotonic():
             _replays.pop(key, None)
             return None
         _replays.move_to_end(key)
     if user_id != row.used_by_id:
         return None
-    return User.get_or_none(User.id == user_id)
+    user = User.get_or_none(User.id == user_id)
+    if user is None or user.disabled:
+        return None
+    if (user.session_epoch or 0) != epoch:
+        return None
+    return user
 
 
 def _validate_form(data):
@@ -492,7 +497,7 @@ def invite_redeem():
             field="password",
         )
 
-    _remember_redeem(row.id, request_id, user.id)
+    _remember_redeem(row.id, request_id, user.id, user.session_epoch or 0)
     redeem_limiter.reset_user(token_key)
     logger.info("invite %s redeemed by user %s", row.id, user.id)
     from .. import onboarding as _onboarding

@@ -219,6 +219,10 @@ def create_application(config=None):
 
     # Read or create secret key
     app.secret_key = get_secret_key("cookies_secret")
+    # The invitation HMAC is a server secret too: read it at boot so a
+    # SECRETS_ENV_ONLY deployment missing it fails loudly here, not with a 500
+    # on the first invitation.
+    get_secret_key("invite_secret")
 
     # Harden the web UI session cookie (the Subsonic API uses its own per-request
     # auth, so this only affects the /api + /app session). SameSite=Lax blocks the

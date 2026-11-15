@@ -712,8 +712,11 @@ export const api = {
   adminUser: (id) => req("/admin/users/" + encodeURIComponent(id)),
   adminUserPatch: (id, payload) =>
     req("/admin/users/" + encodeURIComponent(id), { method: "PATCH", body: body(payload) }),
-  adminUserDelete: (id) =>
-    req("/admin/users/" + encodeURIComponent(id), { method: "DELETE" }),
+  adminUserDelete: (id, name) =>
+    req("/admin/users/" + encodeURIComponent(id), {
+      method: "DELETE",
+      body: body({ confirm: name }),
+    }),
   adminInvites: ({ state = null, limit = 50, afterCreated = null, afterId = null } = {}) => {
     const qs = new URLSearchParams();
     if (state) qs.set("state", state);
