@@ -538,6 +538,21 @@ the person had left.
   and then fail the first time somebody opened it. The HTML scrape is kept as the fallback, for an
   older server whose `version.json` has no `assets`.
 
+- **The cache belongs to ONE account** (`lib/account.js`, `apicache.js`, `offline.js`): the owner
+  is `origin + "/" + user.name` (no id in `/api/me`), every personal key is
+  `neezer:<origin>/<name>:<key>`, and the IndexedDB store is keyed by `(owner, path)`. Without a
+  known owner nothing is read or written; a 401/403/404 deletes the entry; a logout/account switch
+  purges that owner's rows and keys (then reloads, which clears module caches). Queue, position,
+  recents, last playlist, podcast progress/speeds are scoped; `search.recent`, `flow.*` and the
+  discovery levels are purged; device settings (theme, volume, quality, output, viz, EQ) stay
+  global. Downloads carry `meta.owner` and are listed/played/deleted only for their account —
+  another account's bytes are never removed, only hidden. A v1 cache without an owner is dropped
+  once, and old personal keys are adopted by the remembered account.
+- **A 5xx is not a logout.** At boot only a 401 clears `auth.user`; a 5xx/network error keeps the
+  remembered session, paints the shell with « Le serveur ne répond pas » + « Réessayer » (or a
+  retry screen without a remembered session) and never shows the login form. `revalidate()` follows
+  the same rule.
+
 **The heavy screens load when they are opened.** Everything on the first screen is in the main
 bundle and worth being there; three things are not, and together they were a third of what every
 visitor downloaded, parsed and compiled before the first note played — which is the "the whole app
