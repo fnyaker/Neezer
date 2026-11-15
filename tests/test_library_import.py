@@ -40,6 +40,7 @@ from neezer.deezer import ids
 from neezer.deezer.provider import DeezerProvider
 from neezer.managers.user import encrypt_password
 from neezer.providers.errors import ProviderAuth
+from neezer.webui import myaccounts as my_accounts
 
 from .test_access import _Case
 from .test_deezer import count_statements
@@ -213,6 +214,23 @@ class ServerAccountTestCase(_ImportCase):
         self.assertEqual(rv.get_json()["code"], "server_account")
         self.assertFalse(
             ProviderAccount.select().where(ProviderAccount.user == self.bob.id).exists()
+        )
+
+    def test_linking_deezer_is_rate_limited(self):
+        my_accounts.DEEZER_LINK.clear()
+        self.as_bob()
+        codes = [
+            self.client.post("/api/me/accounts/deezer", json={"arl": "x"}).status_code
+            for _ in range(11)
+        ]
+        self.assertEqual(codes[:10], [400] * 10)
+        self.assertEqual(codes[10], 429)
+        self.assertEqual(
+            self.client.post("/api/me/accounts/deezer", json={"arl": "x"}).headers.get(
+                "Retry-After"
+            )
+            is not None,
+            True,
         )
 
     def test_the_holder_of_the_server_account_cannot_link_a_second_deezer(self):

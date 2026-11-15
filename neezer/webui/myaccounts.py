@@ -41,9 +41,11 @@ from flask import current_app, jsonify, request
 from .. import access, libraryimport as li
 from ..db import Meta, ProviderAccount, ServiceLink, db, now
 from ..providers.errors import ProviderAuth, ProviderError, ProviderUnavailable
+from ..ratelimit import WindowLimiter
 from . import login_required, webapi
 
 logger = logging.getLogger(__name__)
+DEEZER_LINK = WindowLimiter(10, 900)
 
 ARL_MAX = 512
 NAMES = {"deezer": "Deezer", "youtube": "YouTube Music"}
@@ -362,7 +364,19 @@ def link_deezer(user, data):
 @webapi.route("/me/accounts/deezer", methods=["POST"])
 @login_required
 def my_accounts_link_deezer():
-    status, payload = link_deezer(_me(), request.get_json(silent=True) or {})
+    user = _me()
+    allowed, retry = DEEZER_LINK.allow(f"deezer-link:{user.id}")
+    if not allowed:
+        response = jsonify(
+            {
+                "error": "Trop de tentatives de connexion Deezer : réessayez dans un moment.",
+                "code": "rate_limited",
+            }
+        )
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry)
+        return response
+    status, payload = link_deezer(user, request.get_json(silent=True) or {})
     return jsonify(payload), status
 
 
