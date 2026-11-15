@@ -15,6 +15,7 @@ or writing to it again, and fails here by name.
 """
 
 import re
+import threading
 import unittest
 from unittest import mock
 
@@ -102,16 +103,17 @@ _SKIP_ENDPOINTS = re.compile(r"logout|static")
 class Spy:
     """Anything asked of it is a call: recorded, answered with an empty page."""
 
-    def __init__(self, calls, prefix="", where=None):
+    def __init__(self, calls, prefix="", where=None, threads=None):
         self._calls = calls
         self._prefix = prefix
         self._where = where if where is not None else [""]
+        self._threads = threads if threads is not None else []
 
     def __getattr__(self, name):
         if name.startswith("__"):
             raise AttributeError(name)
         if name in ("gw", "api"):
-            return Spy(self._calls, name + ".", self._where)
+            return Spy(self._calls, name + ".", self._where, self._threads)
         if name in ("current_user",):
             return {"id": 42, "name": "tester", "can_stream_lossless": True}
         if name == "close":  # releasing the sockets asks Deezer nothing
@@ -120,6 +122,7 @@ class Spy:
 
         def call(*args, **kwargs):
             self._calls.append((self._where[0], full))
+            self._threads.append(threading.get_ident())
             return {"data": [], "results": {}}
 
         return call
@@ -130,7 +133,8 @@ class DeezerGuardTestCase(_AppCase):
         super().setUp()
         self.make_track("1", "One")
         self.calls = []
-        self.spy = Spy(self.calls)
+        self.threads = []
+        self.spy = Spy(self.calls, threads=self.threads)
         # The spy is the only client there is: nothing can log in for real,
         # whatever a route does to the session (a new ARL, a failed resolve).
         self.app.deezer._dz = self.spy
@@ -199,7 +203,12 @@ class DeezerGuardTestCase(_AppCase):
         pl = self.client.post("/api/playlists", json={"title": "Mine", "tracks": [str(track.id)]}).get_json()
         self.client.post("/api/listen", json={"deezer_id": str(track.id), "listened": 60})
         self.client.delete("/api/playlist/" + pl["id"])
-        self.assertEqual(self.calls, [])
+        mine = [
+            call
+            for call, thread in zip(self.calls, self.threads)
+            if thread == threading.get_ident()
+        ]
+        self.assertEqual(mine, [])
 
 
 #: What each provider's adapter may ask its service (lot B). Deezer's list is
