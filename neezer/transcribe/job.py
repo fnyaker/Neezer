@@ -1203,6 +1203,9 @@ def queue_status(app=None):
 
 
 def _candidate_query(channel=None, limit=None):
+    blocked = PodcastTranscript.select(PodcastTranscript.episode).where(
+        PodcastTranscript.status.not_in(("error", "stopped"))
+    )
     query = (
         PodcastEpisode.select(PodcastEpisode, PodcastChannel)
         .join(PodcastChannel)
@@ -1210,6 +1213,7 @@ def _candidate_query(channel=None, limit=None):
             (PodcastChannel.auto_transcribe == True)  # noqa: E712 - a SQL expression
             & (PodcastEpisode.path.is_null(False))
             & (PodcastEpisode.status == "completed")
+            & PodcastEpisode.id.not_in(blocked)
         )
         .order_by(
             fn.COALESCE(PodcastEpisode.publish_date, PodcastEpisode.created).desc(),

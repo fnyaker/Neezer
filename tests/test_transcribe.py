@@ -962,6 +962,23 @@ class AutoTranscribeTestCase(_Base):
         self.assertEqual(everything["queued"], 12)
         self.assertEqual(PodcastTranscript.select().count(), 12)
 
+    def test_the_all_backlog_continues_past_the_first_twenty(self):
+        channel = self.channel(auto_transcribe=True)
+        for number in range(1, 31):
+            self.episode(number=number, duration=60, channel=channel)
+        first = job.queue_backlog(channel=channel, backlog="all", app=self.config)
+        self.assertEqual(first["queued"], 20)
+        row = PodcastTranscript.select().first()
+        row.status = "ready"
+        row.done_ms = row.duration_ms = 60_000
+        row.save(only=(PodcastTranscript.status, PodcastTranscript.done_ms,
+                       PodcastTranscript.duration_ms))
+        self.assertEqual(job.resume_auto(self.config), 1)
+        self.assertEqual(
+            PodcastTranscript.select().where(PodcastTranscript.status == "queued").count(),
+            20,
+        )
+
     def test_the_daily_budget_skips_automatic_jobs_and_never_manual_ones(self):
         self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, daily_minutes=1)
         channel = self.channel(auto_transcribe=True)
