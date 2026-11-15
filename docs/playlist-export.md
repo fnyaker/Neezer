@@ -7,7 +7,6 @@ Ce que chaque service permet en octobre 2026, et ce que Neezer en fait
 |---|---|---|---|
 | **Spotify** | Oui | Web API, OAuth « Authorization Code + PKCE » (pas de secret client sur le serveur). `POST /me/playlists` puis `POST /playlists/{id}/items` par 100. | Une app sur developer.spotify.com, créée par l'admin (Réglages → Compte → *Application Spotify du serveur*). Depuis février 2026, en mode développement : le propriétaire doit être **Premium**, **5 comptes** au plus (à déclarer dans *User Management*), et l'URI de redirection doit être en **https** (ou 127.0.0.1). |
 | **YouTube Music** | Oui | `ytmusicapi`, connecté avec les en-têtes d'un onglet music.youtube.com (son mode « browser »). La recherche passe par la recherche YouTube déjà en place (cache d'un jour, pauses après un refus). | Coller les en-têtes d'une requête `browse` (Réglages → Compte). Ils valent une session : chiffrés, par utilisateur ; se déconnecter du navigateur les annule. |
-| **Deezer** | Oui (admin) | Le compte du serveur (l'ARL), une seule fois et à la demande : une NOUVELLE playlist, jamais retouchée ensuite (ce n'est pas l'ancien miroir). | Rien de plus. Réservé à l'admin : ce compte est le sien. |
 | **Apple Music** | Pas directement | MusicKit exige l'Apple Developer Program (99 $/an) pour signer le jeton développeur, plus MusicKit JS dans le navigateur pour le jeton utilisateur. | Exporter la **liste en CSV** et l'importer avec TuneMyMusic / Soundiiz / FreeYourMusic. |
 | Tidal, Amazon Music, Qobuz | Pas directement | API réservées aux partenaires. | Même chemin : CSV. |
 
@@ -49,6 +48,7 @@ Ce que chaque service permet en octobre 2026, et ce que Neezer en fait
 
 ## Pour le fil « import de playlists »
 
-`neezer/services/` est fait pour servir dans les deux sens : `spotify.Client`,
-`ytmusic.Client` et `deezer.Client` savent déjà chercher, `match.wanted` / `match.pick`
-décrivent un titre et jugent une réponse, et `service_link` garde les comptes reliés.
+`neezer/services/` est fait pour servir dans les deux sens : `spotify.Client` et
+`ytmusic.Client` savent déjà chercher, `match.wanted` / `match.pick` décrivent un titre
+et jugent une réponse, et `service_link` garde les comptes reliés. Deezer n'a plus
+d'export : rien dans Neezer n'écrit sur un compte Deezer, et la liste part en CSV/JSON.

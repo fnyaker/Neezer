@@ -36,7 +36,6 @@ from flask import current_app, jsonify, redirect, request, session, url_for
 from ..db import Album, Artist, Meta, ServiceLink, Track, now
 from ..managers.user import decrypt_password, encrypt_password
 from ..services import SERVICES, ServiceAuthError, ServiceError
-from ..services import deezer as dz_service
 from ..services import listfile, match, spotify, ytmusic
 from . import (
     _db_playlist_track_rows,
@@ -120,11 +119,6 @@ def _spotify_redirect() -> str | None:
 
 def _client(service, user_id):
     """The service client for this user, or raises ServiceError in words."""
-    if service == "deezer":
-        provider = _provider()
-        if provider is None:
-            raise ServiceError("Le proxy Deezer est désactivé sur ce serveur.")
-        return dz_service.Client(provider)
     row = _link(user_id, service)
     secret = _secret(row) if row else None
     if not secret:
@@ -183,17 +177,6 @@ def services_status():
             "account": links["youtube"].account if "youtube" in links else None,
         },
     ]
-    if admin:
-        provider = _provider()
-        out.append(
-            {
-                "id": "deezer",
-                "name": "Deezer",
-                "ready": provider is not None,
-                "linked": provider is not None,
-                "account": None,
-            }
-        )
     out.append({"id": "apple", "name": "Apple Music", "ready": False, "linked": False, "file": True})
     return jsonify({"services": out, "formats": [
         {"id": k, "label": v[2], "ext": v[1]} for k, v in listfile.FORMATS.items()

@@ -32,4 +32,4 @@ class ServiceAuthError(ServiceError):
     """The credential is gone (revoked, expired for good): link the account again."""
 
 
-SERVICES = ("spotify", "youtube", "deezer")
+SERVICES = ("spotify", "youtube")

@@ -269,7 +269,8 @@ class ServicesTestCase(unittest.TestCase):
         theirs = {s["id"]: s for s in self.bob.get("/api/services").get_json()["services"]}
         self.assertTrue(theirs["spotify"]["ready"])
         self.assertNotIn("client_id", theirs["spotify"])
-        self.assertNotIn("deezer", theirs, "the server's Deezer account is the admin's")
+        self.assertNotIn("deezer", mine, "no export writes to a provider account")
+        self.assertNotIn("deezer", theirs)
 
     def test_the_redirect_uri_is_the_one_saved_never_the_request_host(self):
         def under(name, password, base):
@@ -447,7 +448,7 @@ class ServicesTestCase(unittest.TestCase):
             if t.name == "export-spotify":
                 t.join(10)
         self.assertEqual(self.bob.get(f"/api/services/export/{job_id}").status_code, 404)
-        self.assertEqual(self.bob.post("/api/services/deezer/export", json={"kind": "playlist", "id": str(self.pl.id)}).status_code, 403)
+        self.assertEqual(self.bob.post("/api/services/deezer/export", json={"kind": "playlist", "id": str(self.pl.id)}).status_code, 404)
 
     def test_youtube_export_uses_the_video_a_track_came_from(self):
         created = {}
