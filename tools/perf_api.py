@@ -248,13 +248,16 @@ def populate(app, n_tracks, n_playlists, n_fav, big_playlist, recap=False):
             pl = Playlist.create(user=admin, name=f"Playlist {p} {title(r)}")
             size = big_playlist if p == 0 else r.randint(5, 150)
             rows = r.sample(tracks, min(size, len(tracks)))
-            PlaylistTrack.insert_many(
-                [{"playlist": pl.id, "track": t.id, "index": k} for k, t in enumerate(rows)]
-            ).execute()
+            if rows:
+                PlaylistTrack.insert_many(
+                    [{"playlist": pl.id, "track": t.id, "index": k} for k, t in enumerate(rows)]
+                ).execute()
             pls.append(pl)
-        StarredTrack.insert_many(
-            [{"user": admin.id, "starred": t.id} for t in r.sample(tracks, min(n_fav, len(tracks)))]
-        ).execute()
+        favorites = r.sample(tracks, min(n_fav, len(tracks)))
+        if favorites:
+            StarredTrack.insert_many(
+                [{"user": admin.id, "starred": t.id} for t in favorites]
+            ).execute()
         # Followed artists, kept albums, and what the followed put out lately
         # (the home's "Nouveautés" and "Tes artistes", the library's chips).
         from neezer.db import Album, Artist, ArtistRelease, StarredAlbum, StarredArtist
@@ -281,13 +284,348 @@ def populate(app, n_tracks, n_playlists, n_fav, big_playlist, recap=False):
             "small": str(pls[-1].id),
             "album": albums[0][0],
             "artist": artists[0][0],
-            "track": str(tracks[0].deezer_id),
+            "track": str(tracks[0].deezer_id) if tracks else "",
             "writer": "Max Prolific",
             "ids": [str(t.deezer_id) for t in tracks[:12]],
         }
         if recap:
             out["recap"] = seed_recap(app, tracks)
         return out
+
+
+def seed_onboarding(app, tracks):
+    """The list, its neighbours and the invitations the onboarding bench redeems.
+
+    The feed is the library's own (Deezer is off): 50 artists with 800 tracks,
+    plus ``Camille Fictive`` for the search. Every artist is given two cached
+    neighbours among artists that own no track, so a like answers immediately
+    with two insertable tiles instead of waiting for Deezer. Three single-use
+    tokens: one per viewport and one spare.
+    """
+    import uuid
+
+    from neezer import invites as invite_mod
+    from neezer.db import Artist, ArtistLink, Track, User
+    from neezer.deezer import library
+
+    with app.app_context():
+        admin = User.get(name="bench")
+        tokens = []
+        for i in range(3):
+            row, token = invite_mod.create(
+                admin, note=f"Banc onboarding {i + 1}", expires_in=7 * 24 * 3600
+            )
+            tokens.append({"id": row.id, "token": token, "note": row.note})
+
+        if tracks:
+            root = library.get_root_folder(app.config["DEEZER"]["archive_dir"])
+            known = None
+            for i in range(2):
+                raw = {
+                    "SNG_ID": str(9_900_001 + i),
+                    "SNG_TITLE": f"Le banc des histoires {i + 1}",
+                    "ART_ID": "9900001",
+                    "ART_NAME": "Camille Fictive",
+                    "ALB_ID": "9900001",
+                    "ALB_TITLE": "Banc des artistes",
+                    "ALB_PICTURE": "",
+                    "DURATION": 240,
+                    "TRACK_NUMBER": i + 1,
+                    "DISK_NUMBER": 1,
+                    "TRACK_TOKEN": f"bench-onboarding-{i}",
+                }
+                track = library.upsert_track(raw, root)
+                Track.update(play_count=50 + i).where(Track.id == track.id).execute()
+                known = track.artist
+            related = []
+            parents = list(Artist.select().where(Artist.deezer_id.is_null(False)))
+            for index, parent in enumerate(parents):
+                for k in range(2):
+                    other = Artist.create(
+                        id=uuid.uuid4(),
+                        name=f"Proche {parent.name} {k + 1}",
+                        deezer_id=str(9_500_000 + index * 10 + k),
+                    )
+                    related.append(
+                        {
+                            "provider": "deezer",
+                            "artist_ref": str(parent.deezer_id),
+                            "other_ref": str(other.deezer_id),
+                            "other_name": other.name,
+                            "other_picture": None,
+                            "score": 1.0 - k / 10.0,
+                            "pos": k + 1,
+                        }
+                    )
+            if related:
+                ArtistLink.insert_many(related).execute()
+            if known is None:
+                known = Artist.get_or_none(Artist.name == "Camille Fictive")
+        else:
+            known = None
+
+        return {
+            "tokens": tokens,
+            "password": "MotDePasseSolide123",
+            "known_artist": known.name if known is not None else None,
+            "artists": Artist.select().count(),
+        }
+
+
+def seed_admin(app, users, invite_count):
+    """The accounts and pending invitations Réglages → Utilisateurs lists.
+
+    One argon2 hash is computed and reused: the bench never logs in as the
+    seeded members, it only reads and mutates them. ``membre`` is the non-admin
+    session, ``desactive_moi`` the active row a PATCH disables,
+    ``deja_desactive`` the disabled row the filter keeps, ``supprime_moi`` the
+    row a DELETE removes.
+    """
+    import datetime as _dt
+
+    from neezer import invites as invite_mod
+    from neezer.db import User, now
+    from neezer.managers.user import UserManager, encrypt_password
+
+    password = "MembreSolide1!"
+    crypt, salt = UserManager._hash_fields(password)
+    clear = encrypt_password(password)
+    base = now()
+
+    def add(name, admin=False, disabled=False, minutes=0, mail=None):
+        return User.create(
+            name=name,
+            name_key=name,
+            mail=mail,
+            password=crypt,
+            salt=salt,
+            password_clear=clear,
+            admin=admin,
+            disabled=disabled,
+            last_login=base - _dt.timedelta(minutes=minutes) if minutes else None,
+            onboarding_step="done",
+        )
+
+    with app.app_context():
+        admin = User.get(name="bench")
+        add("membre", minutes=12)
+        add("desactive_moi", minutes=60 * 24 * 4)
+        add("deja_desactive", disabled=True, minutes=60 * 24 * 6)
+        add("supprime_moi", minutes=60 * 24 * 9)
+        camilles = max(0, min(20, users))
+        for i in range(camilles):
+            add(f"camille{i + 1:02d}", minutes=60 * (i + 1))
+        for i in range(max(0, users - camilles)):
+            add(f"membre{i + 1:03d}", minutes=60 * (i + 25))
+        invites = []
+        for i in range(max(0, invite_count)):
+            row, _token = invite_mod.create(
+                admin, note=f"Invitation {i + 1:02d}", expires_in=7 * 24 * 3600
+            )
+            invites.append({"id": row.id, "note": row.note})
+        return {
+            "member": "membre",
+            "member_password": password,
+            "delete": "supprime_moi",
+            "disable": "desactive_moi",
+            "disabled": "deja_desactive",
+            "camille": "camille01",
+            "invites": invites,
+            "admin_id": str(admin.id),
+        }
+
+
+def seed_podcasts(app):
+    """A show with two scanned episodes, a ready transcript, a running one.
+
+    The audio files are one-second WAVs: the chapter and transcript routes only
+    check that the archived file exists, and the bench answers ``/api/stream``
+    itself. The transcript has 240 15-second lines, so 10:00 is exactly a
+    segment boundary; every twentieth line says « mémoire ».
+    """
+    import datetime as _dt
+    import uuid
+    import wave
+
+    from neezer.db import (
+        PodcastChannel,
+        PodcastChapter,
+        PodcastChapterScan,
+        PodcastEpisode,
+        PodcastTranscript,
+        PodcastTranscriptSegment,
+        User,
+        now,
+    )
+    from neezer.deezer.library import PODCAST_DIR_NAME
+    from neezer.managers.user import UserManager
+    from neezer.transcribe import job
+
+    with app.app_context():
+        admin = User.get(name="bench")
+        listeners = []
+        for i in range(3):
+            name = f"podcast{i + 1}"
+            UserManager.add(name, "Podcast1!")
+            listeners.append({"name": name, "password": "Podcast1!"})
+        archive = app.config["DEEZER"]["archive_dir"]
+        folder = os.path.join(archive, PODCAST_DIR_NAME, "banc")
+        os.makedirs(folder, exist_ok=True)
+        channel = PodcastChannel.create(
+            id=uuid.uuid4(),
+            user=admin,
+            deezer_id="9400001",
+            url="https://www.deezer.com/show/9400001",
+            title="Les Histoires de Neezer",
+            description="Une heure de récits, découpée en chapitres et transcrite sur le serveur.",
+            subscribed=True,
+            auto_archive=False,
+            auto_transcribe=False,
+        )
+        specs = [
+            ("Épisode 1 · La maison des histoires", 3),
+            ("Épisode 2 · Cent sections", 100),
+            ("Épisode 3 · En cours de transcription", 0),
+            ("Épisode 4 · La transcription a échoué", 0),
+            ("Épisode 5 · Sans transcription", 0),
+            ("Épisode 6 · Le retour", 0),
+            ("Épisode 7 · Les archives", 0),
+            ("Épisode 8 · Le dernier mot", 0),
+        ]
+        episodes = []
+        for index, (title, _chapters) in enumerate(specs):
+            path = os.path.join(folder, f"episode-{index + 1}.wav")
+            if not os.path.exists(path):
+                with wave.open(path, "wb") as handle:
+                    handle.setnchannels(1)
+                    handle.setsampwidth(1)
+                    handle.setframerate(8000)
+                    handle.writeframes(b"\x80" * 8000)
+            episodes.append(
+                PodcastEpisode.create(
+                    id=uuid.uuid4(),
+                    channel=channel,
+                    deezer_id=str(9_410_000 + index),
+                    title=title,
+                    description="Un épisode du banc, archivé pour la page d'émission et le panneau.",
+                    duration=3600,
+                    publish_date=now() - _dt.timedelta(days=index + 1),
+                    stream_url=f"https://example.invalid/episode-{index + 1}.mp3",
+                    image_md5=None,
+                    path=path,
+                    bitrate=64,
+                    status="completed",
+                )
+            )
+
+        for index, count in ((0, 3), (1, 100)):
+            episode = episodes[index]
+            starts = [0, 600_000, 1_800_000]
+            ends = [600_000, 1_800_000, 3_600_000]
+            rows = []
+            for k in range(count):
+                rows.append(
+                    {
+                        "id": uuid.uuid4(),
+                        "episode": episode.id,
+                        "idx": k,
+                        "start_ms": starts[k] if count == 3 else k * 36_000,
+                        "end_ms": ends[k] if count == 3 else (k + 1) * 36_000,
+                        "title": (
+                            ["Introduction", "La maison", "Les invités"][k]
+                            if count == 3
+                            else f"Section {k + 1}"
+                        ),
+                        "source": "id3",
+                    }
+                )
+            PodcastChapter.insert_many(rows).execute()
+            PodcastChapterScan.create(
+                episode=episode.id,
+                scanned_at=now(),
+                source="id3",
+                n_chapters=count,
+            )
+
+        ready = episodes[0]
+        transcript = PodcastTranscript.create(
+            episode=ready.id,
+            status="ready",
+            language="fr",
+            engine="whisper.cpp",
+            model="ggml-small.bin",
+            engine_version="1.7.4",
+            duration_ms=3_600_000,
+            done_ms=3_600_000,
+            n_segments=240,
+            source="server",
+            user=admin,
+            queued_at=now() - _dt.timedelta(hours=3),
+            started_at=now() - _dt.timedelta(hours=2),
+            finished_at=now() - _dt.timedelta(hours=1),
+        )
+        lines = []
+        for k in range(240):
+            start = k * 15_000
+            text = (
+                f"Ligne {k + 1}. On parle de mémoire et d'histoires, de la maison, "
+                "des invités et de ce qui reste après la dernière phrase."
+            )
+            lines.append(
+                {
+                    "transcript": transcript.episode_id,
+                    "idx": k,
+                    "start_ms": start,
+                    "end_ms": start + 15_000,
+                    "text": text,
+                    "search_text": job.fold(text),
+                }
+            )
+        PodcastTranscriptSegment.insert_many(lines).execute()
+
+        running = episodes[2]
+        PodcastTranscript.create(
+            episode=running.id,
+            status="running",
+            language="fr",
+            engine="whisper.cpp",
+            model="ggml-small.bin",
+            duration_ms=3_600_000,
+            done_ms=1_512_000,
+            n_segments=0,
+            source="client",
+            worker_name="portable-banc",
+            user=admin,
+            queued_at=now() - _dt.timedelta(minutes=30),
+            started_at=now() - _dt.timedelta(minutes=20),
+        )
+        broken = episodes[3]
+        PodcastTranscript.create(
+            episode=broken.id,
+            status="error",
+            language="fr",
+            engine="whisper.cpp",
+            model="ggml-small.bin",
+            duration_ms=3_600_000,
+            done_ms=91_000,
+            n_segments=0,
+            error_code="engine_crashed",
+            error_message="le moteur whisper.cpp s'est arrêté (code 139)",
+            source="server",
+            user=admin,
+            queued_at=now() - _dt.timedelta(hours=4),
+            started_at=now() - _dt.timedelta(hours=3),
+        )
+        return {
+            "show": str(channel.id),
+            "episodes": [str(episode.id) for episode in episodes],
+            "chapters3": str(episodes[0].id),
+            "chapters100": str(episodes[1].id),
+            "ready": str(episodes[0].id),
+            "running": str(episodes[2].id),
+            "error": str(episodes[3].id),
+            "listeners": listeners,
+        }
 
 
 def make_archived(app, clusters=40):
@@ -378,6 +716,33 @@ def main():
         help="serve the SPA from this directory instead of neezer/webui/dist "
         "(a vite build --outDir elsewhere), for a browser bench",
     )
+    ap.add_argument(
+        "--onboarding",
+        action="store_true",
+        help="seed invitation tokens (and, with tracks, a searchable artist plus "
+        "two cached neighbours for every artist) for test/onboarding",
+    )
+    ap.add_argument(
+        "--admin-users",
+        type=int,
+        default=0,
+        metavar="N",
+        help="seed N member accounts for Réglages → Utilisateurs, plus 'membre', "
+        "'desactive_moi' and 'supprime_moi'",
+    )
+    ap.add_argument(
+        "--admin-invites",
+        type=int,
+        default=0,
+        metavar="M",
+        help="seed M pending invitations for Réglages → Utilisateurs",
+    )
+    ap.add_argument(
+        "--podcasts",
+        action="store_true",
+        help="seed a show with chapters, a ready transcript, a running and a "
+        "failed one, and expose the transcription engine as external",
+    )
     args = ap.parse_args()
 
     work = tempfile.mkdtemp(prefix="nsperf-")
@@ -393,6 +758,10 @@ def main():
             self.BASE = dict(self.BASE, database_uri="sqlite:///" + db)
             self.WEBAPP = dict(self.WEBAPP, cache_dir=cache, mount_webui=True, mount_api=True)
             self.DEEZER = dict(getattr(self, "DEEZER", {}), archive_dir=archive, enabled=False)
+            if args.podcasts:
+                self.TRANSCRIBE = dict(
+                    getattr(self, "TRANSCRIBE", {}), enabled=True, runner="external"
+                )
 
     app = create_application(Config())
     if args.dist:
@@ -430,6 +799,15 @@ def main():
                 Track.update(path=path).where(Track.id == t.id).execute()
     if args.archived:
         make_archived(app)
+    if args.onboarding:
+        print("seeding onboarding…", file=sys.stderr)
+        ids["onboarding"] = seed_onboarding(app, args.tracks)
+    if args.admin_users or args.admin_invites:
+        print("seeding admin accounts…", file=sys.stderr)
+        ids["admin"] = seed_admin(app, args.admin_users, args.admin_invites)
+    if args.podcasts:
+        print("seeding podcasts…", file=sys.stderr)
+        ids["podcast"] = seed_podcasts(app)
     # Each request opens its own connection (web.py), as the server does.
     from neezer.db import close_connection
 
@@ -469,6 +847,34 @@ def main():
         ("GET", "/api/version", None),
         ("GET", "/api/storage", None),
     ]
+    if args.onboarding:
+        routes += [
+            ("GET", "/api/onboarding", None),
+            ("GET", "/api/onboarding/artists?limit=36", None),
+            ("GET", "/api/onboarding/search?q=camille&limit=25", None),
+        ]
+    if args.admin_users or args.admin_invites:
+        routes += [
+            ("GET", "/api/admin/users?limit=25", None),
+            ("GET", "/api/admin/users?q=cam&limit=25", None),
+            ("GET", "/api/admin/invites?state=pending&limit=200", None),
+        ]
+    if args.podcasts:
+        show = ids["podcast"]["show"]
+        ready = ids["podcast"]["ready"]
+        wide = ids["podcast"]["chapters100"]
+        routes += [
+            ("GET", f"/api/podcast/{show}", None),
+            ("GET", f"/api/podcast/episode/{ready}/chapters", None),
+            ("GET", f"/api/podcast/episode/{wide}/chapters", None),
+            ("GET", f"/api/podcast/episode/{ready}/transcript?limit=200", None),
+            ("GET", f"/api/podcast/episode/{ready}/transcript?at=600&limit=200", None),
+            ("GET", f"/api/podcast/episode/{ready}/transcript?q=memoire&limit=100", None),
+            ("GET", f"/api/podcast/{show}/transcript/search?q=memoire&limit=50", None),
+            ("GET", "/api/transcripts/search?q=memoire&limit=20", None),
+            ("GET", "/api/transcribe/status", None),
+            ("GET", "/api/transcribe/settings", None),
+        ]
     if args.archived:
         from neezer.db import Track
 

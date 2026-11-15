@@ -105,6 +105,15 @@ cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen pl
 cd webapp && node test/recap/run.mjs                 # the recap stories: 2 requests cold / 1 warm / 0 per card, 9 cards maximum,
                                                      # share poster 1080x1350 + real PNG download, 390/360/641/1440 px, auto-advance,
                                                      # all states and privacy; needs a build (DIST=/tmp/... for one outside dist)
+cd webapp && node test/onboarding/run.mjs            # invitation -> public page -> account -> artists -> account step: 1 public inspect,
+                                                     # 1 redemption POST, 36 tiles, 1 search GET, 1 like POST + 2 neighbours, the
+                                                     # refresh, the 3 skippable options, 390/1440, and the no-artist escape on a 0-track server
+cd webapp && node test/admin/run.mjs                 # Réglages → Utilisateurs on 200 accounts and 20 invites: 1 users + 1 invites GET,
+                                                     # 1 GET per search/page, 1 POST/PATCH/DELETE per mutation, the once-shown link,
+                                                     # the last-admin 409, the member's 0 request + 403, 390/641/1280 geometry
+cd webapp && node test/podcast/run.mjs               # a show with chapters and transcripts: 0/1/0 chapter requests, 1 panel GET,
+                                                     # 0 per segment, 200 lines, a hit seek, 1 poll per 10 s, the 100-chapter sheet,
+                                                     # 390/641/1440 and the admin mark/progress card
 
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works
@@ -128,7 +137,10 @@ python tools/tempo_eval.py --render /tmp/tempo          # the server's file temp
 python tools/perf_api.py [--tracks 20000] [--serve] [--recap]   # every screen's /api route timed on a big synthetic library
                                                      # (Deezer off): median ms, SQL statement count, bytes and gzip per route;
                                                      # --recap seeds 37 000 listen events and times /api/recap/years + /<year>
-                                                     # cold/warm/304 with exact totals; --dist serves a build outside dist
+                                                     # cold/warm/304 with exact totals; --onboarding seeds invitation tokens,
+                                                     # a searchable artist and cached neighbours; --admin-users N --admin-invites M
+                                                     # seed the accounts screen; --podcasts seeds a show with chapters and
+                                                     # transcripts (external runner); --dist serves a build outside dist
 neezer-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
 neezer-cli deezer embed --self-test                 # check the mel front-end without a reference
 

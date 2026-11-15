@@ -117,6 +117,11 @@ the code under it was broken:
   304/revalidation bench must run without `page.route` interceptors, and `request.headers()`
   hides `If-None-Match` where `allHeaders()` shows it. Count covers **by the URL the screen's
   payload names**, never globally: the shell's playlist thumbnails otherwise inflate the number.
+- **A bench that checks a seek must answer byte ranges** (`webapp/test/podcast/run.mjs`): a
+  `/api/stream` fulfilled with one 200 body and `Accept-Ranges: none` let the player read 10:00
+  for a tick, then reset to 0:00 when the metadata landed. Answering 206 with `Content-Range`
+  kept `currentTime` at 10:00 and advancing — the same contract the real server serves. A seek
+  assertion on a whole-body stub measures the stub, not the player.
 - **Real chapter fixtures** (`tests/test_chapters.py`): ffmpeg writes a 1 h MP3 carrying ID3
   `CHAP`/`CTOC` and an M4A carrying `chpl`; the mutagen extractor is measured on both (0.25 ms per
   file) instead of trusting a hand-built tag dict. The same suite pins that a corrupt tag, a
