@@ -10,6 +10,7 @@
   import { artistLine } from "../lib/format.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import { modalFocus } from "../lib/modal.js";
   import TrackCredits from "./TrackCredits.svelte";
 
   let track = null;
@@ -63,7 +64,15 @@
 {#if track}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeCredits}>
-    <div class="sheet" role="dialog" aria-label="Crédits du titre" transition:scale={{ duration: 160, start: 0.97 }}>
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Crédits du titre"
+      tabindex="-1"
+      transition:scale={{ duration: 160, start: 0.97 }}
+      use:modalFocus
+    >
       <header>
         <div class="thumb">
           <Cover src={track.album?.cover} alt={track.title} size={48} kind="track" fallbackId={trackRef(track)} />

@@ -27,6 +27,7 @@
   import GradientHeader from "../components/GradientHeader.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import ChapterList from "../components/ChapterList.svelte";
   import ChapterSheet from "../components/ChapterSheet.svelte";
   import TranscriptHits from "../components/TranscriptHits.svelte";
@@ -36,6 +37,7 @@
   let id = null;
   let data = null;
   let loading = true;
+  let loadError = null;
   let expanded = new Set();
   let chapterOpen = new Set();
   let chapterPos = {};
@@ -84,6 +86,7 @@
     resetSearchState();
     loading = true;
     data = null;
+    loadError = null;
     chapterOpen = new Set();
     chapterPos = {};
     chapterCap = {};
@@ -96,8 +99,11 @@
         nextEpisodes = r.next || null;
         if (hasActiveTranscript(r)) watchTranscript();
       }
-    } catch {
-      if (mine === loadSeq) data = null;
+    } catch (e) {
+      if (mine === loadSeq) {
+        data = null;
+        loadError = e;
+      }
     }
     if (mine === loadSeq) loading = false;
   }
@@ -651,7 +657,7 @@
   <Skeleton kind="header" />
   <Skeleton kind="list" />
 {:else if !data}
-  <p class="muted">Podcast introuvable.</p>
+  <LoadFailed error={loadError} notFound="Podcast introuvable." on:retry={() => load(id)} />
 {:else}
   <div class="fade-in">
     <GradientHeader cover={data.cover}>

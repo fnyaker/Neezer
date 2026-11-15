@@ -68,7 +68,11 @@
     // press of the play button. composedPath() is captured at dispatch.
     const path = e.composedPath ? e.composedPath() : [];
     if (path.some((n) => n && n.tagName === "BUTTON")) return;
-    immersiveOpen.set(true);
+    openFull();
+  }
+
+  function openFull() {
+    if ($current) immersiveOpen.set(true);
   }
 
   // Through `seekTo`, like every other view: the engine chases it on a live
@@ -101,7 +105,7 @@
 <footer class="player" class:empty={!$current} on:click={cardTap}>
   <!-- now playing (left / tap to open the immersive view) -->
   <div class="left">
-    <button class="now" on:click={() => immersiveOpen.set(true)} aria-label="Ouvrir le lecteur plein écran">
+    <button class="now" on:click={openFull} disabled={!$current} aria-label="Ouvrir le lecteur plein écran">
       {#if $current}
         <Cover src={$current.album?.cover} alt={$current.title} size={mobile ? 44 : 56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
         <span class="info">
@@ -197,7 +201,7 @@
     {#if canQueue}
       <button class="sm" on:click={trackMenu} title="Plus d'options" aria-label="Plus d'options"><Icon name="more" size={18} /></button>
     {/if}
-    <button class="sm max" on:click={() => immersiveOpen.set(true)} title="Plein écran" aria-label="Plein écran"><Icon name="maximize" size={17} /></button>
+    <button class="sm max" on:click={openFull} disabled={!$current} title="Plein écran" aria-label="Plein écran"><Icon name="maximize" size={17} /></button>
   </div>
 
   <!-- phone only: the 2 px progress line along the mini card's bottom edge -->

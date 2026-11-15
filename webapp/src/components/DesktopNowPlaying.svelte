@@ -656,6 +656,8 @@
     flex-direction: column;
     justify-content: center;
     gap: 18px;
+    container-type: inline-size;
+    container-name: nowmain;
   }
 
   /* The reading columns (Sillon's raised card, same as the queue's). They only
@@ -768,7 +770,7 @@
        artist line under it. */
     padding: 0;
     font-family: var(--font-display);
-    font-size: 44px;
+    font-size: clamp(24px, 12.6cqi, 44px);
     line-height: 1;
     letter-spacing: -0.03em;
     font-weight: 800;
@@ -776,6 +778,23 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* A narrow main column (the player with its queue panel beside it at 641–800)
+     cannot hold a title on one line: it wraps to two and the column keeps the
+     room. A seven-letter stub was what the one-line rule produced. The strip
+     gives way first, as it already does under 820 px of height. */
+  @container nowmain (max-width: 460px) {
+    .t {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-height: 1.04;
+    }
+    .viz {
+      display: none;
+    }
   }
   /* `display: block` is load-bearing: this used to be a <button> and now wraps
      one button per credited artist (each with its own hover), and ellipsis
@@ -1242,6 +1261,18 @@
     }
     .vol-range {
       width: 72px;
+    }
+  }
+  @container nowmain (max-width: 320px) {
+    .controls {
+      gap: 12px;
+    }
+  }
+  /* The narrowest desktop player (641–700 px, its queue panel beside it): the
+     footer wraps to two rows, so the column's own gaps give the height back. */
+  @media (max-width: 700px) {
+    .main {
+      gap: 14px;
     }
   }
 </style>

@@ -15,6 +15,7 @@
   import PodcastCard from "../components/PodcastCard.svelte";
   import TrackList from "../components/TrackList.svelte";
   import Skeleton from "../components/Skeleton.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
   import ExplorerStyles from "../components/ExplorerStyles.svelte";
   import { fallbackSources, mainSource, iconOf } from "../lib/sources.js";
@@ -54,6 +55,7 @@
   let q = saved?.q ?? "";
   let results = saved?.results ?? EMPTY;
   let loading = false;
+  let loadError = null;
   let tab = saved?.tab ?? "all"; // all | tracks | artists | albums | playlists
   // library = what a search always reaches (the library + the main source);
   // podcasts = the shows only, for when that is what you are after.
@@ -434,16 +436,21 @@
       results = EMPTY;
       loading = false;
       searchedFor = "";
+      loadError = null;
       return;
     }
     searchedFor = term;
     loading = true;
+    loadError = null;
     try {
       const r = await api.search(term);
       if (mine !== seq) return; // a newer query already started
       results = { ...EMPTY, ...r };
-    } catch {
-      if (mine === seq) results = EMPTY;
+    } catch (e) {
+      if (mine === seq) {
+        results = EMPTY;
+        loadError = e;
+      }
     } finally {
       if (mine === seq) loading = false;
     }
@@ -802,6 +809,8 @@
       <Skeleton kind="shelf" />
     {:else if !q.trim()}
       <p class="muted hint">Tape un mot pour chercher un podcast.</p>
+    {:else if loadError}
+      <LoadFailed error={loadError} inline on:retry={() => run(searchedFor || q.trim())} />
     {:else if shows.length}
       <p class="tr-scope">{shows.length} émission{shows.length > 1 ? "s" : ""}</p>
       <div class="grid">
@@ -817,6 +826,8 @@
   <Skeleton kind="list" />
 {:else if !q.trim()}
   <!-- the recent searches and the style tiles are above: never an empty page -->
+{:else if loadError && !hasResults}
+  <LoadFailed error={loadError} inline on:retry={() => run(searchedFor || q.trim())} />
 {:else if !hasResults}
   {#if !(yt && ytAvailable && ytWaiting) && !shared}
     <p class="muted hint">Aucun résultat pour « {q} ».</p>

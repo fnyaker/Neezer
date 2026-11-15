@@ -2,10 +2,11 @@
 // Kept separate from api.js to avoid an import cycle (api.js imports stores).
 
 import { migrateKey, trackKey, trackRef } from "./trackkey.js";
-import { get } from "svelte/store";
+import { get, writable } from "svelte/store";
 
 import { REMOTE, CAN_KEEP, CAN_BROWSE } from "./remote/mode.js";
 import { api } from "./api.js";
+import { onOwnerChange } from "./account.js";
 import {
   favorites,
   disliked,
@@ -84,6 +85,9 @@ export async function runDeezerSync() {
 // the array still get it back; callers that need to STAY current subscribe to
 // the store instead (that is the whole point — see stores.js).
 let playlistsInFlight = null;
+// Why the last attempt failed, so a screen can say so instead of painting the
+// `null` state as "no playlist at all".
+export const playlistsError = writable(null);
 // When the list was last asked for, successful or not. The focus refresh below
 // is bounded by this: a flaky link must not turn "come back to the tab" into a
 // request per visit.
@@ -101,16 +105,18 @@ export async function userPlaylists(force = false) {
     .myPlaylists()
     .then((r) => {
       const list = r.playlists || [];
+      playlistsError.set(null);
       playlists.set(list);
       playlistFolders.set(r.folders || []);
       warmPlaylists(list);
       return list;
     })
-    .catch(() => {
+    .catch((e) => {
       // Don't memoize a failure: storing [] here left the sidebar / picker / the
       // library tab permanently empty after a single failed load (offline boot,
       // server not up yet) until an unrelated edit invalidated the cache. Leave
       // the store as it is, so the next call refetches.
+      playlistsError.set(e || { status: 0, message: "network" });
       return get(playlists) || [];
     })
     .finally(() => {
@@ -611,6 +617,7 @@ export function isFavorite(id) {
 // cache immediately and refresh in the background (the server response is cheap
 // when the favorites haven't changed, thanks to its checksum cache).
 let favTracksInFlight = null;
+export const favTracksError = writable(null);
 export async function loadMyFavorites(force = false) {
   const cached = get(favTracks);
   if (cached && !force) {
@@ -633,6 +640,7 @@ async function primeFavTracksFromCache() {
 }
 function refreshFavTracks() {
   if (favTracksInFlight) return favTracksInFlight;
+  favTracksError.set(null);
   favTracksInFlight = api
     .myFavorites()
     .then((r) => {
@@ -641,11 +649,12 @@ function refreshFavTracks() {
       // track. Merging in place means the browser re-renders those few rows
       // instead of all four thousand — no flash, no lost scroll, no re-decoded
       // artwork.
+      favTracksError.set(null);
       favTracks.set(reconcileList(get(favTracks), r.tracks || []));
       return get(favTracks);
     })
-    .catch(() => {
-      if (get(favTracks) === null) favTracks.set([]);
+    .catch((e) => {
+      favTracksError.set(e || { status: 0, message: "network" });
       return get(favTracks) || [];
     })
     .finally(() => {
@@ -1233,3 +1242,18 @@ export function buildTrackMenu(track, nav) {
     });
   return items;
 }
+
+onOwnerChange(() => {
+  cancelPlaylistRefresh();
+  playlistsInFlight = null;
+  playlistsTouchedAt = 0;
+  playlists.set(null);
+  playlistFolders.set(null);
+  warming = false;
+  favoritesInFlight = null;
+  favoritesLoaded = false;
+  favorites.set(new Set());
+  disliked.set(new Set());
+  favTracksInFlight = null;
+  favTracks.set(null);
+});

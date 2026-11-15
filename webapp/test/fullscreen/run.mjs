@@ -13,7 +13,7 @@ const { check, state } = checker();
 const WAV = silence(60);
 
 const SIZES = [
-  [1920, 1080], [1440, 900], [1366, 768], [1280, 720], [1024, 768], [900, 700], [800, 600], [700, 900], [1280, 560],
+  [1920, 1080], [1440, 900], [1366, 768], [1280, 720], [1024, 768], [900, 700], [800, 600], [768, 900], [700, 900], [641, 900], [1280, 560],
 ];
 
 const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
@@ -65,6 +65,26 @@ for (const [w, h] of SIZES) {
     return [...new Set(out)];
   });
   check(bad.length === 0, `${label}${w}x${h}: every control on screen and clickable`, bad.join("; "));
+  const title = await page.evaluate(() => {
+    const t = document.querySelector(".d .txt .t");
+    if (!t || !t.firstChild) return null;
+    const box = t.getBoundingClientRect();
+    const r = document.createRange();
+    r.setStart(t.firstChild, 0);
+    r.setEnd(t.firstChild, Math.min(12, t.textContent.trim().length));
+    const head = r.getBoundingClientRect();
+    return {
+      text: t.textContent.trim(),
+      shown: head.right <= box.right + 1 && head.bottom <= box.bottom + 6,
+      lines: Math.round(box.height / parseFloat(getComputedStyle(t).lineHeight)),
+      size: Math.round(parseFloat(getComputedStyle(t).fontSize)),
+    };
+  });
+  check(
+    !!title && title.shown,
+    `${label}${w}x${h}: the first 12 characters of the title are read`,
+    title ? `"${title.text}" ${title.lines} line(s) at ${title.size}px` : "no title"
+  );
   if (process.env.SHOTS) await page.screenshot({ path: join(process.env.SHOTS, `fullscreen-${label.replace(/\W+/g, "")}${w}x${h}.png`) });
 }
 }

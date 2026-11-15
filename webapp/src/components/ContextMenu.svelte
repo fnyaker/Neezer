@@ -6,17 +6,30 @@
   let el;
   let pos = { x: 0, y: 0 };
   let openSub = null;
+  let trigger = null;
+  let wasOpen = false;
 
-  // Clamp the menu inside the viewport once it's rendered (desktop floating
-  // menu only — on mobile it's a bottom-anchored sheet).
-  $: if ($contextMenu) place($contextMenu);
+  $: if ($contextMenu) {
+    if (!wasOpen) {
+      const active = typeof document !== "undefined" ? document.activeElement : null;
+      trigger = active && active !== document.body ? active : null;
+      wasOpen = true;
+    }
+    place($contextMenu);
+  } else if (wasOpen) {
+    wasOpen = false;
+    restore();
+  }
 
   async function place(menu) {
     openSub = null;
     pos = { x: menu.x, y: menu.y };
     await tick();
     if (!el) return;
-    if (window.matchMedia("(max-width: 640px)").matches) return; // sheet: no clamp
+    if (window.matchMedia("(max-width: 640px)").matches) {
+      focusAt(0);
+      return;
+    }
     const r = el.getBoundingClientRect();
     const pad = 8;
     let x = menu.x;
@@ -24,6 +37,62 @@
     if (x + r.width + pad > window.innerWidth) x = window.innerWidth - r.width - pad;
     if (y + r.height + pad > window.innerHeight) y = window.innerHeight - r.height - pad;
     pos = { x: Math.max(pad, x), y: Math.max(pad, y) };
+    await tick();
+    focusAt(0);
+  }
+
+  function entries() {
+    if (!el) return [];
+    return [...el.querySelectorAll('[role="menuitem"]')].filter(
+      (b) => !b.disabled && b.getClientRects().length > 0
+    );
+  }
+
+  function focusAt(i) {
+    const list = entries();
+    if (!list.length) {
+      el?.focus?.();
+      return;
+    }
+    const at = Math.max(0, Math.min(i, list.length - 1));
+    list[at].focus({ preventScroll: true });
+  }
+
+  function restore() {
+    const back = trigger;
+    trigger = null;
+    if (back && back.isConnected) back.focus?.({ preventScroll: true });
+  }
+
+  function dismiss() {
+    const back = trigger;
+    trigger = null;
+    wasOpen = false;
+    closeMenu();
+    if (back && back.isConnected) back.focus?.({ preventScroll: true });
+  }
+
+  function onKeydown(e) {
+    const list = entries();
+    const i = list.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusAt(i < 0 ? 0 : i + 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusAt(i < 0 ? list.length - 1 : i - 1);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      focusAt(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      focusAt(list.length - 1);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      dismiss();
+    } else if (e.key === "Tab") {
+      dismiss();
+    }
   }
 
   function toggleSub(item) {
@@ -35,31 +104,41 @@
   function run(item) {
     if (item.sub) {
       toggleSub(item);
+      tick().then(() => {
+        const at = entries().findIndex((b) => b.classList.contains("sub"));
+        if (at >= 0) focusAt(at);
+      });
       return;
     }
-    closeMenu();
+    dismiss();
     item.action?.();
   }
 </script>
 
-<svelte:window on:keydown={(e) => e.key === "Escape" && closeMenu()} />
+<svelte:window
+  on:keydown={(e) => {
+    if (e.key === "Escape" && !e.defaultPrevented && $contextMenu) dismiss();
+  }}
+/>
 
 {#if $contextMenu}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div
     class="backdrop"
-    on:click={closeMenu}
-    on:contextmenu|preventDefault|stopPropagation={closeMenu}
+    on:click={() => closeMenu()}
+    on:contextmenu|preventDefault|stopPropagation={() => closeMenu()}
   ></div>
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div
     class="menu"
     role="menu"
+    aria-label="Actions"
     tabindex="-1"
     bind:this={el}
     style="left:{pos.x}px; top:{pos.y}px"
     on:click|stopPropagation
     on:contextmenu|preventDefault|stopPropagation
+    on:keydown={onKeydown}
   >
     {#each $contextMenu.items as item}
       {#if item === "divider"}

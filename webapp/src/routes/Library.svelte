@@ -31,6 +31,8 @@
     flushPlaylistFolderOrders,
     invalidatePlaylists,
     isSharedPlaylist,
+    favTracksError,
+    playlistsError,
   } from "../lib/actions.js";
   import { listDownloads } from "../lib/offline.js";
   import { api } from "../lib/api.js";
@@ -43,6 +45,7 @@
   import TrackBrowser from "../components/TrackBrowser.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import UnavailableList from "../components/UnavailableList.svelte";
   import ArtistTile from "../components/ArtistTile.svelte";
   import LibraryNav from "../components/LibraryNav.svelte";
@@ -305,6 +308,8 @@
   // -- artists and albums you starred -----------------------------------------
   let artists = null;
   let albums = null;
+  let artistsError = null;
+  let albumsError = null;
   let arQuery = saved?.arQuery ?? "";
   let arSort = saved?.arSort ?? "plays"; // plays | name | recent
   const AR_SORTS = [
@@ -312,23 +317,35 @@
     { id: "name", label: "A-Z" },
     { id: "recent", label: "Ajoutés récemment" },
   ];
-  $: if (tab === "artists" && artists === null) loadArtists();
-  $: if (tab === "albums" && albums === null) loadAlbums();
+  let artistsAsked = false;
+  let albumsAsked = false;
+  $: if (tab === "artists" && !artistsAsked) loadArtists();
+  $: if (tab === "albums" && !albumsAsked) loadAlbums();
   async function loadArtists() {
-    artists = [];
+    artistsAsked = true;
+    artistsError = null;
     try {
       await api.swr("/me/artists", (d) => (artists = d.artists || []));
-    } catch {
-      /* the list stays empty and says so */
+    } catch (e) {
+      if (artists === null) artistsError = e;
     }
   }
   async function loadAlbums() {
-    albums = [];
+    albumsAsked = true;
+    albumsError = null;
     try {
       await api.swr("/me/albums", (d) => (albums = d.albums || []));
-    } catch {
-      /* the list stays empty and says so */
+    } catch (e) {
+      if (albums === null) albumsError = e;
     }
+  }
+  function retryArtists() {
+    artists = null;
+    loadArtists();
+  }
+  function retryAlbums() {
+    albums = null;
+    loadAlbums();
   }
   const fold = (x) => (x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   $: shownArtists = (() => {
@@ -353,6 +370,7 @@
   const titles = (n) => (n ? `${n} titre${n > 1 ? "s" : ""}` : "Aucun titre gardé");
 
   let local = null;
+  let localError = null;
   let offline = null;
   // Tracks the server knows can no longer be played. Loaded when the tab is
   // first opened (and refreshed when a replacement lands), not on every page
@@ -415,11 +433,16 @@
   }
 
   async function loadLocal() {
+    localError = null;
     try {
       local = (await api.myLocal()).tracks || [];
-    } catch {
-      local = [];
+    } catch (e) {
+      if (local === null) localError = e;
     }
+  }
+  function retryLocal() {
+    local = null;
+    loadLocal();
   }
 
   async function onFiles(e) {
@@ -616,8 +639,10 @@
 
 <div id="library-view" role="tabpanel" aria-labelledby={panelLabel}>
 {#if tab === "favorites"}
-  {#if favorites === null}
+  {#if favorites === null && !$favTracksError}
     <Skeleton kind="list" />
+  {:else if favorites === null}
+    <LoadFailed error={$favTracksError} on:retry={() => loadMyFavorites(true)} />
   {:else if !favorites.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -668,22 +693,22 @@
     {/if}
   {/if}
 {:else if tab === "artists"}
-  {#if artists === null || (!artists.length && !arQuery)}
-    {#if artists === null}
-      <Skeleton kind="shelf" />
-    {:else}
-      <div class="empty">
-        <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
-          <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
-        </svg>
-        <p class="empty-title">Aucun artiste suivi</p>
-        <p class="empty-text">
-          Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront
-          sur l'accueil.
-        </p>
-        <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
-      </div>
-    {/if}
+  {#if artists === null && !artistsError}
+    <Skeleton kind="shelf" />
+  {:else if artists === null}
+    <LoadFailed error={artistsError} on:retry={retryArtists} />
+  {:else if !artists.length && !arQuery}
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Aucun artiste suivi</p>
+      <p class="empty-text">
+        Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront
+        sur l'accueil.
+      </p>
+      <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+    </div>
   {:else}
     <div class="tools">
       <label class="field search">
@@ -711,8 +736,10 @@
     {/if}
   {/if}
 {:else if tab === "albums"}
-  {#if albums === null}
+  {#if albums === null && !albumsError}
     <Skeleton kind="shelf" />
+  {:else if albums === null}
+    <LoadFailed error={albumsError} on:retry={retryAlbums} />
   {:else if !albums.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -729,8 +756,10 @@
     {#if albums.length > alLimit}<div class="grow" use:nearEnd={() => (alLimit += STEP)}></div>{/if}
   {/if}
 {:else if tab === "playlists"}
-  {#if myPlaylists === null}
+  {#if myPlaylists === null && !$playlistsError}
     <Skeleton kind="shelf" />
+  {:else if myPlaylists === null}
+    <LoadFailed error={$playlistsError} on:retry={() => userPlaylists(true)} />
   {:else if !myPlaylists.length && !folders.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -940,8 +969,10 @@
     <UnavailableList bind:tracks={gone} />
   {/if}
 {:else if tab === "local"}
-  {#if local === null}
+  {#if local === null && !localError}
     <Skeleton kind="list" />
+  {:else if local === null}
+    <LoadFailed error={localError} on:retry={retryLocal} />
   {:else if !local.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">

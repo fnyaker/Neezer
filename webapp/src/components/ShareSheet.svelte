@@ -22,6 +22,7 @@
   import { episodeMarkers, loadEpisodeMarkers } from "../lib/markers.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import { modalFocus } from "../lib/modal.js";
 
   // The server refuses clips longer than this (keep in sync with share.py).
   const CLIP_MAX = 600;
@@ -814,7 +815,15 @@
 {#if open && track}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="backdrop" on:click={close}>
-    <div class="sheet" role="dialog" aria-label="Partager" tabindex="-1" on:click|stopPropagation>
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Partager"
+      tabindex="-1"
+      on:click|stopPropagation
+      use:modalFocus
+    >
       <header>
         <div class="who">
           <Cover src={track.album?.cover} alt={track.title} size={46} kind="track" fallbackId={trackRef(track)} />

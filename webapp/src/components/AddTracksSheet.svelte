@@ -5,6 +5,8 @@
   import { toasts } from "../lib/stores.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
   import Icon from "./Icon.svelte";
+  import LoadFailed from "./LoadFailed.svelte";
+  import { modalFocus } from "../lib/modal.js";
   import { iconOf, offMain, sourceTitle } from "../lib/sources.js";
   import Cover from "./Cover.svelte";
 
@@ -21,11 +23,13 @@
   let q = "";
   let results = [];
   let loading = false;
+  let searchError = null;
   let added = new Set();
   let timer = null;
 
   function onInput() {
     clearTimeout(timer);
+    searchError = null;
     timer = setTimeout(search, 280);
   }
 
@@ -35,6 +39,7 @@
   async function search() {
     const term = q.trim();
     const mine = ++seq;
+    searchError = null;
     if (!term) {
       results = [];
       loading = false;
@@ -44,19 +49,29 @@
     try {
       const r = await api.search(term);
       if (mine === seq) results = r.tracks || [];
-    } catch {
-      if (mine === seq) results = [];
+    } catch (e) {
+      if (mine === seq) {
+        results = [];
+        searchError = e;
+      }
     } finally {
       if (mine === seq) loading = false;
     }
   }
 
-  function add(track) {
+  async function add(track) {
     const id = trackKey(track);
     if (added.has(id)) return;
+    const before = added;
     added = new Set(added).add(id);
-    onadd?.(track);
-    toasts.push("Ajouté à la playlist", "info", 2400);
+    let ok = true;
+    try {
+      ok = onadd ? (await onadd(track)) !== false : true;
+    } catch {
+      ok = false;
+    }
+    if (ok) toasts.push("Ajouté à la playlist", "info", 2400);
+    else added = before;
   }
 
   function isIn(track) {
@@ -81,7 +96,15 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <div class="backdrop" on:click={() => onclose?.()}>
-  <div class="sheet" on:click|stopPropagation role="dialog" aria-modal="true" tabindex="-1" aria-label="Ajouter des titres">
+  <div
+    class="sheet"
+    on:click|stopPropagation
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    aria-label="Ajouter des titres"
+    use:modalFocus={{ initial: ".searchbox input" }}
+  >
     <header>
       <div class="ttl">
         <h2>Ajouter des titres</h2>
@@ -101,6 +124,8 @@
     <div class="results">
       {#if loading}
         <p class="state">Recherche…</p>
+      {:else if searchError}
+        <LoadFailed error={searchError} inline on:retry={() => search()} />
       {:else if q.trim() && !results.length}
         <p class="state">Aucun résultat pour « {q.trim()} ».</p>
       {:else if !q.trim()}

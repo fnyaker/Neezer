@@ -13,6 +13,7 @@
   import { services, loadServices, linkSpotify, jobSummary } from "../lib/services.js";
   import { online } from "../lib/net.js";
   import Icon from "./Icon.svelte";
+  import { modalFocus } from "../lib/modal.js";
 
   let formats = [];
   let fmt = null;
@@ -254,7 +255,15 @@
 {#if target}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeExport}>
-    <div class="sheet" transition:scale={{ duration: 160, start: 0.97 }}>
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Exporter"
+      tabindex="-1"
+      transition:scale={{ duration: 160, start: 0.97 }}
+      use:modalFocus
+    >
       <header>
         <div class="ttl">
           <h2>Exporter</h2>

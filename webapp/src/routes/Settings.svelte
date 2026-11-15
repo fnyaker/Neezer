@@ -30,6 +30,7 @@
   } from "../lib/nativeDeezer.js";
   import { carAvailable, openCarSettings } from "../lib/car.js";
   import Icon from "../components/Icon.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import HardReload from "../components/HardReload.svelte";
   import EnrichBackfill from "../components/EnrichBackfill.svelte";
   import CreditsBackfill from "../components/CreditsBackfill.svelte";
@@ -200,6 +201,7 @@
   // value back — only whether one is set, where it comes from and its last four
   // characters — so the field always starts empty and only a real paste saves.
   let dz = null;
+  let dzError = null;
   let arlDraft = "";
   let arlSaving = false;
   let dzStatus = null;
@@ -215,15 +217,19 @@
     if (!openCarSettings()) toasts.push("Réglages du mode voiture indisponibles", "error");
   }
   let arlLinking = false;
-  onMount(async () => {
-    if (!$user?.admin || !CAN_ADMIN) return;
+  async function loadSettings() {
+    dzError = null;
     try {
       const s = await api.getSettings();
       quotaGb = s.upload_quota_gb;
       dz = s.deezer || null;
-    } catch {
-      /* leave the card hidden if it can't load */
+    } catch (e) {
+      dzError = e;
     }
+  }
+  onMount(async () => {
+    if (!$user?.admin || !CAN_ADMIN) return;
+    await loadSettings();
     refreshDeezerStatus();
     loadReleases();
     loadStorage();
@@ -1367,6 +1373,8 @@
       </button>
     {/if}
   </section>
+{:else if $user?.admin && CAN_ADMIN && dzError}
+  <LoadFailed error={dzError} inline on:retry={loadSettings} />
 {/if}
 
 {/if}

@@ -324,7 +324,7 @@
               <button class="btn icon-btn" title="Ranger sous…" on:click={() => { picking = picking?.key === row.key ? null : row; pickQuery = ""; }}>Ranger</button>
               {#if row.parent}
                 <button class="btn icon-btn" title="Poids du lien" on:click={() => (weightFor = weightFor === row.key ? null : row.key)}>Poids</button>
-                <button class="btn icon-btn" title="Retirer ce lien" on:click={() => cut(row)}><Icon name="x" size={13} /></button>
+                <button class="btn icon-btn" title="Retirer ce lien" aria-label="Retirer ce lien" on:click={() => cut(row)}><Icon name="close" size={13} /></button>
               {:else}
                 <span class="ph"></span>
               {/if}
@@ -341,7 +341,7 @@
       <div class="picker menu" role="menu" aria-label="Actions sur {menu.name}">
         <div class="picker-head">
           <strong>{menu.name}</strong>
-          <button class="btn icon-btn" on:click={() => (menu = null)}><Icon name="x" size={13} /></button>
+          <button class="btn icon-btn" aria-label="Fermer" title="Fermer" on:click={() => (menu = null)}><Icon name="close" size={13} /></button>
         </div>
         <div class="menu-grid">
           <button class="btn" on:click={() => { picking = menu; pickQuery = ""; menu = null; }}>Ranger sous…</button>
@@ -359,7 +359,7 @@
       <div class="picker" role="dialog" aria-label="Ranger {picking.name}">
         <div class="picker-head">
           <strong>Ranger « {picking.name} » sous</strong>
-          <button class="btn icon-btn" on:click={() => (picking = null)}><Icon name="x" size={13} /></button>
+          <button class="btn icon-btn" aria-label="Fermer" title="Fermer" on:click={() => (picking = null)}><Icon name="close" size={13} /></button>
         </div>
         <input type="search" placeholder="Chercher un genre" bind:value={pickQuery} />
         <ul>
