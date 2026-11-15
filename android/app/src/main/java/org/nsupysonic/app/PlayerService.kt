@@ -90,6 +90,15 @@ class PlayerService : Service() {
      */
     var nativeSkip: ((Boolean) -> Boolean)? = null
 
+    /**
+     * Play / pause / seek made by the native player itself, true when it did: set by
+     * MainActivity on bind, for the same reason as [nativeSkip]. A frozen page runs no
+     * `evaluateJavascript` task, so a pause from the notification, a headset, the lock
+     * screen or the car card used to sit in the renderer queue until the phone was
+     * unlocked, while this session kept saying "playing" over silence.
+     */
+    var nativeTransport: ((String, Double?) -> Boolean)? = null
+
     /** Transport commands back to the WebView; set by MainActivity on bind. */
     var commandSink: ((String, Double?) -> Unit)? = null
 
@@ -230,8 +239,37 @@ class PlayerService : Service() {
         }
     }
 
+    /**
+     * One transport command: first the app's own player, when it is the one that
+     * owns the sound and the activity is stopped ([nativeTransport], the same
+     * routing as next/previous); otherwise the page, as it always did.
+     */
     private fun send(cmd: String, value: Double? = null) {
+        if (nativeTransport?.invoke(cmd, value) == true) {
+            // The session and the notification must answer the button too: the page
+            // that would have published the new state is exactly the one not asked.
+            markTransport(cmd, value)
+            return
+        }
         commandSink?.invoke(cmd, value)
+    }
+
+    /**
+     * The state the app's player just made true (a pause / play / seek it applied
+     * itself). The page's next publish replaces it when it runs again; until then
+     * the notification and the lock screen say what is actually happening.
+     */
+    private fun markTransport(cmd: String, value: Double?) {
+        val s = lastState ?: return
+        if (!s.active) return
+        when (cmd) {
+            "play" -> if (!s.playing) update(s.copy(playing = true))
+            "pause" -> if (s.playing) update(s.copy(playing = false))
+            "seek" -> {
+                val t = value?.takeIf { it.isFinite() && it >= 0 } ?: return
+                update(s.copy(position = t))
+            }
+        }
     }
 
     /**
@@ -277,8 +315,10 @@ class PlayerService : Service() {
     /**
      * Run one transport command with the same routing as the MediaSession:
      * next/previous first ask the native player that owns the playlist, then
-     * fall back to the page. Only the commands the car UI can produce are
-     * accepted; values are clamped so a malformed one cannot seek past a day.
+     * fall back to the page; play/pause/seek reach it through [send] the same
+     * way while the activity is stopped. Only the commands the car UI can
+     * produce are accepted; values are clamped so a malformed one cannot seek
+     * past a day.
      */
     fun transport(cmd: String, value: Double? = null) {
         when (cmd) {
@@ -588,6 +628,9 @@ class PlayerService : Service() {
         // and setMetadata on a released MediaSession throws.
         released = true
         jsSink = null
+        commandSink = null
+        nativeSkip = null
+        nativeTransport = null
         stateListener = null
         main.removeCallbacksAndMessages(null)
         releaseLocks()

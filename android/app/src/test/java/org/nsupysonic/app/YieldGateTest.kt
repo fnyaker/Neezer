@@ -83,4 +83,74 @@ class YieldGateTest {
         g.trickle(1 shl 20) // would be 256 s
         assertTrue((System.nanoTime() - t0) / 1_000_000 < 1000)
     }
+
+    // The app's own player holds the link too (A3): behind a locked screen the
+    // page's renewal (a setInterval and the element's events) stops, its 45 s
+    // lease expired, and the downloads went back to full speed against the very
+    // stream ExoPlayer was reading.
+
+    @Test
+    fun thePlayersHoldDoesNotExpireWithThePagesLease() {
+        var now = 0L
+        val g = YieldGate { now }
+        g.hold(45_000)
+        g.holdPlayer(true)
+        now = 46_000 // the page's lease, unrenewed (a frozen page): gone
+        assertTrue("the app's player is still reading the stream", g.yielding())
+        now = 10 * 60_000L
+        assertTrue("ten minutes behind a locked screen", g.yielding())
+        g.holdPlayer(false)
+        assertFalse(g.yielding())
+    }
+
+    @Test
+    fun thePageEndingItsLeaseDoesNotFreeThePlayersHold() {
+        var now = 0L
+        val g = YieldGate { now }
+        g.holdPlayer(true)
+        g.hold(45_000)
+        g.hold(0) // the page says it is done, or died and its lease expired
+        assertTrue(g.yielding())
+        g.holdPlayer(false)
+        assertFalse(g.yielding())
+    }
+
+    @Test
+    fun thePlayerLettingGoDoesNotCutThePagesLease() {
+        var now = 0L
+        val g = YieldGate { now }
+        g.hold(45_000)
+        g.holdPlayer(true)
+        g.holdPlayer(false)
+        assertTrue("the page still holds its own lease", g.yielding())
+        now = 46_000
+        assertFalse(g.yielding())
+    }
+
+    @Test
+    fun aDownloadWaitingOnThePlayerWakesWhenItLetsGo() {
+        val g = YieldGate(clock())
+        g.holdPlayer(true)
+        thread { Thread.sleep(100); g.holdPlayer(false) }
+        val t0 = System.nanoTime()
+        assertTrue(g.awaitClear { false })
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 1000)
+    }
+
+    @Test
+    fun aPlayersHoldIsNotRenewedByThePagesLease() {
+        // The page renewing must not make the player's hold look timed, and a
+        // trickled read must still end when the player lets go.
+        var now = 0L
+        val g = YieldGate { now }
+        g.holdPlayer(true)
+        g.hold(45_000)
+        now = 10_000
+        g.hold(45_000) // renewed, as a live page does
+        assertTrue(g.yielding())
+        g.holdPlayer(false)
+        assertTrue(g.yielding())
+        now = 56_000
+        assertFalse(g.yielding())
+    }
 }

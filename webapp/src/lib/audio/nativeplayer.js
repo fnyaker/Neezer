@@ -328,6 +328,11 @@ export class NativeAudioElement extends EventTarget {
     this._advKey = ""; // the key of the track the app went on to by itself
     this._advPending = false; // ...which the page has not taken over yet
     this._advFired = false;
+    // The app paused the track it went on to, while the page was frozen: the
+    // page never heard that pause (see `_fire`), so it still believes it is
+    // playing and would resume it as it adopts the track.
+    this._advPaused = "";
+    this._appPaused = false; // ...absorb the one stale resume() that follows the adopt
     this._advTimer = null; // coalesces a burst of advances into one nsadvance
     this._clear();
   }
@@ -398,6 +403,16 @@ export class NativeAudioElement extends EventTarget {
     if (this._webOn || this._released) return;
     const c = +s.c || 0;
     if (c < this._srcSeq) return; // about a source we have since replaced
+    if (typeof s.fault === "string" && s.fault) {
+      // The app skipped a title it could not play while the page was frozen
+      // (bridge 10: a verdict about ONE title no longer stops the named list).
+      // It never arrived as an `error` event on purpose: an error would hand the
+      // whole app's player to the page's for a day (noteNativeFault) — behind a
+      // locked screen, that is the silence the skip exists to avoid.
+      logInfo("audio", `titre ignoré par le lecteur de l'application (${s.fault})`, null, {
+        important: true,
+      });
+    }
     if (s.ev === "error") {
       this._err = { code: [1, 2, 3, 4].includes(s.code) ? s.code : 2, message: String(s.msg || "") };
       // Before the event: whoever handles it already reads the page's player as the one wanted.
@@ -411,6 +426,8 @@ export class NativeAudioElement extends EventTarget {
       // or the first one the page hears after a freeze).
       this._advKey = s.k;
       this._advPending = true;
+      // A pause remembered for the outgoing track cannot concern this one.
+      this._advPaused = "";
       if (typeof s.u === "string" && s.u) this._src = s.u;
       // The app still holds the rest of the list: whatever is sent next goes.
       this._nextSent = null;
@@ -460,6 +477,11 @@ export class NativeAudioElement extends EventTarget {
       this._fire("seeked");
     }
     if (pauseFlip) {
+      // A pause the app applied while the page was frozen on a track it has not
+      // taken over yet: the event below is suppressed (`_fire`), but the page
+      // must not lose it — it would resume the very title the person stopped as
+      // it adopts the track (Player.svelte#loadTrack's startPlayback).
+      if (pauseFlip === "pause" && this._advPending) this._advPaused = this._advKey;
       this._fire(pauseFlip);
       if (pauseFlip === "pause") this._settlePlays(abortError("paused by the system"));
     }
@@ -606,6 +628,18 @@ export class NativeAudioElement extends EventTarget {
       types.push("loadeddata", "canplay", "canplaythrough");
       if (!this._paused) types.push("playing");
     }
+    if (this._advPaused === key) {
+      // The app paused this title while the page was frozen and the page never
+      // heard it. Its store still says "playing", so the load that adopts this
+      // source is about to call play() — one stale resume, absorbed below — and
+      // the pause is delivered here, when the page can act on it at last.
+      this._advPaused = "";
+      this._appPaused = true;
+      setTimeout(() => {
+        this._appPaused = false;
+      }, 0);
+      types.push("pause");
+    }
     this._later(...types);
     return true;
   }
@@ -615,6 +649,8 @@ export class NativeAudioElement extends EventTarget {
     this._clearAdvanceTimer();
     this._advPending = false;
     this._advFired = false;
+    this._advPaused = "";
+    this._appPaused = false;
   }
 
   // --- the element -----------------------------------------------------------
@@ -717,6 +753,16 @@ export class NativeAudioElement extends EventTarget {
   play() {
     if (this._webOn) return this._web.play();
     if (this._released) return Promise.reject(abortError("released"));
+    if (this._appPaused) {
+      // The one resume that follows an adopt of a title the app PAUSED while the
+      // page was frozen: the page's store had not heard of it (Player.svelte's
+      // "if ($player.playing) startPlayback"), and resuming a title the person
+      // stopped is never right. The pause event that came with the adopt makes
+      // the page's own mirror set the store straight; a real tap is a later
+      // call and goes through.
+      this._appPaused = false;
+      return Promise.resolve();
+    }
     if (this._dirty) this.load();
     const wasPaused = this._paused;
     if (this._ended) {

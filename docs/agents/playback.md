@@ -59,7 +59,11 @@ Chromium: an audible page is the one the Page Lifecycle API does not freeze, so 
 re-name the list — the old ten-title lease then ended in silence until the app was reopened (`test/native/run.mjs` freezes a
 40-title queue through 36 ends). The app also retries an IO failure by itself while stopped (2/5/10 s, three times; a 4xx or a
 decode error still fails fast), keeps the renderer important while it owns the sound, survives the renderer death without releasing
-its player, and marks the session paused when the list really ends instead of leaving a "playing" notification. `repeat=one` is
+its player, and marks the session paused when the list really ends instead of leaving a "playing" notification. **A title that cannot
+be played costs that title, not the list**: a non-retryable failure while the activity is stopped consumes the entry and starts the
+next one (three in a row at most), reported as a `fault` on the advancing state so the page never records a player fault for one bad
+file. And the player that streams holds the link for the downloads itself (`YieldGate.holdPlayer`, 15 s to take it / 30 s to let go
+on its own buffer), because the page's lease is renewed by timers a locked screen stops. `repeat=one` is
 restarted by the app; `repeat=all` wraps to the hint length; the Flow pre-chooses a batch of ten when the activity stops (past it,
 a frozen page still stops). Old APKs keep the ten-entry behaviour; old SPAs have no refill hook and are never sent a list they
 would drop whole (32 KiB `MAX_AUDIO_CMD`).

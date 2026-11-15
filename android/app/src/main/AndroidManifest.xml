@@ -87,11 +87,17 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- MainActivity hosts the WebView AND the native player: a config change not
+             listed here RECREATES it, onDestroy releases the players and the
+             notification goes on claiming "playing" over silence (a system font
+             size or language change was enough). The page has no resource to
+             re-inflate — the WebView lays itself out — so every display/text
+             setting is kept in place. -->
         <activity
             android:name=".MainActivity"
             android:exported="false"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|fontScale|density|locale|layoutDirection|keyboard|navigation|touchscreen" />
 
         <!-- The car mode's full-screen settings (lot D). Reached from the
              overlay's gear, the notification's Réglages action and the SPA's

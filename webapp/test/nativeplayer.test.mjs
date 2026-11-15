@@ -439,8 +439,7 @@ test("bridge 10: a long list, repeat flags, and an old APK never gets more than 
   assert.equal(sent.at(-1).rep, "one");
 });
 
-test("bridge 10: the app asks for more through __nsNeedNext, and a burst is one nsadvance", async () => {
-  const sent = app({ version: 10 });
+test("bridge 10: the app asks for more through __nsNeedNext, and a burst is one nsadvance", async () => {  const sent = app({ version: 10 });
   const el = N.createNativeElement();
   el.src = "/api/stream/a";
   el.load();
@@ -462,4 +461,93 @@ test("bridge 10: the app asks for more through __nsNeedNext, and a burst is one 
   await new Promise((r) => setTimeout(r, 40));
   assert.deepEqual(seen, ["d"], "one nsadvance, carrying the last key");
   assert.equal(el.advancedKey, "d");
+});
+
+// A1: a media button's pause / play / seek while the page is frozen is applied
+// by the app itself (NativeAudio.transport) and reaches the page as a state —
+// never as a page command, which is exactly what a frozen renderer never runs.
+test("a pause the app applied behind a frozen page is adopted, not undone", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  const c = sent.at(-1).c;
+  report(el, { c, st: 3, p: true, t: 10, d: 200, sk: true, sc: true });
+  // The person presses pause on the headset. The renderer ran nothing, so the
+  // app paused the player itself and the state it sends says so.
+  report(el, { c, ev: "tick", st: 3, p: false, t: 10.25, d: 200, sk: true, sc: true });
+  assert.equal(el.paused, true, "the page reads the app's pause");
+  const seen = events(el);
+  // Nothing about the seek/pause went back to the app: it is already applied.
+  assert.equal(sent.filter((m) => m.op === "pause").length, 0);
+  // A play the page issues later is the person's: it goes through.
+  el.play();
+  assert.equal(sent.at(-1).op, "play");
+  await flush();
+  assert.ok(seen.includes("play"));
+});
+
+test("the app seeking while the page is frozen moves the page's playhead", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  let c = sent.at(-1).c;
+  report(el, { c, st: 3, p: true, t: 10, d: 200, sk: true, sc: true });
+  const seen = events(el);
+  // The car card's bar dragged: the app seeks its own player and says `seeked`.
+  report(el, { c, ev: "seeked", st: 3, p: true, t: 90, d: 200, sk: true, sc: true });
+  await flush();
+  assert.ok(Math.abs(el.currentTime - 90) < 1e-6, `playhead at ${el.currentTime}`);
+  assert.equal(el.seeking, false);
+  assert.ok(seen.includes("seeked"), "the page learns the discontinuity");
+  assert.equal(sent.filter((m) => m.op === "seek").length, 0, "the app did it, not the page");
+});
+
+test("a title the app skipped behind a frozen page moves the page on without faulting its player", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  const seen = events(el);
+  el.addEventListener("nsadvance", () => seen.push("nsadvance"));
+  const c = sent.at(-1).c;
+  // Track "b" answered 404: the app consumed it, started "c" and said why in
+  // the state that announces it (`fault`), NOT as an error event.
+  report(el, { c, st: 2, p: true, t: 0, k: "c", u: "http://srv/api/stream/c", fault: "ERROR_CODE_IO_BAD_HTTP_STATUS", d: 180, sk: true, sc: true });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(seen, ["nsadvance"], "no error event reached the page");
+  assert.equal(el.error, null, "the app's player is not marked broken for one bad file");
+  assert.equal(get(S.nativeFault), null);
+  assert.equal(el.advancedKey, "c");
+});
+
+test("a title the app paused while the page was frozen is not resumed by the adopt", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  const c = sent.at(-1).c;
+  report(el, { c, st: 3, p: true, t: 10, d: 200, k: "b", u: "http://srv/api/stream/b", sk: true, sc: true });
+  // ...then the person paused from the lock screen, still frozen: the page
+  // never ran the advance and never heard the pause.
+  report(el, { c, ev: "tick", st: 3, p: false, t: 10.2, d: 200, k: "b", u: "http://srv/api/stream/b", sk: true, sc: true });
+  await new Promise((r) => setTimeout(r, 40));
+  const seen = [];
+  for (const t of ["pause", "playing", "canplay", "loadstart"]) el.addEventListener(t, () => seen.push(t));
+  assert.equal(el.adopt("b"), true);
+  const before = sent.filter((m) => m.op === "play").length;
+  // What Player.svelte#loadTrack does next, from a store that still says playing.
+  await el.play();
+  assert.equal(sent.filter((m) => m.op === "play").length, before, "the stale resume did not reach the app");
+  await flush();
+  assert.ok(seen.includes("pause"), "the page is told it is paused");
+  assert.equal(el.paused, true);
+  // A real tap afterwards still plays.
+  el.play();
+  assert.equal(sent.at(-1).op, "play");
 });

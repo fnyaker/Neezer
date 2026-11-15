@@ -97,6 +97,10 @@ class NativeAudio(
     // The list is empty and the player reached the end: the service must say
     // "paused" instead of leaving a playing notification over silence.
     private val onStalled: () -> Unit = {},
+    // The app's own player needs (true) or no longer needs (false) the network:
+    // the downloads' gate (OfflineStore/YieldGate), so a locked screen cannot
+    // expire the lease it holds for the stream it is reading (LinkNeed).
+    private val onLinkNeeded: (Boolean) -> Unit = {},
 ) {
     /** The rhythm analyser on what the players play; null without the native core. */
     val analysis: NativeAnalysis? = if (emitFrames != null && NsCore.available) NativeAnalysis(emitFrames) else null
@@ -139,6 +143,9 @@ class NativeAudio(
     private val pausedByFocus = HashSet<Int>()
     // The player the page told to play last: the one that goes on by itself.
     private var lastPlayed = 0
+    // Whether the app's players, together, need the link for what they stream
+    // (the downloads' gate): see noteLink().
+    private var linkHeld = false
     // Whether the activity is started. Only while it is stopped do the players
     // follow the page's list and cut a trimmed track themselves: then the page
     // may be throttled or stopped by the OS, and a transition it starts there
@@ -154,13 +161,39 @@ class NativeAudio(
      * False when it is not ours to do (the page is shown, nothing to go to): the command
      * then goes to the page as it always did.
      */
-    fun skip(forward: Boolean): Boolean {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return doSkip(forward)
+    fun skip(forward: Boolean): Boolean = onMain { doSkip(forward) }
+
+    private fun doSkip(forward: Boolean): Boolean =
+        !foreground && slots[lastPlayed]?.skip(forward) == true
+
+    /**
+     * A media button's play / pause / seek (the notification, a headset, the lock screen,
+     * the car card) while the activity is stopped: applied here, on the player the page
+     * told to play last, for the same reason [skip] is (NativeRouting.transport). A
+     * frozen page runs no task, so `evaluateJavascript` used to queue the pause until the
+     * phone was unlocked while the MediaSession kept saying "playing". The player's state
+     * carries the change back to the page, which adopts it when it runs (its `p`/`t`
+     * fields, and an explicit `seeked` for a seek).
+     *
+     * False when it is not ours to do (the page is shown, or it plays through its own
+     * `<audio>`): the command then goes to the page as it always did.
+     */
+    fun transport(cmd: String, value: Double?): Boolean = onMain { doTransport(cmd, value) }
+
+    private fun doTransport(cmd: String, value: Double?): Boolean {
+        val slot = slots[lastPlayed] ?: return false
+        if (NativeRouting.transport(foreground, true, cmd) != TransportTarget.APP) return false
+        return slot.transport(cmd, value)
+    }
+
+    /** Runs [block] on the main looper (where every player lives), bounded. */
+    private fun onMain(block: () -> Boolean): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) return block()
         var done = false
         val latch = java.util.concurrent.CountDownLatch(1)
         main.post {
             try {
-                done = doSkip(forward)
+                done = block()
             } finally {
                 latch.countDown()
             }
@@ -168,9 +201,6 @@ class NativeAudio(
         latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)
         return done
     }
-
-    private fun doSkip(forward: Boolean): Boolean =
-        !foreground && slots[lastPlayed]?.skip(forward) == true
 
     /** The activity was started (true) or stopped (false). */
     fun setForeground(fg: Boolean) {
@@ -190,6 +220,7 @@ class NativeAudio(
                 for (s in slots.values.toList()) s.release()
                 slots.clear()
                 pausedByFocus.clear()
+                noteLink()
                 this.page = page
             }
             // A page that leaks players is told on the first one it cannot have.
@@ -228,8 +259,29 @@ class NativeAudio(
             pausedByFocus.clear()
             abandonFocus()
             analysis?.release()
+            noteLink()
         }
         if (Looper.myLooper() == Looper.getMainLooper()) run.run() else main.post(run)
+    }
+
+    /**
+     * The downloads' gate, from the app's side: while any of the players is
+     * pulling a stream it needs the link, and `OfflineStore` holds it back for
+     * us (LinkNeed). The page's own lease expires behind a locked screen — its
+     * renewal is a `setInterval` and the element's events, and a frozen page
+     * runs neither — so the player that actually reads the network keeps one
+     * itself. One switch for every player: a crossfade has two, and a download
+     * must yield to either.
+     */
+    private fun noteLink() {
+        var want = false
+        for (s in slots.values) if (s.linkOn) {
+            want = true
+            break
+        }
+        if (want == linkHeld) return
+        linkHeld = want
+        onLinkNeeded(want)
     }
 
     // --- the audio focus, for all the players at once ------------------------
@@ -322,6 +374,9 @@ class NativeAudio(
         private var pendingSeek = false
         private var released = false
         private var url = ""
+        // Whether `url` is a download read off the disk (no network to share): resolved
+        // once per source, not on every tick.
+        private var localSrc = false
         // The current source was read from its first byte to its last.
         private var complete = false
         // A seek held in a stream with no seek map (ms), -1 when none.
@@ -349,6 +404,15 @@ class NativeAudio(
         // A network failure retried in the background (the page is frozen and
         // its own recovery ladder cannot run).
         private var retryCount = 0
+        // Consecutive titles the app skipped because they could not be played
+        // (NativeRouting.fault): a broken server must not burn the whole list.
+        private var faultSkips = 0
+        // The reason of a title this player is about to skip (bridge 10, `fault`
+        // in the advancing state): the page learns it when it runs again.
+        private var nextFault: String? = null
+        // Whether this player needs the network right now (the downloads' gate).
+        var linkOn = false
+            private set
         private val retryEvent = Runnable { doRetry() }
         private val window = Timeline.Window()
         private val chaseTimeout = Runnable { endChase() }
@@ -358,7 +422,10 @@ class NativeAudio(
                 if (released || !player.isPlaying) return
                 checkTrim()
                 if (released) return
-                send("tick")
+                // Four states a second into a frozen renderer queue up until the
+                // phone is unlocked: a page that runs nothing reads none of them,
+                // and the trimmed end is timed on this clock anyway.
+                if (NativeRouting.tickToPage(foreground)) send("tick") else refreshLink()
                 main.postDelayed(this, TICK_MS)
             }
         }
@@ -387,7 +454,7 @@ class NativeAudio(
                     retryCount = 0
                     main.removeCallbacks(trimCheck)
                     complete = false
-                    this.url = url
+                    setUrl(url)
                     pendingSeek = false
                     player.stop()
                     player.clearMediaItems()
@@ -416,7 +483,7 @@ class NativeAudio(
                     retryCount = 0
                     main.removeCallbacks(trimCheck)
                     complete = false
-                    url = ""
+                    setUrl("")
                     pendingSeek = false
                     player.stop()
                     player.clearMediaItems()
@@ -424,49 +491,9 @@ class NativeAudio(
                     prepared = false
                     send(null)
                 }
-                "play" -> {
-                    if (hasItem) prepare()
-                    if (chaseMs < 0 && player.playbackState == Player.STATE_ENDED) {
-                        proc.startAt = 0.0
-                        player.seekTo(0)
-                    }
-                    requestFocus()
-                    pausedByFocus.remove(id)
-                    retryCount = 0
-                    stalledSent = false
-                    // The analyser follows the player told to play last: the
-                    // incoming track of a crossfade, the one the page names.
-                    analysis?.analysed = id
-                    lastPlayed = id
-                    player.playWhenReady = true
-                    send(null)
-                }
-                "pause" -> {
-                    pausedByFocus.remove(id)
-                    player.playWhenReady = false
-                    send(null)
-                }
-                "seek" -> {
-                    val ms = (o.optDouble("t", 0.0) * 1000).toLong().coerceAtLeast(0)
-                    if (!hasItem) {
-                        send("seeked")
-                        return
-                    }
-                    prepare()
-                    if (knownUnseekable()) {
-                        startChase(ms)
-                        return
-                    }
-                    cancelChase()
-                    pendingSeek = true
-                    proc.startAt = ms / 1000.0
-                    player.seekTo(ms)
-                    // A seek that needs no buffering may never leave READY.
-                    if (player.playbackState == Player.STATE_READY) {
-                        pendingSeek = false
-                        send("seeked")
-                    } else send(null)
-                }
+                "play" -> start()
+                "pause" -> pauseNow()
+                "seek" -> seekTo((o.optDouble("t", 0.0) * 1000).toLong().coerceAtLeast(0))
                 "volume" -> setVol(o.optDouble("v", 1.0))
                 "next" -> {
                     next = parseNext(o)
@@ -493,8 +520,89 @@ class NativeAudio(
                     cancelRetry()
                     release()
                     slots.remove(id)
+                    noteLink()
                 }
             }
+        }
+
+        // The three transport commands, shared by the page's own commands and the
+        // MediaSession's (NativeAudio.transport): the same code path, so a pause
+        // from a headset and a pause from the page leave the player in one state.
+
+        private fun start() {
+            if (hasItem) prepare()
+            if (chaseMs < 0 && player.playbackState == Player.STATE_ENDED) {
+                proc.startAt = 0.0
+                player.seekTo(0)
+            }
+            requestFocus()
+            pausedByFocus.remove(id)
+            retryCount = 0
+            stalledSent = false
+            // The analyser follows the player told to play last: the
+            // incoming track of a crossfade, the one the page names.
+            analysis?.analysed = id
+            lastPlayed = id
+            player.playWhenReady = true
+            send(null)
+        }
+
+        private fun pauseNow() {
+            pausedByFocus.remove(id)
+            player.playWhenReady = false
+            send(null)
+        }
+
+        private fun seekTo(ms: Long) {
+            if (!hasItem) {
+                send("seeked")
+                return
+            }
+            prepare()
+            if (knownUnseekable()) {
+                startChase(ms)
+                return
+            }
+            cancelChase()
+            pendingSeek = true
+            proc.startAt = ms / 1000.0
+            player.seekTo(ms)
+            // A seek that needs no buffering may never leave READY.
+            if (player.playbackState == Player.STATE_READY) {
+                pendingSeek = false
+                send("seeked")
+            } else send(null)
+        }
+
+        /**
+         * One transport command from the MediaSession (NativeAudio.doTransport):
+         * true when this player applied it. The sequence number is untouched —
+         * the page is not the one asking — so its next state shows the change
+         * and the page adopts it as it does the app's own advance (`p`, `t`, and
+         * an explicit `seeked`).
+         */
+        fun transport(cmd: String, value: Double?): Boolean {
+            if (released) return false
+            when (cmd) {
+                "play" -> {
+                    if (!hasItem) return false
+                    cancelRetry()
+                    start()
+                }
+                "pause" -> {
+                    if (!hasItem) return false
+                    cancelRetry()
+                    pauseNow()
+                }
+                "seek" -> {
+                    if (!hasItem) return false
+                    val t = value?.takeIf { it.isFinite() && it >= 0 } ?: return false
+                    cancelRetry()
+                    seekTo((t * 1000).toLong())
+                }
+                else -> return false
+            }
+            return true
         }
 
         /** The page answered (or a command arrived): no native retry is pending. */
@@ -696,10 +804,14 @@ class NativeAudio(
         }
 
         /** The page names the track that follows; this player goes on to it by itself. */
-        private fun advance(n: Next) {
+        private fun advance(n: Next, fault: String? = null) {
             cancelRetry()
             stalledSent = false
             retryCount = 0
+            // The title just left behind was skipped here: the page hears why in
+            // the state that announces the next one (never an `error`, which would
+            // hand the whole app's player to the page's for a single bad file).
+            nextFault = fault
             next = next.drop(1)
             trail.add(n)
             if (trail.size > 20) trail.removeAt(0)
@@ -707,7 +819,7 @@ class NativeAudio(
             main.removeCallbacks(trimCheck)
             curEndMs = n.endMs
             cancelChase()
-            url = n.url
+            setUrl(n.url)
             complete = false
             pendingSeek = false
             vol = n.vol
@@ -757,7 +869,7 @@ class NativeAudio(
             main.removeCallbacks(trimCheck)
             curEndMs = back.endMs
             cancelChase()
-            url = back.url
+            setUrl(back.url)
             complete = false
             pendingSeek = false
             vol = back.vol
@@ -786,6 +898,10 @@ class NativeAudio(
             main.removeCallbacks(retryEvent)
             pausedByFocus.remove(id)
             live.decrementAndGet()
+            if (linkOn) {
+                linkOn = false
+                noteLink()
+            }
             try {
                 player.removeListener(this)
                 player.release()
@@ -796,6 +912,7 @@ class NativeAudio(
 
         private fun send(ev: String?) {
             if (released) return
+            refreshLink()
             val chasing = chaseMs >= 0
             val o = JSONObject()
                 .put("c", lastCmd)
@@ -811,10 +928,37 @@ class NativeAudio(
                 .put("bg", !foreground)
             // Every state says it, so a page that missed the first (frozen) still learns it.
             if (curKey.isNotEmpty()) o.put("k", curKey).put("u", url)
+            // A title skipped here (it could not be played): told once, with the
+            // state that announces the one now playing. The page logs it.
+            nextFault?.let { o.put("fault", it); nextFault = null }
             val d = player.duration
             if (hasItem && d != C.TIME_UNSET && d > 0) o.put("d", d / 1000.0)
             if (ev != null) o.put("ev", ev)
             emit(id, o.toString())
+        }
+
+        /**
+         * Whether this player needs the network now, for the downloads' gate
+         * (LinkNeed): playing a source that is not on disk with less than 30 s
+         * (or 15 s when it was not holding) ahead of the playhead. Recomputed
+         * from the buffer ExoPlayer reports on every state and every tick, and
+         * pushed to the process's gate when it flips.
+         */
+        private fun refreshLink() {
+            val network = hasItem && url.isNotEmpty() && !localSrc
+            val active = player.playWhenReady &&
+                (player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_READY)
+            val ahead = (player.bufferedPosition - player.currentPosition) / 1000.0
+            val on = LinkNeed.wanted(active, network, ahead, linkOn)
+            if (on == linkOn) return
+            linkOn = on
+            noteLink()
+        }
+
+        /** The source this player carries; resolves once whether it is a download on disk. */
+        private fun setUrl(u: String) {
+            url = u
+            localSrc = u.isNotEmpty() && localFile(u) != null
         }
 
         private fun error(code: Int, msg: String) {
@@ -856,6 +1000,8 @@ class NativeAudio(
             if (state == Player.STATE_READY) {
                 retryCount = 0
                 stalledSent = false
+                // This title plays: a run of skipped ones is over (NativeRouting.fault).
+                faultSkips = 0
                 checkTrim()
             }
             if (state == Player.STATE_READY && pendingSeek) {
@@ -875,19 +1021,38 @@ class NativeAudio(
             cancelChase()
             pendingSeek = false
             prepared = false // a play() after an error prepares again
-            // The page is frozen behind a locked screen: its own recovery ladder
-            // cannot run. Re-open the SAME source a few times before calling the
-            // failure fatal; a 4xx, a decode error or a refused source is a
-            // verdict and keeps today's fail-fast path.
-            if (!foreground && isRetryable(e) && retryCount < RETRY_MAX) {
-                scheduleRetry()
-                return
-            }
             // HTMLMediaElement's codes: 2 network, 3 decode, 4 source not supported.
             val code = when (e.errorCode) {
                 in 3000..3999 -> 4
                 in 4000..5999 -> 3
                 else -> 2
+            }
+            // Who decides, and what: NativeRouting.fault holds the rule. The page is
+            // frozen behind a locked screen and its own recovery ladder (probe, skip
+            // the title, move on) cannot run, so a verdict about ONE title advances
+            // instead of ending the whole list the page named.
+            val action = NativeRouting.fault(
+                foreground = foreground,
+                retryable = isRetryable(e),
+                retriesLeft = retryCount < RETRY_MAX,
+                hasNext = next.isNotEmpty(),
+                repeatOne = repeatMode == "one",
+                skipsLeft = faultSkips < FAULT_SKIPS_MAX,
+            )
+            if (action == FaultAction.RETRY) {
+                scheduleRetry()
+                return
+            }
+            if (action == FaultAction.ADVANCE) {
+                // The page hears WHY in the state that announces the next title
+                // (`fault`), never as an `error` event: an `error` hands the whole
+                // app's player to the page's for a day on a decode error
+                // (nativeplayer.js#noteNativeFault), which behind a locked screen
+                // is the very silence this fixes. The failed title is consumed.
+                faultSkips++
+                retryCount = 0
+                advance(next.first(), e.errorCodeName)
+                return
             }
             error(code, e.errorCodeName)
             // A failed next title after the retry budget is silence too: stop
@@ -928,6 +1093,9 @@ class NativeAudio(
         // the activity is stopped and the page cannot recover the track itself.
         private const val RETRY_MAX = 3
         private val RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L)
+        // Consecutive titles the app skipped because they could not be played:
+        // past this, a broken server must not burn the rest of the named list.
+        private const val FAULT_SKIPS_MAX = 3
         // "Previous" restarts the track past this, goes back before it.
         private const val PREV_RESTART_MS = 3_000L
     }
