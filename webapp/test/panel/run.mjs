@@ -129,7 +129,13 @@ if (DESKTOP) {
   if (process.env.SHOTS) await page.screenshot({ path: join(process.env.SHOTS, "panel-desktop.png") });
   await page.locator(".more .pill", { hasText: "Tout lire" }).click();
   await page.waitForTimeout(700);
-  check(await page.evaluate(() => JSON.parse(localStorage.getItem("player.session")).queue.length) === 12, "‘Tout lire’ plays them");
+  check(
+    await page.evaluate(() => {
+      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+      return JSON.parse(localStorage.getItem(pkey("player.session"))).queue.length;
+    }) === 12,
+    "‘Tout lire’ plays them",
+  );
 } else {
   await page.locator("footer.player .now").first().click();
   await page.waitForSelector(".m .scroller");

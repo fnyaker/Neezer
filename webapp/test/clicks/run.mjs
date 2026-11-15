@@ -62,10 +62,11 @@ await ctx.addInitScript(() => {
 // The page saves its own (empty) session as it unloads, so a queue is put in
 // BEFORE the app starts.
 await ctx.addInitScript(() => {
+  const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
   const j = sessionStorage.getItem("__inject");
   if (j) {
-    localStorage.setItem("player.session", j);
-    localStorage.removeItem("player.pos");
+    localStorage.setItem(pkey("player.session"), j);
+    localStorage.removeItem(pkey("player.pos"));
     sessionStorage.removeItem("__inject");
   }
 });

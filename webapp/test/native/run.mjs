@@ -448,11 +448,12 @@ async function open(ctx, settings, queue) {
   await ctx.route(offline, (r) => r.abort());
   await ctx.addInitScript(fakeApp);
   await ctx.addInitScript(() => {
+    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
     const j = sessionStorage.getItem("__inject");
     if (!j) return;
     const { session, settings } = JSON.parse(j);
-    localStorage.setItem("player.session", JSON.stringify(session));
-    localStorage.removeItem("player.pos");
+    localStorage.setItem(pkey("player.session"), JSON.stringify(session));
+    localStorage.removeItem(pkey("player.pos"));
     for (const [k, v] of Object.entries(settings)) localStorage.setItem(k, JSON.stringify(v));
     sessionStorage.removeItem("__inject");
   });

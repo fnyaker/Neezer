@@ -56,12 +56,13 @@ async function scenario(name, { queue = ["s1"], index = 0, repeat = "one", setti
   });
   await ctx.addInitScript(() => {
     try {
+      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
       const j = sessionStorage.getItem("__inject");
       if (j) {
         const { session, settings } = JSON.parse(j);
-        localStorage.setItem("player.session", JSON.stringify(session));
+        localStorage.setItem(pkey("player.session"), JSON.stringify(session));
         localStorage.setItem("player.repeat", JSON.stringify(session.repeat));
-        localStorage.removeItem("player.pos");
+        localStorage.removeItem(pkey("player.pos"));
         for (const [k, v] of Object.entries(settings)) localStorage.setItem(k, JSON.stringify(v));
         sessionStorage.removeItem("__inject");
       }

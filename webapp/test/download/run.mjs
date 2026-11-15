@@ -120,11 +120,12 @@ async function run({ downloads }) {
       return el;
     };
     window.Audio.prototype = Native.prototype;
+    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
     const j = sessionStorage.getItem("__inject");
     if (j) {
       const { session } = JSON.parse(j);
-      localStorage.setItem("player.session", JSON.stringify(session));
-      localStorage.removeItem("player.pos");
+      localStorage.setItem(pkey("player.session"), JSON.stringify(session));
+      localStorage.removeItem(pkey("player.pos"));
       localStorage.setItem("offline.quality", JSON.stringify("FLAC"));
       localStorage.setItem("cache.prefetch", JSON.stringify(false));
       sessionStorage.removeItem("__inject");
