@@ -3,10 +3,9 @@
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""Lot F of the Deezer detachment: the neighbours index, and a radio, a flow and
-a home that read the library and nothing else — including on a server that
-already had data (an old database, an old config, vectors on disk, no
-neighbours yet)."""
+"""Lot F of the Deezer detachment: the neighbours index, and a radio and a flow
+that read the library and nothing else — including on a server that already
+had data (an old database, an old config, vectors on disk, no neighbours yet)."""
 
 import datetime
 import os
