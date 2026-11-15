@@ -30,13 +30,16 @@ guards and the encryption exist once.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 import uuid
 
 from flask import current_app, jsonify, request
 
 from .. import access, libraryimport as li
-from ..db import ProviderAccount, ServiceLink, now
+from ..db import Meta, ProviderAccount, ServiceLink, db, now
 from ..providers.errors import ProviderAuth, ProviderError, ProviderUnavailable
 from . import login_required, webapi
 
@@ -243,13 +246,51 @@ def _deezer_login(arl):
                 logger.debug("closing a probe session failed", exc_info=True)
 
 
+SERVER_IDENTITY_KEY = "dz.server_identity"
+
+
+def _server_arl_digest():
+    client = getattr(current_app, "deezer", None)
+    arl = getattr(client, "arl", None) if client is not None else None
+    return hashlib.sha256(arl.encode("utf-8")).hexdigest() if arl else ""
+
+
+def _remember_server_deezer_id(uid):
+    digest = _server_arl_digest()
+    if not uid or not digest:
+        return
+    value = json.dumps({"id": str(uid), "arl_sha": digest})
+    try:
+        with db.atomic():
+            Meta.insert(key=SERVER_IDENTITY_KEY, value=value).on_conflict(
+                conflict_target=[Meta.key], update={Meta.value: value}
+            ).execute()
+    except Exception:
+        logging.getLogger(__name__).debug("could not remember the server Deezer id", exc_info=True)
+
+
 def _server_deezer_user_id():
     client = getattr(current_app, "deezer", None)
     dz = getattr(client, "_dz", None) if client is not None else None
+    if dz is not None:
+        try:
+            uid = str((dz.current_user or {}).get("id") or "")
+        except Exception:
+            uid = ""
+        if uid:
+            _remember_server_deezer_id(uid)
+            return uid
+    digest = _server_arl_digest()
+    if not digest:
+        return ""
     try:
-        return str((dz.current_user or {}).get("id") or "") if dz is not None else ""
+        row = Meta.get_or_none(Meta.key == SERVER_IDENTITY_KEY)
+        saved = json.loads(row.value) if row is not None and row.value else {}
     except Exception:
         return ""
+    if saved.get("arl_sha") != digest:
+        return ""
+    return str(saved.get("id") or "")
 
 
 def link_deezer(user, data):
@@ -263,6 +304,12 @@ def link_deezer(user, data):
     arl = "".join(str(data.get("arl") or "").split())
     if not arl or len(arl) > ARL_MAX or not arl.isalnum():
         return 400, {"error": "Cet ARL n'a pas la forme d'un ARL.", "code": "invalid_arl"}
+    server_arl = getattr(getattr(current_app, "deezer", None), "arl", None)
+    if server_arl and hmac.compare_digest(arl, server_arl):
+        return 409, {
+            "error": "C'est le compte Deezer du serveur : demandez à son titulaire de vous le prêter (Sources).",
+            "code": "server_account",
+        }
     row = ProviderAccount.get_or_none(
         (ProviderAccount.provider == "deezer") & (ProviderAccount.user == user.id)
     )

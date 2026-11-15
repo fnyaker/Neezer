@@ -203,6 +203,18 @@ class ServerAccountTestCase(_ImportCase):
         self.assertEqual(mine.name, "P")
         self.assertEqual(PlaylistTrack.select().where(PlaylistTrack.playlist == mine.id).count(), 5)
 
+    def test_a_member_cannot_link_the_server_arl_with_a_cold_client(self):
+        self.server_account()
+        self.as_bob()
+        arl = self.app.deezer.arl
+        self.app.deezer._dz = None
+        rv = self.client.post("/api/me/accounts/deezer", json={"arl": arl})
+        self.assertEqual(rv.status_code, 409, rv.get_data(as_text=True))
+        self.assertEqual(rv.get_json()["code"], "server_account")
+        self.assertFalse(
+            ProviderAccount.select().where(ProviderAccount.user == self.bob.id).exists()
+        )
+
     def test_the_holder_of_the_server_account_cannot_link_a_second_deezer(self):
         self.as_alice()
         self.server_account()
