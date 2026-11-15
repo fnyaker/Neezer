@@ -147,14 +147,6 @@ def create_podcast_channel():
     return request.formatter.empty
 
 
-def _delete_episode_file(episode):
-    if episode.path and os.path.isfile(episode.path):
-        try:
-            os.remove(episode.path)
-        except OSError:
-            logger.warning("Could not delete episode file %s", episode.path)
-
-
 @api_routing("/deletePodcastChannel")
 def delete_podcast_channel():
     _require_admin()
