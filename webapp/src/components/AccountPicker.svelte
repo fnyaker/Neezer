@@ -3,7 +3,7 @@
   // albums, its playlists — to tick or untick one by one (lot P2). Unticked:
   // never imported, and an artist is no longer followed. Ticked: imported now.
   // The list is windowed: an account can follow thousands of artists.
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api } from "../lib/api.js";
   import { toasts } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
@@ -23,22 +23,41 @@
   let kind = kinds[0];
   let lists = {}; // kind -> items
   let errors = {};
+  let notices = {};
+  let refreshing = {};
   let loading = false;
   let q = "";
   let pending = new Set(); // refs whose change is in flight
+  const pollTimers = new Map();
 
-  async function fetchKind(k, fresh = false) {
+  async function fetchKind(k, fresh = false, tries = 0) {
     loading = true;
     errors[k] = null;
     try {
       const r = await api.accountLibrary(account.id, k, fresh);
       lists[k] = r.items || [];
+      refreshing[k] = !!r.refreshing;
+      notices[k] = r.error || "";
+      if (r.error && !lists[k].length) errors[k] = r.error;
+      if (r.refreshing && tries < 20 && !pollTimers.has(k)) {
+        pollTimers.set(
+          k,
+          setTimeout(() => {
+            pollTimers.delete(k);
+            fetchKind(k, false, tries + 1);
+          }, 1500)
+        );
+      }
     } catch (e) {
       errors[k] = e?.message || "Impossible de lire ce compte.";
     }
     loading = false;
   }
   onMount(() => fetchKind(kind));
+  onDestroy(() => {
+    for (const timer of pollTimers.values()) clearTimeout(timer);
+    pollTimers.clear();
+  });
 
   function pick(k) {
     kind = k;
@@ -133,11 +152,16 @@
         <p class="hint muted">{errors[kind]} <button class="link" on:click={() => fetchKind(kind, true)}>Réessayer</button></p>
       {:else if !lists[kind]}
         <p class="hint muted">{loading ? "Lecture du compte…" : ""}</p>
+      {:else if refreshing[kind] && !all.length}
+        <p class="hint muted">Lecture du compte…</p>
       {:else if !all.length}
         <p class="hint muted">Rien dans ce compte.</p>
       {:else if !shown.length}
         <p class="hint muted">Aucun résultat.</p>
       {:else}
+        {#if notices[kind]}
+          <p class="hint muted">{notices[kind]}</p>
+        {/if}
         <VirtualList items={shown} estimateHeight={60} key={(it) => it.ref} let:item>
           <button
             type="button"
