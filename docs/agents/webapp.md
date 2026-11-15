@@ -552,6 +552,14 @@ the person had left.
   remembered session, paints the shell with « Le serveur ne répond pas » + « Réessayer » (or a
   retry screen without a remembered session) and never shows the login form. `revalidate()` follows
   the same rule.
+- **A failed request is never an empty state.** `LoadFailed.svelte` covers 404/401/403/offline/5xx
+  and Deezer, prints the cause and offers one « Réessayer » (one click = one request); screens that
+  already carry their own sentence keep it. `favTracks`/`playlists` stay `null` with a separate
+  error (`favTracksError`/`playlistsError`) instead of `[]`, so the Library/Podcasts/Show/Sources
+  never say « 0 titre » or « Rien ici » for a 500. Rows offer **44 px** on a coarse pointer and
+  40 px with a mouse (the play/actions columns grow via `--play-col`/`--acts-col`), and a ⋯ menu
+  opens focused on its first item, walks with ↑/↓/Home/End, and closes on Échap with focus returned;
+  the sheets share `lib/modal.js` for `aria-modal` and the focus trap.
 
 **The heavy screens load when they are opened.** Everything on the first screen is in the main
 bundle and worth being there; three things are not, and together they were a third of what every

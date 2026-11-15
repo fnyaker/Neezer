@@ -99,9 +99,11 @@ cd webapp && node test/download/run.mjs              # a playlist downloading on
 cd webapp && node test/import/run.mjs [--phone]       # a shared playlist link: pasted into the search, read, played, kept
 cd webapp && node test/requests/run.mjs             # what playing costs in requests: a track the server refuses (Deezer off) is
                                                      # retried at a human pace, not 70 times a second; a missing cover is asked once
-cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen player from 700x900 to 1920x1080: every control on screen,
-                                                     # inside its column and the element a click at its centre lands on
+cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen player from 641x900 to 1920x1080: every control on screen,
+                                                     # inside its column, the title readable at 641-800, and the element a click at its centre lands on
                                                      # (the four browser tests above start tools/perf_api.py --serve; PYTHON=<venv python>, SHOTS=<dir> keeps pictures)
+cd webapp && node test/failure/run.mjs               # an API 500/offline says its cause and offers Réessayer (one click = one request),
+                                                     # menus ⋯ work from the keyboard, rows are 44 px on touch / 40 px with a mouse
 cd webapp && node test/recap/run.mjs                 # the recap stories: 2 requests cold / 1 warm / 0 per card, 9 cards maximum,
                                                      # share poster 1080x1350 + real PNG download, 390/360/641/1440 px, auto-advance,
                                                      # all states and privacy; needs a build (DIST=/tmp/... for one outside dist)
