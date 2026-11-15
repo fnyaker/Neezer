@@ -18,7 +18,9 @@ import {
   activePresetId,
   bandsEqual,
   createMeterSession,
+  createRiskHold,
   dbToGain,
+  eqRisk,
   fmtDb,
   isBuiltinPreset,
   isUserPreset,
@@ -223,6 +225,41 @@ test("risk is three tones, and an unknown reading is not a warning", () => {
   assert.equal(riskTone("boom"), "ok");
   assert.equal(isBuiltinPreset({ id: "flat" }), true);
   assert.equal(isUserPreset({ id: "flat" }), false);
+});
+
+test("a bypassed, flat or cut-only equalizer never warns, whatever the master", () => {
+  assert.equal(eqRisk("clip", false, CURVE), "ok", "equalizer off");
+  assert.equal(eqRisk("warn", true, ZERO), "ok", "flat curve");
+  assert.equal(eqRisk("clip", true, [-6, -4, 0, 0, 0, 0, 0, 0, -2, -3]), "ok", "cuts only");
+  assert.equal(eqRisk("warn", true, [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), "warn");
+  assert.equal(eqRisk("clip", true, CURVE), "clip");
+});
+
+test("a warning stays until the next setting, and keeps the highest value it saw", () => {
+  const hold = createRiskHold();
+  assert.equal(hold.current, null);
+  assert.equal(hold.fold("ok", 0, 0), null);
+  assert.deepEqual(hold.fold("warn", 0.8, 0.5), { tone: "warn", reduction: 0.8, margin: 0.5 });
+  assert.deepEqual(
+    hold.fold("ok", 0, 0),
+    { tone: "warn", reduction: 0.8, margin: 0.5 },
+    "a peak that fell does not take it away"
+  );
+  assert.deepEqual(hold.fold("warn", 2.1, 1.4), { tone: "warn", reduction: 2.1, margin: 1.4 });
+  assert.deepEqual(
+    hold.fold("warn", 1.2, 0.9),
+    { tone: "warn", reduction: 2.1, margin: 1.4 },
+    "the highest value holds"
+  );
+  assert.deepEqual(hold.fold("clip", 4.2, 3.0), { tone: "clip", reduction: 4.2, margin: 3.0 });
+  assert.equal(hold.fold("warn", 1, 0.5).tone, "clip", "a clip does not step back down");
+  hold.reset();
+  assert.equal(hold.current, null);
+  assert.deepEqual(
+    hold.fold("warn", 1.1, 0.6),
+    { tone: "warn", reduction: 1.1, margin: 0.6 },
+    "a new episode starts from its own values"
+  );
 });
 
 test("the warning's numbers read in French, and the cut is a half-decibel step", () => {

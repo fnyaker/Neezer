@@ -160,6 +160,17 @@ style, not layout. The number readout is written straight to its spans at 4 Hz w
 the same reason. The risk colours are semantic, theme-scoped marks — lemon on Encre, ink on Papier, `--tx`
 on Pochette, amber `#f5b041`/`#8a5200`, red `#ff6b6b`/`#b3261e` — measured against the card at 14.4/5.0/5.2:1
 minimum (encre/papier/pochette), far above the 3:1 a graphical object needs.
+**The warning is about the SETTING, not the recording.** A bypassed, flat or cut-only curve adds no energy,
+so it never warns however loud the master or hard the limiter works (`eqRisk`); only a band above 0 dB can
+make the equalizer the cause. The bars are less trigger-happy than the first version: warn at +2 dBFS
+pre-limiter or 2 dB of limiter reduction, clip at +6/+6 (a finished master at 0 dBFS with 0.38 dB of
+reduction is normal). Once warned, the banner is an EPISODE (`createRiskHold`): it stays until the person
+changes the setting (band, preset, EQ switch, normalization, volume) while its reduction and margin keep
+the highest values seen, so a peak that falls back 40 ms later no longer makes it flash and vanish.
+`test/eq/run.mjs` drives it on screen with a +16 dB curve over a full-scale 1 kHz square: it warns, is still
+there one second into the silence with the same 19.8 dB, and « Plat » clears it; the same master with a flat
+curve and normalization high never warns, and switching the equalizer off hides it at once.
+
 **A volume change resets the warning's peak-hold after 160 ms**, not immediately: the analyser's 85 ms
 window still holds the pre-change signal, and a hold started inside it kept the old 9.7 dB reduction for the
 whole episode while the live peak had already fallen (seen in the bench). The player's volume is the media

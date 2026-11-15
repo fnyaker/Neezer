@@ -148,6 +148,56 @@ export function riskTone(risk) {
   return risk === "warn" || risk === "clip" ? risk : "ok";
 }
 
+/**
+ * The risk a SETTING can cause, not the one a loud recording shows. A bypassed
+ * equalizer, a flat curve and a curve made only of cuts add no energy: the
+ * limiter working on a loud master is then the recording's level, and the card
+ * says nothing. Only a band above 0 dB can make the equalizer the cause.
+ */
+export function eqRisk(risk, enabled, bands) {
+  if (!enabled) return "ok";
+  let boost = 0;
+  for (const v of bands || []) {
+    const g = +v;
+    if (g > boost) boost = g;
+  }
+  return boost > 0 ? riskTone(risk) : "ok";
+}
+
+/**
+ * One warning episode. It starts at the first warning and STAYS until the
+ * person changes the setting: a peak that falls back 40 ms later must not take
+ * the banner away under the reader's eyes. While it lasts, its numbers keep the
+ * highest value seen. `fold` answers the episode to show (null before the
+ * first warning); `reset` begins a new one.
+ */
+export function createRiskHold() {
+  let tone = "ok";
+  let reduction = 0;
+  let margin = 0;
+  let shown = null;
+  return {
+    get current() {
+      return shown;
+    },
+    fold(nextTone, reductionDb = 0, marginDb = 0) {
+      const t = riskTone(nextTone);
+      if (t === "ok") return shown;
+      tone = t === "clip" || tone === "clip" ? "clip" : "warn";
+      reduction = Math.max(reduction, +reductionDb || 0);
+      margin = Math.max(margin, +marginDb || 0);
+      shown = { tone, reduction, margin };
+      return shown;
+    },
+    reset() {
+      tone = "ok";
+      reduction = 0;
+      margin = 0;
+      shown = null;
+    },
+  };
+}
+
 // French decimals with a real minus sign, one decimal as the meter publishes
 // them. "-0.0" is not a reading: anything under half a tenth is zero.
 const MINUS = "\u2212";

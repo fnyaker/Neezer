@@ -33,11 +33,12 @@
     EQ_BAND_COUNT,
     activePresetId,
     createMeterSession,
+    createRiskHold,
     dbToGain,
+    eqRisk,
     fmtDb,
     presetItems,
     presetNeedsUpdate,
-    riskTone,
     updatedPreset,
     volumeCutDb,
   } from "../lib/eqpresets.js";
@@ -163,6 +164,22 @@
     const next = $eqBands.slice();
     next[i] = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, +v || 0));
     eqBands.set(next);
+    resetRiskHold();
+  }
+
+  function toggleEq() {
+    eqEnabled.set(!$eqEnabled);
+    resetRiskHold(true);
+  }
+
+  function useNormalization(id) {
+    normalization.set(id);
+    resetRiskHold();
+  }
+
+  function setBass(v) {
+    bassBoost.set(+v || 0);
+    resetRiskHold();
   }
 
   $: bassPct = Math.round($bassBoost * 100);
@@ -207,6 +224,7 @@
     } else {
       applyFxPreset(p);
     }
+    resetRiskHold();
     pickedId = p.id;
     // No toast: the chip highlights, the state line names the preset, and a
     // second toast would only stack under the next action's.
@@ -353,8 +371,7 @@
     typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
   let warn = null;
   let warnAnnounce = "";
-  let holdReduction = 0;
-  let holdMargin = 0;
+  const riskHold = createRiskHold();
   let holdAfter = 0;
   let warnedTone = "ok";
   let lastWarnAt = 0;
@@ -400,6 +417,23 @@
     }
   }
 
+  // A new episode on every deliberate change. `clearNow` is for a switch that
+  // makes the question moot (the equalizer off, or the processed path gone);
+  // a slider or a preset lets the meter turn its 85 ms window over first, so a
+  // curve that stays risky does not blink off and on under the finger.
+  function resetRiskHold(clearNow = false) {
+    riskHold.reset();
+    warnedTone = "ok";
+    lastWarnAt = 0;
+    if (clearNow) {
+      warn = null;
+      warnAnnounce = "";
+      holdAfter = 0;
+    } else {
+      holdAfter = nowMs() + 160;
+    }
+  }
+
   function onSaturation(snap) {
     if (!snap) return;
     const now = nowMs();
@@ -411,11 +445,7 @@
         readValues.headroom = 96;
         readValues.reduction = 0;
         paintBars(null);
-        warn = null;
-        warnedTone = "ok";
-        holdReduction = 0;
-        holdMargin = 0;
-        if (warnAnnounce) warnAnnounce = "";
+        resetRiskHold(true);
       }
       if (snap.reason !== meterReason) meterReason = snap.reason || "idle";
       if (meterRisk !== "off") meterRisk = "off";
@@ -431,7 +461,8 @@
       paintBars(snap.bands);
     }
 
-    const tone = riskTone(snap.risk);
+    // The bars show the chain now; the warning below outlives the peak.
+    const tone = eqRisk(snap.risk, $eqEnabled, $eqBands);
     if (tone !== meterRisk) meterRisk = tone;
 
     if (now - lastReadAt >= 250) {
@@ -451,36 +482,29 @@
       }
     }
 
-    if (tone === "ok") {
-      holdReduction = 0;
-      holdMargin = 0;
-      warnedTone = "ok";
-      if (warnAnnounce) warnAnnounce = "";
-      if (warn) warn = null;
+    // The analyser's 85 ms window still holds the signal from before a volume
+    // or EQ change; folding it into a fresh episode would keep the old peak.
+    const shown = now < holdAfter ? riskHold.current : riskHold.fold(tone, snap.reductionDb, snap.marginDb);
+    if (!shown) {
+      // A change settled back under the bars: the old banner has had its turn.
+      if (warn && now >= holdAfter) {
+        warn = null;
+        if (warnAnnounce) warnAnnounce = "";
+      }
       return;
     }
-    // The analyser's 85 ms window still holds the signal from before a volume
-    // change. A peak-hold started inside it would keep the old reduction for
-    // the whole episode (seen: the button lowered the level, the visible peak
-    // fell to 0.8 dB, and the banner insisted on the previous 7.0).
-    if (now < holdAfter) return;
-    // A peak-hold over the warning: the offer must not flap between 0.6 and 2.1
-    // dB at 25 Hz while the person reads it, and the largest reduction of the
-    // episode is what the ear actually heard.
-    holdReduction = Math.max(holdReduction, +snap.reductionDb || 0);
-    holdMargin = Math.max(holdMargin, +snap.marginDb || 0);
-    if (tone !== warnedTone) {
-      warnedTone = tone;
-      warnAnnounce = `${tone === "clip" ? "Saturation" : "Risque de saturation"} : le limiteur réduit de ${fmtDb(holdReduction)}.`;
+    if (shown.tone !== warnedTone) {
+      warnedTone = shown.tone;
+      warnAnnounce = `${shown.tone === "clip" ? "Saturation" : "Risque de saturation"} : le limiteur réduit de ${fmtDb(shown.reduction)}.`;
       lastWarnAt = 0; // paint the banner now, not after the throttle
     }
     if (now - lastWarnAt >= 750) {
       lastWarnAt = now;
       const next = {
-        tone,
-        reduction: Math.round(holdReduction * 10) / 10,
-        margin: Math.round(holdMargin * 10) / 10,
-        cut: volumeCutDb(holdMargin),
+        tone: shown.tone,
+        reduction: Math.round(shown.reduction * 10) / 10,
+        margin: Math.round(shown.margin * 10) / 10,
+        cut: volumeCutDb(shown.margin),
       };
       if (
         !warn ||
@@ -500,21 +524,19 @@
   $: canReduce = !!warn && !$player.muted && $player.volume > 0.005;
 
   // A deliberate volume move (the slider, the mute button, or the warning's own
-  // "Réduire le volume") invalidates the peak-hold: keeping the old 9.7 dB next
-  // to a quieter chain read as "the button did nothing". The next reading
-  // rebuilds the banner from the level that is actually playing now.
+  // "Réduire le volume") starts a new episode: keeping the old 9.7 dB next to a
+  // quieter chain read as "the button did nothing". The next reading rebuilds
+  // the banner from the level that is actually playing now.
   let lastVolume = null;
   $: if ($player.volume !== lastVolume) {
     lastVolume = $player.volume;
-    holdReduction = 0;
-    holdMargin = 0;
-    // Let the meter's 85 ms window turn over before the next reading becomes
-    // the new hold; see the guard in onSaturation.
-    holdAfter = nowMs() + 160;
-    lastWarnAt = 0;
-    warnedTone = "ok";
-    if (warnAnnounce) warnAnnounce = "";
+    resetRiskHold();
   }
+
+  // Switching the equalizer off, or flattening/cutting every band (here or by
+  // applying a preset that carries the flag), makes the warning false at once:
+  // it is about what the EQ adds.
+  $: if (warn && (!$eqEnabled || !$eqBands.some((g) => +g > 0))) resetRiskHold(true);
 
   onMount(() => {
     let io = null;
@@ -748,7 +770,7 @@
     </div>
     <div class="seg">
       {#each NORM_LEVELS as n}
-        <button class="seg-btn" class:sel={$normalization === n.id} on:click={() => normalization.set(n.id)} title={n.hint}>
+        <button class="seg-btn" class:sel={$normalization === n.id} on:click={() => useNormalization(n.id)} title={n.hint}>
           {n.label}
         </button>
       {/each}
@@ -765,7 +787,7 @@
       </span>
     </div>
     <div class="slider-row">
-      <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => bassBoost.set(+e.target.value)} aria-label="Amplification des basses" aria-valuetext={`${bassPct} %`} />
+      <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => setBass(e.target.value)} aria-label="Amplification des basses" aria-valuetext={`${bassPct} %`} />
       <span class="val">{bassPct}%</span>
     </div>
   </div>
@@ -780,11 +802,12 @@
   <p class="muted sub">
     Dix bandes de 31 Hz à 16 kHz (±16 dB). Un limiteur de sécurité rattrape les
     pics en fin de chaîne ; le mètre montre le niveau réel de chaque bande et
-    l'effort du limiteur.
+    l'effort du limiteur. Le risque de saturation ne s'affiche que si votre
+    courbe relève le signal, et reste visible jusqu'à votre prochain réglage.
     {#if dspNote}<span class="off-note">{dspNote}</span>{/if}
   </p>
 
-  <button class="toggle" role="switch" aria-checked={$eqEnabled} on:click={() => eqEnabled.set(!$eqEnabled)}>
+  <button class="toggle" role="switch" aria-checked={$eqEnabled} on:click={toggleEq}>
     <span class="tg-txt">
       <span class="tg-title">Égaliseur 10 bandes</span>
       <span class="tg-hint muted">
@@ -929,7 +952,7 @@
         <span class="warn-txt">
           <strong>{warn.tone === "clip" ? "Saturation" : "Risque de saturation"}</strong>
           <span class="muted">
-            {#if warn.reduction >= 0.1}Le limiteur réduit de {fmtDb(warn.reduction)}.{:else}Le signal touche
+            {#if warn.reduction >= 0.1}Le limiteur réduit de {fmtDb(warn.reduction)}.{:else}Le signal dépasse
               0 dBFS.{/if}
             Marge recommandée : {fmtDb(warn.margin)}.
           </span>

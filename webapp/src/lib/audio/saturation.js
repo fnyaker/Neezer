@@ -54,7 +54,8 @@
 //     measured: boolean,    // false until a first reading (updatedAt > 0)
 //     peakDb: number,       // PRE-limiter sample peak, dBFS, floored at -96
 //     headroomDb: number,   // -peakDb (dB below full scale; <0 when over)
-//     risk: "ok" | "warn" | "clip",
+//     risk: "ok" | "warn" | "clip", // the CHAIN's state; the screen ignores it
+//                           // when the EQ adds no gain (eqpresets.eqRisk)
 //     reductionDb: number,  // limiter gain reduction, >= 0
 //     marginDb: number,     // dB to pull back to release the limiter; 0
 //                           // while risk is "ok"
@@ -103,22 +104,22 @@ export const PEAK_FLOOR_DB = -96;
 // threshold with a 20:1 ratio, so its gain reduction is 0.95 × (pre - (-0.5)):
 // a modern master peaking at -0.1 dBFS already makes it work by 0.38 dB, and
 // that is inaudible and normal. A warning that fires there would be on for
-// every track ever released. So the bars follow what the LIMITER is doing:
-//  - ok    : it is idle (under 0.5 dB of reduction) and the pre-limiter peak is
-//            below full scale;
-//  - warn  : the pre-limiter peak reaches 0 dBFS, or the limiter is pulling
-//            0.5-3 dB — enough to hear as a touched transient;
-//  - clip  : the peak is driven 3 dB past full scale, or the limiter is pulling
-//            3 dB or more (0.95 × 3.5 dB over its threshold): the chain is
+// every track ever released, and a loud master is not a fault. So the bars
+// follow what a SETTING does, not how loud the music is:
+//  - ok    : the limiter is doing less than 2 dB (0.95 × 2.5 dB over its
+//            threshold) and the pre-limiter peak stays under +2 dBFS;
+//  - warn  : the peak is driven 2 dB past full scale, or the limiter is pulling
+//            2-6 dB — the curve is audibly touching the music;
+//  - clip  : the peak is driven 6 dB past full scale, or the limiter is pulling
+//            6 dB or more (0.95 × 6.5 dB over its threshold): the chain is
 //            squashing the music, and a boost did it.
-// A sample at 0 dBFS is not itself clipping — the limiter is already catching
-// it — which is why "clip" starts past the ceiling, not at it. (Distribution's
-// -1 dBTP is a delivery spec for a file, not a playback-chain threshold: a
-// finished master is meant to sit just under 0.)
-export const WARN_PEAK_DB = 0;
-export const CLIP_PEAK_DB = 3;
-export const WARN_REDUCTION_DB = 0.5;
-export const CLIP_REDUCTION_DB = 3;
+// The screen also ignores the warning entirely when the EQ adds no gain (off,
+// flat, or cuts only): a loud master then is the recording's level, not the
+// equalizer's doing.
+export const WARN_PEAK_DB = 2;
+export const CLIP_PEAK_DB = 6;
+export const WARN_REDUCTION_DB = 2;
+export const CLIP_REDUCTION_DB = 6;
 // What `marginDb` pulls back to: the limiter's own threshold (-0.5 dBFS,
 // graph.js#limiterNode). Pulling the pre-limiter peak down to it releases the
 // limiter completely, which is the actionable answer for a boosted EQ.

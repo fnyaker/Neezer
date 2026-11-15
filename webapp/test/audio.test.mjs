@@ -23,9 +23,11 @@ import { buildBandPlan, buildEnergyPlan, readBands, readEnergy, ENERGY_BANDS } f
 import {
   BAND_FLOOR_DB,
   BANDS,
+  CLIP_PEAK_DB,
   CLIP_REDUCTION_DB,
   PEAK_FLOOR_DB,
   WARN_PEAK_DB,
+  WARN_REDUCTION_DB,
   bandEdges,
   classifyRisk,
   createSaturationMeter,
@@ -338,24 +340,29 @@ test("the risk is ok, warn or clip at the documented bars", () => {
   assert.equal(classifyRisk(-20, 0), "ok");
   // A modern master peaking at -0.1 dBFS is normal, not a warning.
   assert.equal(classifyRisk(-0.1, 0.38), "ok");
-  assert.equal(classifyRisk(WARN_PEAK_DB, 0), "warn", "a sample at full scale is a warning");
-  assert.equal(classifyRisk(-3, 0.5), "warn", "the limiter starting to work is a warning");
-  assert.equal(classifyRisk(2.999, 0), "warn");
-  assert.equal(classifyRisk(3, 0), "clip", "3 dB past full scale");
-  assert.equal(classifyRisk(-30, CLIP_REDUCTION_DB), "clip", "3 dB of limiting convicts on its own");
+  // Reaching full scale, and a limiter touching it, are normal too: only
+  // +2 dBFS or 2 dB of reduction says a curve is doing something.
+  assert.equal(classifyRisk(0, 0), "ok", "a loud master is not a fault");
+  assert.equal(classifyRisk(0, 1.9), "ok");
+  assert.equal(classifyRisk(-3, 1.9), "ok", "the limiter starting to work is not a warning");
+  assert.equal(classifyRisk(WARN_PEAK_DB, 0), "warn", "2 dB past full scale");
+  assert.equal(classifyRisk(-3, WARN_REDUCTION_DB), "warn", "2 dB of reduction is a warning");
+  assert.equal(classifyRisk(5.999, 0), "warn");
+  assert.equal(classifyRisk(CLIP_PEAK_DB, 0), "clip", "6 dB past full scale");
+  assert.equal(classifyRisk(-30, CLIP_REDUCTION_DB), "clip", "6 dB of limiting convicts on its own");
 });
 
 test("the reduction is the limiter's own work, and never negative", () => {
   assert.equal(limiterReduction(-6, -6), 0, "nothing to catch");
   assert.equal(limiterReduction(-6, -3), 0, "a post peak above the pre one is not a reduction");
   assert.equal(limiterReduction(-6, -12), 6);
-  // ...and through the meter: 0.5 → 0.4 is 1.94 dB of reduction.
+  // ...and through the meter: 0.5 → 0.35 is 3.1 dB of reduction.
   const pulled = createSaturationMeter().measure(
-    fakeTap({ amplitude: 0.5 }, { amplitude: 0.4 }),
+    fakeTap({ amplitude: 0.5 }, { amplitude: 0.35 }),
     1
   );
-  assert.ok(Math.abs(pulled.reductionDb - 1.9) <= 0.1, `measured ${pulled.reductionDb} dB`);
-  assert.equal(pulled.risk, "warn", "a limiter pulling 1.9 dB is a warning");
+  assert.ok(Math.abs(pulled.reductionDb - 3.1) <= 0.1, `measured ${pulled.reductionDb} dB`);
+  assert.equal(pulled.risk, "warn", "a limiter pulling 3.1 dB is a warning");
   assert.ok(pulled.marginDb > 0, "and it recommends pulling the chain back");
   // Same level both sides: nothing was reduced.
   const even = createSaturationMeter().measure(
@@ -365,23 +372,23 @@ test("the reduction is the limiter's own work, and never negative", () => {
   assert.equal(even.reductionDb, 0);
   assert.equal(even.risk, "ok");
   assert.equal(even.marginDb, 0);
-  // At full scale the limiter has just started: warn, and half a dB to release it.
+  // At full scale the limiter held it without pulling: a loud master, not a risk.
   const full = createSaturationMeter().measure(
     fakeTap({ amplitude: 1 }, { amplitude: 1 }),
     1
   );
   assert.equal(full.peakDb, 0);
-  assert.equal(full.risk, "warn");
+  assert.equal(full.risk, "ok");
   assert.equal(full.reductionDb, 0, "the limiter held it at full scale without pulling");
-  assert.equal(full.marginDb, 0.5);
-  // Three dB over full scale is the clip bar.
+  assert.equal(full.marginDb, 0);
+  // Six dB over full scale is the clip bar.
   const over = createSaturationMeter().measure(
-    fakeTap({ amplitude: Math.pow(10, 3 / 20) }, { amplitude: 1 }),
+    fakeTap({ amplitude: 2 }, { amplitude: 1 }),
     1
   );
-  assert.equal(over.peakDb, 3);
+  assert.equal(over.peakDb, 6);
   assert.equal(over.risk, "clip");
-  assert.equal(over.marginDb, 3.5);
+  assert.equal(over.marginDb, 6.5);
   assert.equal(recommendedMargin("ok", 0), 0);
   assert.equal(recommendedMargin("warn", 0), 0.5);
   assert.equal(recommendedMargin("clip", 3), 3.5);
