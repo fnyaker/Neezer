@@ -397,3 +397,22 @@ test("the client contract exports every method the lots rely on", () => {
     assert.equal(typeof api[name], "function", name);
   }
 });
+
+test("a refusal drops the cached copy of a page", async () => {
+  const { switchAccount } = await import("../src/lib/account.js");
+  switchAccount({ name: "bench" });
+  dbOpens = 0;
+  answer = () => response(404, { error: "not found" });
+  await assert.rejects(api.playlist("private"), (err) => err.status === 404);
+  assert.equal(dbOpens, 1);
+
+  dbOpens = 0;
+  answer = () =>
+    response(
+      503,
+      { error: "Deezer est injoignable", code: "deezer-unreachable" },
+      { "X-NS-Error": "deezer-unreachable" }
+    );
+  await assert.rejects(api.playlist("private"), (err) => err.code === "deezer-unreachable");
+  assert.equal(dbOpens, 0);
+});

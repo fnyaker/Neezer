@@ -13,6 +13,7 @@
 
 import { get } from "svelte/store";
 import { api } from "./api.js";
+import { activeOwner, savedOwner, onOwnerChange } from "./account.js";
 import { coverKey } from "./format.js";
 import { blobDecodes } from "./imagebytes.js";
 import { logInfo } from "./log.js";
@@ -22,7 +23,6 @@ import { migrateKey, trackKey, trackRef } from "./trackkey.js";
 import { isYielding, trickle, whenClear } from "./netyield.js";
 import {
   nativeAdopt,
-  nativeClear,
   nativeDownload,
   nativeFree,
   nativeHas,
@@ -114,9 +114,12 @@ export async function loadOfflineIndex() {
     const db = await openDB();
     let metas = await reqp(tx(db, "meta", "readonly").objectStore("meta").getAll());
     if (nativeOfflineAvailable()) metas = await reconcileNative(db, metas);
+    const owner = activeOwner();
+    if (owner && owner === savedOwner()) metas = await claimLegacy(db, metas, owner);
     const ids = new Set();
     let size = 0;
     for (const m of metas) {
+      if (!owner || m.owner !== owner) continue;
       const key = migrateKey(m.id);
       if (key !== m.id) storedAs.set(key, m.id);
       ids.add(key);
@@ -128,6 +131,25 @@ export async function loadOfflineIndex() {
     /* IndexedDB unavailable (private mode?) — offline cache just stays empty */
   }
 }
+
+async function claimLegacy(db, metas, owner) {
+  const legacy = metas.filter((m) => m && m.id != null && !m.owner);
+  if (!legacy.length) return metas;
+  const t = tx(db, "meta", "readwrite");
+  for (const m of legacy) t.objectStore("meta").put({ ...m, owner });
+  await done(t);
+  return metas.map((m) => (m && !m.owner ? { ...m, owner } : m));
+}
+
+let reloadingIndex = null;
+onOwnerChange((next) => {
+  if (!next) {
+    downloads.set(new Set());
+    downloadsSize.set(0);
+    return;
+  }
+  if (!reloadingIndex) reloadingIndex = loadOfflineIndex().finally(() => (reloadingIndex = null));
+});
 
 // The app's files against this index: a file nobody lists (its record was
 // never written: the page went away mid-download) is dropped, and so is a
@@ -260,9 +282,12 @@ function scheduleCoverRepair(rows) {
 
 export async function repairMissingCovers(have) {
   const db = await openDB();
+  const owner = activeOwner();
+  if (!owner) return { missing: 0, repaired: 0 };
   const metas = await reqp(tx(db, "meta", "readonly").objectStore("meta").getAll());
   const todo = new Map(); // key -> [cover url, id]; one fetch per distinct art
   for (const m of metas) {
+    if (!m || m.owner !== owner) continue;
     const url = m && m.track && m.track.album && m.track.album.cover;
     const id = m && ((m.track && (m.track.id || m.track.deezer_id)) || m.id);
     if (!url || !id) continue;
@@ -360,22 +385,29 @@ async function gcCover(coverUrl) {
 
 export async function getMeta(id) {
   const db = await openDB();
-  return reqp(tx(db, "meta", "readonly").objectStore("meta").get(diskId(id)));
+  const m = await reqp(tx(db, "meta", "readonly").objectStore("meta").get(diskId(id)));
+  return m && m.owner === activeOwner() ? m : null;
 }
 
 export async function listDownloads() {
   const db = await openDB();
+  const owner = activeOwner();
   const metas = await reqp(tx(db, "meta", "readonly").objectStore("meta").getAll());
   // Most recently played first.
-  return metas.sort((a, b) => (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0));
+  return metas
+    .filter((m) => m && owner && m.owner === owner)
+    .sort((a, b) => (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0));
 }
 
 // Read the stored blob and hand back an object URL (caller revokes it).
 export async function getObjectURL(id) {
+  const db = await openDB();
+  const at = diskId(id);
+  const meta = await reqp(tx(db, "meta", "readonly").objectStore("meta").get(at));
+  if (!meta || meta.owner !== activeOwner()) return null;
   // Kept by the app: a URL it answers from the file (nothing to revoke).
   if (nativeHas(id)) return nativeOfflineUrl(id);
-  const db = await openDB();
-  const rec = await reqp(tx(db, "audio", "readonly").objectStore("audio").get(diskId(id)));
+  const rec = await reqp(tx(db, "audio", "readonly").objectStore("audio").get(at));
   if (!rec || !rec.blob) return null;
   return URL.createObjectURL(rec.blob);
 }
@@ -387,7 +419,7 @@ export async function touch(id) {
     const t = tx(db, "meta", "readwrite");
     const store = t.objectStore("meta");
     const m = await reqp(store.get(diskId(id)));
-    if (m) {
+    if (m && m.owner === activeOwner()) {
       m.lastPlayedAt = Date.now();
       store.put(m);
     }
@@ -473,6 +505,8 @@ const RESUMES = 3;
 // Returns true on success. Idempotent: a track already stored is skipped.
 export async function downloadTrack(track, quality, onProgress = null) {
   const id = trackKey(track);
+  const owner = activeOwner();
+  if (!owner) return false;
   if (isDownloaded(id) || get(downloading).has(id)) return true;
   setDownloading(id, true);
   const t0 = Date.now();
@@ -488,6 +522,7 @@ export async function downloadTrack(track, quality, onProgress = null) {
       const t = tx(db, "meta", "readwrite");
       t.objectStore("meta").put({
         id,
+        owner,
         quality,
         size,
         native: true,
@@ -517,6 +552,7 @@ export async function downloadTrack(track, quality, onProgress = null) {
     t.objectStore("audio").put({ id, blob });
     t.objectStore("meta").put({
       id,
+      owner,
       quality,
       size: blob.size,
       track: slimTrack(track),
@@ -548,6 +584,7 @@ export async function removeTrack(key) {
   try {
     const db = await openDB();
     const meta = await reqp(tx(db, "meta", "readonly").objectStore("meta").get(at));
+    if (meta && meta.owner !== activeOwner()) return false;
     const t = tx(db, ["meta", "audio"], "readwrite");
     t.objectStore("meta").delete(at);
     t.objectStore("audio").delete(at);
@@ -568,34 +605,29 @@ export async function removeTrack(key) {
 }
 
 export async function clearAll() {
+  const owner = activeOwner();
+  if (!owner) return false;
   try {
     const db = await openDB();
-    // Grab our cover URLs first so we only revoke OUR entries in the shared map
-    // (the playback cache owns its own covers there).
-    const coverRows = await reqp(tx(db, "covers", "readonly").objectStore("covers").getAll());
-    const keys = coverRows.map((r) => coverKey(r.url)).filter(Boolean);
-    const t = tx(db, ["meta", "audio", "covers"], "readwrite");
-    t.objectStore("meta").clear();
-    t.objectStore("audio").clear();
-    t.objectStore("covers").clear();
+    const metas = await reqp(tx(db, "meta", "readonly").objectStore("meta").getAll());
+    const mine = metas.filter((m) => m && m.owner === owner);
+    const ids = mine.map((m) => String(m.id));
+    const covers = new Set(
+      mine.map((m) => m.track && m.track.album && m.track.album.cover).filter(Boolean)
+    );
+    const t = tx(db, ["meta", "audio"], "readwrite");
+    for (const id of ids) {
+      t.objectStore("meta").delete(id);
+      t.objectStore("audio").delete(diskId(id));
+    }
     await done(t);
-    nativeClear();
+    for (const id of ids) {
+      nativeRemove(id);
+      storedAs.delete(id);
+    }
     downloads.set(new Set());
     downloadsSize.set(0);
-    offlineCovers.update((m) => {
-      const n = { ...m };
-      for (const key of keys) {
-        if (n[key]) {
-          try {
-            URL.revokeObjectURL(n[key]);
-          } catch {
-            /* ignore */
-          }
-          delete n[key];
-        }
-      }
-      return n;
-    });
+    for (const url of covers) await gcCover(url);
     return true;
   } catch {
     return false;
@@ -620,7 +652,12 @@ export async function migrateStoredKeys() {
       reqp(audio.get(old)),
       reqp(meta.get(key)),
     ]);
-    if (!mNew && m && a) {
+    if (!m || m.owner !== activeOwner()) {
+      await done(t);
+      storedAs.delete(key);
+      continue;
+    }
+    if (!mNew && a) {
       meta.put({ ...m, id: key, track: m.track ? { ...m.track, id: key } : m.track });
       audio.put({ ...a, id: key });
     }
@@ -650,9 +687,12 @@ export function moveDownloadsToApp() {
 
 async function adoptAll() {
   const db = await openDB();
+  const owner = activeOwner();
+  if (!owner) return 0;
   const metas = await reqp(tx(db, "meta", "readonly").objectStore("meta").getAll());
   let moved = 0;
   for (const m of metas) {
+    if (m.owner !== owner) continue;
     if (m.native || storedAs.has(migrateKey(m.id)) || migrateKey(m.id) !== m.id) continue;
     const rec = await reqp(tx(db, "audio", "readonly").objectStore("audio").get(m.id));
     if (!rec || !rec.blob) continue;

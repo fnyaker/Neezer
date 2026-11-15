@@ -4,7 +4,7 @@
 import { get } from "svelte/store";
 import { user } from "./stores.js";
 import { online, reportOnline, reportOffline } from "./net.js";
-import { isCacheable, cacheGet, cachePut } from "./apicache.js";
+import { isCacheable, cacheGet, cachePut, cacheDelete } from "./apicache.js";
 
 const BASE = "/api";
 
@@ -48,12 +48,17 @@ function refreshInBackground(path) {
   fetch(BASE + path, { credentials: "include" })
     .then(async (res) => {
       reportOnline(); // any response at all proves the server is reachable
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (REFUSED.has(res.status)) cacheDelete(path).catch(() => {});
+        return;
+      }
       const text = await res.text();
       cachePut(path, null, text).catch(() => {});
     })
     .catch(() => {});
 }
+
+const REFUSED = new Set([401, 403, 404]);
 
 // `wasOnline` records whether we believed the network was up when the FIRST
 // attempt started, and is threaded through the retries: a blip that began
@@ -113,6 +118,7 @@ async function req(path, opts = {}, attempt = 0, wasOnline = null) {
   reportOnline();
 
   if (res.status === 401) {
+    if (cacheable) cacheDelete(path).catch(() => {});
     // A remote-control grant that just ended (the owner cut it, it expired) is
     // not a logged-out user: the controller says so and offers the account
     // this browser had before, if the server gave it back.
@@ -130,6 +136,7 @@ async function req(path, opts = {}, attempt = 0, wasOnline = null) {
     throw { status: 401, message: "unauthorized" };
   }
   if (!res.ok) {
+    if (cacheable && REFUSED.has(res.status)) cacheDelete(path).catch(() => {});
     // A failure the server has already classified as Deezer's (unreachable,
     // or the proxy switched off) is FINAL here. Reaching Deezer again is the
     // server's job — its calls retry within their own budget and its breaker

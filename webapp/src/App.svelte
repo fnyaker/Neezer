@@ -4,7 +4,9 @@
   import { onMount } from "svelte";
   import { onboardingTarget, stepFor, stepFromPath } from "./lib/onboarding.js";
   import { user, authChecked, nowPlayingOpen, player } from "./lib/stores.js";
-  import { api } from "./lib/api.js";
+  import { api, failureCause } from "./lib/api.js";
+  import { switchAccount } from "./lib/account.js";
+  import { cachePurgeOwner } from "./lib/apicache.js";
   import { initConnectivity, online } from "./lib/net.js";
   import { loadOfflineIndex, loadCoverCache, moveDownloadsToApp } from "./lib/offline.js";
   import { initPlayCache } from "./lib/playcache.js";
@@ -175,6 +177,28 @@
     const target = onboardingTarget($user && $user.onboarding, $location);
     if (target) replace(target);
   }
+
+  let purgeRun = Promise.resolve();
+  let switching = false;
+  function adoptAccount(u) {
+    const change = switchAccount(u);
+    if (!change || !change.action) return;
+    if (change.prev)
+      purgeRun = Promise.all([purgeRun, cachePurgeOwner(change.prev)]).catch(() => {});
+    if (change.action !== "reload") return;
+    switching = true;
+    const ready = purgeRun;
+    Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 1200))]).finally(() =>
+      window.location.reload()
+    );
+  }
+  $: if (
+    $authChecked &&
+    !REMOTE &&
+    !(partyId || rcToken || sharedPlaylistToken || inviteToken)
+  )
+    adoptAccount($user);
+
   // A remote control on the "queue" level lends the transport and the queue
   // and nothing else: the full-screen player IS the app, with nothing behind.
   const queueOnly = !!REMOTE && !atLeast("read");
@@ -255,41 +279,52 @@
       if ("requestIdleCallback" in window) requestIdleCallback(later, { timeout: 8000 });
       else setTimeout(later, 3000);
     }
+    await bootSession();
+  });
 
-    // Airplane-mode launch: if we're offline but have a remembered session, boot
-    // straight into the (downloaded) library instead of stalling on the login
-    // screen; re-validate once we're back online.
-    const saved = bootSaved;
-    if (saved && typeof navigator !== "undefined" && !navigator.onLine) {
-      user.set(saved);
-      bootedOffline = true;
-      authChecked.set(true);
-      return;
-    }
+  let bootProblem = null;
+  let booting = false;
+  async function bootSession() {
+    if (booting) return;
+    booting = true;
+    bootProblem = null;
     try {
-      const r = await api.me();
-      if (r.remote) {
-        // This browser's session is a remote control now (claimed in another
-        // tab): the page has to be rebuilt as one, from the first store up.
-        rememberRemote(r.remote);
-        reloadHome();
-        return;
-      }
-      user.set(r.user);
-      if (r.user.onboarding === "done" || !r.user.onboarding) loadFavorites();
-    } catch (e) {
-      // Network failure with a known session -> stay logged in (offline); a real
-      // 401/expired session clears it.
-      if (e && e.offline && saved) {
+      const saved = savedUser();
+      // Airplane-mode launch: if we're offline but have a remembered session, boot
+      // straight into the (downloaded) library instead of stalling on the login
+      // screen; re-validate once we're back online.
+      if (saved && typeof navigator !== "undefined" && !navigator.onLine) {
         user.set(saved);
         bootedOffline = true;
-      } else {
-        user.set(null);
+        return;
+      }
+      try {
+        const r = await api.me();
+        if (r.remote) {
+          // This browser's session is a remote control now (claimed in another
+          // tab): the page has to be rebuilt as one, from the first store up.
+          rememberRemote(r.remote);
+          reloadHome();
+          return;
+        }
+        user.set(r.user);
+        if (r.user.onboarding === "done" || !r.user.onboarding) loadFavorites();
+      } catch (e) {
+        if (e && e.status === 401) {
+          user.set(null);
+        } else if (saved) {
+          user.set(saved);
+          bootedOffline = true;
+          bootProblem = e;
+        } else {
+          bootProblem = e;
+        }
       }
     } finally {
       authChecked.set(true);
+      booting = false;
     }
-  });
+  }
 
   // Persist / clear the session so an offline launch can trust it. Guard on
   // authChecked: this reactive block runs once at init with $user still null
@@ -308,7 +343,7 @@
   // Reload favorites + pull the server-side podcast positions at login.
   // Nothing of the shell starts while a new account is still onboarding: those
   // requests have no screen to feed and would compete with the first one.
-  $: if ($user && !REMOTE && !onboardingRequired) {
+  $: if ($user && !REMOTE && !onboardingRequired && !switching) {
     loadFavorites();
     initPodcastProgress();
     startHealthWatch();
@@ -379,10 +414,17 @@
     bootedOffline = false;
     try {
       const r = await api.me();
+      if (r.remote) {
+        rememberRemote(r.remote);
+        reloadHome();
+        return;
+      }
       user.set(r.user);
+      bootProblem = null;
       loadFavorites();
     } catch (e) {
-      if (!(e && e.offline)) user.set(null); // genuine auth failure -> log out
+      if (e && e.status === 401) user.set(null);
+      else bootProblem = e;
     }
   }
 
@@ -461,6 +503,14 @@
   {/if}
 {:else if !$authChecked}
   <div class="loading">…</div>
+{:else if switching}
+  <div class="loading">…</div>
+{:else if !$user && bootProblem}
+  <div class="boot-retry">
+    <h1>Le serveur ne répond pas</h1>
+    <p>Impossible de vérifier ta session : {failureCause(bootProblem)}. Vérifie ta connexion, puis réessaie.</p>
+    <button class="btn btn-primary" on:click={bootSession}>Réessayer</button>
+  </div>
 {:else if !$user}
   <Login />
 {:else if onboardingRequired}
@@ -488,6 +538,12 @@
            --topbar-h token below). -->
       <TopBar />
       <Notices />
+      {#if bootProblem}
+        <div class="boot-banner" role="alert">
+          <p>Le serveur ne répond pas : {failureCause(bootProblem)}. Ta session et ce qui est déjà sur cet appareil restent disponibles.</p>
+          <button class="btn btn-sm btn-ghost" on:click={bootSession}>Réessayer</button>
+        </div>
+      {/if}
       <Router {routes} />
     </main>
     {#if $nowPlayingOpen && !mobile}
@@ -546,6 +602,47 @@
     padding: 24px;
     padding-bottom: calc(var(--player-h) + 80px);
     font-size: 0.95rem;
+  }
+  .boot-banner {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 12px var(--page-x) 0;
+    padding: 10px 12px 10px 16px;
+    border: 1px solid var(--ln);
+    border-radius: var(--r-card);
+    background: var(--s1);
+  }
+  .boot-banner p {
+    margin: 0;
+    min-width: 0;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: var(--tx);
+  }
+  .boot-banner button {
+    flex: none;
+  }
+  .boot-retry {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 24px;
+    text-align: center;
+  }
+  .boot-retry h1 {
+    margin: 0;
+    font-size: 1.4rem;
+  }
+  .boot-retry p {
+    margin: 0;
+    color: var(--dim);
+    line-height: 1.5;
   }
   .layout {
     display: grid;

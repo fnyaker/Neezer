@@ -21,7 +21,12 @@ import { fakeIndexedDB } from "./fakeidb.mjs";
 
 // --- the browser, as far as these modules reach ------------------------------
 globalThis.window = { addEventListener() {}, location: { href: "http://x/" } };
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+const savedRows = new Map([["auth.user", JSON.stringify({ name: "bench" })]]);
+globalThis.localStorage = {
+  getItem: (k) => (savedRows.has(k) ? savedRows.get(k) : null),
+  setItem: (k, v) => savedRows.set(k, String(v)),
+  removeItem: (k) => savedRows.delete(k),
+};
 
 const idb = fakeIndexedDB();
 globalThis.indexedDB = idb;
@@ -52,6 +57,7 @@ URL.revokeObjectURL = (u) => {
 };
 
 const { get } = await import("svelte/store");
+const { activeOwner } = await import("../src/lib/account.js");
 const { offlineCovers, playCacheSize } = await import("../src/lib/stores.js");
 const { online } = await import("../src/lib/net.js");
 const { coverKey } = await import("../src/lib/format.js");
@@ -146,12 +152,12 @@ test("downloads that lost their art get it back, once per picture, in the backgr
   const artless = art("44444444444444444444444444444444");
   await seed("nsupy-offline", "covers", [{ url: kept, blob: jpeg() }]);
   await seed("nsupy-offline", "meta", [
-    { id: "1", track: { deezer_id: "1", album: { cover: kept } } },
-    { id: "2", track: { deezer_id: "2", album: { cover: lost } } },
-    { id: "3", track: { deezer_id: "3", album: { cover: lost } } }, // same album
-    { id: "4", track: { deezer_id: "4", album: { cover: lostToo } } },
-    { id: "5", track: { deezer_id: "5", album: { cover: artless } } },
-    { id: "6", track: { deezer_id: "6", album: null } },
+    { id: "1", owner: activeOwner(), track: { deezer_id: "1", album: { cover: kept } } },
+    { id: "2", owner: activeOwner(), track: { deezer_id: "2", album: { cover: lost } } },
+    { id: "3", owner: activeOwner(), track: { deezer_id: "3", album: { cover: lost } } }, // same album
+    { id: "4", owner: activeOwner(), track: { deezer_id: "4", album: { cover: lostToo } } },
+    { id: "5", owner: activeOwner(), track: { deezer_id: "5", album: { cover: artless } } },
+    { id: "6", owner: activeOwner(), track: { deezer_id: "6", album: null } },
   ]);
   // The play cache is already showing one of them: the download still needs
   // a copy of its own, since the play cache's is evictable.

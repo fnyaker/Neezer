@@ -6,10 +6,11 @@
 // quota-safe) rather than localStorage — track lists can be big.
 
 import { REMOTE } from "./remote/mode.js";
+import { activeOwner, ownerPrefix } from "./account.js";
 
 const DB_NAME = "nsupy-apicache";
-const DB_VERSION = 1;
-const MAX_ENTRIES = 400; // prune oldest beyond this
+const DB_VERSION = 2;
+const MAX_ENTRIES = 400;
 let dbPromise = null;
 
 function openDB() {
@@ -18,11 +19,19 @@ function openDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains("responses"))
-        db.createObjectStore("responses", { keyPath: "path" });
+      if (db.objectStoreNames.contains("responses")) db.deleteObjectStore("responses");
+      db.createObjectStore("responses", { keyPath: "key" });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      dbPromise = null;
+      reject(new Error("indexeddb blocked"));
+    };
   });
   return dbPromise;
 }
@@ -34,8 +43,14 @@ function reqp(request) {
   });
 }
 
-// GET-response paths worth keeping for offline browsing (matched on the path,
-// query stripped). Deliberately excludes dynamic/large/streaming endpoints.
+function done(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
 const CACHE_PREFIXES = [
   "/me/playlists",
   "/me/favorites",
@@ -93,11 +108,22 @@ export function decode(rec) {
   return rec.data ?? null;
 }
 
+export function ownerKey(owner, path) {
+  return owner + "\u0000" + path;
+}
+
+function scopeOwner(path) {
+  if (!isCacheable(path)) return null;
+  return activeOwner();
+}
+
 export async function cacheGet(path) {
+  const owner = scopeOwner(path);
+  if (!owner) return null;
   try {
     const db = await openDB();
     const rec = await reqp(
-      db.transaction("responses", "readonly").objectStore("responses").get(path)
+      db.transaction("responses", "readonly").objectStore("responses").get(ownerKey(owner, path))
     );
     return decode(rec);
   } catch {
@@ -108,10 +134,12 @@ export async function cacheGet(path) {
 // Age in ms of a cached entry, or Infinity when there isn't one. Used by the
 // background warmer to skip what it refreshed recently.
 export async function cacheAge(path) {
+  const owner = scopeOwner(path);
+  if (!owner) return Infinity;
   try {
     const db = await openDB();
     const rec = await reqp(
-      db.transaction("responses", "readonly").objectStore("responses").get(path)
+      db.transaction("responses", "readonly").objectStore("responses").get(ownerKey(owner, path))
     );
     return rec && rec.ts ? Date.now() - rec.ts : Infinity;
   } catch {
@@ -147,19 +175,54 @@ export function aliasPath(path, body) {
 }
 
 export async function cachePut(path, data, text = null) {
+  const owner = scopeOwner(path);
+  if (!owner) return;
   try {
     const db = await openDB();
     const t = db.transaction("responses", "readwrite");
+    const store = t.objectStore("responses");
     const body = typeof text === "string" ? text : JSON.stringify(data ?? null);
     const ts = Date.now();
-    t.objectStore("responses").put({ path, text: body, ts });
+    store.put({ key: ownerKey(owner, path), owner, path, text: body, ts });
     const alias = aliasPath(path, body);
-    if (alias) t.objectStore("responses").put({ path: alias, text: body, ts });
-    await new Promise((resolve, reject) => {
-      t.oncomplete = resolve;
-      t.onerror = () => reject(t.error);
-    });
+    if (alias)
+      store.put({ key: ownerKey(owner, alias), owner, path: alias, text: body, ts });
+    await done(t);
     prune().catch(() => {});
+  } catch {
+    /* best effort */
+  }
+}
+
+export async function cacheDelete(path) {
+  const owner = scopeOwner(path);
+  if (!owner) return;
+  try {
+    const db = await openDB();
+    const t = db.transaction("responses", "readwrite");
+    t.objectStore("responses").delete(ownerKey(owner, path));
+    await done(t);
+  } catch {
+    /* best effort */
+  }
+}
+
+export async function cachePurgeOwner(owner) {
+  if (!owner) return;
+  try {
+    const db = await openDB();
+    const rows = await reqp(
+      db.transaction("responses", "readonly").objectStore("responses").getAll()
+    );
+    const prefix = ownerPrefix(owner);
+    const doomed = rows.filter(
+      (r) => r && (r.owner === owner || String(r.key || "").startsWith(prefix))
+    );
+    if (!doomed.length) return;
+    const t = db.transaction("responses", "readwrite");
+    const store = t.objectStore("responses");
+    for (const r of doomed) store.delete(r.key);
+    await done(t);
   } catch {
     /* best effort */
   }
@@ -182,5 +245,5 @@ async function prune() {
     .slice(0, all.length - MAX_ENTRIES);
   const t = db.transaction("responses", "readwrite");
   const store = t.objectStore("responses");
-  for (const r of doomed) store.delete(r.path);
+  for (const r of doomed) store.delete(r.key);
 }

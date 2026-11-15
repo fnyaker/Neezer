@@ -7,6 +7,7 @@
 
 import { writable } from "svelte/store";
 import { api } from "./api.js";
+import { scopedKey, onOwnerChange } from "./account.js";
 
 const KEY = "podcast.progress";
 // Cap the number of remembered episodes so the store can't grow unbounded;
@@ -22,8 +23,10 @@ const DONE_TAIL = 15;
 const SYNC_MIN_MS = 15000;
 
 function load() {
+  const key = scopedKey(KEY);
+  if (!key) return {};
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(key);
     const obj = raw ? JSON.parse(raw) : null;
     return obj && typeof obj === "object" ? obj : {};
   } catch {
@@ -35,6 +38,12 @@ function load() {
 let map = load();
 export const podcastProgress = writable(map);
 
+onOwnerChange(() => {
+  map = load();
+  for (const id of Object.keys(lastSync)) delete lastSync[id];
+  podcastProgress.set(map);
+});
+
 function persist() {
   const entries = Object.entries(map);
   if (entries.length > MAX) {
@@ -42,7 +51,8 @@ function persist() {
     map = Object.fromEntries(entries.slice(0, MAX));
   }
   try {
-    localStorage.setItem(KEY, JSON.stringify(map));
+    const key = scopedKey(KEY);
+    if (key) localStorage.setItem(key, JSON.stringify(map));
   } catch {
     /* ignore quota — the position is a nicety, not critical */
   }

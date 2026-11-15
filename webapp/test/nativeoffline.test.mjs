@@ -8,7 +8,13 @@ import { fakeIndexedDB } from "./fakeidb.mjs";
 
 globalThis.window = { addEventListener() {}, location: { href: "http://srv/app/", origin: "http://srv" } };
 globalThis.location = globalThis.window.location;
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+const savedRows = new Map();
+savedRows.set("auth.user", JSON.stringify({ name: "bench" }));
+globalThis.localStorage = {
+  getItem: (k) => (savedRows.has(k) ? savedRows.get(k) : null),
+  setItem: (k, v) => savedRows.set(k, String(v)),
+  removeItem: (k) => savedRows.delete(k),
+};
 const idb = fakeIndexedDB();
 globalThis.indexedDB = idb;
 // Nothing here reaches the server: covers and gains are best effort and fail.
@@ -75,6 +81,7 @@ function app({ version = 5, refuseAt = -1, failDownload = false, free = 1e12 } =
 }
 
 const { get } = await import("svelte/store");
+const { activeOwner } = await import("../src/lib/account.js");
 const S = await import("../src/lib/stores.js");
 const N = await import("../src/lib/nativeoffline.js");
 const offline = await import("../src/lib/offline.js");
@@ -119,7 +126,7 @@ test("an app without the store keeps the old path: the Blob in IndexedDB", async
 function seedBlob(n, size) {
   const bytes = new Uint8Array(size);
   for (let i = 0; i < size; i++) bytes[i] = (i * 31 + n) & 255;
-  rows("meta").set(U(n), { id: U(n), quality: "FLAC", size, track: { id: U(n), title: "T" }, addedAt: 1, lastPlayedAt: 1 });
+  rows("meta").set(U(n), { id: U(n), owner: activeOwner(), quality: "FLAC", size, track: { id: U(n), title: "T" }, addedAt: 1, lastPlayedAt: 1 });
   rows("audio").set(U(n), { id: U(n), blob: new Blob([bytes], { type: "audio/flac" }) });
   return bytes;
 }
