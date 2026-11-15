@@ -201,7 +201,8 @@ server-side), `POST /api/podcast/<pid>/transcribe` to mark a show and enqueue it
 backlog, `POST|DELETE /api/podcast/episode/<eid>/transcribe` to start/stop/delete, and the read
 routes `GET .../transcript` (page, `at`, `q`), `GET /api/podcast/<pid>/transcript/search` and
 `GET /api/transcripts/search`. A page is **3 statements**, an `at`/`q` page 4, both searches 4 with
-exactly **1 `search_text LIKE`**; the show page now costs 7 SELECT (+1 grouped transcript state),
+exactly **1 `search_text LIKE`**; the show page now costs 6 SELECT (the episode/archived counts
+are one grouped query; the transcript state adds one when present),
 each `transcript` payload is ~113 B when ready. Search scopes are the show's 100 latest ready
 episodes and the most recent **1.2 M segments** (configurable; `0` = unlimited), and the payload
 says when it is truncated. Transcript reads are `read` for remote sessions; settings/start/stop/
@@ -759,6 +760,10 @@ add/remove/reorder tracks only; rename, delete, invite, role changes and the pub
 owner/admin. `/api/me/playlists` returns the caller's own lists plus their memberships, never an
 admin firehose. Private uploads are filtered per viewer from tracks, counts, cover and recommendation
 seeds through `Track.visible_clause`; hidden rows stay in the playlist and are anchored for reorder.
+The same visibility now covers Subsonic `getSong`/`getAlbum`/`getArtist`/`getArtists`/`getCoverArt`
+and the CSV/list export: a non-owner gets the same 70/404 and never the embedded cover bytes.
+`access.snapshot()` is **fail-closed** — it keeps the last valid snapshot for the same database,
+and an unreadable first snapshot opens nothing instead of granting the server account to `all`.
 The core measures 6 statements for `/me/playlists` at 61 lists, 3/95 B for `/version`, 7 statements
 for a 4 000-title page, and two concurrent writers at the same version produce exactly one 200 and
 one 409.
@@ -779,7 +784,14 @@ no members, versions or `last_edited_*`. `ratelimit.WindowLimiter` is a bounded,
 (no Flask import): playlist creation is **60/h/account** and member writes **30/10 min**, returning
 429 with `Retry-After`. Subsonic `getPlaylists` at 61 playlists is 66 statements (one owner join
 saved 61 reads; the per-playlist aggregate remains in `db.py`), a ZIP export 8, a file list 4 and a
-public page 6.
+public page 6. `/rest/getPlaylist` at 4 000 titles is **9 statements / 0.33 s** (28 016 / 2.65 s
+before): one joined `Track+Album+Artist+Folder+root` read, three prefetches and one credits query,
+with byte-identical JSON. Creating or filling a playlist uses `Playlist.add_many` (one
+`MAX(index)`, INSERTs of 300 in the caller's transaction): **13–14 statements** for 2 000 titles on
+`/api`, **19** on Subsonic. Schema `20261122` adds the two real MySQL foreign keys to
+`playlist_share` after purging orphans; `GET /api/podcast/<pid>` pages episodes (`limit` 1..200,
+default 50, keyset `next`): 1 000 episodes cost **7 statements / 28 kB** per page instead of
+553 582 B.
 
 **A public playlist link** (`webui/playlist_share.py`, table `playlist_share` schema `20261113`,
 `/pl/<token>` in `spa.py`): the token is `<id>.<hmac>` under the app secret (the remote-link
