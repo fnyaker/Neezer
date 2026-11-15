@@ -24,15 +24,14 @@ from neezer.db import Track
 from .test_detach_a import _AppCase
 
 FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
 
 
 def _need_ffmpeg():
-    if FFMPEG and FFPROBE:
+    if FFMPEG:
         return
     if os.environ.get("NS_REQUIRE_FFMPEG") == "1":
-        raise RuntimeError("NS_REQUIRE_FFMPEG=1 but ffmpeg/ffprobe are not on PATH")
-    raise unittest.SkipTest("ffmpeg/ffprobe not installed")
+        raise RuntimeError("NS_REQUIRE_FFMPEG=1 but ffmpeg is not on PATH")
+    raise unittest.SkipTest("ffmpeg not installed")
 
 
 def _write_marked_flac(path, silence=8, tone=4):
