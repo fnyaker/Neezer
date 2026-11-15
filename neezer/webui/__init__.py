@@ -3667,8 +3667,10 @@ def subscribe_podcast():
         try:
             info = provider.dz.api.get_episode(did)
             show_id = (info.get("podcast") or {}).get("id") or info.get("podcast_id")
-        except Exception:
-            show_id = None
+        except Exception as exc:
+            if _deezer_down(exc):
+                return _deezer_unreachable()
+            return jsonify({"error": "could not resolve show"}), 502
         if not show_id:
             return jsonify({"error": "could not resolve show"}), 400
 

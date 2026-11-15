@@ -546,6 +546,20 @@ class PodcastWebUITestCase(unittest.TestCase):
     def test_requires_login(self):
         self.assertEqual(self.client.get("/api/podcasts").status_code, 401)
 
+    def test_an_episode_url_does_not_turn_an_outage_into_a_verdict(self):
+        import requests
+
+        self._login()
+        self.provider.dz.api.get_episode = lambda _id: (_ for _ in ()).throw(
+            requests.Timeout("down")
+        )
+        rv = self.client.post(
+            "/api/podcasts", json={"url": "https://www.deezer.com/episode/123"}
+        )
+        self.assertEqual(rv.status_code, 503)
+        self.assertEqual(rv.headers.get("X-NS-Error"), "deezer-unreachable")
+        self.assertEqual(PodcastChannel.select().count(), 0)
+
     def test_subscribe_list_and_get(self):
         self._login()
         rv = self._subscribe()
