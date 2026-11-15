@@ -521,8 +521,18 @@ class UserManager:
             UserManager._last_login_touch.clear()
 
     @staticmethod
+    def _by_name(name):
+        if not isinstance(name, str) or not name.strip():
+            return None
+        try:
+            user = User.get_or_none(User.name_key == fold_name(name))
+        except TypeError:
+            return None
+        return user if user is not None else User.get_or_none(User.name == name)
+
+    @staticmethod
     def try_auth(name, password):
-        user = User.get_or_none(name=name)
+        user = UserManager._by_name(name)
         if user is None:
             # Verify against a throwaway hash so a missing account costs the
             # same as a wrong password. Returning early made the response time
@@ -545,7 +555,7 @@ class UserManager:
     @staticmethod
     def try_auth_token(name, token, salt):
         """Subsonic token auth: token == md5(password + salt)."""
-        user = User.get_or_none(name=name)
+        user = UserManager._by_name(name)
         if user is None or user.disabled or not user.password_clear:
             return None
         try:

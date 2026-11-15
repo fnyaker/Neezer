@@ -63,6 +63,8 @@ class UserManagerAccountTestCase(unittest.TestCase):
         self.assertFalse(user.disabled)
         self.assertIsNone(user.last_login)
         self.assertIsNotNone(UserManager.try_auth("Élodie", "Alic3pass"))
+        self.assertIsNotNone(UserManager.try_auth("elodie", "Alic3pass"))
+        self.assertIsNotNone(UserManager.try_auth("ÉLODIE", "Alic3pass"))
         self.assertEqual(db.User.get(db.User.name == "Élodie").id, user.id)
 
     def test_add_refuses_a_folded_duplicate(self):
@@ -135,6 +137,7 @@ class UserManagerAccountTestCase(unittest.TestCase):
         renamed = db.User.get(db.User.id == alice.id)
         self.assertEqual((renamed.name, renamed.name_key), ("Carol", "carol"))
         self.assertIsNotNone(UserManager.try_auth("Carol", "Alic3pass"))
+        self.assertIsNotNone(UserManager.try_auth("carol", "Alic3pass"))
 
         UserManager.rename("CAROL", "dave")
         moved = db.User.get(db.User.id == alice.id)
