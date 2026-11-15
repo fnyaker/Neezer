@@ -25,7 +25,7 @@ TABLES = (
     track_id CHAR(32) NOT NULL REFERENCES track(id) ON DELETE CASCADE,
     neighbor_id CHAR(32) NOT NULL REFERENCES track(id) ON DELETE CASCADE,
     score DOUBLE NOT NULL,
-    rank INTEGER NOT NULL,
+    `rank` INTEGER NOT NULL,
     PRIMARY KEY (track_id, neighbor_id)
 )""",
     """CREATE TABLE IF NOT EXISTS track_enrichment (
@@ -41,7 +41,7 @@ TABLES = (
 INDEXES = (
     ("starred_playlist", "index_starred_playlist_user_id_fk", "user_id"),
     ("starred_playlist", "index_starred_playlist_starred_id_fk", "starred_id"),
-    ("track_neighbor", "index_track_neighbor_track_id_rank", "track_id, rank"),
+    ("track_neighbor", "index_track_neighbor_track_id_rank", "track_id, `rank`"),
     ("track_neighbor", "index_track_neighbor_neighbor_id_fk", "neighbor_id"),
 )
 
