@@ -29,7 +29,7 @@ from datetime import datetime
 
 from flask import Blueprint, current_app, jsonify, request, session
 
-from .. import invites
+from .. import audit, invites
 from ..db import Invite, User, db, now
 from ..managers.user import (
     InvalidUserName,
@@ -500,6 +500,7 @@ def invite_redeem():
 
     _remember_redeem(row.id, request_id, user.id, user.session_epoch or 0)
     redeem_limiter.reset_user(token_key)
+    audit.record("invite.redeem", user, row.id, "account created")
     logger.info("invite %s redeemed by user %s", row.id, user.id)
     from .. import onboarding as _onboarding
 
@@ -618,6 +619,7 @@ def admin_invite_create():
     except _LiveCap:
         return _live_cap()
 
+    audit.record("invite.create", request.webuser, row.id, note or "")
     logger.info("admin %s created invite %s", request.webuser.name, row.id)
     resp = jsonify({"invite": _invite_json(row, at), "token": token})
     resp.status_code = 201
@@ -642,6 +644,7 @@ def admin_invite_revoke(invite_id):
             return _invite_not_found()
         if current.used_at is not None:
             return _invite_used()
+    audit.record("invite.revoke", request.webuser, row.id)
     logger.info("admin %s revoked invite %s", request.webuser.name, row.id)
     return jsonify({"revoked": True})
 
@@ -685,6 +688,7 @@ def admin_invite_renew(invite_id):
     except _LiveCap:
         return _live_cap()
 
+    audit.record("invite.renew", request.webuser, fresh.id, f"from {row.id}")
     logger.info("admin %s renewed invite %s as %s", request.webuser.name, row.id, fresh.id)
     resp = jsonify({"invite": _invite_json(fresh, at), "token": token})
     resp.status_code = 201

@@ -738,9 +738,18 @@ log. `POST .../account/done` stays in the artists blueprint; every option is ski
 options 2 statements / 931 B (391 B gzip), import request 2 statements / 1 980 B, link limited to
 10 attempts/15 min/account, bodies capped at 8 KiB.
 
+**The administrative trail** (`neezer/audit.py`, table `audit_log` schema `20261123`) records
+account and invitation mutations — `user.create|update|delete`, `invite.create|revoke|renew|redeem` —
+with the actor, the target, a short detail, the result code and the timestamp. It has **no foreign
+key** on purpose: deleting an account must not erase who deleted it, and no token, password or path
+ever lands there. Rows are written in the caller's transaction (a refused action stores its code,
+a successful one cannot be lost) and read with `neezer-cli audit list [-n N]`. The table is additive
+and idempotent on all three engines.
+
 **The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
 `GET /api/admin/users` (keyset `after`, `q` folded over `name_key`/`mail`, `limit` 1..200),
-`GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`.
+`GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`,
+which requires the exact account name in `{"confirm": "…"}` (400 `confirm_mismatch` otherwise).
 Every non-admin gets a bare 403 whatever the id, so the dashboard is not an enumeration oracle.
 `UserManager.update_guarded`/`delete_guarded` carry the **at least one active admin** invariant
 (checked in the write and re-checked after it, since SQLite has no row locks), refuse

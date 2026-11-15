@@ -1624,3 +1624,43 @@ class PlaylistShareForeignKeyTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuditLogSchemaTestCase(_TempDatabaseTestCase):
+    """20261123: the administrative trail, additive on every engine."""
+
+    def _schema(self, provider):
+        path = os.path.join(
+            os.path.dirname(dbmod.__file__), "schema", f"{provider}.sql"
+        )
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_every_engine_ships_the_table_and_the_migration(self):
+        for provider in PROVIDERS:
+            sql = self._schema(provider)
+            self.assertIn("CREATE TABLE IF NOT EXISTS audit_log", sql, provider)
+            for column in ("actor", "action", "target", "detail", "result"):
+                self.assertIn(column, sql, provider)
+            folder = os.path.join(MIGRATION_ROOT, provider)
+            self.assertTrue(
+                os.path.exists(os.path.join(folder, "20261123.sql")),
+                provider,
+            )
+
+    def test_the_upgrade_creates_the_table_and_is_replayed(self):
+        from neezer.db import AuditLog
+
+        init_database(self.uri)
+        AuditLog.create(actor="alice", action="user.update", target="bob")
+        release_database()
+        self._sql("DROP TABLE audit_log")
+        self._rewind("20261122")
+        init_database(self.uri)
+        self.assertEqual(AuditLog.select().count(), 0)
+        self.assertEqual(dbmod._missing_columns(), [])
+        AuditLog.create(actor="alice", action="user.delete", target="bob")
+        release_database()
+        self._rewind("20261122")
+        init_database(self.uri)
+        self.assertEqual(AuditLog.select().count(), 1)

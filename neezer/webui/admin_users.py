@@ -24,6 +24,7 @@ import uuid
 from flask import Blueprint, jsonify, request
 from peewee import fn
 
+from .. import audit
 from ..db import Playlist, Track, User
 from ..managers.user import UserActionRefused, UserManager, fold_name
 from ..utils import like_term
@@ -276,6 +277,13 @@ def admin_user_patch(uid):
     except User.DoesNotExist:
         return _not_found()
     except UserActionRefused as exc:
+        audit.record(
+            "user.update",
+            request.webuser,
+            target,
+            f"admin={admin} disabled={disabled}",
+            getattr(exc, "code", "refused"),
+        )
         logger.info(
             "admin %s refused to change account %s (%s)",
             request.webuser.name,
@@ -283,6 +291,12 @@ def admin_user_patch(uid):
             getattr(exc, "code", "refused"),
         )
         return _refused(exc)
+    audit.record(
+        "user.update",
+        request.webuser,
+        user.name,
+        f"admin={user.admin} disabled={user.disabled}",
+    )
     logger.info(
         "admin %s changed account %s (admin=%s disabled=%s)",
         request.webuser.name,
@@ -319,6 +333,13 @@ def admin_user_delete(uid):
     except User.DoesNotExist:
         return _not_found()
     except UserActionRefused as exc:
+        audit.record(
+            "user.delete",
+            request.webuser,
+            row.name,
+            None,
+            getattr(exc, "code", "refused"),
+        )
         logger.info(
             "admin %s refused to delete account %s (%s)",
             request.webuser.name,
@@ -326,4 +347,5 @@ def admin_user_delete(uid):
             getattr(exc, "code", "refused"),
         )
         return _refused(exc)
+    audit.record("user.delete", request.webuser, row.name, f"uploads={moved}")
     return jsonify({"deleted": True, "uploads_reassigned": moved})

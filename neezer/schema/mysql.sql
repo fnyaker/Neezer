@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS invite (
     INDEX index_invite_used_by (used_by)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    at DATETIME NOT NULL,
+    actor VARCHAR(64),
+    action VARCHAR(64) NOT NULL,
+    target VARCHAR(128),
+    detail VARCHAR(200),
+    result VARCHAR(16) NOT NULL,
+    INDEX index_audit_log_at (at)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS client_prefs (
     user_id CHAR(32) NOT NULL REFERENCES user(id),
     client_name VARCHAR(32) NOT NULL,

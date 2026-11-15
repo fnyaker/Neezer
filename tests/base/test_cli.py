@@ -160,6 +160,15 @@ class CLITestCase(unittest.TestCase):
         self.__invoke("user setroles -j alice")
         self.assertFalse(User.get(name="alice").jukebox)
 
+    def test_audit_list_shows_the_durable_trail(self):
+        from neezer import audit
+
+        audit.record("user.create", "alice", "bob", "admin=False")
+        rv = self.__invoke("audit list")
+        self.assertIn("user.create", rv.output)
+        self.assertIn("bob", rv.output)
+        self.assertIn("alice", rv.output)
+
     def test_user_changepass(self):
         self.__invoke("user add -p Alic3 alice")
         self.__invoke("user changepass alice -p newpass")

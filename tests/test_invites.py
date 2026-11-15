@@ -319,6 +319,18 @@ class InvitesTestCase(unittest.TestCase):
         self.assertEqual(User.select().where(User.name_key == "elodie").count(), 1)
         self.assertEqual(self._redeem(token, request_id="other").status_code, 404)
 
+    def test_creating_and_redeeming_an_invite_leaves_a_trace(self):
+        from neezer.db import AuditLog
+
+        invite, token = self._create(note="pour Léa")
+        self.assertEqual(self._redeem(token).status_code, 201)
+        rows = list(AuditLog.select().order_by(AuditLog.id))
+        self.assertEqual([row.action for row in rows], ["invite.create", "invite.redeem"])
+        self.assertEqual(rows[0].actor, "alice")
+        self.assertEqual(rows[0].target, invite["id"])
+        self.assertEqual(rows[1].target, invite["id"])
+        self.assertEqual(rows[1].actor, "elodie")
+
     def test_a_replay_never_resurrects_a_revoked_session(self):
         _invite, token = self._create()
         first = self._redeem(token, request_id="retry-7")

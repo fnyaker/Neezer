@@ -104,6 +104,17 @@ CREATE INDEX IF NOT EXISTS index_invite_expires ON invite(expires);
 CREATE INDEX IF NOT EXISTS index_invite_created_by ON invite(created_by);
 CREATE INDEX IF NOT EXISTS index_invite_used_by ON invite(used_by);
 
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    at TIMESTAMP NOT NULL,
+    actor VARCHAR(64),
+    action VARCHAR(64) NOT NULL,
+    target VARCHAR(128),
+    detail VARCHAR(200),
+    result VARCHAR(16) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_audit_log_at ON audit_log(at);
+
 CREATE TABLE IF NOT EXISTS client_prefs (
     user_id UUID NOT NULL REFERENCES "user",
     client_name VARCHAR(32) NOT NULL,

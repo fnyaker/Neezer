@@ -8,6 +8,7 @@
 from flask import request
 from functools import wraps
 
+from .. import audit
 from ..db import User
 from ..managers.user import (
     InvalidUserName,
@@ -72,6 +73,7 @@ def user_add():
         UserManager.add(username, password, mail=email, **roles)
     except (InvalidUserName, UserNameTaken) as exc:
         raise GenericError(str(exc)) from exc
+    audit.record("user.create", request.user, username, f"admin={roles.get('admin')}")
 
     return request.formatter.empty
 
@@ -84,7 +86,9 @@ def user_del():
     try:
         UserManager.delete_guarded(user.id, request.user)
     except UserActionRefused as exc:
+        audit.record("user.delete", request.user, username, result=getattr(exc, "code", "refused"))
         raise GenericError(str(exc)) from exc
+    audit.record("user.delete", request.user, username)
 
     return request.formatter.empty
 
@@ -115,7 +119,15 @@ def user_edit():
         try:
             UserManager.update_guarded(user.id, request.user, admin=admin)
         except UserActionRefused as exc:
+            audit.record(
+                "user.update",
+                request.user,
+                username,
+                f"admin={admin}",
+                getattr(exc, "code", "refused"),
+            )
             raise GenericError(str(exc)) from exc
+        audit.record("user.update", request.user, username, f"admin={admin}")
         user = UserManager.get(user.id)
 
     if "password" in request.values:

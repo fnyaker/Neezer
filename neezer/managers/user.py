@@ -524,11 +524,13 @@ class UserManager:
     def _by_name(name):
         if not isinstance(name, str) or not name.strip():
             return None
+        exact = User.get_or_none(User.name == name)
+        if exact is not None:
+            return exact
         try:
-            user = User.get_or_none(User.name_key == fold_name(name))
+            return User.get_or_none(User.name_key == fold_name(name))
         except TypeError:
             return None
-        return user if user is not None else User.get_or_none(User.name == name)
 
     @staticmethod
     def try_auth(name, password):

@@ -121,6 +121,7 @@ cd webapp && node test/podcast/run.mjs               # a show with chapters and 
 neezer-cli deezer login-test                      # check the ARL works
 neezer-cli deezer import <deezer-url|track|album|playlist <id>>
 neezer-cli deezer sync                            # import playlists/favorites/new releases
+neezer-cli audit list [-n 50]                        # the durable admin trail, newest first
 neezer-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for archived tracks
 neezer-cli podcast chapters [--force] [--urls] [--limit N]  # extract chapters from archived podcast
                                                      # episodes (sidecar/tags, optionally publisher URL); resumable

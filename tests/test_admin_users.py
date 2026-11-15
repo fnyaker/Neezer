@@ -273,20 +273,22 @@ class AdminUsersTestCase(unittest.TestCase):
     def test_the_patch_statement_budgets(self):
         self._add("carol", admin=True)
         self._login()
-        # 1 session, 1 target, 1 UPDATE for a promotion (no invariant to check).
+        # 1 session, 1 target, 1 UPDATE for a promotion (no invariant to check)
+        # and the audit row.
         with count_statements() as counts:
             response = self.client.patch(
                 f"/api/admin/users/{self.bob.id}", json={"admin": True}
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 3)
-        # A demotion pays the target read, the count before and the count after.
+        self.assertEqual(sum(counts.values()), 4)
+        # A demotion pays the target read, the count before and the count after,
+        # plus its audit row.
         with count_statements() as counts:
             response = self.client.patch(
                 f"/api/admin/users/{self.bob.id}", json={"admin": False}
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 5)
+        self.assertEqual(sum(counts.values()), 6)
 
     def test_the_payload_never_carries_a_secret(self):
         self._login()
@@ -512,6 +514,21 @@ class AdminUsersTestCase(unittest.TestCase):
         self.assertNotIn(f"u:{self.bob.id}", subjects)
         self.assertIn(f"u:{self.alice.id}", subjects)
 
+    def test_admin_actions_leave_a_durable_trace(self):
+        from neezer.db import AuditLog
+
+        self._login()
+        self.client.patch(f"/api/admin/users/{self.bob.id}", json={"admin": True})
+        self._delete("bob", confirm="wrong")
+        self._delete("bob")
+        rows = list(AuditLog.select().order_by(AuditLog.id))
+        self.assertEqual([row.action for row in rows], ["user.update", "user.delete"])
+        self.assertEqual(rows[0].actor, "alice")
+        self.assertEqual(rows[0].target, "bob")
+        self.assertEqual(rows[0].detail, "admin=True disabled=False")
+        self.assertEqual(rows[1].result, "ok")
+        self.assertEqual(rows[1].detail, "uploads=0")
+
     def test_delete_removes_the_person_provider_account_and_its_grants(self):
         from neezer.db import ProviderGrant
 
@@ -565,11 +582,11 @@ class AdminUsersTestCase(unittest.TestCase):
         # revocation, the grants, the upload reassignment and Peewee's cascades
         # over every table that names a user (including the transcription
         # worker lease). Deletion is rare; nothing here is per-row except the
-        # uploads, which are one UPDATE.
+        # uploads, which are one UPDATE, and its own audit row.
         with count_statements() as counts:
             response = self._delete("bob")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 55, dict(counts))
+        self.assertEqual(sum(counts.values()), 56, dict(counts))
 
     # -- the legacy /user routes use the same guards --------------------------
 

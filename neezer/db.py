@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261122"
+SCHEMA_VERSION = "20261123"
 
 
 def now():
@@ -757,6 +757,25 @@ class Invite(_Model):
 
     class Meta:
         table_name = "invite"
+
+
+class AuditLog(_Model):
+    """One administrative action, durably: who, what, on whom, and how it ended.
+
+    Deliberately plain text and no foreign key: deleting an account must not
+    erase the trace of who deleted it. No secret, token or password ever lands
+    here — the detail is a short human phrase (``admin=true``, ``uploads=3``).
+    """
+
+    at = DateTimeField(default=now)
+    actor = CharField(null=True, max_length=64)
+    action = CharField(max_length=64)
+    target = CharField(null=True, max_length=128)
+    detail = CharField(null=True, max_length=200)
+    result = CharField(max_length=16, default="ok")
+
+    class Meta:
+        table_name = "audit_log"
 
 
 class ClientPrefs(_Model):
@@ -2122,6 +2141,7 @@ def _migration_order():
         GenreModel,
         User,
         Invite,
+        AuditLog,
         ClientPrefs,
         StarredFolder,
         StarredArtist,

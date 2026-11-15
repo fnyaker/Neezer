@@ -393,6 +393,32 @@ def user_rename(name, newname):
     click.echo(f"User '{name}' renamed to '{newname}'")
 
 
+@cli.group("audit")
+def audit_group():
+    """Administrative audit trail"""
+    pass
+
+
+@audit_group.command("list")
+@click.option("-n", "--limit", default=50, type=click.IntRange(1, 500))
+def audit_list(limit):
+    """The last administrative actions, newest first."""
+    from .db import AuditLog
+
+    for row in AuditLog.select().order_by(AuditLog.id.desc()).limit(limit):
+        stamp = row.at.strftime("%Y-%m-%d %H:%M:%S") if row.at else "?"
+        click.echo(
+            "{}\t{}\t{}\t{}\t{}\t{}".format(
+                stamp,
+                row.actor or "-",
+                row.action,
+                row.target or "-",
+                row.result or "ok",
+                row.detail or "",
+            )
+        )
+
+
 @cli.group("deezer")
 def deezer():
     """Deezer proxy management commands"""
