@@ -563,8 +563,6 @@ def genre_status():
         # tagging starts by CONFIRMING a guess rather than typing a vocabulary.
         # One-time — see seed_default_tags.
         gen.seed_default_tags()
-        # ...and the default sounds, once per list change (see start_sounds_if_due).
-        start_sounds_if_due(current_app._get_current_object())
 
     from peewee import fn
 
@@ -1901,26 +1899,6 @@ def start_sounds(app) -> bool:
         _sounds_job.update(running=True, stopped=False, finished=None)
     threading.Thread(target=_run_sounds, args=(app,), name="genre-default-sounds", daemon=True).start()
     return True
-
-
-def start_sounds_if_due(app):
-    """Start the default sounds when the lists changed since they were last
-    added. A run Deezer cut short waits SOUNDS_RETRY_S before the next try, so a
-    studio page polled during an outage does not hammer it."""
-    from ..db import Meta
-
-    if app.testing:
-        return
-    with _sounds_lock:
-        if _sounds_job["stopped"] and time.monotonic() < _sounds_job["retry_at"]:
-            return
-    try:
-        row = Meta.get_or_none(Meta.key == SOUNDS_META_KEY)
-    except Exception:
-        return
-    if row is not None and (row.value or "") == _sounds_signature():
-        return
-    start_sounds(app)
 
 
 @webapi.route("/genre/sounds", methods=["GET", "POST"])
