@@ -59,6 +59,8 @@
   let searchRetryLeft = 0;
   let searchRetryTimer = null;
   let seenNote = 0;
+  let nextEpisodes = null;
+  let loadingEpisodes = false;
 
   $: if (params.id && params.id !== id) {
     id = params.id;
@@ -91,12 +93,31 @@
       const r = await api.podcast(pid);
       if (mine === loadSeq) {
         data = r;
+        nextEpisodes = r.next || null;
         if (hasActiveTranscript(r)) watchTranscript();
       }
     } catch {
       if (mine === loadSeq) data = null;
     }
     if (mine === loadSeq) loading = false;
+  }
+
+  async function loadMoreEpisodes() {
+    if (!nextEpisodes || loadingEpisodes) return;
+    loadingEpisodes = true;
+    try {
+      const r = await api.podcast(id, { cursor: nextEpisodes, limit: 50 });
+      data = {
+        ...data,
+        ...r,
+        episodes: [...(data?.episodes || []), ...(r.episodes || [])],
+      };
+      nextEpisodes = r.next || null;
+    } catch {
+      toasts.push("Les épisodes suivants n'ont pas pu être chargés.", "error");
+    } finally {
+      loadingEpisodes = false;
+    }
   }
 
   function hasActiveTranscript(show) {
@@ -1069,6 +1090,18 @@
           </li>
         {/each}
       </ul>
+      {#if nextEpisodes}
+        <div class="ep-more">
+          <button
+            type="button"
+            class="tr-btn ghost"
+            disabled={loadingEpisodes}
+            on:click={loadMoreEpisodes}
+          >
+            {loadingEpisodes ? "Chargement…" : "Charger plus d'épisodes"}
+          </button>
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}
@@ -1666,6 +1699,12 @@
     color: var(--text);
     font-weight: 650;
   }
+  .ep-more {
+    display: flex;
+    justify-content: center;
+    padding: 16px 0 8px;
+  }
+
   .tr-btn {
     display: inline-flex;
     align-items: center;

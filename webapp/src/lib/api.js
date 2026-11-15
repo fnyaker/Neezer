@@ -545,7 +545,11 @@ export const api = {
 
   // podcasts
   podcasts: () => req("/podcasts"),
-  podcast: (id) => req("/podcast/" + id),
+  podcast: (id, { limit = 50, cursor = null } = {}) => {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (cursor) q.set("cursor", cursor);
+    return req("/podcast/" + id + "?" + q.toString());
+  },
   searchPodcasts: (q) => req("/search/podcasts?q=" + encodeURIComponent(q)),
   // The YouTube fallback: opt-in per search (lib/youtube.js). Its hits are
   // ordinary tracks whose id is the row they become once played or kept.
