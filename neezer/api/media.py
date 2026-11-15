@@ -24,7 +24,7 @@ from PIL import Image
 from zipstream import ZipStream
 
 from ..cache import CacheMiss
-from ..db import Track, Album, Artist, Folder, PodcastEpisode, now
+from ..db import Track, Album, Artist, Folder, PodcastEpisode, User, now
 from ..covers import EXTENSIONS
 
 from . import get_entity, get_entity_id, api_routing
@@ -387,14 +387,15 @@ def stream_media():
     # Play bookkeeping + album prefetch only apply to real Tracks; podcast
     # episodes aren't part of the play-history / last_play FK model.
     if isinstance(res, Track):
-        res.play_count = res.play_count + 1
-        res.last_play = now()
-        res.save()
+        Track.update(
+            play_count=Track.play_count + 1,
+            last_play=now(),
+        ).where(Track.id == res.id).execute()
 
-        user = request.user
-        user.last_play = res
-        user.last_play_date = now()
-        user.save()
+        User.update(
+            last_play=res.id,
+            last_play_date=now(),
+        ).where(User.id == request.user.id).execute()
 
         _prefetch_next(res)
 

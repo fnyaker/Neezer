@@ -484,13 +484,24 @@ def claim_next(worker, app=None):
         holder = TranscribeWorker.get_or_none(TranscribeWorker.id == worker)
     if holder is None or not holder.enabled or holder.revoked is not None:
         raise LeaseError("lease_expired", "worker inconnu ou révoqué")
+    when = now()
+    alive = (
+        TranscribeWorker.update(last_seen=when)
+        .where(
+            (TranscribeWorker.id == holder.id)
+            & (TranscribeWorker.enabled == True)  # noqa: E712
+            & TranscribeWorker.revoked.is_null()
+        )
+        .execute()
+    )
+    if not alive:
+        raise LeaseError("lease_expired", "worker inconnu ou révoqué")
     expire_leases()
     if holder.kind == "server":
         if _live_server_lease():
             return None
         if PodcastTranscript.select().where(PodcastTranscript.status == "running").exists():
             return None
-    when = now()
     for _attempt in range(5):
         candidate = (
             PodcastTranscript.select()
@@ -548,8 +559,6 @@ def claim_next(worker, app=None):
             lease.attempts = attempts
             lease.last_error = None
             lease.save()
-        holder.last_seen = when
-        holder.save()
         values = settings.load(app)
         return {
             "lease": token,
@@ -618,6 +627,18 @@ def heartbeat(episode_id, worker, token, chunk_pct=None):
     if transcript is None:
         raise LeaseError("lease_expired", "transcription absente")
     when = now()
+    holder = lease.worker
+    alive = (
+        TranscribeWorker.update(last_seen=when)
+        .where(
+            (TranscribeWorker.id == holder.id)
+            & (TranscribeWorker.enabled == True)  # noqa: E712
+            & TranscribeWorker.revoked.is_null()
+        )
+        .execute()
+    )
+    if not alive:
+        raise LeaseError("lease_expired", "worker inconnu ou révoqué")
     if lease.heartbeat_at is None or (
         when - lease.heartbeat_at
     ).total_seconds() >= HEARTBEAT_WRITE_SECONDS:
@@ -625,9 +646,6 @@ def heartbeat(episode_id, worker, token, chunk_pct=None):
         lease.expires_at = when + timedelta(seconds=LEASE_SECONDS)
         lease.chunk_start_ms = transcript.done_ms
         lease.save()
-        holder = lease.worker
-        holder.last_seen = when
-        holder.save()
     if chunk_pct is not None:
         try:
             note_progress(

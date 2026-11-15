@@ -709,6 +709,25 @@ class LeaseTestCase(_Base):
             2,
         )
 
+    def test_a_revoked_worker_instance_cannot_claim_or_heartbeat(self):
+        episode = self.episode(duration=1300)
+        job.enqueue(episode.id, app=self.config)
+        worker = self.worker()
+        TranscribeWorker.update(revoked=now(), enabled=False).where(
+            TranscribeWorker.id == worker.id
+        ).execute()
+        with self.assertRaises(job.LeaseError):
+            job.claim_next(worker, app=self.config)
+        self.assertEqual(PodcastTranscript.get().status, "queued")
+
+        other = self.worker("Autre")
+        token = self.claimed(episode, other)["lease"]
+        TranscribeWorker.update(revoked=now(), enabled=False).where(
+            TranscribeWorker.id == other.id
+        ).execute()
+        with self.assertRaises(job.LeaseError):
+            job.heartbeat(episode.id, other, token)
+
     def test_a_wrong_token_or_a_revoked_worker_is_refused(self):
         episode = self.episode()
         job.enqueue(episode.id, app=self.config)

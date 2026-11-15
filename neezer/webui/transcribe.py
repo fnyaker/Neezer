@@ -675,7 +675,9 @@ def auto_transcribe(pid):
         channel.transcribe_language = language
     if "auto" in data:
         channel.auto_transcribe = auto
-    channel.save()
+    channel.save(
+        only=(PodcastChannel.auto_transcribe, PodcastChannel.transcribe_language)
+    )
     if "backlog" in data:
         _meta_set(_backlog_key(channel), data["backlog"])
     mode = _show_backlog(channel)
