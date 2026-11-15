@@ -151,6 +151,11 @@ class CarSettingsActivity : AppCompatActivity() {
         // Back from the overlay/usage-access settings, and pins that may have
         // changed in the playlist page while this screen was behind it.
         refreshPermissions()
+        // A trigger may have been enabled here, or the access granted on the
+        // system screen: arm the watch now, so the navigation app opened next
+        // brings the card back even though no service is running. A running
+        // service owns its own state — this screen is not its RETURN path.
+        if (!CarModeService.isRunning()) CarWatch.watch(this)
         if (::pinsBox.isInitialized) {
             seedFromCache()
             renderPins()

@@ -107,6 +107,9 @@ class NativeAudio(
 
     // The EQ and the bass lift every player's chain applies (NsProcessor).
     @Volatile private var fx = NsProcessor.Fx(0, FloatArray(10), 0f)
+    // The mono fold and the balance of the app's own output (PanProcessor).
+    @Volatile private var panMono = false
+    @Volatile private var panBalance = 0f
 
     /** The page's effects: `{eq: [10 dB], bass: 0..1}` (graph.js's settings). */
     fun setFx(json: String) {
@@ -124,6 +127,9 @@ class NativeAudio(
         }
         val amount = o.optDouble("bass", 0.0).let { if (it.isFinite()) it.coerceIn(0.0, 1.0) else 0.0 }
         fx = NsProcessor.Fx(fx.version + 1, bands, (amount * 12).toFloat())
+        panMono = o.optBoolean("mono", panMono)
+        panBalance = o.optDouble("balance", panBalance.toDouble())
+            .let { if (it.isFinite()) it.coerceIn(-1.0, 1.0).toFloat() else 0f }
     }
 
     /** One command for the analyser (NativeAnalysis.command). */
@@ -248,7 +254,12 @@ class NativeAudio(
         } catch (_: Exception) {
             return
         }
-        main.post { slots[id]?.command(o) }
+        main.post {
+            val slot = slots[id]
+            if (slot == null) {
+                if (o.optString("op") != "release") refuse(id)
+            } else slot.command(o)
+        }
     }
 
     /** The page that owned the players is gone (reload, navigation, teardown). */
@@ -342,7 +353,8 @@ class NativeAudio(
 
     private inner class Slot(val id: Int) : Player.Listener {
         val proc = NsProcessor(id, analysis) { fx }
-        val player: ExoPlayer = ExoPlayer.Builder(context, Renderers(context, proc))
+        val pan = PanProcessor({ panMono }, { panBalance })
+        val player: ExoPlayer = ExoPlayer.Builder(context, Renderers(context, proc, pan))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(DataSource.Factory {
                     ServerDataSource(prefs, cookieFor, localFile) { u -> main.post { onSourceRead(u) } }
@@ -516,6 +528,7 @@ class NativeAudio(
                     player.setPlaybackSpeed(rate(o.optDouble("r", 1.0)))
                     send(null)
                 }
+                "state" -> send(null)
                 "release" -> {
                     cancelRetry()
                     release()
@@ -1061,14 +1074,18 @@ class NativeAudio(
         }
     }
 
-    /** A player whose audio sink runs its PCM through [proc]. */
-    private class Renderers(context: Context, private val proc: NsProcessor) : DefaultRenderersFactory(context) {
+    /** A player whose audio sink runs its PCM through [proc], then through [pan]. */
+    private class Renderers(
+        context: Context,
+        private val proc: NsProcessor,
+        private val pan: PanProcessor,
+    ) : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
             context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean
         ): AudioSink? = DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .setAudioProcessors(arrayOf<AudioProcessor>(proc))
+            .setAudioProcessors(arrayOf<AudioProcessor>(proc, pan))
             .build()
     }
 

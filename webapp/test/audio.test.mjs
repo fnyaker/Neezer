@@ -33,7 +33,6 @@ import {
   createSaturationMeter,
   limiterReduction,
   readSaturation,
-  recommendedMargin,
   subscribeSaturation,
 } from "../src/lib/audio/saturation.js";
 import { EQ_FREQS } from "../src/lib/audio/graph.js";
@@ -363,7 +362,6 @@ test("the reduction is the limiter's own work, and never negative", () => {
   );
   assert.ok(Math.abs(pulled.reductionDb - 3.1) <= 0.1, `measured ${pulled.reductionDb} dB`);
   assert.equal(pulled.risk, "warn", "a limiter pulling 3.1 dB is a warning");
-  assert.ok(pulled.marginDb > 0, "and it recommends pulling the chain back");
   // Same level both sides: nothing was reduced.
   const even = createSaturationMeter().measure(
     fakeTap({ amplitude: 0.2 }, { amplitude: 0.2 }),
@@ -371,7 +369,6 @@ test("the reduction is the limiter's own work, and never negative", () => {
   );
   assert.equal(even.reductionDb, 0);
   assert.equal(even.risk, "ok");
-  assert.equal(even.marginDb, 0);
   // At full scale the limiter held it without pulling: a loud master, not a risk.
   const full = createSaturationMeter().measure(
     fakeTap({ amplitude: 1 }, { amplitude: 1 }),
@@ -380,7 +377,6 @@ test("the reduction is the limiter's own work, and never negative", () => {
   assert.equal(full.peakDb, 0);
   assert.equal(full.risk, "ok");
   assert.equal(full.reductionDb, 0, "the limiter held it at full scale without pulling");
-  assert.equal(full.marginDb, 0);
   // Six dB over full scale is the clip bar.
   const over = createSaturationMeter().measure(
     fakeTap({ amplitude: 2 }, { amplitude: 1 }),
@@ -388,11 +384,8 @@ test("the reduction is the limiter's own work, and never negative", () => {
   );
   assert.equal(over.peakDb, 6);
   assert.equal(over.risk, "clip");
-  assert.equal(over.marginDb, 6.5);
-  assert.equal(recommendedMargin("ok", 0), 0);
-  assert.equal(recommendedMargin("warn", 0), 0.5);
-  assert.equal(recommendedMargin("clip", 3), 3.5);
-  assert.equal(recommendedMargin("warn", -30, 1.9), 1.9, "releasing the limiter is a margin too");
+  assert.equal(over.reductionDb, 6, "the reduction is the measurement of the limiter's work");
+  assert.equal("marginDb" in over, false, "no estimated margin rides along with it");
 });
 
 test("the direct path answers unavailable, with no reading and no exception", async () => {

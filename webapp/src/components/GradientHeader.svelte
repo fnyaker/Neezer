@@ -1,11 +1,11 @@
 <script>
-  import { dominantColor, rgb, darken } from "../lib/color.js";
+  import { dominantColor, rgb } from "../lib/color.js";
   import { resolveCover } from "../lib/format.js";
   import { offlineCovers } from "../lib/stores.js";
 
   export let cover = null;
 
-  let bg = "linear-gradient(180deg, #3a2a55, var(--bg) 70%)";
+  let tint = null;
   let colorSeq = 0;
 
   // Resolve through the offline cover cache so the gradient still gets a real
@@ -16,13 +16,17 @@
     // Sequence guard: on a cover change, a slower earlier extraction must not
     // overwrite the newer color.
     const mine = ++colorSeq;
+    if (!url) {
+      tint = null;
+      return;
+    }
     const c = await dominantColor(url);
     if (mine !== colorSeq) return;
-    bg = `linear-gradient(180deg, ${rgb(c, 0.9)} 0%, ${rgb(darken(c, 0.55), 1)} 55%, var(--bg) 100%)`;
+    tint = rgb(c);
   }
 </script>
 
-<div class="gh" style="background:{bg}">
+<div class="gh" style={tint ? `--gh-c:${tint}` : ""}>
   <div class="gh-inner">
     <slot />
   </div>
@@ -36,12 +40,23 @@
   .gh {
     margin: calc(-1 * var(--page-y, 28px)) calc(-1 * var(--page-x, 32px)) 8px;
     padding: 56px var(--page-x, 32px) 24px;
-    transition: background 0.4s ease;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--gh-c) 90%, transparent) 0%,
+      color-mix(in srgb, var(--gh-c) 45%, black) 55%,
+      var(--bg) 100%
+    );
+    transition: --gh-c 600ms cubic-bezier(0.4, 0, 0.2, 1);
   }
   .gh-inner {
     display: flex;
     gap: 28px;
     align-items: flex-end;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .gh {
+      transition: none;
+    }
   }
   @media (max-width: 640px) {
     .gh {

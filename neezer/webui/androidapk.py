@@ -13,13 +13,20 @@ itself signed with its own key, and hands it to Android's installer — one tap.
 Where the file comes from, best first:
 
 - ``[webapp] android_apk``: a local file the operator put there (a private or
-  fork build). Served as is.
+  fork build). Served once ``_apk_problem`` says it is an APK.
 - the GitHub release of the declared ``android_version``, on the repository
   ``android_url`` points at (the project's by default). Fetched ONCE, by a
   single worker: the first request for that version answers ``202`` with a
   ``Retry-After``, the following ones serve the file as soon as it is on disk.
   A 10 MB download never happens in a request thread, and never behind a lock
   another device is waiting on.
+
+Every byte this module hands out has been checked first: a body is read whole,
+its length compared with what the response announced, and the file must open as
+a zip carrying Android's binary ``AndroidManifest.xml`` — on the way in (every
+member's CRC read) and again on every serve (the central directory only). A
+cached file that fails that check is deleted and fetched again, instead of being
+served to the app for ever.
 
 Nothing here is a trust decision: Android refuses to install an update that is
 not signed with the installed app's certificate, and the app checks that itself
@@ -34,6 +41,7 @@ import os
 import re
 import threading
 import time
+import zipfile
 from urllib.parse import urlsplit
 
 import requests
@@ -44,12 +52,13 @@ from . import login_required, webapi
 logger = logging.getLogger(__name__)
 
 APK_NAME = "neezer.apk"
-# The asset name published before the rebrand. A release that predates the
-# rename still carries only this one, and the server must keep offering it.
-LEGACY_APK_NAME = "nsupysonic.apk"
 APK_MIME = "application/vnd.android.package-archive"
 # A release APK is ~10 MB; anything past this is not one.
 MAX_APK_BYTES = 200 * 1024 * 1024
+# And anything below this is not one either (a real build is a thousand times bigger).
+MIN_APK_BYTES = 64 * 1024
+# What Android's BINARY XML manifest starts with (RES_XML_TYPE, 8-byte header).
+ANDROID_MANIFEST_HEADER = b"\x03\x00\x08\x00"
 # Connect, then between two reads: a stalled GitHub must not hold the thread.
 TIMEOUT = (10, 60)
 # What a tag may look like before it goes into a URL path.
@@ -97,6 +106,45 @@ def _cache_path(cfg: dict, version: str) -> str:
     return os.path.join(cfg["cache_dir"], "android", f"neezer-{version}.apk")
 
 
+def _apk_problem(path: str, deep: bool = False) -> str | None:
+    """Why ``path`` is not an installable APK, or None when it looks like one.
+
+    ``deep`` reads every member (the zip's own CRCs) and the first bytes of the
+    manifest, which only Android's binary XML starts with: that is what a
+    finished download pays before it is published. Serving a cached file only
+    opens the central directory, so the check costs milliseconds.
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return "absent"
+    if size < MIN_APK_BYTES:
+        return f"{size} octets, plus court qu'un APK"
+    if size > MAX_APK_BYTES:
+        return f"{size} octets, au-delà du plafond"
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if "AndroidManifest.xml" not in archive.namelist():
+                return "aucun AndroidManifest.xml"
+            with archive.open("AndroidManifest.xml") as manifest:
+                head = manifest.read(len(ANDROID_MANIFEST_HEADER))
+            if head != ANDROID_MANIFEST_HEADER:
+                return "AndroidManifest.xml n'est pas du XML binaire Android"
+            if deep and archive.testzip() is not None:
+                return "un membre ne correspond pas à sa somme de contrôle"
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError):
+        return "zip illisible"
+    return None
+
+
+def _discard(path: str, why: str) -> None:
+    logger.warning("Mise à jour Android écartée (%s) : %s", why, path)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def _download(url: str, dest: str) -> None:
     """Fetch the release asset into ``dest``; raises on anything but an APK."""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -107,6 +155,7 @@ def _download(url: str, dest: str) -> None:
             if final.scheme != "https" or final.hostname not in _ASSET_HOSTS:
                 raise OSError(f"redirected off GitHub ({final.hostname})")
             rv.raise_for_status()
+            announced = rv.headers.get("Content-Length")
             size = 0
             with open(part, "wb") as fh:
                 for chunk in rv.iter_content(64 * 1024):
@@ -114,17 +163,22 @@ def _download(url: str, dest: str) -> None:
                     if size > MAX_APK_BYTES:
                         raise OSError("larger than any APK")
                     fh.write(chunk)
-        with open(part, "rb") as fh:
-            # An APK is a zip; a GitHub error page is not.
-            if fh.read(4) != b"PK\x03\x04":
-                raise OSError("not an APK")
+        if announced is not None:
+            try:
+                announced_size = int(announced)
+            except (TypeError, ValueError):
+                announced_size = None
+            if announced_size is not None and announced_size != size:
+                raise OSError(f"tronqué ({size} octets sur {announced_size})")
+        problem = _apk_problem(part, deep=True)
+        if problem is not None:
+            raise OSError(f"not an APK: {problem}")
         os.replace(part, dest)
     finally:
         if os.path.exists(part):
             os.remove(part)
-    # Older versions are never served again. Both the current and the
-    # pre-rebrand cache prefix are cleared, so an upgraded server does not keep
-    # a stale 10 MB APK next to the new one.
+    # Older versions are never served again. The pre-rebrand cache prefix is
+    # cleared too, so an upgraded server does not keep 10 MB nobody serves.
     folder = os.path.dirname(dest)
     for entry in os.listdir(folder):
         path = os.path.join(folder, entry)
@@ -135,12 +189,6 @@ def _download(url: str, dest: str) -> None:
                 os.remove(path)
             except OSError:
                 pass
-
-
-def _legacy_url(url: str) -> str | None:
-    """The same release asset under its pre-rebrand name, if this is that URL."""
-    tail = "/" + APK_NAME
-    return url[: -len(tail)] + "/" + LEGACY_APK_NAME if url.endswith(tail) else None
 
 
 def fetch_apk(cfg: dict) -> str:
@@ -159,17 +207,11 @@ def fetch_apk(cfg: dict) -> str:
 def _fetch_asset(where: str, dest: str) -> str:
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.isfile(dest):
-        return dest
-    try:
-        _download(where, dest)
-    except requests.HTTPError as exc:
-        # Only a missing asset (404) is worth the pre-rebrand name: a
-        # corrupt download or a redirect off GitHub is a real failure.
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        legacy = _legacy_url(where)
-        if status != 404 or legacy is None:
-            raise
-        _download(legacy, dest)
+        problem = _apk_problem(dest)
+        if problem is None:
+            return dest
+        _discard(dest, problem)
+    _download(where, dest)
     return dest
 
 
@@ -190,9 +232,19 @@ def cached_apk(cfg: dict) -> str | None:
         return None
     kind, where = source
     if kind == "file":
-        return where
+        problem = _apk_problem(where)
+        if problem is None:
+            return where
+        logger.warning("Fichier de mise à jour Android inutilisable (%s) : %s", problem, where)
+        return None
     dest = _cache_path(cfg, declared_version(cfg))
-    return dest if os.path.isfile(dest) else None
+    if not os.path.isfile(dest):
+        return None
+    problem = _apk_problem(dest)
+    if problem is None:
+        return dest
+    _discard(dest, problem)
+    return None
 
 
 def apk_job(cfg: dict) -> dict | None:
@@ -261,10 +313,28 @@ def _fetch(where: str, dest: str) -> None:
 def android_apk():
     cfg = current_app.config["WEBAPP"]
     version = declared_version(cfg)
+    source = apk_source(cfg)
     path = ensure_apk(cfg)
     if path is None:
-        if apk_source(cfg) is None:
+        if source is None:
             return jsonify({"error": "Aucune mise à jour Android publiée"}), 404
+        headers = {"Retry-After": str(APK_RETRY)}
+        if version:
+            headers["X-NS-Version"] = version
+        if source[0] == "file":
+            return (
+                jsonify(
+                    {
+                        "state": "failed",
+                        "error": (
+                            "Le fichier de mise à jour Android configuré "
+                            "n'est pas un APK valide"
+                        ),
+                    }
+                ),
+                502,
+                headers,
+            )
         job = apk_job(cfg) or {}
         failed = job.get("state") == "failed"
         retry = (

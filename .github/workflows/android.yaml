@@ -105,6 +105,9 @@ jobs:
       - name: Unit tests
         run: gradle -p android testReleaseUnitTest
 
+      - name: Lint
+        run: gradle -p android lintDebug
+
       - name: Build release APK
         env:
           VERSION_CODE: ${{ github.run_number }}
@@ -114,8 +117,57 @@ jobs:
       - name: Collect APK
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk neezer.apk
-          # Same APK under the pre-rebrand name, for servers not upgraded yet.
-          cp neezer.apk nsupysonic.apk
+
+      - name: Verify the APK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?no Android SDK}}"
+          BT="$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$BT" ]; then
+            echo "no build-tools under $SDK" >&2
+            exit 1
+          fi
+          size=$(stat -c%s neezer.apk)
+          echo "neezer.apk: $size bytes"
+          if [ "$size" -le 1000000 ]; then
+            echo "neezer.apk is $size bytes: too small to be an APK" >&2
+            exit 1
+          fi
+          if ! unzip -t neezer.apk > unzip-test.txt; then
+            tail -5 unzip-test.txt
+            echo "neezer.apk is not a readable zip: truncated or corrupt" >&2
+            exit 1
+          fi
+          tail -1 unzip-test.txt
+          if ! out=$("${BT}apksigner" verify --min-sdk-version 23 --verbose --print-certs neezer.apk 2>&1); then
+            echo "$out"
+            echo "apksigner verify failed: the APK is not installable" >&2
+            exit 1
+          fi
+          echo "$out" | grep -v "not protected by signature" || true
+          for scheme in "v1 scheme" "v2 scheme" "v3 scheme"; do
+            if ! echo "$out" | grep -q "^Verified using $scheme .*: true$"; then
+              echo "signed with no $scheme" >&2
+              exit 1
+            fi
+          done
+          if ! "${BT}zipalign" -c -p 4 neezer.apk > /dev/null; then
+            "${BT}zipalign" -c -p -v 4 neezer.apk | grep -v " (OK" | head -5 || true
+            echo "neezer.apk is not 4-byte aligned" >&2
+            exit 1
+          fi
+          "${BT}aapt2" dump badging neezer.apk > apk-badging.txt
+          head -1 apk-badging.txt
+          if ! grep -q "^package: name='org.nsupysonic.app' " apk-badging.txt; then
+            echo "not the Neezer package" >&2
+            exit 1
+          fi
+          versionCode=$(sed -n "s/^package: name='[^']*' versionCode='\([0-9][0-9]*\)'.*/\1/p" apk-badging.txt)
+          if [ -z "$versionCode" ] || [ "$versionCode" -le 0 ]; then
+            echo "versionCode '${versionCode}' is not positive" >&2
+            exit 1
+          fi
+          echo "verified: org.nsupysonic.app versionCode $versionCode"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -128,9 +180,32 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # neezer.apk is the name the renamed server asks for; the pre-rebrand
-          # name is attached too, so a server that has not been upgraded yet can
-          # still fetch the update it expects.
-          files: |
-            neezer.apk
-            nsupysonic.apk
+          files: neezer.apk
+
+      - name: Verify the release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for _ in 1 2 3 4 5 6; do
+            names=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            if echo "$names" | grep -qx neezer.apk; then break; fi
+            sleep 5
+          done
+          echo "$names"
+          if ! echo "$names" | grep -qx neezer.apk; then
+            echo "neezer.apk is not attached to $TAG" >&2
+            exit 1
+          fi
+          if echo "$names" | grep -qx nsupysonic.apk; then
+            echo "$TAG still carries nsupysonic.apk" >&2
+            exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/asset" && mkdir -p "$RUNNER_TEMP/asset"
+          gh release download "$TAG" --pattern neezer.apk --dir "$RUNNER_TEMP/asset"
+          cmp neezer.apk "$RUNNER_TEMP/asset/neezer.apk"
+          size=$(stat -c%s "$RUNNER_TEMP/asset/neezer.apk")
+          [ "$size" -gt 1000000 ]
+          echo "release asset $TAG/neezer.apk: $size bytes, sha256 $(sha256sum "$RUNNER_TEMP/asset/neezer.apk" | cut -d' ' -f1)"

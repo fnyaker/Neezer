@@ -28,6 +28,21 @@ import kotlin.math.roundToInt
 enum class ForegroundKind { GPS, OTHER, SYSTEM, SELF, LAUNCHER, PERMISSION_CONTROLLER }
 
 /**
+ * The packages drawn OVER another app: the notification shade, a permission
+ * dialog. One definition, read by the trigger's poll and by [CarWatch] when it
+ * looks for a navigation app already in front.
+ */
+object CarForegroundScan {
+    val OVERLAYS = setOf(
+        "com.android.systemui",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+    )
+}
+
+/**
  * The sticky "is a navigation app in front" answer, with the transient grace.
  * No Android type here: `CarForegroundTest` drives it on the JVM.
  *
@@ -265,7 +280,7 @@ class CarTrigger(
         lastState = null
         tracker.reset()
         homePackages = readHomePackages()
-        usageUsable = prefs.gpsTrigger && CarPermissions.hasUsageStats(app)
+        usageUsable = prefs.gpsWatching
         worker = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "car-trigger").apply { isDaemon = true }
         }
@@ -316,7 +331,7 @@ class CarTrigger(
             return
         }
         if (!started) return
-        usageUsable = prefs.gpsTrigger && CarPermissions.hasUsageStats(app)
+        usageUsable = prefs.gpsWatching
         bluetoothSink = readBluetoothSink()
         // The settings screen may have added or removed the app that is in
         // front right now, and that app emits no new event for us. A GPS app
@@ -337,7 +352,7 @@ class CarTrigger(
 
     private fun poll() {
         if (!started) return
-        usageUsable = prefs.gpsTrigger && CarPermissions.hasUsageStats(app)
+        usageUsable = prefs.gpsWatching
         val ready = usageUsable
         if (!ready) {
             // No option or no usage access: no detection, whatever the last
@@ -456,9 +471,7 @@ class CarTrigger(
     /** Which kind of app [pkg] is, using the person's own GPS list first. */
     private fun kindOf(pkg: String): ForegroundKind {
         if (prefs.gpsPackages.contains(pkg)) return ForegroundKind.GPS
-        if (pkg in SYSTEM_PACKAGES || pkg in PERMISSION_PACKAGES) {
-            return ForegroundKind.SYSTEM
-        }
+        if (pkg in CarForegroundScan.OVERLAYS) return ForegroundKind.SYSTEM
         if (pkg == app.packageName) return ForegroundKind.SELF
         if (pkg in homePackages || pkg in KNOWN_LAUNCHERS) return ForegroundKind.LAUNCHER
         return ForegroundKind.OTHER
@@ -532,20 +545,6 @@ class CarTrigger(
         return devices.any { isBluetoothSink(it.type) }
     }
 
-    /**
-     * A2DP and BLE outputs are the car-radio case. A headset also counts — the
-     * platform cannot tell a headset from a car stereo, and the person's
-     * `bluetoothTrigger` switch is the answer for anyone who does not want it.
-     */
-    private fun isBluetoothSink(type: Int): Boolean = when (type) {
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLE_HEADSET,
-        AudioDeviceInfo.TYPE_BLE_SPEAKER,
-        AudioDeviceInfo.TYPE_BLE_BROADCAST,
-        AudioDeviceInfo.TYPE_HEARING_AID -> true
-        else -> false
-    }
-
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = devicesChanged()
 
@@ -594,18 +593,20 @@ class CarTrigger(
          */
         const val GRACE_MS = 2_000L
 
-        /** Drawn over the navigation app, never a reason to hide it. */
-        private val SYSTEM_PACKAGES = setOf(
-            "com.android.systemui",
-        )
-
-        /** Runtime-permission dialogs: also drawn over the app they ask for. */
-        private val PERMISSION_PACKAGES = setOf(
-            "com.android.permissioncontroller",
-            "com.google.android.permissioncontroller",
-            "com.android.packageinstaller",
-            "com.google.android.packageinstaller",
-        )
+        /**
+         * A2DP and BLE outputs are the car-radio case. A headset also counts —
+         * the platform cannot tell a headset from a car stereo, and the
+         * person's `bluetoothTrigger` switch is the answer for anyone who does
+         * not want it.
+         */
+        fun isBluetoothSink(type: Int): Boolean = when (type) {
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
+            AudioDeviceInfo.TYPE_BLE_BROADCAST,
+            AudioDeviceInfo.TYPE_HEARING_AID -> true
+            else -> false
+        }
 
         /** Launchers seen on the phones this app targets; the HOME query adds the rest. */
         private val KNOWN_LAUNCHERS = setOf(

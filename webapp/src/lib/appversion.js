@@ -281,6 +281,12 @@ export function bridgeVersion() {
 
 const UPDATE_ERRORS = {
   network: "Le téléchargement de la mise à jour a échoué.",
+  preparing:
+    "Le serveur prépare la mise à jour. Réessayez dans quelques instants.",
+  truncated:
+    "Le téléchargement de la mise à jour est incomplet. Réessayez : rien n'a été installé.",
+  archive:
+    "Le fichier reçu est corrompu (archive illisible). Réessayez : rien n'a été installé.",
   invalid: "Le fichier reçu n'est pas une application valide.",
   package: "Le fichier reçu n'est pas cette application.",
   signature:

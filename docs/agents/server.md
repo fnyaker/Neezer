@@ -147,6 +147,60 @@ unreachable, and the parts that do need Deezer must fail *fast* and *without a v
 archives the FLAC, then the existing transcode/cache/`send_file` path runs unchanged. The permanent
 FLAC archive is separate from neezer's capped `transcode_cache`.
 
+**Seeking a track, and what tells a player it can** (`/api/stream`, `/rest/stream`,
+`/api/stream/<id>/ready`; `tests/test_stream_seek.py`). A player can only move inside what the
+server can address, so every answer says which of the three things it is, and the player picks:
+
+- **A finished FILE** — an archived FLAC, a cached Opus transcode, an upload, an archived episode —
+  answers `Accept-Ranges: bytes`, `Content-Length`, `ETag`/`Last-Modified`, a byte `Range` with
+  `206` + `Content-Range`; `If-Range` is honoured (a stale validator gets the whole body, never a
+  stitched one) and a range past the end is `416` + `Content-Range: bytes */<size>`, which is how a
+  player learns the real length (the `/api` error handler keeps that header). `send_file(...,
+  conditional=True)` already did all of it; what was missing was anything that checked it end to
+  end. Measured on a real ffmpeg FLAC: a seek to 80 % of a 4.6 MB file costs **930 836 B and 2.9 ms
+  to the first byte** instead of 4 630 836 B, and Chromium lands at **240.24 s** of a 300-s track.
+- **A stream GENERATED as it is sent** — a live archive, a cold transcode — declares
+  `Accept-Ranges: none`, `Cache-Control: no-store` and no length. Chromium reads that as
+  `duration: null`, and **a seek outside the buffered part restarts at 0** (measured: asked 200 s,
+  the element went to 0.08 s). That is the "the bar does nothing / the track starts again" pair:
+  the two answers used to be indistinguishable, so the browser guessed.
+- **`GET /api/stream/<id>/ready[?q=OPUS_N]`** says what the next answer would be, and by contract
+  starts nothing (no download, no transcode): `ready` (a file, therefore ranges), `ranges`
+  (`"bytes"` or null), `bytes` (the archive's size), `cached` (the Opus transcode is in the cache —
+  the key is `deezer-…`, `youtube-…` or `episode-…` depending on the row, they disagree at your
+  peril), `offset` (`?start=` is honoured right now) and `streaming` (nothing is published yet and
+  an archive is being written: a `.part` sibling of the final name, which is how every writer here
+  publishes). **2 SELECT**, one of them the session's user, and a **93 B** payload. `ready` is the
+  published file, never a `.part`, and the directory is only listed when nothing is published — so
+  a sibling `.part` (a second download, or one a killed process left) can never hide a finished
+  archive, and one stale file cannot block every seek of that track for ever. A file written in
+  place by an outside process (a copy landing in a scanned library) cannot be told apart;
+  archives can, and they are what the app fetches.
+
+**A seek into a source that is on disk but that is not served as a file** (the Opus transcode of an
+archived track, or a FLAC one wants from a moment) is a **`start=<seconds>`** parameter on
+`/api/stream`, and the OpenSubsonic **`timeOffset`** (the `transcodeOffset` extension) on
+`/rest/stream`. ffmpeg gets `-ss` **before** `-i`, the input seek: it starts on the sample asked —
+a marked FLAC sliced at 119 s keeps exactly 1.000 s of silence, at 121 s none — and costs
+**39-40 ms** to the first byte where encoding from 0 costs 43-71 ms. A FLAC is re-encoded
+(lossless: a stream copy keeps the old STREAMINFO and would claim the whole track's length), MP3
+and Ogg are copied, and an MP4 is not cut at all (its muxer needs a seekable output and writes
+nothing to a pipe) — that answer is 409, because the file itself serves the byte range that seeks
+it. The slice is **never** written to `transcode_cache` (a slice is not the track) and bumps no
+play count; `X-NS-Start` carries the offset actually applied (clamped to `duration - 0.25`),
+because the client's timeline for that answer starts at 0. A source that is **not on disk answers
+409 + `Retry-After`**: the live stream must not be restarted from 0, so the client keeps the sound
+it has and reloads when `/ready` turns `ready` or `offset`.
+
+Two more rules hold the whole thing up. A `Range` on a generated stream is answered `200` from the
+start, never a fake `206`: `bytes=0-` is every browser's first request and must not break, and a
+truncated `206` would make the player believe it landed. And **a failed transcode is never
+published**: `cache.set_generated` keeps what a generator completed, so
+`_opus_generator`/`_opus_live_generator` raise when ffmpeg exited non-zero **or** the live source
+was not consumed to the end. A network hiccup used to cache the first half of a long track as the
+whole track — a 15 kB "song", served for ever with a length and byte ranges, which no seek could
+get past.
+
 **Decrypting a stream** (`provider.decrypt_blocks` / `iter_decrypted`). Deezer encrypts the 2048-byte
 blocks at FILE offsets 0, 6144, 12288… — every third one, each its own CBC chain (IV `00..07`), never
 a short last block. The body is re-cut into those blocks by byte count, whatever pieces the network

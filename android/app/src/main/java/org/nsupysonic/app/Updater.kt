@@ -26,8 +26,8 @@ import java.util.concurrent.Executors
  * Progress and the outcome reach the page through `window.__nsUpdate({state,…})`:
  * download (progress 0..1), install (the system dialog is up), permission (the
  * user must allow installs from this app — the settings screen is opened, and
- * coming back resumes), uptodate, error (reason: network | invalid | package |
- * signature | permission).
+ * coming back resumes), uptodate, error (reason: network | preparing |
+ * truncated | archive | invalid | package | signature | permission).
  */
 class Updater(
     private val activity: Activity,
@@ -76,47 +76,75 @@ class Updater(
         val dir = File(activity.cacheDir, "update").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
         val out = File(dir, "neezer.apk")
+        var conn: java.net.HttpURLConnection? = null
         try {
-            // The first request may make the server fetch the release itself.
-            val conn = Net.get(prefs, url, cookie, 15000, 120000)
-            try {
-                val total = conn.contentLengthLong
-                if (total > MAX_BYTES) throw java.io.IOException("too large")
-                var done = 0L
-                var lastSent = -1
-                conn.inputStream.use { input ->
-                    out.outputStream().use { output ->
-                        val buf = ByteArray(64 * 1024)
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            done += n
-                            if (done > MAX_BYTES) throw java.io.IOException("too large")
-                            output.write(buf, 0, n)
-                            if (total > 0) {
-                                val pct = (done * 100 / total).toInt()
-                                if (pct != lastSent) {
-                                    lastSent = pct
-                                    send("download", progress = pct / 100.0)
-                                }
+            conn = openApk(url, cookie) ?: return null
+            val total = conn.contentLengthLong
+            if (total > MAX_BYTES) throw java.io.IOException("too large")
+            var done = 0L
+            var lastSent = -1
+            conn.inputStream.use { input ->
+                out.outputStream().use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        done += n
+                        if (done > MAX_BYTES) throw java.io.IOException("too large")
+                        output.write(buf, 0, n)
+                        if (total > 0) {
+                            val pct = (done * 100 / total).toInt()
+                            if (pct != lastSent) {
+                                lastSent = pct
+                                send("download", progress = pct / 100.0)
                             }
                         }
                     }
                 }
-            } finally {
-                conn.disconnect()
+            }
+            conn.disconnect()
+            conn = null
+            if ((total > 0 && done != total) || out.length() < ApkArchive.MIN_BYTES) {
+                out.delete()
+                send("error", "truncated")
+                return null
             }
             return out
         } catch (_: Exception) {
             out.delete()
             send("error", "network")
             return null
+        } finally {
+            try {
+                conn?.disconnect()
+            } catch (_: Exception) {
+            }
         }
+    }
+
+    /**
+     * The connection that carries the APK itself. `/api/android/apk` answers
+     * 202 + Retry-After while its one worker fetches the release from GitHub;
+     * that JSON is not an update, so the app waits it out instead of saving it.
+     */
+    private fun openApk(url: String, cookie: String?): java.net.HttpURLConnection? {
+        for (attempt in 0 until ATTEMPTS) {
+            val conn = Net.get(prefs, url, cookie, 15000, 120000)
+            if (conn.responseCode != 202) return conn
+            val wait = conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull()
+                ?.coerceIn(1L, 10L) ?: 5L
+            conn.disconnect()
+            if (attempt < ATTEMPTS - 1) Thread.sleep(wait * 1000)
+        }
+        send("error", "preparing")
+        return null
     }
 
     /** null when [apk] may be installed, else why not. */
     @Suppress("DEPRECATION")
     private fun verify(apk: File): String? {
+        if (apk.length() < ApkArchive.MIN_BYTES) return "truncated"
+        if (!ApkArchive.looksLikeApk(apk)) return "archive"
         val pm = activity.packageManager
         val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES
         else PackageManager.GET_SIGNATURES
@@ -125,7 +153,9 @@ class Updater(
         } catch (_: Exception) {
             null
         } ?: return "invalid"
-        if (archive.packageName != activity.packageName) return "package"
+        val name = archive.packageName
+        if (name.isNullOrBlank()) return "invalid"
+        if (name != activity.packageName) return "package"
         val installed = try {
             pm.getPackageInfo(activity.packageName, flags)
         } catch (_: Exception) {
@@ -213,5 +243,6 @@ class Updater(
 
     companion object {
         private const val MAX_BYTES = 200L * 1024 * 1024
+        private const val ATTEMPTS = 3
     }
 }

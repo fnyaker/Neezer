@@ -13,7 +13,11 @@ stays in the WebView — the native side is only a remote control + keep-alive. 
 that `Player.svelte` already maintains to `window.NSNative.publish()`, and routes transport
 commands back via `window.__nsNativeCmd()`. No webapp-side code is involved, so the app works
 against any deployed SPA version. Build: `gradle -p android assembleRelease` (JDK 17, SDK 34 —
-CI does this; no wrapper is committed).
+CI does this; no wrapper is committed). The release signing config asks for **v1, v2 and v3**
+(`enableV1Signing` too, on the debug fallback as well): AGP decides v1 from the minSdk when left
+to itself, so a minSdk-26 build ships v2-only — measured on v1.3.1, and `apksigner verify` hides
+the fact by skipping the JAR check above minSdk 24 (ask it `--min-sdk-version 23`). v1 is what an
+old installer reads; `android.yaml` fails the job without all three.
 
 **Trust boundaries** (audit NS-19). "Verify SSL" unticked is **trust on first use**, never
 trust-all (`Ssl.kt`): the setup screen learns the certificate with a handshake it refuses (nothing is
@@ -56,6 +60,14 @@ included) — so the page can say "signature différente" (a CI build without th
 instead of an installer error; then the "install unknown apps" permission (settings opened, resumed on return) and
 the system installer (ACTION_VIEW on a FileProvider uri). `NSNative.bridgeVersion()` (2) is what the page may ask of
 an APK: an older one answers nothing and keeps the "Télécharger" link. Progress: `window.__nsUpdate({state,…})`.
+**Nothing reaches the installer on trust**: the route answers `200` only with an APK (`application/vnd.android.package-archive`)
+and `202 + Retry-After` while its one worker fetches — the app waits that out instead of saving the `{"state":"fetching"}`
+JSON as an APK, which is the "Le fichier reçu n'est pas une application valide" (reason `invalid`) the first tap after a
+release used to get. Both ends refuse a body shorter than its `Content-Length` and a file that is not a zip carrying
+Android's **binary** `AndroidManifest.xml` (`ApkArchive`, above a 64 KiB floor): the server validates on publish (every
+member's CRC, `testzip`) and again on every serve (the central directory only), and deletes + re-fetches a cached file that
+fails instead of serving it for ever. The page names the cause — `preparing`, `truncated`, `archive`, `invalid`, `package`,
+`signature`, `permission` — and every one but the signature keeps the "Réessayer" action.
 This is the delivery channel for the native audio work.
 
 **The native audio core** (`android/nscore`, Rust, `NsCore.kt`; lot N2 of the native-audio plan). The `rhythm`
@@ -199,6 +211,35 @@ halves. `test/native/run.mjs` freezes a 40-title queue and advances 36 times wit
 checks the page catches up on the last one and the refill was asked exactly once; the unit test
 sends 200 entries, asserts the bridge-9 cap of ten, repeat flags and the 128 KiB ceiling.
 
+**Bridge 11: the player answers, and the page can put it back in step** (`nativeplayer.js`,
+`Player.svelte#resyncNative`, `NativeAudio.kt`). A source/transport command (`src`, `clear`, `play`,
+`pause`, `seek`) must be echoed by a state that has seen it within **1.5 s** (`ACK_OPS`); past that,
+the element fires `nsdesync` with the op that went unanswered, and the page runs ONE recovery path:
+adopt the track the app is actually on if its `k` differs; otherwise `probe()` (op `state`, or `rate`
+before bridge 11, so every APK ≥ 4 answers) and re-assert position/transport/list; a probe that stays
+silent builds a **new player**; a second failure calls `noteNativeFault` and hands the sound to the
+page's own `<audio>`. An advance (`k`) that was announced but not adopted is re-announced by the next
+state and reported after **3 s**; `_fire` no longer swallows `error`, `nsneednext`, `nsbackground` or
+`nsforeground` behind an unadopted advance; an app `error` (including `no player` for a slot the app
+lost) is handled before the source-sequence gate, not discarded as stale; `dropAdvance` forgets the
+key so the same advance can be announced again; a command to a slot that no longer exists answers
+`no player`. Measured in `test/native/run.mjs` B1 (two dead slots): **3.03 s** of silence, one new
+player created, no `<audio>` fallback, the next skip works in 1.07 s. The `volume` setter ignores a
+non-finite store value and the four reactive blocks that drive the element go through `Player.svelte#guard`,
+so a JS exception can no longer abort Svelte's flush and freeze every control (the "full-screen
+player won't close" symptom). No timer was added to the recovery path: it is triggered by an ack, an
+advance, a tick mismatch, the playback watchdog, or an error.
+
+**Mono and balance in the native player** (`PanAudio.kt`, `PanProcessor`, after `NsProcessor` in the
+same `DefaultAudioSink`; bridge 11). 16-bit stereo in, **same format out** (no AudioTrack reopen, no
+gap, no click): mono is `0.5·(L+R)`, balance follows the W3C StereoPannerNode law exactly like
+`lib/audio/pan.js` (the mono `cos/sin((p+1)π/4)` and both stereo branches), matrices interpolated in
+32-frame blocks (12 ms balance, 48 ms mono). The Rust analyser reads the signal **before** the stage,
+so the animations keep the stereo. `fx` carries `mono` and `balance`; an APK below 11 ignores them and
+`nativePanAvailable()` is false, so the card stays disabled. `PanAudioTest` holds the laws, levels,
+the ramp (no step above 6 LSB/frame) and the 16-bit-stereo gate. The card enables itself on a bridge-11
+APK with `plan.why === "native"`; the web graph remains the path on PC and on the direct output.
+
 **Next / previous — and play / pause / seek — from a media button, with the page asleep** (`PlayerService` -> `PlayerService.nativeSkip` / `nativeTransport` -> `NativeAudio.skip` / `transport`).
 The notification, a headset or the lock screen used to send `next` / `prev` to the PAGE (`commandSink` -> `evaluateJavascript`): with the
 activity stopped that page is throttled (timers once a minute after five minutes) or frozen, with the activity gone `commandSink` is null
@@ -273,8 +314,9 @@ in `CarVisibility`: **GPS first**. When the GPS trigger is on and the usage acce
 overlay exists only while a configured navigation app is really in front — Bluetooth no longer
 keeps it over YouTube or the launcher (the old `gps || bluetooth` was the reported leak). The GPS
 trigger off means Bluetooth alone decides (the documented mode, the platform cannot tell a car
-radio from a headset); the GPS trigger on with the usage access missing cannot see anything, so
-Bluetooth is the only signal left and the settings' access row explains it. `manual` is NOT in the
+radio from a headset); the GPS trigger on with no usable access — no usage grant, or no app watched,
+`CarPrefs.gpsWatching` being that one definition — cannot see anything, so Bluetooth is the only
+signal left and the settings' access row explains it. `manual` is NOT in the
 formula: a tile or settings start shows the card once, then the first answer saying no navigation
 app is in front takes it down (the close button and the notification remain the explicit way out).
 A `DriveState` carries the foreground package, so the service applies that app's own position and
@@ -309,15 +351,52 @@ speed, 5 s of silence, no location permission — is always "moving" (no crash, 
 restricted). Listener on the main thread, `start`/`stop` idempotent; `CarMotionTest` (JVM) holds
 the 5 km/h / 5 s thresholds.
 
-**Starting itself without Neezer open** (`CarBootReceiver`, `START_STICKY`). `BOOT_COMPLETED` and
+**Only while the car is really there** (`CarWatch`, `CarBootReceiver`, `CarWakeReceiver`,
+`CarWatchJobService`, `CarBluetoothReceiver`, `CarLifecycle`). `BOOT_COMPLETED` and
 `MY_PACKAGE_REPLACED` (permission `RECEIVE_BOOT_COMPLETED`, receiver `exported="false"` — the
-system still delivers these protected broadcasts) call `CarModeService.startIfEnabled`: the service
-then watches for the navigation app even if Neezer is never opened. Android 12+ allows those two
-broadcasts as background FGS starts (developer.android.com, "Exemptions from background start
-restrictions"), and SYSTEM_ALERT_WINDOW — already required to draw — is another exemption. Both
-services return `START_STICKY`, and `onStartCommand(null)` is handled: the car service re-arms the
-trigger (no manual flag, no stale dismissal), the player stops when it has neither a client nor a
-state, so no zombie notification survives. A refused background start
+system still delivers these protected broadcasts) and `MainActivity.onResume`
+(`CarModeService.startIfEnabled`) no longer start the service: they ARM `CarWatch` — the persisted
+15-minute `JobScheduler` job, no notification and no service, Android owns the schedule — then look
+ONCE on a worker thread. `activeNow` reads the last meaningful `ACTIVITY_RESUMED` of the trigger's
+own six-hour seed and the audio outputs, and the service starts only when `CarVisibility.wanted`
+says a trigger really wants it (a configured navigation app in front, or the Bluetooth trigger with
+a sink). No notification exists at boot, on a resume, or in a pocket. `CarLifecycle.endsWithTheDrive`
+stops everything on the first drive state that says the drive is over (the answer is known, nothing
+visible, no card attached, no manual start, no settings screen), and the notification goes with the
+card. `CarBluetoothReceiver` catches the car radio connecting (A2DP, headset, ACL — the Bluetooth
+broadcasts a manifest receiver still receives, with `BLUETOOTH_CONNECT`): a connect looks and arms
+the ladder, a disconnect only looks, and a running mode ends through the same rule. `watch` also arms
+a bounded ladder (`CarLifecycle.LADDER_MS`: 10 s, 60 s, 5 min) of `CarWakeReceiver` alarms
+(`ELAPSED_REALTIME`, never a wakeup), one look each: that catches a navigation app opened a moment
+after the app, or reopened after a phone call, without polling — a rung found with the screen off
+arms nothing. Past its last rung the ladder keeps going **once a minute while the app's music plays,
+the phone charges and the screen is on** (`CarLifecycle.SUSTAIN_MS`; the process is already alive
+for the player, and each rung is one `queryEvents`), which is the “music in the car, then Maps at
+minute 7” flow; it stops with the music or the screen. “Arrêter” (the notification's action, and the
+tile) is the person's own answer: it
+disarms the job and the ladder until their next event (the app opening, the radio connecting, a
+boot). A manual start is unchanged — the tile and the settings pass `manual`, which keeps the
+service and its notification until the person stops it, and `manual` is still not a visibility
+source (the card goes when no navigation app is in front). `CarPrefs.gpsWatching` is the one
+definition of “the GPS trigger can see something” (switch on, an app watched, the access granted).
+
+**The limits, assumed.** Android has no third-party callback for “an app came to the foreground”
+(`UsageStatsManager.registerAppUsageObserver` and its siblings are `@SystemApi`, behind
+`OBSERVE_APP_USAGE`), and `ACTION_SCREEN_ON` / `ACTION_USER_PRESENT` / `ACTION_POWER_CONNECTED` are
+not on the implicit-broadcast exception list (developer.android.com, *Implicit broadcast
+exceptions*), so a manifest receiver cannot see them. What is left is Bluetooth, USB and boot;
+everything else falls to the 15-minute job, which is `setPeriodic`'s platform minimum — a navigation
+app opened with none of those events is therefore noticed in **≤ 15 min**, and `queryEvents` returns
+null while the device is locked, so nothing is seen then either. The sustain rung above shortens that
+to **≤ 1 min** while the app is playing in a charging car. That job is the least visible
+mechanism Android offers: it wakes the process, reads one window and stops, with no notification and
+no service — against the permanent foreground service this replaced, which was the reported
+notification. Android 12+ allows the boot/update broadcasts as background FGS starts
+(developer.android.com, "Exemptions from background start restrictions"), and SYSTEM_ALERT_WINDOW —
+already required to draw — is another exemption, which is what a Bluetooth-triggered start relies
+on. Both services return `START_STICKY`, and `onStartCommand(null)` is handled: the car service
+re-arms the trigger (no manual flag, no stale dismissal), the player stops when it has neither a
+client nor a state, so no zombie notification survives. A refused background start
 (`ForegroundServiceStartNotAllowedException`, or the Android 14 while-in-use `SecurityException`
 for the location/microphone types) is caught: a plain `startService` is tried, then a notification
 with a “Démarrer” action is posted — a notification action is an allowed start — never a crash.

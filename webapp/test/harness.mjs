@@ -32,7 +32,10 @@ export async function startServer(extra = []) {
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const py =
     process.env.PYTHON || (existsSync(join(repo, ".venv/bin/python")) ? join(repo, ".venv/bin/python") : "python3");
-  const srv = spawn(py, [join(repo, "tools/perf_api.py"), "--runs", "1", "--serve", ...extra], {
+  // DIST=/path/to/dist serves a build made elsewhere (`vite build --outDir …`),
+  // so a bench never has to replace neezer/webui/dist another agent is using.
+  const dist = process.env.DIST ? ["--dist", resolve(process.env.DIST)] : [];
+  const srv = spawn(py, [join(repo, "tools/perf_api.py"), "--runs", "1", "--serve", ...dist, ...extra], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const ready = await new Promise((res, rej) => {

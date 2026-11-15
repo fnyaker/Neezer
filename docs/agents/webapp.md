@@ -65,6 +65,38 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   The watcher is keyed on `currentId` — a STRING, because `current` re-emits its object on every
   progress tick — and guarded on the sleeve URL it asked for, NOT a counter: replacing a queue emits
   A, null, A, and a counter loses A's answer and leaves the fallback up forever (seen in the browser).
+- **A sleeve change is a WALK, not a cut** (`app.css`, `lib/backdrop.js`,
+  `DesktopNowPlaying`/`MobileNowPlaying`). `--cover-ac` is a registered `<color>` (`@property`), so
+  Pochette's whole accent — `--ac`, `--btn`, `--hrt`, `--ac-mark`, which are `var(--cover-ac)` —
+  transitions in CSS over 600 ms: no timer, no JavaScript, a change that arrives mid-fade is
+  retargeted from where it is, and `prefers-reduced-motion` turns it off at once. The blurred ground
+  is a stack of layers each fading in with the same 600 ms curve (the cover glow crossfades with
+  them); `lib/backdrop.js` only drops a layer once the one above it has been opaque for `fadeMs`
+  (720 ms) — dropping the OPAQUE base the moment a second cover arrived was the dark flash on a
+  skip, measured at 90 % of the page colour showing through even on ONE skip (the play cache emits
+  the same art twice), 0 % now. Eco mode keeps its instant swap. Measured (`test/theme/run.mjs`,
+  1280 and 390): the accent is green→red with mid colours between the two and settles in 600–660 ms,
+  ≤3 layers for a skip and ≤5 for two 250 ms apart, no frame over 51 ms, 2 cover requests and 0
+  after it settles, the first frame after a reload already the stored accent. `DIST=<dir>` (a
+  `vite build --outDir` elsewhere) points any bench at a build of its own (`test/harness.mjs`).
+- **The sleeve-derived header gradient fades too** (`components/GradientHeader.svelte`, used by a
+  show, an import job and the credits page): `--gh-c` is the second registered `<color>`, and the
+  gradient is built from it with `color-mix` — 90 % of the sleeve at 0 %, 45 % of it mixed with black
+  at 55 %, `--bg` at 100 %, the stops the old inline gradient had — so a colour ARRIVING is a 600 ms
+  walk instead of the cut `transition: background` never could animate. No cover keeps the fallback
+  `#3a2a55` (the old FALLBACK purple within 3 units, checked on Papier) and skips the fade entirely.
+  Measured on the show page: 32 distinct gradient values while arriving, the teal reached in ~600 ms,
+  no intermediate under reduced motion, no frame over 120 ms. The album, playlist and artist pages
+  have no cover tint at all (a flat `--s2` band): the tint lives on those three pages only.
+- **The bar's level speaks the faders' language** (`components/PlayerBar.svelte`): an 8 px track
+  inset by the thumb's radius, a 22 px thumb whose centre rides the track's ends, a 44 px hit box,
+  the fill inside the track, and the value (`14 %`, mono 10 px) under it. The native range is
+  invisible on top and does the mapping — its thumb is 22 px, so a click at 14 % of the TRACK is
+  14 % (the surviving 10 px thumb rule made it 21 %) — which keeps the keyboard and the screen
+  reader for free. Measured at 1920/1440/1280/1181: thumb centre on the track centre to 0.00 px both
+  ways at 0/50/100/14 %, hit area 84×44 or 72×44, no overflow, click 14 % → 0.14. The level is not
+  mounted at all below 1181 px (no room in the third column; the mute icon and the full-screen
+  player keep the sound reachable), so a 641 px bar has no slider — `test/volume/run.mjs` holds it.
 - **Missing art is a record groove, never an empty square** (`lib/sillon.js`): DESIGN §4's repeating
   radial grain, from eight dark pairs chosen by FNV-1a over `src|alt|fallbackId|kind` (Cover) or the
   name (Avatar's initials). Deterministic: a placeholder that changes colour on reload reads as a

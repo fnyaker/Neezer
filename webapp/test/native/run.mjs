@@ -112,6 +112,7 @@ function fakeApp() {
       return el.readyState >= 3 ? 3 : 2;
     };
     sl.send = (ev) => {
+      if (sl.dead) return;
       const bridge7 = version() >= 7;
       const s = { c: sl.c, st: st(), p: sl.pwr, t: el.currentTime, b: el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0, sk: sl.item && !unseekable() };
       if (bridge7) s.sc = true;
@@ -310,7 +311,13 @@ function fakeApp() {
       // Applied on the main looper: after the call returns.
       setTimeout(() => {
         const sl = slots.get(id);
-        if (!sl) return;
+        // NativeAudio.command: a player this side no longer has answers, it
+        // does not swallow the command.
+        if (!sl) {
+          if (o.op !== "release") emit(id, { c: 0, ev: "error", code: 4, msg: "no player" });
+          return;
+        }
+        if (sl.dead) return;
         const el = sl.el;
         sl.c = Math.max(sl.c, o.c);
         switch (o.op) {
@@ -390,6 +397,9 @@ function fakeApp() {
             el.playbackRate = o.r;
             sl.send(null);
             break;
+          case "state":
+            sl.send(null);
+            break;
           case "release":
             clearInterval(sl.tick);
             el.pause();
@@ -400,6 +410,20 @@ function fakeApp() {
         }
       }, 2);
     },
+  };
+  // The app's player stops answering: the player is still there (the page may
+  // make a new one) but this slot applies nothing and emits no state — a service
+  // wedged on its main looper, or a slot the app released under the page.
+  window.__fake.kill = () => {
+    let n = 0;
+    for (const sl of slots.values()) {
+      sl.dead = true;
+      clearInterval(sl.tick);
+      clearInterval(sl.trim);
+      sl.el.pause();
+      n++;
+    }
+    return n;
   };
   // The page's own <audio> elements, counted (what the setting OFF uses).
   window.__pageEls = 0;
@@ -915,6 +939,53 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
 }
 
 {
+  // B1: the app's player stops answering in the middle of a queue (a service
+  // wedged on its looper, a slot it no longer has). Every command then dies in
+  // the void: the store moves and the sound does not, and nothing used to put
+  // them back together short of restarting the app.
+  const q5 = Array.from({ length: 5 }, (_, k) =>
+    song(k < ids.ids.length ? ids.ids[k] : "x" + (k + 1), k + 1));
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await open(ctx, { "audio.native": true }, q5);
+  const made0 = await page.evaluate(() => window.__fake.made);
+  await page.locator("footer.player .pp").click();
+  await page.waitForTimeout(1200);
+  const killed = await page.evaluate(() => window.__fake.kill());
+  const t0 = Date.now();
+  await page.locator('footer.player button[aria-label="Suivant"]').first().click();
+  let recovered = true;
+  try {
+    await page.waitForFunction(
+      () => {
+        const live = [...window.__fake.slots.values()].filter((s) => !s.dead && !s.el.paused);
+        const title = document.querySelector("footer.player .info .t")?.textContent;
+        return live.length === 1 && title === "Song 2";
+      },
+      null,
+      { timeout: 9000 }
+    );
+  } catch {
+    recovered = false;
+  }
+  const elapsed = Date.now() - t0;
+  const w = await where(page);
+  const made1 = await page.evaluate(() => window.__fake.made);
+  check(killed >= 1 && recovered, "a dead app player: the skip still reaches a player and the sound follows",
+    `${killed} slot(s) silent, recovered in ${elapsed} ms`);
+  check(elapsed < 7000, "and it takes the ack deadline plus one probe, not a restart", `${elapsed} ms`);
+  check(w.title === "Song 2" && w.playing === 1 && !w.paused, "the title the person asked for is the one sounding",
+    `${w.title} at ${w.t?.toFixed(2)}, ${w.playing} playing`);
+  check(made1 === made0 + 1, "one fresh player, not a loop of them", `${made1 - made0} made`);
+  check(w.pageEls === 0, "still the app's own player, not the page's", `${w.pageEls} page el`);
+  await page.locator('footer.player button[aria-label="Suivant"]').first().click();
+  await page.waitForTimeout(1200);
+  const w2 = await where(page);
+  check(w2.title === "Song 3" && w2.playing === 1 && !w2.paused, "and the queue goes on: the next skip lands too",
+    `${w2.title} at ${w2.t?.toFixed(2)}, ${w2.playing} playing`);
+  await ctx.close();
+}
+
+{
   // A seek in a first play: no length, no ranges. The page used to wait for a
   // `seekable` that never came (the bar moved, the sound did not).
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -932,6 +1003,85 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
   const real = await page.evaluate(() => [...window.__fake.slots.values()].find((s) => !s.el.paused)?.el.currentTime);
   const w = await where(page);
   check(real > LEN * 0.6 && Math.abs(w.t - real) < 0.4 && !w.paused, "and the sound is where the bar is", `app ${real?.toFixed(2)}, bar ${w.t?.toFixed(2)}`);
+  await ctx.close();
+}
+
+{
+  // B2: seeking in a stream that has no ranges. The server answers three shapes
+  // (/stream/<id>/ready) and can begin encoding at an offset (?start=); the page
+  // must take the right one and show the track's position while the element's
+  // own clock starts at 0.
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await open(ctx, { "player.quality": "OPUS_128", "audio.native": false }, queue);
+  const shapes = await page.evaluate(async (one) => {
+    const json = async (u) => {
+      const r = await fetch(u, { credentials: "include" });
+      return { status: r.status, body: await r.json() };
+    };
+    const slice = await fetch(`/api/stream/${one}?q=OPUS_128&start=4`, { credentials: "include" });
+    return {
+      flac: (await json(`/api/stream/${one}/ready`)).body,
+      opus: (await json(`/api/stream/${one}/ready?q=OPUS_320`)).body,
+      slice: {
+        status: slice.status,
+        accept: slice.headers.get("accept-ranges"),
+        length: slice.headers.get("content-length"),
+        start: slice.headers.get("x-ns-start"),
+      },
+    };
+  }, ids.ids[0]);
+  check(shapes.flac.ready === true && shapes.flac.ranges === "bytes",
+    "an archived file answers ready, with byte ranges", JSON.stringify(shapes.flac));
+  check(shapes.opus.ready === false && shapes.opus.offset === true,
+    "a quality with no transcode yet: not ready, but the offset is honoured", JSON.stringify(shapes.opus));
+  check(shapes.slice.status === 200 && shapes.slice.accept === "none" && !shapes.slice.length &&
+    Math.abs(+shapes.slice.start - 4) < 0.01,
+    "and ?start= answers the audio from there, without a length or ranges", JSON.stringify(shapes.slice));
+
+  await page.route("**/api/stream/*/ready*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ready: false, ranges: null, offset: true, streaming: false, bytes: 0, cached: false }),
+    })
+  );
+  const started = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/stream/") && r.url().includes("start=")) started.push(r.url());
+  });
+  await page.evaluate(() => {
+    document.querySelector("footer.player .pp").click();
+    const bar = document.querySelector("footer.player input[type=range]");
+    bar.value = "5";
+    bar.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.waitForTimeout(2000);
+  const at = await page.evaluate(() => {
+    const p = window.__nsAudioPath();
+    return {
+      el: p.t,
+      paused: p.paused,
+      title: document.querySelector("footer.player .info .t")?.textContent,
+    };
+  });
+  const shown = await page.evaluate(
+    () => document.querySelector("footer.player .seek .time")?.textContent.trim()
+  );
+  const seconds = (() => {
+    const m = /^(\d+):(\d+)$/.exec(shown || "");
+    return m ? +m[1] * 60 + +m[2] : NaN;
+  })();
+  if (started.length) {
+    check(/[?&]start=5\./.test(started[0]), "a stream with no ranges is reopened at the offset",
+      started[0]);
+    check(at.el < 2.5, "and the element's own clock starts at 0 (the offset is not forced on it)",
+      `element ${at.el?.toFixed(2)} s`);
+  } else {
+    console.log("note the offset branch: not taken here (the element could seek there itself at that moment)");
+  }
+  check(seconds >= 5 && seconds <= 8 && !at.paused && at.title === "Song 1",
+    "the bar shows the position asked for, and the sound is there",
+    `${shown} (element ${at.el?.toFixed(2)}, ${at.title})`);
   await ctx.close();
 }
 

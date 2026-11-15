@@ -55,3 +55,61 @@ test("a failing CDN image is still retried before falling back", async () => {
   assert.deepEqual(requested, ["https://cdn/dead/500x500.jpg"], "the retry waits its back-off");
   bg.destroy();
 });
+
+test("a skip during a fade keeps the opaque layer underneath", async () => {
+  const bg = createBackdrop({ fadeMs: 1000 });
+  bg.set("https://cdn/cover/a.jpg");
+  await wait(20);
+  bg.set("https://cdn/cover/b.jpg");
+  await wait(20);
+  bg.set("https://cdn/cover/c.jpg");
+  await wait(20);
+  assert.deepEqual(
+    get(bg).map((l) => l.url),
+    ["https://cdn/cover/a.jpg", "https://cdn/cover/b.jpg", "https://cdn/cover/c.jpg"],
+    "dropping A while B is still translucent is the dark ground showing through"
+  );
+  bg.destroy();
+});
+
+test("a burst keeps every layer that is still fading", async () => {
+  const bg = createBackdrop({ fadeMs: 600 });
+  for (const c of ["a", "b", "c", "d", "e"]) {
+    bg.set(`https://cdn/cover/${c}.jpg`);
+    await wait(10);
+  }
+  assert.equal(get(bg).length, 5, "none of them is opaque yet");
+  bg.destroy();
+});
+
+test("a long burst is capped", async () => {
+  const bg = createBackdrop({ fadeMs: 600 });
+  for (let k = 0; k < 12; k++) {
+    bg.set(`https://cdn/cover/${k}.jpg`);
+    await wait(5);
+  }
+  assert.equal(get(bg).length, 8, "at most eight full-screen blurred layers");
+  bg.destroy();
+});
+
+test("the stack settles on the newest cover once it is opaque", async () => {
+  const bg = createBackdrop({ fadeMs: 30 });
+  bg.set("https://cdn/cover/a.jpg");
+  await wait(5);
+  bg.set("https://cdn/cover/b.jpg");
+  await wait(80);
+  assert.deepEqual(get(bg).map((l) => l.url), ["https://cdn/cover/b.jpg"]);
+  bg.destroy();
+});
+
+test("destroy leaves no timer behind", async () => {
+  const bg = createBackdrop({ fadeMs: 10 });
+  bg.set("https://cdn/cover/a.jpg");
+  await wait(5);
+  bg.set("https://cdn/cover/b.jpg");
+  await wait(5);
+  bg.destroy();
+  const after = get(bg);
+  await wait(40);
+  assert.equal(get(bg), after, "the hold timer was cleared with the owner");
+});

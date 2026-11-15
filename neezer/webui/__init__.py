@@ -14,6 +14,7 @@ returned as Deezer CDN URLs the browser loads directly.
 from __future__ import annotations
 
 import logging
+import math
 import os.path
 import re
 import sys
@@ -180,7 +181,13 @@ def _unhandled_api_error(exc):
     from werkzeug.exceptions import HTTPException
 
     if isinstance(exc, HTTPException):
-        return jsonify({"error": exc.name}), exc.code
+        original = exc.get_response()
+        resp = jsonify({"error": exc.name})
+        resp.status_code = exc.code
+        for header in ("Content-Range", "Retry-After"):
+            if header in original.headers:
+                resp.headers[header] = original.headers[header]
+        return resp
     logger.error("Unhandled error on %s %s", request.method, request.path, exc_info=True)
     return jsonify({"error": "server error"}), 500
 
@@ -5160,6 +5167,184 @@ def _gone(track, deezer_id):
 # Opus transcode bitrates (kbps) the web player may request: q=OPUS_320 etc.
 _OPUS_BITRATES = {320, 256, 192, 128, 64}
 
+#: Containers a seek slice can be stream-copied from, and their muxer/mimetype.
+_SLICE_COPY = {
+    ".mp3": ("mp3", "audio/mpeg"),
+    ".ogg": ("ogg", "audio/ogg"),
+    ".opus": ("ogg", "audio/ogg"),
+}
+
+
+def _archive_state(path):
+    """``(size, writing)`` for an archive path: is the file there, and is one coming?
+
+    Every writer of audio here publishes atomically — ``archive.ensure_archived``
+    renames ``<name>.<token>.stage.part`` onto the final name, and the live,
+    YouTube and podcast paths rename ``<name>.<token>.part`` — so a file found at
+    the final name is COMPLETE and ``size`` is what the caller will hear. Only
+    when nothing is published is the directory listed: a ``.part`` sibling then
+    says an archive for that very name is being written, which is what tells a
+    waiting player that the wait is a real one and it will end. A stale ``.part``
+    (a killed process) can therefore never hide a finished archive.
+    """
+    if not path:
+        return None, False
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    if size > 0:
+        return size, False
+    name = os.path.basename(path)
+    try:
+        with os.scandir(os.path.dirname(path) or ".") as entries:
+            for entry in entries:
+                if entry.name.startswith(name + ".") and entry.name.endswith(".part"):
+                    return None, True
+    except OSError:
+        pass
+    return None, False
+
+
+def _start_offset():
+    """``?start=<seconds>`` into the track, and the refusal for a bad value."""
+    raw = request.args.get("start")
+    if raw is None or raw == "":
+        return None, None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = None
+    if value is None or not math.isfinite(value) or value < 0:
+        return None, (jsonify({"error": "invalid start"}), 400)
+    return value, None
+
+
+def _clamped_offset(start, duration):
+    """The offset actually applied: never past the track's own length."""
+    limit = float(duration or 0)
+    if limit > 0:
+        return min(start, max(0.0, limit - 0.25))
+    return min(start, 86400.0)
+
+
+def _not_archived(path=None):
+    """Nothing on disk to seek in: 409, and whether a writer is actually at work."""
+    _, writing = _archive_state(path)
+    resp = jsonify({"error": "not archived yet", "ready": False, "streaming": writing})
+    resp.status_code = 409
+    resp.headers["Retry-After"] = "2"
+    return resp
+
+
+def _mark_generated(resp):
+    """A stream generated as it is sent: no length, no byte range, not cacheable."""
+    resp.headers["Accept-Ranges"] = "none"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _transcode_key(entity, bitrate):
+    """The transcode cache key ``/stream`` uses for this entity (and this quality)."""
+    if isinstance(entity, PodcastEpisode):
+        return f"episode-{entity.id}-opus{bitrate}.ogg"
+    if getattr(entity, "youtube_id", None) and not getattr(entity, "deezer_id", None):
+        return f"youtube-{entity.id}-opus{bitrate}.ogg"
+    return f"deezer-{entity.id}-opus{bitrate}.ogg"
+
+
+def _seek_is_generated(entity, bitrate):
+    """Whether ``/stream`` answers this entity/quality with an Opus transcode."""
+    if not bitrate:
+        return False
+    is_youtube = bool(
+        getattr(entity, "youtube_id", None) and not getattr(entity, "deezer_id", None)
+    )
+    if not is_youtube:
+        return True
+    source_rate = int(getattr(entity, "bitrate", 0) or 0)
+    from . import youtube
+
+    return bool(source_rate and bitrate < source_rate - youtube.TRANSCODE_MARGIN)
+
+
+def _sliceable(path, bitrate):
+    """Whether ``?start=`` into this source can be answered (see ``_slice_generator``)."""
+    if bitrate:
+        return True
+    suffix = os.path.splitext(str(path or ""))[1].lower()
+    return suffix == ".flac" or suffix in _SLICE_COPY
+
+
+def _slice_generator(path, start, bitrate):
+    """ffmpeg from ``start`` seconds into ``path``; ``(mimetype, generator)``.
+
+    ``-ss`` before ``-i`` is ffmpeg's input seek: it starts on the sample asked
+    (on a marked FLAC, ``-ss 119`` leaves exactly 1.000 s of silence and
+    ``-ss 121`` none) and costs 40 ms to the first byte where encoding from 0
+    costs 71 ms. A FLAC stream copy keeps the source's STREAMINFO and would
+    claim the whole track's length, so FLAC is re-encoded — lossless — while an
+    MP3 or Ogg source is copied (its duration comes out right, measured). An MP4
+    is left out: its muxer needs a seekable output and writes nothing to a pipe,
+    and an MP4 upload is served as a file, which a byte range already seeks.
+    ``(None, None)`` for a container neither can serve.
+    """
+    import subprocess
+
+    if not _sliceable(path, bitrate):
+        return None, None
+    suffix = os.path.splitext(str(path))[1].lower()
+    if bitrate:
+        codec = [
+            "-c:a", "libopus", "-b:a", f"{bitrate}k", "-vbr", "on",
+            "-flush_packets", "1", "-page_duration", "100000",
+        ]
+        muxer, mimetype = "ogg", "audio/ogg"
+    elif suffix == ".flac":
+        codec, muxer, mimetype = ["-c:a", "flac"], "flac", "audio/flac"
+    else:
+        muxer, mimetype = _SLICE_COPY[suffix]
+        codec = ["-c", "copy"]
+
+    cmd = [
+        "ffmpeg", "-v", "0", "-ss", f"{start:.3f}", "-i", str(path),
+        "-map", "0:a:0", *codec, "-vn", "-f", muxer, "pipe:1",
+    ]
+
+    def generate():
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        failed = True
+        try:
+            while True:
+                data = proc.stdout.read1(65536)
+                if not data:
+                    break
+                yield data
+            failed = proc.wait() != 0
+        except GeneratorExit:
+            proc.kill()
+            raise
+        finally:
+            proc.stdout.close()
+            proc.wait()
+        if failed:
+            logger.warning("Seek slice of %s at %.3f s failed", path, start)
+            raise RuntimeError("seek slice failed")
+
+    return mimetype, generate()
+
+
+def _slice_response(path, start, bitrate):
+    """A seek answered by encoding from ``start`` — never by replaying from 0."""
+    mimetype, gen = _slice_generator(path, start, bitrate)
+    if gen is None:
+        resp = jsonify({"error": "seek with a byte range", "ranges": "bytes"})
+        resp.status_code = 409
+        return resp
+    resp = _mark_generated(current_app.response_class(gen, mimetype=mimetype))
+    resp.headers["X-NS-Start"] = f"{start:.3f}"
+    return resp
+
 
 def _then(first, rest):
     """``first`` (already read, or None), then the rest of the generator ``rest``.
@@ -5178,7 +5363,12 @@ def _then(first, rest):
 
 
 def _opus_generator(flac_path, bitrate):
-    """ffmpeg: decode the archived FLAC and (re)encode to Opus-in-Ogg."""
+    """ffmpeg: decode the archived FLAC and (re)encode to Opus-in-Ogg.
+
+    Raises when ffmpeg did not finish: the cache publishes what the generator
+    completed, and a truncated Opus used to be cached for good — the next plays
+    then served a 15 kB file that claimed to be the track.
+    """
     import subprocess
 
     cmd = [
@@ -5188,12 +5378,14 @@ def _opus_generator(flac_path, bitrate):
     ]
     # stderr -> /dev/null so an unread, full stderr pipe can't deadlock ffmpeg.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    failed = True
     try:
         while True:
             data = proc.stdout.read(8192)
             if not data:
                 break
             yield data
+        failed = proc.wait() != 0
     except GeneratorExit:
         # Client disconnected mid-stream: stop ffmpeg promptly instead of
         # letting it run to completion (wasted CPU under load).
@@ -5202,6 +5394,9 @@ def _opus_generator(flac_path, bitrate):
     finally:
         proc.stdout.close()
         proc.wait()
+    if failed:
+        logger.warning("Transcode of %s failed; nothing cached", flac_path)
+        raise RuntimeError("transcode failed")
 
 
 def _opus_live_generator(first, source, bitrate):
@@ -5234,6 +5429,7 @@ def _opus_live_generator(first, source, bitrate):
     proc = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
     )
+    state = {"finished": False}
 
     def feed():
         # The archive is finalised on this thread (the row is refreshed, the
@@ -5247,6 +5443,7 @@ def _opus_live_generator(first, source, bitrate):
                 proc.stdin.write(first)
             for chunk in source:
                 proc.stdin.write(chunk)
+            state["finished"] = True
         except (BrokenPipeError, ValueError, OSError):
             pass  # ffmpeg is gone: the listener left
         except Exception:
@@ -5264,6 +5461,7 @@ def _opus_live_generator(first, source, bitrate):
 
     feeder = threading.Thread(target=feed, name="opus-live-feed", daemon=True)
     feeder.start()
+    complete = False
     try:
         while True:
             # read1: whatever is there now. read(n) waits for n bytes, and the
@@ -5272,20 +5470,26 @@ def _opus_live_generator(first, source, bitrate):
             if not data:
                 break
             yield data
+        complete = proc.wait() == 0 and state["finished"]
     except GeneratorExit:
         proc.kill()
         raise
     finally:
         proc.stdout.close()
         proc.wait()
+    if not complete:
+        logger.warning("Live Opus transcode was cut short; nothing cached")
+        raise RuntimeError("incomplete live transcode")
 
 
-def _stream_episode(episode, bitrate):
+def _stream_episode(episode, bitrate, start=None):
     """Stream a podcast episode: archived MP3 from disk, Opus-transcoded on
     request (cached), archiving from the podcast host on first play."""
     from ..deezer import archive
 
     if not (episode.path and os.path.isfile(episode.path)):
+        if start is not None:
+            return _not_archived(episode.path)
         provider, err = _need_provider()
         if err:
             return err
@@ -5309,7 +5513,7 @@ def _stream_episode(episode, bitrate):
             except Exception:
                 _log_deezer_failure("Episode live stream failed for %s", episode.id)
                 return jsonify({"error": "episode unavailable"}), 502
-            return current_app.response_class(gen, mimetype=mimetype)
+            return _mark_generated(current_app.response_class(gen, mimetype=mimetype))
         # An Opus transcode needs the whole source on disk first.
         try:
             archive.ensure_episode_archived(provider, episode)
@@ -5317,14 +5521,20 @@ def _stream_episode(episode, bitrate):
             _log_deezer_failure("Episode fetch failed for %s", episode.id)
             return jsonify({"error": "episode unavailable"}), 502
 
+    if start is not None:
+        return _slice_response(
+            episode.path, _clamped_offset(start, episode.duration), bitrate
+        )
     if bitrate:
         cache = current_app.transcode_cache
         key = f"episode-{episode.id}-opus{bitrate}.ogg"
         if cache.has(key):
             return send_file(cache.get(key), mimetype="audio/ogg", conditional=True)
-        return current_app.response_class(
-            cache.set_generated(key, lambda: _opus_generator(episode.path, bitrate)),
-            mimetype="audio/ogg",
+        return _mark_generated(
+            current_app.response_class(
+                cache.set_generated(key, lambda: _opus_generator(episode.path, bitrate)),
+                mimetype="audio/ogg",
+            )
         )
     return send_file(episode.path, mimetype=episode.mimetype, conditional=True)
 
@@ -5511,14 +5721,24 @@ def cover_response(cid, *, vetted=False):
 @webapi.route("/stream/<deezer_id>/ready")
 @login_required
 def stream_ready(deezer_id):
-    """Whether ``/stream/<id>?q=`` would now answer with a finished FILE (a length, byte
-    ranges, so a seek anywhere lands) rather than a stream generated as it is sent.
+    """What ``/stream/<id>?q=`` would answer right now, for a player deciding how to seek.
 
-    A FIRST play is the second kind: no length, no ranges, so the browser cannot seek past
-    what it has read (it fetches the URL again and starts from 0). The player asks this
-    before it re-fetches for a seek, instead of re-fetching blind and getting another
-    generated stream back. Cheap: one indexed lookup, a file test, a cache test; it
-    never starts a download or a transcode."""
+    ``ready`` — a finished FILE will be served: a length, ``Accept-Ranges: bytes``, byte
+    ranges, so a seek anywhere lands. Otherwise the answer is generated as it is sent
+    (``Accept-Ranges: none``), and the browser cannot seek it.
+    ``ranges`` — ``"bytes"`` when the next answer is that file, else null.
+    ``bytes`` — the size of the archive on disk, when there is one.
+    ``cached`` — the Opus transcode for this ``q`` is already in the cache.
+    ``offset`` — ``?start=<seconds>`` is honoured now: the source is a finished file on
+    disk, so the server can begin encoding at that time in ONE request.
+    ``streaming`` — nothing is published yet and an archive for this track is being
+    written right now (a ``.part`` sibling of its final name), so the wait is real and
+    it ends.
+
+    A FIRST play is generated as it is sent: no length, no ranges, so the browser clamps
+    a seek to what it has read and a reload would restart from 0. The player asks this
+    instead of re-fetching blind. Cheap by contract: one indexed lookup, one directory
+    listing and a cache test — it never starts a download or a transcode."""
     from ..deezer import archive
     from .refs import canonical
 
@@ -5531,19 +5751,42 @@ def stream_ready(deezer_id):
             bitrate = b if b in _OPUS_BITRATES else 128
         except ValueError:
             bitrate = 128
+    entity = None
     if _valid_id(deezer_id):
-        track = archive.find_local_track(deezer_id)
+        entity = archive.find_local_track(deezer_id)
     else:
         try:
-            track = Track[uuid.UUID(deezer_id)]
-        except (ValueError, Track.DoesNotExist):
+            key = uuid.UUID(deezer_id)
+        except ValueError:
             return jsonify({"error": "invalid id"}), 400
-        if not _may_access_track(track):
+        try:
+            entity = Track[key]
+        except Track.DoesNotExist:
+            try:
+                entity = PodcastEpisode[key]
+            except PodcastEpisode.DoesNotExist:
+                return jsonify({"error": "invalid id"}), 400
+        if not _may_access_track(entity):
             return jsonify({"error": "invalid id"}), 400
-    ready = bool(track is not None and track.path and os.path.isfile(track.path))
-    if ready and bitrate:
-        ready = current_app.transcode_cache.has(f"deezer-{track.id}-opus{bitrate}.ogg")
-    return jsonify({"ready": ready})
+
+    path = getattr(entity, "path", None) if entity else None
+    size, writing = _archive_state(path)
+    generated = entity is not None and _seek_is_generated(entity, bitrate)
+    cached = bool(
+        generated and current_app.transcode_cache.has(_transcode_key(entity, bitrate))
+    )
+    final = size is not None
+    ready = cached if generated else final
+    return jsonify(
+        {
+            "ready": ready,
+            "ranges": "bytes" if ready else None,
+            "bytes": size,
+            "cached": cached,
+            "offset": bool(final and _sliceable(path, bitrate)),
+            "streaming": writing,
+        }
+    )
 
 
 @webapi.route("/stream/<deezer_id>")
@@ -5556,6 +5799,12 @@ def stream(deezer_id):
     A track that's already archived — or a local (imported) file — is served
     straight from disk with no Deezer call, so downloaded music keeps playing
     even if Deezer is unreachable. Local tracks are addressed by their UUID.
+
+    A seek: a finished file answers a byte ``Range`` (206). A source that is on disk
+    but has to be encoded answers ``?start=<seconds>`` with the audio from that time
+    (``X-NS-Start``, ``Accept-Ranges: none``, never cached: a slice is not the whole
+    track). A source that is not on disk answers 409 + ``Retry-After`` until
+    ``/stream/<id>/ready`` says ``ready`` or ``offset``.
     """
     from ..deezer import archive
     from .refs import canonical
@@ -5573,6 +5822,9 @@ def stream(deezer_id):
             bitrate = b if b in _OPUS_BITRATES else 128
         except ValueError:
             bitrate = 128
+    start, refused = _start_offset()
+    if refused is not None:
+        return refused
 
     if _valid_id(deezer_id):
         track = archive.find_local_track(deezer_id)  # by Deezer id
@@ -5593,7 +5845,7 @@ def stream(deezer_id):
                     episode = PodcastEpisode[key]
                 except PodcastEpisode.DoesNotExist:
                     return jsonify({"error": "invalid id"}), 400
-                return _stream_episode(episode, bitrate)
+                return _stream_episode(episode, bitrate, start)
         if not _may_access_track(track):
             # Someone else's private upload: indistinguishable from an unknown id.
             return jsonify({"error": "invalid id"}), 400
@@ -5605,11 +5857,17 @@ def stream(deezer_id):
                 if refused is not None:
                     return refused
                 track = Track.get_by_id(track.id)
+            if start is not None:
+                return _slice_response(
+                    track.path, _clamped_offset(start, track.duration), bitrate
+                )
             return youtube.serve(track, bitrate)
 
     if track is None or not os.path.isfile(track.path):
         if not _valid_id(deezer_id):
             return jsonify({"error": "track unavailable"}), 404
+        if start is not None:
+            return _not_archived(getattr(track, "path", None))
         # A PREFETCH must never be what downloads a FLAC on a request thread.
         # Nobody is waiting for these bytes, and holding a thread for the minute
         # the download takes is how the person who IS waiting ends up queueing
@@ -5669,28 +5927,37 @@ def stream(deezer_id):
                 _log_deezer_failure("Live stream failed for %s", deezer_id)
                 return jsonify({"error": "track unavailable"}), 502
             if not bitrate:
-                return current_app.response_class(
-                    _then(first, gen), mimetype=mimetype
+                return _mark_generated(
+                    current_app.response_class(_then(first, gen), mimetype=mimetype)
                 )
             # Opus: the same live download, transcoded as it arrives (it
             # used to wait for the whole FLAC). A complete transcode lands
             # in the cache like any other, so the next play is seekable.
-            key = f"deezer-{track.id}-opus{bitrate}.ogg"
-            return current_app.response_class(
-                current_app.transcode_cache.set_generated(
-                    key, lambda: _opus_live_generator(first, gen, bitrate)
-                ),
-                mimetype="audio/ogg",
+            key = _transcode_key(track, bitrate)
+            return _mark_generated(
+                current_app.response_class(
+                    current_app.transcode_cache.set_generated(
+                        key, lambda: _opus_live_generator(first, gen, bitrate)
+                    ),
+                    mimetype="audio/ogg",
+                )
             )
+
+    if start is not None:
+        return _slice_response(
+            track.path, _clamped_offset(start, track.duration), bitrate
+        )
 
     if bitrate:
         cache = current_app.transcode_cache
-        key = f"deezer-{track.id}-opus{bitrate}.ogg"
+        key = _transcode_key(track, bitrate)
         if cache.has(key):
             return send_file(cache.get(key), mimetype="audio/ogg", conditional=True)
-        return current_app.response_class(
-            cache.set_generated(key, lambda: _opus_generator(track.path, bitrate)),
-            mimetype="audio/ogg",
+        return _mark_generated(
+            current_app.response_class(
+                cache.set_generated(key, lambda: _opus_generator(track.path, bitrate)),
+                mimetype="audio/ogg",
+            )
         )
 
     # Lossless: serve the archived FLAC (range/seek via send_file).

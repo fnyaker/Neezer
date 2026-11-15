@@ -918,15 +918,9 @@
   on:touchcancel={onTouchCancel}
   transition:fade={{ duration: 140 }}
 >
-  {#if $ecoMode}
-    {#if $bg.length}
-      <div class="bg" style={`background-image:${cssUrl($bg[$bg.length - 1].src)}`}></div>
-    {/if}
-  {:else}
-    {#each $bg as layer (layer.id)}
-      <div class="bg" style={`background-image:${cssUrl(layer.src)}`} in:fade={{ duration: 350 }}></div>
-    {/each}
-  {/if}
+  {#each $ecoMode ? $bg.slice(-1) : $bg as layer (layer.id)}
+    <div class="bg" class:eco={$ecoMode} style={`background-image:${cssUrl(layer.src)}`}></div>
+  {/each}
   <div class="scrim"></div>
 
   {#if fullBleed}
@@ -1219,6 +1213,20 @@
     background-position: center;
     filter: blur(60px) saturate(1.25);
     transform: scale(1.3);
+    animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+  .bg.eco {
+    animation: none;
+  }
+  @keyframes bg-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bg {
+      animation: none;
+    }
   }
   .scrim {
     position: absolute;

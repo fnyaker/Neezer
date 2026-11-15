@@ -44,6 +44,7 @@
 
 import { derived } from "svelte/store";
 import { nativePlayer, nativeFault, eqEnabled, eqBands, bassBoost } from "../stores.js";
+import { panSettings } from "./pan.js";
 import { logInfo } from "../log.js";
 
 // ExoPlayer's playback states, as the native side reports them.
@@ -64,6 +65,7 @@ export const NATIVE_OWN_BRIDGE = 8;
 // ten entries it always did: a longer list would overflow MAX_AUDIO_CMD and
 // be dropped whole by an older APK.
 export const NATIVE_LONG_NEXT = 10;
+export const NATIVE_STATE_BRIDGE = 11;
 // The native side drops a command over MAX_AUDIO_CMD (128 KiB on bridge 10).
 // Keep a margin for the JSON wrapper and UTF-8: 200 compact entries fit.
 const MAX_NEXT_CHARS = 120 * 1024;
@@ -72,6 +74,14 @@ const MAX_NEXT_CHARS = 120 * 1024;
 // behind the app. Long enough to cover one evaluateJavascript batch, short
 // enough to be invisible to a listener.
 const ADVANCE_COALESCE_MS = 25;
+
+const ACK_MS = 1500;
+const ADVANCE_STUCK_MS = 3000;
+const DESYNC_COALESCE_MS = 400;
+
+const ACK_OPS = new Set(["src", "clear", "play", "pause", "seek"]);
+
+const ADVANCE_FREE = new Set(["nsdesync", "nsneednext", "nsbackground", "nsforeground", "error"]);
 
 // A reading of the position that goes back by less than this is taken for the
 // tick arriving a little behind the interpolation, not for a move.
@@ -159,23 +169,37 @@ export function nativeElementById(id) {
   return registry.get(id) || null;
 }
 
+let panOk = null;
+export function nativePanAvailable() {
+  if (panOk !== null) return panOk;
+  try {
+    panOk = !!(nativeDspAvailable() && bridge().bridgeVersion() >= NATIVE_STATE_BRIDGE);
+  } catch {
+    panOk = false;
+  }
+  return panOk;
+}
+
 /** For the tests: forget the cached answer. */
 export function resetNativeAudio() {
   availability = null;
   dsp = null;
+  panOk = null;
   fxSent = "";
   registry.clear();
 }
 
 // The effects go to the app as they change, the way graph.js applies them to
 // its nodes: the app's players all share one setting.
-let fxState = { on: false, bands: [], bass: 0 };
+let fxState = { on: false, bands: [], bass: 0, mono: false, balance: 0 };
 let fxSent = "";
 function sendFx() {
   if (!nativeDspAvailable()) return;
   const msg = JSON.stringify({
     eq: fxState.on ? fxState.bands.slice(0, 10).map((v) => +v || 0) : [],
     bass: Math.max(0, Math.min(1, +fxState.bass || 0)),
+    mono: !!fxState.mono,
+    balance: Math.max(-1, Math.min(1, +fxState.balance || 0)),
   });
   if (msg === fxSent) return;
   fxSent = msg;
@@ -195,6 +219,10 @@ eqBands.subscribe((v) => {
 });
 bassBoost.subscribe((v) => {
   fxState = { ...fxState, bass: v };
+  sendFx();
+});
+panSettings.subscribe((v) => {
+  fxState = { ...fxState, mono: !!(v && v.mono), balance: +(v && v.balance) || 0 };
   sendFx();
 });
 
@@ -334,11 +362,20 @@ export class NativeAudioElement extends EventTarget {
     this._advPaused = "";
     this._appPaused = false; // ...absorb the one stale resume() that follows the adopt
     this._advTimer = null; // coalesces a burst of advances into one nsadvance
+    this._advSince = 0; // when the pending advance was first heard
+    this._awaits = new Map(); // op -> { c } of a command no state has echoed yet
+    this._ackTimer = null;
+    this._probes = [];
+    this._lastDesyncAt = 0;
+    this._desyncReason = "";
     this._clear();
   }
 
   _clear() {
     this._clearAdvanceTimer();
+    this._clearAckTimer();
+    this._awaits.clear();
+    this._advSince = 0;
     this._t = 0;
     this._at = now();
     this._lastOut = 0;
@@ -364,13 +401,106 @@ export class NativeAudioElement extends EventTarget {
     } catch {
       /* the activity is going away */
     }
+    if (ACK_OPS.has(op)) this._await(op, c);
     return c;
+  }
+
+  _await(op, c) {
+    this._awaits.set(op, { c, at: now() });
+    this._armAck();
+  }
+
+  _clearAckTimer() {
+    if (this._ackTimer) {
+      clearTimeout(this._ackTimer);
+      this._ackTimer = null;
+    }
+  }
+
+  _armAck() {
+    this._clearAckTimer();
+    if (!this._awaits.size || this._released) return;
+    let oldest = Infinity;
+    for (const w of this._awaits.values()) oldest = Math.min(oldest, w.at);
+    const wait = Math.max(0, ACK_MS - (now() - oldest));
+    this._ackTimer = setTimeout(() => {
+      this._ackTimer = null;
+      if (!this._awaits.size || this._released) return;
+      let op = "state";
+      let oldestAt = Infinity;
+      for (const [name, w] of this._awaits) {
+        if (w.at < oldestAt) {
+          oldestAt = w.at;
+          op = name;
+        }
+      }
+      this._desync(`no answer to ${op}`);
+    }, wait);
+  }
+
+  _settleAck(c) {
+    let moved = false;
+    for (const [op, w] of this._awaits) {
+      if (c >= w.c) {
+        this._awaits.delete(op);
+        moved = true;
+      }
+    }
+    if (moved) this._armAck();
+    if (!this._probes.length) return;
+    for (const p of this._probes.slice()) {
+      if (c < p.c) continue;
+      clearTimeout(p.timer);
+      this._probes = this._probes.filter((x) => x !== p);
+      p.resolve(this);
+    }
+  }
+
+  probe(ms = ACK_MS) {
+    return new Promise((resolve, reject) => {
+      if (this._released || !this._id) {
+        reject(new Error("no player"));
+        return;
+      }
+      const ask = this.bridgeVersion() >= NATIVE_STATE_BRIDGE ? "state" : "rate";
+      const c =
+        ask === "state" ? this._send("state") : this._send("rate", { r: this._rate });
+      if (!c) {
+        reject(new Error("no player"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        this._probes = this._probes.filter((x) => x.timer !== timer);
+        reject(new Error("the app's player did not answer"));
+      }, ms);
+      this._probes.push({ c, timer, resolve, reject });
+    });
+  }
+
+  _desync(reason) {
+    if (this._released) return;
+    const at = now();
+    if (at - this._lastDesyncAt < DESYNC_COALESCE_MS) return;
+    this._lastDesyncAt = at;
+    this._desyncReason = String(reason || "desync").slice(0, 120);
+    this._awaits.clear();
+    this._clearAckTimer();
+    logInfo("audio", `app player out of step: ${this._desyncReason}`, null, { important: true });
+    this.dispatchEvent(new Event("nsdesync"));
+  }
+
+  get desyncReason() {
+    return this._desyncReason;
+  }
+
+  get pendingAdvance() {
+    return this._advPending ? this._advKey : "";
   }
 
   _fire(type) {
     // Until the page takes over a track the app went on to, every event would
     // be read as being about the track the page still thinks is playing.
-    if (this._advPending && type !== "nsadvance") return;
+    if (this._advPending && type !== "nsadvance" && !ADVANCE_FREE.has(type)) return;
     this.dispatchEvent(new Event(type));
   }
 
@@ -385,6 +515,14 @@ export class NativeAudioElement extends EventTarget {
       clearTimeout(this._advTimer);
       this._advTimer = null;
     }
+  }
+
+  _armAdvance() {
+    if (this._advTimer || !this._advPending) return;
+    this._advTimer = setTimeout(() => {
+      this._advTimer = null;
+      if (this._advPending) this._fire("nsadvance");
+    }, ADVANCE_COALESCE_MS);
   }
 
   /** The app asked for more tracks (bridge 10): Player.svelte re-names the list. */
@@ -402,6 +540,16 @@ export class NativeAudioElement extends EventTarget {
   _onState(s) {
     if (this._webOn || this._released) return;
     const c = +s.c || 0;
+    if (s.ev === "error") {
+      this._settleAck(Infinity);
+      this._err = { code: [1, 2, 3, 4].includes(s.code) ? s.code : 2, message: String(s.msg || "") };
+      // Before the event: whoever handles it already reads the page's player as the one wanted.
+      if (isPlayerFault(this._err.code, this._err.message)) noteNativeFault(this._err.message || "code " + this._err.code);
+      this._settlePlays(Object.assign(new Error(this._err.message || "native playback failed"), { name: "NotSupportedError" }));
+      this._fire("error");
+      return;
+    }
+    this._settleAck(c);
     if (c < this._srcSeq) return; // about a source we have since replaced
     if (typeof s.fault === "string" && s.fault) {
       // The app skipped a title it could not play while the page was frozen
@@ -412,14 +560,6 @@ export class NativeAudioElement extends EventTarget {
       logInfo("audio", `titre ignoré par le lecteur de l'application (${s.fault})`, null, {
         important: true,
       });
-    }
-    if (s.ev === "error") {
-      this._err = { code: [1, 2, 3, 4].includes(s.code) ? s.code : 2, message: String(s.msg || "") };
-      // Before the event: whoever handles it already reads the page's player as the one wanted.
-      if (isPlayerFault(this._err.code, this._err.message)) noteNativeFault(this._err.message || "code " + this._err.code);
-      this._settlePlays(Object.assign(new Error(this._err.message || "native playback failed"), { name: "NotSupportedError" }));
-      this._fire("error");
-      return;
     }
     if (typeof s.k === "string" && s.k && s.k !== this._advKey) {
       // The app went on to the track the page named (its first state about it,
@@ -439,13 +579,14 @@ export class NativeAudioElement extends EventTarget {
       this._seeking = false;
       this._lastOut = 0;
       this._advFired = true;
+      this._advSince = now();
       // A page frozen through several advances hears them in a burst: keep the
       // LAST key and fire one nsadvance, not one per intermediate track.
       this._clearAdvanceTimer();
-      this._advTimer = setTimeout(() => {
-        this._advTimer = null;
-        if (this._advPending) this._fire("nsadvance");
-      }, ADVANCE_COALESCE_MS);
+      this._armAdvance();
+    } else if (this._advPending) {
+      this._armAdvance();
+      if (now() - this._advSince > ADVANCE_STUCK_MS) this._desync("advance not adopted");
     }
     if (typeof s.sc === "boolean") this._chase = s.sc;
     if (typeof s.bg === "boolean") {
@@ -547,6 +688,14 @@ export class NativeAudioElement extends EventTarget {
     }
   }
 
+  bridgeVersion() {
+    try {
+      return +this._b.bridgeVersion() || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /** Whether the app accepts a long list, refills and repeat flags (bridge 10). */
   get longNext() {
     if (!this.canChain) return false;
@@ -617,6 +766,7 @@ export class NativeAudioElement extends EventTarget {
     this._clearAdvanceTimer();
     this._advPending = false;
     this._advFired = false;
+    this._advSince = 0;
     this._dirty = false;
     const types = ["loadstart"];
     if (isFinite(this._d) || this._st === ST_READY) {
@@ -649,8 +799,10 @@ export class NativeAudioElement extends EventTarget {
     this._clearAdvanceTimer();
     this._advPending = false;
     this._advFired = false;
+    this._advSince = 0;
     this._advPaused = "";
     this._appPaused = false;
+    this._advKey = "";
   }
 
   // --- the element -----------------------------------------------------------
@@ -846,7 +998,7 @@ export class NativeAudioElement extends EventTarget {
   }
   set volume(v) {
     const x = Math.min(1, Math.max(0, +v));
-    if (!isFinite(x)) throw new TypeError("volume");
+    if (!isFinite(x)) return; // a NaN from a store must not throw inside a flush
     if (x === this._vol) return;
     this._vol = x;
     if (this._webOn) this._web.volume = x;
@@ -894,6 +1046,14 @@ export class NativeAudioElement extends EventTarget {
   release() {
     if (this._released) return;
     this._clearAdvanceTimer();
+    this._clearAckTimer();
+    this._awaits.clear();
+    const probes = this._probes;
+    this._probes = [];
+    for (const p of probes) {
+      clearTimeout(p.timer);
+      p.reject(new Error("released"));
+    }
     this._send("release");
     this._released = true;
     registry.delete(this._id);

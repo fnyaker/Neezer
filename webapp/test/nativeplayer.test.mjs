@@ -551,3 +551,108 @@ test("a title the app paused while the page was frozen is not resumed by the ado
   el.play();
   assert.equal(sent.at(-1).op, "play");
 });
+
+test("a player the app could not make says so, whatever source the page has since sent", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  const seen = events(el);
+  el.src = "/api/stream/a";
+  el.load();
+  const c = sent.at(-1).c;
+  // NativeAudio.refuse: the sixth slot, an ExoPlayer that threw.
+  report(el, { c: 0, ev: "error", code: 4, msg: "no player" });
+  await flush();
+  assert.ok(seen.includes("error"), "the refusal reached the page");
+  assert.equal(el.error?.message, "no player");
+  assert.notEqual(get(S.nativeFault), null, "and the page's own player takes over");
+  assert.ok(c > 0);
+  S.nativePlayer.set(false);
+});
+
+test("a command no state ever echoes asks for a resync, once", async () => {
+  const sent = app({ version: 10 });
+  const el = N.createNativeElement();
+  const said = [];
+  el.addEventListener("nsdesync", () => said.push(el.desyncReason));
+  el.src = "/api/stream/a";
+  el.load();
+  await new Promise((r) => setTimeout(r, 1400));
+  assert.deepEqual(said, [], "the app is allowed 1.5 s to answer");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(said, ["no answer to src"]);
+  // A state that has seen the command settles it: nothing more is said.
+  report(el, { c: sent.at(-1).c, st: 2, p: false, t: 0, sk: true, sc: true });
+  await new Promise((r) => setTimeout(r, 1600));
+  assert.equal(said.length, 1);
+});
+
+test("an advance whose coalescing timer was lost is announced again by the next state", async () => {
+  app({ version: 7 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  const seen = [];
+  el.addEventListener("nsadvance", () => seen.push(el.advancedKey));
+  const c = el._seq;
+  report(el, { c, st: 3, p: true, t: 4, d: 180, k: "b", u: "http://srv/api/stream/b", sk: true, sc: true });
+  // A throttled page: the 25 ms timer never ran. The app's next tick re-arms it.
+  clearTimeout(el._advTimer);
+  el._advTimer = null;
+  report(el, { c, ev: "tick", st: 3, p: true, t: 4.25, d: 180, k: "b", u: "http://srv/api/stream/b", sk: true, sc: true });
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(seen, ["b"]);
+});
+
+test("an advance nobody takes over asks for a resync instead of leaving the element deaf", async () => {
+  app({ version: 7 });
+  const el = N.createNativeElement();
+  const seen = events(el);
+  const said = [];
+  el.addEventListener("nsdesync", () => said.push(el.desyncReason));
+  el.src = "/api/stream/a";
+  el.load();
+  el.play();
+  const c = el._seq;
+  report(el, { c, st: 3, p: true, t: 4, d: 180, k: "b", u: "http://srv/api/stream/b", sk: true, sc: true });
+  // Three seconds later the page still has not adopted it (a load in flight,
+  // a frozen page that woke on another source): the element says so.
+  el._advSince -= 3100; // the page has had three seconds to take it over
+  report(el, { c, ev: "tick", st: 3, p: true, t: 4.25, d: 180, k: "b", u: "http://srv/api/stream/b", sk: true, sc: true });
+  assert.deepEqual(said, ["advance not adopted"]);
+  assert.equal(el.advancedKey, "b");
+  // What the page does with it: drop the advance and load its own truth — and
+  // the element is not deaf any more (an error reaches it).
+  el.dropAdvance();
+  assert.equal(el.advancedKey, "");
+  report(el, { c, ev: "error", code: 2, msg: "gone" });
+  assert.ok(seen.includes("error"));
+});
+
+test("a probe resolves on the state that answers it, and rejects when nothing does", async () => {
+  const sent = app({ version: 11 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  const asked = el.probe(300);
+  const last = sent.at(-1);
+  assert.equal(last.op, "state", "bridge 11: a state on demand, not a side effect");
+  report(el, { c: last.c, st: 3, p: true, t: 7, d: 180, k: "", u: "", sk: true, sc: true });
+  const got = await asked;
+  assert.equal(got, el);
+  assert.equal(el.currentTime >= 7 - 1e-9, true, "the page learned where the app is");
+  await assert.rejects(el.probe(120), /did not answer/);
+});
+
+test("the volume a store hands over can never throw inside a flush", () => {
+  app({ version: 10 });
+  const el = N.createNativeElement();
+  el.volume = "0.4";
+  assert.equal(el.volume, 0.4);
+  el.volume = NaN;
+  assert.equal(el.volume, 0.4, "a NaN is ignored, not a TypeError");
+  el.volume = undefined;
+  assert.equal(el.volume, 0.4);
+  el.volume = 3;
+  assert.equal(el.volume, 1);
+});

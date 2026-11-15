@@ -44,8 +44,6 @@
     resolveCover($offlineCovers, $current?.album?.cover),
     trackRef($current) ? api.coverUrl(trackRef($current)) : ""
   );
-  // The cover glow reuses the last *decoded* backdrop (never a loading URL).
-  $: glowSrc = $bg.length ? $bg[$bg.length - 1].src : "";
   import {
     vizMode,
     vizWorld,
@@ -312,15 +310,9 @@
 {/snippet}
 
 <div class="d" transition:fade={{ duration: 150 }}>
-  {#if $ecoMode}
-    {#if $bg.length}
-      <div class="bg" style={`background-image:${cssUrl($bg[$bg.length - 1].src)}`}></div>
-    {/if}
-  {:else}
-    {#each $bg as layer (layer.id)}
-      <div class="bg" style={`background-image:${cssUrl(layer.src)}`} in:fade={{ duration: 350 }}></div>
-    {/each}
-  {/if}
+  {#each $ecoMode ? $bg.slice(-1) : $bg as layer (layer.id)}
+    <div class="bg" class:eco={$ecoMode} style={`background-image:${cssUrl(layer.src)}`}></div>
+  {/each}
   <div class="scrim"></div>
 
   {#if fullBleed}
@@ -386,7 +378,11 @@
       </div>
 
       <div class="cover" bind:this={coverBox}>
-        <div class="glow" style={`background-image:${cssUrl(glowSrc)}`}></div>
+        <div class="glow-wrap">
+          {#each $ecoMode ? $bg.slice(-1) : $bg as layer (layer.id)}
+            <div class="glow" class:eco={$ecoMode} style={`background-image:${cssUrl(layer.src)}`}></div>
+          {/each}
+        </div>
         {#key trackKey($current)}
           <div class="cover-fade" in:fade={{ duration: 260 }} out:fade={{ duration: 260 }}>
             <!-- 1000px: 1500 is 2-3× the bytes for a marginal gain, and the CDN
@@ -559,6 +555,22 @@
     background-position: center;
     filter: blur(64px) saturate(1.35);
     transform: scale(1.25);
+    animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+  .bg.eco,
+  .glow.eco {
+    animation: none;
+  }
+  @keyframes bg-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bg,
+    .glow {
+      animation: none;
+    }
   }
   .scrim {
     position: absolute;
@@ -711,15 +723,21 @@
     margin: 0 auto;
     flex: none;
   }
-  .glow {
+  .glow-wrap {
     position: absolute;
     inset: -6%;
-    background-size: cover;
-    background-position: center;
-    filter: blur(40px) saturate(1.5);
     opacity: 0.55;
     border-radius: 28%;
     z-index: -1;
+  }
+  .glow {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    filter: blur(40px) saturate(1.5);
+    border-radius: 28%;
+    animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
   }
   /* keyed crossfade: old + new overlap during the transition */
   .cover-fade {

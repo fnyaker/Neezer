@@ -24,10 +24,11 @@ lui ajoute ce que le navigateur ne sait pas faire :
 ## Build
 
 L'APK est construit par le workflow CI `.github/workflows/android.yaml` : artefact `neezer-apk` sur
-chaque build, et fichier attaché à la release GitHub sur les tags `v*`. Sans secrets configurés, la
-signature change à chaque run (il faut désinstaller pour mettre à jour) ; pour une signature stable,
-définir `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
-`ANDROID_KEY_PASSWORD`.
+chaque build, et fichier attaché à la release GitHub sur les tags `v*`, sous le seul nom `neezer.apk`.
+Il est signé en v1, v2 et v3, et le workflow le vérifie (`apksigner verify`, paquet, versionCode)
+avant de le publier. Sans secrets configurés, la signature change à chaque run (il faut désinstaller
+pour mettre à jour) ; pour une signature stable, définir `ANDROID_KEYSTORE_BASE64`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
 
 En local :
 

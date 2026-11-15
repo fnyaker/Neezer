@@ -39,7 +39,6 @@
   import {
     registerSource,
     resumeAudio,
-    setTrackGain,
     setElementGain,
     fadeElement,
     fadeDone,
@@ -65,6 +64,18 @@
     noteContextLatency,
   } from "../lib/audio/output.js";
   import { startTimekeeper, judge } from "../lib/audio/timekeeper.js";
+  import {
+    seekPlan,
+    seekableAt,
+    bufferedAt,
+    seekLost,
+    seekBounced,
+    readiness,
+    trackTimeOf,
+    elementTimeOf,
+    SEEK_LAND_MS,
+    SEEK_WAIT_MS,
+  } from "../lib/audio/seekplan.js";
   import { createNativeElement, isNativeEl, nativeAudioWanted } from "../lib/audio/nativeplayer.js";
   import { primeEdges, knownEdges } from "../lib/edges.js";
   import { primeGains, knownGain, gainFor } from "../lib/gaincache.js";
@@ -120,6 +131,7 @@
     ["nsneednext", onNativeNeedNext],
     ["nsbackground", onNativeBackground],
     ["nsforeground", onNativeForeground],
+    ["nsdesync", onNativeDesync],
     ["play", onElPlay],
     ["pause", onElPause],
     ["error", onElError],
@@ -156,6 +168,18 @@
     watchElement(el);
     return el;
   }
+
+  function guard(where, fn) {
+    try {
+      return fn();
+    } catch (err) {
+      logInfo("player", `${where}: ${err && err.name ? err.name : "error"} ${err && err.message ? err.message : err}`, null, {
+        important: true,
+      });
+      return null;
+    }
+  }
+
   onMount(() => {
     els = [makeEl(), makeEl()];
     audio = els[0]; // assignment kicks the reactive load/transport blocks
@@ -281,6 +305,10 @@
     // A frozen page may have missed the app's end-of-list `ended` (events are
     // suppressed until the advance is adopted). The person is looking now:
     // move the queue on, exactly as the element's own `ended` would have.
+    if (audio && isNativeEl(audio) && audio.advancedKey && !loadingTrack && get(player).playing) {
+      onNativeAdvance({ target: audio });
+      return;
+    }
     if (audio && isNativeEl(audio) && audio.ended && !loadingTrack && get(player).playing) {
       onEnded({ target: audio });
       return;
@@ -383,6 +411,8 @@
         if (stuckNudges++ < 1) {
           setPlaybackStatus("loading");
           startPlayback("watchdog");
+        } else if (isNativeEl(audio)) {
+          resyncNative("the store plays, the app's player does not");
         } else {
           recoverPlayback();
         }
@@ -390,10 +420,10 @@
       }
       stuckSince = 0;
       stuckNudges = 0;
-      if (audio.currentTime !== lastPos) {
-        lastPos = audio.currentTime;
+      if (trackTime() !== lastPos) {
+        lastPos = trackTime();
         lastAdvance = Date.now();
-        if (audio.currentTime > 0.25) {
+        if (trackTime() > 0.25) {
           hadProgress = true;
           setPlaybackStatus("idle");
         }
@@ -405,7 +435,10 @@
       // Say WHAT is happening while we wait, so the silence isn't unexplained.
       if (frozen > 1500 && !netWaiting)
         setPlaybackStatus(hadProgress ? "buffering" : "archiving");
-      if (frozen > limit) recoverPlayback();
+      if (frozen > limit) {
+        if (isNativeEl(audio)) resyncNative("the position has not moved");
+        else recoverPlayback();
+      }
     }, 2000);
   }
   function stopWatchdog() {
@@ -549,13 +582,14 @@
     const el = audio;
     const pos =
       el.currentTime > 0.5
-        ? el.currentTime
+        ? trackTime(el)
         : lastKnownTime || get(player).currentTime || 0;
     // The element may still carry preload=none from a paused restore — with it,
     // load() defers fetching and loadedmetadata below would never fire.
     el.preload = "auto";
-    el.src =
-      curIsBlob && curBlobUrl ? curBlobUrl : api.streamUrl(trackRef(cur), curQ);
+    const wasSlice = audioOffset > 0.05;
+    audioOffset = wasSlice ? pos : 0;
+    el.src = curIsBlob && curBlobUrl ? curBlobUrl : sourceUrl(cur, audioOffset);
     el.load();
     const cleanup = () => {
       clearTimeout(recoverDeadline);
@@ -576,7 +610,7 @@
         // Only seek when the reloaded source actually allows it: forcing it on
         // a still-generating (rangeless) stream made the browser restart the
         // fetch and bounce playback to 0.
-        if (pos > 0 && seekableAt(el, pos)) el.currentTime = pos;
+        if (!audioOffset && pos > 0 && seekableAt(el, pos)) el.currentTime = pos;
       } catch {
         /* not seekable yet */
       }
@@ -633,7 +667,7 @@
     // A long suspend (mobile lock) can silently rewind the element to 0. If we
     // resume play near the start but knew a later position, restore it. The
     // guard (knew > 2s, now ~0) keeps legit fresh starts at the beginning.
-    if (lastKnownTime > 2 && audio.currentTime < 0.5) safeSeek(lastKnownTime);
+    if (lastKnownTime > 2 && audioOffset + audio.currentTime < 0.5) safeSeek(lastKnownTime);
     // Reflect a NATIVE resume (OS/lock-screen play) back into the store — but
     // NOT while we're mid-recovery/switch/chase, where the play() is ours or a
     // stale handler's: promoting it there would resurrect a playback the user
@@ -749,7 +783,7 @@
     await primeGains([cur]);
     const g = gainFor(cur);
     if (typeof g === "number" && trackKey(get(current)) === trackKey(cur))
-      setTrackGain(g, false);
+      setElementGain(audio, g, false);
   }
 
   // How long after a track starts a freshly-learned gain may still be applied to
@@ -778,8 +812,8 @@
     // that arrives while the next track is still loading still lands exactly
     // when that track starts.
     if (loadingTrack || trackKey(get(current)) !== trackKey(track)) return;
-    if ((audio?.currentTime || 0) > GAIN_LATE_GRACE) return;
-    setTrackGain(g, false); // already audible: ramp, don't click
+    if (trackTime() > GAIN_LATE_GRACE) return;
+    setElementGain(audio, g, false); // already audible: ramp, don't click
   }
 
   // Podcast resume: remember the playhead of the current episode so it can be
@@ -795,7 +829,7 @@
       audio.duration && isFinite(audio.duration) ? audio.duration : cur.duration || 0;
     // `force` also pushes straight to the server (pause / page-hide are often
     // the last code to run before the tab is frozen).
-    saveEpisodeProgress(trackKey(cur), audio.currentTime, d, force);
+    saveEpisodeProgress(trackKey(cur), trackTime(), d, force);
   }
 
   // Seek requests from other views (e.g. the immersive player). Routed through
@@ -810,10 +844,11 @@
   // Load a new track onto the active element when the track changes — OR restart
   // the current one when the player navigated to it deliberately even though it
   // carries the same deezer id (a duplicate in the queue, a "restart" prev).
-  $: if (audio && $current) {
-    if (trackKey($current) !== curId) loadTrack($current);
-    else if ($player.seq !== curSeq) restartCurrent();
-  }
+  $: if (audio && $current)
+    guard("load", () => {
+      if (trackKey($current) !== curId) loadTrack($current);
+      else if ($player.seq !== curSeq) restartCurrent();
+    });
   // The queue emptied (last track removed): stop and release the element so it
   // doesn't keep playing a track that's no longer current while the UI shows
   // "nothing playing".
@@ -834,6 +869,7 @@
       /* ignore */
     }
     setBlobUrl(null);
+    audioOffset = 0;
     curId = null;
     curIsBlob = false;
     buffered.set(0);
@@ -981,6 +1017,7 @@
       if (e && e.start > 0.25) resumeAt = e.start;
     }
     curId = trackKey(track);
+    audioOffset = 0;
     // From here, everything that is not the audio itself waits its turn behind
     // it (see lib/ladder.js).
     beginTrack(trackKey(track));
@@ -1103,7 +1140,7 @@
     // the prefetch cache. track.gain is preloaded for upcoming tracks (see the
     // reactive below), so the snapped value is already the correct one, with no
     // unity-then-correct jump. No-op unless normalization is on.
-    setTrackGain(gainFor(track));
+    setElementGain(audio, gainFor(track));
     if (src.blob) touch(trackKey(track)); // bump LRU recency
 
     if (resumeAt > 0 && !adopt) seekOnceLoaded(resumeAt);
@@ -1153,6 +1190,11 @@
     cancelRecovery();
     cancelPendingSeek(); // a pending resume-seek would undo the restart
     cancelSeekChase(); // so would a chase still aiming at an old target
+    if (audioOffset) {
+      audioOffset = 0;
+      loadTrack($current, { hard: true });
+      return;
+    }
     try {
       audio.currentTime = 0;
     } catch {
@@ -1215,7 +1257,7 @@
   function safeSeek(t) {
     try {
       if (audio.readyState >= 1) {
-        audio.currentTime = t;
+        audio.currentTime = elementTime(t);
         return;
       }
     } catch {
@@ -1238,17 +1280,20 @@
   // the element allows it.
   let chase = null; // { t, el, onAvail, reloadTimer, capTimer }
   let chasing = false; // gates transport auto-play / pause mirroring / onTime
-
-  function seekableAt(el, t) {
-    try {
-      const s = el.seekable;
-      for (let i = 0; i < s.length; i++) {
-        if (t >= s.start(i) && t <= s.end(i)) return true;
-      }
-    } catch {
-      /* element not ready yet */
-    }
-    return false;
+  // A stream opened at an offset (`?start=`, the server's answer for a source a
+  // byte range cannot seek) starts its own clock at 0 where the track is at
+  // `audioOffset`: everything the person sees and every track-time decision
+  // goes through these two.
+  let audioOffset = 0;
+  function trackTime(el = audio) {
+    if (!el) return 0;
+    return trackTimeOf(el.currentTime, el === audio ? audioOffset : 0);
+  }
+  function elementTime(t) {
+    return elementTimeOf(t, audioOffset);
+  }
+  function sourceUrl(track, at = 0) {
+    return api.streamUrl(trackRef(track), curQ, at > 0.05 ? at : 0);
   }
 
   function performSeek(t) {
@@ -1262,29 +1307,72 @@
     // Reflect the intent on the bar right away (also stops the thumb snapping
     // back under the pointer between input events while dragging).
     player.setProgress(t, dur);
-    // Blobs and range-supporting sources seek directly; an element without
-    // metadata yet defers through safeSeek's loadedmetadata path.
-    if (curIsBlob || audio.readyState < 1 || seekableAt(audio, t)) {
+    const plan = seekPlan(audio, t, { direct: curIsBlob || isNativeEl(audio) });
+    if (plan === "direct") {
       safeSeek(t);
+      watchSeek(t, dur);
       return;
     }
-    startSeekChase(t);
+    if (plan === "defer") {
+      seekOnceLoaded(t);
+      return;
+    }
+    // Behind the start of a slice: its own zero is the offset, so the element
+    // cannot reach back. Ask the server for a new one, without landing on 0.
+    startSeekChase(t, dur, { hold: audioOffset > 0.05 && t < audioOffset - 0.5 });
   }
 
-  function startSeekChase(t) {
+  let seekWatch = null;
+  function cancelSeekWatch() {
+    if (!seekWatch) return;
+    const { el, timer, lost } = seekWatch;
+    seekWatch = null;
+    clearTimeout(timer);
+    el.removeEventListener("seeked", lost);
+    el.removeEventListener("timeupdate", lost);
+  }
+  function watchSeek(t, dur = 0) {
+    cancelSeekWatch();
     const el = audio;
+    if (!el || curIsBlob) return;
+    const at = Date.now();
+    const elT = elementTime(t);
+    const lost = () => {
+      if (el !== audio || seekWatch?.el !== el) {
+        cancelSeekWatch();
+        return;
+      }
+      const bounced = seekBounced(el, elT) && el.readyState >= 2;
+      if (!bounced && !seekLost(el, elT, at)) return;
+      cancelSeekWatch();
+      logInfo("audio", `seek to ${t.toFixed(1)} s did not land: chasing`, null, { important: true });
+      startSeekChase(t, dur);
+    };
+    const timer = setTimeout(lost, SEEK_LAND_MS + 50);
+    seekWatch = { el, timer, lost };
+    el.addEventListener("seeked", lost);
+    el.addEventListener("timeupdate", lost);
+  }
+
+  function startSeekChase(t, dur = 0, opts = {}) {
+    const el = audio;
+    if (!el) return;
+    cancelSeekWatch();
+    const shown = dur || get(player).duration;
+    const elT = elementTime(t);
     const onAvail = () => {
-      if (!chase || !seekableAt(chase.el, t)) return;
+      if (!chase || chase.hold || !seekableAt(chase.el, elT)) return;
       const target = chase.el;
       cancelSeekChase();
       try {
-        target.currentTime = t;
+        target.currentTime = elT;
       } catch {
         /* lost the race — give up quietly */
       }
+      player.setProgress(t, shown);
       if (get(player).playing) target.play().catch(() => {});
     };
-    chase = { t, el, onAvail, reloadTimer: null, capTimer: null };
+    chase = { t, elT, el, hold: !!opts.hold, onAvail, reloadTimer: null, capTimer: null };
     chasing = true;
     // Listeners live on the ELEMENT, so they survive the reload's src change.
     el.addEventListener("progress", onAvail);
@@ -1298,42 +1386,62 @@
     chase.reloadTimer = setTimeout(pollReady, 600);
     // Give up silently after a while — the bar falls back to the real position.
     chase.capTimer = setTimeout(cancelSeekChase, 90000);
-    onAvail(); // in case it became seekable between the check and now
+    player.setProgress(t, shown);
+    if (!chase.hold) onAvail(); // in case it became seekable between the check and now
   }
 
   async function pollReady() {
     if (!chase) return;
     const mine = chase;
     const cur = get(current);
+    let wait = SEEK_WAIT_MS;
+    let stop = false;
     if (cur && !curIsBlob && get(online)) {
+      let verdict;
       try {
-        const r = await api.streamReady(trackRef(cur), curQ);
-        if (chase !== mine) return;
-        if (r && r.ready) {
-          reloadForChase();
-          return;
-        }
-      } catch {
-        /* not answered: ask again */
+        verdict = readiness(await api.streamReady(trackRef(cur), curQ));
+      } catch (err) {
+        verdict = readiness(err && err.body, (err && err.status) || 0);
       }
+      if (chase !== mine) return;
+      if (verdict.mode === "ready") {
+        reloadForChase(mine, 0);
+        return;
+      }
+      if (verdict.mode === "offset") {
+        reloadForChase(mine, mine.t);
+        return;
+      }
+      wait = verdict.retryMs || wait;
+      stop = verdict.mode === "stop";
     }
-    if (chase === mine) mine.reloadTimer = setTimeout(pollReady, 1000);
+    if (chase !== mine) return;
+    if (stop) {
+      cancelSeekChase();
+      return;
+    }
+    mine.reloadTimer = setTimeout(pollReady, wait);
   }
 
-  function reloadForChase() {
-    if (!chase) return;
+  function reloadForChase(mine, offsetT = 0) {
     const cur = get(current);
-    // No network (or a blob, which never needs this): keep waiting on the
-    // buffer we already have instead of killing the stream.
-    if (!cur || curIsBlob || !get(online)) return;
-    const el = chase.el;
-    el.pause(); // don't audibly replay from 0 while buffering toward the target
+    if (!mine || !cur || curIsBlob || !get(online)) return;
+    const el = mine.el;
+    el.pause();
     el.preload = "auto";
-    el.src = api.streamUrl(trackRef(cur), curQ);
+    const at = offsetT > 0.05 ? Math.max(0, offsetT) : 0;
+    audioOffset = at;
+    el.src = sourceUrl(cur, at);
     el.load();
+    if (!at) return;
+    cancelSeekChase();
+    lastKnownTime = at;
+    player.setProgress(at, get(player).duration);
+    if (get(player).playing) startPlayback("offset");
   }
 
   function cancelSeekChase() {
+    cancelSeekWatch();
     if (!chase) return;
     const { el, onAvail, reloadTimer, capTimer } = chase;
     el.removeEventListener("progress", onAvail);
@@ -1344,7 +1452,6 @@
     chase = null;
     chasing = false;
   }
-
   // Gapless quality switch: buffer the new bitrate on the idle element at the
   // current position, then swap playback over once it can play through. Keeps
   // the position to the element's full precision so there's no audible jump.
@@ -1376,7 +1483,8 @@
     }
     cancelSeekChase(); // the swap changes elements — a chase would misfire
     switching = true;
-    const pos = audio.currentTime;
+    const pos = trackTime();
+    audioOffset = 0;
     incoming.volume = audio.volume;
     incoming.muted = audio.muted;
     incoming.preload = "auto"; // may carry preload=none from a paused restore
@@ -1445,7 +1553,7 @@
       registerSource(incoming);
       // The idle element still carries the gain of whatever it last played (a
       // crossfade's incoming track, two songs ago): this is the same track.
-      setTrackGain(gainFor(cur));
+      setElementGain(incoming, gainFor(cur));
       resumeAudio();
       // Recompute intent at SWAP time — a pause made during the preload must not
       // be undone by a stale `wasPlaying` captured when the switch started.
@@ -1507,16 +1615,6 @@
     return isNativeEl(e) !== get(nativeAudioWanted);
   }
 
-  function bufferedAt(el, t) {
-    try {
-      const b = el.buffered;
-      for (let i = 0; i < b.length; i++) if (t >= b.start(i) && t <= b.end(i)) return true;
-    } catch {
-      /* not ready */
-    }
-    return false;
-  }
-
   // The idle element, if routed and not in use, is replaced at once: nothing
   // is playing on it.
   function renewIdle() {
@@ -1557,6 +1655,9 @@
     renewWanted = true;
     // Mid-transition states own the elements; the watchdog tries again.
     if (switching || recovering || chasing || loadingTrack || xfade) return;
+    // An element playing a slice has its own zero at `audioOffset`: its
+    // position is not the source's. The next track's load moves it.
+    if (audioOffset > 0.05) return;
     renewIdle();
     if (!stale(audio)) {
       renewWanted = false;
@@ -1580,19 +1681,21 @@
   // The current track onto a fresh element, at the position it had reached.
   function moveSourceToFresh(cur, reason) {
     const old = audio;
-    const pos = old.readyState >= 1 && old.currentTime > 0 ? old.currentTime : get(player).currentTime || 0;
+    const pos = old.readyState >= 1 && old.currentTime > 0 ? trackTime(old) : get(player).currentTime || 0;
     const preload = old.preload;
-    const url = currentSourceUrl(cur);
+    const wasSlice = audioOffset > 0.05;
+    const url = curIsBlob ? currentSourceUrl(cur) : sourceUrl(cur, wasSlice ? pos : 0);
     const el = swapToFresh(reason);
     el.preload = preload;
     if (detachLadder) {
       detachLadder();
       detachLadder = watchAudio(el, curId);
     }
+    audioOffset = curIsBlob || !wasSlice ? 0 : pos;
     el.src = url;
     el.load();
-    setTrackGain(gainFor(cur));
-    if (pos > 0) seekOnceLoaded(pos);
+    setElementGain(el, gainFor(cur));
+    if (pos > 0 && !audioOffset) seekOnceLoaded(pos);
     if (get(player).playing) startPlayback(reason);
   }
 
@@ -1675,7 +1778,7 @@
       els = els.map((e) => (e === old ? incoming : e));
       audio = incoming;
       registerSource(incoming);
-      setTrackGain(gainFor(cur));
+      setElementGain(incoming, gainFor(cur));
       if (detachLadder) {
         detachLadder();
         detachLadder = watchAudio(incoming, trackKey(cur));
@@ -1762,13 +1865,21 @@
   function seekOnceLoaded(t) {
     cancelPendingSeek();
     const el = audio;
+    if (!el) return;
     const apply = () => {
+      cancelPendingSeek();
+      if (el !== audio) return;
+      const elT = elementTime(t);
+      if (seekPlan(el, elT, { direct: curIsBlob || isNativeEl(el) }) === "chase") {
+        startSeekChase(t);
+        return;
+      }
       try {
-        el.currentTime = t;
+        el.currentTime = elT;
+        watchSeek(t);
       } catch {
         /* not seekable yet */
       }
-      cancelPendingSeek();
     };
     pendingSeek = { el, fn: apply };
     el.addEventListener("loadedmetadata", apply);
@@ -1781,42 +1892,44 @@
   // is paused while the store may still read playing=true for a tick, and an
   // unconditional play() gets cut off again → a rapid play/pause loop. Guarding
   // on audio.paused makes each direction idempotent and breaks the oscillation.
-  $: if (audio && curId) {
-    if (!$player.playing) {
-      // A pause ALWAYS wins, in EVERY state. First tear down any in-flight
-      // recovery / quality-switch / seek-chase — otherwise their late handlers
-      // would re-`play()` the element a moment later and the pause "does
-      // nothing" (silence with the play icon on, or the button feels inverted).
-      // Then pause the element. Guard on audio.paused so we don't fight the OS.
-      if (recovering) cancelRecovery();
-      if (switching) cancelSwitch();
-      if (chasing) cancelSeekChase();
-      // A fade runs on the audio clock, which does not stop with the element:
-      // leaving one in flight would keep ramping a track nobody can hear and
-      // hand over to the next one while paused.
-      if (xfade) cancelCrossfade();
-      if (!audio.paused) audio.pause();
-      stuckSince = 0; // a deliberate pause is never a wedge
-      stuckNudges = 0;
-      setPlaybackStatus("idle"); // paused = not trying to play = no indicator
-    } else if (!switching && !recovering && !chasing && audio.paused) {
-      // Playback starts: restore eager buffering if the paused-restore load
-      // deferred it (play() fetches regardless, but rebuffers stay eager too).
-      // Mid-transition states own their own play(), so don't double-drive here.
-      if (audio.preload !== "auto") audio.preload = "auto";
-      startPlayback("transport");
-    }
-  }
-  $: if (audio) {
-    // The sleep timer's fade-out rides on top of the volume, so the level the
-    // user chose is never touched and never has to be put back.
-    const v = ($player.muted ? 0 : $player.volume) * $sleepFade;
-    // The outgoing element of a crossfade is still audible: a volume change
-    // mid-fade has to reach it too, or the two tracks drift apart in level. On
-    // the direct path the graph folds each element's normalization and fade
-    // into its volume (graph.js#setPlayerVolume).
-    setPlayerVolume(v, [audio, xfade?.old]);
-  }
+  $: if (audio && curId)
+    guard("transport", () => {
+      if (!$player.playing) {
+        // A pause ALWAYS wins, in EVERY state. First tear down any in-flight
+        // recovery / quality-switch / seek-chase — otherwise their late handlers
+        // would re-`play()` the element a moment later and the pause "does
+        // nothing" (silence with the play icon on, or the button feels inverted).
+        // Then pause the element. Guard on audio.paused so we don't fight the OS.
+        if (recovering) cancelRecovery();
+        if (switching) cancelSwitch();
+        if (chasing) cancelSeekChase();
+        // A fade runs on the audio clock, which does not stop with the element:
+        // leaving one in flight would keep ramping a track nobody can hear and
+        // hand over to the next one while paused.
+        if (xfade) cancelCrossfade();
+        if (!audio.paused) audio.pause();
+        stuckSince = 0; // a deliberate pause is never a wedge
+        stuckNudges = 0;
+        setPlaybackStatus("idle"); // paused = not trying to play = no indicator
+      } else if (!switching && !recovering && !chasing && audio.paused) {
+        // Playback starts: restore eager buffering if the paused-restore load
+        // deferred it (play() fetches regardless, but rebuffers stay eager too).
+        // Mid-transition states own their own play(), so don't double-drive here.
+        if (audio.preload !== "auto") audio.preload = "auto";
+        startPlayback("transport");
+      }
+    });
+  $: if (audio)
+    guard("volume", () => {
+      // The sleep timer's fade-out rides on top of the volume, so the level the
+      // user chose is never touched and never has to be put back.
+      const v = ($player.muted ? 0 : $player.volume) * $sleepFade;
+      // The outgoing element of a crossfade is still audible: a volume change
+      // mid-fade has to reach it too, or the two tracks drift apart in level. On
+      // the direct path the graph folds each element's normalization and fade
+      // into its volume (graph.js#setPlayerVolume).
+      setPlayerVolume(v, [audio, xfade?.old]);
+    });
 
   // Podcast speed: remembered per show, and music always plays at 1. It goes on
   // BOTH elements (the idle one is what a quality switch hands over to) and as
@@ -1824,12 +1937,13 @@
   // new source. A hosted listen party plays at 1: its guests schedule the audio
   // in real time, so a faster host would leave them further behind each second.
   $: wantedRate = $partyHost ? 1 : $currentSpeed;
-  $: if (els.length) {
-    for (const el of els) {
-      el.defaultPlaybackRate = wantedRate;
-      el.playbackRate = wantedRate;
-    }
-  }
+  $: if (els.length)
+    guard("rate", () => {
+      for (const el of els) {
+        el.defaultPlaybackRate = wantedRate;
+        el.playbackRate = wantedRate;
+      }
+    });
 
   // Keep the OS media notification's transport state in sync (play/pause glyph).
   // Guarded on an actual change: this reactive block re-runs on EVERY store tick
@@ -1858,6 +1972,7 @@
     if (e && e.target !== audio) return; // ignore the idle/preloading element
     if (loadingTrack) return; // a track change is mid-flight — position is stale
     if (chasing) return; // chasing a seek — hold the bar at the target
+    checkNativeStep();
     // If the visualizer wired the element through a Web Audio context that the
     // OS later suspended (backgrounded tab), the element "plays" but is silent —
     // resumeAudio() is a no-op unless the context is actually suspended.
@@ -1869,7 +1984,7 @@
     // the retry delay scaled by that budget, a track the server refused (Deezer
     // switched off or unreachable, never archived) was reloaded every 15 ms,
     // 70 requests a second, for as long as it stayed on screen.
-    if (recoverAttempts && audio.currentTime > Math.max(lastPos, 0)) recoverAttempts = 0;
+    if (recoverAttempts && trackTime() > Math.max(lastPos, 0)) recoverAttempts = 0;
     // A live, on-the-fly transcoded stream (e.g. Opus/ogg piped from ffmpeg)
     // has no Content-Length, so audio.duration is Infinity/NaN. Fall back to
     // the duration we already know from the track metadata.
@@ -1877,13 +1992,13 @@
       audio.duration && isFinite(audio.duration)
         ? audio.duration
         : $current?.duration || 0;
-    if (audio.currentTime > 0.25) {
-      lastKnownTime = audio.currentTime;
+    if (trackTime() > 0.25) {
+      lastKnownTime = trackTime();
       hadProgress = true;
       if (!audio.paused) setPlaybackStatus("idle"); // real audio is flowing
     }
     if (netWaiting) netWaiting = false; // progress resumed on its own
-    player.setProgress(audio.currentTime, d);
+    player.setProgress(trackTime(), d);
     updateBuffered();
     savePodcastProgress(); // throttled; no-op for non-podcast tracks
     maybeCrossfade();
@@ -1906,7 +2021,7 @@
     // full duration whenever bounds are unknown, and cutting at the duration
     // would just race the element's own `ended`.
     if (!end || !d || end > d - 0.2) return;
-    if (audio.currentTime < end - 0.05) return;
+    if (trackTime() < end - 0.05) return;
     trimmedId = curId;
     onEnded({ target: audio });
   }
@@ -1920,12 +2035,13 @@
   }
   function updateBuffered() {
     if (!audio) return;
-    let end = audio.currentTime;
+    const now = audio.currentTime;
+    let end = now;
     try {
       const b = audio.buffered;
       for (let i = 0; i < b.length; i++) {
         // The range covering (or just reached by) the playhead.
-        if (b.start(i) <= audio.currentTime + 0.25 && b.end(i) >= audio.currentTime) {
+        if (b.start(i) <= now + 0.25 && b.end(i) >= now) {
           end = Math.max(end, b.end(i));
           break;
         }
@@ -1933,7 +2049,7 @@
     } catch {
       /* buffered may throw if the element isn't ready */
     }
-    buffered.set(end);
+    buffered.set(end + audioOffset);
   }
 
   // Feed the OS media notification a duration/position so it can draw a seek
@@ -1956,7 +2072,7 @@
       audio.duration && isFinite(audio.duration)
         ? audio.duration
         : get(current)?.duration || 0;
-    updatePositionState(audio.currentTime, d);
+    updatePositionState(trackTime(), d);
   }
   // Throws if duration <= 0 or position > duration, so clamp + guard.
   function updatePositionState(position, duration) {
@@ -2124,7 +2240,7 @@
     const end = audioEndsAt();
     if (!end) return;
     const fade = fadeSeconds();
-    const remain = end - audio.currentTime;
+    const remain = end - trackTime();
     if (remain <= 0 || remain > fade + XFADE_PRELOAD) return;
     armCrossfade(next, fade, Math.max(0, remain - fade));
   }
@@ -2336,6 +2452,7 @@
     // finishCrossfade revokes it once the element has actually stopped.
     x.oldBlobUrl = curBlobUrl;
     curBlobUrl = x.blobUrl;
+    audioOffset = 0;
     lastKnownTime = el.currentTime;
     hadProgress = true;
     loadingTrack = false;
@@ -2364,7 +2481,7 @@
     }
     registerSource(el);
     resumeAudio();
-    setTrackGain(gainFor(x.track));
+    setElementGain(el, gainFor(x.track));
     player.setProgress(el.currentTime, x.track.duration || 0);
     setPlaybackStatus("idle");
     if (x.isBlob) touch(trackKey(x.track));
@@ -2538,6 +2655,10 @@
     // The app may have run out of its list while the page was frozen: the
     // element is ended and no `ended` survived the suppression. The person is
     // here now; move the queue on the way the element would have.
+    if (audio && isNativeEl(audio) && audio.advancedKey && !loadingTrack && get(player).playing) {
+      onNativeAdvance({ target: audio });
+      return;
+    }
     if (audio && isNativeEl(audio) && audio.ended && !loadingTrack && get(player).playing) {
       onEnded({ target: audio });
     }
@@ -2560,6 +2681,89 @@
       nativeNeedTimer = null;
       if (isNativeEl(audio) && audio === e.target) updateNativeNext(true);
     }, 60);
+  }
+
+  const RESYNC_MAX = 2;
+  let resyncAt = 0;
+  let resyncStep = 0;
+  let resyncBusy = false;
+
+  function onNativeDesync(e) {
+    if (e && e.target && e.target !== audio) return;
+    resyncNative(e && e.target && e.target.desyncReason ? e.target.desyncReason : "the app's player says so");
+  }
+
+  function adoptAppTrack(el, reason) {
+    const key = el.advancedKey;
+    if (!key) return false;
+    const at = hinted.findIndex((h) => h.key === key);
+    const h = at >= 0 ? hinted[at] : null;
+    const s = get(player);
+    if (h && trackKey(s.queue[h.index] || {}) === key) {
+      logInfo("audio", `resync (${reason}): the app is on ${key}, the queue follows`, null, { important: true });
+      onNativeAdvance({ target: el });
+      return true;
+    }
+    logInfo("audio", `resync (${reason}): the app is on ${key}, which the queue does not hold`, null, {
+      important: true,
+    });
+    el.dropAdvance();
+    if ($current) loadTrack($current, { hard: true });
+    return true;
+  }
+
+  function resyncNative(reason) {
+    const el = audio;
+    if (!el || !isNativeEl(el)) return;
+    const nowMs = Date.now();
+    if (nowMs - resyncAt < 300) return;
+    resyncAt = nowMs;
+    if (loadingTrack || switching || chasing || recovering || xfade) return;
+    if (el.advancedKey) {
+      if (adoptAppTrack(el, reason)) return;
+    }
+    const cur = $current;
+    if (!cur || !curId || resyncBusy) return;
+    resyncBusy = true;
+    logInfo("audio", `resync (${reason})`, null, { important: true });
+    el.probe()
+      .then((probed) => {
+        resyncBusy = false;
+        if (probed !== audio) return;
+        resyncStep = 0;
+        if (probed.advancedKey && adoptAppTrack(probed, reason)) return;
+        const pos = lastKnownTime > 0.5 ? lastKnownTime : probed.currentTime;
+        if (get(player).playing) {
+          if (isFinite(pos) && pos > 0.5 && Math.abs(probed.currentTime - pos) > 1.5) safeSeek(pos);
+          if (probed.paused) startPlayback("resync");
+        } else if (!probed.paused) probed.pause();
+        updateNativeNext(true);
+        pushPositionState();
+      })
+      .catch(() => {
+        resyncBusy = false;
+        if (el !== audio) return;
+        resyncStep++;
+        logInfo("audio", `resync (${reason}): the app's player did not answer (${resyncStep})`, null, {
+          important: true,
+        });
+        if (resyncStep > RESYNC_MAX) {
+          noteNativeFault("the app's player stopped answering");
+          fallBackToPage();
+          return;
+        }
+        if ($current) moveSourceToFresh($current, "the app's player did not answer");
+      });
+  }
+
+  function checkNativeStep() {
+    const el = audio;
+    if (!el || !isNativeEl(el)) return;
+    if (el.advancedKey && el.advancedKey !== curId) {
+      resyncNative("the app is on another track");
+      return;
+    }
+    if (!el.paused && el.currentTime > 0.25) resyncStep = 0;
   }
 
   // From bridge 8 the app keeps the list while the page is VISIBLE too: naming
@@ -2722,7 +2926,8 @@
   }
   // Every input of the decision; the signature keeps a progress tick from
   // sending anything.
-  $: audio, $player, $current, $quality, pageHidden, nativeBackground, loadingTrack, xfade, chasing, updateNativeNext();
+  $: audio, $player, $current, $quality, pageHidden, nativeBackground, loadingTrack, xfade, chasing,
+    guard("native-next", updateNativeNext);
 
   function onNativeAdvance(e) {
     const el = e && e.target;
@@ -2751,7 +2956,10 @@
     // for an older key is still in flight, supersede it with the newest one
     // instead of dropping it: the old load's token/curId check bails out, and
     // the queue lands on the track the app is really playing.
-    if (loadingTrack && (curId === key || get(player).index === h.index)) return;
+    if (loadingTrack && (curId === key || get(player).index === h.index)) {
+      lastAdvanceKey = null;
+      return;
+    }
     const cur = $current;
     if (cur && cur.podcast) markEpisodeFinished(trackKey(cur), cur.duration || 0);
     adoptKey = key;
@@ -3108,10 +3316,10 @@
         if (audio && d.seekTime != null) performSeek(d.seekTime);
       });
       navigator.mediaSession.setActionHandler("seekbackward", (d) => {
-        if (audio) performSeek(Math.max(0, audio.currentTime - (d.seekOffset || 10)));
+        if (audio) performSeek(Math.max(0, trackTime() - (d.seekOffset || 10)));
       });
       navigator.mediaSession.setActionHandler("seekforward", (d) => {
-        if (audio) performSeek(audio.currentTime + (d.seekOffset || 10));
+        if (audio) performSeek(trackTime() + (d.seekOffset || 10));
       });
     } catch {
       /* ignore */

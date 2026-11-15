@@ -136,10 +136,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- Boot / update: start the car mode when the person's settings want
-             it, so a navigation app coming forward is seen without opening
-             Neezer. Not exported: the system may still deliver these two
-             protected broadcasts to it. -->
+        <!-- Boot / update: re-arm the car mode's watch when the person's
+             settings want it, so a navigation app coming forward is seen
+             without opening Neezer. The service itself only starts when a
+             trigger really saw the car. Not exported: the system may still
+             deliver these two protected broadcasts to it. -->
         <receiver
             android:name=".CarBootReceiver"
             android:exported="false">
@@ -148,6 +149,32 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- The car radio connecting or leaving: the Bluetooth broadcasts
+             Android still delivers to a manifest receiver. Receiving them
+             needs BLUETOOTH_CONNECT (asked from the car settings). -->
+        <receiver
+            android:name=".CarBluetoothReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- One rung of the watch's ladder (an explicit PendingIntent). -->
+        <receiver
+            android:name=".CarWakeReceiver"
+            android:exported="false" />
+
+        <!-- The periodic look behind the watch: no notification, and Android
+             owns the schedule. -->
+        <service
+            android:name=".CarWatchJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- Car mode overlay: specialUse is the only Android 14 type that fits
              "draw a player over the navigation app". The subtype property is

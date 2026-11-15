@@ -27,7 +27,7 @@
     toasts,
   } from "../lib/stores.js";
   import { EQ_FREQS, EQ_MIN_DB, EQ_MAX_DB } from "../lib/audio/graph.js";
-  import { subscribeSaturation } from "../lib/audio/saturation.js";
+  import { classifyRisk, subscribeSaturation } from "../lib/audio/saturation.js";
   import {
     BUILTIN_PRESETS,
     EQ_BAND_COUNT,
@@ -54,6 +54,7 @@
   import {
     nativeAudioAvailable,
     nativeDspAvailable,
+    nativePanAvailable,
     nativeChoiceOn,
     faultHolds,
     clearNativeFault,
@@ -127,10 +128,9 @@
   // -- mono and balance (lib/audio/pan.js) -----------------------------------
   // These change the AUDIBLE output only: the graph's analysers tap before the
   // stage, so the rhythm analysis and the visualizer keep the original stereo.
-  // The direct path (the Android app's player included) has no graph to insert
-  // the stage into, hence the disabled state and its short hint.
   $: pan = $panSettings;
-  $: panDisabled = plan.direct;
+  const nativePan = nativePanAvailable();
+  $: panDisabled = plan.direct && !(plan.why === "native" && nativePan);
   $: panText = describeBalance(pan.balance);
   $: panSummary = `${pan.mono ? "Mono" : "Stéréo"} · ${panText}`;
 
@@ -164,25 +164,68 @@
     const next = $eqBands.slice();
     next[i] = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, +v || 0));
     eqBands.set(next);
-    resetRiskHold();
+    resetRiskHold(false, "band:" + i);
   }
 
   function toggleEq() {
     eqEnabled.set(!$eqEnabled);
-    resetRiskHold(true);
+    resetRiskHold(true, "eq");
   }
 
   function useNormalization(id) {
     normalization.set(id);
-    resetRiskHold();
+    resetRiskHold(false, "norm");
   }
 
   function setBass(v) {
     bassBoost.set(+v || 0);
-    resetRiskHold();
+    resetRiskHold(false, "bass");
   }
 
   $: bassPct = Math.round($bassBoost * 100);
+
+  const FADER_THUMB = 22;
+  function faderStyle(db) {
+    const v = Math.max(EQ_MIN_DB, Math.min(EQ_MAX_DB, +db || 0));
+    const p = (v - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB);
+    return `--p:${p.toFixed(4)}`;
+  }
+  function faderAt(e, i, node) {
+    const r = node.getBoundingClientRect();
+    const span = Math.max(1, r.height - FADER_THUMB);
+    const t = (r.bottom - FADER_THUMB / 2 - e.clientY) / span;
+    const db = Math.round(EQ_MIN_DB + Math.max(0, Math.min(1, t)) * (EQ_MAX_DB - EQ_MIN_DB));
+    setBand(i, db);
+  }
+  function faderDown(e, i) {
+    if (!$eqEnabled) return;
+    e.preventDefault();
+    e.currentTarget.querySelector("input")?.focus({ preventScroll: true });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    faderAt(e, i, e.currentTarget);
+  }
+  function faderMove(e, i) {
+    const node = e.currentTarget;
+    if (!node.hasPointerCapture?.(e.pointerId)) return;
+    faderAt(e, i, node);
+  }
+  function volAt(e, node) {
+    const r = node.getBoundingClientRect();
+    const span = Math.max(1, r.width - FADER_THUMB);
+    const t = (e.clientX - r.left - FADER_THUMB / 2) / span;
+    player.setVolume(Math.max(0, Math.min(1, Math.round(t * 100) / 100)));
+  }
+  function volDown(e) {
+    e.preventDefault();
+    e.currentTarget.querySelector("input")?.focus({ preventScroll: true });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    volAt(e, e.currentTarget);
+  }
+  function volMove(e) {
+    const node = e.currentTarget;
+    if (!node.hasPointerCapture?.(e.pointerId)) return;
+    volAt(e, node);
+  }
 
   // -- transitions -----------------------------------------------------------
   $: fadeLabel =
@@ -224,7 +267,7 @@
     } else {
       applyFxPreset(p);
     }
-    resetRiskHold();
+    resetRiskHold(false, "preset");
     pickedId = p.id;
     // No toast: the chip highlights, the state line names the preset, and a
     // second toast would only stack under the next action's.
@@ -372,6 +415,7 @@
   let warn = null;
   let warnAnnounce = "";
   const riskHold = createRiskHold();
+  let lastReading = null;
   let holdAfter = 0;
   let warnedTone = "ok";
   let lastWarnAt = 0;
@@ -421,8 +465,8 @@
   // makes the question moot (the equalizer off, or the processed path gone);
   // a slider or a preset lets the meter turn its 85 ms window over first, so a
   // curve that stays risky does not blink off and on under the finger.
-  function resetRiskHold(clearNow = false) {
-    riskHold.reset();
+  function resetRiskHold(clearNow = false, key = null) {
+    riskHold.begin(lastReading, nowMs(), key);
     warnedTone = "ok";
     lastWarnAt = 0;
     if (clearNow) {
@@ -445,6 +489,7 @@
         readValues.headroom = 96;
         readValues.reduction = 0;
         paintBars(null);
+        lastReading = null;
         resetRiskHold(true);
       }
       if (snap.reason !== meterReason) meterReason = snap.reason || "idle";
@@ -456,13 +501,19 @@
       meterReason = "";
     }
     if (snap.measured !== meterMeasured) meterMeasured = snap.measured;
+    if (snap.measured) lastReading = { reduction: snap.reductionDb, peak: snap.peakDb };
     if (now - lastBarsAt >= BAR_PAINT_MS) {
       lastBarsAt = now;
       paintBars(snap.bands);
     }
 
     // The bars show the chain now; the warning below outlives the peak.
-    const tone = eqRisk(snap.risk, $eqEnabled, $eqBands);
+    const net = riskHold.net(snap.reductionDb, snap.peakDb);
+    const tone = eqRisk(
+      net.fromChange ? classifyRisk(net.peak, net.reduction) : snap.risk,
+      $eqEnabled,
+      $eqBands
+    );
     if (tone !== meterRisk) meterRisk = tone;
 
     if (now - lastReadAt >= 250) {
@@ -484,7 +535,10 @@
 
     // The analyser's 85 ms window still holds the signal from before a volume
     // or EQ change; folding it into a fresh episode would keep the old peak.
-    const shown = now < holdAfter ? riskHold.current : riskHold.fold(tone, snap.reductionDb, snap.marginDb);
+    const shown =
+      now < holdAfter
+        ? riskHold.current
+        : riskHold.fold(tone, net.reduction, net.fromChange);
     if (!shown) {
       // A change settled back under the bars: the old banner has had its turn.
       if (warn && now >= holdAfter) {
@@ -493,9 +547,10 @@
       }
       return;
     }
+    const more = shown.fromChange ? " de plus depuis votre réglage" : "";
     if (shown.tone !== warnedTone) {
       warnedTone = shown.tone;
-      warnAnnounce = `${shown.tone === "clip" ? "Saturation" : "Risque de saturation"} : le limiteur réduit de ${fmtDb(shown.reduction)}.`;
+      warnAnnounce = `${shown.tone === "clip" ? "Saturation" : "Risque de saturation"} : le limiteur réduit de ${fmtDb(shown.reduction)}${more}.`;
       lastWarnAt = 0; // paint the banner now, not after the throttle
     }
     if (now - lastWarnAt >= 750) {
@@ -503,15 +558,15 @@
       const next = {
         tone: shown.tone,
         reduction: Math.round(shown.reduction * 10) / 10,
-        margin: Math.round(shown.margin * 10) / 10,
-        cut: volumeCutDb(shown.margin),
+        cut: volumeCutDb(shown.reduction),
+        fromChange: shown.fromChange,
       };
       if (
         !warn ||
         warn.tone !== next.tone ||
         warn.reduction !== next.reduction ||
-        warn.margin !== next.margin ||
-        warn.cut !== next.cut
+        warn.cut !== next.cut ||
+        warn.fromChange !== next.fromChange
       )
         warn = next;
     }
@@ -528,15 +583,17 @@
   // quieter chain read as "the button did nothing". The next reading rebuilds
   // the banner from the level that is actually playing now.
   let lastVolume = null;
-  $: if ($player.volume !== lastVolume) {
+  let lastMuted = null;
+  $: if ($player.volume !== lastVolume || $player.muted !== lastMuted) {
     lastVolume = $player.volume;
-    resetRiskHold();
+    lastMuted = $player.muted;
+    resetRiskHold(false, "volume");
   }
 
   // Switching the equalizer off, or flattening/cutting every band (here or by
   // applying a preset that carries the flag), makes the warning false at once:
   // it is about what the EQ adds.
-  $: if (warn && (!$eqEnabled || !$eqBands.some((g) => +g > 0))) resetRiskHold(true);
+  $: if (warn && (!$eqEnabled || !$eqBands.some((g) => +g > 0))) resetRiskHold(true, "shape");
 
   onMount(() => {
     let io = null;
@@ -752,7 +809,26 @@
       <button class="vbtn" on:click={() => player.toggleMute()} aria-label="Muet" title="Muet">
         <Icon name={$player.muted || $player.volume === 0 ? "mute" : "volume"} size={18} />
       </button>
-      <input type="range" min="0" max="1" step="0.01" value={$player.muted ? 0 : $player.volume} on:input={(e) => player.setVolume(+e.target.value)} aria-label="Volume de sortie" aria-valuetext={`${volPct} %`} />
+      <div
+        class="vol"
+        style={`--p:${($player.muted ? 0 : $player.volume).toFixed(3)}`}
+        on:pointerdown={volDown}
+        on:pointermove={volMove}
+      >
+        <span class="vol-track" aria-hidden="true"><span class="vol-fill"></span></span>
+        <span class="vol-thumb" aria-hidden="true"></span>
+        <input
+          class="vol-input"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={$player.muted ? 0 : $player.volume}
+          on:input={(e) => player.setVolume(+e.target.value)}
+          aria-label="Volume de sortie"
+          aria-valuetext={`${volPct} %`}
+        />
+      </div>
       <span class="val">{volPct}%</span>
     </div>
   </div>
@@ -787,7 +863,7 @@
       </span>
     </div>
     <div class="slider-row">
-      <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => setBass(e.target.value)} aria-label="Amplification des basses" aria-valuetext={`${bassPct} %`} />
+      <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => setBass(e.target.value)} style={`--p:${bassPct}%`} aria-label="Amplification des basses" aria-valuetext={`${bassPct} %`} />
       <span class="val">{bassPct}%</span>
     </div>
   </div>
@@ -952,9 +1028,8 @@
         <span class="warn-txt">
           <strong>{warn.tone === "clip" ? "Saturation" : "Risque de saturation"}</strong>
           <span class="muted">
-            {#if warn.reduction >= 0.1}Le limiteur réduit de {fmtDb(warn.reduction)}.{:else}Le signal dépasse
+            {#if warn.reduction >= 0.1}Le limiteur réduit de {fmtDb(warn.reduction)}{warn.fromChange ? " de plus depuis votre réglage" : ""}.{:else}Le signal dépasse
               0 dBFS.{/if}
-            Marge recommandée : {fmtDb(warn.margin)}.
           </span>
         </span>
         <button class="warn-btn" on:click={reduceVolume} disabled={!canReduce}>
@@ -968,10 +1043,18 @@
       {#each EQ_FREQS as hz, i}
         <div class="band">
           <span class="gain">{$eqBands[i] > 0 ? "+" : ""}{$eqBands[i]}</span>
-          <div class="band-mid">
-            <span class="lvl" aria-hidden="true">
-              <span class="lvl-fill" use:levelBar={i}></span>
+          <div
+            class="fader"
+            style={faderStyle($eqBands[i])}
+            on:pointerdown={(e) => faderDown(e, i)}
+            on:pointermove={(e) => faderMove(e, i)}
+          >
+            <span class="fader-track" aria-hidden="true">
+              <span class="fader-level" use:levelBar={i}></span>
+              <span class="fader-fill"></span>
             </span>
+            <span class="fader-zero" aria-hidden="true"></span>
+            <span class="fader-thumb" aria-hidden="true"></span>
             <input
               class="vert"
               type="range"
@@ -982,6 +1065,7 @@
               disabled={!$eqEnabled}
               on:input={(e) => setBand(i, e.target.value)}
               aria-label={freqLabel(hz) + " Hz"}
+              aria-valuetext={fmtDb($eqBands[i], { plus: true })}
             />
           </div>
           <span class="freq">{freqLabel(hz)}</span>
@@ -1253,11 +1337,8 @@
     text-align: right;
   }
   .pan-slider {
-    /* A finger needs 44 px of target; the track stays the 4 px line. The
-       padding is hit area only, and background-clip keeps the grey off it. */
     box-sizing: content-box;
-    padding: 20px 0;
-    background-clip: content-box;
+    padding: 19px 0;
   }
   .pan-foot {
     display: flex;
@@ -1354,27 +1435,110 @@
   .slider-row input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--bg-hover);
+    box-sizing: content-box;
+    height: 6px;
+    padding: 19px 0;
+    background: transparent;
     flex: 1;
+    min-width: 0;
     cursor: pointer;
+    touch-action: pan-y;
+  }
+  .slider-row input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(
+      to right,
+      var(--accent) 0 var(--p, 0%),
+      var(--bg) var(--p, 0%)
+    );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 12%, transparent);
+  }
+  .slider-row input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(
+      to right,
+      var(--accent) 0 var(--p, 0%),
+      var(--bg) var(--p, 0%)
+    );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 12%, transparent);
   }
   .slider-row input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
+    margin-top: -7px;
     border-radius: 50%;
     background: var(--accent);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.32);
     cursor: pointer;
   }
   .slider-row input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     border: none;
     border-radius: 50%;
     background: var(--accent);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.32);
     cursor: pointer;
+  }
+  .vol {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 44px;
+    cursor: pointer;
+    touch-action: pan-y;
+  }
+  .vol-track {
+    position: absolute;
+    left: 11px;
+    right: 11px;
+    top: 50%;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--bg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 14%, transparent);
+    transform: translateY(-50%);
+    overflow: hidden;
+  }
+  .vol-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(var(--p, 0) * 100%);
+    border-radius: 4px;
+    background: var(--accent);
+  }
+  .vol-thumb {
+    position: absolute;
+    left: calc(11px + (100% - 22px) * var(--p, 0));
+    top: 50%;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.32);
+    pointer-events: none;
+  }
+  .vol:has(input:focus-visible) .vol-thumb {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .vol-input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+    -webkit-appearance: none;
+    appearance: none;
   }
   .val {
     font-variant-numeric: tabular-nums;
@@ -1781,52 +1945,113 @@
     border: 0;
   }
 
-  /* -- the ten faders, each with its band's level above it ----------------- */
+  /* -- the ten faders, with the band's level and setting inside the track --- */
   .eq {
     display: flex;
     justify-content: space-between;
     gap: 6px;
-    overflow-x: auto;
     padding: 4px 2px 0;
   }
   .band {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     flex: 1;
     min-width: 44px;
   }
-  .band-mid {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
+  .fader {
+    position: relative;
+    width: 44px;
+    height: calc(var(--track-h, 170px) + 22px);
+    cursor: pointer;
+    touch-action: none;
   }
-  .lvl {
-    display: flex;
-    align-items: flex-end;
-    width: 12px;
-    height: 48px;
-    border-radius: 6px;
-    overflow: hidden;
+  .fader-track {
+    position: absolute;
+    left: 50%;
+    top: 11px;
+    bottom: 11px;
+    width: 8px;
+    border-radius: 4px;
     background: var(--bg);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 15%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 14%, transparent);
+    transform: translateX(-50%);
+    overflow: hidden;
   }
-  .lvl-fill {
-    display: block;
-    width: 100%;
+  .fader-level {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
     height: 100%;
-    border-radius: 6px;
-    background: var(--m-ok);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--m-ok) 30%, transparent);
     transform: scaleY(var(--lvl, 0));
     transform-origin: 50% 100%;
     transition: transform 90ms linear, background-color 160ms ease;
   }
-  .eq[data-risk="warn"] .lvl-fill {
+  .fader-fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(var(--p, 0.5) * 100%);
+    border-radius: 4px;
+    background: var(--accent);
+    transition: height 70ms linear;
+  }
+  .fader-zero {
+    position: absolute;
+    left: 50%;
+    bottom: 50%;
+    width: 18px;
+    height: 2px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--tx) 34%, transparent);
+    transform: translate(-50%, 50%);
+    pointer-events: none;
+  }
+  .fader-thumb {
+    position: absolute;
+    left: 50%;
+    bottom: calc(11px + (100% - 22px) * var(--p, 0.5));
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-50%, 50%);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.32);
+    pointer-events: none;
+  }
+  .fader:has(input:focus-visible) .fader-thumb {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .fader input.vert {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+    writing-mode: vertical-lr;
+    direction: rtl;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .eq[data-risk="warn"] .fader-level {
+    background: color-mix(in srgb, var(--m-warn) 45%, transparent);
+  }
+  .eq[data-risk="clip"] .fader-level {
+    background: color-mix(in srgb, var(--m-clip) 50%, transparent);
+  }
+  .eq[data-risk="warn"] .fader-fill {
     background: var(--m-warn);
   }
-  .eq[data-risk="clip"] .lvl-fill {
+  .eq[data-risk="clip"] .fader-fill {
     background: var(--m-clip);
   }
   .gain {
@@ -1840,49 +2065,14 @@
     color: var(--text-dim);
   }
   .eq.dim .gain,
-  .eq.dim input.vert {
+  .eq.dim .fader-thumb,
+  .eq.dim .fader-fill {
     opacity: 0.45;
   }
-  input.vert {
-    writing-mode: vertical-lr;
-    direction: rtl;
-    width: 10px;
-    height: 170px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: var(--bg);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
-    border-radius: 5px;
-    cursor: pointer;
-  }
-  input.vert:disabled {
+  .eq.dim .fader {
     cursor: default;
   }
-  input.vert::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-  }
-  input.vert::-moz-range-thumb {
-    width: 20px;
-    height: 20px;
-    border: none;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-  }
 
-  /* On phones a horizontal row of ten vertical faders forces horizontal
-     scrolling, and dragging to scroll grabs whichever fader is under the
-     finger. Rotate the whole EQ for touch: one horizontal fader per row,
-     stacked vertically. Page scroll (up/down) and fader drag (left/right)
-     are now on perpendicular axes, so they never fight — `touch-action:
-     pan-y` makes the browser hand vertical swipes to the page and horizontal
-     drags to the fader. The band's meter becomes the thin line above its
-     fader, so the level and the slider share the same frequency label. */
   @media (max-width: 640px) {
     .picker {
       grid-template-columns: 1fr;
@@ -1917,91 +2107,24 @@
       flex: 0 1 auto;
     }
     .eq {
-      flex-direction: column;
-      justify-content: flex-start;
-      gap: 4px;
-      overflow-x: visible;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(44px, 1fr));
+      gap: 16px 4px;
       padding: 4px 0 2px;
     }
     .band {
-      flex-direction: row;
-      align-items: center;
-      gap: 12px;
       width: 100%;
       min-width: 0;
-      /* The 26px thumbs draw outside the thin track's box, so give each row a
-         generous height — otherwise adjacent thumbs sit on top of each other
-         and the whole thing reads as a cramped grid. This is the breathing
-         room that makes it feel considered rather than crammed. */
-      min-height: 56px;
+      gap: 4px;
     }
-    .band-mid {
-      flex: 1;
-      min-width: 0;
-      gap: 6px;
-      align-items: stretch;
-    }
-    .lvl {
-      width: 100%;
-      height: 6px;
-      border-radius: 3px;
-    }
-    .lvl-fill {
-      border-radius: 3px;
-      transform: scaleX(var(--lvl, 0));
-      transform-origin: 0 50%;
-    }
-    .freq {
-      order: -1;
-      flex: none;
-      width: 40px;
-      text-align: left;
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: var(--text);
+    .fader {
+      --track-h: 132px;
     }
     .gain {
-      flex: none;
-      width: 44px;
-      text-align: right;
-      min-height: 0;
-      font-size: 0.78rem;
+      font-size: 0.76rem;
     }
-    input.vert {
-      writing-mode: horizontal-tb;
-      direction: ltr;
-      width: 100%;
-      /* 6 px of visible track, 19 px of transparent hit area above and below:
-         the thumb is 26 px and the row must stay a 44 px target. The track is
-         drawn by the runnable-track pseudo-element so the padding stays empty
-         (the input's own background would paint a second line at its top). */
-      box-sizing: content-box;
-      height: 6px;
-      padding: 19px 0;
-      background: transparent;
-      box-shadow: none;
-      border-radius: 0;
-      touch-action: pan-y;
-    }
-    input.vert::-webkit-slider-runnable-track {
-      height: 6px;
-      border-radius: 3px;
-      background: var(--bg);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
-    }
-    input.vert::-moz-range-track {
-      height: 6px;
-      border-radius: 3px;
-      background: var(--bg);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
-    }
-    input.vert::-webkit-slider-thumb {
-      width: 26px;
-      height: 26px;
-    }
-    input.vert::-moz-range-thumb {
-      width: 26px;
-      height: 26px;
+    .freq {
+      font-size: 0.72rem;
     }
     .warn-btn {
       flex: 1 1 100%;
@@ -2024,8 +2147,6 @@
       width: 44px;
       height: 44px;
     }
-    /* A finger, not a mouse: the switch's whole row, the reset chip, and a
-       thumb big enough to see on the balance's 44 px hit area. */
     .pan-toggle {
       min-height: 44px;
     }
@@ -2033,9 +2154,15 @@
       height: 44px;
       min-height: 44px;
     }
+    .vbtn {
+      min-width: 44px;
+      min-height: 44px;
+      justify-content: center;
+    }
     .pan-slider::-webkit-slider-thumb {
       width: 24px;
       height: 24px;
+      margin-top: -9px;
     }
     .pan-slider::-moz-range-thumb {
       width: 24px;
@@ -2043,7 +2170,7 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .lvl-fill {
+    .fader-level {
       transition: none;
     }
   }

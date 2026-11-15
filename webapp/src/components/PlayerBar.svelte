@@ -92,6 +92,7 @@
     ? Math.min(100, Math.max(progress, ($buffered / $player.duration) * 100))
     : 0;
   $: repeatIconName = $player.repeat === "one" ? "repeat1" : "repeat";
+  $: volPct = Math.round(($player.muted ? 0 : $player.volume) * 100);
   $: chapterList = $current?.podcast
     ? $chaptersByEpisode[String($current.id || "")]?.chapters || []
     : [];
@@ -187,17 +188,22 @@
     <button class="sm vol-ic" on:click={() => player.toggleMute()} aria-label={$player.muted || $player.volume === 0 ? "Rétablir le son" : "Couper le son"}>
       <Icon name={$player.muted || $player.volume === 0 ? "mute" : "volume"} size={18} />
     </button>
-    <input
-      class="vol"
-      type="range"
-      min="0"
-      max="1"
-      step="0.01"
-      value={$player.muted ? 0 : $player.volume}
-      on:input={(e) => player.setVolume(+e.target.value)}
-      aria-label="Volume"
-      style={`--p:${($player.muted ? 0 : $player.volume) * 100}%`}
-    />
+    <div class="vol-wrap" style={`--p:${($player.muted ? 0 : $player.volume).toFixed(3)}`}>
+      <span class="vol-track" aria-hidden="true"><span class="vol-fill"></span></span>
+      <span class="vol-thumb" aria-hidden="true"></span>
+      <span class="vol-val" aria-hidden="true">{volPct} %</span>
+      <input
+        class="vol"
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={$player.muted ? 0 : $player.volume}
+        on:input={(e) => player.setVolume(+e.target.value)}
+        aria-label="Volume"
+        aria-valuetext={`${volPct} %`}
+      />
+    </div>
     {#if canQueue}
       <button class="sm" on:click={trackMenu} title="Plus d'options" aria-label="Plus d'options"><Icon name="more" size={18} /></button>
     {/if}
@@ -405,8 +411,94 @@
       var(--ln) var(--b, 0%)
     );
   }
-  .vol {
-    background: linear-gradient(90deg, var(--ac-mark) var(--p, 0%), var(--ln) var(--p, 0%));
+  /* The level: an 8 px track, a 22 px thumb whose centre rides the track's own
+     ends, a 44 px hit box, and the value under it — the same language as the
+     equaliser's faders, sized for the bar. The native input is invisible and
+     does the keyboard, the screen reader and the pointer mapping (its thumb is
+     22 px, so a click at 14 % of the TRACK is 14 %). */
+  .vol-wrap {
+    position: relative;
+    width: 84px;
+    height: 44px;
+    flex: none;
+  }
+  .vol-track {
+    position: absolute;
+    left: 11px;
+    right: 11px;
+    top: 20px;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--bg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 14%, transparent);
+    transform: translateY(-50%);
+    overflow: hidden;
+  }
+  .vol-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(var(--p, 0) * 100%);
+    border-radius: 4px;
+    background: var(--ac-mark);
+  }
+  .vol-thumb {
+    position: absolute;
+    left: calc(11px + (100% - 22px) * var(--p, 0));
+    top: 20px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--tx);
+    box-shadow:
+      0 0 0 2px var(--s1),
+      0 1px 3px rgba(0, 0, 0, 0.35);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .vol-val {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    color: var(--dim);
+    pointer-events: none;
+  }
+  input.vol {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    border-radius: 0;
+    background: none;
+    flex: none;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .vol-wrap input.vol::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .vol-wrap input.vol::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .vol-wrap:has(input.vol:focus-visible) .vol-thumb {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
   }
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -421,10 +513,6 @@
     border: none;
     border-radius: 50%;
     background: var(--tx);
-  }
-  input.vol {
-    width: 84px;
-    flex: none;
   }
 
   /* right: the room's controls */
@@ -461,12 +549,12 @@
     .extra {
       gap: 2px;
     }
-    input.vol {
+    .vol-wrap {
       width: 72px;
     }
   }
   @media (max-width: 1180px) {
-    input.vol {
+    .vol-wrap {
       display: none;
     }
   }

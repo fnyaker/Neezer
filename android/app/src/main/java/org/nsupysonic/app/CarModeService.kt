@@ -39,10 +39,13 @@ import kotlin.math.abs
  * app is in front — that is exactly the use Android has no narrower type for;
  * the two permission-guarded bits are added only while their grant exists.
  *
- * Auto-start is deliberately narrow: triggers on, overlay granted, the
- * configured server present, notifications usable. A quick-settings tile or
- * the settings screen starts it manually even when those are missing; the
- * overlay then explains what permission is blocking it.
+ * It exists only while the mode is really on: [CarWatch] starts it when a
+ * trigger sees the car (a navigation app in front, the configured Bluetooth
+ * sink), and the first drive state that says the car is gone stops it — no
+ * service, no notification, when nothing is happening. A quick-settings tile
+ * or the settings screen starts it by hand even when no trigger fires; that
+ * manual mode lives until the person stops it. The overlay then explains what
+ * permission is blocking it.
  */
 class CarModeService : Service(), CarHost {
 
@@ -89,7 +92,7 @@ class CarModeService : Service(), CarHost {
             val intent = Intent(context, CarModeService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_MANUAL, true)
-            if (startForeground(context, intent)) return
+            if (startForeground(context, intent, notifyBlocked = true)) return
             // A manual start from the tile/activity is normally allowed; if an
             // OEM refused it anyway, the notification is the explicit door.
         }
@@ -104,10 +107,15 @@ class CarModeService : Service(), CarHost {
          * this app relies on are the BOOT_COMPLETED / MY_PACKAGE_REPLACED
          * broadcasts and the SYSTEM_ALERT_WINDOW grant it already requires. If
          * an OEM refuses anyway, a plain `startService` is tried (allowed for
-         * the lifetime of a broadcast receiver) and the notification is the
-         * last, explicit fallback.
+         * the lifetime of a broadcast receiver) and, for a start the person
+         * asked for, the notification is the last, explicit fallback — an
+         * automatic one is simply retried by [CarWatch] later.
          */
-        private fun startForeground(context: Context, intent: Intent): Boolean {
+        private fun startForeground(
+            context: Context,
+            intent: Intent,
+            notifyBlocked: Boolean,
+        ): Boolean {
             return try {
                 ContextCompat.startForegroundService(context, intent)
                 true
@@ -115,15 +123,17 @@ class CarModeService : Service(), CarHost {
                 // Android 12+ throws ForegroundServiceStartNotAllowedException
                 // for a start from the background; Android 14 adds the
                 // while-in-use SecurityException for a location/microphone
-                // type. Both are expected here and the notification is the
-                // explicit way back.
+                // type. Both are expected here.
                 val retryable = isBackgroundStartRestriction(e) || e is SecurityException
                 val plain = if (retryable) {
                     try {
                         context.startService(
                             Intent(context, CarModeService::class.java)
                                 .setAction(ACTION_START)
-                                .putExtra(EXTRA_MANUAL, false)
+                                .putExtra(
+                                    EXTRA_MANUAL,
+                                    intent.getBooleanExtra(EXTRA_MANUAL, false)
+                                )
                         )
                         true
                     } catch (_: Exception) {
@@ -132,7 +142,7 @@ class CarModeService : Service(), CarHost {
                 } else {
                     false
                 }
-                if (!plain) notifyStartBlocked(context)
+                if (!plain && notifyBlocked) notifyStartBlocked(context)
                 plain
             }
         }
@@ -157,9 +167,9 @@ class CarModeService : Service(), CarHost {
         }
 
         /**
-         * The OS refused a background start: post the one notification the
-         * person can tap to start the mode (a notification action is an
-         * allowed foreground start), instead of a crash or a silent nothing.
+         * The OS refused a start the person asked for: post the one
+         * notification they can tap to start the mode (a notification action is
+         * an allowed foreground start), instead of a crash or a silent nothing.
          */
         private fun notifyStartBlocked(context: Context) {
             try {
@@ -212,16 +222,20 @@ class CarModeService : Service(), CarHost {
          * card and suppressed it; this clears the suppression through the one
          * ACTION_REFRESH path, so returning to a navigation app reattaches
          * exactly once — including when the trigger had not seen a new event
-         * (coming back inside the grace).
+         * (coming back inside the grace). With no service alive nothing draws,
+         * so the watch is armed for the navigation app's return instead.
          */
         fun settingsClosed(context: Context) {
-            if (!running) return
+            if (!running) {
+                CarWatch.watch(context)
+                return
+            }
             try {
                 context.startService(
                     Intent(context, CarModeService::class.java).setAction(ACTION_REFRESH)
                 )
             } catch (_: Exception) {
-                // The service died meanwhile: nothing is drawing.
+                CarWatch.watch(context)
             }
         }
 
@@ -230,6 +244,7 @@ class CarModeService : Service(), CarHost {
                 context.stopService(Intent(context, CarModeService::class.java))
             } catch (_: Exception) {
             }
+            CarWatch.disarm(context)
         }
 
         /**
@@ -297,43 +312,48 @@ class CarModeService : Service(), CarHost {
         }
 
         /**
-         * Start only when the person's own settings say the mode has something
-         * to watch. Returns false without starting anything (no zombie
-         * notification) when a trigger is off, the overlay is not granted, the
-         * server is not configured, or notifications would hide the one way to
-         * stop it.
+         * The app came back to the person (MainActivity.onResume) or a settings
+         * screen closed: arm the watch and start the mode only if a trigger
+         * already wants it. Idempotent, and it re-reads triggers and
+         * permissions after a dialog.
          */
         fun startIfEnabled(context: Context): Boolean {
+            CarWatch.watch(context)
+            return running
+        }
+
+        /** Start because a trigger saw the car: no manual card, no dismissal. */
+        internal fun detected(context: Context): Boolean {
             if (running) {
-                // Re-apply permissions/settings changed while the service was
-                // up (returning from the car settings screen, a permission
-                // grant, a trigger switch).
-                try {
-                    context.startService(
-                        Intent(context, CarModeService::class.java).setAction(ACTION_REFRESH)
-                    )
-                } catch (_: Exception) {
-                }
+                refresh(context)
                 return true
             }
             if (!autoStartAllowed(context)) return false
             val intent = Intent(context, CarModeService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_MANUAL, false)
-            return startForeground(context, intent)
+            return startForeground(context, intent, notifyBlocked = false)
         }
 
-        private fun autoStartAllowed(context: Context): Boolean {
+        /** Re-read the triggers in a service that is already up. */
+        internal fun refresh(context: Context) {
+            try {
+                context.startService(
+                    Intent(context, CarModeService::class.java).setAction(ACTION_REFRESH)
+                )
+            } catch (_: Exception) {
+            }
+        }
+
+        internal fun autoStartAllowed(context: Context): Boolean {
             if (!Prefs(context).configured) return false
             val car = CarPrefs(context)
             if (!car.gpsTrigger && !car.bluetoothTrigger) return false
             if (!CarPermissions.hasOverlay(context)) return false
-            // A GPS trigger without usage access can never fire. Bluetooth may
-            // still be the reason the person is here, so only refuse when it is
-            // the only configured trigger.
-            if (car.gpsTrigger && !CarPermissions.hasUsageStats(context) &&
-                !car.bluetoothTrigger
-            ) return false
+            // A GPS trigger that cannot see anything (no usage access, no app
+            // watched) never fires. Bluetooth may still be the reason the
+            // person is here, so only refuse when it is the only trigger left.
+            if (!car.gpsWatching && !car.bluetoothTrigger) return false
             // A foreground service whose notification is hidden has no visible
             // "Arrêter"; the tile remains, but auto-starting into that state is
             // not the person's choice.
@@ -490,6 +510,10 @@ class CarModeService : Service(), CarHost {
                 // startForeground even when the first thing it does is stop.
                 if (!foregrounded) goForeground()
                 stopEverything()
+                // "Arrêter" is the person's own answer: nothing may bring the
+                // mode back until a new event of theirs (opening the app, the
+                // radio connecting, the phone booting).
+                CarWatch.disarm(this)
                 return START_NOT_STICKY
             }
             ACTION_OPEN_SETTINGS -> {
@@ -541,7 +565,7 @@ class CarModeService : Service(), CarHost {
                 return START_STICKY
             }
             else -> {
-                manual = intent.getBooleanExtra(EXTRA_MANUAL, true)
+                manual = manual || intent.getBooleanExtra(EXTRA_MANUAL, false)
                 dismissed = false
                 suppressOverlay = false
                 if (!goForeground()) {
@@ -889,6 +913,17 @@ class CarModeService : Service(), CarHost {
         }
         if (overlayAttached) renderOverlay()
         updateNotification()
+        if (CarLifecycle.endsWithTheDrive(
+                decided = state.decided,
+                visible = state.visible,
+                attached = overlayAttached,
+                manual = manual,
+                suppressed = suppressOverlay,
+            )
+        ) {
+            stopEverything()
+            CarWatch.rearm(this)
+        }
     }
 
     private fun onPlayerState(state: PlayerService.State) {
@@ -1378,10 +1413,12 @@ class CarModeService : Service(), CarHost {
         // The WebView (and with it the queue) went with the task; an overlay
         // over the map with a dead player is worse than no overlay.
         stopEverything()
+        CarWatch.disarm(this)
         super.onTaskRemoved(rootIntent)
     }
 
     private fun stopEverything() {
+        running = false
         manual = false
         triggerVisible = false
         dismissed = true

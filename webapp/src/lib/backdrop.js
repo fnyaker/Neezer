@@ -23,9 +23,10 @@ import { logInfo } from "./log.js";
 
 // URLs are long and noisy; the tail is the part that identifies the art.
 const tag = (u) => (u ? String(u).slice(-44) : "(none)");
+const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
 export function createBackdrop({
-  fadeMs = 420, // must match the layers' in:fade duration
+  fadeMs = 720, // must outlast the layers' CSS fade (see DesktopNowPlaying / MobileNowPlaying)
   timeoutMs = 7000, // an image request can hang forever with no error
   retries = 2,
 } = {}) {
@@ -65,20 +66,32 @@ export function createBackdrop({
 
   function pushLayer(src, url) {
     const id = ++seq;
-    // Keep at most ONE layer under the incoming one — that's all that shows
-    // through while the new art fades in. The stack used to grow until 420ms of
-    // quiet finally arrived, so skipping through a dozen tracks left a dozen
-    // full-screen `blur(60px)` layers composited on top of each other, which is
-    // enough on its own to drag the whole view to a crawl.
-    layers = [...layers.slice(-1), { id, src, url }];
+    // The layers under the incoming one stay until it is opaque (a layer
+    // dropped mid-fade is the dark ground showing through); the cap bounds a
+    // burst of skips.
+    layers = [...layers.slice(-7), { id, src, url, at: now() }];
     set(layers);
     logInfo("bg", `painted ${tag(url)}`);
-    // Drop the covered-up layer once the fade-in has finished.
+    arm();
+  }
+
+  function prune() {
+    dropTimer = null;
+    const t = now();
+    let dropped = false;
+    while (layers.length > 1 && layers[1].at + fadeMs <= t) {
+      layers = layers.slice(1);
+      dropped = true;
+    }
+    if (dropped) set(layers);
+    arm();
+  }
+
+  function arm() {
     clearTimeout(dropTimer);
-    dropTimer = setTimeout(() => {
-      layers = layers.filter((l) => l.id === id);
-      set(layers);
-    }, fadeMs);
+    dropTimer = null;
+    if (layers.length < 2) return;
+    dropTimer = setTimeout(prune, Math.max(0, layers[1].at + fadeMs - now()) + 1);
   }
 
   /**

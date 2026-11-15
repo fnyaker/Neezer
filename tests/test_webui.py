@@ -11,6 +11,7 @@ import struct
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest import mock
 
 from neezer import webui as _webui
@@ -160,6 +161,16 @@ class MockGW:
         self.gain_batches = getattr(self, "gain_batches", [])
         self.gain_batches.append([str(i) for i in sng_ids])
         return [raw_track(i, f"T{i}") for i in sng_ids if str(i) != "999"]
+
+
+def apk_zip(marker: bytes = b""):
+    """A release APK as Android publishes one: a zip whose AndroidManifest.xml
+    is BINARY XML (the real header) and big enough to be a build at all."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr("AndroidManifest.xml", b"\x03\x00\x08\x00" + b"\x00" * 60)
+        archive.writestr("classes.dex", marker + b"\x00" * (64 * 1024))
+    return buf.getvalue()
 
 
 def api_track(i=1):
@@ -2420,9 +2431,6 @@ class WebUITestCase(unittest.TestCase):
         self.assertTrue(body["android"]["url"].startswith("https://"))
 
     def test_android_apk(self):
-        import zipfile
-        from unittest import mock
-
         from neezer.webui import androidapk
 
         cfg = self.app.config["WEBAPP"]
@@ -2435,14 +2443,17 @@ class WebUITestCase(unittest.TestCase):
         self.assertFalse(self.client.get("/api/version").get_json()["android"]["apk"])
 
         apk = os.path.join(cfg["cache_dir"], "t.apk")
-        with zipfile.ZipFile(apk, "w") as z:
-            z.writestr("AndroidManifest.xml", b"x")
+        with open(apk, "wb") as fh:
+            fh.write(apk_zip())
         with open(apk, "rb") as fh:
             body = fh.read()
 
         class Resp:
-            def __init__(self, url, data, code=200):
+            def __init__(self, url, data, code=200, length=None):
                 self.url, self._data, self.status_code = url, data, code
+                self.headers = {
+                    "Content-Length": str(len(data) if length is None else length)
+                }
 
             def __enter__(self):
                 return self
@@ -2528,6 +2539,15 @@ class WebUITestCase(unittest.TestCase):
                 self.assertEqual(rv.data, body)
                 rv.close()
                 get.assert_not_called()
+            # …but a file that is not an APK is refused, never served.
+            with open(apk, "wb") as fh:
+                fh.write(b"PK\x03\x04 pas une application")
+            with mock.patch.object(androidapk.requests, "get") as get:
+                rv = self.client.get("/api/android/apk")
+                self.assertEqual(rv.status_code, 502)
+                self.assertIn("APK", rv.get_json()["error"])
+                rv.close()
+                get.assert_not_called()
         finally:
             androidapk._apk_jobs.clear()
             cfg["android_version"] = None
@@ -2535,26 +2555,177 @@ class WebUITestCase(unittest.TestCase):
             cfg["android_apk"] = None
             os.remove(apk)
 
+    def test_a_corrupt_cached_apk_is_fetched_again(self):
+        """The reported bug: a file already in the cache was served for ever,
+        whatever it contained, so a partial or corrupted download reached the
+        phone and the app answered "Le fichier reçu n'est pas une application
+        valide". A cache entry is checked before every serve; a bad one is
+        dropped and fetched again."""
+        from neezer.webui import androidapk
+
+        cfg = self.app.config["WEBAPP"]
+        self._login()
+        cfg["android_version"] = "v1.4.0"
+        cfg["android_url"] = None
+        cfg["android_apk"] = None
+        dest = androidapk._cache_path(cfg, "v1.4.0")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(apk_zip()[:20000])
+        body = apk_zip(b"fresh")
+
+        class Resp:
+            def __init__(self, data):
+                self.url = "https://objects.githubusercontent.com/x"
+                self.status_code = 200
+                self.headers = {"Content-Length": str(len(data))}
+                self._data = data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                yield self._data
+
+        androidapk._apk_jobs.clear()
+        try:
+            with mock.patch.object(
+                androidapk.requests, "get", return_value=Resp(body)
+            ) as get:
+                rv = self.client.get("/api/android/apk")
+                self.assertEqual(rv.status_code, 202)
+                rv.close()
+                androidapk.apk_job(cfg)["thread"].join(10)
+                served = self.client.get("/api/android/apk")
+                self.assertEqual(served.status_code, 200)
+                self.assertEqual(served.data, body)
+                served.close()
+                self.assertEqual(get.call_count, 1)
+        finally:
+            androidapk._apk_jobs.clear()
+            cfg["android_version"] = None
+            cfg["android_apk"] = None
+            if os.path.exists(dest):
+                os.remove(dest)
+
+    def test_a_truncated_download_is_never_published(self):
+        """A body short of what it announced, or half a zip with the length it
+        claims, stays in `.part` and disappears: the app is told the fetch
+        failed instead of receiving a broken APK."""
+        from neezer.webui import androidapk
+
+        cfg = self.app.config["WEBAPP"]
+        self._login()
+        cfg["android_version"] = "v1.4.0"
+        cfg["android_url"] = None
+        cfg["android_apk"] = None
+        body = apk_zip()
+        folder = os.path.dirname(androidapk._cache_path(cfg, "v1.4.0"))
+        dest = androidapk._cache_path(cfg, "v1.4.0")
+
+        class Resp:
+            def __init__(self, data, length):
+                self.url = "https://objects.githubusercontent.com/x"
+                self.status_code = 200
+                self.headers = {"Content-Length": str(length)}
+                self._data = data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                yield self._data
+
+        def fetched():
+            rv = self.client.get("/api/android/apk")
+            if rv.status_code == 202:
+                androidapk.apk_job(cfg)["thread"].join(10)
+                rv.close()
+                rv = self.client.get("/api/android/apk")
+            return rv
+
+        try:
+            for data, length in ((body, len(body) + 4096), (body[: len(body) // 2], None)):
+                androidapk._apk_jobs.clear()
+                with mock.patch.object(
+                    androidapk.requests,
+                    "get",
+                    return_value=Resp(data, len(data) if length is None else length),
+                ):
+                    rv = fetched()
+                    self.assertEqual(rv.status_code, 502)
+                    self.assertEqual(rv.get_json()["state"], "failed")
+                    rv.close()
+                self.assertFalse(os.path.exists(dest), "a broken download was published")
+                self.assertEqual(
+                    [n for n in os.listdir(folder) if n.endswith(".part")], []
+                )
+        finally:
+            androidapk._apk_jobs.clear()
+            cfg["android_version"] = None
+
+    def test_a_zip_without_android_manifest_is_refused(self):
+        """A zip is not an APK: the manifest must be there, and be Android's
+        binary XML. A GitHub page zipped up (or a truncated manifest) never
+        reaches the phone."""
+        from neezer.webui import androidapk
+
+        cache = self.app.config["WEBAPP"]["cache_dir"]
+        for payload in (b"", b"x" * 64):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as archive:
+                archive.writestr("AndroidManifest.xml", payload)
+                archive.writestr("classes.dex", b"\x00" * (64 * 1024))
+            path = os.path.join(cache, "plain.apk")
+            with open(path, "wb") as fh:
+                fh.write(buf.getvalue())
+            try:
+                self.assertIsNotNone(androidapk._apk_problem(path))
+            finally:
+                os.remove(path)
+        path = os.path.join(cache, "no-manifest.apk")
+        with open(path, "wb") as fh:
+            fh.write(b"PK\x03\x04" + b"\x00" * (64 * 1024))
+        try:
+            self.assertIsNotNone(androidapk._apk_problem(path))
+            self.assertIsNotNone(androidapk._apk_problem(path, deep=True))
+        finally:
+            os.remove(path)
+        path = os.path.join(cache, "real.apk")
+        with open(path, "wb") as fh:
+            fh.write(apk_zip())
+        try:
+            self.assertIsNone(androidapk._apk_problem(path))
+            self.assertIsNone(androidapk._apk_problem(path, deep=True))
+        finally:
+            os.remove(path)
+
     def test_two_devices_share_one_apk_download(self):
         """The first tap starts the fetch and answers at once; a second device
         arriving during it is told to come back instead of queueing behind a
         global lock, and the file is served as soon as it is there."""
-        import zipfile
-
         from neezer.webui import androidapk
 
         cfg = self.app.config["WEBAPP"]
-        apk = os.path.join(cfg["cache_dir"], "t.apk")
-        with zipfile.ZipFile(apk, "w") as z:
-            z.writestr("AndroidManifest.xml", b"x")
-        with open(apk, "rb") as fh:
-            body = fh.read()
-        os.remove(apk)
+        body = apk_zip()
 
         class SlowResp:
             def __init__(self, url, data):
                 self.url, self._data = url, data
                 self.status_code = 200
+                self.headers = {"Content-Length": str(len(data))}
 
             def __enter__(self):
                 return self
@@ -2607,12 +2778,10 @@ class WebUITestCase(unittest.TestCase):
             androidapk._apk_jobs.clear()
             cfg["android_version"] = None
             cfg["android_url"] = None
-            if os.path.exists(apk):
-                os.remove(apk)
 
-    def test_android_apk_falls_back_to_the_pre_rebrand_asset(self):
-        """A release published before the rename only has nsupysonic.apk; a 404
-        on the new name must offer that one instead of a dead update link."""
+    def test_android_apk_does_not_retry_the_pre_rebrand_name(self):
+        """The workflow publishes `neezer.apk` only; a 404 on it is a failure,
+        never a second request under the old `nsupysonic.apk` name."""
         from neezer.webui import androidapk
 
         cache = tempfile.mkdtemp()
@@ -2626,23 +2795,18 @@ class WebUITestCase(unittest.TestCase):
 
         def fake(url, dest):
             calls.append(url)
-            if url.endswith("/neezer.apk"):
-                response = androidapk.requests.Response()
-                response.status_code = 404
-                raise androidapk.requests.HTTPError("404", response=response)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with open(dest, "wb") as fh:
-                fh.write(b"PK\x03\x04")
+            response = androidapk.requests.Response()
+            response.status_code = 404
+            raise androidapk.requests.HTTPError("404", response=response)
 
         try:
             with mock.patch.object(androidapk, "_download", side_effect=fake):
-                path = androidapk.fetch_apk(cfg)
-            self.assertTrue(os.path.isfile(path))
+                with self.assertRaises(androidapk.requests.HTTPError):
+                    androidapk.fetch_apk(cfg)
             self.assertEqual(
                 calls,
                 [
                     "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/neezer.apk",
-                    "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/nsupysonic.apk",
                 ],
             )
         finally:

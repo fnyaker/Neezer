@@ -74,9 +74,11 @@ class MainActivity : AppCompatActivity() {
          * and says `bg` in every state, 9 the car mode: carAvailable /
          * openCarSettings / carPin, and the overlay's launch hook), 10 the app
          * can hold a long list, repeat one/all, ask the page for more when it
-         * runs low (`__nsNeedNext`) and say when the list is exhausted.
+         * runs low (`__nsNeedNext`) and say when the list is exhausted, 11 its
+         * player answers a state probe (op `state`) and can fold the sound to
+         * mono and pan it (the `mono` / `balance` of op `fx`).
          */
-        private const val BRIDGE_VERSION = 10
+        private const val BRIDGE_VERSION = 11
         /** Upper bound on one analyser command (the family table is ~16 kB). */
         private const val MAX_ANALYSIS_CMD = 64 * 1024
         /** Upper bound on one piece of a download moved into the app (base64 chars). */
@@ -616,6 +618,10 @@ class MainActivity : AppCompatActivity() {
         // app owns the sound, keep the renderer out of the "waived when not
         // visible" bucket so Android is far less likely to freeze or kill it.
         setRendererWanted(pendingState?.playing == true)
+        // Leaving Neezer for the map is when the car watch must be armed:
+        // `onResume` alone let the ladder be spent inside the app. `watch`
+        // refreshes a running service instead of starting a second one.
+        if (prefs.configured) CarModeService.startIfEnabled(this)
     }
 
     /**

@@ -74,6 +74,11 @@ cd webapp && node test/ui/run.mjs                    # the lists' main-thread co
                                                      # open the favourites, type into them, sort, open a 4000-track playlist
 cd webapp && node test/queue/run.mjs [--phone]       # the queue's editing in headless Chromium on a 4000-track queue: drag a row (mouse, or real touch
                                                      # events), drag to the far end with the list scrolling under the finger, the keyboard, clear
+cd webapp && node test/theme/run.mjs                 # the sleeve change is a 600 ms walk, not a cut: accent at 60 Hz, no
+                                                     # uncovered ground on one or two skips, the podcast header tint, reduced-motion;
+                                                     # DIST=<dir> serves a build made elsewhere so it never replaces neezer/webui/dist
+cd webapp && node test/volume/run.mjs                # the player bar's volume: 8 px track, 22 px thumb centred (0.00 px), 44 px
+                                                     # target, 14 % click -> 0.14, keyboard/mute, 1920/1440/1280/1181/641/390
 cd webapp && node test/mobile/run.mjs                # the phone shell at 360/390/639/640/641 px: no sideways overflow, tab bar 64 + mini
                                                      # player 64 floating 8 above it, the library tab, the full-screen player, the theme kept
                                                      # (needs npm run build; PLAYWRIGHT=/path/to/playwright-core CHROMIUM=/usr/bin/chromium)
@@ -200,6 +205,18 @@ every rule's URLs against a fresh werkzeug compilation). CI runs seven workflows
   encoder the app drives BY NAME and writes-then-reads every format it serves; bump the pin (it is
   the multi-arch index digest) and those two lists are what to re-check.
 - `network.yaml` — `tests/net` (real third-party services), weekly and on demand.
-- `android.yaml` — the native app APK, uploaded as a run artifact / attached to `v*` releases.
+- `android.yaml` — the native app APK, uploaded as a run artifact / attached to `v*` releases as
+  the one asset `neezer.apk` (a release that carried the pre-rebrand `nsupysonic.apk` fails the
+  job). `testReleaseUnitTest` and **`lintDebug`** both run before the build: `assembleRelease`
+  only runs `lintVitalRelease`, which ignores an error-level check such as AndroidX's
+  `UnsafeOptInUsageError` (a missing `@OptIn(UnstableApi::class)` on a declaration using a
+  `@UnstableApi` symbol compiles and ships), so the job asks for the full debug lint explicitly.
+  The job then refuses to publish an APK it cannot vouch for: `unzip -t` (a truncated file is not
+  an APK), `apksigner verify --min-sdk-version 23` must report the **v1, v2 and v3** schemes —
+  without `--min-sdk-version` apksigner skips the JAR check whenever the APK's own minSdk is 24 or
+  more and reports `v1 scheme: false` even on a v1-signed file —, `zipalign -c -p 4` (an unaligned
+  stored entry is the other way an APK opens as "not a valid application"), `aapt2 dump badging`
+  must say `org.nsupysonic.app` with a versionCode above 0, and after the upload the asset is
+  downloaded again and `cmp`-ed against the built file.
 - `release.yaml` — on a `v*` tag, attaches `docker-compose.yml` (image pinned to the tag's version, since the checked-in file follows `:latest`) and `.env.example` to the GitHub release; `android.yaml` attaches the APK to the same one, and whichever runs first creates the release.
 - `security.yaml` — advisory scanners side by side (CodeQL, Semgrep, Bandit, Trivy over every lockfile + Dockerfile, Gitleaks over the history); each job is `continue-on-error`, so a finding never gates a merge. SARIF goes to the Security tab.

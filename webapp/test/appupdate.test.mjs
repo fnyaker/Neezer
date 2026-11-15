@@ -58,6 +58,23 @@ test("a signature mismatch says to reinstall and sends to the download page", ()
   assert.equal(n.actionLabel, "Télécharger");
 });
 
+test("each native failure says what happened, not one catch-all", () => {
+  const reason = (r) => A.updateNotice({ state: "error", reason: r }, "v1.4.0", "https://g/r", () => {});
+  const preparing = reason("preparing");
+  const truncated = reason("truncated");
+  const archive = reason("archive");
+  assert.match(preparing.message, /prépare la mise à jour/);
+  assert.match(truncated.message, /incomplet/);
+  assert.match(archive.message, /corrompu/);
+  for (const n of [preparing, truncated, archive]) {
+    assert.equal(n.kind, "warn");
+    assert.equal(n.actionLabel, "Réessayer");
+  }
+  const unknown = reason("?");
+  assert.match(unknown.message, /échoué/);
+  assert.notEqual(unknown.message, truncated.message);
+});
+
 test("an older APK, or a server with no APK to serve, keeps the download link", async () => {
   for (const [extra, apk] of [[{}, true], [{ bridgeVersion: () => 2, installUpdate() {} }, false]]) {
     S.notices.dismiss("android-update");

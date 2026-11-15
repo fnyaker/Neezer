@@ -238,28 +238,56 @@ test("a bypassed, flat or cut-only equalizer never warns, whatever the master", 
 test("a warning stays until the next setting, and keeps the highest value it saw", () => {
   const hold = createRiskHold();
   assert.equal(hold.current, null);
-  assert.equal(hold.fold("ok", 0, 0), null);
-  assert.deepEqual(hold.fold("warn", 0.8, 0.5), { tone: "warn", reduction: 0.8, margin: 0.5 });
+  assert.equal(hold.fold("ok", 0), null);
+  assert.deepEqual(hold.fold("warn", 0.8), { tone: "warn", reduction: 0.8, fromChange: false });
   assert.deepEqual(
-    hold.fold("ok", 0, 0),
-    { tone: "warn", reduction: 0.8, margin: 0.5 },
+    hold.fold("ok", 0),
+    { tone: "warn", reduction: 0.8, fromChange: false },
     "a peak that fell does not take it away"
   );
-  assert.deepEqual(hold.fold("warn", 2.1, 1.4), { tone: "warn", reduction: 2.1, margin: 1.4 });
+  assert.deepEqual(hold.fold("warn", 2.1), { tone: "warn", reduction: 2.1, fromChange: false });
   assert.deepEqual(
-    hold.fold("warn", 1.2, 0.9),
-    { tone: "warn", reduction: 2.1, margin: 1.4 },
+    hold.fold("warn", 1.2),
+    { tone: "warn", reduction: 2.1, fromChange: false },
     "the highest value holds"
   );
-  assert.deepEqual(hold.fold("clip", 4.2, 3.0), { tone: "clip", reduction: 4.2, margin: 3.0 });
-  assert.equal(hold.fold("warn", 1, 0.5).tone, "clip", "a clip does not step back down");
+  assert.deepEqual(hold.fold("clip", 4.2), { tone: "clip", reduction: 4.2, fromChange: false });
+  assert.equal(hold.fold("warn", 1).tone, "clip", "a clip does not step back down");
   hold.reset();
   assert.equal(hold.current, null);
   assert.deepEqual(
-    hold.fold("warn", 1.1, 0.6),
-    { tone: "warn", reduction: 1.1, margin: 0.6 },
+    hold.fold("warn", 1.1),
+    { tone: "warn", reduction: 1.1, fromChange: false },
     "a new episode starts from its own values"
   );
+});
+
+test("the warning measures what the setting adds, not what the master already does", () => {
+  const hold = createRiskHold();
+  hold.begin({ reduction: 6.4, peak: 7.3 }, 1000, "band:1");
+  assert.deepEqual(hold.net(6.4, 7.3), { reduction: 0, peak: 0, fromChange: true });
+  assert.equal(hold.net(7.3, 8.2).reduction.toFixed(1), "0.9");
+  assert.equal(hold.fold("ok", 0.9, true), null, "under 2 dB the setting is not blamed");
+  hold.begin({ reduction: 7.2, peak: 8.2 }, 2000, "band:1");
+  assert.equal(hold.net(13.2, 14.2).reduction.toFixed(1), "6.0");
+  const shown = hold.fold("clip", 6.0, true);
+  assert.deepEqual(shown, { tone: "clip", reduction: 6, fromChange: true });
+  assert.deepEqual(hold.fold("clip", 4.0, true), shown, "the highest value holds");
+
+  const drag = createRiskHold();
+  drag.begin({ reduction: 6.4, peak: 7.3 }, 0, "band:1");
+  drag.begin({ reduction: 7.3, peak: 8.2 }, 200, "band:1");
+  assert.equal(drag.baseline.reduction, 6.4, "the gesture keeps its reference");
+  drag.begin({ reduction: 7.3, peak: 8.2 }, 1200, "band:1");
+  assert.equal(drag.baseline.reduction, 7.3, "a new gesture measures from where the chain is now");
+  drag.begin({ reduction: 8.2, peak: 9.1 }, 1500, "bass");
+  assert.equal(drag.baseline.reduction, 8.2, "another control is its own episode");
+  drag.begin(null, 1600, "preset");
+  assert.equal(drag.baseline, null, "no reading yet: the raw value is the only one");
+  assert.deepEqual(drag.net(7.2, 8.2), { reduction: 7.2, peak: 8.2, fromChange: false });
+  const noPeak = createRiskHold();
+  noPeak.begin({ reduction: 5 }, 0, "band:1");
+  assert.deepEqual(noPeak.net(5, -6), { reduction: 0, peak: 0, fromChange: true });
 });
 
 test("the warning's numbers read in French, and the cut is a half-decibel step", () => {

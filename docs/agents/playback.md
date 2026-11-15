@@ -2,14 +2,21 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
-**A seek into a part not yet downloaded (first play).** A first play is generated as it is sent (live archive, or a transcode): no length,
-no ranges, so the browser cannot seek past what it has read — it fetches the URL again and starts from 0. `performSeek` therefore CHASES
-the target (the bar shows it, the sound goes on from where it is) and re-fetches ONCE, when `GET /api/stream/<id>/ready?q=` says the server
-has the FILE (`pollReady`, every second, up to 90 s; Opus: the transcode is in the cache) — the old blind reload after 8 s got another
-generated stream back, paused it and left silence until the 45 s cap snapped the bar back. What the established servers do: ExoPlayer's
-progressive docs need ranges and a length to seek; the OpenSubsonic `transcodeOffset` extension restarts the transcode at the position
-(`timeOffset`) instead — a later step if waiting for the file proves too long on a slow link (Deezer's FLAC is fetched at link speed, a few
-seconds on a LAN, tens on a mobile link). The app's player has its own held seek (android.md, bridge 7).
+**A seek is answered by the server, or explicitly deferred** (`lib/audio/seekplan.js`, `Player.svelte`,
+`neezer/webui/__init__.py`). A finished file (archived FLAC, cached Opus, upload, episode) answers a
+byte `Range` with 206; the player seeks it directly. A source that is on disk but has to be encoded
+answers `?start=<seconds>` with a 200 (`Accept-Ranges: none`, no length, `X-NS-Start`): the element
+starts at 0 = that offset, so the page must NOT set `currentTime` or use `el.duration`; the bar reads
+`offset + currentTime` and the track's own duration. `GET /api/stream/<id>/ready?q=` says which of the
+three it is — `{ready, ranges, bytes, cached, offset, streaming}` — and the page chooses: reload the
+bare URL and seek, reload with `start`, or keep the sound and poll (1 s, 1.5 s while `streaming`).
+`seekableAt` only accepts a range whose END is finite: Chromium reports `[0, Infinity]` for a generated
+stream, and treating that as a real range made every chase "land" without ever asking the server, so
+the seek restarted the stream from 0. A direct seek that comes back to the start is chased after 4 s.
+Measured: FLAC 80 % seek = 1 request, 930 836 B, TTFB 2.9 ms, Chromium lands at 240.24 s / 300;
+Opus `?start=240` = 1 116 423 B, TTFB 98 ms, exact sample (silence 1.000 s at `-ss 119`, none at
+`-ss 121`). The server contract is in [server.md](server.md); the native player's seek uses the same
+plan, and its own held path is in [android.md](android.md).
 
 **A transport action the person takes always wins.** Play, pause, next, previous and seek are applied
 at once, even while the player is recovering from a refused resume, switching source or chasing a
@@ -105,6 +112,17 @@ is a policy, `audio.output`, and in its default it is MEASURED rather than assum
   Auto uses the same machinery while a fault is being corrected.
 - **graph**: always processed, as before; a measured fault is only reported (a toast, the log).
 
+**The first track of a session is normalized like the next one** (`Player.svelte#loadTrackInner`,
+`graph.js#setElementGain`). `setTrackGain` used to write through `currentEl`, which is only set at the
+first `play()`, so the ReplayGain of track 1 was lost and only track 2 onward was normalized (measured
+in the probe: track 1 peak 0 vs +7.3 dBFS on track 2 with normalization high). Every handover now names
+its own element (`setElementGain(audio, gainFor(track))`, and the same in `moveSourceToFresh`,
+`switchQuality`, `handOverToFresh`, `adoptIncoming` and the late catch-ups); `graph.js` already keeps
+`pendingGain` for an element that is not wired yet and applies it before its first audible frame, on the
+graph node, on the direct path's volume and for the native element. No ramp is needed on the first
+track: the gain lands when the strip is built, at the head of playback. `test/nativegain.test.mjs` pins
+the equal volume of the first two elements and the trap that was removed.
+
 Leaving the graph needs a NEW element: the idle one is replaced at once, the playing one hands its
 track over to a fresh one at the position it has reached (seek at metadata and again at `canplay`,
 measured 3.78 s landed for 3.79 s expected), and where that cannot land (a live first-play stream
@@ -165,21 +183,49 @@ so it never warns however loud the master or hard the limiter works (`eqRisk`); 
 make the equalizer the cause. The bars are less trigger-happy than the first version: warn at +2 dBFS
 pre-limiter or 2 dB of limiter reduction, clip at +6/+6 (a finished master at 0 dBFS with 0.38 dB of
 reduction is normal). Once warned, the banner is an EPISODE (`createRiskHold`): it stays until the person
-changes the setting (band, preset, EQ switch, normalization, volume) while its reduction and margin keep
-the highest values seen, so a peak that falls back 40 ms later no longer makes it flash and vanish.
+changes the setting (band, preset, EQ switch, bass, normalization, volume) while its reduction keeps the
+highest value seen, so a peak that falls back 40 ms later no longer makes it flash and vanish.
 `test/eq/run.mjs` drives it on screen with a +16 dB curve over a full-scale 1 kHz square: it warns, is still
 there one second into the silence with the same 19.8 dB, and « Plat » clears it; the same master with a flat
 curve and normalization high never warns, and switching the equalizer off hides it at once.
 
+**The banner's number is a measurement with a baseline, never an estimate.** The raw limiter reduction
+includes the master's own level and the normalization: measured on a 60 Hz sine at −0.1 dBFS with
+normalization high and a quiet master's ReplayGain, the pre-limiter peak sits at +7.3 dBFS and the limiter
+already pulls 6.4 dB with a FLAT curve; raising the 62 Hz band by +1 dB takes it to 7.2 dB
+(`test/eq/run.mjs` case 4). Blaming the band for that 7.2 is the "9 dB for +1 dB" report, so each episode
+takes the reduction measured just before the change as its baseline and shows the max of the reduction
+ABOVE it: 0.9 dB for that +1 dB (below the 2 dB bar, so no banner at all), and 6.0 dB for a +9 dB band whose
+raw reduction is 13.2 dB — the button then offers `volumeCutDb(6.0)` = 6.0 dB, not the old peak-derived
+margin (`recommendedMargin`, which answered 8.5 dB on this bench and 9 dB on the reported hotter master for
+the +1 dB case, is gone and the engine no longer publishes it). A slider drag keeps the baseline of the
+gesture's first step (900 ms window), because a reading taken mid-drag already carries the earlier steps;
+with no reading yet, the raw reduction is the only honest value. The readout keeps showing the RAW reduction
+("Limiteur 7,2 dB"): it is the meter, the banner is the attribution. `test/eqpresets.test.mjs` pins the
+baseline, the gesture window and the monotonic max.
+
 **A volume change resets the warning's peak-hold after 160 ms**, not immediately: the analyser's 85 ms
 window still holds the pre-change signal, and a hold started inside it kept the old 9.7 dB reduction for the
-whole episode while the live peak had already fallen (seen in the bench). The player's volume is the media
+whole episode while the live peak had already fallen (seen in the bench). The volume change also starts a
+fresh episode with a new baseline, so lowering the level to 14 % (the +9 dB case above: 13.2 dB raw → 0)
+takes the banner away instead of leaving the old number standing. The player's volume is the media
 element's own and applies BEFORE its `MediaElementAudioSourceNode` (measured on Chromium: volume 0.5 halved
-the analyser peak), so the warning's "Réduire le volume" really does lower the pre-limiter peak — 9.2 dB →
-1.1 dB at the same instant in the bench — and the banner recomputes its own margin instead of claiming the
-old one. Presets: built-ins are code and refuse "Mettre à jour"; a user preset takes the ten bands and the
-bass lift only (not its EQ switch or normalization level), and update/delete ride in a toast with "Annuler"
-rather than a confirmation dialog (`test/eqpresets.test.mjs`).
+the analyser peak), so the warning's "Réduire le volume" really does lower the pre-limiter peak. Presets:
+built-ins are code and refuse "Mettre à jour"; a user preset takes the ten bands and the bass lift only (not
+its EQ switch or normalization level), and update/delete ride in a toast with "Annuler" rather than a
+confirmation dialog (`test/eqpresets.test.mjs`).
+
+**The ten faders are vertical at every width** (`AudioEffects.svelte`). The track is an 8 px groove inside
+a 44 px hit area, the 22 px thumb is drawn in CSS and placed on the value (not a native thumb whose travel
+and alignment differ by browser), the setting fills the groove from the bottom to the thumb with a 2 px tick
+at 0 dB, and the measured band level is the 30 % tint behind it (its own −60..0 dBFS scale, never read as a
+gain). At ≤640 px the ten faders are a 5×2 grid instead of one row (ten 44 px targets do not fit 390 px), so
+the phone and the desktop keep the same vertical metaphor. Measured in headless Chromium: thumb axis and
+value off by 0.00 px, fader 44×192 px (desktop) / 44×154 (phone), no horizontal overflow at 1280 or 390.
+The master volume is the same drawing horizontally: a 44 px row, an 8 px track inset by the 11 px knob
+radius, the fill inside it, and the same 0.00 px alignment; the bass, crossfade, trim and balance sliders
+share the 6 px track, the 20 px thumb (24 px on touch for the balance) and the 44 px hit area.
+`test/eq/run.mjs` measures the geometry at both widths.
 
 **THE APP CORE IS RUST TOO** (`webapp/appcore`, compiled to `src/lib/appcore/appcore.wasm`, reached
 through `lib/appcore/core.js`). The interface's own logic — not the DOM, the logic — where the

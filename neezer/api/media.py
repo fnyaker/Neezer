@@ -9,6 +9,7 @@
 import hashlib
 import json
 import logging
+import math
 import mediafile
 import mimetypes
 import os.path
@@ -206,6 +207,20 @@ def prepare_transcoding_cmdline(
     return ret
 
 
+def prepare_seek_cmdline(cmdline, offset):
+    """Insert ffmpeg's input seek into a configured command line, or None.
+
+    ``-ss`` only means "start reading here" before ``-i`` (after it, it decodes
+    and throws away everything up to the offset). A command line that names no
+    input cannot be seeked: the caller refuses the ``timeOffset`` rather than
+    answering the whole track from 0.
+    """
+    if not cmdline or "-i" not in cmdline:
+        return None
+    at = cmdline.index("-i")
+    return cmdline[:at] + ["-ss", f"{offset:.3f}"] + cmdline[at:]
+
+
 def _count_media_response(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -222,13 +237,27 @@ def _count_media_response(view):
     return wrapped
 
 
+def _cached_transcode(cache, key, mimetype):
+    """The cached transcode as a range-capable file, or None when it is not there."""
+    try:
+        return send_file(cache.get(key), mimetype=mimetype, conditional=True)
+    except CacheMiss:
+        return None
+
+
 @api_routing("/stream")
 @_count_media_response
 def stream_media():
     res = _resolve_stream_entity()
 
+    time_offset = 0.0
     if "timeOffset" in request.values:
-        raise UnsupportedParameter("timeOffset")
+        try:
+            time_offset = float(request.values["timeOffset"])
+        except (TypeError, ValueError):
+            time_offset = None
+        if time_offset is None or not math.isfinite(time_offset) or time_offset < 0:
+            raise GenericError("Invalid timeOffset")
     if "size" in request.values:
         raise UnsupportedParameter("size")
 
@@ -282,11 +311,10 @@ def stream_media():
         cache = current_app.transcode_cache
         cache_key = f"{res.id}-{dst_bitrate}.{dst_suffix}"
 
-        try:
-            response = send_file(
-                cache.get(cache_key), mimetype=dst_mimetype, conditional=True
-            )
-        except CacheMiss:
+        response = (
+            None if time_offset else _cached_transcode(cache, cache_key, dst_mimetype)
+        )
+        if response is None:
             transcoder = config.get(f"transcoder_{src_suffix}_{dst_suffix}")
             decoder = config.get("decoder_" + src_suffix) or config.get("decoder")
             encoder = config.get("encoder_" + dst_suffix) or config.get("encoder")
@@ -303,6 +331,11 @@ def stream_media():
                 prepare_transcoding_cmdline(x, res, src_suffix, dst_suffix, dst_bitrate)
                 for x in (transcoder, decoder, encoder)
             )
+            if time_offset:
+                transcoder = prepare_seek_cmdline(transcoder, time_offset)
+                decoder = prepare_seek_cmdline(decoder, time_offset)
+                if transcoder is None and decoder is None:
+                    raise UnsupportedParameter("timeOffset")
             try:
                 # stderr is sent to /dev/null: an unread, inherited stderr can
                 # fill its pipe buffer under a chatty transcoder and deadlock
@@ -327,7 +360,8 @@ def stream_media():
                 raise ServerError("Error while running the transcoding process")
 
             if estimateContentLength == "true":
-                estimate = dst_bitrate * 1000 * res.duration // 8
+                remaining = max(0, int(res.duration or 0) - int(time_offset))
+                estimate = dst_bitrate * 1000 * remaining // 8
             else:
                 estimate = None
 
@@ -370,23 +404,41 @@ def stream_media():
                         dec_proc.wait()
                     proc.stdout.close()
                     proc.wait()
-
-            resp_content = cache.set_generated(cache_key, handle_transcoding)
+                if proc.returncode != 0 or (
+                    dec_proc is not None and dec_proc.returncode != 0
+                ):
+                    # The cache publishes what a generator completed: a transcoder
+                    # that died halfway used to leave a truncated file cached for
+                    # good, which every later play then served as the whole track.
+                    logger.warning("Transcoding %s failed; nothing cached", res.id)
+                    raise ServerError("The transcoding process failed")
 
             logger.info(
                 "Transcoding track {0.id} for user {1.id}. Source: {2} at {0.bitrate}kbps. Dest: {3} at {4}kbps".format(
                     res, request.user, src_suffix, dst_suffix, dst_bitrate
                 )
             )
-            response = Response(resp_content, mimetype=dst_mimetype)
+            response = Response(
+                handle_transcoding()
+                if time_offset
+                else cache.set_generated(cache_key, handle_transcoding),
+                mimetype=dst_mimetype,
+            )
+            if time_offset:
+                response.headers["X-NS-Start"] = f"{time_offset:.3f}"
+            response.headers["Accept-Ranges"] = "none"
+            response.headers["Cache-Control"] = "no-store"
             if estimate is not None:
                 response.headers.add("Content-Length", estimate)
+    elif time_offset:
+        raise UnsupportedParameter("timeOffset")
     else:
         response = send_file(res.path, mimetype=dst_mimetype, conditional=True)
 
     # Play bookkeeping + album prefetch only apply to real Tracks; podcast
-    # episodes aren't part of the play-history / last_play FK model.
-    if isinstance(res, Track):
+    # episodes aren't part of the play-history / last_play FK model. A seek is
+    # not a new play and must not count twice.
+    if isinstance(res, Track) and not time_offset:
         Track.update(
             play_count=Track.play_count + 1,
             last_play=now(),

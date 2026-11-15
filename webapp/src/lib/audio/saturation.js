@@ -57,8 +57,6 @@
 //     risk: "ok" | "warn" | "clip", // the CHAIN's state; the screen ignores it
 //                           // when the EQ adds no gain (eqpresets.eqRisk)
 //     reductionDb: number,  // limiter gain reduction, >= 0
-//     marginDb: number,     // dB to pull back to release the limiter; 0
-//                           // while risk is "ok"
 //     bandsDb: number[10],  // per EQ band, dBFS, floored at -60, EQ order
 //     bands: number[10],    // the same, mapped 0..1 over [-60, 0] dB
 //     updatedAt: number,    // performance.now() of the reading, 0 before
@@ -120,10 +118,6 @@ export const WARN_PEAK_DB = 2;
 export const CLIP_PEAK_DB = 6;
 export const WARN_REDUCTION_DB = 2;
 export const CLIP_REDUCTION_DB = 6;
-// What `marginDb` pulls back to: the limiter's own threshold (-0.5 dBFS,
-// graph.js#limiterNode). Pulling the pre-limiter peak down to it releases the
-// limiter completely, which is the actionable answer for a boosted EQ.
-export const TARGET_PEAK_DB = -0.5;
 
 // 25 Hz: fast enough that a slider move answers under the eye, slow enough
 // that a 4096-point FFT costs nothing next to the visualizer's 60 Hz reads.
@@ -142,14 +136,6 @@ export function classifyRisk(peakDb, reductionDb = 0) {
 /** The gain reduction the limiter applied: how much lower the peak is now. */
 export function limiterReduction(prePeakDb, postPeakDb) {
   return Math.max(0, prePeakDb - postPeakDb);
-}
-
-/** How far to pull the chain back to reach TARGET_PEAK_DB (0 when safe). */
-export function recommendedMargin(risk, peakDb, reductionDb = 0) {
-  if (risk === "ok") return 0;
-  // The peak sets the target; a limiter already working hard sets a floor
-  // under it — pulling back by its own reduction is what releases it.
-  return Math.max(0, peakDb - TARGET_PEAK_DB, reductionDb);
 }
 
 // Band boundaries: the geometric midpoint between two neighbouring EQ
@@ -279,7 +265,6 @@ export function createSaturationMeter() {
         headroomDb: round1(-prePeak),
         risk,
         reductionDb: round1(reductionDb),
-        marginDb: round1(recommendedMargin(risk, prePeak, reductionDb)),
         bandsDb: bandsDbOut,
         bands: bandsOut,
         updatedAt: now,
@@ -304,7 +289,6 @@ function blank(available, reason) {
     headroomDb: -PEAK_FLOOR_DB,
     risk: "ok",
     reductionDb: 0,
-    marginDb: 0,
     bandsDb: new Array(BANDS).fill(BAND_FLOOR_DB),
     bands: new Array(BANDS).fill(0),
     updatedAt: 0,

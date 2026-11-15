@@ -169,30 +169,64 @@ export function eqRisk(risk, enabled, bands) {
  * person changes the setting: a peak that falls back 40 ms later must not take
  * the banner away under the reader's eyes. While it lasts, its numbers keep the
  * highest value seen. `fold` answers the episode to show (null before the
- * first warning); `reset` begins a new one.
+ * first warning); `begin` starts a new one.
  */
-export function createRiskHold() {
+export function createRiskHold({ gestureMs = 900 } = {}) {
   let tone = "ok";
   let reduction = 0;
-  let margin = 0;
   let shown = null;
+  let base = null;
+  let lastAt = -Infinity;
+  let lastKey = null;
+
   return {
     get current() {
       return shown;
     },
-    fold(nextTone, reductionDb = 0, marginDb = 0) {
+    get baseline() {
+      return base;
+    },
+    begin(reference = null, now = 0, key = null) {
+      const same =
+        base !== null && key !== null && key === lastKey && now - lastAt <= gestureMs;
+      if (!same) {
+        const red = reference && Number.isFinite(+reference.reduction) ? +reference.reduction : null;
+        base =
+          red === null
+            ? null
+            : {
+                reduction: Math.max(0, red),
+                peak: Number.isFinite(+reference.peak) ? +reference.peak : null,
+              };
+      }
+      lastAt = now;
+      lastKey = key;
+      tone = "ok";
+      reduction = 0;
+      shown = null;
+      return base;
+    },
+    net(rawReductionDb, rawPeakDb) {
+      const red = Math.max(0, +rawReductionDb || 0);
+      const peak = Number.isFinite(+rawPeakDb) ? +rawPeakDb : 0;
+      if (!base) return { reduction: red, peak, fromChange: false };
+      return {
+        reduction: Math.max(0, red - base.reduction),
+        peak: base.peak === null ? 0 : Math.max(0, peak - base.peak),
+        fromChange: true,
+      };
+    },
+    fold(nextTone, netReductionDb = 0, fromChange = false) {
       const t = riskTone(nextTone);
       if (t === "ok") return shown;
       tone = t === "clip" || tone === "clip" ? "clip" : "warn";
-      reduction = Math.max(reduction, +reductionDb || 0);
-      margin = Math.max(margin, +marginDb || 0);
-      shown = { tone, reduction, margin };
+      reduction = Math.max(reduction, +netReductionDb || 0);
+      shown = { tone, reduction, fromChange: !!fromChange };
       return shown;
     },
     reset() {
       tone = "ok";
       reduction = 0;
-      margin = 0;
       shown = null;
     },
   };
@@ -210,12 +244,12 @@ export function fmtDb(value, { plus = false, unit = true } = {}) {
 }
 
 /**
- * How much to pull the level back to release the limiter: the engine's margin,
- * rounded to half a decibel (a whole number of clicks on a phone), never below
- * 0.5 so the button always does something.
+ * How much to pull the level back to release the limiter: the measured
+ * reduction, rounded to half a decibel (a whole number of clicks on a phone),
+ * never below 0.5 so the button always does something.
  */
-export function volumeCutDb(marginDb) {
-  const m = Math.max(0, +marginDb || 0);
+export function volumeCutDb(reductionDb) {
+  const m = Math.max(0, +reductionDb || 0);
   return Math.max(0.5, Math.round(m * 2) / 2);
 }
 

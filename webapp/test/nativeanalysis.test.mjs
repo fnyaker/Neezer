@@ -165,12 +165,39 @@ test("the EQ and the bass lift go to the app", () => {
   S.eqEnabled.set(true);
   S.bassBoost.set(0.5);
   const last = sent.fx[sent.fx.length - 1];
-  assert.deepEqual(last, { eq: [3, 0, 0, 0, 0, 0, 0, 0, 0, -2], bass: 0.5 });
+  assert.deepEqual(last, {
+    eq: [3, 0, 0, 0, 0, 0, 0, 0, 0, -2],
+    bass: 0.5,
+    mono: false,
+    balance: 0,
+  });
   S.eqEnabled.set(false);
-  assert.deepEqual(sent.fx[sent.fx.length - 1], { eq: [], bass: 0.5 }, "EQ off: flat, the lift kept");
+  assert.deepEqual(
+    sent.fx[sent.fx.length - 1],
+    { eq: [], bass: 0.5, mono: false, balance: 0 },
+    "EQ off: flat, the lift kept"
+  );
   const n = sent.fx.length;
   S.bassBoost.set(0.5);
   assert.equal(sent.fx.length, n, "an unchanged setting is not sent again");
+});
+
+test("the mono fold and the balance go with the effects", async () => {
+  const P = await import("../src/lib/audio/pan.js");
+  sent.fx.length = 0;
+  P.setMono(true);
+  P.setBalance(-0.75);
+  const last = sent.fx[sent.fx.length - 1];
+  assert.equal(last.mono, true);
+  assert.equal(last.balance, -0.75);
+  assert.deepEqual(last.eq, []);
+  const n = sent.fx.length;
+  P.setBalance(-0.75);
+  assert.equal(sent.fx.length, n, "a value that did not move is not sent again");
+  P.setMono(false);
+  P.resetBalance();
+  assert.equal(sent.fx[sent.fx.length - 1].mono, false);
+  assert.equal(sent.fx[sent.fx.length - 1].balance, 0);
 });
 
 test("an app without the analyser: the page path, as before", () => {

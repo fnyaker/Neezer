@@ -96,6 +96,42 @@ object CarVisibility {
 }
 
 /**
+ * The car mode's service exists only while a trigger really wants it: the
+ * wake-up ladder that looks again after a drive ended, and the rule that ends
+ * the service with that drive. No Android type, so `CarWatchTest` holds it.
+ */
+object CarLifecycle {
+    /** How long after a drive ended the foreground app is looked at again. */
+    val LADDER_MS = longArrayOf(10_000L, 60_000L, 300_000L)
+
+    /**
+     * The rung past the ladder, repeated while the app is playing in a car:
+     * one look a minute, in a process the player already keeps alive.
+     */
+    const val SUSTAIN_MS = 60_000L
+
+    /** The delay of rung [rung], or null when there is nothing to arm. */
+    fun wakeAfter(rung: Int): Long? = LADDER_MS.getOrNull(rung)
+        ?: if (rung == LADDER_MS.size) SUSTAIN_MS else null
+
+    /** The rung to arm after [current], the sustain one only while playing. */
+    fun nextRung(current: Int, playing: Boolean): Int {
+        if (current < 0) return -1
+        val next = current + 1
+        if (next < LADDER_MS.size) return next
+        return if (playing) LADDER_MS.size else -1
+    }
+
+    fun endsWithTheDrive(
+        decided: Boolean,
+        visible: Boolean,
+        attached: Boolean,
+        manual: Boolean,
+        suppressed: Boolean,
+    ): Boolean = decided && !visible && !attached && !manual && !suppressed
+}
+
+/**
  * The only door between the car views and the player. The service implements
  * it with the existing PlayerService/MediaSession; the views never touch audio,
  * the WebView or the server themselves.

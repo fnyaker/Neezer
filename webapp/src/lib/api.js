@@ -1012,8 +1012,15 @@ export const api = {
   },
 
   // playback (returned as a URL for the <audio> element)
-  streamUrl: (id, quality) =>
-    BASE + "/stream/" + id + (quality && quality !== "FLAC" ? "?q=" + quality : ""),
+  // `start` (seconds) asks the server to begin the stream there: it answers the
+  // audio from that time (Accept-Ranges: none, no length, X-NS-Start), for a
+  // source a byte range cannot seek. Omitted, the URL is the one it always was.
+  streamUrl: (id, quality, start) => {
+    const q = quality && quality !== "FLAC" ? "q=" + quality : "";
+    const at = +start > 0.05 ? "start=" + (+start).toFixed(3) : "";
+    const qs = [q, at].filter(Boolean).join("&");
+    return BASE + "/stream/" + id + (qs ? "?" + qs : "");
+  },
 
   // Whether the stream would now be a finished FILE (length + ranges: a seek lands anywhere)
   // and not a first-play stream generated as it is sent. Never starts a download.

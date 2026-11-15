@@ -177,7 +177,8 @@ object CarPins {
  * UI that cannot be tapped is worse than a translucent one.
  */
 class CarPrefs(context: Context) {
-    private val sp = context.applicationContext.getSharedPreferences("car", Context.MODE_PRIVATE)
+    private val app = context.applicationContext
+    private val sp = app.getSharedPreferences("car", Context.MODE_PRIVATE)
 
     var overlayAlpha: Float
         get() = sp.getFloat(KEY_ALPHA, 0.62f).coerceIn(0.40f, 0.80f)
@@ -192,6 +193,15 @@ class CarPrefs(context: Context) {
     var bluetoothTrigger: Boolean
         get() = sp.getBoolean(KEY_BT, true)
         set(v) = sp.edit().putBoolean(KEY_BT, v).apply()
+
+    /**
+     * The GPS trigger can really see a navigation app: the switch is on, at
+     * least one app is watched, and the usage access is granted. Read by the
+     * trigger and by [CarWatch]; [CarVisibility] lets Bluetooth decide when
+     * this is false.
+     */
+    val gpsWatching: Boolean
+        get() = gpsTrigger && gpsPackages.isNotEmpty() && CarPermissions.hasUsageStats(app)
 
     /** Packages considered navigation apps. */
     var gpsPackages: Set<String>
