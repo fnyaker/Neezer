@@ -68,6 +68,12 @@ class RateLimiterTestCase(unittest.TestCase):
         self.assertTrue(rl.is_blocked("a"))
         self.assertFalse(rl.is_blocked("b"))
 
+    def test_the_key_table_is_bounded(self):
+        rl = RateLimiter(max_attempts=1, window=300, max_keys=2)
+        for index in range(100):
+            rl.record_failure(f"k{index}")
+        self.assertLessEqual(len(rl._fails), 2)
+
 
 class SafeRedirectTestCase(unittest.TestCase):
     def test_only_local_paths_allowed(self):

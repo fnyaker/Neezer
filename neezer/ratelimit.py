@@ -37,10 +37,11 @@ from collections import OrderedDict, defaultdict, deque
 
 
 class RateLimiter:
-    def __init__(self, max_attempts=10, window=300):
+    def __init__(self, max_attempts=10, window=300, max_keys=4096):
         """max_attempts failures allowed per `window` seconds before blocking."""
         self.max_attempts = max_attempts
         self.window = window
+        self.max_keys = max(1, int(max_keys))
         self._fails = defaultdict(deque)
         self._lock = threading.Lock()
 
@@ -64,6 +65,8 @@ class RateLimiter:
         now = time.time()
         with self._lock:
             for k in self._keys(key, username):
+                if k not in self._fails and len(self._fails) >= self.max_keys:
+                    self._fails.pop(next(iter(self._fails)), None)
                 dq = self._fails[k]
                 self._trim(dq, now)
                 dq.append(now)
