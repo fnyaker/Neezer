@@ -20,7 +20,7 @@ from unittest import mock
 
 from neezer import linkimport
 from neezer.config import DefaultConfig
-from neezer.db import Playlist, PlaylistMember, User, release_database
+from neezer.db import Playlist, PlaylistMember, PlaylistTrack, User, release_database
 from neezer.managers.user import UserManager
 from neezer.web import create_application
 from neezer.webui import playlist_import
@@ -528,6 +528,26 @@ class ImportRouteTestCase(unittest.TestCase):
         # the library match cost no search
         self.assertFalse(any("papaoutai" in q.lower() for q in self.api.queries))
 
+    def test_matching_asks_deezer_in_the_bulk_lane(self):
+        from deezerpy import _throttle
+
+        seen = []
+        original = self.api.search
+
+        def search(query, **kwargs):
+            seen.append(_throttle.current_priority())
+            return original(query, **kwargs)
+
+        self.api.search = search
+        self.login()
+        self.pages[SPOTIFY_ID] = spotify_page(
+            [sp_track("Bella", "Maître Gims", 231000), sp_track("Papaoutai", "Stromae", 232000)]
+        )
+        job = self.status(self.start(f"https://open.spotify.com/playlist/{SPOTIFY_ID}"))
+        self.assertEqual(job["state"], "done", job)
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {_throttle.BULK})
+
     def test_isrc_wins_over_a_search(self):
         self.login()
         page = apple_page().replace('"albumName": "Cheese",', '"albumName": "Cheese", "isrc": "BEUM70900001",')
@@ -609,6 +629,34 @@ class ImportRouteTestCase(unittest.TestCase):
             [(pl.user_id, "owner")],
         )
         self.assertEqual(created, [])
+
+    def test_saving_two_hundred_lines_is_a_handful_of_statements(self):
+        from .test_deezer import count_statements
+
+        self.login()
+        rows = [self.local_track(f"T{i}", "A", 200) for i in range(5)]
+        ids = [str(rows[i % 5].id) for i in range(200)]
+        job = {
+            "source": "spotify",
+            "source_label": "Spotify",
+            "name": "Long",
+            "url": "https://open.spotify.com/playlist/x",
+        }
+        alice = User.get(User.name == "alice")
+        with count_statements() as counts:
+            playlist_import._run_save(self.app, job, ids, "Long", alice.id, True)
+        self.assertLessEqual(sum(counts.values()), 20, dict(counts))
+        saved = Playlist.get(Playlist.name == "Long")
+        self.assertEqual(
+            PlaylistTrack.select().where(PlaylistTrack.playlist == saved).count(), 200
+        )
+        indexes = [
+            row.index
+            for row in PlaylistTrack.select()
+            .where(PlaylistTrack.playlist == saved)
+            .order_by(PlaylistTrack.index)
+        ]
+        self.assertEqual(indexes, list(range(200)))
 
     def test_a_guest_can_save_their_own_import_and_nobody_else_sees_the_job(self):
         self.login("bob", "B0bbb")

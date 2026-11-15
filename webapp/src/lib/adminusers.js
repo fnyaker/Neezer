@@ -5,6 +5,8 @@ export const FILTERS = [
   { id: "all", label: "Tous" },
   { id: "active", label: "Actifs" },
   { id: "invited", label: "Invités" },
+  { id: "admins", label: "Administrateurs" },
+  { id: "members", label: "Membres" },
   { id: "disabled", label: "Désactivés" },
 ];
 
@@ -196,6 +198,8 @@ export function filterRows(rows, filter = "all", term = "") {
     if (filter === "invited" && row.kind !== "invite") return false;
     if (filter === "active" && (row.kind !== "user" || row.disabled)) return false;
     if (filter === "disabled" && (row.kind !== "user" || !row.disabled)) return false;
+    if (filter === "admins" && (row.kind !== "user" || !row.admin)) return false;
+    if (filter === "members" && (row.kind !== "user" || row.admin)) return false;
     if (needle && row.kind === "invite") {
       return foldText(`${row.note || ""} ${row.name || ""}`).includes(needle);
     }

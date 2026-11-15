@@ -250,6 +250,32 @@ async function runFlow({ width, height, phone, token, name }) {
   const ov3 = await overflow(page);
   check(ov3.doc <= ov3.width + 1, `${tag}: the refreshed artists page does not overflow`);
 
+  const beforeFailedLike = { done: st.donePost, api: st.api.length };
+  await page.route("**/api/onboarding/artists/like", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Banc : échec simulé" }),
+    });
+  });
+  await page.locator('button.tile:not([aria-pressed="true"])').first().click();
+  await page.locator(".finish").click();
+  await page.waitForTimeout(2200);
+  check(
+    (await page.evaluate(() => location.hash)) === "#/onboarding/artists",
+    `${tag}: a failed like keeps the person on the artists step`
+  );
+  check(
+    st.donePost === beforeFailedLike.done,
+    `${tag}: a failed like sends no artists/done (measured ${st.donePost - beforeFailedLike.done})`
+  );
+  check(
+    (await page.locator(".alert").count()) >= 1,
+    `${tag}: a failed like says so and offers to retry`
+  );
+  await page.unroute("**/api/onboarding/artists/like");
+
   const beforeFinish = {
     done: st.donePost,
     api: st.api.length,
@@ -263,13 +289,21 @@ async function runFlow({ width, height, phone, token, name }) {
   const accountPosts = accountCalls.filter((entry) => entry.startsWith("POST /api/onboarding/account/")).length;
   const accountGets = accountCalls.filter((entry) => entry.startsWith("GET ")).length;
   check(accountPosts === 0, `${tag}: the account step opens with 0 POST (measured ${accountPosts})`);
-  check(accountGets === 0, `${tag}: the account step opens without a request, the payload is kept (measured ${accountGets} GET)`);
+  const optionGets = accountCalls.filter((entry) => entry === "GET /api/onboarding/account/options").length;
+  check(optionGets === 1 && accountGets === 1, `${tag}: the account step reads the rich options once (measured ${optionGets} options / ${accountGets} GET)`);
   note(`${tag}: account step request(s)`, JSON.stringify(accountCalls));
 
   const cards = await page.locator(".account .cards > .card").count();
   check(cards === 3, `${tag}: the account step shows 3 optional cards (measured ${cards})`);
   const skips = await page.locator(".account .card .ghost.small").count();
   check(skips === 3, `${tag}: each card can be skipped (measured ${skips})`);
+  const importDoor = await page
+    .locator(".account button", { hasText: "Importer une playlist" })
+    .count();
+  check(
+    importDoor === 1,
+    `${tag}: the rich options make the public playlist import reachable (measured ${importDoor})`
+  );
   const skipHeights = await page.locator(".account .card .ghost.small").evaluateAll((els) =>
     els.map((el) => el.getBoundingClientRect().height)
   );

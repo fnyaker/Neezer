@@ -22,7 +22,9 @@
     ? offline
       ? "Cette page n'est pas encore enregistrée sur cet appareil. Reconnecte-toi, puis réessaie."
       : `Cette page n'a pas pu être chargée : ${cause}.`
-    : notFound;
+    : status !== null && status >= 500
+      ? `${notFound} (${cause})`
+      : notFound;
 </script>
 
 {#if denied}

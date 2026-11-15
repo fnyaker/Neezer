@@ -372,7 +372,10 @@ def _do_import(app, job, link, user_id, admin):
 
     def one(i):
         try:
-            got = matcher.network(lines[i])
+            from ..deezer import workload
+
+            with workload.deezer_lane(workload.Priority.BULK):
+                got = matcher.network(lines[i])
         except Exception:
             logger.info("Import: matching failed for %r", lines[i]["title"], exc_info=True)
             got = (None, None, False)
@@ -409,19 +412,31 @@ def _rows_for(provider, ids, user_id, admin) -> list:
     """Track rows for the kept items, in order. Same rules as adding to a
     playlist: a UUID is a library row (someone else's upload is refused) or a
     remembered YouTube hit, a number a Deezer track whose row is made now."""
-    from ..deezer import archive, library
+    from ..deezer import archive, ids as dz_ids, library
     from . import _ensure_track_row
     from . import youtube as ytweb
 
+    ids = [str(sid) for sid in ids]
+    wanted = []
+    for sid in ids:
+        try:
+            wanted.append(uuid.UUID(sid))
+        except ValueError:
+            if _valid_id(sid):
+                wanted.append(dz_ids.track_uuid(sid))
+    local = {}
+    for i in range(0, len(wanted), 400):
+        for row in Track.select().where(Track.id.in_(wanted[i : i + 400])):
+            local[row.id] = row
+
     root, cache, out = None, library.ImportCache(), []
     for sid in ids:
-        sid = str(sid)
         try:
             tid = uuid.UUID(sid)
         except ValueError:
             tid = None
         if tid is not None:
-            row = Track.get_or_none(Track.id == tid)
+            row = local.get(tid)
             if row is None:
                 row = ytweb.materialize(sid)
             elif row.owner_id is not None and not admin and row.owner_id != user_id:
@@ -431,7 +446,7 @@ def _rows_for(provider, ids, user_id, admin) -> list:
             continue
         if not _valid_id(sid):
             continue
-        row = archive.find_local_track(sid)
+        row = local.get(dz_ids.track_uuid(sid))
         if row is None and provider is not None:
             try:
                 if root is None:
@@ -460,8 +475,7 @@ def _run_save(app, job, ids, title, user_id, admin):
                     PlaylistMember.create(
                         playlist=pl, user=User[user_id], role="owner", added=pl.created
                     )
-                    for row in rows:
-                        pl.add(row)
+                    pl.add_many(rows)
                 if admin:
                     try:
                         backfill.archive_tracks(app, rows, event="on_playlist_add")

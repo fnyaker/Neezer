@@ -227,16 +227,8 @@
       dzError = e;
     }
   }
-  onMount(async () => {
-    if (!$user?.admin || !CAN_ADMIN) return;
-    await loadSettings();
-    refreshDeezerStatus();
-    loadReleases();
-    loadStorage();
-    loadRules();
-    loadCleanup();
-    // A sweep started before a reload is still running server-side: pick the
-    // progress back up instead of pretending nothing is happening.
+  let loaded = { sources: false, server: false };
+  async function loadArchive() {
     try {
       job = await api.archiveStatus();
       if (job?.running) pollJob();
@@ -249,7 +241,23 @@
     } catch {
       /* ignore */
     }
-  });
+  }
+  $: if ($user?.admin && CAN_ADMIN) {
+    if (tab === "sources" && !loaded.sources) {
+      loaded = { ...loaded, sources: true };
+      loadSettings();
+      refreshDeezerStatus();
+    } else if (tab === "server" && !loaded.server) {
+      loaded = { ...loaded, server: true };
+      loadSettings();
+      refreshDeezerStatus();
+      loadReleases();
+      loadStorage();
+      loadRules();
+      loadCleanup();
+      loadArchive();
+    }
+  }
 
   // Admin: the releases check (neezer/releases.py) — how often, how many
   // close artists, how far back — and a button to run it now.

@@ -35,6 +35,8 @@ from neezer.db import (
     Folder,
     Invite,
     Playlist,
+    PodcastChannel,
+    PodcastEpisode,
     ProviderAccount,
     Track,
     User,
@@ -246,6 +248,11 @@ class AdminUsersTestCase(unittest.TestCase):
         payload = self.client.get("/api/admin/users?q=BOB@example").get_json()
         self.assertEqual([u["name"] for u in payload["users"]], ["bob"])
 
+        legacy = self._add("dave")
+        User.update(name_key=None).where(User.id == legacy.id).execute()
+        payload = self.client.get("/api/admin/users?q=dave").get_json()
+        self.assertEqual([u["name"] for u in payload["users"]], ["dave"])
+
         self.assertEqual(self.client.get("/api/admin/users?q=%25").status_code, 400)
         self.assertEqual(self.client.get("/api/admin/users?q=zzz").get_json()["users"], [])
         self.assertEqual(self.client.get("/api/admin/users?q=" + "x" * 81).status_code, 400)
@@ -455,7 +462,10 @@ class AdminUsersTestCase(unittest.TestCase):
         self._login()
         response = self._delete("bob")
         self.assertEqual(response.status_code, 200, response.get_json())
-        self.assertEqual(response.get_json(), {"deleted": True, "uploads_reassigned": 1})
+        self.assertEqual(
+            response.get_json(),
+            {"deleted": True, "uploads_reassigned": 1, "podcasts_reassigned": 0},
+        )
         self.assertIsNone(User.get_or_none(User.id == self.bob.id))
         track = Track[track.id]
         self.assertEqual(track.owner_id, self.alice.id)
@@ -527,7 +537,29 @@ class AdminUsersTestCase(unittest.TestCase):
         self.assertEqual(rows[0].target, "bob")
         self.assertEqual(rows[0].detail, "admin=True disabled=False")
         self.assertEqual(rows[1].result, "ok")
-        self.assertEqual(rows[1].detail, "uploads=0")
+        self.assertEqual(rows[1].detail, "uploads=0 podcasts=0")
+
+    def test_delete_reassigns_podcast_shows_and_keeps_the_audio(self):
+        channel = PodcastChannel.create(user=self.bob, url="https://example.test/show")
+        path = os.path.join(self.archive, "episode.mp3")
+        with open(path, "wb") as handle:
+            handle.write(b"audio")
+        PodcastEpisode.create(
+            channel=channel,
+            title="Ep",
+            path=path,
+            status="completed",
+            published=now(),
+        )
+        self._login()
+        response = self._delete("bob")
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["podcasts_reassigned"], 1)
+        self.assertEqual(PodcastChannel[channel.id].user_id, self.alice.id)
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(PodcastEpisode.select().where(
+            PodcastEpisode.channel == channel.id
+        ).count(), 1)
 
     def test_delete_removes_the_person_provider_account_and_its_grants(self):
         from neezer.db import ProviderGrant
@@ -586,7 +618,7 @@ class AdminUsersTestCase(unittest.TestCase):
         with count_statements() as counts:
             response = self._delete("bob")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 56, dict(counts))
+        self.assertEqual(sum(counts.values()), 58, dict(counts))
 
     # -- the legacy /user routes use the same guards --------------------------
 

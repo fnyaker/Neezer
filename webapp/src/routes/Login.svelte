@@ -1,4 +1,5 @@
 <script>
+  import { tick } from "svelte";
   import { user } from "../lib/stores.js";
   import { api } from "../lib/api.js";
   import Icon from "../components/Icon.svelte";
@@ -6,6 +7,7 @@
   let username = "";
   let password = "";
   let error = "";
+  let alertEl;
   let busy = false;
   let passwordEl;
 
@@ -31,6 +33,8 @@
       if (err && err.status === 401) {
         password = "";
         passwordEl?.focus();
+      } else {
+        tick().then(() => alertEl?.focus());
       }
     } finally {
       busy = false;
@@ -80,7 +84,7 @@
       </div>
 
       {#if error}
-        <p class="err" role="alert"><Icon name="alert" size={14} /><span>{error}</span></p>
+        <p class="err" role="alert" tabindex="-1" bind:this={alertEl}><Icon name="alert" size={14} /><span>{error}</span></p>
       {/if}
 
       <button class="primary wide" type="submit" disabled={busy}>

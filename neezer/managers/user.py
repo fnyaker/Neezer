@@ -30,7 +30,7 @@ except ImportError:  # pycryptodomex
     from Cryptodome.Cipher import AES
     from Cryptodome.Random import get_random_bytes
 
-from ..db import Invite, ProviderAccount, Track, User, db, now
+from ..db import Invite, PodcastChannel, ProviderAccount, Track, User, db, now
 from ..utils import get_secret_key
 
 logger = logging.getLogger(__name__)
@@ -486,6 +486,9 @@ class UserManager:
             moved = (
                 Track.update(owner=actor.id).where(Track.owner == target.id).execute()
             )
+            PodcastChannel.update(user=actor.id).where(
+                PodcastChannel.user == target.id
+            ).execute()
             target.delete_instance(recursive=True)
             if was_active_admin and not UserManager._active_admin_ids(lock=True):
                 raise LastAdmin("Can't remove the last active administrator")

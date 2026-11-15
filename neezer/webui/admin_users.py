@@ -25,7 +25,7 @@ from flask import Blueprint, jsonify, request
 from peewee import fn
 
 from .. import audit
-from ..db import Playlist, Track, User
+from ..db import Playlist, PodcastChannel, Track, User
 from ..managers.user import UserActionRefused, UserManager, fold_name
 from ..utils import like_term
 
@@ -161,7 +161,9 @@ def _search_clause():
     if term is None:
         return None, _bad("La recherche ne contient aucun terme exploitable.")
     return (
-        User.name_key.contains(term) | fn.LOWER(User.mail).contains(term)
+        User.name_key.contains(term)
+        | fn.LOWER(User.name).contains(term)
+        | fn.LOWER(User.mail).contains(term)
     ), None
 
 
@@ -328,6 +330,7 @@ def admin_user_delete(uid):
             jsonify({"error": "confirm_mismatch", "code": "confirm_mismatch"}),
             400,
         )
+    podcasts = PodcastChannel.select().where(PodcastChannel.user == target).count()
     try:
         moved = UserManager.delete_guarded(target, request.webuser)
     except User.DoesNotExist:
@@ -347,5 +350,13 @@ def admin_user_delete(uid):
             getattr(exc, "code", "refused"),
         )
         return _refused(exc)
-    audit.record("user.delete", request.webuser, row.name, f"uploads={moved}")
-    return jsonify({"deleted": True, "uploads_reassigned": moved})
+    audit.record(
+        "user.delete", request.webuser, row.name, f"uploads={moved} podcasts={podcasts}"
+    )
+    return jsonify(
+        {
+            "deleted": True,
+            "uploads_reassigned": moved,
+            "podcasts_reassigned": podcasts,
+        }
+    )

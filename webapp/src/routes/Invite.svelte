@@ -36,6 +36,7 @@
   let errorText = "";
   let account = $user || (savedAccount && savedAccount.name ? savedAccount : null);
   let leaving = false;
+  let leaveError = "";
   let busy = false;
   let username = "";
   let password = "";
@@ -98,8 +99,6 @@
         if (draft.name && !username) username = draft.name;
       }
       phase = "valid";
-      await tick();
-      if (!account) focusField("username");
     } catch (e) {
       const status = e && e.status;
       if (status === 404) {
@@ -139,6 +138,8 @@
     const before = foldName(el.value.slice(0, position));
     const next = foldName(el.value);
     username = next;
+    requestId = requestId || newRequestId();
+    rememberDraft({ token, name: next, request_id: requestId });
     clearField("username");
     if (next !== el.value) {
       el.value = next;
@@ -256,9 +257,14 @@
   async function useInvitation() {
     if (leaving) return;
     leaving = true;
+    leaveError = "";
     try {
       await api.logout();
-    } catch {
+    } catch (err) {
+      leaving = false;
+      leaveError =
+        "La déconnexion a échoué : vérifiez la connexion, puis réessayez. Votre session actuelle reste ouverte.";
+      return;
     }
     user.set(null);
     account = null;
@@ -328,6 +334,9 @@
         Tu es connecté en tant que <strong>{account.name}</strong>. Créer un compte ici te
         déconnectera de celui-ci.
       </p>
+      {#if leaveError}
+        <p class="alert" role="alert">{leaveError}</p>
+      {/if}
       <div class="actions">
         <button class="primary wide" type="button" on:click={openApp}>
           Retour à l'application

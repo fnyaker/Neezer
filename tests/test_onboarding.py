@@ -930,6 +930,29 @@ class OnboardingApiTestCase(OnboardingTestCase):
             [call[0] for call in self.fake.calls].count("search_artist"), 1
         )
 
+    def test_search_reports_the_liked_state_without_waiting_for_a_cache(self):
+        self._install([deezer_card(2, "Camille"), deezer_card(3, "Autre")])
+        self._login()
+        first = self.client.get("/api/onboarding/search?q=camille").get_json()
+        self.assertFalse(
+            next(i for i in first["items"] if i["deezer_id"] == "2")["liked"]
+        )
+        self.assertEqual(self._like(2).status_code, 200)
+        liked = self.client.get("/api/onboarding/search?q=camille").get_json()
+        self.assertTrue(
+            next(i for i in liked["items"] if i["deezer_id"] == "2")["liked"]
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/onboarding/unlike", json={"deezer_id": "2"}
+            ).status_code,
+            200,
+        )
+        gone = self.client.get("/api/onboarding/search?q=camille").get_json()
+        self.assertFalse(
+            next(i for i in gone["items"] if i["deezer_id"] == "2")["liked"]
+        )
+
     def test_search_empty_and_one_character_make_no_call(self):
         self._local_artist("Daft Punk", deezer_id="27")
         self._login()
@@ -1091,6 +1114,40 @@ class OnboardingApiTestCase(OnboardingTestCase):
             ).status_code,
             404,
         )
+
+    def test_a_cold_picture_never_holds_the_request_on_the_cdn(self):
+        import time
+
+        ref = "UC" + "c" * 22
+        card = youtube_card(ref, "Slow Pic")
+        self._install([card], kind="youtube")
+        self._login()
+
+        class Slow:
+            status_code = 200
+            headers = {"Content-Type": "image/jpeg", "Content-Length": "4"}
+
+            def __enter__(self):
+                time.sleep(1.2)
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def iter_content(self, size):
+                yield b"\xff\xd8\xff\xe0"
+
+        started = time.monotonic()
+        with mock.patch(
+            "neezer.deezer.onboarding_pool.requests.get", return_value=Slow()
+        ):
+            response = self.client.get(f"/api/onboarding/picture/{card.entity_id}")
+        elapsed = time.monotonic() - started
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/png")
+        self.assertLess(elapsed, 0.8, elapsed)
+        response.close()
+        time.sleep(1.3)
 
     def test_a_starred_artist_survives_prune_and_leaves_after_unlike(self):
         self._install([deezer_card(5, "Kept")])

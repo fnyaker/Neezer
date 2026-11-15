@@ -287,7 +287,6 @@
   async function bootSession() {
     if (booting) return;
     booting = true;
-    bootProblem = null;
     try {
       const saved = savedUser();
       // Airplane-mode launch: if we're offline but have a remembered session, boot
@@ -296,6 +295,7 @@
       if (saved && typeof navigator !== "undefined" && !navigator.onLine) {
         user.set(saved);
         bootedOffline = true;
+        bootProblem = null;
         return;
       }
       try {
@@ -308,10 +308,12 @@
           return;
         }
         user.set(r.user);
+        bootProblem = null;
         if (r.user.onboarding === "done" || !r.user.onboarding) loadFavorites();
       } catch (e) {
         if (e && e.status === 401) {
           user.set(null);
+          bootProblem = null;
         } else if (saved) {
           user.set(saved);
           bootedOffline = true;
@@ -517,7 +519,7 @@
   {#if Onboarding}
     <svelte:component this={Onboarding} step={onboardingLeaf} />
   {:else}
-    <div class="loading">…</div>
+    <div class="loading" role="status">Chargement de la préparation…</div>
   {/if}
 {:else if queueOnly}
   <!-- Remote control, "queue" level: the player and its queue, full screen.

@@ -88,6 +88,8 @@
   let finishing = false;
   let finishWanted = false;
   let finishingAccount = false;
+  let accountBusy = false;
+  let accountFinishArmed = false;
 
   $: accounts = step === "accounts";
   $: items = query ? searchItems || [] : artists;
@@ -418,6 +420,7 @@
     pendingIds = new Set(pendingIds);
     pendingIds.delete(key);
     if (ok) return;
+    finishWanted = false;
     likedIds = new Set(likedIds).add(key);
     likedTotal += 1;
     persistLiked();
@@ -431,6 +434,7 @@
     pendingIds = new Set(pendingIds);
     pendingIds.delete(key);
     if (!ok) {
+      finishWanted = false;
       likedIds = new Set(likedIds);
       likedIds.delete(key);
       likedTotal = Math.max(0, likedTotal - 1);
@@ -538,7 +542,15 @@
         if (entry.liked) await api.onboardingLike(entry.id, seenIds());
         else await api.onboardingUnlike(entry.id);
       } catch (e) {
-        if (!e || e.offline || e.status === 0 || (e.status && e.status >= 500)) break;
+        flushing = false;
+        finishWanted = false;
+        actionError = {
+          message:
+            "Votre choix n'a pas été enregistré. Vérifiez la connexion puis réessayez.",
+          retry: flushQueue,
+        };
+        announce("");
+        return;
       }
       queue = queue.slice(1);
       persistQueue();
@@ -726,6 +738,13 @@
       announce("Hors ligne : terminez quand la connexion revient.");
       return;
     }
+    if (accountBusy && !accountFinishArmed) {
+      accountFinishArmed = true;
+      announce(
+        "Un import est en cours : il continuera sur le serveur. Cliquez sur Terminer pour quitter maintenant."
+      );
+      return;
+    }
     finishingAccount = true;
     finishStatus = "";
     try {
@@ -842,7 +861,10 @@
     </main>
   {:else if accounts}
     <main class="pane">
-      <OnboardingAccount options={record ? record.account || null : null} />
+      <OnboardingAccount
+        options={record ? record.account || null : null}
+        onActivity={(busy) => (accountBusy = busy)}
+      />
     </main>
   {:else}
     <main class="pane">
@@ -876,18 +898,20 @@
           </div>
         </header>
 
-        <div class="progressrow">
-          <span class="dots" aria-hidden="true">
-            {#each [0, 1, 2, 3, 4] as i}
-              <span class="dot" class:on={i < likedTotal}></span>
-            {/each}
-          </span>
-          <span class="count">{artistCountLabel(likedTotal)}</span>
-          <span class="hint">{progressHint(likedTotal)}</span>
-        </div>
-        <p class="sr" role="status" aria-live="polite">
-          {artistCountLabel(likedTotal)}. {progressHint(likedTotal)}{insertNote ? ` ${insertNote}.` : ""}
-        </p>
+        {#if !loadError && !(listError && !artists.length)}
+          <div class="progressrow">
+            <span class="dots" aria-hidden="true">
+              {#each [0, 1, 2, 3, 4] as i}
+                <span class="dot" class:on={i < likedTotal}></span>
+              {/each}
+            </span>
+            <span class="count">{artistCountLabel(likedTotal)}</span>
+            <span class="hint">{progressHint(likedTotal)}</span>
+          </div>
+          <p class="sr" role="status" aria-live="polite">
+            {artistCountLabel(likedTotal)}. {progressHint(likedTotal)}{insertNote ? ` ${insertNote}.` : ""}
+          </p>
+        {/if}
 
         {#if actionError}
           <p class="alert" role="alert">

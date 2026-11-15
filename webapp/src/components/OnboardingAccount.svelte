@@ -20,6 +20,7 @@
   } from "../lib/onboarding.js";
 
   export let options = null;
+  export let onActivity = null;
 
   const POLL_MS = 1500;
   const POLL_MAX = 5 * 60 * 1000;
@@ -37,6 +38,8 @@
   let job = null;
   let lastUrl = "";
   let pollTimer = null;
+  let accountTimer = null;
+  let accountStart = 0;
   let pollStart = 0;
   let capped = false;
   let loadError = null;
@@ -70,13 +73,16 @@
   $: note = importNote(job);
   $: runningAccount = !!((dz && dz.account && dz.account.running) || (yt && yt.account && yt.account.running));
   $: importInFlight = runningAccount || isImportRunning(job);
+  $: if (runningAccount) watchAccounts();
+  $: if (!runningAccount) stopAccountPoll();
+  $: if (onActivity) onActivity(importInFlight);
 
   onMount(() => {
     const account = accountName();
     const saved = readStore("import", { maxAge: 3 * 60 * 60 * 1000 });
     const savedSkips = readStore("skipped", { maxAge: null });
     skipped = savedSkips && savedSkips.account === account && Array.isArray(savedSkips.ids) ? savedSkips.ids : [];
-    if (!opts) loadOptions();
+    if (!richOptions(opts)) loadOptions();
     if (saved && saved.account === account && saved.id) {
       job = { id: saved.id, state: "reading" };
       lastUrl = saved.url || "";
@@ -85,12 +91,23 @@
       job = { ...opts.job };
       startPolling();
     }
+    watchAccounts();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       stopPolling();
+      stopAccountPoll();
     };
   });
+
+  function richOptions(value) {
+    if (!value || !Array.isArray(value.imports)) return false;
+    const deezer = value.deezer || {};
+    return (
+      "can_link" in deezer &&
+      value.imports.every((entry) => entry && "available" in entry)
+    );
+  }
 
   async function loadOptions() {
     loadError = null;
@@ -156,6 +173,7 @@
         provider === "deezer"
           ? "Compte Deezer relié. L'import de vos favoris a démarré sur le serveur."
           : "Compte YouTube Music relié. L'import de vos favoris a démarré sur le serveur.";
+      watchAccounts(true);
     } catch (e) {
       error = { provider, message: linkFailure(e) };
     } finally {
@@ -219,6 +237,29 @@
   function stopPolling() {
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
+  }
+
+  function stopAccountPoll() {
+    if (accountTimer) clearTimeout(accountTimer);
+    accountTimer = null;
+  }
+
+  function watchAccounts(restart = false) {
+    if (!runningAccount) {
+      stopAccountPoll();
+      return;
+    }
+    if (restart || !accountTimer) accountStart = Date.now();
+    if (accountTimer) return;
+    accountTimer = setTimeout(pollAccounts, POLL_MS);
+  }
+
+  async function pollAccounts() {
+    accountTimer = null;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (Date.now() - accountStart > POLL_MAX) return;
+    await loadOptions();
+    watchAccounts();
   }
 
   function startPolling(delay = POLL_MS) {
@@ -344,8 +385,12 @@
               <span>{dzState.text}</span>
             </p>
           {/if}
-          {#if dz && dz.account}
-            <p class="hint">L'import de votre compte continue sur le serveur. Vous pouvez quitter cette page.</p>
+          {#if dz && dz.account && dz.available}
+            <p class="hint">
+              {dz.account.running && dz.account.running.running
+                ? "L'import de votre compte continue sur le serveur. Vous pouvez quitter cette page."
+                : "Votre compte est relié : ses nouveaux éléments sont importés automatiquement."}
+            </p>
           {:else if dz && open !== "deezer" && dz.can_link}
             <button
               class="primary"
@@ -416,8 +461,12 @@
               <span>{ytState.text}</span>
             </p>
           {/if}
-          {#if yt && yt.account}
-            <p class="hint">L'import de votre compte continue sur le serveur. Vous pouvez quitter cette page.</p>
+          {#if yt && yt.account && yt.available}
+            <p class="hint">
+              {yt.account.running && yt.account.running.running
+                ? "L'import de votre compte continue sur le serveur. Vous pouvez quitter cette page."
+                : "Votre compte est relié : ses nouveaux éléments sont importés automatiquement."}
+            </p>
           {:else if yt && yt.can_link && open !== "youtube"}
             <button
               class="primary"

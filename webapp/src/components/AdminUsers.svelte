@@ -91,7 +91,9 @@
   $: countLine =
     loading && !rows.length
       ? "Chargement des comptes…"
-      : term
+      : refreshError && term
+        ? "Recherche indisponible : réessayez."
+        : term
         ? `${countLabel(total, "compte")} correspondant${total > 1 ? "s" : ""}${matchingInvites.length ? ` · ${countLabel(matchingInvites.length, "invitation")} correspondante${matchingInvites.length > 1 ? "s" : ""}` : ""}`
         : `${countLabel(total, "compte")} · ${countLabel(invites.length, "invitation")} en attente`;
   $: filterHint =
@@ -102,6 +104,8 @@
     all: total + (term ? matchingInvites.length : invites.length),
     invited: matchingInvites.length,
     active: allLoaded ? activeLoaded : null,
+    admins: allLoaded ? rows.filter((row) => row.kind === "user" && row.admin).length : null,
+    members: allLoaded ? rows.filter((row) => row.kind === "user" && !row.admin).length : null,
     disabled: allLoaded ? disabledLoaded : null,
   };
   $: rangeLabel =
@@ -660,11 +664,16 @@
         const data = await api.adminUserDelete(row.id, confirm.typed);
         removeUser(row.id);
         finishConfirm();
-        toasts.push(
-          data.uploads_reassigned
-            ? `Compte supprimé · ${countLabel(data.uploads_reassigned, "fichier")} réattribué${data.uploads_reassigned > 1 ? "s" : ""}`
-            : "Compte supprimé",
-        );
+        const moved = [];
+        if (data.uploads_reassigned)
+          moved.push(
+            `${countLabel(data.uploads_reassigned, "fichier")} réattribué${data.uploads_reassigned > 1 ? "s" : ""}`
+          );
+        if (data.podcasts_reassigned)
+          moved.push(
+            `${countLabel(data.podcasts_reassigned, "émission")} réattribuée${data.podcasts_reassigned > 1 ? "s" : ""}`
+          );
+        toasts.push(moved.length ? `Compte supprimé · ${moved.join(" · ")}` : "Compte supprimé");
       } catch (err) {
         confirm = { ...confirm, busy: false, error: guardMessage(err) };
       }
@@ -975,7 +984,7 @@
                     <th scope="col">Nom</th>
                     <th scope="col">Rôle</th>
                     <th scope="col">État</th>
-                    <th scope="col">Dernière connexion</th>
+                    <th scope="col">Connexion / expiration</th>
                     <th scope="col" aria-label="Actions"></th>
                   </tr>
                 </thead>
@@ -1049,7 +1058,7 @@
                           </span>
                         </td>
                         <td class="when">
-                          <span title={rowSeenTitle(row)}>{shortDate(row.expires)}</span>
+                          <span title={rowSeenTitle(row)}>{expiryLabel(row.expires)}</span>
                         </td>
                         <td class="act">
                           <button
@@ -1704,7 +1713,7 @@
   }
   thead th {
     position: sticky;
-    top: 0;
+    top: var(--topbar-h, 68px);
     z-index: 2;
     height: 42px;
     padding: 0 12px;

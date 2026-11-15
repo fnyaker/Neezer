@@ -1434,8 +1434,7 @@ def pool_search(app, query) -> list[Card]:
     return out
 
 
-def picture(app, entity_id, size=250):
-    size = 60 if int(size or 250) == 60 else 250
+def _picture_card(app, entity_id):
     if not valid_uuid(entity_id):
         return None
     card = artist_cache.by_entity(entity_id)
@@ -1468,7 +1467,13 @@ def picture(app, entity_id, size=250):
                     card = candidate
                     artist_cache.remember([card])
                     break
-    if card is None or not card.picture:
+    return card if card is not None and card.picture else None
+
+
+def picture(app, entity_id, size=250, fetch=True):
+    size = 60 if int(size or 250) == 60 else 250
+    card = _picture_card(app, entity_id)
+    if card is None:
         return None
     url = _yt_picture(card.picture, size)
     if not url:
@@ -1482,6 +1487,8 @@ def picture(app, entity_id, size=250):
         path = os.path.join(directory, digest + extension)
         if os.path.isfile(path):
             return path, mimetype
+    if not fetch:
+        return None
     failure_key = f"{card.ref}:{size}"
     with _picture_lock:
         if _picture_failures.get(failure_key, 0.0) > time.monotonic():
@@ -1528,6 +1535,30 @@ def picture(app, entity_id, size=250):
         with _picture_lock:
             _picture_failures[failure_key] = time.monotonic() + 60.0
         return None
+
+
+_picture_fetching = set()
+
+
+def request_picture(app, entity_id, size=250):
+    """Start one background download of a portrait, never in the request."""
+    if _picture_card(app, entity_id) is None:
+        return False
+    key = (str(entity_id), int(size))
+    with _picture_lock:
+        if key in _picture_fetching:
+            return False
+        _picture_fetching.add(key)
+
+    def work():
+        try:
+            picture(app, entity_id, size)
+        finally:
+            with _picture_lock:
+                _picture_fetching.discard(key)
+
+    threading.Thread(target=work, name="onboarding-picture", daemon=True).start()
+    return True
 
 
 def install_snapshot(app, kind, cards, built_at=None, sources_map=None) -> None:

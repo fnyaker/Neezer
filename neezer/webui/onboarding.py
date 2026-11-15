@@ -18,7 +18,7 @@ import operator
 import uuid
 from functools import reduce
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, Response, jsonify, request, send_file
 from peewee import IntegrityError
 
 from .. import discover, sources
@@ -415,10 +415,11 @@ def _artist_payload(card, row):
     }
 
 
-def _search_items(cards):
+def _search_items(cards, user):
+    starred = _starred_ids(user, cards)
     items = []
     for card in cards:
-        item = card.as_item()
+        item = card.as_item(liked=card.entity_id in starred)
         item["fans"] = card.fans or None
         items.append(item)
     return items
@@ -456,7 +457,7 @@ def _search_payload(app, user, raw_query, limit):
     if len(folded) < SEARCH_MIN_CHARS:
         payload = {
             "query": raw_query,
-            "items": _search_items(local_ranked),
+            "items": _search_items(local_ranked, user),
             "local": local_count,
             "partial": False,
             "error": None,
@@ -481,7 +482,7 @@ def _search_payload(app, user, raw_query, limit):
     ranked = rank_search(local_ranked, remote, raw_query)[:limit]
     payload = {
         "query": raw_query,
-        "items": _search_items(ranked),
+        "items": _search_items(ranked, user),
         "local": local_count,
         "partial": error is not None,
         "error": error,
@@ -631,6 +632,7 @@ def onboarding_like():
         pass
     _unmute(user, card, row)
     discover.invalidate(user)
+    search_cache.clear()
     seen = data.get("seen") if isinstance(data.get("seen"), list) else ()
     seen = [str(value) for value in seen[:SEEN_MAX]]
     related = pool.similar_payload(app, user, card, seen=seen)
@@ -665,6 +667,7 @@ def onboarding_unlike(artist_id=None):
         (StarredArtist.user == user) & (StarredArtist.starred == starred)
     ).execute()
     discover.invalidate(user)
+    search_cache.clear()
     return jsonify({"liked": False})
 
 
@@ -767,6 +770,12 @@ def onboarding_feed_retry():
     return jsonify({"building": True}), 202
 
 
+_BLANK_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000d49444154789c6360000000020001e221bc330000000049454e44ae426082"
+)
+
+
 @onboarding_api.route("/onboarding/picture/<entity_id>")
 @login_required
 def onboarding_picture(entity_id):
@@ -774,9 +783,14 @@ def onboarding_picture(entity_id):
         size = int(request.args.get("s") or 250)
     except (TypeError, ValueError):
         size = 250
-    found = pool.picture(request_app(), entity_id, size)
+    app = request_app()
+    found = pool.picture(app, entity_id, size, fetch=False)
     if found is None:
-        raise _not_found("Portrait introuvable.", "not_found")
+        if not pool.request_picture(app, entity_id, size):
+            raise _not_found("Portrait introuvable.", "not_found")
+        response = Response(_BLANK_PNG, mimetype="image/png")
+        response.headers["Cache-Control"] = "no-store"
+        return response
     path, mimetype = found
     response = send_file(path, mimetype=mimetype, conditional=True)
     response.headers["Cache-Control"] = "public, max-age=86400, immutable"

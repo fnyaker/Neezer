@@ -198,8 +198,10 @@ side effects and the network badge are suspended; finishing reloads `/` so the s
 artist grid mounts **36 tiles first** (2/3/4/5/6 columns at 360/641/1440), then one GET per 36 by
 `after`; a like paints in the frame (11–21 ms at 4×), inserts **2** similar tiles (never a
 duplicate, cap 12), sends one POST, and polls read-only at most five times when the server answers
-`pending`. The account step costs **0 requests** on entry (its three cards come from the same
-`/api/onboarding`), an import is 1 POST + 1 GET/1.5 s while visible, and every card can be skipped.
+`pending`. The account step costs **1 GET** on entry (`GET /api/onboarding/account/options`, the rich
+`deezer|youtube|imports` shape the cards need; 2 SELECT / ~931 B server-side), then 1 GET/1.5 s
+while a linked account imports. An import is 1 POST + 1 GET/1.5 s while visible, and every card can
+be skipped.
 Offline likes go to a per-account `sessionStorage` queue and are flushed sequentially on return.
 « Terminer » waits for the queue, POSTs `artists/done`, then `accounts`; the two-attempt
 “Passer pour l'instant” only appears when the server says the feed is unavailable. 44 px, roving
