@@ -715,15 +715,17 @@ class OnboardingApiTestCase(OnboardingTestCase):
         self.assertEqual(second["next"], "48")
         self.assertEqual(self.fake.calls, [])
 
-    def test_the_page_uses_additive_fields_and_filters_liked_after_the_slice(self):
+    def test_the_page_uses_additive_fields_and_marks_liked_artists(self):
         self._install([deezer_card(i) for i in range(1, 31)])
         self._login()
         before = self._page(limit=24).get_json()
         liked = before["items"][0]["deezer_id"]
         self.assertEqual(self._like(liked).status_code, 200)
         page = self._page(limit=24).get_json()
-        self.assertEqual(len(page["items"]), 23)
-        self.assertNotIn(liked, {item["deezer_id"] for item in page["items"]})
+        self.assertEqual(len(page["items"]), 24)
+        self.assertIn(liked, {item["deezer_id"] for item in page["items"]})
+        marked = next(item for item in page["items"] if item["deezer_id"] == liked)
+        self.assertTrue(marked["liked"])
         self.assertEqual(page["next"], "24")
         next_page = self._page(after=24, limit=24).get_json()
         cards, _source, _count = pool.feed_cards(self.app, self.alice)
@@ -907,7 +909,10 @@ class OnboardingApiTestCase(OnboardingTestCase):
         self.assertTrue(all(item["hint"] for item in page["items"]))
         self._like(1)
         page = self._page(limit=24).get_json()
-        self.assertEqual([item["deezer_id"] for item in page["items"]], ["2"])
+        self.assertEqual([item["deezer_id"] for item in page["items"]], ["1", "2"])
+        self.assertTrue(
+            next(item for item in page["items"] if item["deezer_id"] == "1")["liked"]
+        )
         self.assertEqual(Artist.select().count(), 1)
 
     def test_search_local_first_then_one_provider_call(self):

@@ -560,11 +560,7 @@ def onboarding_artists():
     page = ordered[after : after + limit]
     starred = _starred_ids(user, page)
     mutes = _mute_keys(user)
-    visible = [
-        card
-        for card in page
-        if card.entity_id not in starred and not _muted(card, mutes)
-    ]
+    visible = [card for card in page if not _muted(card, mutes)]
     pool.remember_cards(visible)
     hints = page_hints(visible)
     building, error, state = _build_flags(app)
@@ -572,7 +568,7 @@ def onboarding_artists():
         {
             "items": [
                 card.as_item(
-                    liked=False,
+                    liked=card.entity_id in starred,
                     hint=hints.get(card.key),
                 )
                 for card in visible

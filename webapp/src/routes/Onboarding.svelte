@@ -58,6 +58,7 @@
   let buildTries = 0;
 
   let likedIds = new Set();
+  let likedTotal = 0;
   let pendingIds = new Set();
   let slots = new Map();
   let queue = [];
@@ -95,7 +96,6 @@
     Math.max(0, visible.findIndex((artist) => idOf(artist) === focusId)),
     Math.max(0, visible.length - 1)
   );
-  $: likedTotal = (record && Number(record.liked) || 0) + likedIds.size;
   $: unavailable = !!(feed && feed.state === "unavailable" && !feed.building);
   $: canPass = canPassArtists({ attempts: feedAttempts, feed, count: likedTotal });
   $: endOfList = !next && visible.length > 0 && visible.length >= items.length;
@@ -123,9 +123,10 @@
   onMount(() => {
     const account = ($user && $user.name) || "";
     const cached = readStore("list", { maxAge: LIST_TTL });
-    if (cached && cached.account === account && Array.isArray(cached.items) && cached.items.length) {
+    if (cached && (!cached.account || cached.account === account) && Array.isArray(cached.items) && cached.items.length) {
       artists = cached.items;
       next = typeof cached.next === "string" ? cached.next : "";
+      if (Array.isArray(cached.liked)) likedIds = new Set(cached.liked);
     }
     const savedSearch = readStore("search", { maxAge: CACHE_TTL });
     if (savedSearch && savedSearch.account === account && savedSearch.q) {
@@ -133,8 +134,12 @@
       query = savedSearch.q;
       searchItems = Array.isArray(savedSearch.items) ? savedSearch.items : [];
     }
+    const savedLiked = readStore("liked", { maxAge: null });
+    if (savedLiked && (!savedLiked.account || savedLiked.account === account) && Array.isArray(savedLiked.ids)) {
+      likedIds = new Set(savedLiked.ids);
+    }
     const savedQueue = readStore("queue", { maxAge: null });
-    if (savedQueue && savedQueue.account === account && Array.isArray(savedQueue.entries)) {
+    if (savedQueue && (!savedQueue.account || savedQueue.account === account) && Array.isArray(savedQueue.entries)) {
       queue = savedQueue.entries;
       for (const entry of queue) if (entry.liked) likedIds.add(entry.id);
     } else {
@@ -167,6 +172,7 @@
       const state = await api.onboardingState();
       if (destroyed) return;
       record = state || {};
+      likedTotal = Number(record.liked) || 0;
       feed = record.feed || null;
       if (record.step === "done") {
         finishToHome();
@@ -204,12 +210,28 @@
     return ($user && $user.name) || "";
   }
 
+  function seedLiked(items) {
+    const next = new Set(likedIds);
+    for (const item of items || []) if (item && item.liked) next.add(idOf(item));
+    likedIds = next;
+  }
+
   function persistList() {
-    writeStore("list", { account: accountName(), items: cacheList(artists), next });
+    writeStore("list", {
+      account: accountName(),
+      items: cacheList(artists),
+      next,
+      liked: Array.from(likedIds),
+    });
   }
 
   function persistQueue() {
     writeStore("queue", { account: accountName(), entries: queue });
+  }
+
+  function persistLiked() {
+    writeStore("liked", { account: accountName(), ids: Array.from(likedIds) });
+    persistList();
   }
 
   async function loadPage({ first = false } = {}) {
@@ -225,6 +247,7 @@
       if (destroyed || seq !== listSeq) return;
       const pageItems = Array.isArray(page.items) ? page.items : [];
       artists = first && !artists.length ? pageItems : reconcilePage(artists, pageItems);
+      seedLiked(pageItems);
       next = page.next || "";
       rememberFeed(page);
       persistList();
@@ -245,6 +268,7 @@
       if (destroyed) return;
       const pageItems = Array.isArray(page.items) ? page.items : [];
       artists = reconcilePage(artists, pageItems);
+      seedLiked(pageItems);
       if (before <= pageItems.length) next = page.next || "";
       rememberFeed(page);
       persistList();
@@ -352,6 +376,8 @@
 
   function like(key) {
     likedIds = new Set(likedIds).add(key);
+    likedTotal += 1;
+    persistLiked();
     if (!$online) {
       queue = enqueueLike(queue, key, true);
       persistQueue();
@@ -372,6 +398,8 @@
   function unlike(key) {
     likedIds = new Set(likedIds);
     likedIds.delete(key);
+    likedTotal = Math.max(0, likedTotal - 1);
+    persistLiked();
     clearSlot(key);
     setActive(removeSimilar(activeList(), key, likedIds));
     if (!$online) {
@@ -391,6 +419,8 @@
     pendingIds.delete(key);
     if (ok) return;
     likedIds = new Set(likedIds).add(key);
+    likedTotal += 1;
+    persistLiked();
     actionError = {
       message: "Votre choix n'a pas été enregistré.",
       retry: () => toggle({ id: key, liked: true }),
@@ -403,6 +433,8 @@
     if (!ok) {
       likedIds = new Set(likedIds);
       likedIds.delete(key);
+      likedTotal = Math.max(0, likedTotal - 1);
+      persistLiked();
       clearSlot(key);
       actionError = {
         message: "Votre choix n'a pas été enregistré.",
