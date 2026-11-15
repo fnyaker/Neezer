@@ -350,7 +350,13 @@ def _album_rows(ident):
         .where(Track.album == alb)
         .order_by(Track.disc, Track.number)
     )
-    return alb.name, list(q)
+    clause = Track.visible_clause(request.webuser)
+    if clause is not None:
+        q = q.where(clause)
+    rows = list(q)
+    if not rows:
+        return None, None
+    return alb.name, rows
 
 
 def _source(kind, ident):
@@ -367,7 +373,7 @@ def _source(kind, ident):
     from . import export
 
     if kind == "favorites":
-        return "Favoris", _user_starred()
+        return "Favoris", [t for t in _user_starred() if t.readable_by(request.webuser)]
     if kind == "playlist":
         pl = _resolve_db_playlist(ident)
         if pl is not None:

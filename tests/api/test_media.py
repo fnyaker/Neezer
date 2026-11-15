@@ -214,6 +214,37 @@ class MediaTestCase(ApiTestBase):
             self.assertEqual(rv.status_code, 200)
             self.assertEqual(rv.mimetype, "image/png")
 
+    def test_get_cover_art_of_a_file_without_art_is_404_not_500(self):
+        import struct
+        import tempfile
+        import wave
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as fh:
+            wav_path = fh.name
+        try:
+            with wave.open(wav_path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(8000)
+                w.writeframes(struct.pack("<h", 0) * 800)
+            folder = Folder.get(name="Root")
+            track = Track.create(
+                title="bare",
+                number=2,
+                disc=1,
+                artist=Album.get(name="Album").artist,
+                album=Album.get(name="Album"),
+                path=wav_path,
+                root_folder=folder,
+                folder=folder,
+                duration=1,
+                bitrate=128,
+                last_modification=0,
+            )
+            self._make_request("getCoverArt", {"id": str(track.id)}, error=70)
+        finally:
+            os.unlink(wav_path)
+
     def test_get_avatar(self):
         self._make_request("getAvatar", error=0)
 

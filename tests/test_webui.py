@@ -2289,7 +2289,7 @@ class WebUITestCase(unittest.TestCase):
 
     def test_set_arl_stores_and_overrides_the_config(self):
         import neezer.deezer as dzmod
-        from neezer.db import Meta
+        from neezer.db import Meta, ProviderAccount
 
         class Accepting(dzmod.DeezerProvider):
             def check_login(self, force=False):
@@ -2304,7 +2304,13 @@ class WebUITestCase(unittest.TestCase):
             dz = rv.get_json()["deezer"]
             self.assertEqual(dz["arl_source"], "database")
             self.assertEqual(dz["arl_hint"], "…bbbb")
-            self.assertEqual(Meta.get(Meta.key == "deezer_arl").value, "b" * 64)
+            self.assertIsNone(Meta.get_or_none(Meta.key == "deezer_arl"))
+            row = ProviderAccount.get(
+                ProviderAccount.provider == "deezer",
+                ProviderAccount.mode == "server",
+            )
+            self.assertTrue(row.secret.startswith("server-arl:gcm:"))
+            self.assertNotIn("b" * 64, row.secret)
             # The stored one wins when a provider is rebuilt.
             self.assertEqual(dzmod.stored_arl(), "b" * 64)
             self.app.config["DEEZER"]["enabled"] = True
@@ -2313,8 +2319,45 @@ class WebUITestCase(unittest.TestCase):
             rv = self.client.post("/api/settings", json={"deezer_arl": ""})
             self.assertEqual(rv.status_code, 200)
             self.assertIsNone(dzmod.stored_arl())
+            self.assertIsNone(
+                ProviderAccount.get(
+                    ProviderAccount.provider == "deezer",
+                    ProviderAccount.mode == "server",
+                ).secret
+            )
         finally:
             dzmod.DeezerProvider = orig
+
+    def test_a_legacy_plaintext_arl_is_migrated_on_read(self):
+        import neezer.deezer as dzmod
+        from neezer.db import Meta, ProviderAccount
+
+        Meta.create(key="deezer_arl", value="d" * 64)
+        self.assertEqual(dzmod.stored_arl(), "d" * 64)
+        self.assertIsNone(Meta.get_or_none(Meta.key == "deezer_arl"))
+        row = ProviderAccount.get(
+            ProviderAccount.provider == "deezer", ProviderAccount.mode == "server"
+        )
+        self.assertTrue(row.secret.startswith("server-arl:gcm:"))
+        self.assertNotIn("d" * 64, row.secret)
+        self.assertEqual(dzmod.stored_arl(), "d" * 64)
+        self.assertEqual(Meta.select().where(Meta.key == "deezer_arl").count(), 0)
+
+    def test_an_unreadable_stored_arl_is_ignored_not_raised(self):
+        import neezer.deezer as dzmod
+        from neezer.db import ProviderAccount
+
+        dzmod.store_arl("e" * 64)
+        row = ProviderAccount.get(
+            ProviderAccount.provider == "deezer", ProviderAccount.mode == "server"
+        )
+        row.secret = "server-arl:gcm:AAAA"
+        row.save()
+        self.assertIsNone(dzmod.stored_arl())
+
+        dzmod.store_arl("f" * 64)
+        with mock.patch("neezer.managers.user._password_key", return_value=b"\x00" * 32):
+            self.assertIsNone(dzmod.stored_arl())
 
     def test_deezer_status_reports_a_dead_arl(self):
         self._login()
@@ -2403,24 +2446,49 @@ class WebUITestCase(unittest.TestCase):
         cfg["android_url"] = None
         self.assertTrue(self.client.get("/api/version").get_json()["android"]["apk"])
         asset = "https://objects.githubusercontent.com/x"
+
+        def fetched():
+            """Ask for the APK; wait for the worker the 202 points at."""
+            rv = self.client.get("/api/android/apk")
+            if rv.status_code == 202:
+                job = androidapk.apk_job(cfg)
+                job["thread"].join(10)
+                rv.close()
+                rv = self.client.get("/api/android/apk")
+            return rv
+
         try:
-            # A GitHub error page is not an APK: refused, nothing kept.
+            # A GitHub error page is not an APK: refused, nothing kept. The first
+            # call starts the fetch and answers at once; the cause comes after.
+            androidapk._apk_jobs.clear()
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp(asset, b"<html>")) as get:
-                self.assertEqual(self.client.get("/api/android/apk").status_code, 502)
+                rv = self.client.get("/api/android/apk")
+                self.assertEqual(rv.status_code, 202)
+                self.assertTrue(int(rv.headers["Retry-After"]) >= 1)
+                self.assertEqual(rv.get_json()["state"], "fetching")
+                job = androidapk.apk_job(cfg)
+                job["thread"].join(10)
+                rv.close()
+                rv = self.client.get("/api/android/apk")
+                self.assertEqual(rv.status_code, 502)
+                self.assertEqual(rv.get_json()["state"], "failed")
+                rv.close()
             self.assertEqual(
                 get.call_args[0][0],
                 "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/neezer.apk",
             )
             # A redirect off GitHub is refused too.
+            androidapk._apk_jobs.clear()
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp("https://evil.example/a", body)):
-                self.assertEqual(self.client.get("/api/android/apk").status_code, 502)
+                self.assertEqual(fetched().status_code, 502)
             # The real thing: fetched once, then served from the cache.
+            androidapk._apk_jobs.clear()
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp(asset, body)) as get:
                 for _ in range(2):
-                    rv = self.client.get("/api/android/apk")
+                    rv = fetched()
                     self.assertEqual(rv.status_code, 200)
                     self.assertEqual(rv.data, body)
                     self.assertEqual(rv.mimetype, androidapk.APK_MIME)
@@ -2445,6 +2513,7 @@ class WebUITestCase(unittest.TestCase):
                 rv.close()
                 get.assert_not_called()
         finally:
+            androidapk._apk_jobs.clear()
             cfg["android_version"] = None
             cfg["android_url"] = None
             cfg["android_apk"] = None
@@ -2476,7 +2545,7 @@ class WebUITestCase(unittest.TestCase):
 
         try:
             with mock.patch.object(androidapk, "_download", side_effect=fake):
-                path = androidapk.ensure_apk(cfg)
+                path = androidapk.fetch_apk(cfg)
             self.assertTrue(os.path.isfile(path))
             self.assertEqual(
                 calls,

@@ -167,6 +167,9 @@ def album_list_id3():
     root = get_root_folder(mfid)
 
     query = Album.select().join(Track).group_by(Album.id)
+    clause = Track.visible_clause(request.user)
+    if clause is not None:
+        query = query.where(clause)
     if root is not None:
         query = query.where(Track.root_folder == root)
 
