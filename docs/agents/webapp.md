@@ -431,6 +431,23 @@ then “Voir les N chapitres” opens a body-portalled sheet that returns focus 
 non-archived episode, an empty scan and a network failure each say so; no chapter is invented.
 Chapters are deliberately not in the offline `/api` cache.
 
+**Transcription lives in the same About panel** (`components/TranscriptPanel.svelte`,
+`lib/transcript.js`, `transcriptcache.js`): the podcast panel becomes `Chapitres | Transcription`,
+one page of **200** timed lines, the current segment highlighted and followed, tap-to-seek without
+restarting playback, a “back to the live position” pill and an internal debounced search. A ready
+transcript costs **0 requests while listening**, 1 GET for the next page or an internal search, and
+is cached in IndexedDB `neezer-transcripts` (50 pages / 5 MB, 4 per episode, key
+`episode:limit:offset`, `ready` only, local search; never in `REMOTE`). A `queued|running` job polls
+once per 10 s with `limit=1`, never in `ready`; the status/error copy is French and the admin can
+start/stop/delete, while every account reads. A search hit opens the full-screen player **and** the
+About panel on the Transcription segment at the hit's timecode (`panelRequest` is consumed by the
+desktop/mobile shell with `segToken`, expiring after 3 s); the episode page has the same jump. The
+global Space shortcut ignores interactive targets (`button/a/input/textarea/select/[role=button]/
+[contenteditable]`). Settings carries the admin transcription card (enabled, language, limits,
+search scope, engine/model probe) and the two chapter switches. Measured: 0/1/0 requests on a ready
+transcript, 1 GET per page/search, 1 poll per 10.5 s while running, 200 lines at 390/641/1440 with no
+sideways overflow, 44 px controls.
+
 Its requests are keyed on the track's id as a STRING: `track` is the store's
 object, handed over again on every progress tick, and a reactive statement reading it asked for the credits four
 times a second (the browser test counts requests).
