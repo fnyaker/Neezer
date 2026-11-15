@@ -115,8 +115,10 @@ def archive_backfill():
 
 def _run_backfill(app, scope, user_id):
     from ..db import User, close_connection, open_connection
+    from ..deezer import workload
 
     try:
+        workload.renice(10)
         with app.app_context():
             open_connection(reuse=True)
             user = User.get_or_none(User.id == user_id)

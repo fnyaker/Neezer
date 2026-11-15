@@ -25,6 +25,8 @@
   } from "../lib/stores.js";
   import { toggleFavorite, toggleDislike, buildTrackMenu, startTrackRadio } from "../lib/actions.js";
   import { addMarkerAt } from "../lib/markers.js";
+  import { chaptersByEpisode, chapterAt, chapterLabel, chapterCountLabel, nextChapter, podcastAbout } from "../lib/chapters.js";
+  import { panelRequest, takePanelRequest } from "../lib/transcript.js";
   import { duration as fmtDuration, hiResCover, resolveCover, cssUrl } from "../lib/format.js";
   import { nameOf } from "../lib/sources.js";
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
@@ -79,8 +81,13 @@
   import NowPlayingMore from "./NowPlayingMore.svelte";
   import SleepButton from "./SleepButton.svelte";
   import SpeedButton from "./SpeedButton.svelte";
+  import ChapterTicks from "./ChapterTicks.svelte";
 
   let tab = "queue";
+  let panelSeg = null;
+  let panelPosition = null;
+  let panelToken = 0;
+  let panelSegTimer = null;
   // How much of the stage goes to reading, decided by what the columns need.
   // 1200 px is where the sleeve column, the player and the queue still hold
   // their comfortable widths; 1600 px adds a fourth column (the facts) without
@@ -213,8 +220,53 @@
   // the server has no genre for shows none.
   $: styleLabel = $vizShowStyle ? $servedStyleLabel : "";
 
+  $: podcast = !!$current?.podcast;
+  $: aboutAvailable = !!$current && (!podcast || podcastAbout($current) || $current.transcript != null);
+  $: hasSecondTab = CAN_BROWSE && ((!podcast && !roomy) || (aboutAvailable && !wide));
+  $: if (tab === "more" && !aboutAvailable) tab = "queue";
+  $: if (tab === "lyrics" && podcast) tab = "queue";
+
+  $: if (
+    $panelRequest &&
+    $current?.podcast &&
+    String($panelRequest.episodeId) === String($current.id)
+  ) {
+    applyPanelRequest();
+  }
+
+  function applyPanelRequest() {
+    const request = takePanelRequest();
+    if (!request) return;
+    panelSeg = request.seg || "transcript";
+    panelPosition = request.position;
+    panelToken += 1;
+    if (aboutAvailable && !wide) tab = "more";
+    clearTimeout(panelSegTimer);
+    panelSegTimer = setTimeout(() => {
+      panelSeg = null;
+      panelPosition = null;
+    }, 3000);
+  }
+
+  $: chapterEntry = podcast ? $chaptersByEpisode[String($current?.id || "")] || null : null;
+  $: chapterList = chapterEntry?.chapters || [];
+  $: chapterNow = podcast ? chapterAt(chapterList, $player.currentTime) : null;
+  $: chapterNext = podcast && !chapterNow ? nextChapter(chapterList, $player.currentTime) : null;
+  $: aboutLine = podcast
+    ? chapterNow
+      ? chapterLabel(chapterList, chapterNow.index)
+      : chapterNext
+        ? "Prochain chapitre · " + (chapterNext.chapter.title || "Chapitre " + (chapterNext.index + 1))
+        : ($current?.chapter_count || 0) > 0
+          ? chapterCountLabel($current.chapter_count)
+          : aboutAvailable
+            ? "À propos"
+            : "Podcast"
+    : styleLabel;
+
   onDestroy(() => {
     bg.destroy();
+    clearTimeout(panelSegTimer);
   });
 </script>
 
@@ -250,7 +302,13 @@
       </div>
     </div>
   {/if}
-  <NowPlayingMore track={$current} />
+  <NowPlayingMore
+    track={$current}
+    position={$player.currentTime}
+    seg={panelSeg}
+    initialPosition={panelPosition}
+    segToken={panelToken}
+  />
 {/snippet}
 
 <div class="d" transition:fade={{ duration: 150 }}>
@@ -294,7 +352,15 @@
     {/if}
     <span class="ctx">
       <span class="label-mono where">{$player.context?.kind === "flow" ? "Flow" : "En lecture"}</span>
-      {#if styleLabel}<span class="genre">{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</span>{/if}
+      {#if podcast}
+        {#if aboutAvailable && CAN_BROWSE && !wide}
+          <button class="genre about-line" on:click={() => (tab = "more")} aria-controls="np-side-body" title="Ouvrir À propos de l'épisode">{aboutLine}</button>
+        {:else}
+          <span class="genre">{aboutLine}</span>
+        {/if}
+      {:else if styleLabel}
+        <span class="genre">{styleLabel}{#if $readout.bpm} · {$readout.bpm} BPM{/if}</span>
+      {/if}
     </span>
     {#if CAN_KEEP}
       <QualityMenu placement="down" />
@@ -304,7 +370,7 @@
   </header>
 
   <div class="stage">
-    {#if roomy && CAN_BROWSE}
+    {#if roomy && CAN_BROWSE && !podcast}
       <aside class="lyrics-col" aria-label="Paroles">
         <header class="col-h"><span class="label-mono">Paroles</span></header>
         <div class="lyrics-body"><Lyrics /></div>
@@ -364,7 +430,12 @@
 
       <div class="seek">
         <span class="time">{fmtDuration($player.currentTime)}</span>
-        <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} style={`--p:${progress}%; --b:${bufferedPct}%`} aria-label="Position dans le titre" />
+        <div class="rail">
+          <input type="range" min="0" max={$player.duration || 0} value={$player.currentTime} on:input={seek} style={`--p:${progress}%; --b:${bufferedPct}%`} aria-label="Position dans le titre" />
+          {#if podcast}
+            <ChapterTicks chapters={chapterList} duration={$player.duration} thumb={13} />
+          {/if}
+        </div>
         <span class="time">{fmtDuration($player.duration)}</span>
       </div>
 
@@ -426,22 +497,21 @@
     </section>
 
     <aside class="side">
-      {#if wide}
-        <!-- Four columns: the queue's tab row would be a single dead pill.
-             Its header aligns with the two reading columns. -->
-        <header class="col-h"><span class="label-mono">File d'attente</span></header>
-      {:else}
+      {#if hasSecondTab}
         <div class="tabs">
-          <button class:active={tab === "queue"} on:click={() => (tab = "queue")}>File d'attente</button>
-          <!-- A queue-only link lends the transport and the queue, not the
-               library's reading (the lyrics are served at the "read" level).
-               Each tab disappears when its column has its own room, so there is
-               never a second copy of the same view. -->
-          {#if CAN_BROWSE && !roomy}<button class:active={tab === "lyrics"} on:click={() => (tab = "lyrics")}>Paroles</button>{/if}
-          {#if CAN_BROWSE && !$current.podcast && !wide}<button class:active={tab === "more"} on:click={() => (tab = "more")}>À propos</button>{/if}
+          <button class:active={tab === "queue"} aria-controls="np-side-body" on:click={() => (tab = "queue")}>File d'attente</button>
+          {#if CAN_BROWSE && !roomy && !podcast}
+            <button class:active={tab === "lyrics"} aria-controls="np-side-body" on:click={() => (tab = "lyrics")}>Paroles</button>
+          {/if}
+          {#if aboutAvailable && !wide}
+            <button class:active={tab === "more"} aria-controls="np-side-body" on:click={() => (tab = "more")}>À propos</button>
+          {/if}
         </div>
+      {:else}
+        <header class="col-h"><span class="label-mono">File d'attente</span></header>
       {/if}
-      <div class="side-body">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="side-body" id="np-side-body" tabindex={podcast ? "0" : undefined}>
         {#if tab === "queue"}
           <div class="queue">
             <QueueList items={q} {idx} bind:this={queueVL} showDuration />
@@ -455,12 +525,11 @@
       </div>
     </aside>
 
-    {#if wide && CAN_BROWSE && !$current.podcast}
-      <!-- The facts get their own card only once the stage can hold four
-           columns; below that they are the queue card's third tab. -->
+    {#if wide && CAN_BROWSE && aboutAvailable}
       <aside class="about" aria-label="À propos">
         <header class="col-h"><span class="label-mono">À propos</span></header>
-        <div class="side-body about-body">{@render aboutContent()}</div>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <div class="side-body about-body" tabindex={podcast ? "0" : undefined}>{@render aboutContent()}</div>
       </aside>
     {/if}
   </div>
@@ -536,6 +605,22 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .ctx .about-line {
+    min-height: 32px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .ctx .about-line:hover {
+    background: var(--s2);
+  }
+  .ctx .about-line:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: -2px;
+  }
   .ic {
     display: grid;
     place-items: center;
@@ -571,6 +656,8 @@
     flex-direction: column;
     justify-content: center;
     gap: 18px;
+    container-type: inline-size;
+    container-name: nowmain;
   }
 
   /* The reading columns (Sillon's raised card, same as the queue's). They only
@@ -683,7 +770,7 @@
        artist line under it. */
     padding: 0;
     font-family: var(--font-display);
-    font-size: 44px;
+    font-size: clamp(24px, 12.6cqi, 44px);
     line-height: 1;
     letter-spacing: -0.03em;
     font-weight: 800;
@@ -691,6 +778,23 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* A narrow main column (the player with its queue panel beside it at 641–800)
+     cannot hold a title on one line: it wraps to two and the column keeps the
+     room. A seven-letter stub was what the one-line rule produced. The strip
+     gives way first, as it already does under 820 px of height. */
+  @container nowmain (max-width: 460px) {
+    .t {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-height: 1.04;
+    }
+    .viz {
+      display: none;
+    }
   }
   /* `display: block` is load-bearing: this used to be a <button> and now wraps
      one button per credited artist (each with its own hover), and ellipsis
@@ -757,6 +861,13 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+  .rail {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
   }
   .time {
     font-family: var(--font-mono);
@@ -954,11 +1065,20 @@
     background: var(--ac);
     color: var(--onac);
   }
+  @media (pointer: coarse) {
+    .tabs button {
+      height: 44px;
+    }
+  }
   .side-body {
     flex: 1;
     overflow-y: auto;
     padding: 6px 12px 16px;
     min-height: 0;
+  }
+  .side-body:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: -2px;
   }
   .queue {
     margin: 0;
@@ -1141,6 +1261,18 @@
     }
     .vol-range {
       width: 72px;
+    }
+  }
+  @container nowmain (max-width: 320px) {
+    .controls {
+      gap: 12px;
+    }
+  }
+  /* The narrowest desktop player (641–700 px, its queue panel beside it): the
+     footer wraps to two rows, so the column's own gaps give the height back. */
+  @media (max-width: 700px) {
+    .main {
+      gap: 14px;
     }
   }
 </style>

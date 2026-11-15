@@ -88,9 +88,9 @@ specialist reads its own notes, changes only its own files, measures, and return
 
 Safe to run at the same time, because they do not write the same files:
 
-- **up to 10 `batch` workers**, each on a disjoint file list. This is the only place the team
+- **up to 20 `batch` workers**, each on a disjoint file list. This is the only place the team
   scales horizontally: a mechanical job with a checkable command does not need judgment, so split
-  it by file and let the workers run together. Beyond 10, the checks and the review cost more than
+  it by file and let the workers run together. Beyond 20, the checks and the review cost more than
   the job; queue the rest.
 - `security` (read-only audit) with any implementation agent;
 - `qa` measuring the current state while `frontend` or `api` works in another area;

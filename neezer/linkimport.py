@@ -217,23 +217,52 @@ def _read(resp, limit=MAX_PAGE) -> bytes:
     return bytes(out)
 
 
-def _get_page(session, url: str, what: str) -> str:
-    try:
-        resp = session.get(
-            url,
-            headers={"User-Agent": BROWSER_UA, "Accept-Language": "fr,en;q=0.8"},
-            stream=True,
-        )
-    except Exception as exc:
-        raise LinkError(f"{what} ne répond pas ({_short_cause(exc)})") from exc
-    try:
-        if resp.status_code == 404:
-            raise LinkError(f"Playlist introuvable sur {what} (supprimée ou privée ?)")
-        if resp.status_code >= 400:
-            raise LinkError(f"{what} a refusé la demande (HTTP {resp.status_code})")
-        return _read(resp).decode("utf-8", "replace")
-    finally:
-        resp.close()
+_PAGE_HOSTS = {
+    "deezer": _DEEZER_HOSTS,
+    "spotify": _SPOTIFY_HOSTS,
+    "youtube": _YOUTUBE_HOSTS | _YOUTUBE_SHORT,
+    "apple": _APPLE_HOSTS,
+}
+
+
+def _host_allowed(url: str, source: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        return False
+    known = _PAGE_HOSTS.get(source, ())
+    return host in known or any(host.endswith("." + base) for base in known)
+
+
+def _get_page(session, url: str, what: str, hops: int = 4) -> str:
+    source = (parse(url) or {}).get("source")
+    current = url
+    for _ in range(hops):
+        if source is None or not _host_allowed(current, source):
+            raise LinkError(f"{what} a redirigé vers un autre service")
+        try:
+            resp = session.get(
+                current,
+                headers={"User-Agent": BROWSER_UA, "Accept-Language": "fr,en;q=0.8"},
+                allow_redirects=False,
+                stream=True,
+            )
+        except Exception as exc:
+            raise LinkError(f"{what} ne répond pas ({_short_cause(exc)})") from exc
+        try:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                location = resp.headers.get("Location")
+                if not location:
+                    raise LinkError(f"{what} a redirigé sans adresse")
+                current = urljoin(current, location)
+                continue
+            if resp.status_code == 404:
+                raise LinkError(f"Playlist introuvable sur {what} (supprimée ou privée ?)")
+            if resp.status_code >= 400:
+                raise LinkError(f"{what} a refusé la demande (HTTP {resp.status_code})")
+            return _read(resp).decode("utf-8", "replace")
+        finally:
+            resp.close()
+    raise LinkError(f"{what} redirige trop de fois")
 
 
 def entry(title, artists=(), album=None, duration=0, isrc=None, **extra) -> dict | None:

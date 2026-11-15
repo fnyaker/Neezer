@@ -11,6 +11,11 @@ python -m unittest tests.test_webui.SomeClass.test_x # one test
 # The 2026-11 discovery/history/mood/share lots, together (all offline):
 python tools/partest.py tests.test_genre_radio tests.test_history tests.test_moods \
     tests.test_playlist_recs tests.test_playlist_share
+python tools/partest.py tests.test_recap tests.test_playlist_folders tests.test_playlist_collab_core
+                                                     # the 2026-11 recap / folders / collaborative core lots
+python tools/partest.py tests.test_invites tests.test_admin_users tests.test_onboarding \
+    tests.test_onboarding_import
+                                                     # invites, guarded accounts, artist onboarding, account/import
 python -m unittest tests.net.suite                   # network tests (hit real services; weekly in CI)
 
 # Same suite across processes — ~12s on 4 cores. Takes the same test ids. What CI runs.
@@ -18,6 +23,17 @@ python tools/partest.py                              # whole suite
 python tools/partest.py -j8 tests.test_webui
 python tools/partest.py --coverage && coverage combine
 NS_REQUIRE_FFMPEG=1 python tools/partest.py          # fail, don't skip, if ffmpeg is missing
+
+# The upgrade path on the engines production runs (PostgreSQL/MySQL). Each case
+# drops EVERY table of the named database, so the name must contain "test".
+pip install -e .[postgresql]                         # or .[mysql]; MySQL 8's
+                                                     # caching_sha2 also needs `cryptography`
+NEEZER_TEST_DATABASE=postgresql://postgres:postgres@localhost:5432/neezer_test \
+    python -m unittest tests.test_schema_external
+NEEZER_TEST_DATABASE=mysql://neezer:neezer@localhost:3306/neezer_test \
+    python -m unittest tests.test_schema_external
+NS_REQUIRE_DATABASE=1 NEEZER_TEST_DATABASE=... python -m unittest tests.test_schema_external
+                                                     # fail instead of skip without a URI (what CI sets)
 
 # Dev install (a project .venv is expected)
 pip install -e . && pip install lxml coverage        # == ci-requirements.txt
@@ -83,26 +99,70 @@ cd webapp && node test/download/run.mjs              # a playlist downloading on
 cd webapp && node test/import/run.mjs [--phone]       # a shared playlist link: pasted into the search, read, played, kept
 cd webapp && node test/requests/run.mjs             # what playing costs in requests: a track the server refuses (Deezer off) is
                                                      # retried at a human pace, not 70 times a second; a missing cover is asked once
-cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen player from 700x900 to 1920x1080: every control on screen,
-                                                     # inside its column and the element a click at its centre lands on
+cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen player from 641x900 to 1920x1080: every control on screen,
+                                                     # inside its column, the title readable at 641-800, and the element a click at its centre lands on
                                                      # (the four browser tests above start tools/perf_api.py --serve; PYTHON=<venv python>, SHOTS=<dir> keeps pictures)
+cd webapp && node test/failure/run.mjs               # an API 500/offline says its cause and offers Réessayer (one click = one request),
+                                                     # menus ⋯ work from the keyboard, rows are 44 px on touch / 40 px with a mouse
+cd webapp && node test/recap/run.mjs                 # the recap stories: 2 requests cold / 1 warm / 0 per card, 9 cards maximum,
+                                                     # share poster 1080x1350 + real PNG download, 390/360/641/1440 px, auto-advance,
+                                                     # all states and privacy; needs a build (DIST=/tmp/... for one outside dist)
+cd webapp && node test/onboarding/run.mjs            # invitation -> public page -> account -> artists -> account step: 1 public inspect,
+                                                     # 1 redemption POST, 36 tiles, 1 search GET, 1 like POST + 2 neighbours, the
+                                                     # refresh, the 3 skippable options, 390/1440, and the no-artist escape on a 0-track server
+cd webapp && node test/admin/run.mjs                 # Réglages → Utilisateurs on 200 accounts and 20 invites: 1 users + 1 invites GET,
+                                                     # 1 GET per search/page, 1 POST/PATCH/DELETE per mutation, the once-shown link,
+                                                     # the last-admin 409, the member's 0 request + 403, 390/641/1280 geometry
+cd webapp && node test/podcast/run.mjs               # a show with chapters and transcripts: 0/1/0 chapter requests, 1 panel GET,
+                                                     # 0 per segment, 200 lines, a hit seek, 1 poll per 10 s, the 100-chapter sheet,
+                                                     # 390/641/1440 and the admin mark/progress card
 
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works
 neezer-cli deezer import <deezer-url|track|album|playlist <id>>
 neezer-cli deezer sync                            # import playlists/favorites/new releases
+neezer-cli audit list [-n 50]                        # the durable admin trail, newest first
 neezer-cli deezer lyrics [--overwrite] [--limit N]  # archive synced lyrics for archived tracks
+neezer-cli podcast chapters [--force] [--urls] [--limit N]  # extract chapters from archived podcast
+                                                     # episodes (sidecar/tags, optionally publisher URL); resumable
+neezer-cli podcast transcribe --episode <id>          # queue one archived episode (manual priority; repeatable)
+neezer-cli podcast transcribe --all [--limit N]       # queue the backlog of marked shows (budgeted, resumable)
+neezer-cli podcast transcribe --status                # queue counts, active progress, causes and budget
+neezer-cli podcast transcribe --stop [--episode <id>] # stop queued/running work
+neezer-cli transcribe rebuild [--limit N]             # recreate the DB index from the .transcript.json sidecars
+python -m unittest tests.test_transcribe              # fake whisper.cpp, fake ffmpeg, real SQLite
+NS_WHISPER=1 NS_WHISPER_BIN=/usr/local/bin/whisper-cli NS_WHISPER_MODEL=/models/ggml-small.bin \
+    NS_WHISPER_AUDIO=/tmp/opencode/extrait-60s.wav \
+    python -m unittest tests.test_transcribe.RealEngineTestCase   # opt-in, real engine, real speech
 neezer-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo + style for archived tracks
 neezer-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
 python tools/tempo_eval.py --render /tmp/tempo          # the server's file tempo on the 28 arranged records + beatless tones
-python tools/perf_api.py [--tracks 20000] [--serve]     # every screen's /api route timed on a big synthetic library (Deezer off):
-                                                     # median ms, SQL statement count, bytes and gzip bytes per route
+python tools/perf_api.py [--tracks 20000] [--serve] [--recap]   # every screen's /api route timed on a big synthetic library
+                                                     # (Deezer off): median ms, SQL statement count, bytes and gzip per route;
+                                                     # --recap seeds 37 000 listen events and times /api/recap/years + /<year>
+                                                     # cold/warm/304 with exact totals; --onboarding seeds invitation tokens,
+                                                     # a searchable artist and cached neighbours; --admin-users N --admin-invites M
+                                                     # seed the accounts screen; --podcasts seeds a show with chapters and
+                                                     # transcripts (external runner); --dist serves a build outside dist
 neezer-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
 neezer-cli deezer embed --self-test                 # check the mel front-end without a reference
 
 # Docker (full stack: builds SPA + python image, runs entrypoint that creates admin + auto-sync)
 docker compose up --build                            # web player at :5722/app, Subsonic at :5722/rest
 docker build -t neezer:dev . && docker/smoke.sh neezer:dev   # what CI checks before pushing
+
+# Transcription sidecar (docker/transcribe): no model in the image, model mounted :ro
+tools/fetch-whisper-model.sh --model large-v3-turbo-q8_0 --dest ./models
+tools/fetch-whisper-model.sh --model small --dest ./models   # NAS / tight RAM
+docker build -t neezer-transcriber:dev docker/transcribe     # context is the sidecar dir
+docker buildx build --platform linux/amd64,linux/arm64 -t neezer-transcriber:dev docker/transcribe
+docker compose -f docker-compose.yml -f docker-compose.transcribe.yml up -d transcriber
+docker compose -f docker-compose.yml -f docker-compose.transcribe.yml logs -f transcriber
+docker compose -f docker-compose.yml -f docker-compose.transcribe.yml \
+    exec transcriber python3 /app/worker.py --check          # model/binaries/token, no API call
+python3 docker/transcribe/test_worker.py -v                  # fake API + fake whisper/ffmpeg, no Docker needed
+                                                     # (covers claim/audio Range/chunk/complete/fail/cancel/backoff;
+                                                     #  the guide is docs/podcast-media.md)
 ```
 
 The project's subagents are declared in `opencode.json`, with their prompts under
@@ -120,12 +180,14 @@ argon2 for cheap parameters (hashing was half the wall clock; `tests.managers.te
 pins the production defaults), and it compiles each distinct werkzeug URL builder once per process
 instead of once per rule per app (~95% of every `create_application`; `tests.test_harness` checks
 every rule's URLs against a fresh werkzeug compilation). CI runs seven workflows:
-- `tests.yaml` — two jobs, not a version matrix: **image** (Python 3.13, what the Docker image
+- `tests.yaml` — three jobs, not a version matrix: **image** (Python 3.13, what the Docker image
   ships, with numpy, `NS_REQUIRE_FFMPEG=1`, under coverage, and the image's OWN ffmpeg binary —
   the job reads the pinned `FROM mwader/static-ffmpeg…` line out of the Dockerfile and copies
-  `/ffmpeg` from it) and **minimal** (Python 3.10, the oldest `setup.cfg` accepts, bare install).
-  Both via `tools/partest.py`, packed by the previous run's timings (Actions cache). A test that
-  needs ffmpeg or numpy must RUN in the image job — a skip there is the suite testing less than it
+  `/ffmpeg` from it) and **minimal** (Python 3.10, the oldest `setup.cfg` accepts, bare install),
+  both via `tools/partest.py`, packed by the previous run's timings (Actions cache) — and
+  **database** (`matrix`: PostgreSQL 16 and MySQL 8.4 service containers, the engine's extra
+  installed, `NS_REQUIRE_DATABASE=1` and `tests/test_schema_external.py`). A test that needs
+  ffmpeg or numpy must RUN in the image job — a skip there is the suite testing less than it
   claims.
 - `webapp.yaml` — `npm ci`, `npm test`, `npm run build`.
 - `docker.yaml` — a PR builds amd64 only (no QEMU) and runs `docker/smoke.sh` on it; master and

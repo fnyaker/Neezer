@@ -104,6 +104,20 @@ class DefaultConfig:
     ENRICH = {"enabled": True, "acoustid_key": None, "contact": None}
     TRANSCODING = {}
     MIMETYPES = {}
+    # Speech-to-text of archived podcast episodes (neezer/transcribe). Off by
+    # default: the engine is a separate binary and a model file, and a server
+    # that never installed whisper.cpp must boot exactly as before. The two
+    # paths are file-only; no API payload can name one.
+    TRANSCRIBE = {
+        "enabled": False,
+        "bin": None,
+        "model": None,
+        "runner": "inline",
+        "daily_minutes": 120,
+        "search_segments": 1_200_000,
+        "max_minutes": 360,
+        "language": "auto",
+    }
     DEEZER = {
         "enabled": False,
         "arl": None,
@@ -136,6 +150,7 @@ class DefaultConfig:
     }
 
     def __init__(self):
+        global current_config
         current_config = self
 
 
@@ -155,6 +170,7 @@ APP_CONFIG_KEYS = frozenset(
         "ENRICH",
         "TRANSCODING",
         "MIMETYPES",
+        "TRANSCRIBE",
         "DEEZER",
     }
 )

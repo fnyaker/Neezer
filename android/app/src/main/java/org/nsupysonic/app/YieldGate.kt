@@ -18,12 +18,25 @@ package org.nsupysonic.app
  * ResourceScheduler (delayable requests wait while important ones are in
  * flight), at the one place this app controls: its own reads.
  *
- * A lease expires by itself ([MAX_LEASE_MS] at most): a page that died while
- * holding it must not stop the downloads for good.
+ * TWO holders, on purpose, and they are independent:
+ *  - the PAGE's lease ([hold]) is a timed one, renewed while it lasts, and it
+ *    EXPIRES by itself ([MAX_LEASE_MS] at most): a page that died while holding
+ *    it must not stop the downloads for good;
+ *  - the APP's own player ([holdPlayer]) is the second one, because the page's
+ *    renewal is a `setInterval` plus the element's events, and behind a locked
+ *    screen both stop: the lease expired after 45 s and the downloads went back
+ *    to full speed against the very stream the native player was reading. The
+ *    player lives in this process, knows its own buffer (LinkNeed) and keeps the
+ *    lease until it has 30 s in hand — no page required, and it does not expire.
+ *
+ * Ending one never ends the other: a page that says "I am done" (0) or dies
+ * releases only its own lease, and the player releasing its own does not cut a
+ * lease the page still holds.
  */
 class YieldGate(private val now: () -> Long = { android.os.SystemClock.elapsedRealtime() }) {
     private val lock = Object()
     @Volatile private var until = 0L
+    @Volatile private var player = false
 
     /** Yield for the next [ms] milliseconds (capped); 0 or less ends it now. */
     fun hold(ms: Long) {
@@ -33,7 +46,20 @@ class YieldGate(private val now: () -> Long = { android.os.SystemClock.elapsedRe
         }
     }
 
-    fun yielding(): Boolean = now() < until
+    /**
+     * The app's own player is (true) or is not (false) pulling a stream. Not
+     * timed: the caller recomputes it from the player's buffer on every state,
+     * and a process that dies takes the hold with it.
+     */
+    fun holdPlayer(on: Boolean) {
+        if (on == player) return
+        synchronized(lock) {
+            player = on
+            lock.notifyAll()
+        }
+    }
+
+    fun yielding(): Boolean = player || now() < until
 
     /**
      * Waits while yielding, [stop] checked at least every half second. True
@@ -43,7 +69,11 @@ class YieldGate(private val now: () -> Long = { android.os.SystemClock.elapsedRe
         synchronized(lock) {
             while (yielding()) {
                 if (stop()) return false
-                lock.wait(minOf(500L, maxOf(1L, until - now())))
+                // The player's hold has no deadline: wait in half-second steps
+                // (holdPlayer wakes us at once) instead of spinning on a lease
+                // that is not the one holding us.
+                val wait = if (player) 500L else minOf(500L, maxOf(1L, until - now()))
+                lock.wait(wait)
             }
         }
         return !stop()

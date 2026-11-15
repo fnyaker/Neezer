@@ -1,0 +1,89 @@
+# Neezer transcription sidecar — example overlay.
+#
+# Use it together with the main stack (the `neezer` service below only attaches
+# the API to the private network; this file is not a stack on its own):
+#
+#   tools/fetch-whisper-model.sh --model large-v3-turbo-q8_0 --dest ./models
+#   install -d -m 700 secrets
+#   printf 'Worker token: '; read -rs TOKEN
+#   printf '%s' "$TOKEN" > secrets/transcriber.token
+#   chmod 600 secrets/transcriber.token
+#   docker compose -f docker-compose.yml -f docker-compose.transcribe.yml up -d transcriber
+#
+# The token is created once by an admin:
+#   Réglages → Podcasts → Transcription → Appareils → « Ajouter un appareil »
+#   (name "conteneur", kind "server"), or POST /api/transcribe/workers.
+# Revoke it the same way (DELETE /api/transcribe/workers/<id>); the worker's
+# next claim/heartbeat gets 403 and its lease is released.
+#
+# The worker never gets the database, the archive, the Docker socket, a
+# published port, or a secret in an environment variable: only a file secret.
+# The `internal` network has no route out; `neezer` keeps its own public network.
+
+services:
+  neezer:
+    networks:
+      default:
+      internal:
+
+  transcriber:
+    build:
+      context: ./docker/transcribe
+    image: neezer-transcriber:local
+    container_name: neezer-transcriber
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    # turbo-q8_0 ≈ 1.13 GB RSS: 3g leaves room for the downloaded audio and one
+    # 19.2 MB WAV in /tmp (tmpfs memory is charged to this limit). Use 2g for
+    # small, 5g for large-v3 — change memswap_limit to the SAME value.
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: "2.0"
+    stop_grace_period: 30s
+    tmpfs:
+      # Holds the audio (server cap: 1 GiB) and one chunk WAV at a time.
+      - /tmp:size=1280m,mode=1777
+    volumes:
+      # fetched by tools/fetch-whisper-model.sh; never baked into the image.
+      - ./models:/models:ro
+    environment:
+      NEEZER_URL: "http://neezer:5722"
+      NEEZER_WORKER_TOKEN_FILE: /run/secrets/transcriber_token
+      MODEL: /models/ggml-large-v3-turbo-q8_0.bin
+      LANGUAGE: auto
+      THREADS: "2"
+      CHUNK_SECONDS: "600"
+      LOG_LEVEL: INFO
+    secrets:
+      - transcriber_token
+    networks:
+      - internal
+    depends_on:
+      neezer:
+        condition: service_healthy
+    healthcheck:
+      # local only: model magic/size, whisper-cli --version, ffmpeg -version.
+      # No API call: an API restart must not mark the worker unhealthy.
+      test: ["CMD", "python3", "/app/worker.py", "--check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  internal:
+    internal: true
+
+secrets:
+  transcriber_token:
+    file: ./secrets/transcriber.token

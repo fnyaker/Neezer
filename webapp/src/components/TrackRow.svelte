@@ -68,7 +68,9 @@
   function menu(e) {
     e.preventDefault();
     e.stopPropagation();
-    const coords = { clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} };
+    const box = e.currentTarget?.getBoundingClientRect?.();
+    const at = box && !e.clientX && !e.clientY ? { x: box.right, y: box.bottom + 4 } : { x: e.clientX, y: e.clientY };
+    const coords = { clientX: at.x, clientY: at.y, preventDefault() {}, stopPropagation() {} };
     openMenu(coords, buildTrackMenu(track, push));
   }
 
@@ -369,8 +371,10 @@
      album · quality · + and heart · duration. Without an album the column is
      dropped rather than left empty (its `1fr` used to swallow the heart). */
   .track {
+    --play-col: 40px;
+    --acts-col: 82px;
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) minmax(0, 0.8fr) 64px 76px 56px;
+    grid-template-columns: var(--play-col) minmax(0, 1fr) minmax(0, 0.8fr) 64px var(--acts-col) 56px;
     align-items: center;
     gap: 12px;
     padding: 6px 8px;
@@ -379,16 +383,16 @@
     position: relative;
   }
   .track.noalb {
-    grid-template-columns: 36px minmax(0, 1fr) 64px 76px 56px;
+    grid-template-columns: var(--play-col) minmax(0, 1fr) 64px var(--acts-col) 56px;
   }
   /* No track number but a cover: the play glyph (and the playing indicator)
      sits ON the cover instead of in a column of its own — the list then starts
      at the cover, as Spotify's and Apple Music's do. */
   .track.over {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) 64px 76px 56px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) 64px var(--acts-col) 56px;
   }
   .track.over.noalb {
-    grid-template-columns: minmax(0, 1fr) 64px 76px 56px;
+    grid-template-columns: minmax(0, 1fr) 64px var(--acts-col) 56px;
   }
   .track:hover {
     background: var(--s2);
@@ -397,8 +401,8 @@
     color: var(--ac-text);
   }
   .play {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
     display: grid;
     place-items: center;
     position: relative;
@@ -579,8 +583,8 @@
   .fav {
     display: grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     color: var(--dim);
     opacity: 0;
@@ -612,8 +616,8 @@
     right: 6px;
     top: 50%;
     transform: translateY(-50%);
-    width: 30px;
-    height: 30px;
+    width: 40px;
+    height: 40px;
     display: grid;
     place-items: center;
     border-radius: 50%;
@@ -700,12 +704,13 @@
   @media (max-width: 640px) {
     .track,
     .track.noalb {
-      grid-template-columns: 36px minmax(0, 1fr) 68px;
+      --acts-col: 82px;
+      grid-template-columns: var(--play-col) minmax(0, 1fr) var(--acts-col);
       gap: 8px;
     }
     .track.over,
     .track.over.noalb {
-      grid-template-columns: minmax(0, 1fr) 68px;
+      grid-template-columns: minmax(0, 1fr) var(--acts-col);
     }
     .alb,
     .qcell,
@@ -727,12 +732,13 @@
   @container trackrow (max-width: 520px) {
     .track,
     .track.noalb {
-      grid-template-columns: 36px minmax(0, 1fr) 68px;
+      --acts-col: 82px;
+      grid-template-columns: var(--play-col) minmax(0, 1fr) var(--acts-col);
       gap: 8px;
     }
     .track.over,
     .track.over.noalb {
-      grid-template-columns: minmax(0, 1fr) 68px;
+      grid-template-columns: minmax(0, 1fr) var(--acts-col);
     }
     .acts {
       gap: 0;
@@ -753,6 +759,28 @@
     .add,
     .fav {
       opacity: 1;
+    }
+  }
+  /* §10: 44 px under a finger. The glyphs keep their size, the hit areas grow
+     (and the two columns that hold them widen with them). */
+  @media (pointer: coarse) {
+    .track {
+      --play-col: 44px;
+      --acts-col: 92px;
+    }
+    .play,
+    .add,
+    .fav {
+      width: 44px;
+      height: 44px;
+    }
+    .track.over .play {
+      left: 8px;
+    }
+    .more {
+      width: 44px;
+      height: 44px;
+      right: 2px;
     }
   }
 </style>

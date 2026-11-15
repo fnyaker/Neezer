@@ -12,6 +12,8 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import threading
+import time
 import unittest
 from datetime import timedelta
 from unittest import mock
@@ -39,7 +41,8 @@ from neezer.db import (
 from neezer.deezer import ids
 from neezer.deezer.provider import DeezerProvider
 from neezer.managers.user import encrypt_password
-from neezer.providers.errors import ProviderAuth
+from neezer.providers.errors import ProviderAuth, ProviderUnavailable
+from neezer.webui import myaccounts as my_accounts
 
 from .test_access import _Case
 from .test_deezer import count_statements
@@ -95,6 +98,9 @@ class _ImportCase(_Case):
         li._clients.clear()
         li._listings.clear()
         li._runs.clear()
+        my_accounts._listing_last.clear()
+        my_accounts._listing_jobs.clear()
+        my_accounts._last_error.clear()
         super().tearDown()
 
     def my_accounts(self):
@@ -106,6 +112,18 @@ class _ImportCase(_Case):
         rv = self.client.post(f"/api/me/accounts/{account}/import", json=body)
         self.assertEqual(rv.status_code, status, rv.get_data(as_text=True))
         return rv.get_json()
+
+    def listing(self, account, kind, fresh=False, status=200):
+        """Open the picker: the answer serves what is held and fills on a worker,
+        so wait for that worker and read the list it produced."""
+        url = f"/api/me/accounts/{account}/library/{kind}" + ("?fresh=1" if fresh else "")
+        self.assertEqual(self.client.get(url).status_code, status)
+        job = my_accounts.listing_job(account, kind)
+        if job is not None:
+            self.assertTrue(job["done"].wait(10), "the listing refresh never ended")
+        rv = self.client.get(url)
+        self.assertEqual(rv.status_code, status, rv.get_data(as_text=True))
+        return rv
 
     def stars(self, model, user):
         return {str(s) for (s,) in model.select(model.starred).where(model.user == user.id).tuples()}
@@ -203,6 +221,35 @@ class ServerAccountTestCase(_ImportCase):
         self.assertEqual(mine.name, "P")
         self.assertEqual(PlaylistTrack.select().where(PlaylistTrack.playlist == mine.id).count(), 5)
 
+    def test_a_member_cannot_link_the_server_arl_with_a_cold_client(self):
+        self.server_account()
+        self.as_bob()
+        arl = self.app.deezer.arl
+        self.app.deezer._dz = None
+        rv = self.client.post("/api/me/accounts/deezer", json={"arl": arl})
+        self.assertEqual(rv.status_code, 409, rv.get_data(as_text=True))
+        self.assertEqual(rv.get_json()["code"], "server_account")
+        self.assertFalse(
+            ProviderAccount.select().where(ProviderAccount.user == self.bob.id).exists()
+        )
+
+    def test_linking_deezer_is_rate_limited(self):
+        my_accounts.DEEZER_LINK.clear()
+        self.as_bob()
+        codes = [
+            self.client.post("/api/me/accounts/deezer", json={"arl": "x"}).status_code
+            for _ in range(11)
+        ]
+        self.assertEqual(codes[:10], [400] * 10)
+        self.assertEqual(codes[10], 429)
+        self.assertEqual(
+            self.client.post("/api/me/accounts/deezer", json={"arl": "x"}).headers.get(
+                "Retry-After"
+            )
+            is not None,
+            True,
+        )
+
     def test_the_holder_of_the_server_account_cannot_link_a_second_deezer(self):
         self.as_alice()
         self.server_account()
@@ -248,14 +295,14 @@ class PickerTestCase(_ImportCase):
         self.as_alice()
         acc = str(self.server_account().id)
         self.run_import(acc)
-        rv = self.client.get(f"/api/me/accounts/{acc}/library/artists")
+        rv = self.listing(acc, "artists")
         items = {i["ref"]: i for i in rv.get_json()["items"]}
         self.assertTrue(items["9"]["on"] and items["9"]["in_library"])
 
         rv = self.client.put(f"/api/me/accounts/{acc}/library/artists", json={"ref": "9", "on": False})
         self.assertEqual(rv.get_json()["on"], False)
         self.assertNotIn(str(ids.artist_uuid(9)), self.stars(StarredArtist, self.alice))
-        items = {i["ref"]: i for i in self.client.get(f"/api/me/accounts/{acc}/library/artists").get_json()["items"]}
+        items = {i["ref"]: i for i in self.listing(acc, "artists").get_json()["items"]}
         self.assertEqual((items["9"]["on"], items["9"]["in_library"]), (False, False))
 
         # Never imported again, not even after it is forgotten and listed anew.
@@ -271,7 +318,7 @@ class PickerTestCase(_ImportCase):
         self.as_alice()
         acc = str(self.server_account().id)
         self.run_import(acc)
-        self.client.get(f"/api/me/accounts/{acc}/library/artists")
+        self.listing(acc, "artists")
         with count_statements() as counts:
             rv = self.client.put(f"/api/me/accounts/{acc}/library/artists", json={"refs": ["9", "8"], "on": False})
         self.assertEqual(rv.status_code, 200)
@@ -285,7 +332,7 @@ class PickerTestCase(_ImportCase):
         self.as_alice()
         acc = str(self.server_account().id)
         self.client.put(f"/api/me/accounts/{acc}", json={"auto": {"artists": False}})
-        self.client.get(f"/api/me/accounts/{acc}/library/artists")
+        self.listing(acc, "artists")
         self.client.put(f"/api/me/accounts/{acc}/library/artists", json={"ref": "8", "on": False})
         self.client.put(f"/api/me/accounts/{acc}", json={"auto": {"artists": True}})
         self.run_import(acc)
@@ -300,6 +347,155 @@ class PickerTestCase(_ImportCase):
             self.assertEqual(rv.status_code, 400, body)
         self.assertEqual(self.client.get(f"/api/me/accounts/{acc}/library/tracks").status_code, 404)
         self.assertEqual(self.client.get("/api/me/accounts/not-a-uuid/library/artists").status_code, 404)
+
+
+class CountingSource:
+    """A provider listing that counts its calls and takes its time."""
+
+    def __init__(self, delay=0.3, fail=None):
+        self.delay = delay
+        self.fail = fail
+        self.calls = []
+
+    def listing(self, kind):
+        self.calls.append(kind)
+        time.sleep(self.delay)
+        if self.fail is not None:
+            raise self.fail
+        return [
+            {"ref": "9", "name": "Foo", "cover_url": None},
+            {"ref": "8", "name": "Bar", "cover_url": None},
+        ]
+
+
+class ListingRefreshTestCase(_ImportCase):
+    """The picker serves what it holds and refreshes behind it.
+
+    The listing of one account and kind is a provider call — one gateway call
+    plus one per 200 liked tracks for Deezer, a paginated session for YouTube —
+    so it never happens in a request, `?fresh=1` never fans out, and the last
+    list survives on screen while the next one is fetched.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.source = CountingSource()
+        patcher = mock.patch.object(li, "source_for", return_value=self.source)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def account(self):
+        self.as_alice()
+        return str(self.server_account().id)
+
+    def url(self, account, kind="artists", fresh=False):
+        return (
+            f"/api/me/accounts/{account}/library/{kind}"
+            + ("?fresh=1" if fresh else "")
+        )
+
+    def settle(self, account, kind="artists"):
+        job = my_accounts.listing_job(account, kind)
+        if job is not None:
+            self.assertTrue(job["done"].wait(10), "the listing refresh never ended")
+
+    def client_for(self, name, password):
+        client = self.app.test_client()
+        self.assertEqual(
+            client.post("/api/login", json={"username": name, "password": password}).status_code,
+            200,
+        )
+        return client
+
+    def test_the_request_answers_from_the_cache_and_fills_behind_it(self):
+        account = self.account()
+        started = time.monotonic()
+        rv = self.client.get(self.url(account))
+        elapsed = time.monotonic() - started
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_json()
+        self.assertEqual(body["items"], [])  # nothing held yet
+        self.assertTrue(body["refreshing"])
+        self.assertLess(
+            elapsed, 0.1,
+            f"the request waited {elapsed:.3f}s; one listing costs {self.source.delay:.2f}s",
+        )
+        self.settle(account)
+        body = self.client.get(self.url(account)).get_json()
+        self.assertEqual([i["ref"] for i in body["items"]], ["9", "8"])
+        self.assertNotIn("refreshing", body)
+        self.assertEqual(self.source.calls, ["artists"])
+
+    def test_two_fresh_asks_share_the_one_refresh_and_it_is_bounded(self):
+        account = self.account()
+        clients = [self.client_for("alice", "Alic3") for _ in range(2)]
+        answers = []
+
+        def press(client):
+            answers.append(client.get(self.url(account, fresh=True)))
+
+        threads = [threading.Thread(target=press, args=(c,)) for c in clients]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        self.assertEqual(len(answers), 2)
+        for rv in answers:
+            self.assertEqual(rv.status_code, 200)
+            self.assertTrue(rv.get_json()["refreshing"])
+        self.settle(account)
+        self.assertEqual(self.source.calls, ["artists"], "two clients, one listing")
+        # Past the window nothing is asked again: 1 refresh per account and kind.
+        body = self.client.get(self.url(account, fresh=True)).get_json()
+        self.assertNotIn("refreshing", body)
+        self.assertEqual(self.source.calls, ["artists"])
+
+    def test_a_stale_list_is_still_served_while_the_next_one_is_fetched(self):
+        account = self.account()
+        self.client.get(self.url(account))
+        self.settle(account)
+        items = li.held_listing(ProviderAccount.get_by_id(account), "artists")
+        li._listings[(account, "artists")] = (time.monotonic() - li.LISTING_TTL - 1, items)
+        my_accounts._listing_last[(account, "artists")] = (time.monotonic() - 3600, False)
+        body = self.client.get(self.url(account)).get_json()
+        self.assertEqual([i["ref"] for i in body["items"]], ["9", "8"])
+        self.assertTrue(body["stale"])
+        self.assertTrue(body["refreshing"])
+        self.settle(account)
+
+    def test_a_failed_refresh_says_why_and_is_not_retried_at_once(self):
+        account = self.account()
+        # A first, good listing — what a phone has on it from yesterday.
+        self.client.get(self.url(account))
+        self.settle(account)
+        items = li.held_listing(ProviderAccount.get_by_id(account), "artists")
+        li._listings[(account, "artists")] = (time.monotonic() - li.LISTING_TTL - 1, items)
+        my_accounts._listing_last[(account, "artists")] = (time.monotonic() - 3600, False)
+        self.source.calls.clear()
+        self.source.fail = ProviderUnavailable("down", provider="deezer")
+        body = self.client.get(self.url(account)).get_json()
+        self.assertEqual([i["ref"] for i in body["items"]], ["9", "8"])
+        self.assertTrue(body["stale"])
+        self.assertTrue(body["refreshing"])
+        self.settle(account)
+        body = self.client.get(self.url(account)).get_json()
+        self.assertEqual([i["ref"] for i in body["items"]], ["9", "8"])
+        self.assertEqual(body["reason"], "network")
+        self.assertTrue(body["error"])
+        self.assertEqual(self.source.calls, ["artists"])
+        # A person pressing "Réessayer" is not a reason to rebuild it in a loop.
+        self.assertNotIn("refreshing", self.client.get(self.url(account)).get_json())
+        self.assertEqual(self.source.calls, ["artists"])
+
+    def test_a_cold_listing_that_failed_answers_the_cause_not_an_empty_list(self):
+        account = self.account()
+        self.source.fail = ProviderUnavailable("down", provider="deezer")
+        self.assertEqual(self.client.get(self.url(account)).status_code, 200)
+        self.settle(account)
+        rv = self.client.get(self.url(account))
+        self.assertEqual(rv.status_code, 424)  # what this route always answered
+        self.assertEqual(rv.get_json()["reason"], "network")
+        self.assertEqual(self.source.calls, ["artists"])
 
 
 class PersonalDeezerTestCase(_ImportCase):
@@ -457,7 +653,7 @@ class YoutubeTestCase(_ImportCase):
             self.assertEqual(self.stars(StarredTrack, self.bob), {str(ids.youtube_track_uuid("abcdefghijk"))})
             pl = Playlist.get(Playlist.user == self.bob.id)
             self.assertEqual((pl.name, PlaylistTrack.select().where(PlaylistTrack.playlist == pl.id).count()), ("Mix", 1))
-            items = self.client.get(f"/api/me/accounts/{acc['id']}/library/playlists").get_json()["items"]
+            items = self.listing(acc["id"], "playlists").get_json()["items"]
             self.assertEqual([(i["ref"], i["in_library"]) for i in items], [("PLx", True)])  # "Liked" is the likes
         self.assertEqual(EntityRef.select().where(EntityRef.provider == "youtube", EntityRef.kind == "artist").count(), 2)
 

@@ -1,9 +1,12 @@
 <script>
-  import Router from "svelte-spa-router";
+  import Router, { replace } from "svelte-spa-router";
   import { wrap } from "svelte-spa-router/wrap";
   import { onMount } from "svelte";
+  import { onboardingTarget, stepFor, stepFromPath } from "./lib/onboarding.js";
   import { user, authChecked, nowPlayingOpen, player } from "./lib/stores.js";
-  import { api } from "./lib/api.js";
+  import { api, failureCause } from "./lib/api.js";
+  import { switchAccount } from "./lib/account.js";
+  import { cachePurgeOwner } from "./lib/apicache.js";
   import { initConnectivity, online } from "./lib/net.js";
   import { loadOfflineIndex, loadCoverCache, moveDownloadsToApp } from "./lib/offline.js";
   import { initPlayCache } from "./lib/playcache.js";
@@ -111,6 +114,10 @@
     }),
     // A person's credits: what they wrote, composed, produced in the library.
     "/credits/:name": wrap({ asyncComponent: () => import("./routes/Credits.svelte") }),
+    // The year in review: one screen for the latest year and for a deep link,
+    // so the two URLs share the same chunk (fetched the first time one opens).
+    "/recap": wrap({ asyncComponent: () => import("./routes/Recap.svelte") }),
+    "/recap/:year": wrap({ asyncComponent: () => import("./routes/Recap.svelte") }),
   };
 
   // The projector renders outside the router (it is a screen, not a route), so
@@ -151,6 +158,47 @@
   let SharedPlaylist = null;
   $: if (sharedPlaylistToken && !SharedPlaylist)
     import("./routes/SharedPlaylist.svelte").then((m) => (SharedPlaylist = m.default));
+  const INVITE_PREFIX = "/invite/";
+  $: inviteToken = $location.startsWith(INVITE_PREFIX)
+    ? $location.slice(INVITE_PREFIX.length).split("/")[0]
+    : null;
+  let Invite = null;
+  $: if (inviteToken && !Invite)
+    import("./routes/Invite.svelte").then((m) => (Invite = m.default));
+  // A brand-new invited account finishes its setup full screen, before the
+  // shell: nothing to play yet, and the tabs would lead nowhere. The server's
+  // step is the source of truth; the URL only names the step being shown.
+  let Onboarding = null;
+  $: onboardingRequired = !REMOTE && !!$user && stepFor($user.onboarding) !== "done";
+  $: onboardingLeaf = stepFromPath($location) || "artists";
+  $: if (onboardingRequired && !Onboarding)
+    import("./routes/Onboarding.svelte").then((m) => (Onboarding = m.default));
+  $: if ($authChecked && !REMOTE) {
+    const target = onboardingTarget($user && $user.onboarding, $location);
+    if (target) replace(target);
+  }
+
+  let purgeRun = Promise.resolve();
+  let switching = false;
+  function adoptAccount(u) {
+    const change = switchAccount(u);
+    if (!change || !change.action) return;
+    if (change.prev)
+      purgeRun = Promise.all([purgeRun, cachePurgeOwner(change.prev)]).catch(() => {});
+    if (change.action !== "reload") return;
+    switching = true;
+    const ready = purgeRun;
+    Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 1200))]).finally(() =>
+      window.location.reload()
+    );
+  }
+  $: if (
+    $authChecked &&
+    !REMOTE &&
+    !(partyId || rcToken || sharedPlaylistToken || inviteToken)
+  )
+    adoptAccount($user);
+
   // A remote control on the "queue" level lends the transport and the queue
   // and nothing else: the full-screen player IS the app, with nothing behind.
   const queueOnly = !!REMOTE && !atLeast("read");
@@ -191,7 +239,7 @@
   onMount(async () => {
     // A party guest needs none of the app's own machinery (the library, the
     // offline indexes, the version watch): it is a page, not an install.
-    if (partyId || rcToken || sharedPlaylistToken) {
+    if (partyId || rcToken || sharedPlaylistToken || inviteToken) {
       authChecked.set(true);
       return;
     }
@@ -231,41 +279,54 @@
       if ("requestIdleCallback" in window) requestIdleCallback(later, { timeout: 8000 });
       else setTimeout(later, 3000);
     }
+    await bootSession();
+  });
 
-    // Airplane-mode launch: if we're offline but have a remembered session, boot
-    // straight into the (downloaded) library instead of stalling on the login
-    // screen; re-validate once we're back online.
-    const saved = bootSaved;
-    if (saved && typeof navigator !== "undefined" && !navigator.onLine) {
-      user.set(saved);
-      bootedOffline = true;
-      authChecked.set(true);
-      return;
-    }
+  let bootProblem = null;
+  let booting = false;
+  async function bootSession() {
+    if (booting) return;
+    booting = true;
     try {
-      const r = await api.me();
-      if (r.remote) {
-        // This browser's session is a remote control now (claimed in another
-        // tab): the page has to be rebuilt as one, from the first store up.
-        rememberRemote(r.remote);
-        reloadHome();
-        return;
-      }
-      user.set(r.user);
-      loadFavorites();
-    } catch (e) {
-      // Network failure with a known session -> stay logged in (offline); a real
-      // 401/expired session clears it.
-      if (e && e.offline && saved) {
+      const saved = savedUser();
+      // Airplane-mode launch: if we're offline but have a remembered session, boot
+      // straight into the (downloaded) library instead of stalling on the login
+      // screen; re-validate once we're back online.
+      if (saved && typeof navigator !== "undefined" && !navigator.onLine) {
         user.set(saved);
         bootedOffline = true;
-      } else {
-        user.set(null);
+        bootProblem = null;
+        return;
+      }
+      try {
+        const r = await api.me();
+        if (r.remote) {
+          // This browser's session is a remote control now (claimed in another
+          // tab): the page has to be rebuilt as one, from the first store up.
+          rememberRemote(r.remote);
+          reloadHome();
+          return;
+        }
+        user.set(r.user);
+        bootProblem = null;
+        if (r.user.onboarding === "done" || !r.user.onboarding) loadFavorites();
+      } catch (e) {
+        if (e && e.status === 401) {
+          user.set(null);
+          bootProblem = null;
+        } else if (saved) {
+          user.set(saved);
+          bootedOffline = true;
+          bootProblem = e;
+        } else {
+          bootProblem = e;
+        }
       }
     } finally {
       authChecked.set(true);
+      booting = false;
     }
-  });
+  }
 
   // Persist / clear the session so an offline launch can trust it. Guard on
   // authChecked: this reactive block runs once at init with $user still null
@@ -282,7 +343,9 @@
   }
 
   // Reload favorites + pull the server-side podcast positions at login.
-  $: if ($user && !REMOTE) {
+  // Nothing of the shell starts while a new account is still onboarding: those
+  // requests have no screen to feed and would compete with the first one.
+  $: if ($user && !REMOTE && !onboardingRequired && !switching) {
     loadFavorites();
     initPodcastProgress();
     startHealthWatch();
@@ -353,10 +416,17 @@
     bootedOffline = false;
     try {
       const r = await api.me();
+      if (r.remote) {
+        rememberRemote(r.remote);
+        reloadHome();
+        return;
+      }
       user.set(r.user);
+      bootProblem = null;
       loadFavorites();
     } catch (e) {
-      if (!(e && e.offline)) user.set(null); // genuine auth failure -> log out
+      if (e && e.status === 401) user.set(null);
+      else bootProblem = e;
     }
   }
 
@@ -369,10 +439,14 @@
   let mainEl;
 
   function onKey(e) {
-    const tag = (e.target.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable)
+    const target = e.target;
+    if (
+      target &&
+      (target.isContentEditable ||
+        target.closest?.("button, a, input, textarea, select, [role='button'], [contenteditable]"))
+    )
       return;
-    if (!$user) return;
+    if (inviteToken || !$user || onboardingRequired) return;
     switch (e.key) {
       case " ":
         e.preventDefault();
@@ -423,10 +497,30 @@
   {:else}
     <div class="loading">…</div>
   {/if}
+{:else if inviteToken}
+  {#if Invite}
+    <svelte:component this={Invite} token={inviteToken} savedAccount={bootSaved} />
+  {:else}
+    <div class="loading">…</div>
+  {/if}
 {:else if !$authChecked}
   <div class="loading">…</div>
+{:else if switching}
+  <div class="loading">…</div>
+{:else if !$user && bootProblem}
+  <div class="boot-retry">
+    <h1>Le serveur ne répond pas</h1>
+    <p>Impossible de vérifier ta session : {failureCause(bootProblem)}. Vérifie ta connexion, puis réessaie.</p>
+    <button class="btn btn-primary" on:click={bootSession}>Réessayer</button>
+  </div>
 {:else if !$user}
   <Login />
+{:else if onboardingRequired}
+  {#if Onboarding}
+    <svelte:component this={Onboarding} step={onboardingLeaf} />
+  {:else}
+    <div class="loading" role="status">Chargement de la préparation…</div>
+  {/if}
 {:else if queueOnly}
   <!-- Remote control, "queue" level: the player and its queue, full screen.
        Until the controlled player has a track, a quiet wait. -->
@@ -446,6 +540,12 @@
            --topbar-h token below). -->
       <TopBar />
       <Notices />
+      {#if bootProblem}
+        <div class="boot-banner" role="alert">
+          <p>Le serveur ne répond pas : {failureCause(bootProblem)}. Ta session et ce qui est déjà sur cet appareil restent disponibles.</p>
+          <button class="btn btn-sm btn-ghost" on:click={bootSession}>Réessayer</button>
+        </div>
+      {/if}
       <Router {routes} />
     </main>
     {#if $nowPlayingOpen && !mobile}
@@ -473,7 +573,7 @@
 <CreditsSheet />
 {#if GenreBulkSheet}<svelte:component this={GenreBulkSheet} />{/if}
 <ExportSheet />
-{#if !partyId}
+{#if !partyId && !inviteToken && !onboardingRequired}
   {#if PartySheet}<svelte:component this={PartySheet} />{/if}
   {#if RemoteSheet && !REMOTE}<svelte:component this={RemoteSheet} />{/if}
   <NetworkIndicator />
@@ -504,6 +604,47 @@
     padding: 24px;
     padding-bottom: calc(var(--player-h) + 80px);
     font-size: 0.95rem;
+  }
+  .boot-banner {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 12px var(--page-x) 0;
+    padding: 10px 12px 10px 16px;
+    border: 1px solid var(--ln);
+    border-radius: var(--r-card);
+    background: var(--s1);
+  }
+  .boot-banner p {
+    margin: 0;
+    min-width: 0;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: var(--tx);
+  }
+  .boot-banner button {
+    flex: none;
+  }
+  .boot-retry {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 24px;
+    text-align: center;
+  }
+  .boot-retry h1 {
+    margin: 0;
+    font-size: 1.4rem;
+  }
+  .boot-retry p {
+    margin: 0;
+    color: var(--dim);
+    line-height: 1.5;
   }
   .layout {
     display: grid;

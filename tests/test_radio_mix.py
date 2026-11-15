@@ -383,7 +383,8 @@ class UpgradeTestCase(unittest.TestCase):
             conn.execute("DROP TABLE listen_event")
             conn.execute("UPDATE meta SET value = '20261022' WHERE key = 'schema_version'")
             conn.commit()
-            before = conn.execute("SELECT * FROM user").fetchall()
+            account = "SELECT id, name, mail, password, salt, admin, jukebox FROM user"
+            before = conn.execute(account).fetchall()
             conn.close()
             init_database(uri)
             self.assertEqual(dbmod.Meta["schema_version"].value, dbmod.SCHEMA_VERSION)
@@ -391,7 +392,7 @@ class UpgradeTestCase(unittest.TestCase):
             self.assertEqual(listening.history(u).events, 0)
             release_database()
             conn = sqlite3.connect(path)
-            self.assertEqual(conn.execute("SELECT * FROM user").fetchall(), before)
+            self.assertEqual(conn.execute(account).fetchall(), before)
             conn.close()
         finally:
             release_database()

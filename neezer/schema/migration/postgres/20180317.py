@@ -1,18 +1,5 @@
-import argparse
 import hashlib
 import psycopg2
-
-try:
-    bytes = buffer
-except NameError:
-    pass
-
-parser = argparse.ArgumentParser()
-parser.add_argument("username")
-parser.add_argument("password")
-parser.add_argument("database")
-parser.add_argument("-H", "--host", default="localhost", help="default: localhost")
-args = parser.parse_args()
 
 
 def process_table(connection, table):
@@ -30,14 +17,13 @@ def process_table(connection, table):
         hashes[row[0]] = hashlib.sha1(row[0].encode("utf-8"), usedforsecurity=False).digest()
     c.executemany(
         f"UPDATE {table} SET path_hash=%s WHERE path=%s",
-        [(bytes(h), p) for p, h in hashes.items()],
+        [(h, p) for p, h in hashes.items()],
     )
 
     c.execute("CREATE UNIQUE INDEX index_{0}_path ON {0}(path_hash)".format(table))
 
 
-with psycopg2.connect(
-    host=args.host, user=args.username, password=args.password, dbname=args.database
-) as conn:
-    process_table(conn, "folder")
-    process_table(conn, "track")
+def apply(args):
+    with psycopg2.connect(**args) as conn:
+        process_table(conn, "folder")
+        process_table(conn, "track")

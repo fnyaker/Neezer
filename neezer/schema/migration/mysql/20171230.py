@@ -7,8 +7,6 @@
 
 # Converts ids from hex-encoded strings to binary data
 
-import argparse
-
 try:
     import MySQLdb as provider
 except ImportError:
@@ -16,13 +14,6 @@ except ImportError:
 
 from uuid import UUID
 from warnings import filterwarnings
-
-parser = argparse.ArgumentParser()
-parser.add_argument("username")
-parser.add_argument("password")
-parser.add_argument("database")
-parser.add_argument("-H", "--host", default="localhost", help="default: localhost")
-args = parser.parse_args()
 
 
 def process_table(connection, table, fields, nullable_fields=()):
@@ -36,7 +27,7 @@ def process_table(connection, table, fields, nullable_fields=()):
                 continue
             to_update[field].add(value)
 
-    for field, values in to_update.iteritems():
+    for field, values in to_update.items():
         if not values:
             continue
         sql = "UPDATE {0} SET {1}=%s WHERE {1}=%s".format(table, field)
@@ -51,28 +42,27 @@ def process_table(connection, table, fields, nullable_fields=()):
     connection.commit()
 
 
-filterwarnings("ignore", category=provider.Warning)
-conn = provider.connect(
-    host=args.host, user=args.username, passwd=args.password, db=args.database
-)
-conn.cursor().execute("SET FOREIGN_KEY_CHECKS = 0")
+def apply(args):
+    filterwarnings("ignore", category=provider.Warning)
+    conn = provider.connect(**args)
+    conn.cursor().execute("SET FOREIGN_KEY_CHECKS = 0")
 
-process_table(conn, "folder", ("id",), ("parent_id",))
-process_table(conn, "artist", ("id",))
-process_table(conn, "album", ("id", "artist_id"))
-process_table(
-    conn, "track", ("id", "album_id", "artist_id", "root_folder_id", "folder_id")
-)
-process_table(conn, "user", ("id",), ("last_play_id",))
-process_table(conn, "client_prefs", ("user_id",))
-process_table(conn, "starred_folder", ("user_id", "starred_id"))
-process_table(conn, "starred_artist", ("user_id", "starred_id"))
-process_table(conn, "starred_album", ("user_id", "starred_id"))
-process_table(conn, "starred_track", ("user_id", "starred_id"))
-process_table(conn, "rating_folder", ("user_id", "rated_id"))
-process_table(conn, "rating_track", ("user_id", "rated_id"))
-process_table(conn, "chat_message", ("id", "user_id"))
-process_table(conn, "playlist", ("id", "user_id"))
+    process_table(conn, "folder", ("id",), ("parent_id",))
+    process_table(conn, "artist", ("id",))
+    process_table(conn, "album", ("id", "artist_id"))
+    process_table(
+        conn, "track", ("id", "album_id", "artist_id", "root_folder_id", "folder_id")
+    )
+    process_table(conn, "user", ("id",), ("last_play_id",))
+    process_table(conn, "client_prefs", ("user_id",))
+    process_table(conn, "starred_folder", ("user_id", "starred_id"))
+    process_table(conn, "starred_artist", ("user_id", "starred_id"))
+    process_table(conn, "starred_album", ("user_id", "starred_id"))
+    process_table(conn, "starred_track", ("user_id", "starred_id"))
+    process_table(conn, "rating_folder", ("user_id", "rated_id"))
+    process_table(conn, "rating_track", ("user_id", "rated_id"))
+    process_table(conn, "chat_message", ("id", "user_id"))
+    process_table(conn, "playlist", ("id", "user_id"))
 
-conn.cursor().execute("SET FOREIGN_KEY_CHECKS = 1")
-conn.close()
+    conn.cursor().execute("SET FOREIGN_KEY_CHECKS = 1")
+    conn.close()

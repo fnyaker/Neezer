@@ -21,6 +21,7 @@ for the catalog and none on the second read.
 import json
 import os
 import unittest
+from datetime import date, timedelta
 from unittest import mock
 
 from neezer import discover, energy, moods
@@ -29,7 +30,7 @@ from neezer.db import Album, Artist, Track, TrackAnalysis, User
 from .test_deezer import count_statements
 from .test_detach_a import _AppCase
 
-DAY = "2026-11-13"
+DAY = moods.now().date().isoformat()
 
 
 def measures(*, loud, centroid, flux):
@@ -232,7 +233,8 @@ class AssemblyTestCase(_Library):
         moods.invalidate(self.user)
         again = moods.catalog(self.user, DAY)
         self.assertEqual(first, again.mix_ids("energie", 20))
-        tomorrow = moods.catalog(self.user, "2026-11-14")
+        next_day = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
+        tomorrow = moods.catalog(self.user, next_day)
         self.assertNotEqual(first, tomorrow.mix_ids("energie", 20))
 
     def test_fewer_than_eight_titles_is_not_a_mix(self):

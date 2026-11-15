@@ -25,7 +25,7 @@ import unittest
 
 from neezer.config import DefaultConfig
 from neezer.db import Track, User, release_database
-from neezer.managers.user import UserManager
+from neezer.managers.user import UserManager, encrypt_password
 from neezer.web import create_application
 from neezer.webui import party as P
 
@@ -590,7 +590,15 @@ class PartyTestCase(unittest.TestCase):
         self.assertNotIn("alice", body)
 
     def test_the_host_name_is_escaped_in_the_link_page(self):
-        UserManager.add("<b>eve</b>", "Ev3ee", admin=False)
+        # A name today's creation rule refuses can still sit in an upgraded database.
+        crypt, salt = UserManager._hash_fields("Ev3ee")
+        User.create(
+            name="<b>eve</b>",
+            password=crypt,
+            salt=salt,
+            password_clear=encrypt_password("Ev3ee"),
+            admin=False,
+        )
         eve = self.app.test_client()
         eve.post("/api/login", json={"username": "<b>eve</b>", "password": "Ev3ee"})
         pid = eve.post("/api/party").get_json()["id"]

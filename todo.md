@@ -64,11 +64,16 @@ le code.
 
 ## Niveau 3 — quelques jours, avec migration de base de données
 
-- [ ] **Récap** (type Spotify Wrapped / Apple Replay) — top titres, artistes, genres, minutes
-  écoutées, par mois et par année, en « stories ». L'historique d'écoute est désormais livré
-  (niveau 2) ; il reste à construire l'écran et ses agrégats.
-- [ ] **Dossiers de playlists** — regrouper les playlists dans la barre latérale et la
-  bibliothèque. Table locale (ni Deezer ni Subsonic n'ont ce concept), ordre libre.
+- [x] **Récap** (type Spotify Wrapped / Apple Replay) — top titres, artistes, genres, minutes
+  écoutées, par mois et par année, en « stories ». `GET /api/recap/years` + `/api/recap/<year>`
+  (4 statements, cache process, aucun fournisseur), écran `#/recap/:year`, carte saisonnière sur
+  l'Accueil, partage d'affiche 1080×1350 dessinée localement. 29 tests serveur, 19 tests JS purs,
+  banc navigateur de 102 assertions (`webapp/test/recap/run.mjs`).
+- [x] **Dossiers de playlists** — regrouper les playlists dans la barre latérale et la
+  bibliothèque. Table locale (ni Deezer ni Subsonic n'ont ce concept), ordre libre. Deux tables
+  (`playlist_folder`, `playlist_placement`), vue par personne, place aussi les playlists partagées ;
+  sidebar, onglet Playlists, mode Organiser (boutons, clavier, VirtualList au-delà de 60 lignes),
+  feuilles de création/déplacement, annulation. 38 tests serveur, 12 tests purs, 576 tests SPA.
 - [x] **Lien public en lecture seule vers une playlist** — capacité signée (`/pl/<token>`), un lien
   vivant par playlist, révocable et mort à la requête suivante. La page publique n'a ni compte ni
   session : elle liste la playlist et joue uniquement les fichiers déjà archivés, jamais un appel
@@ -91,13 +96,52 @@ le code.
   tempo, couleur spectrale, flux) : Calme, Concentration, Bonne humeur, Énergie, Soirée, Nuit.
   Rangée « Mixes d'ambiance » sur l'Accueil, bibliothèque seule, file finie de 40 titres
   (`neezer/moods.py`, `GET /api/moods`).
-- [ ] **Playlists collaboratives** — *mis de côté.* Plusieurs comptes qui écrivent dans une même
-  playlist. La difficulté est la synchronisation entre plusieurs comptes et les droits d'écriture ;
-  le miroir Deezer n'existe plus.
-- [ ] **Chapitres et transcription de podcasts** — chapitres quand l'épisode en porte
-  (ID3 `CHAP`, ou `podcast:chapters`), transcription en texte avec recherche. Les épisodes
-  arrivent de Deezer en MP3 brut, sans flux RSS : à voir d'où viennent les chapitres. La
-  transcription demande un modèle de reconnaissance vocale.
+- [x] **Playlists collaboratives** — rôles propriétaire / éditeur / lecteur + override admin,
+  membres et invitations par nom exact, `version`/`members_version`, **409 + un seul GET de
+  resynchronisation** (jamais de replay), uploads privés filtrés, Subsonic et exports alignés.
+  UI rôle-dépendante, feuille des membres, probe 30 s / focus 10 s seulement si partagée, groupes
+  « Partagées avec moi ». 35 tests cœur + 25 edges + 26 admin + 8 purs, 101 contrôles Playwright.
+- [x] **Chapitres de podcasts** — sidecar, MP4 `chpl`, ID3 `CHAP`/`CTOC`, URL éditeur opt-in ;
+  extraction mutagen, route `GET /api/podcast/episode/<id>/chapters`, `chapter_count` dans le show,
+  panneau « À propos » (Chapitres → Description → Informations), ticks et feuille Show. 64 tests
+  serveur, 14 tests purs, banc visuel 360→1920.
+- [x] **Transcription de podcasts** — whisper.cpp local (`large-v3-turbo`/`small`), conteneur
+  sidecar séparé, sidecars JSON/SRT sur le disque data, lease/reprise/budget, `streams_active`
+  pour céder pendant une écoute, recherche épisode/émission/bibliothèque, admin seulement pour
+  marquer une émission. Panneau « Chapitres | Transcription », recherche podcast, carte Show,
+  réglages. 33 tests worker + 32 API + 21 UI + 16 conteneur.
+
+## Niveau 5 — administration et onboarding (gros chantier)
+
+- [x] **Dashboard admin des utilisateurs** — dans Réglages, visible seulement pour un admin :
+  liste et recherche des comptes, rôle, état (actif / invité / désactivé), dernière connexion,
+  création d'une invitation, révocation, désactivation/suppression avec garde-fous (pas de
+  suppression du dernier admin, pas d'auto-suppression), renvoi du lien. Routes `/api/admin/users…`
+  avec `@login_required` + contrôle admin, pagination, aucune énumération pour un non-admin.
+- [x] **Invitation à usage unique** — lien copiable (pas d'email tant qu'aucun SMTP n'est
+  configuré) : table `invite` (id, empreinte du jeton, créateur, dates, expiration, utilisé par,
+  révoqué), jeton opaque signé, une seule création de compte par lien, expiration et révocation
+  immédiate. Page publique de création : username limité (3–32 caractères `[a-z0-9_.-]`, replié,
+  noms réservés, unicité insensible à la casse), mot de passe fort + confirmation, limitation de
+  débit, CSRF, aucune fuite d'existence de compte, hachage argon2 existant.
+- [x] **Onboarding par les artistes** — après la création du compte : une page plein écran montre
+  une liste d'artistes connus (Deezer public : `get_chart_artists` / artistes populaires, cache,
+  sélection diverse par genres et pays), scroll infini et barre de recherche en haut. Un like
+  insère **juste après** l'artiste des artistes similaires (`artist/<id>/related`), sans casser la
+  diversité ; minimum 1 artiste pour terminer (3–5 recommandés), bouton « Terminé ». Les artistes
+  choisis deviennent des artistes suivis/étoilés pour le profil de goût et les Nouveautés ; rien
+  n'est téléchargé.
+- [x] **Étape compte et import** — après les artistes, proposer sans bloquer : lier son compte
+  Deezer (ARL ou connexion navigateur), ou importer ses playlists/favoris depuis YouTube, Spotify
+  et Apple Music, via `neezer/services/` et `neezer/webui/playlist_import.py`. Chaque option est
+  skippable ; les imports sont des jobs de fond avec progression et cause d'échec ; rien n'est
+  jamais écrit sur le compte du fournisseur.
+- [x] **Finitions** — l'onboarding est une route gardée avant l'Accueil (reprise après refresh),
+  français, mobile/desktop, cibles 44 px, états vides/erreurs ; tests d'invitation (usage unique,
+  expiration, révocation), d'unicité/validation du username, de mot de passe, de similarité des
+  artistes et d'import ; mesure du nombre de requêtes et du temps de première peinture. Migration
+  pour SQLite/PostgreSQL/MySQL et upgrade d'un serveur existant (les comptes actuels ne voient
+  jamais l'onboarding).
 
 ---
 

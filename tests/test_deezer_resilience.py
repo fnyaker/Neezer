@@ -367,6 +367,59 @@ class VerdictTestCase(unittest.TestCase):
             self.provider.resolve("123")
         self.assertNotIsInstance(ctx.exception, TrackUnavailable)
 
+    def test_an_edge_refusal_is_never_a_verdict_about_the_track(self):
+        """media.deezer.com is the EDGE, not the catalogue.
+
+        401 (a stale media token), 403 (a WAF or a geolocation rule on OUR
+        address), 408, 400: none of them is Deezer saying this track has no
+        source. Treating them as one condemned the track and offered the person
+        to replace or delete something perfectly playable.
+        """
+        from neezer.deezer import archive
+
+        for status in (400, 401, 403, 408):
+            with self.subTest(status=status):
+
+                class Refused(DeezerRoutes):
+                    def send(self, request, **kwargs):
+                        if "media.deezer.com" in request.url:
+                            self.asked.append(("get_url", None, None))
+                            resp = requests.Response()
+                            resp.status_code = status
+                            resp.url = request.url
+                            resp.request = request
+                            resp._content = b"refused"
+                            return resp
+                        return super().send(request, **kwargs)
+
+                dz = Deezer()
+                dz.current_user = {
+                    "id": 42,
+                    "name": "tester",
+                    "license_token": "lt",
+                    "can_stream_lossless": True,
+                    "can_stream_hq": True,
+                    "country": "FR",
+                }
+                wire(dz, Refused({"1": song("1", "t1")}))
+                self.provider._dz = dz
+                logins = []
+                self.provider.relogin = lambda: logins.append(1)
+                marked = []
+                with mock.patch(
+                    "neezer.deezer.library.mark_unavailable",
+                    lambda track: marked.append(track),
+                ):
+                    with self.assertRaises(DeezerError) as ctx:
+                        archive._resolve_or_flag(
+                            self.provider, mock.Mock(deezer_id="1")
+                        )
+                self.assertNotIsInstance(ctx.exception, TrackUnavailable)
+                # Nothing is condemned, and no login is paid for: the edge
+                # answered, so the failure is immediate and says nothing.
+                self.assertEqual(marked, [])
+                self.assertEqual(logins, [])
+
     def test_deezer_answering_no_source_still_condemns_the_track(self):
         # The other half of the contract: a real verdict must still get through,
         # or a track that has genuinely gone would never be replaceable.

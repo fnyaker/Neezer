@@ -181,7 +181,7 @@
      box grows. */
   @media (pointer: coarse) {
     .trigger {
-      min-height: 34px;
+      min-height: 44px;
       padding: 0 10px;
     }
     .menu {

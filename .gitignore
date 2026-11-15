@@ -89,6 +89,11 @@ config/neezer.conf
 config/supysonic.conf
 config/*.local.conf
 
+# Transcription sidecar: the worker token (a capability) and the GGML model
+# (hundreds of MB), both host-side only.
+/secrets/
+/models/
+
 # Svelte web UI build artifacts
 webapp/node_modules/
 webapp/dist/

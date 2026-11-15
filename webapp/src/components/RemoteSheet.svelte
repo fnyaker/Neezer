@@ -13,6 +13,7 @@
   import { deviceId, deviceName } from "../lib/remote/device.js";
   import { remoteHost, startHosting, cutAll } from "../lib/remote/hoststate.js";
   import Icon from "./Icon.svelte";
+  import { modalFocus } from "../lib/modal.js";
   import { shortLink } from "../lib/applink.js";
 
   const DURATIONS = [
@@ -193,7 +194,15 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="backdrop" on:click={closeRemoteSheet}>
-    <div class="sheet" role="dialog" aria-label="Contrôle à distance" tabindex="-1" on:click|stopPropagation>
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Contrôle à distance"
+      tabindex="-1"
+      on:click|stopPropagation
+      use:modalFocus
+    >
       <header>
         <div class="title">
           <span class="badge" class:live={live > 0}><Icon name="remote" size={20} /></span>

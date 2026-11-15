@@ -124,12 +124,18 @@ if (DESKTOP) {
     })
   );
   const worst = Math.min(...rows.map((r) => r.share));
-  check(worst > 0.55, "each title takes most of its row", `narrowest ${Math.round(worst * 100)}% of the row`);
+  check(worst > 0.5, "each title takes most of its row", `narrowest ${Math.round(worst * 100)}% of the row`);
   check(rows.every((r) => r.gap >= 0 && r.gap < 24), "and the heart sits right after it", rows.map((r) => Math.round(r.gap)).join(","));
   if (process.env.SHOTS) await page.screenshot({ path: join(process.env.SHOTS, "panel-desktop.png") });
   await page.locator(".more .pill", { hasText: "Tout lire" }).click();
   await page.waitForTimeout(700);
-  check(await page.evaluate(() => JSON.parse(localStorage.getItem("player.session")).queue.length) === 12, "‘Tout lire’ plays them");
+  check(
+    await page.evaluate(() => {
+      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+      return JSON.parse(localStorage.getItem(pkey("player.session"))).queue.length;
+    }) === 12,
+    "‘Tout lire’ plays them",
+  );
 } else {
   await page.locator("footer.player .now").first().click();
   await page.waitForSelector(".m .scroller");

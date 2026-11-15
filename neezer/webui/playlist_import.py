@@ -47,13 +47,13 @@ from flask import current_app, jsonify, request
 
 from .. import linkimport
 from ..db import Album, Artist, Playlist, Track
+from ..ratelimit import WindowLimiter
 from ..utils import like_term
 from . import (
     _db_tracks,
     _provider,
     _track_api,
     _valid_id,
-    admin_required,
     login_required,
     webapi,
 )
@@ -66,8 +66,10 @@ JOB_TTL = 3 * 3600     # s a finished import stays listenable without saving it
 RUNNING_PER_USER = 2   # imports one user may have running at once
 MATCH_WORKERS = 4      # searches in flight for one import (Deezer allows ~10/s)
 TITLE_MAX = 200
+IMPORT_HOURLY = 10     # imports one account may start per hour
 
 _jobs: "OrderedDict[str, dict]" = OrderedDict()
+hourly = WindowLimiter(IMPORT_HOURLY, 3600)
 _lock = threading.Lock()
 
 
@@ -370,7 +372,10 @@ def _do_import(app, job, link, user_id, admin):
 
     def one(i):
         try:
-            got = matcher.network(lines[i])
+            from ..deezer import workload
+
+            with workload.deezer_lane(workload.Priority.BULK):
+                got = matcher.network(lines[i])
         except Exception:
             logger.info("Import: matching failed for %r", lines[i]["title"], exc_info=True)
             got = (None, None, False)
@@ -407,19 +412,31 @@ def _rows_for(provider, ids, user_id, admin) -> list:
     """Track rows for the kept items, in order. Same rules as adding to a
     playlist: a UUID is a library row (someone else's upload is refused) or a
     remembered YouTube hit, a number a Deezer track whose row is made now."""
-    from ..deezer import archive, library
+    from ..deezer import archive, ids as dz_ids, library
     from . import _ensure_track_row
     from . import youtube as ytweb
 
+    ids = [str(sid) for sid in ids]
+    wanted = []
+    for sid in ids:
+        try:
+            wanted.append(uuid.UUID(sid))
+        except ValueError:
+            if _valid_id(sid):
+                wanted.append(dz_ids.track_uuid(sid))
+    local = {}
+    for i in range(0, len(wanted), 400):
+        for row in Track.select().where(Track.id.in_(wanted[i : i + 400])):
+            local[row.id] = row
+
     root, cache, out = None, library.ImportCache(), []
     for sid in ids:
-        sid = str(sid)
         try:
             tid = uuid.UUID(sid)
         except ValueError:
             tid = None
         if tid is not None:
-            row = Track.get_or_none(Track.id == tid)
+            row = local.get(tid)
             if row is None:
                 row = ytweb.materialize(sid)
             elif row.owner_id is not None and not admin and row.owner_id != user_id:
@@ -429,7 +446,7 @@ def _rows_for(provider, ids, user_id, admin) -> list:
             continue
         if not _valid_id(sid):
             continue
-        row = archive.find_local_track(sid)
+        row = local.get(dz_ids.track_uuid(sid))
         if row is None and provider is not None:
             try:
                 if root is None:
@@ -443,7 +460,7 @@ def _rows_for(provider, ids, user_id, admin) -> list:
 
 
 def _run_save(app, job, ids, title, user_id, admin):
-    from ..db import User, close_connection, open_connection
+    from ..db import PlaylistMember, User, close_connection, db, open_connection
     from ..deezer import backfill
 
     try:
@@ -453,13 +470,17 @@ def _run_save(app, job, ids, title, user_id, admin):
                 rows = _rows_for(getattr(app, "deezer", None), ids, user_id, admin)
                 if not rows:
                     raise RuntimeError("no playable track")
-                pl = Playlist.create(user=User[user_id], name=title, comment=_comment(job))
-                for row in rows:
-                    pl.add(row)
-                try:
-                    backfill.archive_tracks(app, rows, event="on_playlist_add")
-                except Exception:
-                    logger.info("Import: archiving the saved playlist failed", exc_info=True)
+                with db.atomic():
+                    pl = Playlist.create(user=User[user_id], name=title, comment=_comment(job))
+                    PlaylistMember.create(
+                        playlist=pl, user=User[user_id], role="owner", added=pl.created
+                    )
+                    pl.add_many(rows)
+                if admin:
+                    try:
+                        backfill.archive_tracks(app, rows, event="on_playlist_add")
+                    except Exception:
+                        logger.info("Import: archiving the saved playlist failed", exc_info=True)
                 _update(job, state="saved", playlist_id=str(pl.id), saved=len(rows))
             finally:
                 close_connection()
@@ -476,35 +497,61 @@ def _comment(job) -> str:
 
 
 def _start(target, args, name):
-    worker = threading.Thread(target=target, args=args, name=name, daemon=True)
+    app = args[0]
+
+    def work():
+        if not app.testing:
+            try:
+                from ..deezer import workload
+
+                workload.renice()
+            except Exception:
+                logger.debug("Import: renice failed", exc_info=True)
+        target(*args)
+
+    worker = threading.Thread(target=work, name=name, daemon=True)
     worker.start()
-    if args[0].testing:
+    if app.testing:
         worker.join()  # tests read the outcome straight after the request
 
 
-@webapi.route("/import/playlist", methods=["POST"])
-@login_required
-def import_playlist_start():
-    """Start reading + matching a shared link. ``{url}`` → ``{id}`` (a job)."""
-    data = request.get_json(silent=True) or {}
-    text = data.get("url")
+def start_link(text, user):
+    """Start reading + matching a pasted link, as ``user``. ``(status,
+    payload)``: the job's id, or the cause in words (``missing_url``,
+    ``invalid_link``, ``deezer_unavailable``, ``import_running``). Only the
+    parsed id of a link is ever fetched, never the pasted text
+    (``linkimport``)."""
     if not isinstance(text, str) or not text.strip():
-        return jsonify({"error": "missing url"}), 400
+        return 400, {"error": "missing url", "code": "missing_url"}
     link = linkimport.parse(text)
     if link is None:
-        return jsonify(
-            {"error": "Lien non reconnu : colle le lien d'une playlist Deezer, Spotify, YouTube ou Apple Music"}
-        ), 400
+        return 400, {
+            "error": "Lien non reconnu : colle le lien d'une playlist Deezer, Spotify, YouTube ou Apple Music",
+            "code": "invalid_link",
+        }
     if link["source"] == "deezer" and _provider() is None:
-        return jsonify({"error": "Deezer n'est pas configuré sur ce serveur"}), 400
+        return 400, {
+            "error": "Deezer n'est pas configuré sur ce serveur",
+            "code": "deezer_unavailable",
+        }
 
-    user = request.webuser
+    allowed, retry_after = hourly.allow(f"u:{user.id}")
+    if not allowed:
+        return 429, {
+            "error": "Trop d'imports lancés : réessaie dans un moment.",
+            "code": "rate_limited",
+            "retry_in": retry_after,
+        }
+
     now = time.time()
     with _lock:
         _prune(now)
         running = sum(1 for j in _jobs.values() if j["user_id"] == user.id and j["state"] in _RUNNING)
         if running >= RUNNING_PER_USER:
-            return jsonify({"error": "Un import est déjà en cours, attends qu'il finisse"}), 429
+            return 429, {
+                "error": "Un import est déjà en cours, attends qu'il finisse",
+                "code": "import_running",
+            }
         jid = secrets.token_urlsafe(12)
         job = {
             "id": jid,
@@ -531,7 +578,57 @@ def import_playlist_start():
     app = current_app._get_current_object()
     args = (app, job, link, user.id, bool(user.admin))
     _start(_run_import, args, "playlist-import")
-    return jsonify({"id": jid})
+    return 200, {"id": jid}
+
+
+def snapshot(job_id, user_id):
+    """A job of ``user_id``, as a poll reads it, or None (somebody else's job
+    does not exist)."""
+    with _lock:
+        job = _jobs.get(str(job_id))
+    if job is None or job["user_id"] != user_id:
+        return None
+    return _snapshot(job)
+
+
+def newest_running(user_id):
+    """The caller's newest import still running, in the shape a poll reads
+    (no items, no link), or None."""
+    with _lock:
+        live = [
+            j for j in _jobs.values() if j["user_id"] == user_id and j["state"] in _RUNNING
+        ]
+        if not live:
+            return None
+        job = max(live, key=lambda j: j["created"])
+        return {
+            "id": job["id"],
+            "state": job["state"],
+            "source": job["source"],
+            "source_label": job["source_label"],
+            "kind": job["kind"],
+            "name": job["name"],
+            "total": job["total"],
+            "truncated": job["truncated"],
+            "done": job["done"],
+            "matched": job["matched"],
+            "error": job["error"],
+            "counts": dict(job["counts"]),
+        }
+
+
+@webapi.route("/import/playlist", methods=["POST"])
+@login_required
+def import_playlist_start():
+    """Start reading + matching a shared link. ``{url}`` → ``{id}`` (a job)."""
+    data = request.get_json(silent=True)
+    text = data.get("url") if isinstance(data, dict) else None
+    status, payload = start_link(text, request.webuser)
+    response = jsonify(payload)
+    response.status_code = status
+    if status == 429:
+        response.headers["Retry-After"] = "5"
+    return response
 
 
 @webapi.route("/import/playlist/<job_id>")
@@ -545,7 +642,6 @@ def import_playlist_status(job_id):
 
 @webapi.route("/import/playlist/<job_id>/save", methods=["POST"])
 @login_required
-@admin_required
 def import_playlist_save(job_id):
     """Keep an import as a local playlist. ``{title?, keep?: [item index]}``
     (every matched line when ``keep`` is absent)."""

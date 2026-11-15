@@ -9,10 +9,11 @@
   import { fade, scale } from "svelte/transition";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
-  import { exportSheet, closeExport, toasts, isAdmin } from "../lib/stores.js";
+  import { exportSheet, closeExport, toasts } from "../lib/stores.js";
   import { services, loadServices, linkSpotify, jobSummary } from "../lib/services.js";
   import { online } from "../lib/net.js";
   import Icon from "./Icon.svelte";
+  import { modalFocus } from "../lib/modal.js";
 
   let formats = [];
   let fmt = null;
@@ -43,7 +44,9 @@
   $: if (target && loadedFor !== target) open(target);
   $: if (!target) started = false;
   $: listable = target && target.kind !== "podcast";
-  $: linkable = target && target.kind === "playlist" && $isAdmin;
+  // Publishing a read-only link is the OWNER's act (an editor gets 403): the
+  // tab exists only for a playlist the caller can manage.
+  $: linkable = target && target.kind === "playlist" && !!target.canManage;
 
   function open(t) {
     loadedFor = t;
@@ -54,23 +57,31 @@
     confirmRevoke = false;
     if (!job || !job.running) resetJob();
     if (t.kind === "podcast") mode = "audio";
-    if (t.kind !== "playlist" && mode === "link") mode = "audio";
+    if (t.kind !== "playlist" || !t.canManage) {
+      if (mode === "link") mode = "audio";
+    }
     loadFormats();
     if (t.kind !== "podcast") loadServices(true);
-    if (t.kind === "playlist" && $isAdmin) loadLink();
+    if (t.kind === "playlist" && t.canManage) loadLink();
   }
 
   // -- the public link --
 
+  const linkFailure = (e) => {
+    if (e?.status === 404) return "Cette playlist ne vous est plus accessible.";
+    if (e?.status === 403) return "Vous ne pouvez pas gérer le lien public de cette playlist.";
+    return e?.message || "Lien public indisponible";
+  };
+
   async function loadLink() {
-    if (!target || target.kind !== "playlist") return;
+    if (!target || target.kind !== "playlist" || !target.canManage) return;
     linkLoading = true;
     try {
       const r = await api.playlistShare(target.id);
       link = r.link || null;
     } catch (e) {
       link = null;
-      toasts.push(e?.message || "Lien public indisponible");
+      toasts.push(linkFailure(e));
     }
     linkLoading = false;
   }
@@ -81,14 +92,14 @@
   }
 
   async function createLink() {
-    if (!target || linkBusy) return;
+    if (!target || linkBusy || !target.canManage) return;
     linkBusy = true;
     try {
       const r = await api.createPlaylistShare(target.id);
       link = r.link;
       toasts.push("Lien public créé");
     } catch (e) {
-      toasts.push(e?.message || "Création impossible");
+      toasts.push(linkFailure(e));
     }
     linkBusy = false;
   }
@@ -103,7 +114,7 @@
   }
 
   async function revokeLink() {
-    if (!target || linkBusy) return;
+    if (!target || linkBusy || !target.canManage) return;
     linkBusy = true;
     try {
       await api.revokePlaylistShare(target.id);
@@ -111,7 +122,7 @@
       confirmRevoke = false;
       toasts.push("Lien révoqué");
     } catch (e) {
-      toasts.push(e?.message || "Révocation impossible");
+      toasts.push(linkFailure(e));
     }
     linkBusy = false;
   }
@@ -244,7 +255,15 @@
 {#if target}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeExport}>
-    <div class="sheet" transition:scale={{ duration: 160, start: 0.97 }}>
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Exporter"
+      tabindex="-1"
+      transition:scale={{ duration: 160, start: 0.97 }}
+      use:modalFocus
+    >
       <header>
         <div class="ttl">
           <h2>Exporter</h2>

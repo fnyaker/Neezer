@@ -36,7 +36,6 @@ from flask import current_app, jsonify, redirect, request, session, url_for
 from ..db import Album, Artist, Meta, ServiceLink, Track, now
 from ..managers.user import decrypt_password, encrypt_password
 from ..services import SERVICES, ServiceAuthError, ServiceError
-from ..services import deezer as dz_service
 from ..services import listfile, match, spotify, ytmusic
 from . import (
     _db_playlist_track_rows,
@@ -104,7 +103,7 @@ def _spotify_client_id() -> str | None:
 def _redirect_here() -> str:
     # Only ever read from the ADMIN's request, when they save the app: that is
     # the address they register with Spotify, and it is frozen there.
-    return url_for("webapi.services_spotify_callback", _external=True)  # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
+    return url_for("webapi.services_spotify_callback", _external=True)  # nosemgrep: admin-registered redirect URI
 
 
 def _spotify_redirect() -> str | None:
@@ -120,11 +119,6 @@ def _spotify_redirect() -> str | None:
 
 def _client(service, user_id):
     """The service client for this user, or raises ServiceError in words."""
-    if service == "deezer":
-        provider = _provider()
-        if provider is None:
-            raise ServiceError("Le proxy Deezer est désactivé sur ce serveur.")
-        return dz_service.Client(provider)
     row = _link(user_id, service)
     secret = _secret(row) if row else None
     if not secret:
@@ -183,17 +177,6 @@ def services_status():
             "account": links["youtube"].account if "youtube" in links else None,
         },
     ]
-    if admin:
-        provider = _provider()
-        out.append(
-            {
-                "id": "deezer",
-                "name": "Deezer",
-                "ready": provider is not None,
-                "linked": provider is not None,
-                "account": None,
-            }
-        )
     out.append({"id": "apple", "name": "Apple Music", "ready": False, "linked": False, "file": True})
     return jsonify({"services": out, "formats": [
         {"id": k, "label": v[2], "ext": v[1]} for k, v in listfile.FORMATS.items()
@@ -367,7 +350,13 @@ def _album_rows(ident):
         .where(Track.album == alb)
         .order_by(Track.disc, Track.number)
     )
-    return alb.name, list(q)
+    clause = Track.visible_clause(request.webuser)
+    if clause is not None:
+        q = q.where(clause)
+    rows = list(q)
+    if not rows:
+        return None, None
+    return alb.name, rows
 
 
 def _source(kind, ident):
@@ -376,15 +365,21 @@ def _source(kind, ident):
     The library first (Track rows: the ISRC is on disk beside them); a Deezer
     page that is not in it — a recommendation, an editorial playlist, an album
     nobody played — is listed through the ZIP export's own readers (dicts).
+    A local playlist is read through ``playlist_access`` with the caller's
+    visibility: a non-member reads nothing, a member's list stops at what they
+    can see.
     """
+    from .. import playlist_access as placcess
     from . import export
 
     if kind == "favorites":
-        return "Favoris", _user_starred()
+        return "Favoris", [t for t in _user_starred() if t.readable_by(request.webuser)]
     if kind == "playlist":
         pl = _resolve_db_playlist(ident)
         if pl is not None:
-            return pl.name, list(_db_playlist_track_rows(pl))
+            if not placcess.can_read(pl, request.webuser):
+                return None, None
+            return pl.name, list(_db_playlist_track_rows(pl, request.webuser))
         return export._playlist_tracks(ident) if _valid_id(ident) else (None, None)
     if kind == "album":
         name, rows = _album_rows(ident)

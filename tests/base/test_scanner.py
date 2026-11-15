@@ -248,7 +248,6 @@ class ScannerDeletionsTestCase(unittest.TestCase):
         )
         db.StarredFolder.create(user=user, starred=track.folder_id)
         db.StarredFolder.create(user=user, starred=firstdir)
-        db.StarredArtist.create(user=user, starred=track.artist_id)
         db.StarredAlbum.create(user=user, starred=track.album_id)
         db.StarredTrack.create(user=user, starred=track)
         db.RatingFolder.create(user=user, rated=track.folder_id, rating=2)

@@ -65,6 +65,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS index_track_path ON track(path_hash);
 CREATE TABLE IF NOT EXISTS user (
     id CHAR(36) PRIMARY KEY,
     name VARCHAR(64) NOT NULL,
+    name_key VARCHAR(64),
     mail VARCHAR(256),
     password VARCHAR(255) NOT NULL,
     salt CHAR(6) NOT NULL,
@@ -72,6 +73,9 @@ CREATE TABLE IF NOT EXISTS user (
     admin BOOLEAN NOT NULL,
     jukebox BOOLEAN NOT NULL,
     session_epoch INTEGER NOT NULL DEFAULT 0,
+    disabled BOOLEAN NOT NULL DEFAULT 0,
+    last_login DATETIME,
+    onboarding_step VARCHAR(16) NOT NULL DEFAULT 'done',
     listenbrainz_session CHAR(36),
     listenbrainz_status BOOLEAN NOT NULL,
     lastfm_session CHAR(32),
@@ -80,6 +84,34 @@ CREATE TABLE IF NOT EXISTS user (
     last_play_date DATETIME
 );
 CREATE INDEX IF NOT EXISTS index_user_last_play_id_fk ON user(last_play_id);
+CREATE UNIQUE INDEX IF NOT EXISTS index_user_name_key ON user(name_key);
+
+CREATE TABLE IF NOT EXISTS invite (
+    id VARCHAR(24) PRIMARY KEY,
+    token_hash CHAR(64) NOT NULL,
+    created_by CHAR(36) REFERENCES user ON DELETE SET NULL,
+    created DATETIME NOT NULL,
+    expires DATETIME NOT NULL,
+    used_by CHAR(36) REFERENCES user ON DELETE SET NULL,
+    used_at DATETIME,
+    revoked_at DATETIME,
+    note VARCHAR(64)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_invite_token_hash ON invite(token_hash);
+CREATE INDEX IF NOT EXISTS index_invite_expires ON invite(expires);
+CREATE INDEX IF NOT EXISTS index_invite_created_by ON invite(created_by);
+CREATE INDEX IF NOT EXISTS index_invite_used_by ON invite(used_by);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY,
+    at DATETIME NOT NULL,
+    actor VARCHAR(64),
+    action VARCHAR(64) NOT NULL,
+    target VARCHAR(128),
+    detail VARCHAR(200),
+    result VARCHAR(16) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_audit_log_at ON audit_log(at);
 
 CREATE TABLE IF NOT EXISTS client_prefs (
     user_id CHAR(36) NOT NULL REFERENCES user,
@@ -159,7 +191,11 @@ CREATE TABLE IF NOT EXISTS playlist (
     comment VARCHAR(256),
     public BOOLEAN NOT NULL,
     created DATETIME NOT NULL,
-    deezer_id VARCHAR(32)
+    deezer_id VARCHAR(32),
+    version INTEGER NOT NULL DEFAULT 1,
+    members_version INTEGER NOT NULL DEFAULT 1,
+    last_edited_by VARCHAR(64),
+    last_edited_at DATETIME
 );
 CREATE INDEX IF NOT EXISTS index_playlist_user_id_fk ON playlist(user_id);
 
@@ -183,6 +219,37 @@ CREATE TABLE IF NOT EXISTS playlist_share (
 );
 CREATE INDEX IF NOT EXISTS index_playlist_share_playlist_revoked ON playlist_share(playlist_id, revoked);
 CREATE INDEX IF NOT EXISTS index_playlist_share_user_id_fk ON playlist_share(user_id);
+
+CREATE TABLE IF NOT EXISTS playlist_member (
+    playlist_id CHAR(36) NOT NULL REFERENCES playlist ON DELETE CASCADE,
+    user_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    role VARCHAR(8) NOT NULL,
+    added DATETIME NOT NULL,
+    PRIMARY KEY (playlist_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS index_playlist_member_user_id_fk ON playlist_member(user_id);
+
+CREATE TABLE IF NOT EXISTS playlist_folder (
+    id CHAR(36) PRIMARY KEY,
+    user_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_playlist_folder_user_position ON playlist_folder(user_id, position);
+CREATE INDEX IF NOT EXISTS index_playlist_folder_user_id_fk ON playlist_folder(user_id);
+
+CREATE TABLE IF NOT EXISTS playlist_placement (
+    user_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    playlist_id CHAR(36) NOT NULL REFERENCES playlist ON DELETE CASCADE,
+    folder_id CHAR(36) REFERENCES playlist_folder ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, playlist_id)
+);
+CREATE INDEX IF NOT EXISTS index_playlist_placement_user_folder_position
+    ON playlist_placement(user_id, folder_id, position);
+CREATE INDEX IF NOT EXISTS index_playlist_placement_playlist_id_fk ON playlist_placement(playlist_id);
+CREATE INDEX IF NOT EXISTS index_playlist_placement_folder_id_fk ON playlist_placement(folder_id);
 
 CREATE TABLE meta (
     key CHAR(32) PRIMARY KEY,
@@ -210,7 +277,9 @@ CREATE TABLE IF NOT EXISTS podcast_channel (
     error_message VARCHAR(256),
     subscribed BOOLEAN NOT NULL DEFAULT true,
     gone DATETIME,
-    auto_archive BOOLEAN NOT NULL DEFAULT false
+    auto_archive BOOLEAN NOT NULL DEFAULT false,
+    auto_transcribe BOOLEAN NOT NULL DEFAULT false,
+    transcribe_language VARCHAR(8)
 );
 CREATE INDEX IF NOT EXISTS index_podcast_channel_user_id_fk ON podcast_channel(user_id);
 
@@ -253,6 +322,94 @@ CREATE TABLE IF NOT EXISTS podcast_marker (
 );
 CREATE INDEX IF NOT EXISTS index_podcast_marker_user_id_fk ON podcast_marker(user_id);
 CREATE INDEX IF NOT EXISTS index_podcast_marker_episode_id_fk ON podcast_marker(episode_id);
+
+CREATE TABLE IF NOT EXISTS podcast_chapter (
+    id CHAR(36) PRIMARY KEY,
+    episode_id CHAR(36) NOT NULL REFERENCES podcast_episode ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER,
+    title VARCHAR(300),
+    source VARCHAR(8) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_chapter_episode_idx
+    ON podcast_chapter(episode_id, idx);
+CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_chapter_episode_start
+    ON podcast_chapter(episode_id, start_ms);
+
+CREATE TABLE IF NOT EXISTS podcast_chapter_scan (
+    episode_id CHAR(36) PRIMARY KEY REFERENCES podcast_episode ON DELETE CASCADE,
+    scanned_at DATETIME NOT NULL,
+    source VARCHAR(8) NOT NULL,
+    n_chapters INTEGER NOT NULL DEFAULT 0,
+    error VARCHAR(200)
+);
+
+CREATE TABLE IF NOT EXISTS podcast_transcript (
+    episode_id CHAR(36) PRIMARY KEY REFERENCES podcast_episode ON DELETE CASCADE,
+    status VARCHAR(10) NOT NULL,
+    language VARCHAR(8),
+    engine VARCHAR(16),
+    model VARCHAR(64),
+    engine_version VARCHAR(32),
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    done_ms INTEGER NOT NULL DEFAULT 0,
+    n_segments INTEGER NOT NULL DEFAULT 0,
+    error_code VARCHAR(24),
+    error_message VARCHAR(300),
+    cancel_requested BOOLEAN NOT NULL DEFAULT false,
+    source VARCHAR(8) NOT NULL DEFAULT 'server',
+    worker_name VARCHAR(64),
+    transcript_path VARCHAR(4096),
+    user_id CHAR(36) REFERENCES user ON DELETE SET NULL,
+    queued_at DATETIME,
+    started_at DATETIME,
+    finished_at DATETIME,
+    updated DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_podcast_transcript_status ON podcast_transcript(status);
+
+CREATE TABLE IF NOT EXISTS podcast_transcript_segment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id CHAR(36) NOT NULL REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    search_text TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS index_podcast_transcript_segment_idx
+    ON podcast_transcript_segment(transcript_id, idx);
+CREATE INDEX IF NOT EXISTS index_podcast_transcript_segment_start
+    ON podcast_transcript_segment(transcript_id, start_ms);
+
+CREATE TABLE IF NOT EXISTS transcribe_worker (
+    id CHAR(36) PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    kind VARCHAR(8) NOT NULL,
+    token TEXT NOT NULL,
+    scopes VARCHAR(32) NOT NULL DEFAULT 'transcribe',
+    created DATETIME NOT NULL,
+    last_seen DATETIME,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    revoked DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS podcast_transcript_lease (
+    episode_id CHAR(36) PRIMARY KEY REFERENCES podcast_transcript(episode_id) ON DELETE CASCADE,
+    worker_id CHAR(36) NOT NULL REFERENCES transcribe_worker(id) ON DELETE CASCADE,
+    lease_token_hash CHAR(64) NOT NULL,
+    acquired_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+    heartbeat_at DATETIME NOT NULL,
+    chunk_start_ms INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error VARCHAR(200)
+);
+CREATE INDEX IF NOT EXISTS index_transcribe_lease_expires
+    ON podcast_transcript_lease(expires_at);
+CREATE INDEX IF NOT EXISTS index_transcribe_lease_worker
+    ON podcast_transcript_lease(worker_id);
 
 CREATE TABLE IF NOT EXISTS track_analysis (
     track_id CHAR(36) NOT NULL PRIMARY KEY REFERENCES track,

@@ -112,10 +112,11 @@ try {
   await ctx2.route(/dzcdn\.net|api\.deezer\.com|lrclib/, (r) => r.abort());
   await ctx2.addInitScript(() => {
     try {
+      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
       const j = sessionStorage.getItem("__inject");
       if (j) {
-        localStorage.setItem("player.session", j);
-        localStorage.removeItem("player.pos");
+        localStorage.setItem(pkey("player.session"), j);
+        localStorage.removeItem(pkey("player.pos"));
         sessionStorage.removeItem("__inject");
       }
     } catch {

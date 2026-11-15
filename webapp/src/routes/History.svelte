@@ -311,7 +311,10 @@
     <section class="summary card" aria-labelledby="sum-title">
       <div class="sum-head">
         <h2 class="section-title" id="sum-title">{summary.days} derniers jours</h2>
-        <span class="label-mono sum-note">Ton écoute</span>
+        <div class="sum-side">
+          <span class="label-mono sum-note">Ton écoute</span>
+          <a class="btn btn-ghost btn-sm" href="#/recap">Mon récap</a>
+        </div>
       </div>
       <div class="stats">
         <div class="stat">
@@ -495,6 +498,15 @@
   .sum-note {
     color: var(--dim);
     font-size: 11px;
+  }
+  .sum-side {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .sum-side .btn {
+    text-decoration: none;
   }
   .stats {
     display: grid;
@@ -852,6 +864,9 @@
   @media (max-width: 640px) {
     .summary {
       padding: 16px;
+    }
+    .sum-side .btn {
+      min-height: 44px;
     }
     .stats {
       gap: 6px;

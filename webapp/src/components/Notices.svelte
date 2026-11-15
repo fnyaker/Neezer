@@ -111,6 +111,10 @@
       width: 44px;
       height: 44px;
     }
+    .act {
+      min-height: 44px;
+      padding: 10px 16px;
+    }
   }
   .x:hover {
     background: var(--bg-hover);

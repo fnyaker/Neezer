@@ -44,6 +44,26 @@ Three code layers, from low to high:
    - `scheduler.py` — auto-sync: full sync on startup (after ~20s) then daily at `sync_at` (04:00)
      or every `sync_interval`, whenever a `sync_user` exists.
 
+**Never save a whole row that was read before a long request.** Peewee's `save()` writes
+every column the instance loaded, so a `/rest/stream` that holds `request.user` for the
+duration of a first FLAC fetch would write back a stale `disabled`/`session_epoch`/
+`password`, and a `Track` would write back a stale `play_count`/`gain`/`unavailable`/
+`last_modification`. Use a targeted `UPDATE` (`Track.update(play_count=Track.play_count + 1,
+…)`) or `save(only=(…))`; the same rule covers `TranscribeWorker` and `PodcastChannel`. A
+revoked worker is checked in the `UPDATE` itself, not only on the instance read earlier.
+
+**Foreground first on the provider link.** The shared Deezer window (40 calls / 5 s) has lanes:
+`USER` (a tapped page or play), `PREFETCH`, `BULK`; a freed slot goes to the most urgent, and
+`workload.renice()` now also declares the thread's Deezer calls `BULK`. A slow provider call never
+runs in a request thread when it can be moved: Subsonic `refreshPodcasts` and
+`downloadPodcastEpisode` answer immediately and use a single reniced worker (the download queue is
+bounded and deduplicated by episode; the first play keeps its synchronous download),
+`GET /me/accounts/<id>/library/<kind>` serves the held listing and refreshes behind it (one
+refresh per account/kind/5 min, retried 60 s after a failure), and `/api/android/apk` answers
+**202 + Retry-After** while one worker fetches the APK. The archive backfills and nightly sync call
+`renice`/`Throttle` between items, so a person's play always wins. A 4xx from `media.deezer.com` is
+a transport failure (`DeezerError`), never a verdict that the title is unavailable.
+
 **Resilience rules (learned from a production outage — do not regress).** The governing rule:
 **Deezer is optional to the app running.** Everything on disk — playing archived music, browsing,
 playlists, favourites, uploads, the SPA itself — must keep working at full speed while Deezer is
@@ -163,6 +183,68 @@ The local channel rows are the source of truth for subscriptions; `importer.sync
 Per-user playback state is server-side: `PodcastProgress` (auto-saved position, `finished` flag) and
 `PodcastMarker` (manual bookmarks) via `/api/podcast/progress` + marker CRUD; the SPA merges them with
 its localStorage copy newest-wins (`webapp/src/lib/podcastProgress.js`); nothing is sent to Deezer.
+
+**Podcast chapters** (`neezer/deezer/chapters.py`, `webui/podcast_chapters.py`, tables
+`podcast_chapter*` schema `20261116`): Deezer supplies neither chapters nor a transcript, so the
+source precedence is sidecar `<episode>.chapters.json` → MP4 `chpl` → ID3 `CHAP`/`CTOC` → the
+publisher URL embedded as a tag (only with `chapter_urls` on, **off by default**) → none. Extraction
+is mutagen-only (no ffprobe), **0.25 ms** for a 57.6 MB / 1 h file, at archive finalize, lazily on
+the route for an older archive, by a one-shot resumable boot backfill and by
+`neezer-cli podcast chapters`. Episode rows store milliseconds, the API answers seconds;
+`GET /api/podcast/episode/<eid>/chapters` is 200 even for an unarchived episode (`archived:false`)
+or one with no chapters (`scanned:true`, `source:"none"`, never an invented chapter), 404 for an
+unknown id, and **2 SELECT warm**. The show payload gains `chapter_count` in one grouped query
+(+18.5 B/episode raw, +0.19 B gzip). The publisher URL is fetched only on a BULK worker, validated
+on every redirect hop (public address only, pinned, 256 KiB cap, JSON only, no cookies) and a
+failure is recorded without failing the episode.
+
+**Podcast transcripts** (`neezer/transcribe/`, tables `podcast_transcript*` schema `20261117`, columns and lease tables schema `20261121`; routes in `webui/transcribe.py`). The text lives on the **data disk**, next to the episode: `<episode>.transcript.json` is canonical (format version, language, engine/model, duration, segments `{start_ms,end_ms,text}`, timestamps) and `<episode>.transcript.srt` is regenerated from it. Both are written temp-file + `os.replace`, only from a runner thread (never a request), and both paths must resolve under `archive_dir/Podcasts/`; audio is never deleted. The DB is the **index**: `podcast_transcript`/`_segment`, plus `podcast_channel.auto_transcribe`/`transcribe_language` and `podcast_transcript.source`/`worker_name`/`transcript_path`. A missing sidecar does not destroy a row and a missing row does not destroy a sidecar; `neezer-cli transcribe rebuild` recreates rows+segments from the sidecars (measured **5 statements per episode**, idempotent).
+
+The engine is whisper.cpp only, CPU (`whisper-cli -ng -oj`), on 600 s chunks with a 2 s overlap; segments become absolute milliseconds, the slice inside the previous overlap is dropped, empty/bracket-only text is dropped and text is capped at 2 000 chars. Language is resolved episode > show > global (`auto` detects once over 120 s, then pins); a low-confidence detection falls back to `-l auto` for the first chunk and pins `result.language`. The model is chosen from the configured model's directory by **free memory** (`MemAvailable`): `large-v3-turbo-q8_0` at ≥ 2.5 GB, otherwise `q5_0`, then `small`, else the configured file; the binary and the model are validated (executable, GGML magic, ≥ 1 MiB) with paths that only ever come from the configuration file. Nothing is downloaded at runtime and `engine.py`/`sidecar.py` import neither the database nor Flask (pinned by a test).
+
+The queue is `queued → leased | running → ready`, with `stopped` and `error` reprenable at `done_ms`. **20** active rows; a **15 min** lease with a heartbeat write at most once a minute and **3** expiries → `error lease_lost`; one server runner at a time, many clients; a boot requeues `running` (inline) and expired leases (external). Everything is `Priority.BULK`, reniced + idle-I/O, and yields completely: before a chunk through `Throttle(streams_active(), foreground_busy(), listening_for() < 15, load > 0.8)`, and **inside** a chunk by `SIGSTOP`ping the process group while `workload.streams_active() > 0` (the counter added for a whole episode: `listening_for` is stale 45 s into a one-hour stream). A user's stop is read from the DB every 2 s, kills the process group, keeps `done_ms` and the segments, and writes the partial sidecar. Auto jobs reserve their duration in the `user_id IS NULL` transcripts of the last 24 h (`daily_minutes`, default 120, `0` = unlimited) — a skipped auto episode creates **no row** (it is not "waiting"); manual `--episode`/`POST` jobs bypass the budget but not the queue. The archive trigger is one hook at the end of `archive._finalize_episode` (local import, `try/except`): a new archived episode of a marked show is queued, never transcribed in the request. Marking a show queues the backlog through `queue_backlog(show, backlog=all|recent|none)` — `recent` = the 10 newest, `none` = new episodes only; the mode is an argument because the per-show storage is the admin route's lot. `neezer.transcribe.start(app)` (called from `web.py`) starts the inline runner and resumes interrupted
+work; `runner=external` leaves jobs `queued` and says `waiting` instead of running whisper in the
+API, with a light 60 s scheduler (`resume_if_interrupted` then `resume_auto`, BULK/reniced, also
+woken by a claim) so the backlog and interrupted jobs keep moving. `GUNICORN_WORKERS > 1` refuses
+the inline runner (each worker would requeue what its siblings transcribe): the status says
+`multi_worker` and the deployment must use `runner=external`.
+
+Measured on SQLite: enqueue **5 statements**, claim **8**, heartbeat **3 warm / 5 when it renews**, a chunk **6**, idle `resume_auto` **2** (the `tr.*` read); a 1 300 s episode through the fake engine is 3 chunks and 6 segments. Sidecar: **600 segments/h × 92 chars = 85.7 kB JSON/h (143 B/segment)**, SRT 78.5 kB/h. Config: `[transcribe] enabled|bin|model|runner|daily_minutes|search_segments|max_minutes|language`, paths file-only, `enabled=False` by default, and every missing piece is a named reason (`engine_missing`, `model_missing`, `model_invalid`, `ffmpeg_missing`, `no_audio`, `no_duration`, `too_long`, `too_big`, `exit`, `timeout`, `cancelled`, `lease_lost`, `budget`, `queue_full`) with no boot failure.
+
+The **read/search API** is `webui/transcribe.py` (blueprint `transcribe_api`): `GET /api/transcribe/status`
+for every account (admin gets the cleaned `last_error`), `GET/PUT /api/transcribe/settings` admin-only
+(`enabled`, language, limits and search scope in `Meta tr.*`; `bin`/`model`/`runner` are refused as
+server-side), `POST /api/podcast/<pid>/transcribe` to mark a show and enqueue its `all|recent|none`
+backlog, `POST|DELETE /api/podcast/episode/<eid>/transcribe` to start/stop/delete, and the read
+routes `GET .../transcript` (page, `at`, `q`), `GET /api/podcast/<pid>/transcript/search` and
+`GET /api/transcripts/search`. A page is **3 statements**, an `at`/`q` page 4, both searches 4 with
+exactly **1 `search_text LIKE`**; the show page now costs 6 SELECT (the episode/archived counts
+are one grouped query; the transcript state adds one when present),
+each `transcript` payload is ~113 B when ready. Search scopes are the show's 100 latest ready
+episodes and the most recent **1.2 M segments** (configurable; `0` = unlimited), and the payload
+says when it is truncated. Transcript reads are `read` for remote sessions; settings/start/stop/
+delete/mark are `NEVER`. No route exposes `transcript_path`. The `Meta` backlog key is
+`tr.bl.<24>` because `Meta.key` is 32 characters; a database/column would be the durable
+alternative. `settings.load` merges defaults < config file < UI, while `paths()` reads the file
+only. `transcribe_settings` being `NEVER` also hides the card from an admin remote controller
+(deliberate; change to `{"GET": "admin", "PUT": NEVER}` if that is wanted).
+
+The **worker protocol** is `webui/transcribe_worker.py` (blueprint `transcribe_worker_api`) and is
+how the sidecar transcribes without a database or an archive mount. An admin creates a worker with
+`POST /api/transcribe/workers` (`name`, `kind=server|client`); the response shows the token
+`<worker-uuid>.<32-byte secret>` **once**, and the database keeps it encrypted with the server's
+`password_secret` (never in a GET, never in a log). The worker sends `Authorization: Bearer …` and
+the lease in `X-NS-Lease`; the lease itself is stored only as SHA-256. `POST /worker/claim` returns
+one job plus `audio_url`, duration, language, chunk size and start; `heartbeat` returns
+`cancel|pause|done_ms`; `chunk` appends an ordered piece; `complete`, `fail` and `release` close or
+requeue it. `GET /worker/audio/<eid>` serves the archived file with `Range`/206, `no-store`, and
+403 without the matching lease; no payload ever contains a filesystem path. The sidecar is written
+by a daemon thread, never inside the request, and a late flush only updates `transcript_path` and
+`updated` (it can never revert a `ready` row). Worker routes are `NEVER` for remote sessions; the
+three admin worker routes are `admin` (a remote admin link can create/revoke a worker — deliberate,
+confirm if that is too broad). Measured: workers list 3 statements/184 B, create 4/207 B, claim
+11/316 B, heartbeat 4/78 B, chunk 8/49 B, complete 6/51 B, fail 6/31 B, audio 6 statements plus the
+bytes. A revoked or disabled worker gets 403 before the queue is read; 32 live workers is the cap.
 
 **Unavailable tracks** (`neezer/webui/availability.py`): Deezer drops tracks from its catalogue,
 and `Track.unavailable` (a timestamp, so a verdict expires and is re-tested) records the ones we
@@ -580,6 +662,166 @@ recorded while somebody pages can neither drop nor repeat an event. 50 per page 
 second, skips included) and the top 5 artists/titles by number of LISTENS. The page is one event
 query plus one batched `_db_tracks`; **9 statements** for 50 events, 36 kB / 1.4 kB gzip (135 kB /
 3.4 kB at the 200 ceiling). `request.webuser` only: an admin never sees another person's history.
+
+**The year in review** (`neezer/recap.py`, `webui/recap.py`, `routes/Recap.svelte`) is the same
+history aggregated over a **server-local half-open year**: `GET /api/recap/years` is 1 statement
+(one entry per year with at least one event, no `KEEP_DAYS` floor) and `GET /api/recap/<year>` is
+**4 statements** (1 for an empty year) — daily `GROUP BY date(at)`, one per-track/style aggregate,
+then batched `_db_tracks` payloads. `request.webuser` only, no `?user=`, no provider, no write, no
+schema. `enough` means **20 listens or 30 minutes and at least one listen**; tops are by listens;
+genres come only from `track_analysis.style` at confidence ≥ 0.4 rolled up through
+`discover.lift_style`, with coverage printed and the card absent below 34 %. The process cache keeps
+aggregates only (60 s for the current year, 1 h for a past one, 32 entries); ETag 304 is free.
+Measured on the plan's 8 000-title bench: years **22.7 ms / 265 B**, a full year **37.8 ms cold**
+and **2.0 ms warm / 7.3 kB**, an empty year **1.5 ms / 1 040 B** (351 B gzip — the 12-month shape
+cannot fit the plan's 700 B), **2 and 5 statements on the wire** (session included) and **3 warm**
+(the aggregates are cached, the title payload is re-read to compute the ETag; a 304 body is empty).
+The SPA opens with 2 requests cold, 1 warm, then 0 per card and 0 for the share poster.
+
+**Users, identities and invitations** (`managers/user.py`, schema `20261118`):
+`User.name_key` is the folded lookup key (NFKD, diacritics dropped, lowercase) with a unique
+nullable index; `User.disabled`, `User.last_login` and `User.onboarding_step`
+(`artists|account|done`) are additive. The `invite` table stores only the SHA-256 of a
+`<id>.<HMAC>` token (never the clear token), plus `created_by`, `expires`, `used_by`, `used_at`,
+`revoked_at` and a note; `used_at` is the single source of truth for a consumed invitation.
+`UserManager.add`/`rename` validate the 3–32 `[a-z0-9_.-]` form, compute `name_key`, keep the
+spelling the person typed (CLI/Docker and `sync_user` still look up by exact name), and turn an
+uniqueness race into `UserNameTaken`. A historical `Alice`/`alice` pair keeps both accounts able
+to log in with their own spelling; the loser's `name_key` is NULL (the unique index allows many
+NULLs), while `_name_taken` still reserves the folded name for every new account. `UserManager.add`
+leaves `onboarding_step='done'`: only an invitation redeem starts at `artists`. Migration
+`20261118` is idempotent on all three engines, backfills `name_key` and `onboarding_step`, and
+creates zero invitations. Measured: 1 000 existing accounts migrate in 5.3 ms (1.4 ms replay);
+`add` is 2 statements, a duplicate 1, `rename` 2.
+
+**Invitations** (`neezer/invites.py`, `webui/invites.py`, table `invite` schema `20261118`):
+`POST /api/admin/invites` shows the `<id>.<mac>` token **once** and stores only its SHA-256; the
+list is keyset `(created, id)` with `state=pending|used|expired|revoked`, and revoking or renewing
+keeps the row (the token is never returned by a GET). 20 creations/h/admin (`WindowLimiter`) and
+200 live invitations, both 429 with `Retry-After`. The public `POST /api/invites/inspect|redeem`
+take the token in the JSON body (8 KiB, same-origin, 60 inspects/5 min and 5 failures/15 min per
+IP and per token hash), answer the **same 404** for every invalid token, and redeem consumes it
+with a conditional `UPDATE` in the account transaction (`onboarding_step='artists'`, never admin,
+session opened). Measured: creation 4 statements / 206 B, list of 50 3 statements / 3 736 B
+(612 B gzip), inspect 1 / 68 B, redeem 5 / 217 B, renew 6 / 194 B. `last_login` is written at most
+once an hour; a disabled account gets the generic 401 and its sessions are cut. When
+`NEEZER_SECRETS_ENV_ONLY=1`, `NEEZER_SECRET_INVITE_SECRET` holds the token secret; rotating it
+invalidates every pending invitation.
+
+**Onboarding artists** (`neezer/onboarding.py`, `neezer/deezer/onboarding_pool.py`,
+`webui/onboarding.py`): the feed is built in a background BULK worker, never in a request, and
+cached atomically for 24 h. The primary source is **21 public Deezer calls** — the global chart,
+the editorial charts and the nine “Top <country>” playlists (FR, GB, US, DE, BR, MX, JP, KR, NG) —
+not an undocumented country endpoint; the last good pool is kept when a rebuild fails. If Deezer
+is absent or fails and the local library has fewer than 24 artists, **YouTube Music** adds 10
+charts (`ZZ` + the nine countries) in 10 calls, cached (132 kB) and proxied through
+`/api/onboarding/picture/...` so Google never enters the CSP. A like writes only `Artist` +
+`StarredArtist` (idempotent, 5 statements warm, plus `EntityRef` for YouTube), removes an
+`ArtistMute`, invalidates the taste profile and **never** creates a `Track`, archives, prefetches or
+calls a provider; `Artist.prune` keeps a starred artist alive with no archived track. Related
+artists (3–5, the provider's order, filtered for duplicates and diversity) are inserted just after
+the liked card; a cold cache answers `pending` and a single worker fills it. Search is one provider
+call cold (0 cached); the page is 3 statements / ~5 kB. `GET /api/onboarding/artists?limit=24` is
+24 cards, `POST /artists/done` requires one artist unless every source failed, and
+`POST /account/done` finishes the step.
+
+**The onboarding account step** (`webui/onboarding_account.py`, blueprint
+`onboarding_account_api`): `GET /api/onboarding/account/options` returns what the person can
+actually do — Deezer (ARL or native, linked or not), YouTube Music (available/absent/disabled),
+and the four public playlist imports — in **2 SELECT / ~931 B**, never a secret and never a
+provider call. `POST .../link` reuses `myaccounts.link_deezer`/`link_youtube_headers`; a rejected
+credential is a 400 `provider_refused`, an unreachable provider a 503 with `Retry-After`, and no
+failure changes `onboarding_step`. `POST .../import` starts the existing `playlist_import` job
+(202 `{id, job}`, progress at `/api/import/playlist/<id>`), reniced and behind the foreground; a
+non-admin member may save the result but it is **not** bulk-archived. The tokens/ARL never enter a
+log. `POST .../account/done` stays in the artists blueprint; every option is skippable. Measured:
+options 2 statements / 931 B (391 B gzip), import request 2 statements / 1 980 B, link limited to
+10 attempts/15 min/account, bodies capped at 8 KiB.
+
+**The administrative trail** (`neezer/audit.py`, table `audit_log` schema `20261123`) records
+account and invitation mutations — `user.create|update|delete`, `invite.create|revoke|renew|redeem` —
+with the actor, the target, a short detail, the result code and the timestamp. It has **no foreign
+key** on purpose: deleting an account must not erase who deleted it, and no token, password or path
+ever lands there. Rows are written in the caller's transaction (a refused action stores its code,
+a successful one cannot be lost) and read with `neezer-cli audit list [-n N]`. The table is additive
+and idempotent on all three engines.
+
+**The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
+`GET /api/admin/users` (keyset `after`, `q` folded over `name_key`, the raw name and `mail`, so a
+historical duplicate whose `name_key` is NULL stays findable, `limit` 1..200),
+`GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`,
+which requires the exact account name in `{"confirm": "…"}` (400 `confirm_mismatch` otherwise).
+Every non-admin gets a bare 403 whatever the id, so the dashboard is not an enumeration oracle.
+`UserManager.update_guarded`/`delete_guarded` carry the **at least one active admin** invariant
+(checked in the write and re-checked after it, since SQLite has no row locks), refuse
+self-disable/self-delete and the holder of the server's Deezer account, bump `session_epoch` on
+demotion/disable/re-enable (not on promotion), and reassign `Track.owner` to the acting admin
+before deleting — no file is touched and no upload becomes public. The account's podcast shows are
+reassigned to the acting admin in the same transaction (their archived episodes stay playable, the
+response carries `podcasts_reassigned`), and its provider accounts are deleted with their grants
+(Peewee would otherwise null the nullable owner and keep the credential serving). Pending invitations created by
+the deleted account are revoked and its `u:<id>` grants forgotten. Measured at 50 accounts: list
+**3 statements / 8 147 B (1 500 gzip)**, detail 4, promotion 3, demotion 5. The legacy `/user`
+routes and Subsonic `createUser|deleteUser|updateUser` go through the same guards; the CLI keeps
+the right to delete.
+
+**Playlist folders** (`webui/playlist_folders.py`, schema `20261114`): a folder belongs to one
+person and is private; `playlist_placement` is keyed by `(user, playlist)`, so two people file the
+same shared or imported playlist independently. `GET /api/me/playlists` carries `folders` and each
+playlist's `folder_id`/`position` in the same answer — **6 statements at 61 playlists**, 8 at 500
+(the two chunked pairs double), and a playlist with no placement row is unfiled and sorts by
+creation date, so an upgrade needs no backfill. The container order PUT is the complete desired
+order but **additive**: ids are filed/moved in that order, a resident the client omitted is
+appended, duplicates collapse, unknown ids are ignored, positions renormalise to `0..n-1` in one
+transaction; 500 ids cost 6 statements. Deleting a folder returns its playlists to the root and
+never deletes one. A container holds 2 000 ids, a person 500 folders; only own or shared playlists
+can be filed. `/rest` is untouched. The blueprint installs its own same-origin guard (a Flask
+blueprint does not inherit `webapi`'s).
+
+**Collaborative playlists** (`playlist_access.py`, `webui/playlist_members.py`, schema `20261115`):
+roles are `owner` / `editor` / `viewer`, plus the admin override. The owner is computed from
+`Playlist.user_id` **first**, so a missing member row can never lock them out; `role_for` is the
+single authorization authority (never the Subsonic serializer or a component). Every order-sensitive
+mutation carries `version` (tracks and metadata) or `members_version` (roles); the compare-and-swap
+`UPDATE … WHERE version = expected` runs inside the write transaction and a mismatch returns **409**
+`{error:"conflict", scope, version, members_version, last_edited_by, last_edited_at}` — **135 B**,
+never the track list — after which the client resyncs with one GET and says who changed it. Editors
+add/remove/reorder tracks only; rename, delete, invite, role changes and the public link are
+owner/admin. `/api/me/playlists` returns the caller's own lists plus their memberships, never an
+admin firehose. Private uploads are filtered per viewer from tracks, counts, cover and recommendation
+seeds through `Track.visible_clause`; hidden rows stay in the playlist and are anchored for reorder.
+The same visibility now covers Subsonic `getSong`/`getAlbum`/`getArtist`/`getArtists`/`getCoverArt`
+and the CSV/list export: a non-owner gets the same 70/404 and never the embedded cover bytes.
+`access.snapshot()` is **fail-closed** — it keeps the last valid snapshot for the same database,
+and an unreadable first snapshot opens nothing instead of granting the server account to `all`.
+The core measures 6 statements for `/me/playlists` at 61 lists, 3/95 B for `/version`, 7 statements
+for a 4 000-title page, and two concurrent writers at the same version produce exactly one 200 and
+one 409.
+
+The same authority closes the other doors. `/rest` **reads** a playlist for owner/editor/viewer/admin
+(and a public playlist for any account) but answers **error 50** to a non-member; `getPlaylists`
+lists owned + public + memberships, `songCount`/`duration`/`entry` count only the caller's visible
+rows, and `createPlaylist`/`updatePlaylist`/`deletePlaylist` are owner/admin only (error 50
+otherwise). `songIndexToRemove` is remapped through the visible list, so a hidden private upload
+cannot shift the wrong row. The Deezer importer and `libraryimport` create the `owner` member row in
+the playlist's transaction, bump `version` on an overwrite or a merge that adds rows, and a second
+account importing the same canonical Deezer id gets a derived id — it never adopts somebody else's
+row. `replace_everywhere`/`_remove_everywhere` touch owned **or edited** playlists and stamp
+`version` in one UPDATE. `/api/export/playlist/<id>` and `/api/services/list/playlist/<id>` answer
+**404** to a non-member and export only visible rows; the share GET/POST/DELETE is 404 to a
+non-member and 403 without `can_manage`, while the public token payload stays read-only and carries
+no members, versions or `last_edited_*`. `ratelimit.WindowLimiter` is a bounded, thread-safe LRU
+(no Flask import): playlist creation is **60/h/account** and member writes **30/10 min**, returning
+429 with `Retry-After`. Subsonic `getPlaylists` at 61 playlists is 66 statements (one owner join
+saved 61 reads; the per-playlist aggregate remains in `db.py`), a ZIP export 8, a file list 4 and a
+public page 6. `/rest/getPlaylist` at 4 000 titles is **9 statements / 0.33 s** (28 016 / 2.65 s
+before): one joined `Track+Album+Artist+Folder+root` read, three prefetches and one credits query,
+with byte-identical JSON. Creating or filling a playlist uses `Playlist.add_many` (one
+`MAX(index)`, INSERTs of 300 in the caller's transaction): **13–14 statements** for 2 000 titles on
+`/api`, **19** on Subsonic. Schema `20261122` adds the two real MySQL foreign keys to
+`playlist_share` after purging orphans; `GET /api/podcast/<pid>` pages episodes (`limit` 1..200,
+default 50, keyset `next`): 1 000 episodes cost **7 statements / 28 kB** per page instead of
+553 582 B.
 
 **A public playlist link** (`webui/playlist_share.py`, table `playlist_share` schema `20261113`,
 `/pl/<token>` in `spa.py`): the token is `<id>.<hmac>` under the app secret (the remote-link

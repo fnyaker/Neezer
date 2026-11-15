@@ -22,12 +22,15 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# The admin-set ARL lives in the Meta key/value table and OVERRIDES the one from
-# the config file / docker-compose environment: a credential that expires every
-# few months has to be replaceable without editing a file and restarting the
-# container. Meta.value is a CharField(256), which comfortably fits an ARL
-# (192 hex characters).
+# The admin-set ARL OVERRIDES the one from the config file / docker-compose
+# environment: a credential that expires every few months has to be replaceable
+# without editing a file and restarting the container. It is an encrypted
+# ``server-arl:`` blob in the secret column of the ``mode=server`` provider
+# account, the same place every other credential is kept. ``ARL_META_KEY`` is the
+# plaintext row earlier releases wrote; it is read once, re-encrypted and removed.
 ARL_META_KEY = "deezer_arl"
+_SERVER_ARL_PREFIX = "server-arl:"
+_SERVER_LABEL = "Compte du serveur"
 
 # An ARL is an opaque session cookie value: a long run of hex. Validated before
 # it is ever stored or sent, because it goes out as a Cookie header — a stray
@@ -41,39 +44,115 @@ def valid_arl(value) -> bool:
     return bool(value and _ARL_RE.fullmatch(str(value).strip()))
 
 
-def stored_arl() -> "str | None":
-    """The admin-set ARL from the database, or None when there isn't one."""
-    from ..db import Meta
+def _server_row():
+    from ..db import ProviderAccount
+
+    return (
+        ProviderAccount.select()
+        .where(
+            (ProviderAccount.provider == "deezer")
+            & (ProviderAccount.mode == "server")
+        )
+        .first()
+    )
+
+
+def _server_blob(row) -> str:
+    blob = (row.secret or "").strip() if row is not None else ""
+    return blob[len(_SERVER_ARL_PREFIX) :] if blob.startswith(_SERVER_ARL_PREFIX) else ""
+
+
+def _decrypt_server_arl(blob: str) -> "str | None":
+    from ..managers.user import decrypt_password
 
     try:
-        row = Meta.get_or_none(Meta.key == ARL_META_KEY)
-    except Exception:  # DB not ready (very early boot) — fall back to config
-        logger.debug("Could not read the stored ARL", exc_info=True)
+        value = decrypt_password(blob).strip()
+    except Exception:
+        logger.warning("Could not decrypt the stored Deezer ARL")
         return None
-    value = (row.value or "").strip() if row is not None else ""
     if value and not valid_arl(value):
         logger.warning("Ignoring a malformed stored ARL")
         return None
     return value or None
 
 
+def _drop_legacy_arl():
+    from ..db import Meta
+
+    try:
+        Meta.delete().where(Meta.key == ARL_META_KEY).execute()
+    except Exception:
+        logger.debug("Could not remove the legacy stored ARL", exc_info=True)
+
+
+def stored_arl() -> "str | None":
+    """The admin-set ARL from the database, or None when there isn't one."""
+    from ..db import Meta
+
+    try:
+        row = _server_row()
+        blob = _server_blob(row)
+        legacy = Meta.get_or_none(Meta.key == ARL_META_KEY)
+    except Exception:  # DB not ready (very early boot) — fall back to config
+        logger.debug("Could not read the stored ARL", exc_info=True)
+        return None
+    if blob:
+        value = _decrypt_server_arl(blob)
+        if value:
+            if legacy is not None:
+                _drop_legacy_arl()
+            return value
+    if legacy is None:
+        return None
+    value = (legacy.value or "").strip()
+    if not value:
+        _drop_legacy_arl()
+        return None
+    if not valid_arl(value):
+        logger.warning("Ignoring a malformed stored ARL")
+        return None
+    try:
+        store_arl(value)
+    except Exception:
+        logger.warning("Could not migrate the stored Deezer ARL", exc_info=True)
+    return value
+
+
 def store_arl(value) -> None:
     """Persist (or clear, with a falsy value) the admin-set ARL."""
-    from ..db import Meta
+    from ..db import Meta, ProviderAccount, db, now
+    from ..managers.user import encrypt_password
 
     value = (value or "").strip()
     if value and not valid_arl(value):
         raise ValueError("malformed ARL")
-    row = Meta.get_or_none(Meta.key == ARL_META_KEY)
-    if not value:
-        if row is not None:
-            row.delete_instance()
-        return
-    if row is None:
-        Meta.create(key=ARL_META_KEY, value=value)
-    else:
-        row.value = value
-        row.save()
+    blob = _SERVER_ARL_PREFIX + encrypt_password(value) if value else None
+    with db.atomic():
+        row = _server_row()
+        if row is None:
+            if value:
+                ProviderAccount.create(
+                    provider="deezer",
+                    user=None,
+                    label=_SERVER_LABEL,
+                    secret=blob,
+                    mode="server",
+                    status="ok",
+                    created=now(),
+                )
+        else:
+            if value:
+                row.secret = blob
+                row.save()
+            elif _server_blob(row):
+                row.secret = None
+                row.save()
+                if row.user_id is None:
+                    from ..access import forget_account
+
+                    forget_account(row.id)
+                    row.delete_instance()
+        Meta.delete().where(Meta.key == ARL_META_KEY).execute()
 
 
 def _section(config) -> dict:

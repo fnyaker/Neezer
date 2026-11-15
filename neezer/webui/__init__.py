@@ -21,6 +21,7 @@ import sys
 import threading
 import unicodedata
 import datetime
+import json
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -48,11 +49,14 @@ from ..db import (
     Artist,
     Meta,
     Playlist,
+    PlaylistMember,
+    PlaylistPlacement,
     PlaylistTrack,
     PodcastChannel,
     PodcastEpisode,
     PodcastMarker,
     PodcastProgress,
+    PodcastTranscript,
     StarredTrack,
     Track,
     TrackArtist,
@@ -65,7 +69,7 @@ from deezerpy.errors import is_transport_failure
 from ..deezer.provider import TrackUnavailable
 from ..managers.user import UserManager
 from ..ratelimit import auth_limiter
-from .. import access, radio, similar
+from .. import access, playlist_access as placcess, radio, similar
 from . import refs
 from ..utils import like_term
 from .refs import cover_url_for
@@ -127,6 +131,18 @@ def _is_background_request() -> bool:
     if request.headers.get("X-NS-Background") == "1":
         return True
     return request.args.get("bg") == "1"
+
+
+def _count_stream_response(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        from ..deezer import workload
+
+        return workload.counted_response(
+            view(*args, **kwargs), background=_is_background_request()
+        )
+
+    return wrapped
 
 
 @webapi.before_request
@@ -479,6 +495,9 @@ def login_required(f):
         if session.get("epoch", 0) != (user.session_epoch or 0):
             session.clear()
             return jsonify({"error": "unauthorized"}), 401
+        if user.disabled:
+            session.clear()
+            return jsonify({"error": "unauthorized"}), 401
         request.webuser = user
         return f(*args, **kwargs)
 
@@ -567,6 +586,8 @@ DEEZER_FEATURE = {
     "export_zip": "stream",
     "genre_reference_import": "stream",
     # not gated
+    "login": None,
+    "me": None,
     "get_settings": None,
     "set_settings": None,
     "deezer_status": None,
@@ -579,9 +600,31 @@ DEEZER_FEATURE = {
     "replace_track": None,
     "delete_track": None,
     "genre_share_import": None,
+    # collaborative playlists: the database alone, no provider anywhere in the
+    # path (an unlisted route defaults to "browse" and would be gated on a
+    # provider grant for nothing).
+    "playlist_version": None,
+    "playlist_members": None,
+    "playlist_invite": None,
+    "playlist_member_role": None,
+    "playlist_member_remove": None,
+    "playlist_leave": None,
     # the database's own credits: no Deezer behind them
     "person_credits": None,
     "credits_backfill": None,
+    "onboarding_get": None,
+    "onboarding_artists": None,
+    "onboarding_search": None,
+    "onboarding_picture": None,
+    "onboarding_like": None,
+    "onboarding_unlike": None,
+    "onboarding_related": None,
+    "onboarding_artists_done": None,
+    "onboarding_account_done": None,
+    "onboarding_feed_retry": None,
+    "onboarding_account_options": None,
+    "onboarding_account_link": None,
+    "onboarding_account_import": None,
 }
 
 
@@ -1654,12 +1697,6 @@ def _deezer_starred():
 # Deezer account.
 
 
-def _track_uid(t: Track) -> str:
-    """The id the front-end addresses a track by: the Deezer id for Deezer
-    tracks, the row UUID for local files (matches ``_local_track``)."""
-    return str(t.deezer_id) if t.deezer_id else str(t.id)
-
-
 def _resolve_db_playlist(pid):
     """Return the DB Playlist for a UUID *or* a mappable Deezer numeric id,
     else None (a non-imported recommendation/editorial playlist)."""
@@ -1675,15 +1712,105 @@ def _resolve_db_playlist(pid):
             return Playlist[ids.playlist_uuid(sid)]
         except Playlist.DoesNotExist:
             pass
+        me = getattr(request, "webuser", None)
+        if me is not None:
+            own = Playlist.select().where(
+                (Playlist.deezer_id == sid) & (Playlist.user == me)
+            ).first()
+            if own is not None:
+                return own
         return Playlist.select().where(Playlist.deezer_id == sid).first()
     return None
 
 
-def _db_playlist_track_rows(pl):
+def _playlist_guard(playlist_id, need="read"):
+    """``(playlist, role, error_response)`` for a web playlist route.
+
+    The matrix of ``playlist_access`` applied on the wire, once:
+
+    * an unknown/malformed id and a playlist the caller cannot see at all are
+      BOTH ``404 {"error": "not found"}`` — a real-but-foreign playlist must
+      not be confirmed to exist;
+    * ``need="member"`` (the collaborators list) also answers 404 for a public
+      reader: a public link carries no member names at all;
+    * ``need="edit"``/``"manage"`` answer ``403 {"error": "forbidden"}`` to a
+      caller who demonstrably has the playlist but lacks the right (a viewer
+      writing, an editor inviting) — admin override included.
+
+    A catalogue/editorial Deezer playlist has no local row and is a 404 here:
+    the routes that use this guard mutate or list something this server owns.
+    """
+    pl = _resolve_db_playlist(playlist_id)
+    if pl is None:
+        return None, None, (jsonify({"error": "not found"}), 404)
+    user = getattr(request, "webuser", None)
+    role = placcess.role_for(pl, user)
+    if role is None:
+        return None, None, (jsonify({"error": "not found"}), 404)
+    is_admin = bool(getattr(user, "admin", False))
+    if need == "member":
+        if role == "public":
+            return None, None, (jsonify({"error": "not found"}), 404)
+    elif need == "edit":
+        if not (is_admin or placcess.role_can_edit(role)):
+            return None, None, (jsonify({"error": "forbidden"}), 403)
+    elif need == "manage":
+        if not (is_admin or placcess.role_can_manage(role)):
+            return None, None, (jsonify({"error": "forbidden"}), 403)
+    return pl, role, None
+
+
+def _playlist_conflict(playlist, scope):
+    """409 for an optimistic-concurrency mismatch, with the AUTHORITATIVE
+    counters — never the 4 000-track state.
+
+    The row moved under us, so the object in hand is stale by construction:
+    the counters are re-read (one statement, error path only) and the body
+    stays a few hundred bytes, which is what makes the client's one-GET
+    resync cheap on a phone link.
+    """
+    fresh = (
+        Playlist.select(
+            Playlist.version,
+            Playlist.members_version,
+            Playlist.last_edited_by,
+            Playlist.last_edited_at,
+        )
+        .where(Playlist.id == playlist.id)
+        .first()
+    )
+    version = fresh.version if fresh is not None else playlist.version
+    members_version = (
+        fresh.members_version if fresh is not None else playlist.members_version
+    )
+    edited_by = fresh.last_edited_by if fresh is not None else playlist.last_edited_by
+    edited_at = fresh.last_edited_at if fresh is not None else playlist.last_edited_at
+    return (
+        jsonify(
+            {
+                "error": "conflict",
+                "scope": scope,
+                "version": version,
+                "members_version": members_version,
+                "last_edited_by": edited_by,
+                "last_edited_at": edited_at.isoformat() if edited_at else None,
+            }
+        ),
+        409,
+    )
+
+
+def _db_playlist_track_rows(pl, user=None):
     """The playlist's Track rows in order, with Album+Artist eager-loaded —
     ``pl.get_tracks()`` lazy-loads both per track (2 extra queries per row,
-    thousands on a big playlist)."""
-    return (
+    thousands on a big playlist).
+
+    ``user`` applies ``Track.visible_clause`` (shared library + the person's
+    own uploads, nothing for an admin): a shared playlist never becomes a side
+    channel for somebody else's private upload. Callers that need the stored
+    rows (an export of one's own, the Subsonic owner view) pass nobody.
+    """
+    query = (
         Track.select(Track, Album, Artist)
         .join(Album)
         .switch(Track)
@@ -1693,6 +1820,67 @@ def _db_playlist_track_rows(pl):
         .where(PlaylistTrack.playlist == pl)
         .order_by(PlaylistTrack.index)
     )
+    if user is not None:
+        clause = Track.visible_clause(user)
+        if clause is not None:
+            query = query.where(clause)
+    return query
+
+
+def _playlist_private_tracks(pl) -> int:
+    """How many rows are somebody's private upload (invisible to others).
+
+    Shown to the owner/admin only, so the sheet can say how many titles other
+    collaborators will not see. One grouped statement, never a row loop.
+    """
+    return (
+        PlaylistTrack.select(fn.COUNT(PlaylistTrack.id))
+        .join(Track, on=(PlaylistTrack.track == Track.id))
+        .where((PlaylistTrack.playlist == pl.id) & Track.owner.is_null(False))
+        .scalar()
+        or 0
+    )
+
+
+def _visible_playlist_rows(pl, user):
+    """``[(PlaylistTrack.id, PlaylistTrack.index, Track.id, Track.deezer_id)]``
+    in stored order, with the private uploads ``user`` may not see filtered
+    out. ONE statement; the visibility decision is ``Track.readable_by``'s."""
+    rows = list(
+        PlaylistTrack.select(
+            PlaylistTrack.id,
+            PlaylistTrack.index,
+            Track.id,
+            Track.deezer_id,
+            Track.owner,
+        )
+        .join(Track, on=(PlaylistTrack.track == Track.id))
+        .where(PlaylistTrack.playlist == pl.id)
+        .order_by(PlaylistTrack.index)
+        .tuples()
+    )
+    out = []
+    for ptid, index, tid, dz, owner in rows:
+        hidden = owner is not None and not (
+            getattr(user, "admin", False) or owner == user.id
+        )
+        if hidden:
+            continue
+        out.append((ptid, index, tid, dz))
+    return out
+
+
+def _visible_playlist_count(pl, user) -> int:
+    """The caller's visible row count: ``nb_tracks`` on every playlist answer."""
+    query = (
+        PlaylistTrack.select(fn.COUNT(PlaylistTrack.id))
+        .join(Track, on=(PlaylistTrack.track == Track.id))
+        .where(PlaylistTrack.playlist == pl.id)
+    )
+    clause = Track.visible_clause(user)
+    if clause is not None:
+        query = query.where(clause)
+    return query.scalar() or 0
 
 
 def _db_playlist_cover(tracks: list) -> str | None:
@@ -1765,7 +1953,7 @@ def login():
     if throttled and auth_limiter.is_blocked_any(request.remote_addr, username):
         return jsonify({"error": "too many attempts, try again later"}), 429
     user = UserManager.try_auth(username, password) if username and password else None
-    if user is None:
+    if user is None or user.disabled:
         logger.error(
             "Failed web login for user %s (IP: %s)", username, request.remote_addr
         )
@@ -1788,8 +1976,10 @@ def login():
     return jsonify(
         {
             "user": {
+                "id": _uuid_text(user.id),
                 "name": user.name,
                 "admin": user.admin,
+                "onboarding": user.onboarding_step or "done",
                 "access": me_access(user),
                 "sources": sources_brief(),
             }
@@ -1822,8 +2012,10 @@ def me():
     # their order, so that no screen writes a source's name itself.
     out = {
         "user": {
+            "id": _uuid_text(u.id),
             "name": u.name,
             "admin": u.admin,
+            "onboarding": u.onboarding_step or "done",
             "access": me_access(u),
             "sources": sources_brief(),
         }
@@ -2571,6 +2763,15 @@ def album_on_deezer(album_id):
     return jsonify({"tracks": _not_in_library(Track, tracks)})
 
 
+def _is_uuid_text(value) -> bool:
+    """A string that parses as a UUID — never a Deezer numeric/slug id."""
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
+
+
 @webapi.route("/playlist/<playlist_id>")
 @login_required
 def playlist(playlist_id):
@@ -2578,23 +2779,54 @@ def playlist(playlist_id):
     # recommendation/editorial playlist is read straight from Deezer (read-only).
     pl = _resolve_db_playlist(playlist_id)
     if pl is not None:
-        tracks = _db_tracks(_db_playlist_track_rows(pl))
-        return jsonify(
-            {
-                "playlist": {
-                    "id": str(pl.id),
-                    "deezer_id": pl.deezer_id,
-                    "title": pl.name,
-                    "description": pl.comment or "",
-                    "cover": _db_playlist_cover(tracks),
-                    "nb_tracks": len(tracks),
-                    "owner": pl.user.name,
-                    "is_favorite": _starred("playlist", row=pl),
-                    "editable": _is_admin(),
-                },
-                "tracks": tracks,
-            }
-        )
+        user = request.webuser
+        role = placcess.role_for(pl, user)
+        # A non-member sees the SAME 404 as an unknown id: the answer must not
+        # confirm that a real playlist exists (plan §5, §12).
+        if role is None:
+            return jsonify({"error": "not found"}), 404
+        # The caller's VISIBLE rows are the list, the count and the cover: a
+        # shared playlist never becomes a side channel for a private upload.
+        tracks = _db_tracks(_db_playlist_track_rows(pl, user))
+        is_admin = bool(user.admin)
+        editable = is_admin or placcess.role_can_edit(role)
+        manage = is_admin or placcess.role_can_manage(role)
+        # Members first: their query carries the owner's name, so a
+        # collaborative read does not pay a separate `playlist.user` lookup.
+        # A public reader carries no member names and reads the owner alone.
+        members = placcess.member_rows(pl) if role != "public" else None
+        out = {
+            "id": str(pl.id),
+            "deezer_id": pl.deezer_id,
+            "title": pl.name,
+            "description": pl.comment or "",
+            "cover": _db_playlist_cover(tracks),
+            "nb_tracks": len(tracks),
+            "owner": members[0]["name"] if members else pl.user.name,
+            "is_favorite": _starred("playlist", row=pl),
+            "role": role,
+            "admin": is_admin,
+            "editable": editable,
+            "can_manage": manage,
+            "version": pl.version,
+            "members_version": pl.members_version,
+        }
+        if members is not None:
+            # A public link carries no member names and no author hint: the
+            # owner name above is the one the page already shows.
+            out["last_edited_by"] = pl.last_edited_by
+            out["last_edited_at"] = (
+                pl.last_edited_at.isoformat() if pl.last_edited_at else None
+            )
+            out["members"] = members
+        if manage:
+            out["private_tracks"] = _playlist_private_tracks(pl)
+        return jsonify({"playlist": out, "tracks": tracks})
+
+    # No local row. A UUID names something this server should own, so it is a
+    # 404 rather than a Deezer page; a numeric id keeps the editorial page.
+    if _is_uuid_text(playlist_id):
+        return jsonify({"error": "not found"}), 404
 
     if _provider() is None and _deezer_anonymous() and _valid_id(playlist_id):
         return _public_playlist_page(playlist_id)
@@ -2900,34 +3132,87 @@ def radio_next():
 @webapi.route("/me/playlists")
 @login_required
 def my_playlists():
-    # The playlists belong to the account owner (admin); guests don't see them.
-    if not _is_admin():
-        return jsonify({"playlists": []})
+    """The caller's own playlists plus the ones shared with them.
+
+    NEVER an admin firehose: an admin sees their own lists and their
+    memberships, exactly like everybody else; they can still open any playlist
+    by URL. A public playlist is not listed here (its Subsonic meaning is
+    unchanged, but the web sidebar/Library are personal). Folders are the
+    person's own organisation of the same list, in the same answer and the same
+    statement budget (6 at 61 playlists, 8 at 500 — two chunked pairs double at
+    ``_IN_CHUNK``), and every count/cover uses the caller's VISIBLE rows.
+    """
+    from .playlist_folders import list_shape
+
+    user = request.webuser
+    member = PlaylistMember.alias("member")
+    owner = User.alias("owner")
     query = (
-        Playlist.select(_raw(Playlist.id), Playlist.deezer_id, Playlist.name)
-        .where(
-            (Playlist.user == request.webuser) | (Playlist.deezer_id.is_null(False))
+        Playlist.select(
+            _raw(Playlist.id),
+            Playlist.deezer_id,
+            Playlist.name,
+            # `created` and the caller's placement join the same SELECT: the
+            # rendering order is decided in Python (playlist_folders.list_shape)
+            # and costs no extra statement. A playlist with no placement row is
+            # unfiled and sorts by creation date, which is today's list.
+            Playlist.created,
+            _raw(PlaylistPlacement.folder),
+            PlaylistPlacement.position,
+            # The role is decided in the same SELECT: `user_id` first (an owner
+            # may have no member row), then the caller's membership row.
+            _raw(Playlist.user),
+            owner.name,
+            member.role,
         )
-        .order_by(Playlist.created.desc())
+        .join(owner, on=(Playlist.user == owner.id))
+        .left_outer_join(
+            member,
+            on=((member.playlist == Playlist.id) & (member.user == user.id)),
+        )
+        .left_outer_join(
+            PlaylistPlacement,
+            on=(
+                (PlaylistPlacement.playlist == Playlist.id)
+                & (PlaylistPlacement.user == user.id)
+            ),
+        )
+        .where((Playlist.user == user) | (member.user == user.id))
         .tuples()
     )
-    lists = list(query)
+    rows = list(query)
+    lists = [row[:6] for row in rows]
+    roles = {}
+    for row in rows:
+        pid = row[0]
+        mine = _uuid_text(row[6]) == str(user.id)
+        stored = row[8] if row[8] in placcess.ROW_ROLES else None
+        roles[pid] = (
+            "owner" if mine else (stored or "viewer"),
+            row[7],
+        )
+    folders, entries = list_shape(user, lists)
     # Count + first-track cover only — loading every track of every playlist
     # just for this made the list (refetched after each playlist edit) scale
     # with the whole library. And both in ONE query each for all the
     # playlists: asked per playlist, it was two statements a playlist (122 for
-    # sixty, measured, 90 ms).
+    # sixty, measured, 90 ms). The visibility filter is the caller's: a viewer's
+    # count and cover are exactly what their playlist page shows.
+    visible = Track.visible_clause(user)
     counts = {}
     covers = {}
     pids = [p[0] for p in lists]
     for i in range(0, len(pids), _IN_CHUNK):
         chunk = pids[i : i + _IN_CHUNK]
-        for pid, nb in (
+        count_query = (
             PlaylistTrack.select(_raw(PlaylistTrack.playlist), fn.COUNT(PlaylistTrack.id))
+            .join(Track, on=(PlaylistTrack.track == Track.id))
             .where(PlaylistTrack.playlist << chunk)
             .group_by(PlaylistTrack.playlist)
-            .tuples()
-        ):
+        )
+        if visible is not None:
+            count_query = count_query.where(visible)
+        for pid, nb in count_query.tuples():
             counts[pid] = nb
         first = (
             PlaylistTrack.select(
@@ -2938,9 +3223,10 @@ def my_playlists():
             .switch(Track)
             .join(Artist)
             .where(PlaylistTrack.playlist << chunk)
-            .group_by(PlaylistTrack.playlist)
-            .alias("first")
         )
+        if visible is not None:
+            first = first.where(visible)
+        first = first.group_by(PlaylistTrack.playlist).alias("first")
         for pid, alid in (
             PlaylistTrack.select(_raw(PlaylistTrack.playlist), _raw(Album.id))
             .join(first, on=((PlaylistTrack.playlist == first.c.pl) & (PlaylistTrack.index == first.c.ix)))
@@ -2952,18 +3238,60 @@ def my_playlists():
             if pid in covers:
                 continue
             covers[pid] = cover_url_for(alid)
-    out = [
-        {
-            "id": _uuid_text(pid),
-            "deezer_id": dz,
-            "title": name,
-            "cover": covers.get(pid),
-            "nb_tracks": counts.get(pid, 0),
-            "editable": True,
-        }
-        for pid, dz, name in lists
-    ]
-    return jsonify({"playlists": out})
+    # The folder counts, one grouped statement for all of them (never one per
+    # folder), and only for playlists this person may see — an inert placement
+    # left in the database must not inflate a badge. A membership is visible
+    # exactly like an owned list.
+    membership = PlaylistMember.select(PlaylistMember.playlist).where(
+        PlaylistMember.user == user.id
+    )
+    counts_by_folder = {}
+    for fid, nb in (
+        PlaylistPlacement.select(
+            _raw(PlaylistPlacement.folder), fn.COUNT(PlaylistPlacement.playlist)
+        )
+        .join(Playlist, on=(PlaylistPlacement.playlist == Playlist.id))
+        .where(
+            (PlaylistPlacement.user == user)
+            & PlaylistPlacement.folder.is_null(False)
+            & ((Playlist.user == user) | Playlist.id.in_(membership))
+        )
+        .group_by(PlaylistPlacement.folder)
+        .tuples()
+    ):
+        counts_by_folder[_uuid_text(fid)] = nb
+    for folder in folders:
+        folder["nb_playlists"] = counts_by_folder.get(folder["id"], 0)
+    head = {pid: (dz, name) for pid, dz, name, _created, _fid, _pos in lists}
+    out = []
+    for entry in entries:
+        dz, name = head[entry["pid"]]
+        role, owner_name = roles[entry["pid"]]
+        out.append(
+            {
+                "id": _uuid_text(entry["pid"]),
+                "deezer_id": dz,
+                "title": name,
+                "cover": covers.get(entry["pid"]),
+                "nb_tracks": counts.get(entry["pid"], 0),
+                "role": role,
+                # The admin override is true either way (§5.1), exactly like
+                # the playlist page: hiding is UX, the route checks again.
+                "editable": bool(
+                    user.admin or placcess.role_can_edit(role)
+                ),
+                "can_manage": bool(
+                    user.admin or placcess.role_can_manage(role)
+                ),
+                "owner": owner_name,
+                # Additive only: an older SPA and the Android car overlay ignore
+                # both keys. `folder_id` is null when unfiled, `position` null
+                # when the playlist has no placement row (never ordered).
+                "folder_id": entry["folder_id"],
+                "position": entry["position"],
+            }
+        )
+    return jsonify({"playlists": out, "folders": folders})
 
 
 @webapi.route("/me/favorite-ids")
@@ -3134,14 +3462,148 @@ def _channel_counts(ids: list) -> dict:
     return out
 
 
-def _channel(c, with_episodes=False, counts=None):
-    """A podcast channel for the SPA. `counts` is (episodes, archived) from
-    ``_channel_counts``; without it this channel is counted on its own."""
-    if counts is None:
-        counts = (
-            c.episodes.count(),
-            c.episodes.where(PodcastEpisode.path.is_null(False)).count(),
+def _transcript_cards(ids: list) -> dict:
+    """{episode id: transcription state} in one grouped query per 400 ids."""
+    from ..transcribe import job as _job
+
+    out = {}
+    for start in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[start : start + _IN_CHUNK]
+        for row in (
+            PodcastTranscript.select(
+                PodcastTranscript.episode,
+                PodcastTranscript.status,
+                PodcastTranscript.done_ms,
+                PodcastTranscript.duration_ms,
+                PodcastTranscript.language,
+                PodcastTranscript.source,
+                PodcastTranscript.error_code,
+                PodcastTranscript.n_segments,
+            )
+            .where(PodcastTranscript.episode << chunk)
+            .tuples()
+        ):
+            eid, status, done, duration, language, source, code, count = row
+            if status == "ready":
+                progress = 1.0
+            elif status in ("running", "leased"):
+                progress = _job.progress(eid)
+            elif duration:
+                progress = max(0.0, min(1.0, int(done or 0) / int(duration)))
+            else:
+                progress = 0.0
+            out[eid] = {
+                "status": status,
+                "progress": float(progress or 0.0),
+                "language": language,
+                "source": source,
+                "error": {"code": code} if code else None,
+                "segment_count": int(count or 0),
+            }
+    return out
+
+
+#: One page of a show's episodes: what a phone screen opens with, and the most
+#: one answer may carry. A three-year daily show serialized every episode on
+#: every open — ~450 B each, unbounded — which is what the page cost.
+PODCAST_EPISODES_PAGE = 50
+PODCAST_EPISODES_MAX = 200
+#: A cursor is a sort key, not a token: bound what is parsed before it is used.
+PODCAST_CURSOR_MAX = 96
+
+
+def _transcribed_count(channel):
+    """How many of a show's episodes have a finished transcript, in one query."""
+    return (
+        PodcastTranscript.select(fn.COUNT(PodcastTranscript.episode))
+        .join(PodcastEpisode, on=(PodcastTranscript.episode == PodcastEpisode.id))
+        .where(
+            (PodcastEpisode.channel == channel.id)
+            & (PodcastTranscript.status == "ready")
         )
+        .scalar()
+    ) or 0
+
+
+def _episode_key(episode):
+    """The opaque keyset cursor of a page: its last episode's sort key."""
+    published = episode.publish_date.isoformat() if episode.publish_date else ""
+    created = episode.created.isoformat() if episode.created else ""
+    return "%s|%s|%s" % (published, created, episode.id)
+
+
+def _episode_cursor(raw):
+    """``(published, created, id)`` from a ``next`` value; ValueError if junk.
+
+    The three parts are exactly what the page is ordered by, so a second page
+    never overlaps or skips a row, whatever was published while it was open.
+    """
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str) or len(raw) > PODCAST_CURSOR_MAX:
+        raise ValueError("invalid cursor")
+    parts = raw.split("|")
+    if len(parts) != 3:
+        raise ValueError("invalid cursor")
+    published_text, created_text, id_text = parts
+    try:
+        episode_id = uuid.UUID(id_text)
+        created = (
+            datetime.datetime.fromisoformat(created_text) if created_text else None
+        )
+        published = (
+            datetime.datetime.fromisoformat(published_text)
+            if published_text
+            else None
+        )
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("invalid cursor")
+    if created is None:
+        raise ValueError("invalid cursor")
+    return (published, created, episode_id)
+
+
+def _episodes_after(cursor):
+    """Rows strictly after ``cursor`` in the page's (published, created, id) order.
+
+    NULL-dated episodes sort last (the page's own ORDER BY), so a cursor on a
+    dated row also lets the NULL tail through, and a cursor inside the tail
+    only lets the tail rows older than it through.
+    """
+    published, created, episode_id = cursor
+    older = (PodcastEpisode.created < created) | (
+        (PodcastEpisode.created == created) & (PodcastEpisode.id < episode_id)
+    )
+    if published is None:
+        return PodcastEpisode.publish_date.is_null(True) & older
+    return (
+        PodcastEpisode.publish_date.is_null(True)
+        | (PodcastEpisode.publish_date < published)
+        | ((PodcastEpisode.publish_date == published) & older)
+    )
+
+
+def _episode_limit(raw):
+    """``(limit, None)`` or ``(None, response)``: 1..200, 50 by default."""
+    if raw is None or raw == "":
+        return PODCAST_EPISODES_PAGE, None
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": "invalid limit"}), 400)
+    if value < 1 or value > PODCAST_EPISODES_MAX:
+        return None, (jsonify({"error": "invalid limit"}), 400)
+    return value, None
+
+
+def _channel(c, with_episodes=False, counts=None, limit=None, cursor=None):
+    """A podcast channel for the SPA. `counts` is (episodes, archived) from
+    ``_channel_counts``; without it this channel is counted in one grouped
+    query. ``limit`` pages the episodes (newest first) and adds a ``next``
+    cursor; without it every episode is listed, as the subscribe answer wants.
+    """
+    if counts is None:
+        counts = _channel_counts([c.id]).get(c.id, (0, 0))
     info = {
         "id": str(c.id),
         "deezer_id": c.deezer_id,
@@ -3167,23 +3629,60 @@ def _channel(c, with_episodes=False, counts=None):
         # The show's own "archive new episodes automatically" switch: what the
         # archive keeps of it (backfill.collect / archive_show).
         "auto_archive": bool(c.auto_archive),
+        # Its transcription switch and language override (NULL means auto).
+        "auto_transcribe": bool(c.auto_transcribe),
+        "transcribe_language": c.transcribe_language or "auto",
     }
     if with_episodes:
-        info["episodes"] = [
-            _episode(e, c)
-            for e in c.episodes.order_by(
-                PodcastEpisode.publish_date.desc(), PodcastEpisode.created.desc()
+        from ..deezer.chapters import counts_for as _chapter_counts
+
+        query = c.episodes.order_by(
+            # NULL-dated episodes last on every engine: PostgreSQL sorts them
+            # first under DESC, which a keyset cursor cannot follow.
+            PodcastEpisode.publish_date.is_null().asc(),
+            PodcastEpisode.publish_date.desc(),
+            PodcastEpisode.created.desc(),
+            PodcastEpisode.id.desc(),
+        )
+        if cursor is not None:
+            query = query.where(_episodes_after(cursor))
+        page = list(query if limit is None else query.limit(int(limit) + 1))
+        has_more = limit is not None and len(page) > int(limit)
+        episodes = page[: int(limit)] if limit is not None else page
+        chapter_counts = _chapter_counts([e.id for e in episodes])
+        transcripts = _transcript_cards([e.id for e in episodes])
+        if has_more:
+            # The page cannot say how much of the show is transcribed: ask the
+            # show once, so the counter does not reset at each page boundary.
+            info["transcribed_count"] = _transcribed_count(c)
+        else:
+            info["transcribed_count"] = sum(
+                1 for card in transcripts.values() if card["status"] == "ready"
             )
+        info["episodes"] = [
+            _episode(
+                e,
+                c,
+                chapter_count=chapter_counts.get(e.id, 0),
+                transcript=transcripts.get(e.id),
+            )
+            for e in episodes
         ]
+        if limit is not None:
+            info["next"] = _episode_key(episodes[-1]) if has_more else None
     return info
 
 
-def _episode(e, channel=None):
+def _episode(e, channel=None, chapter_count=0, transcript=None):
     """A podcast episode shaped like a playable track for the web player.
 
     Its universal stream id (``deezer_id``) is the episode UUID — the same
     convention local tracks use — so the existing queue/player machinery plays
-    it unchanged via ``/api/stream/<uuid>``.
+    it unchanged via ``/api/stream/<uuid>``. ``chapter_count`` is the number
+    of chapters the archived file carries (0 when there is none); the list
+    itself is only fetched when a person expands the episode. ``transcript``
+    is the episode's transcription state, or None when it has never been asked
+    for — never its sidecar path.
     """
     channel = channel or e.channel
     archived = bool(e.path and os.path.isfile(e.path))
@@ -3207,6 +3706,8 @@ def _episode(e, channel=None):
         "archived": archived,
         "unavailable": gone,
         "explicit": False,
+        "chapter_count": int(chapter_count or 0),
+        "transcript": transcript,
         "channel_id": str(channel.id),
         "artist": {"deezer_id": str(channel.id), "name": channel.title or ""},
         "album": {
@@ -3246,7 +3747,14 @@ def podcast(pid):
             return jsonify({"error": "not found"}), 404
     except PodcastChannel.DoesNotExist:
         return jsonify({"error": "not found"}), 404
-    return jsonify(_channel(c, with_episodes=True))
+    limit, error = _episode_limit(request.args.get("limit"))
+    if error:
+        return error
+    try:
+        cursor = _episode_cursor(request.args.get("cursor"))
+    except ValueError:
+        return jsonify({"error": "invalid cursor"}), 400
+    return jsonify(_channel(c, with_episodes=True, limit=limit, cursor=cursor))
 
 
 @webapi.route("/podcasts", methods=["POST"])
@@ -3276,8 +3784,10 @@ def subscribe_podcast():
         try:
             info = provider.dz.api.get_episode(did)
             show_id = (info.get("podcast") or {}).get("id") or info.get("podcast_id")
-        except Exception:
-            show_id = None
+        except Exception as exc:
+            if _deezer_down(exc):
+                return _deezer_unreachable()
+            return jsonify({"error": "could not resolve show"}), 502
         if not show_id:
             return jsonify({"error": "could not resolve show"}), 400
 
@@ -3858,165 +4368,549 @@ def favorite_entity(kind):
 
 
 # -- playlist management -----------------------------------------------------
-# All edits act on the DB Playlist (so local files are first-class) and then
-# mirror the Deezer-track subset back to the account fail-soft. A playlist id is
-# the Playlist UUID; a Deezer numeric id of an imported playlist also resolves.
+# All edits act on the DB Playlist (so local files are first-class), under the
+# role matrix of ``neezer/playlist_access.py``. A playlist id is the Playlist
+# UUID; a Deezer numeric id of an imported playlist also resolves. Nothing is
+# written to a provider account — there is no mirror any more.
+#
+# The order-sensitive mutations are compared-and-swapped on ``Playlist.version``
+# inside the same transaction as the track write: a stale client gets 409 + the
+# authoritative counters, never a silently merged order. ``version`` is OPTIONAL
+# on every route so an installed older SPA (which cannot send it) keeps working.
+
+#: A title or a description is one 256-char database column.
+PLAYLIST_MAX_TITLE = 256
+PLAYLIST_MAX_DESCRIPTION = 256
+#: One request may carry this many track refs / indexes. A reorder carries the
+#: WHOLE visible list (a 4 000-title playlist), so it gets its own, larger cap;
+#: the 256 KiB body cap still bounds the request.
+PLAYLIST_MAX_TRACKS = 2000
+PLAYLIST_MAX_ORDER = 10000
+#: One account's playlists. Creation is open to every account, so a scripted
+#: client must not be able to fill the table; 500 is far above a real library.
+PLAYLIST_MAX_PER_USER = 500
+#: A visible-list index is bounded before it is ever used.
+PLAYLIST_MAX_INDEX = 10000
+#: Body caps (413): a 4 000-ref order of UUIDs is ~160 KiB; a member/metadata
+#: body is a few dozen bytes.
+PLAYLIST_BODY_TRACKS = 256 * 1024
+PLAYLIST_BODY_METADATA = 16 * 1024
+PLAYLIST_MAX_VERSION = 2**31 - 1
+
+_LIMITERS = {}
+
+
+def _reset_playlist_limits():
+    """Drop the process-wide creation windows (tests only).
+
+    Production keeps them: a module-level limiter is the point (one gunicorn
+    worker, one view). A test that creates dozens of playlists in one process
+    calls this, like ``playlist_share._stream_limiter.clear()``.
+    """
+    _LIMITERS.pop("playlist-create", None)
+
+
+def _window_limiter(name, max_events, window):
+    """The edge lot's ``WindowLimiter`` when it is installed, else None.
+
+    ``neezer/ratelimit.py`` is owned by the edge lot (it lands the sliding
+    window used by creation and membership). Importing it lazily keeps this
+    module runnable before that file exists, and picks the real limiter up as
+    soon as it does — no duplicate counter, no second policy.
+    """
+    limiter = _LIMITERS.get(name)
+    if limiter is not None:
+        return limiter
+    try:
+        from ..ratelimit import WindowLimiter
+    except ImportError:
+        return None
+    limiter = WindowLimiter(max_events, window)
+    _LIMITERS[name] = limiter
+    return limiter
+
+
+def _rate_limited(limiter, key):
+    """``None`` when the call may pass, else the 429 response."""
+    if limiter is None:
+        return None
+    allowed, retry_after = limiter.allow(key)
+    if allowed:
+        return None
+    delay = max(1, int(float(retry_after or 0) + 0.999))
+    response = jsonify({"error": "rate limited", "retry_after": delay})
+    response.status_code = 429
+    response.headers["Retry-After"] = str(delay)
+    return response
+
+
+def _playlist_body(max_bytes, allow_empty=False):
+    """``(dict, None)`` or ``(None, response)``: 413 over the cap, 400 junk.
+
+    An empty body is a 400 (the /api coverage walk POSTs every route with no
+    body at all) unless the route explicitly accepts ``{}`` (leave, the remove
+    of a member). Never a 500.
+
+    A declared ``Content-Length`` is checked before anything is read. A chunked
+    body has none, so it is read through a bounded read instead: a hostile
+    client must not be able to make the worker buffer an unbounded JSON body
+    just by omitting the length.
+    """
+    given = request.content_length
+    if given is not None and given > max_bytes:
+        return None, (jsonify({"error": "body too large"}), 413)
+    if given is None:
+        try:
+            raw = request.stream.read(max_bytes + 1)
+        except Exception:  # a client that disconnects mid-body
+            return None, (jsonify({"error": "invalid body"}), 400)
+        if len(raw) > max_bytes:
+            return None, (jsonify({"error": "body too large"}), 413)
+        if not raw.strip():
+            if allow_empty:
+                return {}, None
+            return None, (jsonify({"error": "invalid body"}), 400)
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return None, (jsonify({"error": "invalid body"}), 400)
+    else:
+        data = request.get_json(silent=True)
+    if data is None and allow_empty:
+        return {}, None
+    if not isinstance(data, dict):
+        return None, (jsonify({"error": "invalid body"}), 400)
+    return data, None
+
+
+def _playlist_title(data, required=True):
+    """``(title, None)`` or ``(None, response)``: a stripped 1..256 string."""
+    if "title" not in data:
+        if required:
+            return None, (jsonify({"error": "missing title"}), 400)
+        return None, None
+    raw = data.get("title")
+    if not isinstance(raw, str):
+        return None, (jsonify({"error": "invalid title"}), 400)
+    title = raw.strip()
+    if not title:
+        return None, (jsonify({"error": "missing title"}), 400)
+    if len(title) > PLAYLIST_MAX_TITLE:
+        return None, (jsonify({"error": "title too long"}), 400)
+    return title, None
+
+
+def _playlist_description(data):
+    """``(comment, None)`` or ``(None, response)``; absent stays absent."""
+    if "description" not in data:
+        return None, None
+    raw = data.get("description")
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, (jsonify({"error": "invalid description"}), 400)
+    if len(raw) > PLAYLIST_MAX_DESCRIPTION:
+        return None, (jsonify({"error": "description too long"}), 400)
+    return raw or None, None
+
+
+def _playlist_refs(data, key="tracks", max_refs=PLAYLIST_MAX_TRACKS):
+    """``([ref], None)`` or ``(None, response)``: ≤ ``max_refs`` track ids."""
+    raw = data.get(key)
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list):
+        return None, (jsonify({"error": "invalid tracks"}), 400)
+    if len(raw) > max_refs:
+        return None, (jsonify({"error": "too many tracks"}), 400)
+    return [str(value) for value in raw], None
+
+
+def _playlist_expected(data, key):
+    """``(version, None)``, ``(None, None)`` when absent, or a 400.
+
+    A bool is not a version (``True`` is an int in Python); neither is a
+    string, a float or a non-positive value.
+    """
+    if key not in data:
+        return None, None
+    value = data.get(key)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+        or value > PLAYLIST_MAX_VERSION
+    ):
+        return None, (jsonify({"error": "invalid " + key}), 400)
+    return value, None
+
+
+def _playlist_indexes(data):
+    """``([index], None)`` or ``(None, response)``: deduplicated 0..10 000."""
+    raw = data.get("indexes")
+    if not isinstance(raw, list):
+        return None, (jsonify({"error": "invalid indexes"}), 400)
+    if len(raw) > PLAYLIST_MAX_TRACKS:
+        return None, (jsonify({"error": "too many indexes"}), 400)
+    out = []
+    seen = set()
+    for value in raw:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > PLAYLIST_MAX_INDEX
+        ):
+            return None, (jsonify({"error": "invalid indexes"}), 400)
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out, None
+
+
+def _addable_tracks(provider, refs):
+    """The Track rows of a client's refs that the caller may put in a playlist.
+
+    ``refs.resolve_tracks`` answers every known row without filtering, so the
+    private-upload rule is applied here: another account's upload is not a
+    track this person can add, and an unknown id is simply left out (a 400 "no
+    tracks" when nothing remains). Deezer ids resolve to shared-library rows.
+    """
+    user = getattr(request, "webuser", None)
+    return [track for track in _resolve_tracks(provider, refs) if track.readable_by(user)]
+
+
+def _reordered_rows(pl, user, order):
+    """Rebuild the whole tracklist: the client's visible order, hidden anchored.
+
+    The client sends the ids of the rows it SEES, with occurrence counts (a
+    playlist may hold the same title twice). Rows it omitted are appended in
+    their stored order, so a stale/partial list is never destructive. A row
+    this person may not see (somebody else's private upload) is kept in place
+    relative to the visible row it followed — the front when none — so an
+    editor can neither move nor delete it by leaving it out.
+    """
+    stored = list(
+        PlaylistTrack.select(
+            PlaylistTrack.id,
+            PlaylistTrack.index,
+            Track.id,
+            Track.deezer_id,
+            Track.owner,
+        )
+        .join(Track, on=(PlaylistTrack.track == Track.id))
+        .where(PlaylistTrack.playlist == pl.id)
+        .order_by(PlaylistTrack.index)
+        .tuples()
+    )
+    is_admin = bool(getattr(user, "admin", False))
+    front, buckets, visible = [], {}, []
+    pending, last_ptid = [], None
+    for ptid, _index, tid, dz, owner in stored:
+        if owner is not None and not (is_admin or owner == user.id):
+            pending.append(tid)
+            continue
+        if last_ptid is None:
+            front = pending
+        elif pending:
+            buckets.setdefault(last_ptid, []).extend(pending)
+        pending = []
+        visible.append((ptid, tid, dz))
+        last_ptid = ptid
+    if pending:  # trailing hidden rows follow the last visible one
+        if last_ptid is None:
+            front = pending
+        else:
+            buckets.setdefault(last_ptid, []).extend(pending)
+
+    by_uid = {}
+    for ptid, tid, dz in visible:
+        by_uid.setdefault(str(dz) if dz else str(tid), []).append((ptid, tid))
+        by_uid.setdefault(str(tid), []).append((ptid, tid))
+    from collections import Counter
+
+    avail = Counter(tid for _ptid, tid, _dz in visible)
+    used, picked = Counter(), set()
+    picks = []
+    for uid in order:
+        for ptid, tid in by_uid.get(uid, []):
+            if ptid in picked or used[tid] >= avail[tid]:
+                continue
+            picks.append((ptid, tid))
+            picked.add(ptid)
+            used[tid] += 1
+            break
+    for ptid, tid, _dz in visible:
+        if ptid not in picked:
+            picks.append((ptid, tid))
+            picked.add(ptid)
+
+    rows = []
+    for tid in front:
+        rows.append((pl.id, tid, len(rows)))
+    for ptid, tid in picks:
+        rows.append((pl.id, tid, len(rows)))
+        for hidden_tid in buckets.get(ptid, ()):
+            rows.append((pl.id, hidden_tid, len(rows)))
+    return rows
 
 
 @webapi.route("/playlists", methods=["POST"])
 @login_required
-@admin_required
 def create_playlist():
-    provider = _provider()
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    if not title:
-        return jsonify({"error": "missing title"}), 400
-    description = data.get("description") or None
-    track_rows = _resolve_tracks(provider, data.get("tracks") or [])
-    pl = Playlist.create(user=request.webuser, name=title, comment=description)
+    """Create a playlist. Open to every account (Subsonic always was).
 
-    for track in track_rows:
-        pl.add(track)
+    A scripted client cannot fill the table: 500 playlists per account (409) and
+    60 creations an hour (429 when the edge lot's limiter is installed). The
+    creator gets an ``owner`` member row in the same transaction, so the list
+    and the member sheet agree from the first request.
+    """
+    from .playlist_folders import place_new_playlist, resolve_folder
+
+    user = request.webuser
+    limited = _rate_limited(
+        _window_limiter("playlist-create", 60, 3600), f"playlist-create:{user.id}"
+    )
+    if limited is not None:
+        return limited
+    data, error = _playlist_body(PLAYLIST_BODY_TRACKS)
+    if error:
+        return error
+    title, error = _playlist_title(data)
+    if error:
+        return error
+    description, error = _playlist_description(data)
+    if error:
+        return error
+    refs, error = _playlist_refs(data)
+    if error:
+        return error
+    # "Nouvelle playlist ici": the optional `folder` is resolved BEFORE anything
+    # is written, so a foreign or malformed folder is a 404/400 that leaves no
+    # half-created playlist behind. Its presence is what asks for a placement
+    # (a `null` means "top of the root"); a request from an older SPA without
+    # the key keeps its behaviour, with no placement row at all.
+    folder = None
+    wants_placement = "folder" in data
+    if wants_placement:
+        folder, error = resolve_folder(user, data.get("folder"))
+        if error:
+            return error
+    provider = _provider()
+    track_rows = _addable_tracks(provider, refs)
+    with db.atomic():
+        if Playlist.select().where(Playlist.user == user).count() >= PLAYLIST_MAX_PER_USER:
+            return jsonify({"error": "playlist limit"}), 409
+        pl = Playlist.create(user=user, name=title, comment=description)
+        PlaylistMember.create(
+            playlist=pl, user=user, role="owner", added=pl.created
+        )
+        pl.add_many(track_rows)
+        if wants_placement:
+            place_new_playlist(user, pl, folder)
     from ..deezer import backfill
 
     backfill.archive_tracks(
         current_app._get_current_object(), track_rows, event="on_playlist_add"
     )
-    return jsonify({"ok": True, "id": str(pl.id), "deezer_id": pl.deezer_id})
+    return jsonify(
+        {
+            "ok": True,
+            "id": str(pl.id),
+            "deezer_id": pl.deezer_id,
+            "folder_id": str(folder.id) if folder is not None else None,
+            "version": pl.version,
+            "members_version": pl.members_version,
+            "role": "owner",
+        }
+    )
 
 
 @webapi.route("/playlist/<playlist_id>", methods=["PATCH"])
 @login_required
-@admin_required
 def edit_playlist(playlist_id):
-    pl = _resolve_db_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
-    data = request.get_json(silent=True) or {}
-    title = data.get("title")
-    # Tolerate a non-string title (e.g. a number) instead of 500-ing on .strip().
-    if isinstance(title, str) and title.strip():
-        pl.name = title.strip()
+    """Rename / describe a playlist. Owner or admin only; editor gets 403."""
+    pl, _role, error = _playlist_guard(playlist_id, "manage")
+    if error:
+        return error
+    data, error = _playlist_body(PLAYLIST_BODY_METADATA)
+    if error:
+        return error
+    expected, error = _playlist_expected(data, "version")
+    if error:
+        return error
+    title, error = _playlist_title(data, required=False)
+    if error:
+        return error
+    description, error = _playlist_description(data)
+    if error:
+        return error
+    fields = {}
+    if "title" in data:
+        fields["name"] = title
     if "description" in data:
-        pl.comment = data.get("description") or None
-    pl.save()
-    return jsonify({"ok": True})
+        fields["comment"] = description
+    try:
+        with db.atomic():
+            new_version = placcess.bump_version(pl, expected, request.webuser)
+            if fields:
+                Playlist.update(**fields).where(Playlist.id == pl.id).execute()
+    except placcess.VersionConflict as exc:
+        return _playlist_conflict(exc.playlist, "content")
+    return jsonify({"ok": True, "version": new_version})
 
 
 @webapi.route("/playlist/<playlist_id>", methods=["DELETE"])
 @login_required
-@admin_required
 def delete_playlist(playlist_id):
-    pl = _resolve_db_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
+    """Delete a playlist (owner/admin). Terminal: no version precondition.
+
+    There is no lost update to prevent — the row is gone — and a 409 after a
+    confirmation dialog would be hostile. Member rows and share links go with
+    it (the schema's ON DELETE CASCADE).
+    """
+    pl, _role, error = _playlist_guard(playlist_id, "manage")
+    if error:
+        return error
     pl.delete_instance(recursive=True)
     return jsonify({"ok": True})
 
 
 @webapi.route("/playlist/<playlist_id>/tracks", methods=["POST"])
 @login_required
-@admin_required
 def add_playlist_tracks(playlist_id):
+    """Append tracks. Owner, editor or admin.
+
+    Append-only, so it is COMMUTATIVE: two clients that both send no version
+    append safely under the row lock; the SPA still sends its version, and a
+    mismatch is a 409 it may offer to retry (nothing was written).
+    """
+    pl, _role, error = _playlist_guard(playlist_id, "edit")
+    if error:
+        return error
+    data, error = _playlist_body(PLAYLIST_BODY_TRACKS)
+    if error:
+        return error
+    expected, error = _playlist_expected(data, "version")
+    if error:
+        return error
+    refs, error = _playlist_refs(data)
+    if error:
+        return error
+    if not refs:
+        return jsonify({"error": "no tracks"}), 400
     provider = _provider()
-    pl = _resolve_db_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
-    tracks = _resolve_tracks(provider, (request.get_json(silent=True) or {}).get("tracks") or [])
+    tracks = _addable_tracks(provider, refs)
     if not tracks:
         return jsonify({"error": "no tracks"}), 400
-    for track in tracks:
-        pl.add(track)
+    try:
+        with db.atomic():
+            new_version = placcess.bump_version(pl, expected, request.webuser)
+            pl.add_many(tracks)
+            nb_tracks = _visible_playlist_count(pl, request.webuser)
+    except placcess.VersionConflict as exc:
+        return _playlist_conflict(exc.playlist, "content")
     from ..deezer import backfill
 
     backfill.archive_tracks(
         current_app._get_current_object(), tracks, event="on_playlist_add"
     )
-    return jsonify({"ok": True, "added": len(tracks)})
+    return jsonify(
+        {
+            "ok": True,
+            "added": len(tracks),
+            "version": new_version,
+            "nb_tracks": nb_tracks,
+        }
+    )
 
 
 @webapi.route("/playlist/<playlist_id>/tracks", methods=["DELETE"])
 @login_required
-@admin_required
 def remove_playlist_tracks(playlist_id):
-    pl = _resolve_db_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
-    data = request.get_json(silent=True) or {}
-    indexes = data.get("indexes")
-    if indexes is None:
-        wanted = {str(s) for s in (data.get("tracks") or [])}
-        # One statement for the whole list: ``pl.get_tracks()`` loads nothing
-        # but is the wrong shape here, and per-row lookups would be thousands.
-        rows = (
-            PlaylistTrack.select(PlaylistTrack.index, Track.id, Track.deezer_id)
-            .join(Track, on=(PlaylistTrack.track == Track.id))
-            .where(PlaylistTrack.playlist == pl)
-            .order_by(PlaylistTrack.index)
-            .tuples()
-        )
-        indexes = [
-            i for i, (_, tid, dz) in enumerate(rows)
+    """Remove rows by the caller's VISIBLE positions, or by track ids.
+
+    An index is a position in the list this person sees, mapped to the stored
+    ``playlist_track`` rows here; for an owner/admin (every row visible) it is
+    byte-identical to the old behaviour, and an editor's index can never land
+    on somebody else's private upload.
+    """
+    pl, _role, error = _playlist_guard(playlist_id, "edit")
+    if error:
+        return error
+    data, error = _playlist_body(PLAYLIST_BODY_TRACKS, allow_empty=True)
+    if error:
+        return error
+    expected, error = _playlist_expected(data, "version")
+    if error:
+        return error
+    visible = _visible_playlist_rows(pl, request.webuser)
+    if "indexes" in data:
+        indexes, error = _playlist_indexes(data)
+        if error:
+            return error
+        stored = [visible[i][1] for i in indexes if i < len(visible)]
+    else:
+        refs, error = _playlist_refs(data)
+        if error:
+            return error
+        wanted = set(refs)
+        stored = [
+            visible[i][1]
+            for i, (_ptid, _index, tid, dz) in enumerate(visible)
             if str(tid) in wanted or (dz and str(dz) in wanted)
         ]
-    try:
-        indexes = [int(i) for i in indexes]
-    except (TypeError, ValueError):
-        return jsonify({"error": "invalid indexes"}), 400
-    if not indexes:
+    if not stored:
         return jsonify({"error": "no tracks"}), 400
-    pl.remove_at_indexes(indexes)
-    return jsonify({"ok": True})
+    try:
+        with db.atomic():
+            new_version = placcess.bump_version(pl, expected, request.webuser)
+            pl.remove_at_indexes(stored)
+    except placcess.VersionConflict as exc:
+        return _playlist_conflict(exc.playlist, "content")
+    return jsonify({"ok": True, "removed": len(stored), "version": new_version})
 
 
 @webapi.route("/playlist/<playlist_id>/order", methods=["PUT"])
 @login_required
-@admin_required
 def reorder_playlist(playlist_id):
-    pl = _resolve_db_playlist(playlist_id)
-    if pl is None:
-        return jsonify({"error": "not found"}), 404
-    order = [str(s) for s in ((request.get_json(silent=True) or {}).get("tracks") or [])]
+    """Replace the order with the caller's visible order, hidden rows anchored.
+
+    The client's list is resolved with occurrence counts (duplicates are kept),
+    then written as one DELETE plus chunked INSERTs inside the same transaction
+    as the version CAS. Measured on 4 000 rows: 19 statements in all — the
+    session, the resolve, the visible-row read, the CAS, the DELETE and 14
+    INSERTs of 300 rows — never one UPDATE per row.
+    """
+    pl, _role, error = _playlist_guard(playlist_id, "edit")
+    if error:
+        return error
+    data, error = _playlist_body(PLAYLIST_BODY_TRACKS)
+    if error:
+        return error
+    expected, error = _playlist_expected(data, "version")
+    if error:
+        return error
+    order, error = _playlist_refs(data, max_refs=PLAYLIST_MAX_ORDER)
+    if error:
+        return error
     if not order:
         return jsonify({"error": "no order"}), 400
-    current = list(
-        Track.select(Track.id, Track.deezer_id)
-        .join(PlaylistTrack, on=(PlaylistTrack.track == Track.id))
-        .where(PlaylistTrack.playlist == pl)
-        .order_by(PlaylistTrack.index)
-    )
-    by_uid = {}
-    for t in current:
-        by_uid.setdefault(_track_uid(t), t)
-        by_uid.setdefault(str(t.id), t)
-    # A playlist may hold the same track several times; honour each occurrence
-    # instead of collapsing them (the old set-based dedup silently DELETED
-    # duplicates on every reorder).
-    from collections import Counter
-
-    avail = Counter(t.id for t in current)
-    rows = []
-    used = Counter()
-    for uid in order:
-        t = by_uid.get(uid)
-        if t is None or used[t.id] >= avail[t.id]:
-            continue
-        rows.append((pl.id, t.id, len(rows)))
-        used[t.id] += 1
-    # Safety: keep any track the client omitted, appended at the end.
-    for t in current:
-        if used[t.id] < avail[t.id]:
-            rows.append((pl.id, t.id, len(rows)))
-            used[t.id] += 1
+    rows = _reordered_rows(pl, request.webuser, order)
     fields = (PlaylistTrack.playlist, PlaylistTrack.track, PlaylistTrack.index)
-    with db.atomic():
-        PlaylistTrack.delete().where(PlaylistTrack.playlist == pl).execute()
-        # Bulk insert in chunks: one statement instead of one INSERT per track
-        # (a 500-track reorder was 500 round-trips on Postgres/MySQL).
-        for i in range(0, len(rows), 300):
-            PlaylistTrack.insert_many(rows[i : i + 300], fields=fields).execute()
-    return jsonify({"ok": True})
+    try:
+        with db.atomic():
+            new_version = placcess.bump_version(pl, expected, request.webuser)
+            PlaylistTrack.delete().where(PlaylistTrack.playlist == pl.id).execute()
+            # Bulk insert in chunks: one statement instead of one INSERT per
+            # track (a 500-track reorder was 500 round-trips on Postgres/MySQL).
+            for i in range(0, len(rows), 300):
+                PlaylistTrack.insert_many(
+                    rows[i : i + 300], fields=fields
+                ).execute()
+    except placcess.VersionConflict as exc:
+        return _playlist_conflict(exc.playlist, "content")
+    return jsonify({"ok": True, "version": new_version})
 
 
 # Most tracks one /api/download call may queue for background archiving.
@@ -4876,6 +5770,7 @@ def stream_ready(deezer_id):
 
 @webapi.route("/stream/<deezer_id>")
 @login_required
+@_count_stream_response
 def stream(deezer_id):
     """Stream a track. Always FLAC-archived; lower qualities are Opus transcodes
     of that archived master, cached (so repeat plays are instant and seekable).
@@ -5053,5 +5948,7 @@ from . import sourcesapi  # noqa: E402,F401  isort:skip
 from . import playlist_share  # noqa: E402,F401  isort:skip
 from . import genre_radio  # noqa: E402,F401  isort:skip
 from . import history  # noqa: E402,F401  isort:skip
+from . import recap  # noqa: E402,F401  isort:skip
 from . import moods  # noqa: E402,F401  isort:skip
 from . import playlistrecs  # noqa: E402,F401  isort:skip
+from . import playlist_members  # noqa: E402,F401  isort:skip

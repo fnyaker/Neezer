@@ -8,18 +8,22 @@
   import Cover from "../components/Cover.svelte";
   import PodcastCard from "../components/PodcastCard.svelte";
   import Skeleton from "../components/Skeleton.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
 
   // Inside the library's "Podcasts" chip: the library already says where you are.
   export let embedded = false;
 
-  let channels = [];
+  let channels = null;
   let loading = true;
+  let loadError = null;
 
   // search
   let q = "";
   let searchResults = [];
   let searching = false;
+  let searchError = null;
+  let searchedFor = "";
   let timer;
   let seq = 0;
 
@@ -28,11 +32,12 @@
 
   async function load() {
     loading = true;
+    loadError = null;
     try {
       const r = await api.podcasts();
       channels = r?.podcasts || [];
-    } catch {
-      channels = [];
+    } catch (e) {
+      if (channels === null) loadError = e;
     }
     loading = false;
   }
@@ -40,6 +45,7 @@
   function onInput() {
     clearTimeout(timer);
     const term = q.trim();
+    searchError = null;
     if (!term) {
       searchResults = [];
       searching = false;
@@ -51,11 +57,16 @@
 
   async function runSearch(term) {
     const mine = ++seq;
+    searchedFor = term;
+    searchError = null;
     try {
       const r = await api.searchPodcasts(term);
       if (mine === seq) searchResults = r?.podcasts || [];
-    } catch {
-      if (mine === seq) searchResults = [];
+    } catch (e) {
+      if (mine === seq) {
+        searchResults = [];
+        searchError = e;
+      }
     } finally {
       if (mine === seq) searching = false;
     }
@@ -96,6 +107,8 @@
     {#if q.trim()}
       {#if searching}
         <Skeleton kind="list" />
+      {:else if searchError}
+        <LoadFailed error={searchError} inline on:retry={() => runSearch(searchedFor || q.trim())} />
       {:else if searchResults.length}
         <h2>Résultats</h2>
         <div class="grid">
@@ -110,8 +123,10 @@
   {/if}
 
   {#if !embedded}<h2 class:hidden={$isAdmin && q.trim()}>Mes podcasts</h2>{/if}
-  {#if loading}
+  {#if (loading || channels === null) && !loadError}
     <Skeleton kind="list" />
+  {:else if channels === null}
+    <LoadFailed error={loadError} on:retry={load} />
   {:else if !channels.length}
     <p class="muted empty">
       Aucun abonnement pour l'instant.{#if $isAdmin}{" "}Cherchez un podcast ci-dessus pour vous abonner.{/if}

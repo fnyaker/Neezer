@@ -33,6 +33,14 @@ three different places:
    be the first thing the kernel deschedules, never the stream. `renice` asks
    for exactly that.
 
+4. **Deezer's own rate limit.** Every Deezer call of the process shares one
+   sliding window (`deezerpy._throttle`), so a bulk job's burst used to put a
+   person's search behind it for a whole window (up to 5 s). The window has
+   lanes; `renice` puts the calling thread in ``BULK`` — a thread that asked to
+   be behind everything else is background work, whatever it is doing — and
+   `deezer_lane` names a lane per item where one worker serves several
+   urgencies.
+
 Nothing here is a throttle. Background work still runs flat out — it simply runs
 in what the foreground is not using.
 """
@@ -42,6 +50,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+
+from deezerpy import _throttle
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +78,27 @@ def priority_from_name(name, default=Priority.BULK) -> int:
     how urgent it is — otherwise every caller would claim 0.
     """
     return PRIORITY_NAMES.get(str(name or "").strip().lower(), default)
+
+
+_DEEZER_LANES = {
+    Priority.USER: _throttle.USER,
+    Priority.PREFETCH: _throttle.PREFETCH,
+    Priority.BULK: _throttle.BULK,
+}
+
+
+def deezer_priority(level: int) -> int:
+    """The Deezer limiter's lane for a download priority."""
+    return _DEEZER_LANES.get(int(level), _throttle.BULK)
+
+
+def deezer_lane(level: int):
+    """``with deezer_lane(priority)``: this thread's Deezer calls take that lane.
+
+    For a worker that serves several urgencies from one queue: the item's own
+    priority says whether the call is somebody's tap or a background listing.
+    """
+    return _throttle.priority(deezer_priority(level))
 
 
 # --- request admission ------------------------------------------------------
@@ -192,7 +223,12 @@ def renice(delta: int = 10) -> None:
     the one serving a stream — wait for a time slice. Unavailable or refused
     (a container without the capability, a non-Linux host) is not an error: the
     work still runs, it is simply not deprioritised.
+
+    It also puts this thread's Deezer calls in the ``BULK`` lane of the shared
+    rate limiter: a thread that asked to be behind everything else is background
+    work, so it must lose to a person's request when the next slot frees.
     """
+    _throttle.set_priority(_throttle.BULK)
     try:
         os.nice(delta)
     except (AttributeError, OSError, PermissionError):
@@ -233,6 +269,89 @@ def touch_listening() -> None:
     import time
 
     _last_listen = time.monotonic()
+
+
+# --- open streams -----------------------------------------------------------
+# `touch_listening` is a timestamp: a one-hour episode is ONE request, so forty
+# seconds after it started `listening_for` says nobody is listening and the
+# heavy jobs come back. What actually holds the machine is a stream whose body
+# is still being written, so this counts those. web.py opens it when a 200/206
+# body starts and closes it in the generator's `finally` (PEP 380 propagates
+# `close()`); background streams (`X-NS-Background`) do not count.
+
+_streams = 0
+_stream_lock = threading.Lock()
+
+
+def note_stream_open() -> None:
+    global _streams
+    with _stream_lock:
+        _streams += 1
+
+
+def note_stream_close() -> None:
+    global _streams
+    with _stream_lock:
+        if _streams > 0:  # a teardown may run after a double close
+            _streams -= 1
+
+
+def streams_active() -> int:
+    with _stream_lock:
+        return _streams
+
+
+class _Stream:
+    def __init__(self, background=False):
+        self.background = bool(background)
+        self.counted = False
+
+    def __enter__(self):
+        if not self.background:
+            note_stream_open()
+            self.counted = True
+        return self
+
+    def __exit__(self, *exc):
+        if self.counted:
+            note_stream_close()
+            self.counted = False
+        return False
+
+
+def stream(background=False):
+    """Mark a response body as an open stream; a background one does not count.
+
+    ``background=True`` is for the prefetch/offline clients (``X-NS-Background``
+    or ``bg=1``): they must never hold the machine as "somebody is listening".
+    """
+    return _Stream(background=background)
+
+
+def counted_response(response, background=False):
+    if response is None or background:
+        return response
+    if getattr(response, "status_code", 200) not in (200, 206):
+        return response
+    original = getattr(response, "response", None)
+    if original is None:
+        return response
+
+    def body():
+        note_stream_open()
+        try:
+            yield from original
+        finally:
+            note_stream_close()
+
+    response.response = body()
+    return response
+
+
+def reset_streams() -> None:
+    global _streams
+    with _stream_lock:
+        _streams = 0
 
 
 def listening_for() -> float:
@@ -301,6 +420,8 @@ class Throttle:
         self.reason = None  # why it is waiting right now (for the studio)
 
     def _blocked(self):
+        if streams_active() > 0:
+            return "stream"
         if foreground_busy():
             return "download"
         if listening_for() < self.listen_quiet:

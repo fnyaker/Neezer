@@ -139,7 +139,8 @@ advanced).
 `NativeAudio.kt`). The bridge-8 lease was ten titles: if the renderer was actually frozen (not just
 throttled) for longer, the app consumed it and stopped at the next end with no page to ask. Now the
 page names **32 titles while visible and up to 200 compact entries when the activity stops**
-(`MainActivity.onStop` calls `window.__nsAppBackground`, `visibilitychange` does too); each is
+(`MainActivity.onStop` calls `window.__nsAppBackground` **before** the players are told the activity
+stopped, `onStart` calls `window.__nsAppForeground`; `visibilitychange` does too); each is
 `{url, at, e, v, k, meta}` with full metadata for the first 8 and shortened titles for the rest.
 `MAX_NEXT` is 256 and `MAX_AUDIO_CMD` 128 KiB (a 39-entry bench command measured 8 132 bytes; 200
 entries stay under the cap). When the app is stopped and **at most 4 remain**, `NativeAudio` asks
@@ -150,10 +151,21 @@ the long list already covers hours.
 The app also **retries a network failure itself** while the activity is stopped: a Media3
 `ERROR_CODE_IO_*` (except `FILE_NOT_FOUND`, cleartext refused and 4xx; a 5xx is retried) is
 re-opened after 2 s, 5 s and 10 s, cancelled by the first page command, and only then becomes the
-page's `error`. A decode error or a refused source keeps the fail-fast path. At the end of a list
+page's `error`. A decode error or a refused source keeps the fail-fast path. **A title that cannot be
+played costs that title, not the list**: while the activity is stopped a NON-retryable failure (a
+4xx, a decode error, a refused source) consumes the entry and starts the next one
+(`NativeRouting.fault`), at most three titles in a row (`FAULT_SKIPS_MAX`) so a server answering
+404 to everything cannot burn the 200-entry list in a second; a run of them, an empty list, or
+`repeat=one` still stalls. It is reported as a `fault` string ON the advancing state, never as an
+`error` event — an `error` would hand the whole app's player to the page's for a day
+(`noteNativeFault`) for one bad file, which behind a locked screen is the silence the skip exists
+to avoid. At the end of a list
 with nothing after it (or a repeat-one end) `STATE_ENDED` calls `PlayerService.stalled()`: the
 session and notification go **paused**, for the same reason the page's own `ended` would have
-paused them, instead of leaving a "playing" card over silence.
+paused them, instead of leaving a "playing" card over silence. `NativeRoutingTest` holds the
+policy (background + next -> advance, background + empty -> stall, foreground -> the page decides,
+repeat one -> no loop) and `node test/native/run.mjs` freezes a queue, fails its fifth title and
+checks the page lands on the last one the app played.
 
 The page also no longer loses the app's list during a load: `updateNativeNext` keeps the previous
 list while a load/switch/chase is in flight and while an advance waits to be adopted. A burst of
@@ -170,6 +182,13 @@ activity is stopped (`setRendererPriorityPolicy(IMPORTANT, false)`). A renderer 
 releases the native player: `disposeWebView(releaseAudio = false)` keeps the audio and the
 notification, the page is rebuilt on return, and its first `naCreate` (new PAGE token) releases the
 old slots. `releaseAll()` is only for `onDestroy`/finishing.
+**The 4 Hz tick is not sent while the activity is stopped** (`NativeRouting.tickToPage`): four
+states a second through `evaluateJavascript` into a frozen renderer queue up until the phone is
+unlocked — eight hours of playback was ~115 000 states, and `onResume`'s `pingPage` then had to
+compete with the renderer draining them (a page that answers late is REBUILT). A frozen page reads
+none of them and a throttled one interpolates the position from the last state it knows; the trimmed
+end is timed on the app's own clock (`checkTrim`) either way, and the download gate is refreshed by
+the tick without the page.
 
 **Compatibility (bridge 10).** A new SPA facing an older APK (`bridgeVersion() < 10`) sends the ten
 entries it always did and never relies on the refill hook: sending 200 entries to the 32 KiB
@@ -180,18 +199,26 @@ halves. `test/native/run.mjs` freezes a 40-title queue and advances 36 times wit
 checks the page catches up on the last one and the refill was asked exactly once; the unit test
 sends 200 entries, asserts the bridge-9 cap of ten, repeat flags and the 128 KiB ceiling.
 
-**Next / previous from a media button, with the page asleep** (`PlayerService` -> `PlayerService.nativeSkip` -> `NativeAudio.skip`).
+**Next / previous — and play / pause / seek — from a media button, with the page asleep** (`PlayerService` -> `PlayerService.nativeSkip` / `nativeTransport` -> `NativeAudio.skip` / `transport`).
 The notification, a headset or the lock screen used to send `next` / `prev` to the PAGE (`commandSink` -> `evaluateJavascript`): with the
 activity stopped that page is throttled (timers once a minute after five minutes) or frozen, with the activity gone `commandSink` is null
 and the command vanished — "after a while in the background I can no longer skip". Media3's model is the opposite: the player that owns
 the playlist answers the command, whoever asks. So while the activity is stopped the app's player does it itself, from the list the page
 named (bridge 7/8): next = `advance(next.first())`, previous = restart the track past 3 s, else back to the one this player went through
 (`trail`, up to 20, the track left returns to the front of the list); each tells the page (`adv`, `onAdvance`) so it adopts the change when
-it wakes. Not ours to do (the page is shown, no list, nothing before) -> the command goes to the page as before. The list is only what the
+it wakes. **Play, pause and seek the same way** (`NativeAudio.transport`, `NativeRouting.transport`): they used to reach the page only, so
+a pause pressed on the lock screen, a headset or the car card queued in a frozen renderer until the phone was unlocked while the
+MediaSession and the notification kept saying "playing" over silence. `PlayerService` asks its own player first and marks the session
+paused/playing/seeked itself (`markTransport`), so the card answers even when nobody publishes; the player's next state carries the change
+(`p`, `t`, an explicit `seeked`) and the page adopts it as it does the advance — including the one corner where the app paused a title the
+page had not adopted yet (it absorbs the single stale `play()` the page's store would send, then delivers the pause). Not ours to do (the
+page is shown, no list, no player — the setting off — nothing before) -> the command goes to the page as before. The list is only what the
 page named (bridge 10: 32 visible / 200 in the background; an older APK still ten): past it the app cannot know the next track, and a
 skip goes to the page (or restarts the current title when `repeat=one`). Sources: developer.chrome.com "Timer throttling
 in Chrome 88" and the Page Lifecycle API (frozen pages run no timers), Media3 `MediaSession` / `MediaController` docs (commands go to the
-session's player). Unit-untestable (ExoPlayer): the build is CI's `android` workflow, the logic is read against `advance`.
+session's player). Unit-untestable (ExoPlayer): the build is CI's `android` workflow, the logic is read against `advance`;
+`NativeRoutingTest` holds the routing and `node test/native/run.mjs` drives a headset pause/seek/play behind a throttled page and the
+visible fallback.
 
 **When the app's player fails** (lot N6, `nativeplayer.js#noteNativeFault`, `Player.svelte#fallBackToPage`): a player
 error (MEDIA_ERR_DECODE, i.e. ExoPlayer's decoder or audio-track codes, or `naCreate` refusing) is recorded in
@@ -218,6 +245,15 @@ copy exactly as it was, and nothing moves with less than the Blob + 64 MB free. 
 dropped and a record whose file is gone is forgotten. `test/nativeoffline.test.mjs` (the logic) and
 `node test/offline/run.mjs` (Chromium: the move byte for byte, the play off `/__nsoffline/`, a new download, the
 Réglages list at two widths) pin it.
+**The app's own player holds the link too** (`YieldGate.holdPlayer`, `LinkNeed`): the page's lease is renewed by a
+`setInterval` and the element's events, and behind a locked screen both stop — it expired after 45 s and the downloads
+went back to full speed against the stream `NativeAudio` was reading, the very thing rule 1 forbids. The player that
+pulls the stream is in the app's process, so it keeps a second, UNTIMED hold, decided from ExoPlayer's own buffer with
+the page's thresholds (15 s to take it, 30 s to let go, resolved once per source, on every state and every 250 ms tick)
+and released on pause, release or when the source is a download on disk. The two holds are independent: the page saying
+"I am done", or dying, releases only its own, and the player letting go does not cut the page's. `YieldGateTest` holds
+it (a 10-minute simulated lock stays yielding, the page's 0 does not cut it, the player letting go does not cut the
+page's).
 
 **Naming the audio output** (`AudioRoute`): a fault measured on the processed path sends ONE
 CONNECTION of an output direct (see *Where the sound goes* in [playback.md](playback.md)), and a WebView cannot see what it
@@ -425,7 +461,8 @@ just for a counter (measured on the 8 000-track bench: 15 ms / 45 KB for 4 000 s
 route, against 99 ms / 2 MB for the full one). Its catalogue is
 `/api/me/playlists` read natively by `CarPlaylistSource` through `Net` with the WebView's cookie
 (401 = session absent, not “server down”), and a failed read falls back to the pinned titles the
-device remembers. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
+device remembers. The JSON stays additive for the car: `folders`, `folder_id`, `position`, `role`
+and `owner` are ignored, and the catalogue keeps reading the `playlists` array. The endpoint is built from the **server root**: `Prefs.baseUrl()` may carry the
 SPA's `/app` path (a person pastes the player's address) and the route never lives under it, while a
 reverse-proxied prefix is kept (`https://host/musique/app/` → `https://host/musique/api/me/playlists`);
 `Prefs.isServerUrl` still holds it to the one origin definition. If the jar has no cookie yet (the

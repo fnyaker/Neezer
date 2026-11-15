@@ -199,6 +199,14 @@ def create_application(config=None):
 
     _explorer.start(app)
 
+    from . import onboarding as _onboarding
+
+    _onboarding.start(app)
+
+    from . import transcribe as _transcribe
+
+    _transcribe.start(app)
+
     # What each person's own accounts bring into their library, once a day.
     from . import libraryimport as _libraryimport
 
@@ -211,6 +219,10 @@ def create_application(config=None):
 
     # Read or create secret key
     app.secret_key = get_secret_key("cookies_secret")
+    # The invitation HMAC is a server secret too: read it at boot so a
+    # SECRETS_ENV_ONLY deployment missing it fails loudly here, not with a 500
+    # on the first invitation.
+    get_secret_key("invite_secret")
 
     # Harden the web UI session cookie (the Subsonic API uses its own per-request
     # auth, so this only affects the /api + /app session). SameSite=Lax blocks the
@@ -418,6 +430,42 @@ def create_application(config=None):
 
         app.register_blueprint(explorer_api, url_prefix="/api")
 
+        # Playlist folders (a private per-person organisation of playlists):
+        # its own blueprint, like the Explorer, with its own same-origin guard.
+        from .webui.playlist_folders import playlist_folders_api
+
+        app.register_blueprint(playlist_folders_api, url_prefix="/api")
+
+        from .webui.admin_users import admin_users_api
+
+        app.register_blueprint(admin_users_api, url_prefix="/api")
+
+        from .webui.invites import invites_api
+
+        app.register_blueprint(invites_api, url_prefix="/api")
+
+        # The chapters an archived episode carries in its own file: its own
+        # blueprint, read-only, registered under the same /api prefix.
+        from .webui.podcast_chapters import chapters_api
+
+        app.register_blueprint(chapters_api, url_prefix="/api")
+
+        from .webui.onboarding import onboarding_api
+
+        app.register_blueprint(onboarding_api, url_prefix="/api")
+
+        from .webui.onboarding_account import onboarding_account_api
+
+        app.register_blueprint(onboarding_account_api, url_prefix="/api")
+
+        from .webui.transcribe import transcribe_api
+
+        app.register_blueprint(transcribe_api, url_prefix="/api")
+
+        from .webui.transcribe_worker import transcribe_worker_api
+
+        app.register_blueprint(transcribe_worker_api, url_prefix="/api")
+
         # Remote-control narrowing must cover EVERY /api route, including the
         # ones served by a blueprint other than webapi. The hook lives on the
         # application, not on webapi, so a new blueprint cannot escape it.
@@ -430,6 +478,13 @@ def create_application(config=None):
             from .webui.spa import spa
 
             app.register_blueprint(spa)
+
+    # Archives that predate the chapter feature carry no scan row: one query at
+    # boot, then a one-shot resumable walk (nothing under test: it returns the
+    # job unstarted, so a test drives it itself).
+    from .deezer import chapters as _chapters
+
+    _chapters.start_backfill(app)
 
     if not app.testing:
         close_connection()

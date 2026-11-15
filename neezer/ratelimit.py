@@ -24,18 +24,24 @@ worker (see the Dockerfile CMD); with several workers each holds its own view,
 so the effective threshold is multiplied by the worker count. Behind a reverse
 proxy, deploy ProxyFix (webapp/proxy_fix_hops) so request.remote_addr is the
 real client IP rather than the proxy's — otherwise every client shares one key.
+
+:class:`WindowLimiter` is the success-side twin used by the playlist routes
+(``POST /api/playlists``, the membership mutations): it counts the admitted
+calls themselves, answers ``(allowed, retry_after)``, and keeps its key table
+bounded so a client cycling keys cannot grow it without limit.
 """
 
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 
 
 class RateLimiter:
-    def __init__(self, max_attempts=10, window=300):
+    def __init__(self, max_attempts=10, window=300, max_keys=4096):
         """max_attempts failures allowed per `window` seconds before blocking."""
         self.max_attempts = max_attempts
         self.window = window
+        self.max_keys = max(1, int(max_keys))
         self._fails = defaultdict(deque)
         self._lock = threading.Lock()
 
@@ -59,6 +65,8 @@ class RateLimiter:
         now = time.time()
         with self._lock:
             for k in self._keys(key, username):
+                if k not in self._fails and len(self._fails) >= self.max_keys:
+                    self._fails.pop(next(iter(self._fails)), None)
                 dq = self._fails[k]
                 self._trim(dq, now)
                 dq.append(now)
@@ -95,3 +103,60 @@ class RateLimiter:
 
 # Shared limiter for every authentication path (Subsonic API, web UI, frontend).
 auth_limiter = RateLimiter()
+
+
+class WindowLimiter:
+    """A sliding window over the actions a person may repeat up to a cap.
+
+    Unlike :class:`RateLimiter`, every admitted call is counted: these are
+    SUCCESSES (creating a playlist, inviting somebody), not failed attempts, so
+    a caller that is doing the right thing is the one that eventually trips it.
+    ``allow(key)`` answers ``(allowed, retry_after_seconds)``; a refused call
+    records nothing, so waiting out the window always frees exactly one slot.
+
+    The key table is bounded (``max_keys``, least recently used evicted first):
+    the keys are account ids and each call refreshes its own key, so eviction
+    can never hand a caller back a counter it had just exhausted.
+
+    In-process and lock-guarded like ``auth_limiter``: the server runs one
+    Gunicorn worker (see the Dockerfile CMD), so one process holds the view.
+    Tests call :meth:`clear` / :meth:`reset`.
+    """
+
+    def __init__(self, max_events, window, max_keys=4096):
+        if max_events <= 0 or window <= 0:
+            raise ValueError("max_events and window must be positive")
+        self.max_events = max_events
+        self.window = window
+        self.max_keys = max(1, int(max_keys))
+        self._hits = OrderedDict()
+        self._lock = threading.Lock()
+
+    def allow(self, key):
+        now = time.monotonic()
+        with self._lock:
+            hits = self._hits.get(key)
+            if hits is None:
+                hits = self._hits[key] = deque()
+            else:
+                self._hits.move_to_end(key)
+            while hits and now - hits[0] > self.window:
+                hits.popleft()
+            if len(hits) >= self.max_events:
+                return False, max(1, int(self.window - (now - hits[0])) + 1)
+            hits.append(now)
+            while len(self._hits) > self.max_keys:
+                self._hits.popitem(last=False)
+            return True, 0
+
+    def reset(self, key):
+        with self._lock:
+            self._hits.pop(key, None)
+
+    def clear(self):
+        with self._lock:
+            self._hits.clear()
+
+    def __len__(self):
+        with self._lock:
+            return len(self._hits)

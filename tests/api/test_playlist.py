@@ -5,12 +5,44 @@
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
+import collections
+import contextlib
 import unittest
 import uuid
 
-from neezer.db import Folder, Artist, Album, Track, Playlist, User
+import peewee
+
+from neezer.db import (
+    Album,
+    Artist,
+    Folder,
+    Playlist,
+    PlaylistMember,
+    PlaylistTrack,
+    RatingTrack,
+    StarredTrack,
+    Track,
+    User,
+    db,
+)
 
 from .apitestbase import ApiTestBase
+
+
+@contextlib.contextmanager
+def count_statements():
+    counts = collections.Counter()
+    original = peewee.Database.execute_sql
+
+    def execute_sql(self, sql, *args, **kwargs):
+        counts[sql.split(None, 1)[0].upper()] += 1
+        return original(self, sql, *args, **kwargs)
+
+    peewee.Database.execute_sql = execute_sql
+    try:
+        yield counts
+    finally:
+        peewee.Database.execute_sql = original
 
 
 class PlaylistTestCase(ApiTestBase):
@@ -377,6 +409,134 @@ class PlaylistTestCase(ApiTestBase):
         )
         rv, child = self._make_request("getPlaylist", {"id": pid}, tag="playlist")
         self.assertEqual(self._xpath(child, "count(./entry)"), 2)
+
+    def _bulk_tracks(self, count):
+        """``count`` rows of one album, in one transaction (a big playlist)."""
+        root = Folder.get(Folder.root == True)  # noqa: E712 - a column
+        artist = Artist.get(Artist.name == "Artist")
+        album = Album.get(Album.name == "Album")
+        made = []
+        with db.atomic():
+            for i in range(count):
+                made.append(
+                    Track.create(
+                        disc=1,
+                        number=i + 1,
+                        title="Bulk %04d" % i,
+                        duration=60,
+                        album=album,
+                        artist=artist,
+                        bitrate=320,
+                        path="tests/assets/bulk-%d" % i,
+                        last_modification=0,
+                        root_folder=root,
+                        folder=root,
+                    )
+                )
+        return made
+
+    def test_a_playlist_of_4000_titles_is_read_in_a_handful_of_statements(self):
+        """One joined read, three primed lookups, then serialization.
+
+        It used to be seven SELECTs per title — folder, album, artist, root
+        folder, the caller's star, their rating and the average — so a
+        4 000-title playlist answered 28 016 statements (2.65 s on SQLite;
+        minutes of round-trips on PostgreSQL). Now 9 statements, 0.33 s, and
+        the same JSON: this test pins both the budget and the fields the
+        per-row reads used to produce.
+        """
+        user = User.get(User.name == "alice")
+        tracks = self._bulk_tracks(4000)
+        with db.atomic():
+            playlist = Playlist.create(user=user, name="Quatre mille")
+            PlaylistMember.create(playlist=playlist, user=user, role="owner")
+            PlaylistTrack.insert_many(
+                [
+                    {"playlist": playlist, "track": t, "index": i}
+                    for i, t in enumerate(tracks)
+                ]
+            ).execute()
+        first, second = tracks[0], tracks[1]
+        StarredTrack.create(user=user, starred=first.id, date=first.created)
+        RatingTrack.create(user=user, rated=first.id, rating=4)
+        RatingTrack.create(user=user, rated=second.id, rating=2)
+        other = User.get(User.name == "bob")
+        RatingTrack.create(user=other, rated=first.id, rating=2)
+
+        args = {
+            "u": "alice",
+            "p": "Alic3",
+            "v": self.apiVersion,
+            "c": "tests",
+            "f": "json",
+            "id": str(playlist.id),
+        }
+        with count_statements() as counts:
+            rv = self.client.get("/rest/getPlaylist.view", query_string=args)
+        self.assertEqual(rv.status_code, 200)
+        entries = rv.get_json()["subsonic-response"]["playlist"]["entry"]
+        self.assertEqual(len(entries), 4000)
+        # The session, the playlist, its owner, the joined rows, the credits
+        # and the three primed lookups: no statement per title.
+        self.assertLessEqual(sum(counts.values()), 12, counts)
+        self.assertEqual([e["title"] for e in entries[:3]],
+                         ["Bulk 0000", "Bulk 0001", "Bulk 0002"])
+        self.assertEqual(entries[0]["starred"], first.created.isoformat())
+        self.assertEqual(entries[0]["userRating"], 4)
+        self.assertEqual(entries[0]["averageRating"], 3)
+        self.assertNotIn("userRating", entries[2])
+        self.assertEqual(entries[0]["artist"], "Artist")
+        self.assertEqual(entries[0]["album"], "Album")
+        # No file on disk for these rows: the size the old per-row read gave.
+        self.assertEqual(entries[0]["size"], -1)
+        self.assertEqual(entries[0]["path"], "bulk-0")
+
+    def test_creating_and_filling_a_playlist_of_2000_songs_costs_19_statements(self):
+        """Resolving the rows and writing them are both batched now.
+
+        Adding songs read ``MAX(index)`` per title and inserted one row at a
+        time: 2 000 titles paid 4 005 statements. One batched resolve (5 IN
+        chunks) and seven 300-row INSERTs make it 19, measured on SQLite, and
+        the stored order is still 0..n-1.
+        """
+        tracks = self._bulk_tracks(2000)
+        ids = [str(t.id) for t in tracks]
+        base = {
+            "u": "alice",
+            "p": "Alic3",
+            "v": self.apiVersion,
+            "c": "tests",
+            "f": "json",
+        }
+        with count_statements() as counts:
+            rv = self.client.post(
+                "/rest/createPlaylist.view",
+                data=dict(base, name="Deux mille", songId=ids),
+            )
+        self.assertEqual(rv.status_code, 200)
+        self.assertLessEqual(sum(counts.values()), 25, counts)
+        playlist = Playlist.get(name="Deux mille")
+        stored = [
+            row.index
+            for row in PlaylistTrack.select(PlaylistTrack.index)
+            .where(PlaylistTrack.playlist == playlist)
+            .order_by(PlaylistTrack.index)
+        ]
+        self.assertEqual(stored, list(range(2000)))
+
+        with count_statements() as counts:
+            rv = self.client.post(
+                "/rest/updatePlaylist.view",
+                data=dict(base, playlistId=str(playlist.id), songIdToAdd=ids),
+            )
+        self.assertLessEqual(sum(counts.values()), 25, counts)
+        stored = [
+            row.index
+            for row in PlaylistTrack.select(PlaylistTrack.index)
+            .where(PlaylistTrack.playlist == playlist)
+            .order_by(PlaylistTrack.index)
+        ]
+        self.assertEqual(stored, list(range(4000)))
 
 
 if __name__ == "__main__":

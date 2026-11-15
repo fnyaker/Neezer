@@ -16,6 +16,7 @@ import re
 import shlex
 import subprocess
 import zlib
+from functools import wraps
 
 from flask import request, Response, send_file
 from flask import current_app
@@ -23,7 +24,7 @@ from PIL import Image
 from zipstream import ZipStream
 
 from ..cache import CacheMiss
-from ..db import Track, Album, Artist, Folder, PodcastEpisode, now
+from ..db import Track, Album, Artist, Folder, PodcastEpisode, User, now
 from ..covers import EXTENSIONS
 
 from . import get_entity, get_entity_id, api_routing
@@ -205,7 +206,24 @@ def prepare_transcoding_cmdline(
     return ret
 
 
+def _count_media_response(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        from ..deezer import workload
+
+        background = (
+            request.headers.get("X-NS-Background") == "1"
+            or request.values.get("bg") == "1"
+        )
+        return workload.counted_response(
+            view(*args, **kwargs), background=background
+        )
+
+    return wrapped
+
+
 @api_routing("/stream")
+@_count_media_response
 def stream_media():
     res = _resolve_stream_entity()
 
@@ -369,14 +387,15 @@ def stream_media():
     # Play bookkeeping + album prefetch only apply to real Tracks; podcast
     # episodes aren't part of the play-history / last_play FK model.
     if isinstance(res, Track):
-        res.play_count = res.play_count + 1
-        res.last_play = now()
-        res.save()
+        Track.update(
+            play_count=Track.play_count + 1,
+            last_play=now(),
+        ).where(Track.id == res.id).execute()
 
-        user = request.user
-        user.last_play = res
-        user.last_play_date = now()
-        user.save()
+        User.update(
+            last_play=res.id,
+            last_play_date=now(),
+        ).where(User.id == request.user.id).execute()
 
         _prefetch_next(res)
 
@@ -384,6 +403,7 @@ def stream_media():
 
 
 @api_routing("/download")
+@_count_media_response
 def download_media():
     id = request.values["id"]
 
@@ -449,7 +469,7 @@ def download_media():
             z.add_path(track.path, filename)
             seen.add(filename)
 
-        cover_path = _cover_from_collection(rv, extract=False)
+        cover_path = _cover_from_collection(rv, extract=False, user=request.user)
         if cover_path:
             z.add_path(cover_path)
     else:
@@ -468,7 +488,7 @@ def download_media():
             z.add_path(track.path, filename)
             seen.add(filename)
 
-        cover_path = _cover_from_collection(rv, extract=False)
+        cover_path = _cover_from_collection(rv, extract=False, user=request.user)
         if cover_path:
             z.add_path(cover_path)
 
@@ -492,12 +512,15 @@ def _cover_from_track(obj):
         return cache.get(cache_key)
     except CacheMiss:
         try:
-            return cache.set(cache_key, mediafile.MediaFile(obj.path).art)
-        except mediafile.UnreadableFileError:
+            art = mediafile.MediaFile(obj.path).art
+        except (mediafile.UnreadableFileError, OSError):
             return None
+        if not art:
+            return None
+        return cache.set(cache_key, art)
 
 
-def _cover_from_collection(obj, extract=True):
+def _cover_from_collection(obj, extract=True, user=None):
     """Get a path to cover art from a collection (Album, Folder)
 
     If `extract` is True, will fall back to extracting cover art from tracks
@@ -509,8 +532,9 @@ def _cover_from_collection(obj, extract=True):
         cover_path = os.path.join(obj.path, obj.cover_art)
 
     elif isinstance(obj, Album):
+        tracks = Track.visible(obj.tracks, user)
         track_with_folder_cover = (
-            obj.tracks.join(Folder, on=Track.folder)
+            tracks.join(Folder, on=Track.folder)
             .where(Folder.cover_art.is_null(False))
             .first()
         )
@@ -518,7 +542,7 @@ def _cover_from_collection(obj, extract=True):
             cover_path = _cover_from_collection(track_with_folder_cover.folder)
 
         if not cover_path and extract:
-            track_with_embedded = obj.tracks.where(Track.has_art).first()
+            track_with_embedded = tracks.where(Track.has_art).first()
             if track_with_embedded is not None:
                 cover_path = _cover_from_track(track_with_embedded)
 
@@ -547,14 +571,22 @@ def _get_cover_path(eid):
             pass
     elif uid:
         try:
-            return _cover_from_track(Track[uid])
+            track = Track[uid]
         except Track.DoesNotExist:
-            pass
+            track = None
+        if track is not None:
+            if not track.readable_by(request.user):
+                raise NotFound("Entity")
+            return _cover_from_track(track)
 
         try:
-            return _cover_from_collection(Album[uid])
+            album = Album[uid]
         except Album.DoesNotExist:
-            pass
+            album = None
+        if album is not None:
+            if Track.visible(album.tracks, request.user).first() is None:
+                raise NotFound("Entity")
+            return _cover_from_collection(album, user=request.user)
 
     raise NotFound("Entity")
 

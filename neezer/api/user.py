@@ -8,11 +8,17 @@
 from flask import request
 from functools import wraps
 
+from .. import audit
 from ..db import User
-from ..managers.user import UserManager
+from ..managers.user import (
+    InvalidUserName,
+    UserActionRefused,
+    UserManager,
+    UserNameTaken,
+)
 
 from . import decode_password, api_routing
-from .exceptions import Forbidden
+from .exceptions import Forbidden, GenericError
 
 
 def admin_only(f):
@@ -63,7 +69,11 @@ def user_add():
     roles = get_roles_dict()
 
     password = decode_password(password)
-    UserManager.add(username, password, mail=email, **roles)
+    try:
+        UserManager.add(username, password, mail=email, **roles)
+    except (InvalidUserName, UserNameTaken) as exc:
+        raise GenericError(str(exc)) from exc
+    audit.record("user.create", request.user, username, f"admin={roles.get('admin')}")
 
     return request.formatter.empty
 
@@ -72,7 +82,13 @@ def user_add():
 @admin_only
 def user_del():
     username = request.values["username"]
-    UserManager.delete_by_name(username)
+    user = User.get(name=username)
+    try:
+        UserManager.delete_guarded(user.id, request.user)
+    except UserActionRefused as exc:
+        audit.record("user.delete", request.user, username, result=getattr(exc, "code", "refused"))
+        raise GenericError(str(exc)) from exc
+    audit.record("user.delete", request.user, username)
 
     return request.formatter.empty
 
@@ -97,23 +113,30 @@ def user_edit():
     username = request.values["username"]
     user = User.get(name=username)
 
+    admin = request.values.get("adminRole")
+    if admin is not None:
+        admin = admin in (True, "True", "true", 1, "1")
+        try:
+            UserManager.update_guarded(user.id, request.user, admin=admin)
+        except UserActionRefused as exc:
+            audit.record(
+                "user.update",
+                request.user,
+                username,
+                f"admin={admin}",
+                getattr(exc, "code", "refused"),
+            )
+            raise GenericError(str(exc)) from exc
+        audit.record("user.update", request.user, username, f"admin={admin}")
+        user = UserManager.get(user.id)
+
     if "password" in request.values:
         password = decode_password(request.values["password"])
         UserManager.change_password2(user, password)
 
-    email, admin, jukebox = map(
-        request.values.get, ("email", "adminRole", "jukeboxRole")
-    )
+    email, jukebox = map(request.values.get, ("email", "jukeboxRole"))
     if email is not None:
         user.mail = email
-
-    if admin is not None:
-        admin = admin in (True, "True", "true", 1, "1")
-        if user.admin != admin:
-            # A privilege change invalidates the sessions that were minted
-            # under the old role (see db.User.session_epoch).
-            user.session_epoch = (user.session_epoch or 0) + 1
-        user.admin = admin
 
     if jukebox is not None:
         jukebox = jukebox in (True, "True", "true", 1, "1")

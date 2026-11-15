@@ -144,6 +144,17 @@ class MainActivity : AppCompatActivity() {
             service = (binder as PlayerService.LocalBinder).service
             service?.commandSink = { cmd, value -> runOnUiThread { runJsCommand(cmd, value) } }
             service?.nativeSkip = { forward -> nativeAudio?.skip(forward) == true }
+            // The notification's, a headset's, the lock screen's and the car
+            // card's play/pause/seek: the app's player answers them while this
+            // activity is stopped, because the page they used to reach is then
+            // throttled, frozen or gone (NativeAudio.transport).
+            service?.nativeTransport = { cmd, value ->
+                val done = nativeAudio?.transport(cmd, value) == true
+                // Paused from a media button, the renderer no longer has to stay
+                // important: the default policy may let Android reclaim it.
+                if (done && cmd == "pause") setRendererWanted(false)
+                done
+            }
             // The car overlay runs in CarModeService, which binds the same
             // PlayerService: this is its only way back into the SPA.
             service?.jsSink = { js, onResult ->
@@ -157,6 +168,7 @@ class MainActivity : AppCompatActivity() {
             // back (onServiceConnected) installs a fresh one.
             service?.commandSink = null
             service?.nativeSkip = null
+            service?.nativeTransport = null
             service?.jsSink = null
             service = null
         }
@@ -210,6 +222,10 @@ class MainActivity : AppCompatActivity() {
             onAdvance = { meta -> nativeAdvanced(meta) },
             onNeedNext = { id -> requestNativeNext(id) },
             onStalled = { nativeStalled() },
+            // The app's own player is pulling a stream: the downloads wait
+            // (YieldGate), and a locked screen cannot expire this hold the way
+            // it expires the page's lease.
+            onLinkNeeded = { needed -> store.holdLink(needed) },
         )
         if (!prefs.configured) {
             startActivity(Intent(this, SetupActivity::class.java))
@@ -575,6 +591,11 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         nativeAudio?.setForeground(true)
+        // The page names what follows for a stopped activity (bridge 10): tell
+        // it the activity is started again, and that it may stop naming the long
+        // list. The `bg` field of the native states says the same thing, but only
+        // when a player exists — this hook is the one that always arrives.
+        pushAppState(false)
         // Visible again: the default policy is enough (the renderer is
         // important while it is shown). onStop raises it if music is playing.
         setRendererWanted(false)
@@ -583,6 +604,11 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         leftAt = SystemClock.elapsedRealtime()
+        // BEFORE the players are told: the page is still running now, and this is
+        // its one chance to name the long list (200 entries) before Chromium
+        // throttles it and then freezes it. `visibilitychange` alone cannot be
+        // trusted on a screen-off (the WebView is deliberately not paused).
+        pushAppState(true)
         // From here the page may be throttled or stopped: the app's player
         // makes the track changes itself (NativeAudio.followsList).
         nativeAudio?.setForeground(false)
@@ -590,6 +616,24 @@ class MainActivity : AppCompatActivity() {
         // app owns the sound, keep the renderer out of the "waived when not
         // visible" bucket so Android is far less likely to freeze or kill it.
         setRendererWanted(pendingState?.playing == true)
+    }
+
+    /**
+     * `window.__nsAppBackground` / `window.__nsAppForeground`: the hooks
+     * `Player.svelte` installs to know the ACTIVITY is stopped, which a
+     * `visibilitychange` does not always say in a WebView (the page is
+     * deliberately never paused) and which the native `bg` state only reports
+     * once a player exists and its state can go through. Called on the same
+     * origin guard as the other hooks: only our own page.
+     */
+    private fun pushAppState(background: Boolean) {
+        if (webViewDead || !::webView.isInitialized || !onServerPage) return
+        val hook = if (background) "__nsAppBackground" else "__nsAppForeground"
+        try {
+            webView.evaluateJavascript("window.$hook && window.$hook()", null)
+        } catch (_: Exception) {
+            /* WebView torn down under us */
+        }
     }
 
     override fun onResume() {
@@ -1409,6 +1453,7 @@ class MainActivity : AppCompatActivity() {
         audioRoute = null
         service?.commandSink = null
         service?.nativeSkip = null
+        service?.nativeTransport = null
         service?.jsSink = null
         if (bound) {
             try {

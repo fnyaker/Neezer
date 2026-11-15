@@ -305,10 +305,6 @@ class AnalysisThreadNiceTest(unittest.TestCase):
         self.assertEqual(order[0][1], order[1][1])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ThrottleTestCase(unittest.TestCase):
     """The zero-impact gate library maintenance goes through (workload.Throttle):
     nothing runs while anybody listens or a download is awaited, the machine is
@@ -373,3 +369,184 @@ class ThrottleTestCase(unittest.TestCase):
         self.slept.clear()
         self._throttle(duty=1.0).spent(5.0)
         self.assertEqual(self.slept, [])  # full speed: no rest
+
+
+class SweepYieldTestCase(unittest.TestCase):
+    """The archive sweep — the nightly sync's and the admin button's — is
+    background work like every other: its thread is reniced, and between two
+    items it stands aside while somebody waits on a download."""
+
+    def setUp(self):
+        workload.reset_streams()
+        self.addCleanup(workload.reset_streams)
+        workload._last_listen = 0.0
+        self.addCleanup(setattr, workload, "_last_listen", 0.0)
+
+    def test_it_yields_between_two_items_and_runs_reniced(self):
+        from neezer.deezer import backfill
+
+        calls = []
+        second = threading.Event()
+        cond = threading.Condition()
+        nice = []
+
+        def ensure_archived(provider, track):
+            with cond:
+                calls.append((track.deezer_id, workload.foreground_busy()))
+                nice.append(os.nice(0))
+                cond.notify_all()
+            if track.deezer_id == "2":
+                second.set()
+
+        tracks = [mock.Mock(deezer_id="1"), mock.Mock(deezer_id="2")]
+        with mock.patch("neezer.deezer.archive.ensure_archived", ensure_archived):
+            with workload.foreground():
+                thread = threading.Thread(target=backfill.run, args=(None, tracks, []))
+                thread.start()
+                with cond:
+                    while not calls:
+                        self.assertTrue(cond.wait(10), "the sweep never started")
+                # The first item is already archived; the second must NOT begin
+                # while somebody is waiting — 5 polls of the gate's 0.2 s.
+                self.assertFalse(
+                    second.wait(1.0), "the sweep took the link from a waiting listener"
+                )
+            self.assertTrue(second.wait(10), "the sweep never resumed")
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual([c[0] for c in calls], ["1", "2"])
+        self.assertEqual([c[1] for c in calls], [True, False])
+        self.assertGreaterEqual(min(nice), 10, f"the sweep thread ran at nice {nice}")
+
+
+class DeezerLaneTestCase(unittest.TestCase):
+    """Nothing is a throttle, only an order: the shared Deezer window serves a
+    person's call before a background one when the next slot frees."""
+
+    def setUp(self):
+        from deezerpy import _throttle
+
+        self.throttle = _throttle
+        self.addCleanup(_throttle.set_priority, _throttle.USER)
+
+    def test_the_shared_window_is_still_forty_calls_per_five_seconds(self):
+        self.assertEqual(self.throttle.limiter.max_calls, 40)
+        self.assertEqual(self.throttle.limiter.period, 5.0)
+
+    def test_forty_bulk_calls_then_a_person_goes_first(self):
+        limiter = self.throttle.RateLimiter(max_calls=40, period=0.3)
+        for _ in range(40):
+            limiter.acquire(self.throttle.BULK)  # the window is now full
+        order = []
+
+        def background():
+            limiter.acquire(self.throttle.BULK)
+            order.append("bulk")
+
+        def person():
+            limiter.acquire()  # this thread's own lane: USER
+            order.append("user")
+
+        bulk = threading.Thread(target=background)
+        bulk.start()
+        self._until(lambda: limiter.waiting(self.throttle.BULK) == 1, "the bulk waiter")
+        user = threading.Thread(target=person)
+        user.start()
+        self._until(lambda: limiter.waiting(self.throttle.USER) == 1, "the person's call")
+        bulk.join(10)
+        user.join(10)
+        self.assertEqual(order, ["user", "bulk"], f"served in the order {order}")
+
+    def test_a_reniced_thread_speaks_in_the_bulk_lane(self):
+        seen = []
+
+        def work():
+            seen.append(self.throttle.current_priority())
+            workload.renice(10)
+            seen.append(self.throttle.current_priority())
+            seen.append(os.nice(0))
+            with workload.deezer_lane(Priority.USER):
+                seen.append(self.throttle.current_priority())
+            seen.append(self.throttle.current_priority())
+
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join(10)
+        self.assertEqual(seen[0], self.throttle.USER)  # a request thread, by default
+        self.assertEqual(seen[1], self.throttle.BULK)  # reniced: background work
+        self.assertGreaterEqual(seen[2], 10)
+        self.assertEqual(seen[3], self.throttle.USER)  # the queue item says why
+        self.assertEqual(seen[4], self.throttle.BULK)  # and the lane goes back
+
+    def _until(self, predicate, what, within=WAIT):
+        deadline = time.monotonic() + within
+        while not predicate():
+            if time.monotonic() >= deadline:
+                self.fail(f"timed out waiting for {what}")
+            time.sleep(0.005)
+
+
+class OpenStreamsTestCase(unittest.TestCase):
+    """`listening_for` is a timestamp, and a one-hour episode is ONE request, so
+    45 s after it started every background job came back. The open-stream count
+    is what actually holds them off for the whole episode."""
+
+    def setUp(self):
+        workload.reset_streams()
+        self.addCleanup(workload.reset_streams)
+        workload._last_listen = 0.0
+        self.addCleanup(setattr, workload, "_last_listen", 0.0)
+
+    def test_two_streams_count_and_close(self):
+        self.assertEqual(workload.streams_active(), 0)
+        workload.note_stream_open()
+        workload.note_stream_open()
+        self.assertEqual(workload.streams_active(), 2)
+        workload.note_stream_close()
+        self.assertEqual(workload.streams_active(), 1)
+        workload.note_stream_close()
+        self.assertEqual(workload.streams_active(), 0)
+        # A double close (a teardown after a generator's finally) never goes
+        # negative and never makes the gate think work is running.
+        workload.note_stream_close()
+        self.assertEqual(workload.streams_active(), 0)
+
+    def test_the_context_manager_closes_on_an_exception(self):
+        with self.assertRaises(ZeroDivisionError):
+            with workload.stream():
+                self.assertEqual(workload.streams_active(), 1)
+                1 / 0
+        self.assertEqual(workload.streams_active(), 0)
+
+    def test_a_background_stream_never_counts(self):
+        with workload.stream(background=True):
+            self.assertEqual(workload.streams_active(), 0)
+        self.assertEqual(workload.streams_active(), 0)
+
+    def test_the_throttle_waits_for_a_whole_episode(self):
+        workload.note_stream_open()
+        seen = []
+        t = workload.Throttle(sleep=lambda _s: None, listen_quiet=45.0)
+
+        def sleep_and_close(_seconds):
+            seen.append(t.reason)
+            workload.note_stream_close()
+
+        t._sleep = sleep_and_close
+        with mock.patch.object(workload, "load_per_core", lambda: 0.0):
+            self.assertTrue(t.wait())
+        self.assertEqual(seen, ["stream"])
+
+    def test_a_stream_outranks_a_recent_listen_and_a_download(self):
+        workload.touch_listening()
+        workload.note_stream_open()
+        try:
+            with workload.foreground():
+                t = workload.Throttle(sleep=lambda _s: None)
+                self.assertEqual(t._blocked(), "stream")
+        finally:
+            workload.note_stream_close()
+
+
+if __name__ == "__main__":
+    unittest.main()

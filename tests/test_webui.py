@@ -892,6 +892,30 @@ class WebUITestCase(unittest.TestCase):
             backfill._sweep_lock.release()
         self.assertFalse(backfill.is_sweeping())
 
+    def test_the_backfill_button_runs_behind_everything_else(self):
+        """The button's thread is background work like the nightly sweep it
+        shares a lock with: reniced, and its Deezer calls in the bulk lane."""
+        from deezerpy import _throttle
+        from neezer.deezer import backfill
+
+        seen = []
+
+        def sweep_for(provider, user, scope, on_event=None, on_total=None):
+            seen.append((os.nice(0), _throttle.current_priority()))
+            return dict(backfill.IDLE)
+
+        self._login()
+        with mock.patch.object(backfill, "sweep_for", sweep_for):
+            rv = self.client.post("/api/archive/backfill", json={"scope": "all"})
+            self.assertEqual(rv.status_code, 200)
+            deadline = time.monotonic() + 10
+            while not seen and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertTrue(seen, "the button never started its sweep")
+        nice, lane = seen[0]
+        self.assertGreaterEqual(nice, 10, f"the backfill thread ran at nice {nice}")
+        self.assertEqual(lane, _throttle.BULK)
+
     def test_backfill_is_admin_only(self):
         self._login()
         self.assertEqual(
@@ -2289,7 +2313,7 @@ class WebUITestCase(unittest.TestCase):
 
     def test_set_arl_stores_and_overrides_the_config(self):
         import neezer.deezer as dzmod
-        from neezer.db import Meta
+        from neezer.db import Meta, ProviderAccount
 
         class Accepting(dzmod.DeezerProvider):
             def check_login(self, force=False):
@@ -2304,7 +2328,13 @@ class WebUITestCase(unittest.TestCase):
             dz = rv.get_json()["deezer"]
             self.assertEqual(dz["arl_source"], "database")
             self.assertEqual(dz["arl_hint"], "…bbbb")
-            self.assertEqual(Meta.get(Meta.key == "deezer_arl").value, "b" * 64)
+            self.assertIsNone(Meta.get_or_none(Meta.key == "deezer_arl"))
+            row = ProviderAccount.get(
+                ProviderAccount.provider == "deezer",
+                ProviderAccount.mode == "server",
+            )
+            self.assertTrue(row.secret.startswith("server-arl:gcm:"))
+            self.assertNotIn("b" * 64, row.secret)
             # The stored one wins when a provider is rebuilt.
             self.assertEqual(dzmod.stored_arl(), "b" * 64)
             self.app.config["DEEZER"]["enabled"] = True
@@ -2313,8 +2343,45 @@ class WebUITestCase(unittest.TestCase):
             rv = self.client.post("/api/settings", json={"deezer_arl": ""})
             self.assertEqual(rv.status_code, 200)
             self.assertIsNone(dzmod.stored_arl())
+            self.assertIsNone(
+                ProviderAccount.get(
+                    ProviderAccount.provider == "deezer",
+                    ProviderAccount.mode == "server",
+                ).secret
+            )
         finally:
             dzmod.DeezerProvider = orig
+
+    def test_a_legacy_plaintext_arl_is_migrated_on_read(self):
+        import neezer.deezer as dzmod
+        from neezer.db import Meta, ProviderAccount
+
+        Meta.create(key="deezer_arl", value="d" * 64)
+        self.assertEqual(dzmod.stored_arl(), "d" * 64)
+        self.assertIsNone(Meta.get_or_none(Meta.key == "deezer_arl"))
+        row = ProviderAccount.get(
+            ProviderAccount.provider == "deezer", ProviderAccount.mode == "server"
+        )
+        self.assertTrue(row.secret.startswith("server-arl:gcm:"))
+        self.assertNotIn("d" * 64, row.secret)
+        self.assertEqual(dzmod.stored_arl(), "d" * 64)
+        self.assertEqual(Meta.select().where(Meta.key == "deezer_arl").count(), 0)
+
+    def test_an_unreadable_stored_arl_is_ignored_not_raised(self):
+        import neezer.deezer as dzmod
+        from neezer.db import ProviderAccount
+
+        dzmod.store_arl("e" * 64)
+        row = ProviderAccount.get(
+            ProviderAccount.provider == "deezer", ProviderAccount.mode == "server"
+        )
+        row.secret = "server-arl:gcm:AAAA"
+        row.save()
+        self.assertIsNone(dzmod.stored_arl())
+
+        dzmod.store_arl("f" * 64)
+        with mock.patch("neezer.managers.user._password_key", return_value=b"\x00" * 32):
+            self.assertIsNone(dzmod.stored_arl())
 
     def test_deezer_status_reports_a_dead_arl(self):
         self._login()
@@ -2403,24 +2470,50 @@ class WebUITestCase(unittest.TestCase):
         cfg["android_url"] = None
         self.assertTrue(self.client.get("/api/version").get_json()["android"]["apk"])
         asset = "https://objects.githubusercontent.com/x"
+
+        def fetched():
+            """Ask for the APK; wait for the worker the 202 points at."""
+            rv = self.client.get("/api/android/apk")
+            if rv.status_code == 202:
+                job = androidapk.apk_job(cfg)
+                job["thread"].join(10)
+                rv.close()
+                rv = self.client.get("/api/android/apk")
+            return rv
+
         try:
-            # A GitHub error page is not an APK: refused, nothing kept.
+            # A GitHub error page is not an APK: refused, nothing kept. The first
+            # call starts the fetch and answers at once; the cause comes after.
+            androidapk._apk_jobs.clear()
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp(asset, b"<html>")) as get:
-                self.assertEqual(self.client.get("/api/android/apk").status_code, 502)
+                rv = self.client.get("/api/android/apk")
+                # A worker that fails instantly may already be "failed" on the
+                # very first answer; either way the cause arrives at once.
+                if rv.status_code == 202:
+                    self.assertTrue(int(rv.headers["Retry-After"]) >= 1)
+                    self.assertEqual(rv.get_json()["state"], "fetching")
+                    androidapk.apk_job(cfg)["thread"].join(10)
+                    rv.close()
+                    rv = self.client.get("/api/android/apk")
+                self.assertEqual(rv.status_code, 502)
+                self.assertEqual(rv.get_json()["state"], "failed")
+                rv.close()
             self.assertEqual(
                 get.call_args[0][0],
                 "https://github.com/fnyaker/Neezer/releases/download/v1.4.0/neezer.apk",
             )
             # A redirect off GitHub is refused too.
+            androidapk._apk_jobs.clear()
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp("https://evil.example/a", body)):
-                self.assertEqual(self.client.get("/api/android/apk").status_code, 502)
+                self.assertEqual(fetched().status_code, 502)
             # The real thing: fetched once, then served from the cache.
+            androidapk._apk_jobs.clear()
             with mock.patch.object(androidapk.requests, "get",
                                    return_value=Resp(asset, body)) as get:
                 for _ in range(2):
-                    rv = self.client.get("/api/android/apk")
+                    rv = fetched()
                     self.assertEqual(rv.status_code, 200)
                     self.assertEqual(rv.data, body)
                     self.assertEqual(rv.mimetype, androidapk.APK_MIME)
@@ -2445,10 +2538,86 @@ class WebUITestCase(unittest.TestCase):
                 rv.close()
                 get.assert_not_called()
         finally:
+            androidapk._apk_jobs.clear()
             cfg["android_version"] = None
             cfg["android_url"] = None
             cfg["android_apk"] = None
             os.remove(apk)
+
+    def test_two_devices_share_one_apk_download(self):
+        """The first tap starts the fetch and answers at once; a second device
+        arriving during it is told to come back instead of queueing behind a
+        global lock, and the file is served as soon as it is there."""
+        import zipfile
+
+        from neezer.webui import androidapk
+
+        cfg = self.app.config["WEBAPP"]
+        apk = os.path.join(cfg["cache_dir"], "t.apk")
+        with zipfile.ZipFile(apk, "w") as z:
+            z.writestr("AndroidManifest.xml", b"x")
+        with open(apk, "rb") as fh:
+            body = fh.read()
+        os.remove(apk)
+
+        class SlowResp:
+            def __init__(self, url, data):
+                self.url, self._data = url, data
+                self.status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                time.sleep(0.5)
+                yield self._data
+
+        self._login()
+        cfg["android_version"] = "v1.4.0"
+        cfg["android_url"] = None
+        cfg["android_apk"] = None
+        androidapk._apk_jobs.clear()
+        asset = "https://objects.githubusercontent.com/x"
+        try:
+            with mock.patch.object(
+                androidapk.requests, "get", return_value=SlowResp(asset, body)
+            ) as get:
+                started = time.monotonic()
+                first = self.client.get("/api/android/apk")
+                first_elapsed = time.monotonic() - started
+                started = time.monotonic()
+                second = self.client.get("/api/android/apk")
+                second_elapsed = time.monotonic() - started
+                self.assertEqual(first.status_code, 202, first.get_data(as_text=True))
+                self.assertEqual(first.get_json()["state"], "fetching")
+                self.assertEqual(second.status_code, 202)
+                self.assertGreaterEqual(int(second.headers["Retry-After"]), 1)
+                self.assertLess(
+                    first_elapsed, 0.2, f"the first client waited {first_elapsed:.3f}s"
+                )
+                self.assertLess(
+                    second_elapsed, 0.2, f"the second client waited {second_elapsed:.3f}s"
+                )
+                androidapk.apk_job(cfg)["thread"].join(10)
+                self.assertEqual(get.call_count, 1, "two devices, one download")
+                served = self.client.get("/api/android/apk")
+                self.assertEqual(served.status_code, 200)
+                self.assertEqual(served.data, body)
+                self.assertEqual(served.headers["X-NS-Version"], "v1.4.0")
+                served.close()
+            self.assertEqual(get.call_count, 1)
+        finally:
+            androidapk._apk_jobs.clear()
+            cfg["android_version"] = None
+            cfg["android_url"] = None
+            if os.path.exists(apk):
+                os.remove(apk)
 
     def test_android_apk_falls_back_to_the_pre_rebrand_asset(self):
         """A release published before the rename only has nsupysonic.apk; a 404
@@ -2476,7 +2645,7 @@ class WebUITestCase(unittest.TestCase):
 
         try:
             with mock.patch.object(androidapk, "_download", side_effect=fake):
-                path = androidapk.ensure_apk(cfg)
+                path = androidapk.fetch_apk(cfg)
             self.assertTrue(os.path.isfile(path))
             self.assertEqual(
                 calls,
@@ -2828,12 +2997,13 @@ class WebUITestCase(unittest.TestCase):
         rv = self.client.delete(f"/api/playlist/{pid}/tracks", json={"indexes": ["x"]})
         self.assertEqual(rv.status_code, 400)
 
-    def test_edit_playlist_non_string_title_ignored(self):
-        # A non-string title must be ignored, not 500 (.strip() AttributeError).
+    def test_edit_playlist_non_string_title_is_refused(self):
+        # A wrong type is a 400, never a 500 (.strip() AttributeError) and never
+        # a silently ignored value: the JSON contract says str (§5.2).
         self._login()
         pid = self._create_playlist("Keep")["id"]
         rv = self.client.patch(f"/api/playlist/{pid}", json={"title": 123})
-        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.status_code, 400)
         data = self.client.get(f"/api/playlist/{pid}").get_json()
         self.assertEqual(data["playlist"]["title"], "Keep")  # unchanged
 
@@ -3543,8 +3713,11 @@ class WebUIGuestTestCase(unittest.TestCase):
 
     def test_no_owner_playlists(self):
         self._login()
+        # Folders ride in the same answer (a private organisation of the
+        # owner's playlists), so a guest gets two empty arrays, not an error.
         self.assertEqual(
-            self.client.get("/api/me/playlists").get_json(), {"playlists": []}
+            self.client.get("/api/me/playlists").get_json(),
+            {"playlists": [], "folders": []},
         )
 
     def test_telemetry_suppressed(self):
@@ -3567,10 +3740,25 @@ class WebUIGuestTestCase(unittest.TestCase):
         self.assertIn("1", self.client.get("/api/me/favorite-ids").get_json()["ids"])
 
     def test_account_writes_forbidden(self):
+        """A guest creates their OWN playlist; nothing reaches the Deezer
+        account, and somebody else's private playlist stays invisible."""
         self._login()
-        self.assertEqual(
-            self.client.post("/api/playlists", json={"title": "X"}).status_code, 403
-        )
+        rv = self.client.post("/api/playlists", json={"title": "X"})
+        # Creation is open to every account (Subsonic always allowed it); the
+        # admin-only web rule was the anomaly. The creator becomes the owner.
+        self.assertEqual(rv.status_code, 200)
+        pid = rv.get_json()["id"]
+        mine = self.client.get(f"/api/playlist/{pid}").get_json()["playlist"]
+        self.assertEqual((mine["role"], mine["editable"], mine["can_manage"]), ("owner", True, True))
+        # Another account's private playlist is a 404, never a 403.
+        with self.app.app_context():
+            from neezer.db import Playlist
+            from neezer.managers.user import UserManager
+
+            alice = UserManager.add("carol", "C@r0l")
+            theirs = Playlist.create(user=alice, name="Carol private")
+        hidden = self.client.get(f"/api/playlist/{theirs.id}")
+        self.assertEqual(hidden.status_code, 404)
         # nothing reached the Deezer account
 
     def test_a_guest_stars_an_album_for_themselves(self):

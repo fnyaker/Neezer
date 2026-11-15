@@ -25,8 +25,9 @@ Everything is read in one go and kept until a version in ``Meta`` moves
 runs on every request that might reach a provider.
 
 The upgrade must change nothing: the first time this runs on a server, the
-server's Deezer account (the ARL in Meta or the config, left where it is) and
-YouTube's anonymous use are granted to ``all`` — exactly what everybody had.
+server's Deezer account (its ARL where it always lived, the config or the
+secret of its provider row) and YouTube's anonymous use are granted to
+``all`` — exactly what everybody had.
 """
 
 from __future__ import annotations
@@ -71,6 +72,8 @@ class Snapshot:
         self.groups = {}
         # account ids whose credential was last seen refused: they serve nobody
         self.refused = frozenset()
+        # users whose account is disabled: they serve nobody
+        self.disabled = frozenset()
 
     def has_server_account(self):
         return any(m == SERVER for _a, _o, m in self.accounts.get("deezer", ()))
@@ -104,6 +107,8 @@ class Snapshot:
         (lot P3): their own account, then the server's (held or lent), then
         somebody else's that is lent to them, then the provider's anonymous
         use (``ANONYMOUS``) where the feature needs no account. Account ids."""
+        if user_id and user_id in self.disabled:
+            return []
         if F.is_personal(feature):
             # Their own favourites and playlists: the holder of an account, no one else.
             if not user_id:
@@ -192,7 +197,7 @@ def invalidate():
 
 
 def _load():
-    from .db import ProviderAccount, ProviderGrant, UserGroupMember
+    from .db import ProviderAccount, ProviderGrant, User, UserGroupMember
 
     snap = Snapshot()
     for provider, account, feature, subject in ProviderGrant.select(
@@ -218,6 +223,9 @@ def _load():
     for group, user in UserGroupMember.select(UserGroupMember.group, UserGroupMember.user).tuples():
         groups.setdefault(str(user), set()).add(str(group))
     snap.groups = {u: frozenset(g) for u, g in groups.items()}
+    snap.disabled = frozenset(
+        str(uid) for uid, in User.select(User.id).where(User.disabled == True).tuples()
+    )
     return snap
 
 
@@ -271,17 +279,15 @@ def snapshot() -> Snapshot:
             ensure_server_account()
             version = _meta_get(VERSION_KEY)
             snap = _load()
-    except Exception:
-        # No table yet (a tool on an old database) or no database at all: fail
-        # OPEN for the server account's old behaviour rather than shutting
-        # everybody out of a working server; the next check retries.
-        logger.debug("access: could not read the grants", exc_info=True)
-        snap = Snapshot()
-        snap.grants[("deezer", SERVER)] = {F.ANY: frozenset({ALL})}
-        snap.accounts["deezer"] = [(SERVER, None, SERVER)]
-        for pid in ANONYMOUS_DEFAULTS + tuple(p for p, _k in LATER_ANONYMOUS):
-            snap.grants[(pid, ANONYMOUS)] = {F.ANY: frozenset({ALL})}
-        return snap
+    except Exception as exc:
+        # No table yet (a tool on an old database) or no database at all: keep
+        # the last grants this process read, and close everything when it never
+        # managed to read any. Opening the server's account to the world on a
+        # failed read would undo the very rule this module enforces.
+        logger.warning("access: could not read the grants: %s", exc)
+        if state is not None and state[1] == where:
+            return state[3]
+        return Snapshot()
     with _lock:
         _state = (now, where, version, snap)
     return snap
@@ -339,8 +345,7 @@ def server_configured() -> bool:
 
 
 def ensure_server_account(owner=None, grant_all=True):
-    """The row of the server's Deezer account, created if missing (its secret
-    stays where it always was: the row only names its holder and its grants).
+    """The row of the server's Deezer account, created if missing.
     Returns it."""
     from .db import ProviderAccount, ProviderGrant, db, now
 
@@ -349,9 +354,9 @@ def ensure_server_account(owner=None, grant_all=True):
         .where(ProviderAccount.provider == "deezer", ProviderAccount.mode == SERVER)
         .first()
     )
-    if row is not None:
-        return row
     owner = owner if owner is not None else _server_owner()
+    if row is not None and row.user_id is not None:
+        return row
     with db.atomic():
         existing = None
         if owner is not None:
@@ -360,7 +365,22 @@ def ensure_server_account(owner=None, grant_all=True):
             existing = ProviderAccount.get_or_none(
                 ProviderAccount.provider == "deezer", ProviderAccount.user == owner
             )
-        if existing is not None:
+        if row is not None:
+            if existing is not None and existing.id != row.id:
+                if row.secret:
+                    existing.secret = row.secret
+                existing.mode = SERVER
+                existing.save()
+                ProviderGrant.delete().where(
+                    ProviderGrant.provider == "deezer",
+                    ProviderGrant.account == str(row.id),
+                ).execute()
+                row.delete_instance()
+                row = existing
+            else:
+                row.user = owner
+                row.save()
+        elif existing is not None:
             existing.mode = SERVER
             existing.save()
             row = existing

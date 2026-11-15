@@ -342,6 +342,13 @@ def _finalize_episode(episode: PodcastEpisode, path: str, provider=None) -> None
     episode.bitrate = _bitrate_for(path, "MP3_128", episode.duration)
     episode.status = "completed"
     episode.save()
+    # A file read, off the play path: the chapters the episode itself carries.
+    try:
+        from . import chapters
+
+        chapters.ensure(episode)
+    except Exception:
+        logger.debug("Could not read the chapters of episode %s", episode.deezer_id, exc_info=True)
     # Archive the show's art alongside its audio. Once the episodes are local the
     # picture has to be too, or a show that leaves Deezer keeps its episodes and
     # loses its face. Best-effort, once per show.
@@ -356,6 +363,19 @@ def _finalize_episode(episode: PodcastEpisode, path: str, provider=None) -> None
                         library.save_show_cover(provider.archive_dir, channel, art)
         except Exception as exc:
             logger.debug("Could not archive show art: %s", exc)
+    # A new episode of a show marked auto_transcribe joins the queue. This is a
+    # row write and a wake-up, never the engine: a transcription error must not
+    # fail the archive, and archiving must not wait for one.
+    try:
+        from ..transcribe import auto_enqueue
+
+        auto_enqueue(episode)
+    except Exception:
+        logger.debug(
+            "Could not queue the transcript of episode %s",
+            episode.deezer_id,
+            exc_info=True,
+        )
 
 
 def find_local_episode(episode_id) -> PodcastEpisode | None:

@@ -34,7 +34,8 @@ what exists; `/stream` now goes through them (lot E).
   other Deezer answer a plain `ProviderError` that condemns nothing. Refs are checked numeric before any request.
   `get_album` / `get_playlist` return the FULL tracklist; `import_account` is a read-only generator (the import's own
   four calls). `offers` come from the gateway's `FILESIZE_*` and the licence. Reads: `[deezer] arl`, `DEEZER_ARL` and the
-  ARL in `Meta` unchanged.
+  server ARL encrypted (AES-GCM, prefix `server-arl:`) in `ProviderAccount.secret` on the
+  `mode=server` row; the old plaintext `Meta.deezer_arl` is read once, re-encrypted and deleted.
 - `YoutubeAdapter` (role `fallback`) adds no request: `search` is `youtube.search`, `offers` asks nobody (Opus ~133k),
   `fetch` / `open_stream` download on a play (`download_audio`), a hold becomes `ProviderHeld`. Only
   `YoutubeUnavailable` is `Gone`. `LocalProvider` is AUDIO only, ref = the Track's UUID, path read from the database.
@@ -57,7 +58,8 @@ feature serves the account's holder only and is never lent; a shared feature ser
 names (`provider_grant`: `all`, `g:<group>`, `u:<user>`; feature `*` is the whole account, a per-feature row overrides
 it). Groups are the admin's (`user_group`, `user_group_member`). `access.snapshot()` is read once and kept until Meta
 `acc.v` moves (checked at most once a second): a check is dictionary lookups, no statement. The FIRST run on a server
-(`acc.boot`) grants the server's Deezer account (a `provider_account` row of mode `server`, its ARL left where it was)
+(`acc.boot`) grants the server's Deezer account (a `provider_account` row of mode `server`, its
+ARL encrypted in that row's `secret`)
 and YouTube's anonymous use to `all`, so an upgrade changes nothing. Enforcement: `webui._provider()` through the
 `DEEZER_FEATURE` endpoint table (a refused person gets the route's local answer; a Deezer-only page is a 403
 `X-NS-Error: deezer-denied`), `webui/youtube.allowed`, and Subsonic's stream (`api/media._may_use`). `/api/me` carries
@@ -71,7 +73,12 @@ linking or unlinking one links or unlinks the other); the holder of the server a
 account lists — followed artists, loved tracks, saved albums, playlists — is read through `library(kind)` and made into
 THEIR rows: artists starred (so followed for Nouveautés; a YouTube channel matched by name to an existing artist and its
 ref kept in `entity_ref`, which `youtube._artist_row` then reuses), tracks starred, albums with their tracklist,
-playlists merged (one of the same id that is somebody else's is never touched). Rules: each item is imported ONCE
+playlists merged (one of the same id that is somebody else's is never touched). Membership in a
+Neezer playlist is not a provider grant: groups never widen it, and an account import writes an
+`owner` member row only for its own holder. The onboarding account step reuses the same
+`myaccounts.link_deezer`/`link_youtube_headers` engines, says `deezer_disabled`, `deezer_denied`,
+`absent` or `disabled` instead of pretending the option exists, and never writes to the provider.
+Rules: each item is imported ONCE
 (`library_item`), so the local library counts after that; one unticked in the picker (`excluded`) is never imported and
 an artist's or album's star comes off; nothing is written to the account and nothing is downloaded. **One DEFAULT
 platform per person** (`options.primary`, `PUT /me/accounts/default`, Réglages → Mes comptes): only that account is

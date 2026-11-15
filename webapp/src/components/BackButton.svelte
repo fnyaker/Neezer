@@ -32,6 +32,7 @@
   .back {
     width: 36px;
     height: 36px;
+    flex: none;
     display: grid;
     place-items: center;
     border-radius: 50%;
@@ -47,6 +48,8 @@
     .back {
       width: 44px;
       height: 44px;
+      min-width: 44px;
+      min-height: 44px;
     }
   }
 </style>

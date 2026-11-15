@@ -30,6 +30,7 @@
   } from "../lib/nativeDeezer.js";
   import { carAvailable, openCarSettings } from "../lib/car.js";
   import Icon from "../components/Icon.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import HardReload from "../components/HardReload.svelte";
   import EnrichBackfill from "../components/EnrichBackfill.svelte";
   import CreditsBackfill from "../components/CreditsBackfill.svelte";
@@ -43,6 +44,7 @@
   import ServicesSettings from "../components/ServicesSettings.svelte";
   import DiscoverySlider from "../components/DiscoverySlider.svelte";
   import DislikedTracks from "../components/DislikedTracks.svelte";
+
 
   const QUALITIES = [
     { id: "FLAC", label: "FLAC", hint: "Sans perte — lourd" },
@@ -88,6 +90,7 @@
     { id: "discovery", label: "Découverte", icon: "compass", hint: "Flow, titres que vous n'aimez pas, nouveautés" },
     ...(REMOTE ? [] : [{ id: "sources", label: "Sources", icon: "link", hint: "Ordre des sources, vos comptes, et qui peut s'en servir" }]),
     { id: "account", label: REMOTE ? "Contrôle" : "Compte", icon: "user", hint: REMOTE ? "Le lecteur que vous pilotez" : "Votre compte, l'export vers d'autres services" },
+    ...($user?.admin && ADMIN() ? [{ id: "users", label: "Utilisateurs", icon: "users", hint: "Comptes, rôles et invitations" }] : []),
     ...($user?.admin && ADMIN() ? [{ id: "server", label: "Serveur", icon: "archive", hint: "Archive, nettoyage, stockage, quotas" }] : []),
     { id: "help", label: "Assistance", icon: "info", hint: "Recharger l'application, journal de diagnostic" },
   ];
@@ -103,7 +106,7 @@
   const IN_GROUP = {
     listen: ["playback", "appearance", "viz"],
     library: ["downloads", "discovery"],
-    accounts: ["sources", "account", "server", "help"],
+    accounts: ["sources", "account", "users", "server", "help"],
   };
 
   // -- the menu's own filter -------------------------------------------------
@@ -198,6 +201,7 @@
   // value back — only whether one is set, where it comes from and its last four
   // characters — so the field always starts empty and only a real paste saves.
   let dz = null;
+  let dzError = null;
   let arlDraft = "";
   let arlSaving = false;
   let dzStatus = null;
@@ -213,22 +217,18 @@
     if (!openCarSettings()) toasts.push("Réglages du mode voiture indisponibles", "error");
   }
   let arlLinking = false;
-  onMount(async () => {
-    if (!$user?.admin || !CAN_ADMIN) return;
+  async function loadSettings() {
+    dzError = null;
     try {
       const s = await api.getSettings();
       quotaGb = s.upload_quota_gb;
       dz = s.deezer || null;
-    } catch {
-      /* leave the card hidden if it can't load */
+    } catch (e) {
+      dzError = e;
     }
-    refreshDeezerStatus();
-    loadReleases();
-    loadStorage();
-    loadRules();
-    loadCleanup();
-    // A sweep started before a reload is still running server-side: pick the
-    // progress back up instead of pretending nothing is happening.
+  }
+  let loaded = { sources: false, server: false };
+  async function loadArchive() {
     try {
       job = await api.archiveStatus();
       if (job?.running) pollJob();
@@ -241,7 +241,23 @@
     } catch {
       /* ignore */
     }
-  });
+  }
+  $: if ($user?.admin && CAN_ADMIN) {
+    if (tab === "sources" && !loaded.sources) {
+      loaded = { ...loaded, sources: true };
+      loadSettings();
+      refreshDeezerStatus();
+    } else if (tab === "server" && !loaded.server) {
+      loaded = { ...loaded, server: true };
+      loadSettings();
+      refreshDeezerStatus();
+      loadReleases();
+      loadStorage();
+      loadRules();
+      loadCleanup();
+      loadArchive();
+    }
+  }
 
   // Admin: the releases check (neezer/releases.py) — how often, how many
   // close artists, how far back — and a button to run it now.
@@ -681,7 +697,7 @@
 </div>
 {/if}
 {#if tab}
-<div class="pane">
+<div class="pane" class:admin={tab === "users"}>
 {#if !wide}
   <div class="head sub-head">
     <button class="back" on:click={back} aria-label="Retour aux réglages">
@@ -855,6 +871,12 @@
 {/if}
 {/if}
 
+{#if tab === "users" && $user?.admin && ADMIN()}
+  {#await import("../components/AdminUsers.svelte") then { default: AdminUsers }}
+    <AdminUsers />
+  {/await}
+{/if}
+
 {#if tab === "server"}
 {#if $user?.admin && CAN_ADMIN}
 <section class="card">
@@ -997,8 +1019,44 @@
       </label>
     {/if}
   </div>
-</section>
 
+  <h3>Chapitres des épisodes</h3>
+  <div class="rules">
+    <label class="rule">
+      <input
+        type="checkbox"
+        checked={rules.chapters}
+        disabled={rulesSaving}
+        on:change={(e) => saveRule("chapters", e.currentTarget.checked)}
+      />
+      <span>
+        Lire les chapitres à l'archivage
+        <em class="note">— depuis le fichier de l'épisode, sans requête à personne</em>
+      </span>
+    </label>
+    <label class="rule">
+      <input
+        type="checkbox"
+        checked={rules.chapter_urls}
+        disabled={rulesSaving}
+        on:change={(e) => saveRule("chapter_urls", e.currentTarget.checked)}
+      />
+      <span>
+        Suivre aussi le lien de chapitres du fichier
+        <em class="note">— une requête tierce par épisode ; désactivé par défaut</em>
+      </span>
+    </label>
+  </div>
+</section>
+{/if}
+
+{#if $user?.admin && CAN_ADMIN}
+  {#await import("../components/TranscribeSettings.svelte") then { default: TranscribeSettings }}
+    <TranscribeSettings />
+  {/await}
+{/if}
+
+{#if $user?.admin && CAN_ADMIN && rules}
 <section class="card danger">
   <h2>Nettoyage automatique</h2>
   <p class="muted sub">
@@ -1323,6 +1381,8 @@
       </button>
     {/if}
   </section>
+{:else if $user?.admin && CAN_ADMIN && dzError}
+  <LoadFailed error={dzError} inline on:retry={loadSettings} />
 {/if}
 
 {/if}
@@ -1618,6 +1678,9 @@
     min-width: 0;
     max-width: 760px;
   }
+  .pane.admin {
+    max-width: 1100px;
+  }
   .pane-title {
     font-family: var(--font-display);
     font-size: 32px;
@@ -1783,6 +1846,11 @@
   }
   .rule input:disabled {
     cursor: default;
+  }
+  @media (pointer: coarse) {
+    .rule {
+      min-height: 44px;
+    }
   }
   .row {
     display: flex;

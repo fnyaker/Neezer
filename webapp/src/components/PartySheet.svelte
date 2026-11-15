@@ -9,6 +9,7 @@
   import { artistLine } from "../lib/format.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import { modalFocus } from "../lib/modal.js";
 
   let busy = false;
   let confirmEnd = false;
@@ -114,7 +115,15 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div class="backdrop" on:click={closePartySheet}>
-    <div class="sheet" role="dialog" aria-label="Listen party" tabindex="-1" on:click|stopPropagation>
+    <div
+      class="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Listen party"
+      tabindex="-1"
+      on:click|stopPropagation
+      use:modalFocus
+    >
       <header>
         <div class="title">
           <span class="badge" class:live={!!host}><Icon name="party" size={20} /></span>

@@ -124,10 +124,11 @@ await ctx.addInitScript(() => {
 });
 await ctx.addInitScript(() => {
   try {
+    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
     const j = sessionStorage.getItem("__inject");
     if (j) {
-      localStorage.setItem("player.session", j);
-      localStorage.removeItem("player.pos");
+      localStorage.setItem(pkey("player.session"), j);
+      localStorage.removeItem(pkey("player.pos"));
       sessionStorage.removeItem("__inject");
     }
     const s = sessionStorage.getItem("__settings");

@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261113"
+SCHEMA_VERSION = "20261123"
 
 
 def now():
@@ -260,11 +260,7 @@ class Artist(_Model):
         # without this they'd be pruned and their credits deleted with them.
         credited = TrackArtist.select(TrackArtist.artist)
 
-        StarredArtist.delete().where(
-            StarredArtist.starred.not_in(album_artists),
-            StarredArtist.starred.not_in(track_artists),
-            StarredArtist.starred.not_in(credited),
-        ).execute()
+        starred = StarredArtist.select(StarredArtist.starred)
 
         return (
             cls.delete()
@@ -272,6 +268,7 @@ class Artist(_Model):
                 cls.id.not_in(album_artists),
                 cls.id.not_in(track_artists),
                 cls.id.not_in(credited),
+                cls.id.not_in(starred),
             )
             .execute()
         )
@@ -287,27 +284,30 @@ class Album(_Model):
     release_date = CharField(10, null=True)
 
     def as_subsonic_album(self, user):  # "AlbumID3" type in XSD
-        duration, created, year = self.tracks.select(
+        tracks = Track.visible(self.tracks, user)
+        duration, created, year = tracks.select(
             fn.sum(Track.duration), fn.min(Track.created), fn.min(Track.year)
         ).scalar(as_tuple=True)
+        if created is None:
+            created = self.tracks.select(fn.min(Track.created)).scalar() or now()
 
         info = {
             "id": str(self.id),
             "name": self.name,
             "artist": self.artist.name,
             "artistId": str(self.artist.id),
-            "songCount": self.tracks.count(),
+            "songCount": tracks.count(),
             "duration": duration,
             "created": created.isoformat(),
         }
 
         track_with_cover = (
-            self.tracks.join(Folder).where(Folder.cover_art.is_null(False)).first()
+            tracks.join(Folder).where(Folder.cover_art.is_null(False)).first()
         )
         if track_with_cover is not None:
             info["coverArt"] = str(track_with_cover.folder.id)
         else:
-            track_with_cover = self.tracks.where(Track.has_art).first()
+            track_with_cover = tracks.where(Track.has_art).first()
             if track_with_cover is not None:
                 info["coverArt"] = str(track_with_cover.id)
 
@@ -320,7 +320,7 @@ class Album(_Model):
 
         genre = ", ".join(
             g
-            for (g,) in self.tracks.select(Track.genre)
+            for (g,) in tracks.select(Track.genre)
             .where(Track.genre.is_null(False))
             .distinct()
             .tuples()
@@ -431,7 +431,7 @@ class Track(PathMixin, _Model):
         )
 
     @classmethod
-    def prime_credits(cls, tracks):
+    def prime_credits(cls, tracks, playlist=None):
         """Load the credit rows for a whole response in ONE query.
 
         ``as_subsonic_child`` reads the credits per track, which is an N+1 as
@@ -440,22 +440,95 @@ class Track(PathMixin, _Model):
         cache instead. Returns the tracks as a list, so a lazy query can be
         primed and iterated in one go. Not priming is always safe — a track
         that wasn't primed simply pays for its own lookup.
+
+        ``playlist`` names every row of that list in the join, so a 4 000-title
+        playlist is one statement instead of ten ``IN`` chunks; without it the
+        given ids are read in chunks small enough for SQLite's parameter cap.
         """
         tracks = list(tracks)
         ids = [t.id for t in tracks]
         by_track = {}
-        # SQLite caps host parameters (999 by default); chunk the IN clause.
-        for i in range(0, len(ids), 400):
-            rows = (
-                TrackArtist.select(TrackArtist, Artist)
-                .join(Artist)
-                .where(TrackArtist.track << ids[i : i + 400])
-                .order_by(TrackArtist.track, TrackArtist.position)
-            )
+
+        def read(rows):
             for r in rows:
                 by_track.setdefault(r.track_id, []).append((r.artist, r.role))
+
+        if playlist is not None:
+            # One statement for the whole list: the playlist's own rows name
+            # them, so no host-parameter cap applies.
+            read(
+                TrackArtist.select(TrackArtist, Artist)
+                .join(Artist)
+                .join(Track, on=(TrackArtist.track == Track.id))
+                .join(PlaylistTrack, on=(PlaylistTrack.track == Track.id))
+                .where(PlaylistTrack.playlist == getattr(playlist, "id", playlist))
+                .order_by(TrackArtist.track, TrackArtist.position)
+            )
+        else:
+            # SQLite caps host parameters (999 by default); chunk the IN clause.
+            for i in range(0, len(ids), 400):
+                read(
+                    TrackArtist.select(TrackArtist, Artist)
+                    .join(Artist)
+                    .where(TrackArtist.track << ids[i : i + 400])
+                    .order_by(TrackArtist.track, TrackArtist.position)
+                )
         for t in tracks:
             t._credits_cache = by_track.get(t.id, [])
+        return tracks
+
+    @classmethod
+    def prime_subsonic(cls, tracks, user, playlist=None):
+        """Load what :meth:`as_subsonic_child` reads per row for a whole list.
+
+        Three statements instead of three per title — the caller's stars, their
+        ratings and the average — which is what made a 4 000-title Subsonic
+        playlist 28 016 statements. ``playlist`` reads them through that
+        playlist's own ``IN (SELECT …)`` so a big list stays one statement per
+        table; without it the given ids are chunked under the parameter cap.
+        Returns the tracks as a list, like :meth:`prime_credits`.
+        """
+        tracks = list(tracks)
+        if not tracks:
+            return tracks
+        ids = [t.id for t in tracks]
+        if playlist is not None:
+            scopes = [
+                PlaylistTrack.select(PlaylistTrack.track).where(
+                    PlaylistTrack.playlist == getattr(playlist, "id", playlist)
+                )
+            ]
+        else:
+            # SQLite caps host parameters (999 by default); chunk the IN clause.
+            scopes = [ids[i : i + 400] for i in range(0, len(ids), 400)]
+        starred, ratings, averages = {}, {}, {}
+        for track_scope in scopes:
+            starred.update(
+                StarredTrack.select(StarredTrack.starred, StarredTrack.date)
+                .where(
+                    (StarredTrack.user == user)
+                    & (StarredTrack.starred.in_(track_scope))
+                )
+                .tuples()
+            )
+            ratings.update(
+                RatingTrack.select(RatingTrack.rated, RatingTrack.rating)
+                .where(
+                    (RatingTrack.user == user) & (RatingTrack.rated.in_(track_scope))
+                )
+                .tuples()
+            )
+            averages.update(
+                RatingTrack.select(
+                    RatingTrack.rated, fn.avg(RatingTrack.rating, coerce=False)
+                )
+                .where(RatingTrack.rated.in_(track_scope))
+                .group_by(RatingTrack.rated)
+                .tuples()
+            )
+        cache = {"starred": starred, "rating": ratings, "average": averages}
+        for t in tracks:
+            t._subsonic_cache = cache
         return tracks
 
     def credited_artists(self):
@@ -538,25 +611,37 @@ class Track(PathMixin, _Model):
             # getCoverArt fetches from Deezer on demand.
             info["coverArt"] = str(self.album_id)
 
-        try:
-            starred = StarredTrack[user.id, self.id]
-            info["starred"] = starred.date.isoformat()
-        except StarredTrack.DoesNotExist:
-            pass
+        primed = getattr(self, "_subsonic_cache", None)
+        if primed is None:
+            try:
+                starred = StarredTrack[user.id, self.id]
+                info["starred"] = starred.date.isoformat()
+            except StarredTrack.DoesNotExist:
+                pass
 
-        try:
-            rating = RatingTrack[user.id, self.id]
-            info["userRating"] = rating.rating
-        except RatingTrack.DoesNotExist:
-            pass
+            try:
+                rating = RatingTrack[user.id, self.id]
+                info["userRating"] = rating.rating
+            except RatingTrack.DoesNotExist:
+                pass
 
-        avgRating = (
-            RatingTrack.select(fn.avg(RatingTrack.rating, coerce=False))
-            .where(RatingTrack.rated == self)
-            .scalar()
-        )
-        if avgRating:
-            info["averageRating"] = avgRating
+            avgRating = (
+                RatingTrack.select(fn.avg(RatingTrack.rating, coerce=False))
+                .where(RatingTrack.rated == self)
+                .scalar()
+            )
+            if avgRating:
+                info["averageRating"] = avgRating
+        else:
+            starred_date = primed["starred"].get(self.id)
+            if starred_date is not None:
+                info["starred"] = starred_date.isoformat()
+            user_rating = primed["rating"].get(self.id)
+            if user_rating is not None:
+                info["userRating"] = user_rating
+            avgRating = primed["average"].get(self.id)
+            if avgRating:
+                info["averageRating"] = avgRating
 
         if (
             prefs is not None
@@ -593,6 +678,7 @@ class Track(PathMixin, _Model):
 class User(_Model):
     id = PrimaryKeyField()
     name = CharField(64, unique=True)
+    name_key = CharField(64, null=True, unique=True)
     mail = CharField(null=True)
     # argon2id hashes (~97 chars) for new/updated passwords; legacy SHA1 hashes
     # (40 chars) are transparently rehashed on the next successful login.
@@ -609,6 +695,10 @@ class User(_Model):
     # moves on, which is what makes a signed (otherwise unrevocable) session
     # cookie die on a password change or an admin downgrade.
     session_epoch = IntegerField(default=0)
+
+    disabled = BooleanField(default=False)
+    last_login = DateTimeField(null=True)
+    onboarding_step = CharField(16, default="done")
 
     lastfm_session = FixedCharField(32, null=True)
     lastfm_status = BooleanField(
@@ -640,6 +730,52 @@ class User(_Model):
             "jukeboxRole": self.admin or self.jukebox,
             "shareRole": False,
         }
+
+
+class Invite(_Model):
+    """A single-use invitation to create one account.
+
+    The row is the invitation's identity, never the token: only
+    ``token_hash`` (SHA-256 of the token handed out once) is stored, so a copy
+    of this table opens nothing. ``created_by`` and ``used_by`` are nullable
+    with ON DELETE SET NULL so removing an account keeps the audit trail.
+    """
+
+    id = CharField(24, primary_key=True)
+    token_hash = CharField(64, unique=True)
+    created_by = ForeignKeyField(
+        User, null=True, backref="+", on_delete="SET NULL", column_name="created_by"
+    )
+    created = DateTimeField(default=now)
+    expires = DateTimeField()
+    used_by = ForeignKeyField(
+        User, null=True, backref="+", on_delete="SET NULL", column_name="used_by"
+    )
+    used_at = DateTimeField(null=True)
+    revoked_at = DateTimeField(null=True)
+    note = CharField(64, null=True)
+
+    class Meta:
+        table_name = "invite"
+
+
+class AuditLog(_Model):
+    """One administrative action, durably: who, what, on whom, and how it ended.
+
+    Deliberately plain text and no foreign key: deleting an account must not
+    erase the trace of who deleted it. No secret, token or password ever lands
+    here — the detail is a short human phrase (``admin=true``, ``uploads=3``).
+    """
+
+    at = DateTimeField(default=now)
+    actor = CharField(null=True, max_length=64)
+    action = CharField(max_length=64)
+    target = CharField(null=True, max_length=128)
+    detail = CharField(null=True, max_length=200)
+    result = CharField(max_length=16, default="ok")
+
+    class Meta:
+        table_name = "audit_log"
 
 
 class ClientPrefs(_Model):
@@ -868,11 +1004,20 @@ class Playlist(_Model):
     public = BooleanField(default=False)
     created = DateTimeField(default=now)
     deezer_id = CharField(null=True)
+    # Optimistic concurrency (collaborative playlists). `version` guards the
+    # tracks and the metadata; `members_version` guards who is on the playlist,
+    # so an invite never invalidates a reorder that is in flight.
+    version = IntegerField(default=1)
+    members_version = IntegerField(default=1)
+    # A NAME snapshot, not a user id: it survives the account being deleted and
+    # is what the playlist page shows next to "modifié par".
+    last_edited_by = CharField(null=True)
+    last_edited_at = DateTimeField(null=True)
 
-    def as_subsonic_playlist(self, user):
-        tracks, duration = self.__tracks_query(
-            fn.count("*"), fn.sum(Track.duration)
-        ).scalar(as_tuple=True)
+    def as_subsonic_playlist(self, user, counts=None):
+        if counts is None:
+            counts = self.__track_counts(user)
+        tracks, duration = counts
         info = {
             "id": str(self.id),
             "name": (
@@ -891,6 +1036,14 @@ class Playlist(_Model):
         if self.deezer_id:
             info["coverArt"] = str(self.id)
         return info
+
+    def __track_counts(self, user):
+        """``(visible rows, their total duration)`` for the caller."""
+        counts = self.__tracks_query(fn.count("*"), fn.sum(Track.duration))
+        visible = Track.visible_clause(user)
+        if visible is not None:
+            counts = counts.where(visible)
+        return counts.scalar(as_tuple=True)
 
     def get_tracks(self):
         return [t for t in self.__tracks_query().order_by(PlaylistTrack.index)]
@@ -920,6 +1073,39 @@ class Playlist(_Model):
         )
         index = 0 if index is None else index + 1
         PlaylistTrack.create(playlist=self, track=tid, index=index)
+
+    def add_many(self, tracks, batch=300):
+        """Append many tracks after one ``MAX(index)``, ``batch`` rows per INSERT.
+
+        ``add`` re-reads the last index for every title — two round-trips each,
+        so a 2 000-title request paid 4 000 of them, past a second on a network
+        database. Here the last index is read once and the rows are written 300
+        at a time; the caller's transaction is what makes the block atomic.
+        Returns how many rows were written.
+        """
+        ids = []
+        for track in tracks:
+            if isinstance(track, UUID):
+                ids.append(track)
+            elif isinstance(track, Track):
+                ids.append(track.id)
+            else:
+                ids.append(UUID(str(track)))
+        if not ids:
+            return 0
+        index = (
+            PlaylistTrack.select(fn.max(PlaylistTrack.index))
+            .where(PlaylistTrack.playlist == self)
+            .scalar()
+        )
+        start = 0 if index is None else index + 1
+        fields = (PlaylistTrack.playlist, PlaylistTrack.track, PlaylistTrack.index)
+        rows = [
+            (self.id, tid, start + offset) for offset, tid in enumerate(ids)
+        ]
+        for i in range(0, len(rows), batch):
+            PlaylistTrack.insert_many(rows[i : i + batch], fields=fields).execute()
+        return len(rows)
 
     def remove_at_indexes(self, indexes):
         max_index, count = (
@@ -982,6 +1168,64 @@ class PlaylistShare(_Model):
 
     class Meta:
         table_name = "playlist_share"
+
+
+class PlaylistMember(_Model):
+    """One person's role on one playlist. The owner also has a row (backfilled
+    on upgrade, inserted by the web/Subsonic create paths); authorization trusts
+    ``Playlist.user_id`` first and a synthesized owner row for playlists created
+    elsewhere, so a missing owner row can never lock an owner out.
+
+    Roles are ``owner`` | ``editor`` | ``viewer``; the role matrix itself lives
+    in ``neezer/playlist_access.py``, never in the Subsonic serializer.
+    """
+
+    playlist = ForeignKeyField(Playlist, backref="+", on_delete="CASCADE")
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    role = CharField(8, default="viewer")
+    added = DateTimeField(default=now)
+
+    class Meta:
+        table_name = "playlist_member"
+        primary_key = CompositeKey("playlist", "user")
+
+
+class PlaylistFolder(_Model):
+    """A private, per-person folder that groups playlists (never tracks).
+
+    One level in v1: no parent. ``position`` orders the folders of one person;
+    ties are broken by ``created`` then ``id``, so a concurrent create can never
+    make the list ambiguous. The model deliberately does not set an index on
+    ``position``: ``(user, position)`` is declared in the three schema files and
+    in the ``20261114`` migration, like the hand-tuned ones.
+    """
+
+    id = PrimaryKeyField()
+    user = ForeignKeyField(User, backref="playlist_folders", on_delete="CASCADE")
+    name = CharField()
+    position = IntegerField(default=0)
+    created = DateTimeField(default=now)
+
+
+class PlaylistPlacement(_Model):
+    """Where one person filed one playlist, and in what order.
+
+    Keyed by ``(user, playlist)``: a playlist has ONE folder per person, and two
+    people file the same imported playlist independently. ``folder`` NULL means
+    the unfiled root, whose order is stored the same way. No row at all means
+    "never ordered" (sorted after the ordered rows, by creation date) — which is
+    how every playlist starts, so the upgrade needs no data backfill.
+    """
+
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    playlist = ForeignKeyField(Playlist, backref="+", on_delete="CASCADE")
+    folder = ForeignKeyField(
+        PlaylistFolder, null=True, backref="+", on_delete="CASCADE"
+    )
+    position = IntegerField(default=0)
+
+    class Meta:
+        primary_key = CompositeKey("user", "playlist")
 
 
 class Discovery(_Model):
@@ -1077,6 +1321,11 @@ class PodcastChannel(_Model):
     # Archive every NEW episode as the subscription refresh finds it (the
     # show's own switch, off by default: a daily show is a lot of disk).
     auto_archive = BooleanField(default=False)
+    # Transcribe every NEW archived episode of this show (``neezer/transcribe``),
+    # also off by default: an hour of audio is hours of CPU on a small server.
+    # ``transcribe_language`` overrides the global language; NULL means auto.
+    auto_transcribe = BooleanField(default=False)
+    transcribe_language = CharField(8, null=True)
 
     def as_subsonic_channel(self, user, prefs=None, include_episodes=True):
         info = {
@@ -1173,6 +1422,152 @@ class PodcastEpisode(_Model):
                 or "application/octet-stream"
             )
         return info
+
+
+class PodcastChapter(_Model):
+    """One chapter an episode carries in its own file, as one source stated it
+    (``neezer/deezer/chapters.py``): sidecar, ID3, MP4 or Deezer JSON.
+
+    ``idx`` is the 0-based display order; the unique indexes on
+    ``(episode, idx)`` and ``(episode, start_ms)`` make a re-scan idempotent and
+    refuse two chapters starting at the same millisecond.
+    """
+
+    id = PrimaryKeyField()
+    episode = ForeignKeyField(PodcastEpisode, backref="chapters", on_delete="CASCADE")
+    idx = IntegerField()
+    start_ms = IntegerField()
+    end_ms = IntegerField(null=True)
+    title = CharField(300, null=True)
+    source = CharField(8)  # sidecar|id3|mp4|json
+
+    class Meta:
+        indexes = ((("episode", "idx"), True), (("episode", "start_ms"), True))
+
+
+class PodcastChapterScan(_Model):
+    """What the last chapter scan of one episode found — including that it found
+    nothing. Without this row every show open would re-read the file looking for
+    chapters that do not exist."""
+
+    episode = ForeignKeyField(PodcastEpisode, primary_key=True, on_delete="CASCADE")
+    scanned_at = DateTimeField()
+    source = CharField(8)  # sidecar|id3|mp4|json|none
+    n_chapters = IntegerField(default=0)
+    # Truncated cause, never shown raw to a client.
+    error = CharField(200, null=True)
+
+
+class PodcastTranscript(_Model):
+    """The speech-to-text state of one archived episode (``neezer/transcribe``).
+
+    Derived text only: deleting this row never touches the audio. ``n_segments``
+    is the page count's ``total`` (maintained per chunk), so a transcript page
+    costs the row plus one page, never a COUNT over thousands of segments.
+    ``error_code`` is a stable machine token; ``error_message`` a short cause.
+    """
+
+    episode = ForeignKeyField(
+        PodcastEpisode, primary_key=True, backref="transcript", on_delete="CASCADE"
+    )
+    status = CharField(10)  # queued|running|ready|error|stopped
+    language = CharField(8, null=True)
+    engine = CharField(16, null=True)  # "whisper.cpp"
+    model = CharField(64, null=True)  # basename only, never the path
+    engine_version = CharField(32, null=True)
+    duration_ms = IntegerField(default=0)
+    done_ms = IntegerField(default=0)
+    n_segments = IntegerField(default=0)
+    error_code = CharField(24, null=True)
+    error_message = CharField(300, null=True)
+    cancel_requested = BooleanField(default=False)
+    # Where the text came from: ``server`` (the inline runner or the sidecar
+    # container) or ``client`` (an enrolled device). ``worker_name`` is the
+    # device's display name after the fact; ``transcript_path`` is the canonical
+    # sidecar on the data disk. Neither is a client-supplied value.
+    source = CharField(8, default="server")
+    worker_name = CharField(64, null=True)
+    transcript_path = CharField(4096, null=True)
+    user = ForeignKeyField(User, null=True, backref="+", on_delete="SET NULL")
+    queued_at = DateTimeField(null=True)
+    started_at = DateTimeField(null=True)
+    finished_at = DateTimeField(null=True)
+    updated = DateTimeField(default=now)
+
+    class Meta:
+        indexes = ((("status",), False),)
+
+
+class PodcastTranscriptSegment(_Model):
+    """One timed line of a transcript. ``search_text`` is the casefolded,
+    accent-folded copy of ``text`` computed once in Python at insert, so a search
+    is one indexed ``contains`` and never a full table scan."""
+
+    id = AutoField()
+    transcript = ForeignKeyField(
+        PodcastTranscript,
+        backref="segments",
+        column_name="transcript_id",
+        on_delete="CASCADE",
+    )
+    idx = IntegerField()
+    start_ms = IntegerField()
+    end_ms = IntegerField()
+    text = TextField()
+    search_text = TextField()
+
+    class Meta:
+        indexes = ((("transcript", "idx"), True), (("transcript", "start_ms"), False))
+
+
+class TranscribeWorker(_Model):
+    """A device allowed to claim transcripts (``neezer/transcribe``).
+
+    ``token`` is the device's credential, encrypted at rest like every other
+    capability here; it is never returned by a read and never logged. A worker
+    is ``server`` (the sidecar container) or ``client`` (a person's machine);
+    revoking stamps ``revoked`` and every later claim or heartbeat answers 403.
+    """
+
+    id = PrimaryKeyField()
+    name = CharField(64)
+    kind = CharField(8)  # server|client
+    token = TextField()
+    scopes = CharField(32, default="transcribe")
+    created = DateTimeField(default=now)
+    last_seen = DateTimeField(null=True)
+    enabled = BooleanField(default=True)
+    revoked = DateTimeField(null=True)
+
+
+class PodcastTranscriptLease(_Model):
+    """The right to work one transcript, held by an external worker.
+
+    The row is per episode: it carries who holds it, when it expires, and how
+    many attempts it took, so an expired lease is requeued (three times, then
+    ``error lease_lost``) without touching the text already stored. Only the
+    SHA-256 of the token is kept — the server compares a hash, it never needs
+    the token itself.
+    """
+
+    episode = ForeignKeyField(
+        PodcastTranscript,
+        primary_key=True,
+        backref="+",
+        column_name="episode_id",
+        on_delete="CASCADE",
+    )
+    worker = ForeignKeyField(TranscribeWorker, backref="leases", on_delete="CASCADE")
+    lease_token_hash = CharField(64)
+    acquired_at = DateTimeField(default=now)
+    expires_at = DateTimeField()
+    heartbeat_at = DateTimeField(default=now)
+    chunk_start_ms = IntegerField(default=0)
+    attempts = IntegerField(default=0)
+    last_error = CharField(200, null=True)
+
+    class Meta:
+        indexes = ((("expires_at",), False), (("worker",), False))
 
 
 class PodcastProgress(_Model):
@@ -1303,8 +1698,8 @@ class ProviderAccount(_Model):
     user = ForeignKeyField(User, null=True, backref="+", on_delete="CASCADE")
     label = CharField(64, null=True)
     secret = TextField(null=True)
-    # How it was signed in (``server``: the server's ARL, kept where it always
-    # was, in Meta or the config; ``arl``, ``browser``, ``headers``…).
+    # How it was signed in (``server``: the server's ARL, encrypted in this
+    # row's secret; ``arl``, ``browser``, ``headers``…).
     mode = CharField(16, null=True)
     # JSON: what is imported from the account automatically (lot P2), and how
     # the last import went. Never a secret.
@@ -1745,6 +2140,8 @@ def _migration_order():
         TrackTag,  # after Track and GenreTag: it references both
         GenreModel,
         User,
+        Invite,
+        AuditLog,
         ClientPrefs,
         StarredFolder,
         StarredArtist,
@@ -1757,12 +2154,21 @@ def _migration_order():
         StarredPlaylist,  # after Playlist and User
         PlaylistTrack,
         PlaylistShare,  # after Playlist and User: it references both
+        PlaylistMember,  # after Playlist and User: it references both
+        PlaylistFolder,  # after User
+        PlaylistPlacement,  # after Playlist, User and PlaylistFolder
         TrackNeighbor,  # after Track
         Discovery,
         TrackEnrichment,  # after Track
         RadioStation,
         PodcastChannel,
         PodcastEpisode,
+        PodcastChapter,  # after PodcastEpisode
+        PodcastChapterScan,  # after PodcastEpisode
+        PodcastTranscript,  # after PodcastEpisode and User
+        PodcastTranscriptSegment,  # after PodcastTranscript
+        TranscribeWorker,
+        PodcastTranscriptLease,  # after PodcastTranscript and TranscribeWorker
         PodcastProgress,
         PodcastMarker,
         RemoteLink,  # after User: it references it

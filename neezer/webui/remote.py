@@ -119,6 +119,10 @@ POLICY = {
     "group_create": "admin",
     "group_update": "admin",
     "group_delete": "admin",
+    "admin_users_list": "admin",
+    "admin_user_get": "admin",
+    "admin_user_patch": "admin",
+    "admin_user_delete": "admin",
     # the controller's own channel
     "remote_claim": "queue",
     "remote_leave": "queue",
@@ -193,6 +197,16 @@ POLICY = {
     "album_on_deezer": "read",
     "album": "read",
     "playlist": "read",
+    "playlist_version": "read",
+    "playlist_members": "read",
+    # Membership is access: a lent session may SEE who is on a playlist (the
+    # collaborators sheet), but never changes who can reach it — the same
+    # reasoning as remote links and public share links. Admin override included:
+    # NEVER refuses even an admin controller.
+    "playlist_invite": NEVER,
+    "playlist_member_role": NEVER,
+    "playlist_member_remove": NEVER,
+    "playlist_leave": NEVER,
     "discography": "read",
     "lyrics": "read",
     "track_gain": "read",
@@ -211,6 +225,8 @@ POLICY = {
     "mood_mix": "read",
     "playlist_recommendations": "read",
     "listening_history": "read",
+    "recap_years": "read",
+    "recap_year": "read",
     "discover_prefs": "read",
     "discover_prefs_set": "full",
     "discover_mute": "full",
@@ -237,6 +253,7 @@ POLICY = {
     "podcast_progress": "read",
     "channel_markers": "read",
     "episode_markers": "read",
+    "episode_chapters": "read",
     "download_status": "read",
     "upload_usage": "read",
     "track_analysis": "read",
@@ -261,6 +278,15 @@ POLICY = {
     "favorite": "full",
     "favorite_entity": "full",
     "create_playlist": "full",
+    # Playlist folders are the person's own organisation of their playlists:
+    # the same weight as any playlist edit (a controller with `read` or `queue`
+    # gets 403, like every other mutation). Folder visibility is never widened
+    # by a link: the rows are the owner's own.
+    "create_playlist_folder": "full",
+    "edit_playlist_folder": "full",
+    "delete_playlist_folder": "full",
+    "reorder_playlist_folders": "full",
+    "reorder_container": "full",  # serves <folder_id>/order and root/order
     "import_playlist_save": "full",
     "edit_playlist": "full",
     "delete_playlist": "full",
@@ -351,6 +377,15 @@ POLICY = {
     "flush_cache": "admin",
 }
 
+INVITE_POLICY = {
+    "admin_invites_list": "admin",
+    "admin_invite_create": "admin",
+    "admin_invite_revoke": "admin",
+    "admin_invite_renew": "admin",
+    "invite_inspect": NEVER,
+    "invite_redeem": NEVER,
+}
+
 
 def required_level(endpoint, method):
     """The lowest level that may call ``endpoint`` with ``method``, or None.
@@ -427,7 +462,13 @@ def live_link(link_id):
             if len(_link_cache) > 4096:
                 _link_cache.clear()
             _link_cache[link_id] = (t, row)
-    return row if _alive(row) else None
+    if not _alive(row):
+        return None
+    from ..db import User
+
+    if User.select(User.disabled).where(User.id == row.user_id).scalar():
+        return None
+    return row
 
 
 def _device_links(uid: str, device: str):

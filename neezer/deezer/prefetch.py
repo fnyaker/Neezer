@@ -24,7 +24,7 @@ import time
 from deezerpy._circuit import breaker
 from deezerpy.errors import is_transport_failure
 
-from .workload import Priority, quiet_wait, renice
+from .workload import Priority, deezer_lane, quiet_wait, renice
 
 logger = logging.getLogger(__name__)
 
@@ -212,37 +212,38 @@ class DeezerPrefetcher:
                 # download slows this queue rather than stopping it.
                 if priority > Priority.PREFETCH:
                     quiet_wait(5.0)
-                for attempt in range(_MAX_OUTAGE_RETRIES + 1):
-                    try:
-                        if isinstance(item, tuple):  # ("episode", uuid)
-                            _, eid = item
-                            ensure_episode_archived(self.provider, PodcastEpisode[eid])
-                        else:
-                            # Cheap DB lookup first (no network): if we already
-                            # imported this track, reuse the row and let
-                            # ensure_archived skip the audio when the file is on
-                            # disk — so an already-archived track costs nothing.
-                            # Only hit Deezer for metadata when it is genuinely new.
-                            track = find_local_track(item) or import_track(
-                                self.provider, item
-                            )
-                            ensure_archived(self.provider, track)
-                        break
-                    except Exception as exc:
-                        wait = _outage_wait() if is_transport_failure(exc) else 0.0
-                        if wait <= 0.0:
-                            # Either a real failure for this item, or a transport
-                            # failure with no Deezer outage behind it (a podcast
-                            # host that won't resolve, say). Nothing suggests a
-                            # retry in a second would land differently.
-                            raise  # reported on one line below
-                        if attempt >= _MAX_OUTAGE_RETRIES:
-                            logger.info(
-                                "Giving up on %s while Deezer is down (%s); the "
-                                "nightly sweep will pick it up", item, exc,
-                            )
+                with deezer_lane(priority):
+                    for attempt in range(_MAX_OUTAGE_RETRIES + 1):
+                        try:
+                            if isinstance(item, tuple):  # ("episode", uuid)
+                                _, eid = item
+                                ensure_episode_archived(self.provider, PodcastEpisode[eid])
+                            else:
+                                # Cheap DB lookup first (no network): if we already
+                                # imported this track, reuse the row and let
+                                # ensure_archived skip the audio when the file is on
+                                # disk — so an already-archived track costs nothing.
+                                # Only hit Deezer for metadata when it is genuinely new.
+                                track = find_local_track(item) or import_track(
+                                    self.provider, item
+                                )
+                                ensure_archived(self.provider, track)
                             break
-                        time.sleep(min(wait, _MAX_OUTAGE_WAIT))
+                        except Exception as exc:
+                            wait = _outage_wait() if is_transport_failure(exc) else 0.0
+                            if wait <= 0.0:
+                                # Either a real failure for this item, or a transport
+                                # failure with no Deezer outage behind it (a podcast
+                                # host that won't resolve, say). Nothing suggests a
+                                # retry in a second would land differently.
+                                raise  # reported on one line below
+                            if attempt >= _MAX_OUTAGE_RETRIES:
+                                logger.info(
+                                    "Giving up on %s while Deezer is down (%s); the "
+                                    "nightly sweep will pick it up", item, exc,
+                                )
+                                break
+                            time.sleep(min(wait, _MAX_OUTAGE_WAIT))
             except Exception as exc:
                 logger.info("Background download failed for %s: %s", item, exc)
             finally:
@@ -279,7 +280,8 @@ class DeezerPrefetcher:
                 if tid is None:
                     return
                 track = Track[tid]
-                ensure_archived(self.provider, track)
+                with deezer_lane(Priority.PREFETCH):
+                    ensure_archived(self.provider, track)
                 self._check_space()
             except Exception as exc:
                 logger.info("Prefetch failed for track %s: %s", tid, exc)

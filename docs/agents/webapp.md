@@ -189,6 +189,71 @@ AND a word (Écouté / Passé / Partiel), never colour alone; a failure is `Load
 `localStorage` nor to the offline `/api` cache. Measured 390/641/768/900/1024/1200+panel/1440+panel:
 no sideways overflow; the tops stack under 720 px of content.
 
+**The onboarding** (`routes/Onboarding.svelte`, `components/OnboardingArtistCard.svelte`,
+`OnboardingAccount.svelte`, `lib/onboarding.js`) is a branch **before the app shell**: the server's
+`user.onboarding` (and `GET /api/onboarding`) decides `artists|account|done`, the URL only names
+the visible step (`#/onboarding/artists`, `#/onboarding/accounts`), a `done` account is sent to
+`/`, and an old session without the field never enters it. The shell's connectivity/nav/version
+side effects and the network badge are suspended; finishing reloads `/` so the shell boots. The
+artist grid mounts **36 tiles first** (2/3/4/5/6 columns at 360/641/1440), then one GET per 36 by
+`after`; a like paints in the frame (11–21 ms at 4×), inserts **2** similar tiles (never a
+duplicate, cap 12), sends one POST, and polls read-only at most five times when the server answers
+`pending`. The account step costs **1 GET** on entry (`GET /api/onboarding/account/options`, the rich
+`deezer|youtube|imports` shape the cards need; 2 SELECT / ~931 B server-side), then 1 GET/1.5 s
+while a linked account imports. An import is 1 POST + 1 GET/1.5 s while visible, and every card can
+be skipped.
+Offline likes go to a per-account `sessionStorage` queue and are flushed sequentially on return.
+« Terminer » waits for the queue, POSTs `artists/done`, then `accounts`; the two-attempt
+“Passer pour l'instant” only appears when the server says the feed is unavailable. 44 px, roving
+tab index, `aria-pressed`, `role=status`, no emoji, no comment.
+
+**A shared playlist is role-driven** (`routes/Playlist.svelte`, `PlaylistMembersSheet.svelte`,
+`lib/actions.js`): `editable`/`can_manage`/`role` come from the payload, never `$isAdmin`. The owner
+sees rename/delete/collaborators/public link; an editor adds/removes/reorders and may leave; a
+viewer reads and is told to ask the owner; an admin keeps the override without appearing in the
+member list. The header shows the owner, an avatar stack (3 × 22 px + `+N`) opening the sheet,
+« Modifié par X · date » and a stale pill. Opening the sheet costs **0 requests**; 100 members are
+windowed to **20 rows**; invite/role/remove/leave are one request each. Every mutation carries
+`version` or `members_version`; a **409** discards the queued operation, does **one GET per scope**
+(never a replay), keeps the audio queue untouched and says who changed it. The `/version` probe costs
+**0 in a solo playlist** and runs 30 s / 10 s on focus only when the playlist has more than one
+member; if the page is not editing it reloads, otherwise it offers « actualiser ». The sidebar and
+Library gain a « Partagées avec moi » group (owner subtitle), the picker offers only `editable`
+lists while creation stays open to every account, and `ExportSheet` shows the public link only with
+`can_manage`. `/me/playlists` is refetched at most once a minute on focus. Measured: 2 requests to
+open an editable page, 1 for a reader, 1 GET per 30 s probe, 0 per solo, 1 per mutation; no sideways
+overflow at 360/390/768/1280/1920, 44 px touch targets (40 px pointer) and 60 px rows.
+
+**The invitation page** (`routes/Invite.svelte`, `lib/invite.js`) is public and renders before
+the login and before the app shell, exactly like a public playlist: `#/invite/<token>` keeps the
+token in the fragment and sends it only in the JSON body of `POST /api/invites/inspect|redeem`.
+A valid token costs **1 inspect**; an expired, revoked, used or unknown one gets the same generic
+message and 0 POST; a success costs **1 inspect + 1 redeem**, opens the server session and
+`replace`s to `#/onboarding`, removing the token from the URL. The form folds the name as it is
+typed, enforces the 3–32 `[a-z0-9_.-]` shape and a 12–128 password with a four-step meter, keeps a
+10-minute `sessionStorage` draft (token, name, stable `request_id`, **never** the password), and
+replays the same request after a refresh. A signed-in person is offered « Retour à l'application »
+rather than a second account. 48 px fields, 44 px secondary targets, no sideways overflow at
+360/390/641/1440.
+
+**« Récap » is a stories screen** (`routes/Recap.svelte`, `components/RecapStory.svelte`,
+`RecapSlide.svelte`, `RecapShare.svelte`, `lib/recap.js`, `lib/recapyears.js`): `#/recap` resolves the
+latest year and `replace`s to `#/recap/<year>`, which is a reloadable deep link. Opening costs 2
+requests cold (`/years` + the year) and 1 warm, a year change 1, a card advance 0; the bridge mounts
+only the active slide and the next one, 9 cards maximum. Auto-advance is 7 s only at ≤ 900 px and
+not under `prefers-reduced-motion`, and pauses on touch-hold, page hide, focus loss and share. The
+cards sit on a 488 px minimum bridge; at 390×844 the bottom is 700 px and the mini-player starts at
+708 px, while 360×640 scrolls the page ~176 px rather than clipping a card. The two-column desktop
+layout triggers on a **760 px content container**, not on a 900 px window (the 232 px sidebar would
+not fit otherwise). The share poster is 1080×1350, drawn locally from `offlineCovers` only, 0
+requests, `toBlob` 17.6–181 ms depending on the card and CPU (54.8 ms under 4× CPU on the first
+card), PNG **887 705 B** in the bench and ≤ 2 MB. The first card mounts 4 covers, the nine cards 14
+at most, 5 in flight; those are the payload's own `/api/cover` URLs, not the shell's playlist
+thumbnails. Like History, a recap never enters `localStorage` or the offline `/api` cache. The Home
+card appears only for `nowYear` or `nowYear - 1` from `/years` (never the device clock), costs one
+`/years` per session, and draws four deterministic Sillon grooves because `/years` carries no
+covers.
+
 **Nouveautés is two shelves, then the per-release list** (`routes/Releases.svelte`,
 `components/ReleaseCard.svelte`, `routes/ReleaseShelf.svelte`). `close_to` splits the payload:
 « Tes artistes » is the person's own (favourites and the artists they listen to), « Découverte »
@@ -266,6 +331,25 @@ phone shows the list OR a category (back returns to the list, `replace` on a dee
 open category. A link into a setting names its category (`/settings/sources`, `/settings/account`); old `fx`/`quality`
 names are mapped. Benches open the category they test (`#/settings/playback`, `#/settings/downloads`), never bare `#/settings`.
 
+**The admin user dashboard** (`components/AdminUsers.svelte`, `InviteSheet.svelte`,
+`lib/adminusers.js`) is a category **Utilisateurs**, mounted only for a local admin — never for a
+remote controller and never for a member. The pane widens to 1100 px: a real table at ≥ 1280 px,
+cards below. Opening the category no longer fires the eight server-card loads (they wait for their
+own tab). It loads **2 GET** (one account page + pending invitations), then **1 GET** per
+search or « Charger plus », **0** for a local state/role filter, **2** for Rafraîchir, and **1**
+per mutation; it never polls, keeps a 60 s memory copy, and caps the loaded set at 250 accounts /
+200 invitations. Because the server page has no `state`/`role` parameter yet, those filters apply
+to the loaded rows and the screen says so; the client is ready for a server filter when it lands.
+Pending invitations are rows of the same list (`kind:"invite"`), with their state and expiry, and
+the header stays under the top bar (`top: var(--topbar-h)`), a failed search says
+« Recherche indisponible » instead of counting stale rows, and the invite row's date column reads
+its expiry (« expire dans 3 j »). The token is shown **once** in `InviteSheet` (copy with a manual fallback, revoke, renew). Deleting
+an account asks for its exact name and shows the upload/playlist counts; the server's 403
+`self_disable`/`self_delete` and 409 `last_admin`/`server_account_holder` are translated to French
+administrative sentences. The account's own row pre-disables destructive actions, but the server
+remains the only authority. Layout: 390/641 cards (no sideways overflow), 1280/1440 table, 44 px
+controls.
+
 **The Égaliseur card is a picker, a meter and ten faders** (`components/AudioEffects.svelte`,
 `lib/eqpresets.js`). It is its own card under the volume/bass one. The presets are two groups — Intégrés (5)
 and Mes préréglages — as a horizontal snap rail at ≤640 px (44 px chips, the next one clipped as the scroll
@@ -339,7 +423,37 @@ for our own embeddings later). On the phone a swipe UP is the mirror of the swip
 from the cover; the panel follows the finger and settles open or shut; a swipe down drags it back down from anywhere
 on it — the header always, the body once it is scrolled to the top and the finger's first move is down, so a
 scroll or a sideways shelf keeps its gesture; a cancelled gesture decides nothing). On the desktop it is the *À propos* tab. Following any link from in there leaves the
-player (a `hashchange` listener). Its requests are keyed on the track's id as a STRING: `track` is the store's
+player (a `hashchange` listener). **For a podcast the same door becomes the episode's dossier**:
+Chapitres → Description → Informations, with no separate “Épisode” tab; the empty “Paroles” door/column
+disappears for a podcast on both mobile and desktop, while the swipe-up hint stays. `lib/chapters.js`
+is the only store (keyed by episode **id string**, deduped, 40 entries); openings cost **0 requests
+before the door, 1 on the first open, 0 per tick and 0 on reopen**. Rows are 60 px touch / 56 px
+desktop, the current one carries `aria-current="step"`, and above 60 chapters the shared `VirtualList`
+mounts 18 rows at 100 (13 after scrolling, ≤ 33). Ticks appear on the full-screen and desktop rail
+only, `aria-hidden`, and only when `(width − thumb) / N ≥ 7 px` (2 ticks for 3 chapters, 0 for 100 on
+239 px). The Show page chip costs one request per expanded episode, unfolds 4 rows ≤ 640 px / 8 above,
+then “Voir les N chapitres” opens a body-portalled sheet that returns focus to the chip. A
+non-archived episode, an empty scan and a network failure each say so; no chapter is invented.
+Chapters are deliberately not in the offline `/api` cache.
+
+**Transcription lives in the same About panel** (`components/TranscriptPanel.svelte`,
+`lib/transcript.js`, `transcriptcache.js`): the podcast panel becomes `Chapitres | Transcription`,
+one page of **200** timed lines, the current segment highlighted and followed, tap-to-seek without
+restarting playback, a “back to the live position” pill and an internal debounced search. A ready
+transcript costs **0 requests while listening**, 1 GET for the next page or an internal search, and
+is cached in IndexedDB `neezer-transcripts` (50 pages / 5 MB, 4 per episode, key
+`episode:limit:offset`, `ready` only, local search; never in `REMOTE`). A `queued|running` job polls
+once per 10 s with `limit=1`, never in `ready`; the status/error copy is French and the admin can
+start/stop/delete, while every account reads. A search hit opens the full-screen player **and** the
+About panel on the Transcription segment at the hit's timecode (`panelRequest` is consumed by the
+desktop/mobile shell with `segToken`, expiring after 3 s); the episode page has the same jump. The
+global Space shortcut ignores interactive targets (`button/a/input/textarea/select/[role=button]/
+[contenteditable]`). Settings carries the admin transcription card (enabled, language, limits,
+search scope, engine/model probe) and the two chapter switches. Measured: 0/1/0 requests on a ready
+transcript, 1 GET per page/search, 1 poll per 10.5 s while running, 200 lines at 390/641/1440 with no
+sideways overflow, 44 px controls.
+
+Its requests are keyed on the track's id as a STRING: `track` is the store's
 object, handed over again on every progress tick, and a reactive statement reading it asked for the credits four
 times a second (the browser test counts requests).
 
@@ -429,6 +543,31 @@ the person had left.
   and then fail the first time somebody opened it. The HTML scrape is kept as the fallback, for an
   older server whose `version.json` has no `assets`.
 
+- **The cache belongs to ONE account** (`lib/account.js`, `apicache.js`, `offline.js`): the owner
+  is `origin + "/id:" + user.id` (`/api/me`, `/api/login` and the invitation redeem all carry the
+  stable id; a saved account from an older build falls back to its name until the next boot), every personal key is
+  `neezer:<origin>/<name>:<key>`, and the IndexedDB store is keyed by `(owner, path)`. Without a
+  known owner nothing is read or written; a 401/403/404 deletes the entry; a logout/account switch
+  purges that owner's rows and keys (then reloads, which clears module caches). Queue, position,
+  recents, last playlist, podcast progress/speeds are scoped; `search.recent`, `flow.*` and the
+  discovery levels are purged; device settings (theme, volume, quality, output, viz, EQ) stay
+  global. Downloads carry `meta.owner` and are listed/played/deleted only for their account —
+  another account's bytes are never removed, only hidden. A v1 cache without an owner is dropped
+  once, and old personal keys are adopted by the remembered account; a name-keyed owner from an
+  older build migrates to the id form on the first boot (one reload, then stable).
+- **A 5xx is not a logout.** At boot only a 401 clears `auth.user`; a 5xx/network error keeps the
+  remembered session, paints the shell with « Le serveur ne répond pas » + « Réessayer » (or a
+  retry screen without a remembered session) and never shows the login form. `revalidate()` follows
+  the same rule.
+- **A failed request is never an empty state.** `LoadFailed.svelte` covers 404/401/403/offline/5xx
+  and Deezer, prints the cause and offers one « Réessayer » (one click = one request); screens that
+  already carry their own sentence keep it. `favTracks`/`playlists` stay `null` with a separate
+  error (`favTracksError`/`playlistsError`) instead of `[]`, so the Library/Podcasts/Show/Sources
+  never say « 0 titre » or « Rien ici » for a 500. Rows offer **44 px** on a coarse pointer and
+  40 px with a mouse (the play/actions columns grow via `--play-col`/`--acts-col`), and a ⋯ menu
+  opens focused on its first item, walks with ↑/↓/Home/End, and closes on Échap with focus returned;
+  the sheets share `lib/modal.js` for `aria-modal` and the focus trap.
+
 **The heavy screens load when they are opened.** Everything on the first screen is in the main
 bundle and worth being there; three things are not, and together they were a third of what every
 visitor downloaded, parsed and compiled before the first note played — which is the "the whole app
@@ -472,6 +611,22 @@ main bundle **656 kB → 457 kB** (223 → 158 kB gzipped), CSS **128 kB → 85 
   `removePlaylistLocal` show a create/rename/delete instantly; `invalidatePlaylists` then refetches
   (debounced — `/me/playlists` counts every playlist's tracks, and the edit paths call it per
   operation).
+- **Playlist folders** (`lib/playlistfolders.js`, `FolderSheet.svelte`,
+  `MoveToFolderSheet.svelte`) are a per-person view of that same store: the sidebar shows the
+  folders collapsed by default (state kept per device in `localStorage`), then the unfiled lists,
+  then the Deezer import fold; the Library's Playlists tab renders one section per folder plus
+  « Sans dossier » and « Depuis Deezer ». Every signed-in account loads its own + shared lists
+  (no `$isAdmin` gate); a shared card carries its owner and only `editable`/`can_manage` open the
+  edit paths — moving it to one's own folder stays allowed, it is the viewer's organisation.
+  First paint is bounded to **8 sections × 12 cards = 96** (500 playlists / 20 folders at 390×844:
+  96 cards, no sideways overflow); each scroll step adds 12 per section and 8 sections. Creation,
+  rename, move, reorder and delete are **one request each** (undo is 2: recreate + order); opening
+  a folder is 0. The Organiser mounts all rows only up to 60 — above that the shared `VirtualList`
+  takes over: a 500-playlist folder opened in **287 ms at 4× CPU with 11 rows mounted**, against
+  956 ms cold / 1 225 ms at 4× without it. The two sheets are mounted once at the end of
+  `Sidebar.svelte` and portalled to `<body>`; do not mount a second copy in `App.svelte`. Offline,
+  a folder mutation fails fast with « Hors ligne : impossible de modifier les dossiers » and never
+  paints a false success.
 - **ReplayGain is preloaded, never fetched from under a playing track** (`lib/gaincache.js`).
   Normalization is STATIC — `loadTrack` picks the gain at the source handover and holds it for the
   whole track — so a gain that lands one request later is not a refinement, it is the volume moving

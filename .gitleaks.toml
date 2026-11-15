@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+description = "A readable password in an older test fixture, not a credential"
+regexTarget = "match"
+regexes = ['''Quiet9-Meadow''']

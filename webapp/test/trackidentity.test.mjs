@@ -27,8 +27,10 @@ const { migrateKey, trackKey, trackRef } = await import("../src/lib/trackkey.js"
 const old = (id) => ({ deezer_id: String(id), title: `T${id}`, duration: 200 });
 const queue = [11, 22, 33, 44].map(old);
 const now = Date.now();
+mem.set("auth.user", JSON.stringify({ name: "bench" }));
 mem.set("player.session", JSON.stringify({ queue, index: 0, currentTime: 5, at: now - 5000 }));
 mem.set("player.pos", JSON.stringify({ i: 2, id: "33", t: 71.5, at: now }));
+const { scopedKey } = await import("../src/lib/account.js");
 // Verdicts and silence bounds, keyed by Deezer id by the previous build.
 mem.set("audio.analysis", JSON.stringify({ g: 3, v: { 33: { bpm: 174, style: "dnb" } }, t: { 33: now } }));
 mem.set("audio.edges.v3", JSON.stringify({ db: -50, e: { 33: { start: 0.4, end: 200, duration: 201 } } }));
@@ -42,10 +44,12 @@ test("a queue persisted by the previous version reloads on the same track", () =
   assert.equal(s.currentTime, 71.5);
   assert.equal(trackKey(s.queue[s.index]), migrateKey("33"));
   assert.equal(s.queue[s.index].deezer_id, "33");
+  assert.equal(mem.has("player.session"), false, "the unowned copy was adopted, then dropped");
+  assert.notEqual(mem.get(scopedKey("player.session")), undefined);
 });
 
 test("the tick still finds its track when the queue was shifted", () => {
-  mem.set("player.pos", JSON.stringify({ i: 0, id: "44", t: 9, at: Date.now() + 10 }));
+  mem.set(scopedKey("player.pos"), JSON.stringify({ i: 0, id: "44", t: 9, at: Date.now() + 10 }));
   // (read afresh: a new instance of the module)
   return import("../src/lib/stores.js?lotg2").then(({ player: p }) => {
     const s = get(p);
@@ -55,7 +59,7 @@ test("the tick still finds its track when the queue was shifted", () => {
 });
 
 test("a tick written with the UUID (this version) restores too", async () => {
-  mem.set("player.pos", JSON.stringify({ i: 1, id: migrateKey("22"), t: 3, at: Date.now() + 20 }));
+  mem.set(scopedKey("player.pos"), JSON.stringify({ i: 1, id: migrateKey("22"), t: 3, at: Date.now() + 20 }));
   const { player: p } = await import("../src/lib/stores.js?lotg3");
   const s = get(p);
   assert.equal(s.index, 1);

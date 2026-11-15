@@ -12,7 +12,9 @@
 // same with the page only throttled and the crossfade and trim on (bridge 8:
 // the app holds the list before the screen locks and cuts each song itself;
 // `--old` runs that scenario as bridge 7), bridge 10's long list through 36
-// ends with the page frozen and its one refill request, a seek in a first-play
+// ends with the page frozen and its one refill request, a media button's
+// play/pause/seek answered by the app behind a throttled page (A1), a 404 on one
+// title of a locked queue costing that title alone (A2), a seek in a first-play
 // stream with no length, and the Réglages card at the widths it lives in.
 //
 //   npm run build && node test/native/run.mjs [--shots <dir>] [--old]
@@ -45,7 +47,7 @@ function fakeApp() {
   const DELAY = 15; // binder + evaluateJavascript
   const slots = new Map();
   let next = 1;
-  window.__fake = { cmds: [], made: 0, released: 0, slots, frozen: false, held: [], lastPlayed: 0, bg: false, throttled: false, advAt: [], needCalls: 0, needsHeld: [], nextBytes: 0 };
+  window.__fake = { cmds: [], made: 0, released: 0, slots, frozen: false, held: [], lastPlayed: 0, bg: false, throttled: false, advAt: [], needCalls: 0, needsHeld: [], nextBytes: 0, pageCmds: 0, appCmds: 0, faults: [] };
   // The bench's queue can be longer than the twelve audio files the perf
   // server archives; a made-up stream URL still names a distinct track for
   // the page, but the real <audio> behind the stand-in must play a file.
@@ -81,17 +83,19 @@ function fakeApp() {
       for (const id of needs) if (window.__nsNeedNext) window.__nsNeedNext(id);
     }, 120);
   };
-  // MainActivity.onStop / onStart: the app's players learn it and say it.
+  // MainActivity.onStop / onStart: the app's players learn it and say it — and
+  // the page is TOLD FIRST, while it can still run, which is the order the
+  // activity uses (pushAppState, then setForeground): its one chance to name the
+  // long list before Chromium throttles and then freezes the renderer.
   window.__fake.setBg = (bg) => {
     window.__fake.bg = bg;
-    for (const sl of slots.values()) sl.send(null);
-    // MainActivity.onStop/onStart: the page names the long list while it can.
     try {
       if (bg && window.__nsAppBackground) window.__nsAppBackground();
       else if (!bg && window.__nsAppForeground) window.__nsAppForeground();
     } catch (_) {
       /* the page hook is optional */
     }
+    for (const sl of slots.values()) sl.send(null);
   };
   // The screen: a hidden page, as the WebView behind a locked phone is.
   window.__hidden = false;  Object.defineProperty(document, "visibilityState", { get: () => (window.__hidden ? "hidden" : "visible") });
@@ -99,7 +103,7 @@ function fakeApp() {
   function slot(id) {
     const el = new Real();
     el.preload = "auto";
-    const sl = { id, el, c: 0, item: false, prepared: false, pwr: false, seek: false, ended: false, tick: null, next: [], key: "", url: "", rep: "off", lastNeedAt: 0 };
+    const sl = { id, el, c: 0, item: false, prepared: false, pwr: false, seek: false, ended: false, tick: null, next: [], key: "", url: "", rep: "off", lastNeedAt: 0, faultMsg: null };
     // A first play: generated as it is sent, no seek map (NativeAudio.kt holds the seek).
     const unseekable = (sl.unseekable = () => localStorage.getItem("__unseekable") === "1" && !sl.whole);
     const st = () => {
@@ -115,6 +119,9 @@ function fakeApp() {
       if (sl.chase != null) s.t = sl.chase;
       if (sl.key) Object.assign(s, { k: sl.key, u: sl.url });
       if (sl.item && isFinite(el.duration) && el.duration > 0 && !unseekable()) s.d = el.duration;
+      // A title this player skipped (NativeRouting.fault): the page is told WHY
+      // in the state that announces the next one, never as an `error`.
+      if (sl.faultMsg) { s.fault = sl.faultMsg; sl.faultMsg = null; }
       if (ev) s.ev = ev;
       emit(id, s);
     };
@@ -174,6 +181,50 @@ function fakeApp() {
     sl.checkTrim = () => {
       if (version() >= 8 && sl.end > 0 && follows() && st() === 3 && el.currentTime >= sl.end - 0.015) advance();
     };
+    // NativeAudio.transport: a media button's play/pause/seek applied to THIS
+    // player while the activity is stopped. The page is told by the state.
+    sl.transport = (cmd, value) => {
+      const c = cmd === "toggle" ? (sl.pwr ? "pause" : "play") : cmd;
+      if (c === "play") {
+        if (sl.ended) {
+          sl.ended = false;
+          el.currentTime = 0;
+        }
+        sl.pwr = true;
+        el.play().catch(() => {});
+        sl.send(null);
+        return true;
+      }
+      if (c === "pause") {
+        sl.pwr = false;
+        el.pause();
+        sl.send(null);
+        return true;
+      }
+      if (c === "seek") {
+        sl.ended = false;
+        sl.seek = true;
+        el.currentTime = +value;
+        sl.send(null);
+        return true;
+      }
+      return false;
+    };
+    // NativeRouting.fault: a title that cannot be played costs that title, not
+    // the list — while the activity is stopped and something follows.
+    sl.fail = (msg) => {
+      const canSkip = window.__fake.bg && version() >= 10 && sl.next.length &&
+        sl.rep !== "one" && (window.__fake.faultSkips || 0) < 3;
+      window.__fake.faults.push(msg);
+      if (!canSkip) {
+        emit(id, { c: sl.c, ev: "error", code: 2, msg });
+        return false;
+      }
+      window.__fake.faultSkips = (window.__fake.faultSkips || 0) + 1;
+      sl.faultMsg = msg;
+      advance();
+      return true;
+    };
     el.addEventListener("ended", () => {
       if (follows()) {
         if (sl.next.length) return advance();
@@ -206,6 +257,27 @@ function fakeApp() {
     if (!sl || sl.el.paused) return false;
     sl.el.dispatchEvent(new Event("ended"));
     return true;
+  };
+  // PlayerService.transport / MediaSessionCompat.Callback, message for message:
+  // the app's own player answers while the activity is stopped
+  // (NativeAudio.transport, NativeRouting.transport), the page otherwise.
+  window.__fake.transport = (cmd, value) => {
+    if (window.__fake.bg) {
+      const sl = slots.get(window.__fake.lastPlayed);
+      if (sl && sl.transport(cmd, value)) {
+        window.__fake.appCmds++;
+        return "app";
+      }
+    }
+    window.__fake.pageCmds++;
+    if (window.__nsNativeCmd) window.__nsNativeCmd(cmd, value);
+    return "page";
+  };
+  // The track that is playing answers a verdict on itself (a 404, a decode
+  // error): NativeAudio.onPlayerError, i.e. NativeRouting.fault.
+  window.__fake.failTrack = (msg) => {
+    const sl = slots.get(window.__fake.lastPlayed);
+    return sl ? sl.fail(msg) : false;
   };
   // The APK under test: bridge 4 (the player alone) unless the bench says 6, 7, 8 or 10.
   const version = () => +(localStorage.getItem("__bridge") || 4);
@@ -331,7 +403,36 @@ function fakeApp() {
   };
   // The page's own <audio> elements, counted (what the setting OFF uses).
   window.__pageEls = 0;
-  window.Audio = function (...a) {
+  // assets/nsshim.js, the half of the bridge that lives in the page: it replaces
+  // navigator.mediaSession with one that CAPTURES the handlers Player.svelte
+  // registers, and PlayerService's page-bound commands come back through
+  // window.__nsNativeCmd. The bench models both, because "the command went to
+  // the page" is exactly what a frozen renderer never runs — a route this fake
+  // app reports must actually do something.
+  const pageHandlers = {};
+  const pageShim = {
+    setActionHandler(name, fn) {
+      pageHandlers[name] = fn;
+    },
+    setPositionState() {},
+    metadata: null,
+    playbackState: "none",
+  };
+  try {
+    Object.defineProperty(Navigator.prototype, "mediaSession", {
+      get: () => pageShim,
+      configurable: true,
+    });
+  } catch (_) {
+    /* the bench's Chromium allows it */
+  }
+  window.__nsNativeCmd = (cmd, value) => {
+    const map = { play: "play", pause: "pause", next: "nexttrack", prev: "previoustrack", seek: "seekto" };
+    const h = pageHandlers[map[cmd] || cmd];
+    if (!h) return;
+    if (cmd === "seek") h({ seekTime: Number(value) });
+    else h({});
+  };  window.Audio = function (...a) {
     window.__pageEls++;
     return new Real(...a);
   };
@@ -347,11 +448,12 @@ async function open(ctx, settings, queue) {
   await ctx.route(offline, (r) => r.abort());
   await ctx.addInitScript(fakeApp);
   await ctx.addInitScript(() => {
+    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
     const j = sessionStorage.getItem("__inject");
     if (!j) return;
     const { session, settings } = JSON.parse(j);
-    localStorage.setItem("player.session", JSON.stringify(session));
-    localStorage.removeItem("player.pos");
+    localStorage.setItem(pkey("player.session"), JSON.stringify(session));
+    localStorage.removeItem(pkey("player.pos"));
     for (const [k, v] of Object.entries(settings)) localStorage.setItem(k, JSON.stringify(v));
     sessionStorage.removeItem("__inject");
   });
@@ -693,6 +795,121 @@ const queue = ids.ids.slice(0, 3).map((id, k) => song(id, k + 1));
   const bytes = await page.evaluate(() => window.__fake.nextBytes || 0);
   check(bytes > 0 && bytes < 128 * 1024, "the longest bridge `next` payload stays under MAX_AUDIO_CMD",
     `${bytes} bytes`);
+  await ctx.close();
+}
+
+{
+  // A1: pause / play / seek from the notification, a headset, the lock screen
+  // or the car card, with the activity stopped and the page THROTTLED (its own
+  // timers wait; what the app sends it still runs). The app's player answers
+  // them itself — a command sent to the page is a task a frozen renderer never
+  // runs, and even a throttled one answers late.
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await open(ctx, { __bridge: 10 }, queue);
+  await page.locator("footer.player .pp").click();
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => {
+    window.__hidden = true;
+    window.__fake.setBg(true);
+    window.__fake.throttled = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForTimeout(300);
+  const pause = await page.evaluate(() => {
+    const route = window.__fake.transport("pause", null);
+    const sl = window.__fake.slots.get(window.__fake.lastPlayed);
+    return {
+      route, pwr: sl.pwr, playing: [...window.__fake.slots.values()].filter((s) => !s.el.paused).length,
+      pageCmds: window.__fake.pageCmds, appCmds: window.__fake.appCmds,
+    };
+  });
+  check(pause.route === "app" && pause.pwr === false && pause.playing === 0 && pause.pageCmds === 0,
+    "a headset pause behind a throttled page stops the app's player itself, with no page command",
+    JSON.stringify(pause));
+  const seek = await page.evaluate(() => {
+    const route = window.__fake.transport("seek", 4);
+    const sl = window.__fake.slots.get(window.__fake.lastPlayed);
+    return { route, t: sl.el.currentTime, pageCmds: window.__fake.pageCmds };
+  });
+  check(seek.route === "app" && Math.abs(seek.t - 4) < 0.05 && seek.pageCmds === 0,
+    "a seek from the car card lands on the app's player", JSON.stringify(seek));
+  const resumed = await page.evaluate(() => {
+    const route = window.__fake.transport("play", null);
+    const sl = window.__fake.slots.get(window.__fake.lastPlayed);
+    return { route, pwr: sl.pwr, pageCmds: window.__fake.pageCmds };
+  });
+  check(resumed.route === "app" && resumed.pwr === true && resumed.pageCmds === 0,
+    "and so does the play button", JSON.stringify(resumed));
+  // Awake: the page adopts every one of them from the states it was sent.
+  await page.evaluate(() => {
+    window.__hidden = false;
+    window.__fake.setBg(false);
+    window.__fake.thaw();
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForTimeout(900);
+  const w = await where(page);
+  const store = await page.evaluate(() => navigator.mediaSession.playbackState);
+  check(w.title === "Song 1" && !w.paused && w.playing === 1 && store === "playing",
+    "awake: the page is on the app's player, position taken over, store playing",
+    `${w.title} at ${w.t?.toFixed(2)}, ${w.playing} playing, store ${store}`);
+  check(w.t > 3.5, "and the seek it never performed itself is where the sound is", `${w.t?.toFixed(2)} s`);
+  // In front of the page, nothing changed: the command goes to the page, which
+  // owns the transport there.
+  const visible = await page.evaluate(() => {
+    const route = window.__fake.transport("pause", null);
+    return { route, pageCmds: window.__fake.pageCmds };
+  });
+  await page.waitForTimeout(700);
+  const w2 = await where(page);
+  check(visible.route === "page" && w2.paused && w2.playing === 0,
+    "in front of the page, a pause still goes to the page", JSON.stringify(visible));
+  await ctx.close();
+}
+
+{
+  // A2: a title that cannot be played (the fifth of eight answers 404) while the
+  // screen is locked. It used to stop the WHOLE list the app had been given; it
+  // must cost that title and nothing else.
+  const q8 = Array.from({ length: 8 }, (_, k) =>
+    song(k < ids.ids.length ? ids.ids[k] : "x" + (k + 1), k + 1));
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await open(ctx, { __bridge: 10 }, q8);
+  await page.locator("footer.player .pp").click();
+  await page.waitForTimeout(1200);
+  const r = await page.evaluate(() => {
+    window.__hidden = true;
+    window.__fake.setBg(true);
+    window.__fake.frozen = true;
+    for (let i = 0; i < 4; i++) window.__fake.endNow(); // four titles played
+    const before = window.__fake.advanced || 0;
+    const skipped = window.__fake.failTrack("ERROR_CODE_IO_BAD_HTTP_STATUS");
+    for (let i = 0; i < 2; i++) window.__fake.endNow(); // and the list goes on
+    return {
+      before, skipped, advanced: window.__fake.advanced || 0,
+      faults: window.__fake.faults.length,
+      sounding: [...window.__fake.slots.values()].filter((s) => !s.el.paused).length,
+    };
+  });
+  check(r.before === 4 && r.skipped === true && r.advanced === 7 && r.sounding === 1,
+    "404 on the fifth of eight, screen locked: the app consumes that title and plays the rest",
+    JSON.stringify(r));
+  await page.evaluate(() => {
+    window.__hidden = false;
+    window.__fake.setBg(false);
+    window.__fake.thaw();
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.waitForFunction(
+    () => document.querySelector("footer.player .info .t")?.textContent === "Song 8",
+    null,
+    { timeout: 5000 }
+  );
+  await page.waitForTimeout(400);
+  const w = await where(page);
+  check(w.title === "Song 8" && !w.paused && w.playing === 1,
+    "awake: the page caught up on the last title the app played, nothing stalled",
+    `${w.title} at ${w.t?.toFixed(2)}, ${w.playing} playing`);
   await ctx.close();
 }
 

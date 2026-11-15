@@ -1,99 +1,274 @@
 <script>
+  import { tick } from "svelte";
   import { user } from "../lib/stores.js";
   import { api } from "../lib/api.js";
+  import Icon from "../components/Icon.svelte";
 
   let username = "";
   let password = "";
   let error = "";
+  let alertEl;
   let busy = false;
+  let passwordEl;
 
-  async function submit(e) {
-    e.preventDefault();
+  function failureMessage(err) {
+    if (!err) return "La connexion a échoué. Réessaie.";
+    if (err.status === 401) return "Nom d'utilisateur ou mot de passe incorrect.";
+    if (!err.status || err.offline)
+      return "Le serveur ne répond pas. Vérifie ta connexion, puis réessaie.";
+    if (err.status === 429) return "Trop de tentatives. Réessaie dans quelques minutes.";
+    return "Le serveur n'a pas répondu. Réessaie dans un instant.";
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    if (busy) return;
     error = "";
     busy = true;
     try {
       const r = await api.login(username, password);
       user.set(r.user);
     } catch (err) {
-      error = err.status === 401 ? "Identifiants invalides" : err.message || "Erreur";
+      error = failureMessage(err);
+      if (err && err.status === 401) {
+        password = "";
+        passwordEl?.focus();
+      } else {
+        tick().then(() => alertEl?.focus());
+      }
     } finally {
       busy = false;
     }
   }
 </script>
 
-<div class="wrap">
-  <form on:submit={submit}>
-    <div class="brand"><span class="dot"></span> Neezer</div>
-    <h1>Connexion</h1>
-    <input placeholder="Utilisateur" bind:value={username} autocomplete="username" />
-    <input
-      type="password"
-      placeholder="Mot de passe"
-      bind:value={password}
-      autocomplete="current-password"
-    />
-    {#if error}<p class="err">{error}</p>{/if}
-    <button class="pill" type="submit" disabled={busy}>
-      {busy ? "…" : "Se connecter"}
-    </button>
-  </form>
+<svelte:head>
+  <title>Connexion · Neezer</title>
+</svelte:head>
+
+<div class="page">
+  <div class="halo" aria-hidden="true"></div>
+  <main class="card" aria-labelledby="login-title">
+    <div class="brand">
+      <span class="mark"><Icon name="disc" size={17} /></span>
+      <span>Neezer</span>
+    </div>
+
+    <div class="intro">
+      <h1 id="login-title">Connexion</h1>
+      <p class="sub">Entre pour retrouver ta musique.</p>
+    </div>
+
+    <form on:submit={submit} novalidate>
+      <div class="control">
+        <label for="login-name">Nom d'utilisateur</label>
+        <input
+          id="login-name"
+          bind:value={username}
+          autocomplete="username"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="control">
+        <label for="login-password">Mot de passe</label>
+        <input
+          id="login-password"
+          bind:this={passwordEl}
+          bind:value={password}
+          type="password"
+          autocomplete="current-password"
+        />
+      </div>
+
+      {#if error}
+        <p class="err" role="alert" tabindex="-1" bind:this={alertEl}><Icon name="alert" size={14} /><span>{error}</span></p>
+      {/if}
+
+      <button class="primary wide" type="submit" disabled={busy}>
+        {busy ? "Connexion…" : "Se connecter"}
+      </button>
+    </form>
+  </main>
 </div>
 
 <style>
-  .wrap {
-    display: grid;
-    place-items: center;
-    height: 100vh;
-    background: radial-gradient(circle at 30% 20%, #2a1640, var(--bg) 60%);
+  .page {
+    min-height: 100dvh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: max(24px, var(--safe-top, 0px)) 20px max(24px, var(--safe-bottom, 0px));
+    padding-top: clamp(24px, 10vh, 96px);
+    background: var(--bg);
   }
-  form {
-    background: var(--bg-elev);
-    padding: 32px;
-    border-radius: 16px;
-    width: 320px;
+  .card {
+    position: relative;
+    z-index: 1;
+    width: min(400px, 100%);
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    gap: 20px;
+    padding: 24px;
+    border-radius: var(--r-card);
+    background: var(--s1);
+    border: 1px solid var(--ln);
+    overflow: visible;
   }
   .brand {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-weight: 800;
+    gap: 10px;
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
-  .dot {
-    width: 14px;
-    height: 14px;
+  .mark {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
     border-radius: 50%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    background: var(--ac);
+    color: var(--onac);
   }
   h1 {
     margin: 0;
-    font-size: 1.4rem;
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+  }
+  .sub {
+    margin: 6px 0 0;
+    color: var(--dim);
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .control {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  label {
+    font-size: 13px;
+    font-weight: 600;
   }
   input {
-    padding: 12px;
-    border-radius: var(--radius);
-    border: 1px solid transparent;
-    background: var(--bg-card);
-    color: var(--text);
-    outline: none;
+    width: 100%;
+    height: 48px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid var(--ln);
+    background: var(--bg);
+    color: var(--tx);
+    font-size: 15px;
   }
   input:focus {
-    border-color: var(--accent);
+    border-color: var(--ac-text);
   }
   .err {
-    color: var(--accent-2);
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
     margin: 0;
-    font-size: 0.9rem;
+    color: var(--ac-text);
+    font-size: 12.5px;
+    line-height: 1.45;
   }
-  .pill {
+  .err :global(svg) {
+    margin-top: 2px;
+    flex: none;
+  }
+  .primary {
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
-    border: none;
+    gap: 8px;
+    height: 48px;
+    min-height: 44px;
+    padding: 0 20px;
+    border-radius: 999px;
+    background: var(--btn);
+    color: var(--onbtn);
+    font-size: 15px;
+    font-weight: 700;
   }
-  .pill:disabled {
-    opacity: 0.6;
+  .primary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .primary:not(:disabled):hover {
+    filter: brightness(1.06);
+  }
+  .wide {
+    width: 100%;
+  }
+  .halo {
+    display: none;
+  }
+  @media (min-width: 641px) {
+    .card {
+      padding: 32px;
+    }
+  }
+  @media (min-width: 900px) {
+    .page::before {
+      content: "";
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: min(680px, 74vw);
+      aspect-ratio: 1;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      border: 1px solid var(--s2);
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.8;
+    }
+    .page::after {
+      content: "";
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: min(480px, 56vw);
+      aspect-ratio: 1;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      border: 1px solid var(--ln);
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.55;
+    }
+    .halo {
+      display: block;
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: min(290px, 38vw);
+      aspect-ratio: 1;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      border: 1px solid var(--ln);
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.4;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .primary {
+      transition: none;
+    }
   }
 </style>

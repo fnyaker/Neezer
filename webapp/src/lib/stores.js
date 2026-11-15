@@ -1,6 +1,7 @@
 import { writable, derived, get } from "svelte/store";
 import { logInfo, flushLog } from "./log.js";
 import { REMOTE } from "./remote/mode.js";
+import { scopedKey, activeOwner, onOwnerChange } from "./account.js";
 import { trackKey, migrateKey } from "./trackkey.js";
 
 // -- auth -------------------------------------------------------------------
@@ -20,20 +21,26 @@ export const isAdmin = derived(user, ($u) => !!($u && $u.admin));
 // device settings, see lib/remote/settings.js) is looked up here.
 export const persistedStores = new Map();
 
-function persisted(key, initial) {
+function persisted(key, initial, personal = false) {
   // A remote control keeps its own copy of every setting, apart from this
   // device's: what it shows (and writes) is the controlled player's, mirrored
   // in, and driving somebody else's player must never rewrite your own.
-  const storageKey = REMOTE ? "remote:" + key : key;
+  const deviceKey = REMOTE ? "remote:" + key : key;
+  const keyNow = () => (personal ? scopedKey(key) || (REMOTE ? deviceKey : null) : deviceKey);
   let start = initial;
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (raw !== null) start = JSON.parse(raw);
-  } catch {
-    /* ignore */
+  const first = keyNow();
+  if (first) {
+    try {
+      const raw = localStorage.getItem(first);
+      if (raw !== null) start = JSON.parse(raw);
+    } catch {
+      /* ignore */
+    }
   }
   const store = writable(start);
   store.subscribe((v) => {
+    const storageKey = keyNow();
+    if (!storageKey) return;
     try {
       localStorage.setItem(storageKey, JSON.stringify(v));
     } catch {
@@ -253,7 +260,7 @@ export const flashLevel = derived([vizFlash, vizFlashAck], ([$f, $ack]) =>
 //   [{ id, name, eq: bool, bands: number[10], bass: number, norm: string }]
 // How fast each podcast is played, by show (channel id -> rate). A show you
 // listen to at 1.5x is at 1.5x the next time too; music is never touched.
-export const podcastSpeeds = persisted("podcast.speeds", {});
+export const podcastSpeeds = persisted("podcast.speeds", {}, true);
 
 export const fxPresets = persisted("fx.presets", []);
 
@@ -303,6 +310,27 @@ export function deleteFxPreset(id) {
 // out of date. Owned by lib/actions.js (userPlaylists / invalidatePlaylists).
 // null = never loaded yet (skeleton), [] = loaded and empty.
 export const playlists = writable(null);
+
+export const playlistFolders = writable(null);
+export const openFolders = persisted("playlistfolders.open", []);
+export const closedSections = persisted("playlistfolders.closed", []);
+
+export const folderSheet = writable(null);
+export function openFolderSheet(payload) {
+  folderSheet.set(payload || { mode: "create" });
+}
+export function closeFolderSheet() {
+  folderSheet.set(null);
+}
+
+export const moveToFolder = writable(null);
+export function openMoveToFolder(payload) {
+  if (payload?.playlist?.id) moveToFolder.set({ playlist: payload.playlist });
+}
+export function closeMoveToFolder() {
+  moveToFolder.set(null);
+}
+
 
 // -- offline / downloads ----------------------------------------------------
 
@@ -475,7 +503,7 @@ export const notices = createNotices();
 
 // Last playlist a track was added to ({id, title} | null), persisted — powers
 // the one-tap "Ajouter à « X »" entry in the track menu.
-export const lastPlaylist = persisted("playlist.lastUsed", null);
+export const lastPlaylist = persisted("playlist.lastUsed", null, true);
 
 // Playlist picker sheet: pick (or search, or create) a playlist for a track.
 // { track } | { mode: "new" } | { mode: "queue" } | null — mounted once in
@@ -575,12 +603,21 @@ export function closeGenreTag() {
 }
 
 // -- export sheet ------------------------------------------------------------
-// { kind: "playlist" | "album" | "favorites", id, title } | null — pick a format
-// and download the whole thing as a ZIP. Mounted once in App.svelte.
+// { kind: "playlist" | "album" | "favorites", id, title, canManage } | null —
+// pick a format and download the whole thing as a ZIP. Mounted once in
+// App.svelte. `canManage` is the playlist's own capability: only the owner or
+// an admin is offered the « Lien public » tab (the server answers 403 to an
+// editor, so the client never shows a control that would fail).
 
 export const exportSheet = writable(null);
-export function openExport(kind, id, title = "") {
-  if (kind && id) exportSheet.set({ kind, id: String(id), title });
+export function openExport(kind, id, title = "", options = {}) {
+  if (kind && id)
+    exportSheet.set({
+      kind,
+      id: String(id),
+      title,
+      canManage: kind === "playlist" && !!options.canManage,
+    });
 }
 export function closeExport() {
   exportSheet.set(null);
@@ -640,7 +677,7 @@ export const favTracks = writable(null);
 
 // -- recently played (client-side) ------------------------------------------
 
-export const recent = persisted("recent.tracks", []);
+export const recent = persisted("recent.tracks", [], true);
 export function pushRecent(track) {
   const key = trackKey(track);
   if (!key) return;
@@ -686,7 +723,11 @@ const POS_KEY = "player.pos";
 const SESSION_CAP = 1000;
 const SESSION_CAP_MIN = 100;
 
+const sessionKey = () => scopedKey(SESSION_KEY);
+const posKey = () => scopedKey(POS_KEY);
+
 function readJSON(key) {
+  if (!key) return null;
   try {
     const raw = localStorage.getItem(key);
     return raw !== null ? JSON.parse(raw) : null;
@@ -696,6 +737,7 @@ function readJSON(key) {
 }
 
 function writeJSON(key, value) {
+  if (!key) return false;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
@@ -705,7 +747,7 @@ function writeJSON(key, value) {
 }
 
 function readSession() {
-  const sess = readJSON(SESSION_KEY);
+  const sess = readJSON(sessionKey());
   if (!sess) return null;
   // Overlay the position tick when it's FRESHER than the full snapshot (both
   // carry a write timestamp) — during playback the tick is the up-to-date one,
@@ -715,7 +757,7 @@ function readSession() {
   // that's what lets a plain track change skip rewriting the whole queue (see
   // the subscriber below). The id at that index still has to match — but a
   // mismatch is repaired rather than dropped, see below.
-  const pos = readJSON(POS_KEY);
+  const pos = readJSON(posKey());
   // The single most valuable line in the log: exactly what the two keys held at
   // boot, so a resume that lands on the wrong track can be explained instead of
   // guessed at.
@@ -876,12 +918,14 @@ function createPlayer() {
   }
   function save(s) {
     if (DISPLAY_ONLY) return;
+    const key = sessionKey();
+    if (!key) return;
     // Quota blown by a huge queue: retry with a tight window around the
     // playing track so at least the position and nearby tracks survive.
     let snap = snapshot(s);
-    if (!writeJSON(SESSION_KEY, snap)) {
+    if (!writeJSON(key, snap)) {
       snap = snapshot(s, SESSION_CAP_MIN);
-      writeJSON(SESSION_KEY, snap);
+      writeJSON(key, snap);
     }
     savedOffset = snap.start;
     logInfo("session", `queue written: n=${snap.queue.length} i=${snap.index} start=${snap.start}`,
@@ -891,7 +935,7 @@ function createPlayer() {
     if (DISPLAY_ONLY) return;
     lastPosAt = Date.now();
     logInfo("pos", `i=${s.index - savedOffset} id=${trackKey(s.queue[s.index]) ?? "-"} t=${(s.currentTime || 0).toFixed(1)}`);
-    writeJSON(POS_KEY, {
+    writeJSON(posKey(), {
       i: s.index - savedOffset, // same coordinates as the persisted window
       id: trackKey(s.queue[s.index]),
       t: s.currentTime,
@@ -977,6 +1021,32 @@ function createPlayer() {
     subscribe,
     set,
     update,
+
+    resetForAccount() {
+      const sess = !REMOTE && activeOwner() ? readSession() : null;
+      const queue = Array.isArray(sess?.queue) ? sess.queue : [];
+      savedOffset = 0;
+      set({
+        queue,
+        index:
+          Number.isInteger(sess?.index) && sess.index < queue.length
+            ? sess.index
+            : queue.length
+              ? 0
+              : -1,
+        playing: false,
+        currentTime: (sess && sess.currentTime) || 0,
+        duration: 0,
+        seq: latest ? latest.seq + 1 : 1,
+        volume: get(savedVolume),
+        muted: get(savedMuted),
+        shuffle: get(savedShuffle),
+        repeat: get(savedRepeat),
+        autoplay: true,
+        context: (sess && sess.context) || null,
+        _orig: sess && Array.isArray(sess._orig) ? sess._orig : null,
+      });
+    },
 
     playQueue(tracks, start = 0, context = null) {
       // Logged with a stack hint: if the player ever resets itself on returning
@@ -1301,6 +1371,24 @@ function createPlayer() {
 }
 
 export const player = createPlayer();
+
+function hydrateAccount(store, key, initial) {
+  let value = initial;
+  const storageKey = scopedKey(key);
+  if (storageKey) {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw !== null) value = JSON.parse(raw);
+    } catch {}
+  }
+  store.set(value);
+}
+onOwnerChange(() => {
+  player.resetForAccount();
+  hydrateAccount(recent, "recent.tracks", []);
+  hydrateAccount(lastPlaylist, "playlist.lastUsed", null);
+  hydrateAccount(podcastSpeeds, "podcast.speeds", {});
+});
 
 // Flush the session at every "last reliable moment" of the page lifecycle:
 // backgrounding (Android may kill the tab without any further event), the

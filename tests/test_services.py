@@ -269,7 +269,8 @@ class ServicesTestCase(unittest.TestCase):
         theirs = {s["id"]: s for s in self.bob.get("/api/services").get_json()["services"]}
         self.assertTrue(theirs["spotify"]["ready"])
         self.assertNotIn("client_id", theirs["spotify"])
-        self.assertNotIn("deezer", theirs, "the server's Deezer account is the admin's")
+        self.assertNotIn("deezer", mine, "no export writes to a provider account")
+        self.assertNotIn("deezer", theirs)
 
     def test_the_redirect_uri_is_the_one_saved_never_the_request_host(self):
         def under(name, password, base):
@@ -429,8 +430,15 @@ class ServicesTestCase(unittest.TestCase):
     def test_exports_are_private_to_their_user(self):
         self._configure()
         self._link_spotify()
+        # A playlist that is not his is not even confirmed to exist.
         self.assertEqual(
             self.bob.post("/api/services/spotify/export", json={"kind": "playlist", "id": str(self.pl.id)}).status_code,
+            404, "a non-member cannot export somebody else's playlist",
+        )
+        mine = Playlist.create(user=User.get(name="bob"), name="Bob's")
+        PlaylistTrack.create(playlist=mine, track=self.tracks[0], index=0)
+        self.assertEqual(
+            self.bob.post("/api/services/spotify/export", json={"kind": "playlist", "id": str(mine.id)}).status_code,
             409, "bob has no Spotify linked: alice's is not his",
         )
         self.fake.catalogue = [("spotify:track:papa", "Papaoutai", ["Stromae"], 232, None)]
@@ -440,7 +448,7 @@ class ServicesTestCase(unittest.TestCase):
             if t.name == "export-spotify":
                 t.join(10)
         self.assertEqual(self.bob.get(f"/api/services/export/{job_id}").status_code, 404)
-        self.assertEqual(self.bob.post("/api/services/deezer/export", json={"kind": "playlist", "id": str(self.pl.id)}).status_code, 403)
+        self.assertEqual(self.bob.post("/api/services/deezer/export", json={"kind": "playlist", "id": str(self.pl.id)}).status_code, 404)
 
     def test_youtube_export_uses_the_video_a_track_came_from(self):
         created = {}

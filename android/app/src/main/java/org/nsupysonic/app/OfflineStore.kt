@@ -162,6 +162,13 @@ class OfflineStore private constructor(
     /** The page's lease on the link (see YieldGate); 0 ends it. */
     fun yieldFor(ms: Long) = gate.hold(ms)
 
+    /**
+     * The app's own player is (true) or is no longer (false) pulling a stream:
+     * its own hold on the link, independent of the page's lease, so a locked
+     * screen cannot expire it (see YieldGate).
+     */
+    fun holdLink(on: Boolean) = gate.holdPlayer(on)
+
     private fun publish(key: String, type: String) {
         val tmp = part(key)
         val m = JSONObject().put("id", key).put("type", type).put("size", tmp.length())

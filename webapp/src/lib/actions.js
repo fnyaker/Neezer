@@ -2,10 +2,11 @@
 // Kept separate from api.js to avoid an import cycle (api.js imports stores).
 
 import { migrateKey, trackKey, trackRef } from "./trackkey.js";
-import { get } from "svelte/store";
+import { get, writable } from "svelte/store";
 
 import { REMOTE, CAN_KEEP, CAN_BROWSE } from "./remote/mode.js";
 import { api } from "./api.js";
+import { onOwnerChange } from "./account.js";
 import {
   favorites,
   disliked,
@@ -22,6 +23,10 @@ import {
   openReplace,
   openGenreTag,
   openCredits,
+  playlistFolders,
+  openFolders,
+  notices,
+  openMoveToFolder,
 } from "./stores.js";
 import { downloadTrack, removeTrack, isDownloaded } from "./offline.js";
 import { addMarkerAt } from "./markers.js";
@@ -30,6 +35,7 @@ import { entityRef, trackEntityRef } from "./entity.js";
 import { reconcileList } from "./reconcile.js";
 import { cacheAge } from "./apicache.js";
 import { online } from "./net.js";
+import { containerIds, idsOf, orderContainer, orderFolders } from "./playlistfolders.js";
 
 // Quality choices offered in the "download as…" submenu.
 export const DL_QUALITIES = [
@@ -79,27 +85,38 @@ export async function runDeezerSync() {
 // the array still get it back; callers that need to STAY current subscribe to
 // the store instead (that is the whole point — see stores.js).
 let playlistsInFlight = null;
+// Why the last attempt failed, so a screen can say so instead of painting the
+// `null` state as "no playlist at all".
+export const playlistsError = writable(null);
+// When the list was last asked for, successful or not. The focus refresh below
+// is bounded by this: a flaky link must not turn "come back to the tab" into a
+// request per visit.
+let playlistsTouchedAt = 0;
 
 export async function userPlaylists(force = false) {
   const cached = get(playlists);
   if (cached && !force) return cached;
   // Several views mount at once on a cold start; they must share one request.
   if (playlistsInFlight && !force) return playlistsInFlight;
+  playlistsTouchedAt = Date.now();
   // This IS the refresh a pending invalidation was waiting for.
   cancelPlaylistRefresh();
   const p = api
     .myPlaylists()
     .then((r) => {
       const list = r.playlists || [];
+      playlistsError.set(null);
       playlists.set(list);
+      playlistFolders.set(r.folders || []);
       warmPlaylists(list);
       return list;
     })
-    .catch(() => {
+    .catch((e) => {
       // Don't memoize a failure: storing [] here left the sidebar / picker / the
       // library tab permanently empty after a single failed load (offline boot,
       // server not up yet) until an unrelated edit invalidated the cache. Leave
       // the store as it is, so the next call refetches.
+      playlistsError.set(e || { status: 0, message: "network" });
       return get(playlists) || [];
     })
     .finally(() => {
@@ -126,6 +143,119 @@ export function invalidatePlaylists() {
     playlistRefreshTimer = null;
     userPlaylists(true).catch(() => {});
   }, PLAYLIST_REFRESH_DELAY);
+}
+
+// A list shared while this tab was in the background must appear without a
+// reload: one request at most a minute, never offline, never twice at once.
+const PLAYLIST_FOCUS_AGE = 60 * 1000;
+
+export function refreshPlaylistsIfStale() {
+  if (typeof document !== "undefined" && document.hidden) return;
+  if (!get(online) || get(playlists) === null) return;
+  if (playlistsInFlight) return;
+  if (Date.now() - playlistsTouchedAt < PLAYLIST_FOCUS_AGE) return;
+  userPlaylists(true).catch(() => {});
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", refreshPlaylistsIfStale);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshPlaylistsIfStale();
+  });
+}
+
+// -- collaborative playlists: the shapes the UI decides on -------------------
+// The server enforces the matrix; these helpers only read what it answered, once
+// (lib/api.js attaches the parsed 409 body to `err.body`).
+
+/** A list somebody else owns, from `/me/playlists` or the playlist payload. */
+export function isSharedPlaylist(p) {
+  return !!p && !!p.role && p.role !== "owner";
+}
+
+/** The words the collaborator controls use, in one place. */
+export function roleLabel(role) {
+  if (role === "owner") return "Propriétaire";
+  if (role === "editor") return "Peut modifier";
+  if (role === "viewer") return "Lecture seule";
+  if (role === "admin") return "Administrateur";
+  return "";
+}
+
+/** The 409 body of an optimistic-concurrency mismatch, or null (an "owner" 409
+ *  is not a conflict: nothing was reloaded). */
+export function conflictOf(err) {
+  if (!err || err.status !== 409 || !err.body || err.body.error !== "conflict") return null;
+  return err.body;
+}
+
+/** What a conflict says: who moved the playlist, and which half of it. */
+export function conflictNotice(body) {
+  if (!body) return "La playlist a changé entre-temps — rechargée.";
+  if (body.scope === "members") return "La liste des collaborateurs a changé — rechargée.";
+  return body.last_edited_by
+    ? `Modifiée par ${body.last_edited_by} — rechargée.`
+    : "La playlist a changé entre-temps — rechargée.";
+}
+
+/** Why a membership call failed, in words a person can act on. */
+export function memberError(err, username = "") {
+  if (!err) return "";
+  if (err.offline || err.status === 0) return "Hors ligne : la modification n'a pas été enregistrée.";
+  const code = (err.body && err.body.error) || "";
+  if (err.status === 429) {
+    const seconds = Math.max(1, Math.trunc(Number(err.body && err.body.retry_after) || 1));
+    return `Trop d'invitations d'un coup — réessayez dans ${seconds} s.`;
+  }
+  if (err.status === 409) {
+    if (code === "owner") return "Cette personne est déjà propriétaire de la playlist.";
+    if (code === "member limit") return "Cette playlist a atteint sa limite de 100 collaborateurs.";
+    if (code === "playlist limit") return "Ce compte a atteint sa limite de playlists.";
+    if (code === "conflict") return conflictNotice(err.body);
+    return "La playlist a changé entre-temps — réessayez.";
+  }
+  if (err.status === 404) {
+    if (code === "unknown user") return `Aucun compte ne s'appelle « ${username} » sur ce serveur.`;
+    return "Cette playlist ne vous est plus accessible.";
+  }
+  if (err.status === 403) return "Vous n'avez plus le droit de gérer les collaborateurs.";
+  if (err.status === 400) {
+    if (code === "self") return "C'est votre propre compte.";
+    if (code === "invalid role") return "Rôle invalide.";
+    if (code === "invalid username") return "Indiquez un nom d'utilisateur.";
+    return "Demande invalide.";
+  }
+  return "Impossible de modifier les collaborateurs.";
+}
+
+// One resync per (playlist, scope) at a time: a second 409 arriving during the
+// reload waits for the same GET instead of starting a loop. The entry is
+// dropped once it settles, so a later conflict asks again.
+const resyncs = new Map();
+
+export function resyncOnce(key, run) {
+  const k = String(key);
+  const pending = resyncs.get(k);
+  if (pending) return pending;
+  const p = Promise.resolve().then(run);
+  resyncs.set(k, p);
+  const done = () => {
+    if (resyncs.get(k) === p) resyncs.delete(k);
+  };
+  p.then(done, done);
+  return p;
+}
+
+/** What the 30 s probe means: the members list moved, the content moved, and
+ *  whether the page may take the truth NOW or must offer the pill instead. */
+export function probeDecision(seen, next, { editing = false, busy = false } = {}) {
+  const members = !!next && next.members_version !== seen?.members_version;
+  const content = !!next && next.version !== seen?.version;
+  return {
+    members,
+    reload: content && !editing && !busy,
+    stale: content && (editing || busy),
+  };
 }
 
 // Merge a playlist the user just created or renamed into the store NOW. The
@@ -164,6 +294,249 @@ function bumpPlaylistCount(id, delta) {
     return next;
   });
 }
+
+const OFFLINE_FOLDERS = "Hors ligne : impossible de modifier les dossiers";
+const FOLDER_ORDER_DELAY = 400;
+const folderOrderTimers = new Map();
+
+function folderIdOf(value) {
+  return value == null ? null : String(value);
+}
+
+function openFolderLocally(id) {
+  const fid = folderIdOf(id);
+  if (!fid) return;
+  openFolders.update((ids) => {
+    const list = ids || [];
+    return list.some((x) => String(x) === fid) ? list : [...list, fid];
+  });
+}
+
+function closeFolderLocally(id) {
+  const fid = folderIdOf(id);
+  if (!fid) return;
+  openFolders.update((ids) => (ids || []).filter((x) => String(x) !== fid));
+}
+
+function offlineFolders() {
+  toasts.push(OFFLINE_FOLDERS, "error");
+}
+
+function newFolderId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function putOrder(key, run) {
+  const noticeId = "folder-order:" + key;
+  try {
+    await run();
+    notices.dismiss(noticeId);
+  } catch {
+    notices.push({
+      id: noticeId,
+      kind: "error",
+      message: "Ordre non enregistré",
+      actionLabel: "Réessayer",
+      action: () => putOrder(key, run),
+    });
+  }
+}
+
+function scheduleOrder(key, run) {
+  const previous = folderOrderTimers.get(key);
+  if (previous) clearTimeout(previous.timer);
+  const timer = setTimeout(() => {
+    folderOrderTimers.delete(key);
+    putOrder(key, run);
+  }, FOLDER_ORDER_DELAY);
+  folderOrderTimers.set(key, { timer, run });
+}
+
+export async function flushPlaylistFolderOrders() {
+  const pending = [...folderOrderTimers.entries()];
+  folderOrderTimers.clear();
+  await Promise.all(
+    pending.map(([key, { timer, run }]) => {
+      clearTimeout(timer);
+      return putOrder(key, run);
+    })
+  );
+}
+
+export async function createFolder(title) {
+  const name = (title || "").trim();
+  if (!name) return null;
+  if (!get(online)) {
+    offlineFolders();
+    return null;
+  }
+  const id = newFolderId();
+  const folders = get(playlistFolders) || [];
+  const folder = {
+    id,
+    title: name,
+    position: folders.reduce((max, f) => Math.max(max, Number(f.position) || 0), -1) + 1,
+    nb_playlists: 0,
+  };
+  playlistFolders.set([...folders, folder]);
+  openFolderLocally(id);
+  try {
+    const r = await api.createPlaylistFolder(name, id);
+    if (r?.position != null) {
+      playlistFolders.update((list) =>
+        (list || []).map((f) => (String(f.id) === id ? { ...f, position: r.position } : f))
+      );
+    }
+    return { ...folder, position: r?.position ?? folder.position };
+  } catch (e) {
+    playlistFolders.update((list) => (list || []).filter((f) => String(f.id) !== id));
+    closeFolderLocally(id);
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de créer le dossier", "error");
+    return null;
+  }
+}
+
+export async function renameFolder(id, title) {
+  const fid = folderIdOf(id);
+  const name = (title || "").trim();
+  const folders = get(playlistFolders) || [];
+  const folder = folders.find((f) => String(f.id) === fid);
+  if (!folder || !name) return false;
+  if (!get(online)) {
+    offlineFolders();
+    return false;
+  }
+  const previous = folder.title;
+  playlistFolders.update((list) =>
+    (list || []).map((f) => (String(f.id) === fid ? { ...f, title: name } : f))
+  );
+  try {
+    await api.renamePlaylistFolder(fid, name);
+    return true;
+  } catch (e) {
+    playlistFolders.update((list) =>
+      (list || []).map((f) => (String(f.id) === fid ? { ...f, title: previous } : f))
+    );
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de renommer le dossier", "error");
+    return false;
+  }
+}
+
+export async function deleteFolder(id) {
+  const fid = folderIdOf(id);
+  const folders = get(playlistFolders) || [];
+  const folder = folders.find((f) => String(f.id) === fid);
+  if (!folder) return false;
+  if (!get(online)) {
+    offlineFolders();
+    return false;
+  }
+  const list = get(playlists) || [];
+  const placed = list.filter((p) => folderIdOf(p.folder_id) === fid);
+  const order = idsOf(placed);
+  const wasOpen = (get(openFolders) || []).some((x) => String(x) === fid);
+  const remaining = folders.filter((f) => String(f.id) !== fid);
+  const rootOrder = [...containerIds(list, folders, null), ...order];
+  const optimisticallyUnfiled = list.map((p) =>
+    folderIdOf(p.folder_id) === fid ? { ...p, folder_id: null, position: null } : p
+  );
+  playlistFolders.set(remaining);
+  playlists.set(orderContainer(optimisticallyUnfiled, remaining, null, rootOrder));
+  closeFolderLocally(fid);
+  try {
+    const r = await api.deletePlaylistFolder(fid);
+    const restoredOrder = r?.playlists || order;
+    const count = restoredOrder.length;
+    const moved = count
+      ? ` · ${count} playlist${count > 1 ? "s" : ""} déplacée${count > 1 ? "s" : ""} dans « Sans dossier »`
+      : "";
+    toasts.push(`Dossier supprimé${moved} · Annuler`, "info", 8000, {
+      label: "Annuler",
+      run: () => restoreFolder(folder, restoredOrder),
+    });
+    return true;
+  } catch (e) {
+    playlistFolders.set(folders);
+    playlists.set(list);
+    if (wasOpen) openFolderLocally(fid);
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de supprimer le dossier", "error");
+    return false;
+  }
+}
+
+async function restoreFolder(folder, order) {
+  if (!get(online)) {
+    offlineFolders();
+    return;
+  }
+  try {
+    await api.createPlaylistFolder(folder.title, folder.id);
+    playlistFolders.update((list) => [...(list || []), { ...folder, nb_playlists: order.length }]);
+    openFolderLocally(folder.id);
+    const folders = get(playlistFolders) || [];
+    playlists.update((list) => {
+      const replaced = (list || []).map((p) =>
+        order.includes(String(p.id)) ? { ...p, folder_id: String(folder.id) } : p
+      );
+      return orderContainer(replaced, folders, folder.id, order);
+    });
+    if (order.length) await api.reorderPlaylistContainer(folder.id, order);
+    toasts.push("Dossier restauré");
+  } catch {
+    toasts.push("Impossible de restaurer le dossier", "error");
+  }
+}
+
+export function reorderFolders(ids) {
+  const folders = get(playlistFolders) || [];
+  if (!folders.length) return;
+  const next = orderFolders(folders, ids);
+  playlistFolders.set(next);
+  playlists.update((list) => orderContainer(list || [], next, null, []));
+  scheduleOrder("folders", () => api.reorderPlaylistFolders(idsOf(next)));
+}
+
+export function reorderContainer(folderId, ids) {
+  const fid = folderIdOf(folderId);
+  const folders = get(playlistFolders) || [];
+  playlists.update((list) => orderContainer(list || [], folders, fid, ids));
+  scheduleOrder(fid || "root", () => api.reorderPlaylistContainer(fid, ids));
+}
+
+export async function movePlaylistTo(playlistId, folderId) {
+  const pid = folderIdOf(playlistId);
+  const target = folderIdOf(folderId);
+  const folders = get(playlistFolders) || [];
+  if (target && !folders.some((f) => String(f.id) === target)) return false;
+  const list = get(playlists) || [];
+  const item = list.find((p) => String(p.id) === pid);
+  if (!item) return false;
+  if (folderIdOf(item.folder_id) === target) return true;
+  if (!get(online)) {
+    offlineFolders();
+    return false;
+  }
+  const nextIds = [...containerIds(list, folders, target).filter((id) => id !== pid), pid];
+  const moved = list.map((p) =>
+    String(p.id) === pid ? { ...p, folder_id: target, position: null } : p
+  );
+  playlists.set(orderContainer(moved, folders, target, nextIds));
+  if (target) openFolderLocally(target);
+  try {
+    await api.reorderPlaylistContainer(target, nextIds);
+    return true;
+  } catch (e) {
+    playlists.set(list);
+    toasts.push(e?.offline ? OFFLINE_FOLDERS : "Impossible de déplacer la playlist", "error");
+    return false;
+  }
+}
+
 
 // -- offline warming ---------------------------------------------------------
 // Knowing your playlists exist is useless offline if their track lists aren't
@@ -244,6 +617,7 @@ export function isFavorite(id) {
 // cache immediately and refresh in the background (the server response is cheap
 // when the favorites haven't changed, thanks to its checksum cache).
 let favTracksInFlight = null;
+export const favTracksError = writable(null);
 export async function loadMyFavorites(force = false) {
   const cached = get(favTracks);
   if (cached && !force) {
@@ -266,6 +640,7 @@ async function primeFavTracksFromCache() {
 }
 function refreshFavTracks() {
   if (favTracksInFlight) return favTracksInFlight;
+  favTracksError.set(null);
   favTracksInFlight = api
     .myFavorites()
     .then((r) => {
@@ -274,11 +649,12 @@ function refreshFavTracks() {
       // track. Merging in place means the browser re-renders those few rows
       // instead of all four thousand — no flash, no lost scroll, no re-decoded
       // artwork.
+      favTracksError.set(null);
       favTracks.set(reconcileList(get(favTracks), r.tracks || []));
       return get(favTracks);
     })
-    .catch(() => {
-      if (get(favTracks) === null) favTracks.set([]);
+    .catch((e) => {
+      favTracksError.set(e || { status: 0, message: "network" });
       return get(favTracks) || [];
     })
     .finally(() => {
@@ -445,21 +821,35 @@ export async function startTrackRadio(track) {
 
 // Optimistic: the toast and the "last playlist" shortcut update INSTANTLY —
 // the server call (which may include a Deezer round-trip) runs in the
-// background, and only a failure surfaces afterwards.
-export function addTrackToPlaylist(playlistId, trackId, playlistTitle) {
+// background, and only a failure surfaces afterwards. `version` is the content
+// counter of the playlist the caller has on screen; the cross-screen picker
+// sends none (an append is commutative, plan §8.5).
+export function addTrackToPlaylist(playlistId, trackId, playlistTitle, version = null) {
   lastPlaylist.set({ id: String(playlistId), title: playlistTitle });
   // 2,4 s: the duration the design system gives a confirmation pill.
   toasts.push(`Ajouté à « ${playlistTitle} »`, "info", 2400);
   bumpPlaylistCount(playlistId, 1);
   return api
-    .addToPlaylist(playlistId, [String(trackId)])
+    .addToPlaylist(playlistId, [String(trackId)], version)
     .then(() => {
       // The lists show track counts — refresh them (debounced).
       invalidatePlaylists();
       return true;
     })
-    .catch(() => {
+    .catch((e) => {
       bumpPlaylistCount(playlistId, -1); // the optimistic count was wrong
+      // The playlist moved under the caller: say who, reload the list, and let
+      // the person ask again — the retry retries WITHOUT the stale counter, so
+      // it can land instead of conflicting a second time.
+      const conflict = conflictOf(e);
+      if (conflict) {
+        invalidatePlaylists();
+        toasts.push(conflictNotice(conflict), "error", 6000, {
+          label: "Réessayer",
+          run: () => addTrackToPlaylist(playlistId, trackId, playlistTitle),
+        });
+        return false;
+      }
       // A mutation that failed can be retried from the toast itself: the
       // person does not have to reopen the sheet and find the playlist again.
       toasts.push(`Échec de l'ajout à « ${playlistTitle} »`, "error", 6000, {
@@ -476,8 +866,8 @@ export function addTrackToPlaylist(playlistId, trackId, playlistTitle) {
 // the picker that is currently open over a screen that will not remount), and
 // let the debounced refetch confirm the server's copy. Throws on failure: the
 // caller owns the toast, because only it knows what the playlist was for.
-async function postNewPlaylist(title, refs) {
-  const r = await api.createPlaylist(title, refs);
+async function postNewPlaylist(title, refs, folder = null) {
+  const r = await api.createPlaylist(title, refs, folder);
   const list = refs || [];
   if (r?.id) {
     upsertPlaylistLocal({
@@ -485,6 +875,7 @@ async function postNewPlaylist(title, refs) {
       title,
       deezer_id: r.deezer_id,
       nb_tracks: list.length,
+      folder_id: r.folder_id ?? folder,
     });
     if (list.length) lastPlaylist.set({ id: String(r.id), title });
   }
@@ -497,12 +888,12 @@ const countLabel = (n) => `${n} titre${n > 1 ? "s" : ""}`;
 // Create a playlist from the picker (a title, or a title + the track being
 // added). Optimistic on the LIST, not on the tracks: the server is the one
 // that decides the rows, and the answer is what closes the form.
-export async function createPlaylistFrom(title, refs = []) {
+export async function createPlaylistFrom(title, refs = [], folder = null) {
   const name = (title || "").trim();
   const list = (refs || []).filter(Boolean);
   if (!name) return null;
   try {
-    const r = await postNewPlaylist(name, list);
+    const r = await postNewPlaylist(name, list, folder);
     if (list.length === 1) toasts.push(`Ajouté à « ${name} »`, "info", 2400);
     else if (list.length > 1) toasts.push(`${countLabel(list.length)} ajoutés à « ${name} »`, "info", 2400);
     else toasts.push(`Playlist « ${name} » créée`, "info", 2400);
@@ -510,7 +901,7 @@ export async function createPlaylistFrom(title, refs = []) {
   } catch {
     toasts.push(`Impossible de créer « ${name} »`, "error", 6000, {
       label: "Réessayer",
-      run: () => createPlaylistFrom(name, list),
+      run: () => createPlaylistFrom(name, list, folder),
     });
     return null;
   }
@@ -640,6 +1031,22 @@ export function buildEntityMenu(kind, item, nav) {
     { label: "Lire", icon: "play", action: () => playEntity(kind, routeId) },
     { label: "Ouvrir", icon: "open", action: () => nav(route + routeId) },
   ];
+  if (kind === "playlist" && CAN_KEEP) {
+    const mine = (get(playlists) || []).find((p) => String(p.id) === String(item.id));
+    if (mine) {
+      items.push({
+        label: "Déplacer vers un dossier…",
+        icon: "folderMove",
+        action: () => openMoveToFolder({ playlist: mine }),
+      });
+      if (mine.folder_id)
+        items.push({
+          label: "Retirer du dossier",
+          icon: "folderMinus",
+          action: () => movePlaylistTo(mine.id, null),
+        });
+    }
+  }
   if ((kind === "album" || kind === "playlist") && !REMOTE)
     items.push({
       label: "Télécharger",
@@ -716,12 +1123,19 @@ export function buildTrackMenu(track, nav) {
     { label: "Lire ensuite", icon: "next", action: () => player.playNext([track]) },
     { label: "Ajouter à la file", icon: "queue", action: () => player.addToQueue([track]) },
   ];
-  // Adding to a playlist edits the owner's Deezer playlists — admin-only.
+  // Adding to a playlist is every account's business now: a playlist shared
+  // with an editor is a legitimate target, so these entries follow CAN_KEEP
+  // instead of the admin flag. The one-tap shortcut only shows when the store
+  // says that playlist is writable — a viewer's list is not a target.
   // `trackRef` names the track the way the server resolves it: the row UUID, or
   // the Deezer id of a catalogue result the playlist will make a row for.
-  if (admin) {
+  if (CAN_KEEP) {
     const last = get(lastPlaylist);
-    if (last && last.id)
+    const entry =
+      last && last.id
+        ? (get(playlists) || []).find((p) => String(p.id) === String(last.id))
+        : null;
+    if (entry && entry.editable)
       items.push({
         label: `Ajouter à « ${last.title} »`,
         icon: "plus",
@@ -734,6 +1148,8 @@ export function buildTrackMenu(track, nav) {
       icon: "music",
       action: () => openPlaylistPicker(track),
     });
+  }
+  if (admin) {
     // Swap this track for another one everywhere it appears. Always offered —
     // a track can also be simply *wrong* (bad master, wrong version), not only
     // dead — but it leads the list when we already know it's unplayable.
@@ -826,3 +1242,18 @@ export function buildTrackMenu(track, nav) {
     });
   return items;
 }
+
+onOwnerChange(() => {
+  cancelPlaylistRefresh();
+  playlistsInFlight = null;
+  playlistsTouchedAt = 0;
+  playlists.set(null);
+  playlistFolders.set(null);
+  warming = false;
+  favoritesInFlight = null;
+  favoritesLoaded = false;
+  favorites.set(new Set());
+  disliked.set(new Set());
+  favTracksInFlight = null;
+  favTracks.set(null);
+});

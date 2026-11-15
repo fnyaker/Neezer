@@ -1,6 +1,6 @@
 <script>
   import { trackKey, trackRef } from "../lib/trackkey.js";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { push, replace } from "svelte-spa-router";
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
   import {
@@ -14,17 +14,38 @@
     resolvedUnavailable,
     unavailableVersion,
     playlists,
+    playlistFolders,
+    closedSections,
+    openFolderSheet,
+    openMoveToFolder,
     openMenu,
   } from "../lib/stores.js";
-  import { userPlaylists, loadMyFavorites, runDeezerSync, upsertPlaylistLocal } from "../lib/actions.js";
+  import {
+    userPlaylists,
+    loadMyFavorites,
+    runDeezerSync,
+    upsertPlaylistLocal,
+    deleteFolder,
+    reorderFolders,
+    reorderContainer,
+    flushPlaylistFolderOrders,
+    invalidatePlaylists,
+    isSharedPlaylist,
+    favTracksError,
+    playlistsError,
+  } from "../lib/actions.js";
   import { listDownloads } from "../lib/offline.js";
   import { api } from "../lib/api.js";
   import { rememberScreen, recallScreen } from "../lib/nav.js";
-  import { bytes as fmtBytes } from "../lib/format.js";
+  import { bytes as fmtBytes, isLocalId } from "../lib/format.js";
+  import { groupPlaylists, idsOf, moveItem } from "../lib/playlistfolders.js";
   import Card from "../components/Card.svelte";
+  import Cover from "../components/Cover.svelte";
+  import VirtualList from "../components/VirtualList.svelte";
   import TrackBrowser from "../components/TrackBrowser.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
+  import LoadFailed from "../components/LoadFailed.svelte";
   import UnavailableList from "../components/UnavailableList.svelte";
   import ArtistTile from "../components/ArtistTile.svelte";
   import LibraryNav from "../components/LibraryNav.svelte";
@@ -45,7 +66,7 @@
     { id: "history", label: "Historique" },
     { id: "artists", label: "Artistes" },
     { id: "albums", label: "Albums" },
-    { id: "playlists", label: "Playlists", admin: true },
+    { id: "playlists", label: "Playlists" },
     { id: "downloaded", label: "Téléchargés", local: true },
     { id: "local", label: "Mes fichiers" },
   ];
@@ -119,9 +140,176 @@
     if (!t) return list;
     return list.filter((p) => (p.title || "").toLowerCase().includes(t));
   }
+
+  const SECTIONS_STEP = 8;
+  const SECTION_STEP = 12;
+  let sectionLimit = SECTIONS_STEP;
+  let cardLimit = SECTION_STEP;
+  let organizing = false;
+  let organizeContainer = "folders";
+  let organizeStatus = "";
+
+  $: folders = $playlistFolders || [];
+  $: allGrouped = groupPlaylists(myPlaylists || [], folders);
+  $: filteredGrouped = groupPlaylists(shownPlaylists || [], folders);
+  $: sections = buildSections(filteredGrouped, !!plQuery.trim());
+  $: closedKeys = new Set(($closedSections || []).map(String));
+  $: organizeRows =
+    organizeContainer === "folders"
+      ? allGrouped.groups
+      : organizeContainer === "root"
+        ? allGrouped.unfiled
+        : allGrouped.groups.find((g) => String(g.id) === organizeContainer)?.playlists || [];
+
+  function buildSections(grouped, filtering) {
+    // A shared, unfiled list gets its own section, imported or not; one filed
+    // in a folder stays in that folder.
+    const shared = [
+      ...grouped.unfiled.filter(isSharedPlaylist),
+      ...grouped.imported.filter(isSharedPlaylist),
+    ];
+    const root = grouped.unfiled.filter((p) => !isSharedPlaylist(p));
+    const imported = grouped.imported.filter((p) => !isSharedPlaylist(p));
+    const out = grouped.groups.map((group) => ({
+      kind: "folder",
+      key: "folder:" + group.id,
+      title: group.title,
+      rows: group.playlists,
+      count: group.count,
+      group,
+    }));
+    if (root.length)
+      out.push({ kind: "root", key: "root", title: "Sans dossier", rows: root, count: root.length });
+    if (shared.length)
+      out.push({
+        kind: "shared",
+        key: "shared",
+        title: "Partagées avec moi",
+        rows: shared,
+        count: shared.length,
+      });
+    if (imported.length)
+      out.push({
+        kind: "imported",
+        key: "imported",
+        title: "Depuis Deezer",
+        rows: imported,
+        count: imported.length,
+      });
+    return filtering ? out.filter((section) => section.rows.length) : out;
+  }
+
+  const playlistCount = (n) => `${n} playlist${n > 1 ? "s" : ""}`;
+  const trackCount = (p) => `${p.nb_tracks ?? 0} titre${p.nb_tracks > 1 ? "s" : ""}`;
+  const cardSubtitle = (p) =>
+    p.role && p.role !== "owner" && p.owner ? `${p.owner} · ${trackCount(p)}` : trackCount(p);
+
+  function toggleSection(key) {
+    const id = String(key);
+    closedSections.update((list) =>
+      (list || []).some((x) => String(x) === id)
+        ? list.filter((x) => String(x) !== id)
+        : [...(list || []), id]
+    );
+  }
+
+  async function newPlaylistIn(group) {
+    const title = (window.prompt("Nom de la playlist ?") || "").trim();
+    if (!title) return;
+    try {
+      const r = await api.createPlaylist(title, [], group.id);
+      if (r?.id) {
+        upsertPlaylistLocal({
+          id: String(r.id),
+          title,
+          deezer_id: r.deezer_id,
+          nb_tracks: 0,
+          folder_id: r.folder_id ?? String(group.id),
+        });
+        invalidatePlaylists();
+        push("/playlist/" + r.id);
+      }
+    } catch {
+      toasts.push("Impossible de créer la playlist", "error");
+    }
+  }
+
+  onDestroy(flushPlaylistFolderOrders);
+
+  function moveFolderBy(group, delta) {
+    const from = folders.findIndex((f) => String(f.id) === String(group.id));
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= folders.length) return;
+    reorderFolders(idsOf(moveItem(folders, from, to)));
+  }
+
+  function sectionMenu(e, section) {
+    if (section.kind !== "folder") return;
+    const group = section.group;
+    const index = folders.findIndex((f) => String(f.id) === String(group.id));
+    const items = [
+      { label: "Nouvelle playlist ici", icon: "plus", action: () => newPlaylistIn(group) },
+      { label: "Renommer le dossier", icon: "edit", action: () => openFolderSheet({ mode: "rename", folder: group }) },
+    ];
+    if (index > 0)
+      items.push({ label: "Déplacer le dossier vers le haut", icon: "chevronUp", action: () => moveFolderBy(group, -1) });
+    if (index >= 0 && index < folders.length - 1)
+      items.push({ label: "Déplacer le dossier vers le bas", icon: "chevronDown", action: () => moveFolderBy(group, 1) });
+    items.push(
+      "divider",
+      { label: "Supprimer le dossier", icon: "trash", danger: true, action: () => deleteFolder(group.id) }
+    );
+    openMenu(e, items);
+  }
+
+  function openOrganizer() {
+    organizing = true;
+    organizeContainer = "folders";
+    organizeStatus = "";
+  }
+
+  async function closeOrganizer() {
+    await flushPlaylistFolderOrders();
+    organizing = false;
+  }
+
+  function pickContainer(id) {
+    organizeContainer = id;
+    organizeStatus = "";
+  }
+
+  function focusOrganizerRow(id, delta) {
+    const row = document.querySelector(`[data-org-row="${id}"]`);
+    if (!row) return;
+    const dir = delta < 0 ? "up" : "down";
+    const button = row.querySelector(`[data-move="${dir}"]`);
+    if (button && !button.disabled) button.focus();
+    else row.querySelector("[data-move]:not(:disabled)")?.focus();
+  }
+
+  function organizeMove(index, delta) {
+    const rows = organizeRows;
+    const to = index + delta;
+    if (to < 0 || to >= rows.length) return;
+    const row = rows[index];
+    const next = moveItem(rows, index, to);
+    if (organizeContainer === "folders") reorderFolders(idsOf(next));
+    else reorderContainer(organizeContainer === "root" ? null : organizeContainer, idsOf(next));
+    organizeStatus = `${organizeContainer === "folders" ? "Déplacé" : "Déplacée"} en position ${to + 1} sur ${rows.length}`;
+    tick().then(() => focusOrganizerRow(row.id, delta));
+  }
+
+  function organizerKey(e, index) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    organizeMove(index, e.key === "ArrowUp" ? -1 : 1);
+  }
+
   // -- artists and albums you starred -----------------------------------------
   let artists = null;
   let albums = null;
+  let artistsError = null;
+  let albumsError = null;
   let arQuery = saved?.arQuery ?? "";
   let arSort = saved?.arSort ?? "plays"; // plays | name | recent
   const AR_SORTS = [
@@ -129,23 +317,35 @@
     { id: "name", label: "A-Z" },
     { id: "recent", label: "Ajoutés récemment" },
   ];
-  $: if (tab === "artists" && artists === null) loadArtists();
-  $: if (tab === "albums" && albums === null) loadAlbums();
+  let artistsAsked = false;
+  let albumsAsked = false;
+  $: if (tab === "artists" && !artistsAsked) loadArtists();
+  $: if (tab === "albums" && !albumsAsked) loadAlbums();
   async function loadArtists() {
-    artists = [];
+    artistsAsked = true;
+    artistsError = null;
     try {
       await api.swr("/me/artists", (d) => (artists = d.artists || []));
-    } catch {
-      /* the list stays empty and says so */
+    } catch (e) {
+      if (artists === null) artistsError = e;
     }
   }
   async function loadAlbums() {
-    albums = [];
+    albumsAsked = true;
+    albumsError = null;
     try {
       await api.swr("/me/albums", (d) => (albums = d.albums || []));
-    } catch {
-      /* the list stays empty and says so */
+    } catch (e) {
+      if (albums === null) albumsError = e;
     }
+  }
+  function retryArtists() {
+    artists = null;
+    loadArtists();
+  }
+  function retryAlbums() {
+    albums = null;
+    loadAlbums();
   }
   const fold = (x) => (x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   $: shownArtists = (() => {
@@ -160,14 +360,17 @@
   // query starts again from the top.
   let arLimit = STEP;
   let alLimit = STEP;
-  let plLimit = STEP;
   let arKey, alKey, plKey;
   $: if (arKey !== (arKey = `${tab}\0${arQuery}\0${arSort}`)) arLimit = STEP;
   $: if (alKey !== (alKey = tab)) alLimit = STEP;
-  $: if (plKey !== (plKey = `${tab}\0${plQuery}`)) plLimit = STEP;
+  $: if (plKey !== (plKey = `${tab}\0${plQuery}`)) {
+    sectionLimit = SECTIONS_STEP;
+    cardLimit = SECTION_STEP;
+  }
   const titles = (n) => (n ? `${n} titre${n > 1 ? "s" : ""}` : "Aucun titre gardé");
 
   let local = null;
+  let localError = null;
   let offline = null;
   // Tracks the server knows can no longer be played. Loaded when the tab is
   // first opened (and refreshed when a replacement lands), not on every page
@@ -201,7 +404,7 @@
 
   onMount(() => {
     loadMyFavorites();
-    if ($isAdmin) userPlaylists();
+    userPlaylists();
     loadLocal();
     loadUsage();
   });
@@ -230,11 +433,16 @@
   }
 
   async function loadLocal() {
+    localError = null;
     try {
       local = (await api.myLocal()).tracks || [];
-    } catch {
-      local = [];
+    } catch (e) {
+      if (local === null) localError = e;
     }
+  }
+  function retryLocal() {
+    local = null;
+    loadLocal();
   }
 
   async function onFiles(e) {
@@ -333,7 +541,15 @@
   // a phone and read as navigation.
   function addMenu(e) {
     const items = [];
-    if (CAN_KEEP && $isAdmin) items.push({ label: "Nouvelle playlist", icon: "plus", action: newPlaylist });
+    if (CAN_KEEP) items.push({ label: "Nouvelle playlist", icon: "plus", action: newPlaylist });
+    if (CAN_KEEP)
+      items.push({
+        label: "Nouveau dossier",
+        icon: "folderPlus",
+        action: () => openFolderSheet({ mode: "create" }),
+      });
+    if (CAN_KEEP)
+      items.push({ label: "Organiser les playlists", icon: "sliders", action: openOrganizer });
     if (CAN_BROWSE)
       items.push({ label: "Importer une playlist partagée", icon: "link", action: () => push("/import") });
     if (CAN_KEEP) items.push({ label: "Importer des fichiers audio", icon: "upload", action: () => fileInput.click() });
@@ -384,10 +600,49 @@
   oncategory={chooseCategory}
 />
 
+{#snippet orgPlaylistRow(p, i)}
+  <div class="org-row" data-org-row={p.id}>
+    <span class="org-thumb">
+      <Cover src={p.cover} alt="" size={36} kind="playlist" fallbackId={isLocalId(p.id) ? p.id : null} />
+    </span>
+    <span class="org-name">{p.title}</span>
+    <span class="org-count mono">{p.nb_tracks || 0}</span>
+    <span class="org-acts">
+      <button
+        class="org-act"
+        data-move="up"
+        disabled={i === 0}
+        aria-label={`Monter la playlist ${p.title}`}
+        title="Monter"
+        on:click={() => organizeMove(i, -1)}
+        on:keydown={(e) => organizerKey(e, i)}
+      ><Icon name="chevronUp" size={18} /></button>
+      <button
+        class="org-act"
+        data-move="down"
+        disabled={i === organizeRows.length - 1}
+        aria-label={`Descendre la playlist ${p.title}`}
+        title="Descendre"
+        on:click={() => organizeMove(i, 1)}
+        on:keydown={(e) => organizerKey(e, i)}
+      ><Icon name="chevronDown" size={18} /></button>
+      <button
+        class="org-act"
+        data-move="folder"
+        aria-label={`Déplacer la playlist ${p.title} vers un dossier`}
+        title="Déplacer…"
+        on:click={() => openMoveToFolder({ playlist: p })}
+      ><Icon name="folderMove" size={18} /></button>
+    </span>
+  </div>
+{/snippet}
+
 <div id="library-view" role="tabpanel" aria-labelledby={panelLabel}>
 {#if tab === "favorites"}
-  {#if favorites === null}
+  {#if favorites === null && !$favTracksError}
     <Skeleton kind="list" />
+  {:else if favorites === null}
+    <LoadFailed error={$favTracksError} on:retry={() => loadMyFavorites(true)} />
   {:else if !favorites.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -438,22 +693,22 @@
     {/if}
   {/if}
 {:else if tab === "artists"}
-  {#if artists === null || (!artists.length && !arQuery)}
-    {#if artists === null}
-      <Skeleton kind="shelf" />
-    {:else}
-      <div class="empty">
-        <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
-          <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
-        </svg>
-        <p class="empty-title">Aucun artiste suivi</p>
-        <p class="empty-text">
-          Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront
-          sur l'accueil.
-        </p>
-        <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
-      </div>
-    {/if}
+  {#if artists === null && !artistsError}
+    <Skeleton kind="shelf" />
+  {:else if artists === null}
+    <LoadFailed error={artistsError} on:retry={retryArtists} />
+  {:else if !artists.length && !arQuery}
+    <div class="empty">
+      <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
+      </svg>
+      <p class="empty-title">Aucun artiste suivi</p>
+      <p class="empty-text">
+        Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront
+        sur l'accueil.
+      </p>
+      <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+    </div>
   {:else}
     <div class="tools">
       <label class="field search">
@@ -481,8 +736,10 @@
     {/if}
   {/if}
 {:else if tab === "albums"}
-  {#if albums === null}
+  {#if albums === null && !albumsError}
     <Skeleton kind="shelf" />
+  {:else if albums === null}
+    <LoadFailed error={albumsError} on:retry={retryAlbums} />
   {:else if !albums.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -499,19 +756,109 @@
     {#if albums.length > alLimit}<div class="grow" use:nearEnd={() => (alLimit += STEP)}></div>{/if}
   {/if}
 {:else if tab === "playlists"}
-  {#if myPlaylists === null}
+  {#if myPlaylists === null && !$playlistsError}
     <Skeleton kind="shelf" />
-  {:else if !myPlaylists.length}
+  {:else if myPlaylists === null}
+    <LoadFailed error={$playlistsError} on:retry={() => userPlaylists(true)} />
+  {:else if !myPlaylists.length && !folders.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Aucune playlist</p>
       <p class="empty-text">Une playlist pour un moment, une humeur, une route : crée la première.</p>
-      {#if CAN_KEEP && $isAdmin}
+      {#if CAN_KEEP}
         <button class="btn btn-primary" on:click={newPlaylist}><Icon name="plus" size={16} /> Nouvelle playlist</button>
       {:else}
         <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
+      {/if}
+    </div>
+  {:else if organizing}
+    <div class="org">
+      <div class="org-head">
+        <h2 class="section-title">Organiser les playlists</h2>
+        <button class="btn btn-primary" on:click={closeOrganizer}><Icon name="check" size={16} /> Terminer</button>
+      </div>
+
+      <div class="chip-row" role="group" aria-label="Conteneur à organiser">
+        <button
+          class="chip"
+          class:chip-active={organizeContainer === "folders"}
+          aria-pressed={organizeContainer === "folders"}
+          on:click={() => pickContainer("folders")}
+        >Dossiers</button>
+        <button
+          class="chip"
+          class:chip-active={organizeContainer === "root"}
+          aria-pressed={organizeContainer === "root"}
+          on:click={() => pickContainer("root")}
+        >Sans dossier</button>
+        {#each folders as f (f.id)}
+          <button
+            class="chip"
+            class:chip-active={String(organizeContainer) === String(f.id)}
+            aria-pressed={String(organizeContainer) === String(f.id)}
+            on:click={() => pickContainer(String(f.id))}
+          >{f.title}</button>
+        {/each}
+      </div>
+
+      <p class="org-status" role="status" aria-live="polite">{organizeStatus}</p>
+
+      {#if organizeContainer === "folders"}
+        {#if organizeRows.length}
+          <ul class="org-list">
+            {#each organizeRows as f, i (f.id)}
+              <li class="org-row" data-org-row={f.id}>
+                <span class="org-idx mono">{i + 1}</span>
+                <span class="org-name">{f.title}</span>
+                <span class="org-count mono">{playlistCount(f.count)}</span>
+                <span class="org-acts">
+                  <button
+                    class="org-act"
+                    data-move="up"
+                    disabled={i === 0}
+                    aria-label={`Monter le dossier ${f.title}`}
+                    title="Monter"
+                    on:click={() => organizeMove(i, -1)}
+                    on:keydown={(e) => organizerKey(e, i)}
+                  ><Icon name="chevronUp" size={18} /></button>
+                  <button
+                    class="org-act"
+                    data-move="down"
+                    disabled={i === organizeRows.length - 1}
+                    aria-label={`Descendre le dossier ${f.title}`}
+                    title="Descendre"
+                    on:click={() => organizeMove(i, 1)}
+                    on:keydown={(e) => organizerKey(e, i)}
+                  ><Icon name="chevronDown" size={18} /></button>
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="muted hint">Aucun dossier pour l'instant.</p>
+        {/if}
+      {:else if organizeRows.length}
+        {#if organizeRows.length > 60}
+          <VirtualList
+            items={organizeRows}
+            estimateHeight={56}
+            key={(p) => String(p.id)}
+            let:item
+            let:index
+          >
+            {@render orgPlaylistRow(item, index)}
+          </VirtualList>
+        {:else}
+          <div class="org-list">
+            {#each organizeRows as p, i (p.id)}
+              {@render orgPlaylistRow(p, i)}
+            {/each}
+          </div>
+        {/if}
+      {:else}
+        <p class="muted hint">Aucune playlist dans ce conteneur.</p>
       {/if}
     </div>
   {:else}
@@ -523,15 +870,56 @@
       <span class="spacer"></span>
       <span class="count">{myPlaylists.length} playlist{myPlaylists.length > 1 ? "s" : ""}</span>
     </div>
-    {#if !shownPlaylists.length}
+    {#if plQuery.trim() && !shownPlaylists.length}
       <p class="muted hint">Aucune playlist ne correspond à « {plQuery} ».</p>
     {:else}
-      <div class="pl-grid">
-        {#each shownPlaylists.slice(0, plLimit) as p (p.id)}
-          <Card item={{ ...p, subtitle: `${p.nb_tracks ?? 0} titre${p.nb_tracks > 1 ? "s" : ""}` }} kind="playlist" />
+      <div class="pl-sections">
+        {#each sections.slice(0, sectionLimit) as s (s.key)}
+          <section class="pl-section">
+            <div class="sec-head">
+              <h2 class="section-title">
+                <button
+                  class="sec-toggle"
+                  on:click={() => toggleSection(s.key)}
+                  aria-expanded={!closedKeys.has(String(s.key))}
+                  aria-controls={closedKeys.has(String(s.key)) ? undefined : "pl-sec-" + s.key}
+                >
+                  <Icon name={closedKeys.has(String(s.key)) ? "chevronRight" : "chevronDown"} size={18} />
+                  <span class="sec-title">{s.title}</span>
+                  <span class="sec-count mono">{playlistCount(s.count)}</span>
+                </button>
+              </h2>
+              {#if s.kind === "folder" && CAN_KEEP}
+                <button
+                  class="sec-menu"
+                  on:click={(e) => sectionMenu(e, s)}
+                  aria-label={`Actions pour le dossier ${s.title}`}
+                  title="Actions du dossier"
+                ><Icon name="more" size={18} /></button>
+              {/if}
+            </div>
+            {#if !closedKeys.has(String(s.key))}
+              <div class="pl-sec-body" id={"pl-sec-" + s.key}>
+                {#if s.rows.length}
+                  <div class="pl-grid">
+                    {#each s.rows.slice(0, cardLimit) as p (p.id)}
+                      <Card item={{ ...p, subtitle: cardSubtitle(p) }} kind="playlist" />
+                    {/each}
+                  </div>
+                  {#if s.rows.length > cardLimit}
+                    <div class="grow" use:nearEnd={() => (cardLimit += SECTION_STEP)}></div>
+                  {/if}
+                {:else}
+                  <p class="folder-empty">Ce dossier est vide. Déplacez-y une playlist depuis son menu.</p>
+                {/if}
+              </div>
+            {/if}
+          </section>
         {/each}
+        {#if sections.length > sectionLimit}
+          <div class="grow" use:nearEnd={() => (sectionLimit += SECTIONS_STEP)}></div>
+        {/if}
       </div>
-      {#if shownPlaylists.length > plLimit}<div class="grow" use:nearEnd={() => (plLimit += STEP)}></div>{/if}
     {/if}
   {/if}
 {:else if tab === "downloaded"}
@@ -581,8 +969,10 @@
     <UnavailableList bind:tracks={gone} />
   {/if}
 {:else if tab === "local"}
-  {#if local === null}
+  {#if local === null && !localError}
     <Skeleton kind="list" />
+  {:else if local === null}
+    <LoadFailed error={localError} on:retry={retryLocal} />
   {:else if !local.length}
     <div class="empty">
       <svg class="rings" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -794,6 +1184,185 @@
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 16px;
   }
+  .pl-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  .pl-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+  .sec-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .sec-head h2 {
+    flex: 1;
+    min-width: 0;
+  }
+  .sec-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    padding: 0 2px;
+    border-radius: 10px;
+    color: var(--tx);
+    text-align: left;
+  }
+  .sec-toggle:hover {
+    background: var(--s2);
+  }
+  .sec-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sec-count {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--dim);
+  }
+  .sec-menu {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--dim);
+  }
+  .sec-menu:hover {
+    color: var(--tx);
+    background: var(--s2);
+  }
+  .folder-empty {
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px dashed var(--ln);
+    border-radius: var(--r-card);
+    color: var(--dim);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .org {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .org-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .org-head .section-title {
+    margin: 0;
+  }
+  .chip-row {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 2px 2px 6px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  .chip-row::-webkit-scrollbar {
+    display: none;
+  }
+  .chip-row .chip {
+    height: 44px;
+  }
+  .org-status {
+    margin: 0;
+    min-height: 18px;
+    font-size: 13px;
+    color: var(--dim);
+  }
+  .org-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .org-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 56px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    min-width: 0;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 56px;
+  }
+  .org-row:hover {
+    background: var(--s2);
+  }
+  .org-row:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
+  }
+  .org-idx {
+    flex: none;
+    width: 22px;
+    text-align: right;
+    font-size: 11px;
+    color: var(--dim);
+  }
+  .org-thumb {
+    flex: none;
+    width: 36px;
+    height: 36px;
+  }
+  .org-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+  }
+  .org-count {
+    flex: none;
+    font-size: 11px;
+    color: var(--dim);
+  }
+  .org-acts {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .org-act {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: var(--tx);
+  }
+  .org-act:hover:not(:disabled) {
+    background: var(--s2);
+  }
+  .org-act:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
   /* An empty tab is a place with an action, not a grey sentence: rings (the
      record), what happened, what to do now. */
   .empty {
@@ -960,6 +1529,23 @@
     .pl-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
+    }
+    .sec-toggle {
+      min-height: 44px;
+    }
+    .sec-menu {
+      width: 44px;
+      height: 44px;
+    }
+    .chip-row .chip {
+      height: 44px;
+    }
+    .org-idx {
+      display: none;
+    }
+    .org-row {
+      gap: 10px;
+      padding: 6px 2px;
     }
     .empty {
       padding: 40px 18px;

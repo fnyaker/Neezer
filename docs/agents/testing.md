@@ -110,6 +110,31 @@ the code under it was broken:
   found. It is also where the phantom tempo of a held note was recorded, as an `expectedFailure`
   with its numbers, until the attack gate fixed it — now it pins the gate from both sides: held
   tones and a chord measure no tempo, a kick train mastered flat (tail at −2.2 dB) keeps its 150.
+- **A canonical id already owned by another account** (`tests/test_playlist_collab_edges.py`):
+  the second importer must get a derived id and leave the first row's tracks, members and version
+  untouched; the same suite pins the 60/h creation and 30/10 min member-write limits.
+- **Playwright routing bypasses Chromium's HTTP cache** (`webapp/test/recap/run.mjs`): a
+  304/revalidation bench must run without `page.route` interceptors, and `request.headers()`
+  hides `If-None-Match` where `allHeaders()` shows it. Count covers **by the URL the screen's
+  payload names**, never globally: the shell's playlist thumbnails otherwise inflate the number.
+- **A bench that checks a seek must answer byte ranges** (`webapp/test/podcast/run.mjs`): a
+  `/api/stream` fulfilled with one 200 body and `Accept-Ranges: none` let the player read 10:00
+  for a tick, then reset to 0:00 when the metadata landed. Answering 206 with `Content-Range`
+  kept `currentTime` at 10:00 and advancing — the same contract the real server serves. A seek
+  assertion on a whole-body stub measures the stub, not the player.
+- **Real chapter fixtures** (`tests/test_chapters.py`): ffmpeg writes a 1 h MP3 carrying ID3
+  `CHAP`/`CTOC` and an M4A carrying `chpl`; the mutagen extractor is measured on both (0.25 ms per
+  file) instead of trusting a hand-built tag dict. The same suite pins that a corrupt tag, a
+  symlinked sidecar outside `Podcasts/` and a hostile chapter URL all answer `none`, never a 500.
+- **The engine production runs cannot be rehearsed on SQLite** (`tests/test_schema_external.py`):
+  the SQLite suite rebuilds database files with `sqlite3`; it never parses a PostgreSQL or MySQL
+  migration, never measures its backfill, and never reads the shape through `information_schema`.
+  The external module boots a real PostgreSQL 16 and MySQL 8, replays `20261114..20261121` twice
+  on populated tables, upgrades seeded `20261113` and `20261118` databases, and drops the shape to
+  exercise the boot repair. It drops every table between cases and refuses a database whose name
+  lacks "test". Measured: 7 tests in 0.88 s on PostgreSQL 18.6 locally; the MySQL leg is CI's
+  proof. `NS_REQUIRE_DATABASE=1` turns an absent URI into a failure, so the database job can never
+  pass by skipping.
 - **Check the test by breaking the code.** Every test added for these rules was run against a
   deliberate mutation of the line it guards; a test that survives its mutant is decoration.
 - **Isolate optional providers.** A test that builds a source order or a list must switch off the

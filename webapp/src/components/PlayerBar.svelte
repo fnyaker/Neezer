@@ -26,10 +26,12 @@
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
   import { toggleFavorite, buildTrackMenu } from "../lib/actions.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
+  import { chaptersByEpisode } from "../lib/chapters.js";
   import { REMOTE, atLeast } from "../lib/remote/mode.js";
   import { isMobile, onMobileChange } from "../lib/viewport.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import ChapterTicks from "./ChapterTicks.svelte";
   import ImmersivePlayer from "./ImmersivePlayer.svelte";
   import PartyButton from "./PartyButton.svelte";
   import RemoteButton from "./RemoteButton.svelte";
@@ -66,7 +68,11 @@
     // press of the play button. composedPath() is captured at dispatch.
     const path = e.composedPath ? e.composedPath() : [];
     if (path.some((n) => n && n.tagName === "BUTTON")) return;
-    immersiveOpen.set(true);
+    openFull();
+  }
+
+  function openFull() {
+    if ($current) immersiveOpen.set(true);
   }
 
   // Through `seekTo`, like every other view: the engine chases it on a live
@@ -86,6 +92,9 @@
     ? Math.min(100, Math.max(progress, ($buffered / $player.duration) * 100))
     : 0;
   $: repeatIconName = $player.repeat === "one" ? "repeat1" : "repeat";
+  $: chapterList = $current?.podcast
+    ? $chaptersByEpisode[String($current.id || "")]?.chapters || []
+    : [];
 </script>
 
 <!-- the <audio> elements are created and managed in JS (see makeEl/switchQuality) -->
@@ -96,7 +105,7 @@
 <footer class="player" class:empty={!$current} on:click={cardTap}>
   <!-- now playing (left / tap to open the immersive view) -->
   <div class="left">
-    <button class="now" on:click={() => immersiveOpen.set(true)} aria-label="Ouvrir le lecteur plein écran">
+    <button class="now" on:click={openFull} disabled={!$current} aria-label="Ouvrir le lecteur plein écran">
       {#if $current}
         <Cover src={$current.album?.cover} alt={$current.title} size={mobile ? 44 : 56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
         <span class="info">
@@ -140,15 +149,20 @@
     </div>
     <div class="seek">
       <span class="time">{fmtDuration($player.currentTime)}</span>
-      <input
-        type="range"
-        min="0"
-        max={$player.duration || 0}
-        value={$player.currentTime}
-        on:input={seek}
-        style={`--p:${progress}%; --b:${bufferedPct}%`}
-        aria-label="Position dans le titre"
-      />
+      <div class="rail">
+        <input
+          type="range"
+          min="0"
+          max={$player.duration || 0}
+          value={$player.currentTime}
+          on:input={seek}
+          style={`--p:${progress}%; --b:${bufferedPct}%`}
+          aria-label="Position dans le titre"
+        />
+        {#if $current?.podcast}
+          <ChapterTicks chapters={chapterList} duration={$player.duration} thumb={13} />
+        {/if}
+      </div>
       <span class="time">{fmtDuration($player.duration)}</span>
     </div>
   </div>
@@ -187,7 +201,7 @@
     {#if canQueue}
       <button class="sm" on:click={trackMenu} title="Plus d'options" aria-label="Plus d'options"><Icon name="more" size={18} /></button>
     {/if}
-    <button class="sm max" on:click={() => immersiveOpen.set(true)} title="Plein écran" aria-label="Plein écran"><Icon name="maximize" size={17} /></button>
+    <button class="sm max" on:click={openFull} disabled={!$current} title="Plein écran" aria-label="Plein écran"><Icon name="maximize" size={17} /></button>
   </div>
 
   <!-- phone only: the 2 px progress line along the mini card's bottom edge -->
@@ -357,6 +371,13 @@
     gap: 10px;
     width: 100%;
     max-width: 520px;
+  }
+  .rail {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
   }
   .time {
     font-family: var(--font-mono);

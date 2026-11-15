@@ -1,6 +1,6 @@
 name: Tests
 
-# Two jobs, not a version matrix. Five Pythons ran the same suite five times
+# Three jobs, not a version matrix. Five Pythons ran the same suite five times
 # and caught nothing the two ends would not: what differs between 3.11 and 3.12
 # is a subset of what differs between 3.10 and 3.13. What DOES change the result
 # is the environment, so each job is a configuration someone really runs:
@@ -13,9 +13,13 @@ name: Tests
 #              unseen.
 #   minimal  — the oldest Python setup.cfg accepts, on a bare install: no ffmpeg,
 #              no numpy. That is where "optional" has to stay optional.
+#   database — PostgreSQL 16 and MySQL 8, a real service in each matrix leg: the
+#              migrations' SQL, the backfills and the information_schema shape
+#              check, on the engines production runs. NS_REQUIRE_DATABASE=1 makes
+#              a missing or unreachable database fail instead of skip.
 #
-# Both run the suite across processes (tools/partest.py), packed by the timings
-# the previous run recorded (restored from the Actions cache).
+# The Python jobs run the suite across processes (tools/partest.py), packed by
+# the timings the previous run recorded (restored from the Actions cache).
 
 on:
   push:
@@ -146,3 +150,72 @@ jobs:
           files: coverage.xml
         # Don't fail CI when the Codecov token isn't configured on the fork.
         continue-on-error: true
+
+  database:
+    name: Database (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: PostgreSQL 16
+            python: "3.13"
+            extra: postgresql
+            uri: "postgresql://postgres:postgres@127.0.0.1:5432/neezer_test"
+          - name: MySQL 8
+            python: "3.13"
+            extra: mysql
+            uri: "mysql://neezer:neezer@127.0.0.1:3306/neezer_test"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: neezer_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d neezer_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: neezer_test
+          MYSQL_USER: neezer
+          MYSQL_PASSWORD: neezer
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysql -h 127.0.0.1 -uneezer -pneezer -e 'SELECT 1' neezer_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: setup.cfg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[${{ matrix.extra }}]"
+          # MySQL 8 authenticates with caching_sha2_password; PyMySQL needs
+          # cryptography for the RSA exchange on a plain TCP connection.
+          python -m pip install cryptography
+
+      - name: Run the external schema suite
+        env:
+          NEEZER_TEST_DATABASE: ${{ matrix.uri }}
+          NS_REQUIRE_DATABASE: "1"
+        run: python -m unittest tests.test_schema_external

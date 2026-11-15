@@ -107,12 +107,18 @@ def run(provider, tracks, episodes, on_event=None, should_stop=None) -> dict:
     whatever the user is actually listening to, and a burst of parallel FLAC
     downloads would make the app worse for as long as the sweep runs.
 
+    It also stands aside for the people using the app: the thread is reniced and
+    before every item but the first it waits until no foreground download and no
+    open stream is in flight (`workload.Throttle`), so a sweep started from the
+    admin's button never takes the link or the disk head from a listener. The
+    first item always runs, so a busy server still makes progress.
+
     ``on_event(kind)`` is called after every item (``"archived"``,
     ``"unavailable"``, ``"failed"``, plus ``"done"``), so a caller can report
     progress; ``should_stop()`` lets one abandon the sweep (shutdown, a newer
     run taking over).
     """
-    from . import archive
+    from . import archive, workload
     from .provider import TrackUnavailable
 
     stats = {"archived": 0, "unavailable": 0, "failed": 0, "done": 0}
@@ -125,9 +131,16 @@ def run(provider, tracks, episodes, on_event=None, should_stop=None) -> dict:
             except Exception:
                 pass
 
+    workload.renice(10)
+    gate = sweep_gate(should_stop)
+    started = False
+
     for track in tracks:
         if should_stop and should_stop():
             break
+        if started and not gate.wait():
+            break
+        started = True
         try:
             archive.ensure_archived(provider, track)
             event("archived")
@@ -145,6 +158,9 @@ def run(provider, tracks, episodes, on_event=None, should_stop=None) -> dict:
     for episode in episodes:
         if should_stop and should_stop():
             break
+        if started and not gate.wait():
+            break
+        started = True
         try:
             archive.ensure_episode_archived(provider, episode)
             event("archived")
@@ -155,6 +171,25 @@ def run(provider, tracks, episodes, on_event=None, should_stop=None) -> dict:
             event("done")
 
     return stats
+
+
+#: How often the sweep looks again while it is standing aside.
+SWEEP_POLL = 0.2
+
+
+def sweep_gate(should_stop=None):
+    """The sweep's own yield rule, shared by both of its loops.
+
+    ``duty=1`` because the sweep is not throttled, only held back: it runs flat
+    out whenever nobody is waiting, and completely stops while somebody is. The
+    load ceiling is deliberately high: a loaded box is usually loaded BY the
+    sweep's own downloads, and a self-inflicted load must not stall it.
+    """
+    from . import workload
+
+    return workload.Throttle(
+        duty=1.0, listen_quiet=0.0, max_load=8.0, stop=should_stop, poll=SWEEP_POLL
+    )
 
 
 # Only one sweep at a time, whichever asked for it: the one after a sync and the
@@ -396,7 +431,10 @@ def archive_entity(app, provider, kind: str, deezer_id):
         return None
 
     def work():
+        from . import workload
+
         try:
+            workload.renice(10)
             if kind == "artist":
                 _archive_discography(app, provider, deezer_id)
                 return
@@ -489,7 +527,10 @@ def archive_play_context(app, provider, context):
         return None
 
     def work():
+        from . import workload
+
         try:
+            workload.renice(10)
             raw = (
                 provider.get_album_tracks(cid)
                 if kind == "album"

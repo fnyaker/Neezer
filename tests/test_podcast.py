@@ -16,6 +16,7 @@ from datetime import timedelta
 import shutil
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -300,6 +301,20 @@ class PodcastApiTestCase(ApiTestBase):
             {"url": "https://www.deezer.com/show/1002156761"},
         )
 
+    def _download(self, eid):
+        """Ask for an episode, then wait for the worker that archives it."""
+        from neezer.api import podcast
+
+        self._make_request("downloadPodcastEpisode", {"id": eid})
+        self.assertTrue(podcast.wait_downloads(30), "the episode download never ended")
+
+    def _refresh(self):
+        """Press the client's refresh button, then wait for its worker."""
+        from neezer.api import podcast
+
+        self._make_request("refreshPodcasts")
+        self.assertTrue(podcast.wait_refresh(30), "the podcast refresh never ended")
+
     def test_create_and_get_podcasts(self):
         self._create_channel()
 
@@ -342,8 +357,8 @@ class PodcastApiTestCase(ApiTestBase):
         self._create_channel()
         eid = str(ids.episode_uuid("1"))
 
-        # Trigger the server-side archive.
-        self._make_request("downloadPodcastEpisode", {"id": eid})
+        # Trigger the server-side archive (on its worker, never in the request).
+        self._download(eid)
         episode = PodcastEpisode[ids.episode_uuid("1")]
         self.assertEqual(episode.status, "completed")
         self.assertTrue(os.path.isfile(episode.path))
@@ -389,7 +404,7 @@ class PodcastApiTestCase(ApiTestBase):
         channel — flagged unsubscribed — with all its audio."""
         self._create_channel()
         eid = str(ids.episode_uuid("1"))
-        self._make_request("downloadPodcastEpisode", {"id": eid})
+        self._download(eid)
         path = PodcastEpisode[ids.episode_uuid("1")].path
         self.assertTrue(os.path.isfile(path))
 
@@ -416,7 +431,7 @@ class PodcastApiTestCase(ApiTestBase):
 
         self._create_channel()
         eid = str(ids.episode_uuid("1"))
-        self._make_request("downloadPodcastEpisode", {"id": eid})
+        self._download(eid)
         path = PodcastEpisode[ids.episode_uuid("1")].path
         self.assertTrue(os.path.isfile(path))
 
@@ -481,8 +496,114 @@ class PodcastApiTestCase(ApiTestBase):
         # Drop episodes so a refresh visibly re-imports them.
         PodcastEpisode.delete().execute()
         self.assertEqual(PodcastEpisode.select().count(), 0)
-        self._make_request("refreshPodcasts")
+        self._refresh()
         self.assertEqual(PodcastEpisode.select().count(), 3)
+
+
+class SlowShowProvider(MockProvider):
+    """Every show page costs ``delay`` seconds and is recorded."""
+
+    def __init__(self, archive_dir, shows, delay=0.3):
+        super().__init__(archive_dir, shows)
+        self.delay = delay
+        self.pages = []
+
+    def get_show_page(self, show_id, nb=40, start=0):
+        self.pages.append(str(show_id))
+        time.sleep(self.delay)
+        return super().get_show_page(show_id, nb=nb, start=start)
+
+
+class GatedEpisodeProvider(MockProvider):
+    """``iter_episode`` hands its chunks only once the test opens the gate."""
+
+    def __init__(self, archive_dir, shows):
+        super().__init__(archive_dir, shows)
+        self.gate = threading.Event()
+        self.started = threading.Event()
+        self.downloads = 0
+
+    def download_episode_to(self, url, dest):
+        self.downloads += 1
+        super().download_episode_to(url, dest)
+
+    def iter_episode(self, url):
+        self.started.set()
+        if not self.gate.wait(30):
+            raise RuntimeError("the test never opened the episode gate")
+        for _ in range(4):
+            yield b"ID3" + b"x" * (2 << 20)
+
+
+class PodcastBackgroundTestCase(PodcastApiTestCase):
+    """No Subsonic podcast call does the provider's work in the request thread."""
+
+    def test_refresh_podcasts_answers_before_asking_deezer(self):
+        from neezer.api import podcast
+
+        shows = {"1002156761": (show_data(), [episode_obj(i, f"Ep {i}") for i in (1, 2, 3)])}
+        for n in range(2, 6):
+            sid = str(1002156760 + n)
+            shows[sid] = (
+                show_data(sid, f"Show {n}"),
+                [episode_obj(1000 + n, f"Ep {n}", ts=1782660730 + n)],
+            )
+        provider = SlowShowProvider(self.archive_dir, shows)
+        self.client.application.deezer = provider
+        for sid in shows:
+            self._make_request(
+                "createPodcastChannel", {"url": f"https://www.deezer.com/show/{sid}"}
+            )
+        provider.pages.clear()
+
+        started = time.monotonic()
+        self._make_request("refreshPodcasts")  # a GET and a POST, as clients do
+        elapsed = time.monotonic() - started
+        self.assertLess(
+            elapsed, 0.25,
+            f"the request waited {elapsed:.3f}s on the shows; ONE show costs "
+            f"{provider.delay:.2f}s",
+        )
+        # The worker is the one asking, and it is still asking: 5 shows > 1.5 s.
+        self.assertIsNotNone(podcast.refresh_thread())
+        self.assertFalse(podcast.wait_refresh(0.01))
+        # A second press while it runs starts nothing: 5 pages, not 10.
+        self._make_request("refreshPodcasts")
+        self.assertTrue(podcast.wait_refresh(30), "the refresh worker never ended")
+        self.assertEqual(len(provider.pages), 5)
+
+    def test_download_podcast_episode_answers_before_the_body_is_fetched(self):
+        from neezer.api import podcast
+
+        eps = [episode_obj(i, f"Ep {i}") for i in (1, 2, 3)]
+        provider = GatedEpisodeProvider(
+            self.archive_dir, {"1002156761": (show_data(), eps)}
+        )
+        self.client.application.deezer = provider
+        self.addCleanup(provider.gate.set)
+        self.addCleanup(podcast.wait_downloads, 30)
+        self._create_channel()
+        eid = str(ids.episode_uuid("1"))
+
+        started = time.monotonic()
+        self._make_request("downloadPodcastEpisode", {"id": eid})
+        elapsed = time.monotonic() - started
+        self.assertLess(
+            elapsed, 0.25, f"the request waited {elapsed:.3f}s on the episode body"
+        )
+        self.assertTrue(provider.started.wait(10), "the download worker never started")
+        # The second press is the same episode, already in flight: nothing queued.
+        self._make_request("downloadPodcastEpisode", {"id": eid})
+        self.assertEqual(podcast.pending_episodes(), {eid})
+        self.assertEqual(provider.downloads, 1)
+        self.assertNotEqual(PodcastEpisode[ids.episode_uuid("1")].status, "completed")
+
+        provider.gate.set()
+        self.assertTrue(podcast.wait_downloads(30), "the episode download never ended")
+        episode = PodcastEpisode[ids.episode_uuid("1")]
+        self.assertEqual(episode.status, "completed")
+        self.assertTrue(os.path.isfile(episode.path))
+        self.assertEqual(provider.downloads, 1)
 
 
 # -- web UI /api endpoints ------------------------------------------------
@@ -545,6 +666,20 @@ class PodcastWebUITestCase(unittest.TestCase):
 
     def test_requires_login(self):
         self.assertEqual(self.client.get("/api/podcasts").status_code, 401)
+
+    def test_an_episode_url_does_not_turn_an_outage_into_a_verdict(self):
+        import requests
+
+        self._login()
+        self.provider.dz.api.get_episode = lambda _id: (_ for _ in ()).throw(
+            requests.Timeout("down")
+        )
+        rv = self.client.post(
+            "/api/podcasts", json={"url": "https://www.deezer.com/episode/123"}
+        )
+        self.assertEqual(rv.status_code, 503)
+        self.assertEqual(rv.headers.get("X-NS-Error"), "deezer-unreachable")
+        self.assertEqual(PodcastChannel.select().count(), 0)
 
     def test_subscribe_list_and_get(self):
         self._login()

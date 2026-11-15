@@ -133,11 +133,12 @@ ctx.on("request", (r) => {
 });
 await ctx.addInitScript(fakeApp);
 await ctx.addInitScript(() => {
+  const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
   const j = sessionStorage.getItem("__inject");
   if (!j) return;
   const { session } = JSON.parse(j);
-  localStorage.setItem("player.session", JSON.stringify(session));
-  localStorage.removeItem("player.pos");
+  localStorage.setItem(pkey("player.session"), JSON.stringify(session));
+  localStorage.removeItem(pkey("player.pos"));
   sessionStorage.removeItem("__inject");
 });
 page = await ctx.newPage();

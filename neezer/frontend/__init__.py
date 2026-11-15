@@ -82,7 +82,7 @@ def login_check():
             # A signed cookie can't be revoked, so compare the epoch it was
             # minted with against the user's current one: a password change or
             # a role change bumps it and kills every outstanding session.
-            if session.get("epoch", 0) != (user.session_epoch or 0):
+            if session.get("epoch", 0) != (user.session_epoch or 0) or user.disabled:
                 session.clear()
             else:
                 request.user = user

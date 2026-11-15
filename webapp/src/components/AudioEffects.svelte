@@ -730,7 +730,7 @@
       <button class="vbtn" on:click={() => player.toggleMute()} aria-label="Muet" title="Muet">
         <Icon name={$player.muted || $player.volume === 0 ? "mute" : "volume"} size={18} />
       </button>
-      <input type="range" min="0" max="1" step="0.01" value={$player.muted ? 0 : $player.volume} on:input={(e) => player.setVolume(+e.target.value)} />
+      <input type="range" min="0" max="1" step="0.01" value={$player.muted ? 0 : $player.volume} on:input={(e) => player.setVolume(+e.target.value)} aria-label="Volume de sortie" aria-valuetext={`${volPct} %`} />
       <span class="val">{volPct}%</span>
     </div>
   </div>
@@ -765,7 +765,7 @@
       </span>
     </div>
     <div class="slider-row">
-      <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => bassBoost.set(+e.target.value)} />
+      <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => bassBoost.set(+e.target.value)} aria-label="Amplification des basses" aria-valuetext={`${bassPct} %`} />
       <span class="val">{bassPct}%</span>
     </div>
   </div>

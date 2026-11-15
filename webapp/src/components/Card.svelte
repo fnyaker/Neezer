@@ -43,7 +43,11 @@
   class="card"
   on:click={open}
   on:contextmenu={menu}
-  on:keydown={(e) => e.key === "Enter" && open()}
+  on:keydown={(e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    open();
+  }}
   role="button"
   tabindex="0"
   title={title}
@@ -124,6 +128,14 @@
     .play {
       opacity: 1;
       transform: none;
+    }
+  }
+  @media (pointer: coarse) {
+    .play {
+      width: 44px;
+      height: 44px;
+      right: 6px;
+      bottom: 6px;
     }
   }
   .meta {

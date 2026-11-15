@@ -13,6 +13,7 @@ des fonctions qui manquent encore.
 | [`detachement-deezer.md`](detachement-deezer.md) | Référence livrée : Deezer comme source de sons, plus comme compte à synchroniser (décisions et raisons). |
 | [`multi-provider.md`](multi-provider.md) | Référence livrée (sauf le registre de réglages §13) : plusieurs fournisseurs, une seule bibliothèque, doublons, qualité et accès. |
 | [`playlist-export.md`](playlist-export.md) | Référence de la fonction d'export (Spotify, YouTube Music, Deezer, fichier), à jour. |
+| [`podcast-media.md`](podcast-media.md) | Guide opérateur du conteneur de transcription : modèle, jeton, compose, limites, dépannage. |
 | [`audit-securite.md`](audit-securite.md) | Instantané daté de la passe offensive de juillet 2026 : causes, correctifs, constats ouverts. |
 | [`repro/`](repro/) | Harnais de reproduction (transport, file, pause) ; ils restent exécutables. |
 | [`screenshots/`](screenshots/) | Visuels du README. |
@@ -34,6 +35,7 @@ des fonctions qui manquent encore.
 
 - Comprendre le produit : [`../README.md`](../README.md).
 - Travailler sur le code : [`../CLAUDE.md`](../CLAUDE.md), puis la ou les notes de la zone touchée.
+- Installer et exploiter la transcription d'un podcast : [`podcast-media.md`](podcast-media.md).
 - Savoir quoi faire ensuite : [`../todo.md`](../todo.md).
 - Vérifier une commande, un bench, une mesure : [`agents/commands.md`](agents/commands.md) et
   [`agents/testing.md`](agents/testing.md).

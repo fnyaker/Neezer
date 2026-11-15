@@ -11,9 +11,10 @@ import string
 from flask import current_app, request
 from peewee import fn
 
-from ..db import Folder, Artist, Album, Track
+from ..db import Folder, Artist, Album, Track, TrackArtist
 
 from . import get_entity, get_root_folder, api_routing
+from .exceptions import NotFound
 
 
 @api_routing("/getMusicFolders")
@@ -97,7 +98,7 @@ def list_indexes():
     children = []
     for f in folders:
         artists += f.children[:]
-        children += f.tracks[:]
+        children += list(Track.visible(f.tracks, request.user))
 
     indexes = build_indexes(artists)
     return request.formatter(
@@ -153,10 +154,22 @@ def list_genres():
 def list_artists():
     mfid = request.values.get("musicFolderId")
 
-    query = Artist.select()
-    if mfid is not None:
-        folder = get_root_folder(mfid)
-        query = Artist.select().join(Track).where(Track.root_folder == folder)
+    clause = Track.visible_clause(request.user)
+    if clause is None:
+        query = Artist.select()
+        if mfid is not None:
+            folder = get_root_folder(mfid)
+            query = Artist.select().join(Track).where(Track.root_folder == folder)
+    else:
+        tracks = Track.select(Track.artist).where(clause)
+        credits = TrackArtist.select(TrackArtist.artist).join(Track).where(clause)
+        if mfid is not None:
+            folder = get_root_folder(mfid)
+            tracks = tracks.where(Track.root_folder == folder)
+            credits = credits.where(Track.root_folder == folder)
+        query = Artist.select().where(
+            (Artist.id.in_(tracks)) | (Artist.id.in_(credits))
+        )
 
     indexes = build_indexes(query)
     return request.formatter(
@@ -180,13 +193,15 @@ def list_artists():
 @api_routing("/getArtist")
 def artist_info():
     res = get_entity(Artist)
+    albums = sorted(
+        {t.album for t in Track.visible(res.tracks, request.user)},
+        key=lambda a: a.sort_key(),
+    )
+    if not albums and res.albums.count() > 0:
+        raise NotFound("Artist")
     info = res.as_subsonic_artist(request.user)
-    albums = set(res.albums)
-    albums |= {t.album for t in res.tracks}
-    info["album"] = [
-        a.as_subsonic_album(request.user)
-        for a in sorted(albums, key=lambda a: a.sort_key())
-    ]
+    info["albumCount"] = len(albums)
+    info["album"] = [a.as_subsonic_album(request.user) for a in albums]
 
     return request.formatter("artist", info)
 
@@ -194,8 +209,12 @@ def artist_info():
 @api_routing("/getAlbum")
 def album_info():
     res = get_entity(Album)
+    tracks = Track.prime_credits(
+        sorted(Track.visible(res.tracks, request.user), key=lambda t: t.sort_key())
+    )
+    if not tracks and res.tracks.count() > 0:
+        raise NotFound("Album")
     info = res.as_subsonic_album(request.user)
-    tracks = Track.prime_credits(sorted(res.tracks, key=lambda t: t.sort_key()))
     info["song"] = [
         t.as_subsonic_child(request.user, request.client) for t in tracks
     ]
@@ -211,6 +230,8 @@ def album_info():
 @api_routing("/getSong")
 def track_info():
     res = get_entity(Track)
+    if not res.readable_by(request.user):
+        raise NotFound("Track")
     return request.formatter(
         "song", res.as_subsonic_child(request.user, request.client)
     )

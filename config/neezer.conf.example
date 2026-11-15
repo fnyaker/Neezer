@@ -59,6 +59,9 @@ sync_user = admin
 ; Refresh subscribed podcasts (shows) on each sync + episodes kept per show.
 sync_podcasts = yes
 podcast_episodes = 30
+; Chapters from the archived file/sidecar, and (off by default) the publisher URL
+chapters = yes
+chapter_urls = no
 ; Import audio files dropped into archive_dir as local library tracks. Default: yes
 scan_local = yes
 preload = yes
@@ -70,3 +73,22 @@ sync_on_start = yes
 sync_at = 04:00
 ; …or every N minutes instead (overrides sync_at when > 0):
 ;sync_interval = 360
+
+[transcribe]
+; Speech-to-text of archived podcast episodes, on this server's CPU. Off by
+; default; the binary and the model are file paths, never downloaded at runtime.
+enabled = no
+;bin = /usr/local/bin/whisper-cli
+;model = /models/ggml-large-v3-turbo-q8_0.bin
+; inline (this process) or external (the sidecar container; jobs wait for it).
+; GUNICORN_WORKERS > 1 requires external: several inline runners would each
+; requeue the jobs the others are transcribing, so inline refuses to start.
+runner = inline
+; Minutes of audio per rolling 24 h for automatic jobs. 0 = unlimited.
+daily_minutes = 120
+; Default language (auto, fr, en, es, de, it, pt...).
+language = auto
+; Longest episode transcribed, in minutes (5-1440).
+max_minutes = 360
+; Segments the library-wide search may scan (future route).
+search_segments = 1200000
