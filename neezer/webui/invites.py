@@ -525,7 +525,7 @@ def admin_invites_list():
 
     after_created = request.args.get("after_created")
     after_id = request.args.get("after_id")
-    if bool(after_created) != bool(after_id):
+    if (after_created in (None, "")) != (after_id in (None, "")):
         return _failure(
             "Curseur incomplet.", "invalid_cursor", 400, field="after_created"
         )

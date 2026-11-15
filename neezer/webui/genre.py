@@ -751,7 +751,8 @@ def genre_embed_start():
     from ..deezer.analysis import auto_workers
 
     data = request.get_json(silent=True) or {}
-    force = bool(data.get("force") or request.args.get("force"))
+    raw_force = data.get("force", request.args.get("force"))
+    force = raw_force is True or str(raw_force).strip().lower() in ("1", "true", "yes", "on")
     try:
         workers = int(data.get("workers") or 0)
     except (TypeError, ValueError):

@@ -1098,7 +1098,7 @@ class OnboardingApiTestCase(OnboardingTestCase):
             self.app.config["WEBAPP"]["cache_dir"], "onboarding", "pictures"
         )
         os.makedirs(directory, exist_ok=True)
-        digest = hashlib.sha1(f"{ref}:250".encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(f"{ref}:250".encode("utf-8")).hexdigest()[:40]
         path = os.path.join(directory, digest + ".jpg")
         with open(path, "wb") as handle:
             handle.write(b"\xff\xd8\xff\xe0" + b"0" * 64)

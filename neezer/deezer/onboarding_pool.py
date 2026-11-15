@@ -1480,9 +1480,9 @@ def picture(app, entity_id, size=250, fetch=True):
         return None
     directory = os.path.join(_root(app), "pictures")
     os.makedirs(directory, exist_ok=True)
-    digest = hashlib.sha1(
-        f"{card.ref}:{size}".encode("utf-8"), usedforsecurity=False
-    ).hexdigest()
+    digest = hashlib.sha256(
+        f"{card.ref}:{size}".encode("utf-8")
+    ).hexdigest()[:40]
     for extension, mimetype in ((".jpg", "image/jpeg"), (".png", "image/png")):
         path = os.path.join(directory, digest + extension)
         if os.path.isfile(path):

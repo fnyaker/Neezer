@@ -81,7 +81,7 @@ def playlist_details(uid, playlist):
 @resolve_and_inject_playlist
 def playlist_export(uid, playlist):
     return Response(
-        render_template(
+        render_template(  # nosemgrep: a plain-text playlist, not an HTML page
             "playlist_export.m3u",
             playlist=_VisiblePlaylist(playlist, request.user),
         ),

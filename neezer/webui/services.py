@@ -103,7 +103,7 @@ def _spotify_client_id() -> str | None:
 def _redirect_here() -> str:
     # Only ever read from the ADMIN's request, when they save the app: that is
     # the address they register with Spotify, and it is frozen there.
-    return url_for("webapi.services_spotify_callback", _external=True)  # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
+    return url_for("webapi.services_spotify_callback", _external=True)  # nosemgrep: admin-registered redirect URI
 
 
 def _spotify_redirect() -> str | None:
