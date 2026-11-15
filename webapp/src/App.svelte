@@ -395,8 +395,12 @@
   let mainEl;
 
   function onKey(e) {
-    const tag = (e.target.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable)
+    const target = e.target;
+    if (
+      target &&
+      (target.isContentEditable ||
+        target.closest?.("button, a, input, textarea, select, [role='button'], [contenteditable]"))
+    )
       return;
     if (inviteToken || !$user || onboardingRequired) return;
     switch (e.key) {

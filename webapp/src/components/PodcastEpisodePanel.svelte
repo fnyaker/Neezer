@@ -12,11 +12,18 @@
   import { duration as fmtDuration } from "../lib/format.js";
   import { player, seekTo } from "../lib/stores.js";
   import ChapterList from "./ChapterList.svelte";
+  import TranscriptPanel from "./TranscriptPanel.svelte";
   import Icon from "./Icon.svelte";
+  import { isAdmin } from "../lib/stores.js";
+  import { CAN_ADMIN } from "../lib/remote/mode.js";
 
   export let episode = null;
   export let position = 0;
   export let isCurrent = false;
+  export let initialPosition = null;
+  export let active = true;
+  export let seg = null;
+  export let segToken = 0;
   export let onSeek = null;
 
   let root = null;
@@ -24,6 +31,9 @@
   let descOpen = false;
   let descCan = false;
   let lastEp = "";
+  let view = "chapters";
+  let segmentsApplied = 0;
+  let transcriptMounted = false;
 
   $: podcast = !!episode?.podcast;
   $: epId = episode?.id == null ? "" : String(episode.id);
@@ -40,6 +50,16 @@
     promised ||
     entry.archived === false;
   $: loading = !entry || entry.state === "loading" || entry.state === "idle";
+  $: admin = $isAdmin && CAN_ADMIN;
+  $: canTranscript = admin || episode?.transcript != null;
+  $: hasChapters = promised || chapters.length > 0 || !entry || entry.state !== "ready" || entry.archived === false;
+  $: both = hasChapters && canTranscript;
+  $: if (!hasChapters && canTranscript && view === "chapters") view = "transcript";
+  $: if (seg && (segToken !== segmentsApplied || segmentsApplied === 0)) {
+    segmentsApplied = segToken;
+    if (canTranscript) view = seg === "chapters" ? "chapters" : "transcript";
+  }
+  $: if (view === "transcript") transcriptMounted = true;
 
   $: current = isCurrent ? chapterAt(chapters, position) : null;
   $: upcoming = isCurrent && !current ? nextChapter(chapters, position) : null;
@@ -97,6 +117,33 @@
     if (chapter) goTo(chapter.start);
   }
 
+  function choose(next) {
+    if (next === "transcript" && !canTranscript) return;
+    if (next === "chapters" && !hasChapters) return;
+    view = next;
+  }
+
+  function onTabsKey(event) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") {
+      return;
+    }
+    event.preventDefault();
+    const order = [];
+    if (hasChapters) order.push("chapters");
+    if (canTranscript) order.push("transcript");
+    if (order.length < 2) return;
+    const at = Math.max(0, order.indexOf(view));
+    let next = at;
+    if (event.key === "ArrowLeft") next = (at - 1 + order.length) % order.length;
+    else if (event.key === "ArrowRight") next = (at + 1) % order.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = order.length - 1;
+    choose(order[next]);
+    const target = order[next] === "chapters" ? "#tp-tab-chapters" : "#tp-tab-transcript";
+    const node = event.currentTarget.querySelector(target);
+    if (node) node.focus();
+  }
+
   function openShow() {
     if (episode?.channel_id) push("/podcast/" + episode.channel_id);
   }
@@ -105,6 +152,38 @@
 {#if podcast}
   <div class="podcast-panel" bind:this={root}>
     <div class="podcast-seg">
+      {#if both}
+        <div class="seg-tabs" role="tablist" aria-label="Contenu de l'épisode" tabindex="-1" on:keydown={onTabsKey}>
+          <button
+            type="button"
+            role="tab"
+            id="tp-tab-chapters"
+            aria-selected={view === "chapters"}
+            aria-controls="tp-panel"
+            tabindex={view === "chapters" ? 0 : -1}
+            class:on={view === "chapters"}
+            on:click={() => choose("chapters")}
+          >
+            <Icon name="chapters" size={15} /> Chapitres
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="tp-tab-transcript"
+            aria-selected={view === "transcript"}
+            aria-controls="tp-transcript"
+            tabindex={view === "transcript" ? 0 : -1}
+            class:on={view === "transcript"}
+            on:click={() => choose("transcript")}
+          >
+            <Icon name="transcript" size={15} /> Transcription
+          </button>
+        </div>
+      {:else if !hasChapters && canTranscript}
+        <div class="podcast-h"><h2>Transcription</h2></div>
+      {/if}
+
+      <div class="seg-panel" id="tp-panel" role="tabpanel" hidden={both && view !== "chapters"}>
       {#if showChapters}
         <div class="podcast-block" aria-busy={loading}>
           <div class="podcast-h">
@@ -184,6 +263,22 @@
           {/if}
         </div>
       {/if}
+      </div>
+
+      {#if canTranscript && transcriptMounted}
+        <div class="seg-panel" id="tp-transcript" role="tabpanel" hidden={both ? view !== "transcript" : false}>
+          {#key segToken}
+            <TranscriptPanel
+              {episode}
+              {position}
+              {isCurrent}
+              {initialPosition}
+              active={active && (!both || view === "transcript")}
+              onSeek={goTo}
+            />
+          {/key}
+        </div>
+      {/if}
     </div>
 
     {#if descText}
@@ -256,6 +351,45 @@
   }
   .podcast-seg {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .seg-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--s2);
+    align-self: flex-start;
+  }
+  .seg-tabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 999px;
+    color: var(--dim);
+    font-size: 0.84rem;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .seg-tabs button.on {
+    background: var(--s1);
+    color: var(--tx);
+  }
+  .seg-tabs button:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
+  }
+  .seg-panel[hidden] {
+    display: none;
+  }
+  @media (pointer: coarse) {
+    .seg-tabs button {
+      min-height: 44px;
+    }
   }
   .podcast-block {
     min-width: 0;

@@ -166,7 +166,13 @@ async function req(path, opts = {}, attempt = 0, wasOnline = null) {
       /* ignore */
     }
     const message = (info && info.error) || res.statusText;
-    throw { status: res.status, message, body: info };
+    throw {
+      status: res.status,
+      message,
+      body: info,
+      code: info && info.code,
+      retryIn: Number((info && info.retry_in) || 0),
+    };
   }
   if (res.status === 204) return null;
   // The offline cache stores the response's TEXT (apicache.js#cachePut): a
@@ -563,6 +569,55 @@ export const api = {
   setPodcastAutoArchive: (id, on) =>
     req("/podcast/" + id + "/auto_archive", { method: "POST", body: body({ on }) }),
 
+  transcribeStatus: () => req("/transcribe/status"),
+  transcribeSettings: (options = {}) =>
+    req("/transcribe/settings" + (options && options.probe ? "?probe=1" : "")),
+  saveTranscribeSettings: (fields) =>
+    req("/transcribe/settings", { method: "PUT", body: body(fields) }),
+  setShowTranscribe: (id, payload) =>
+    req("/podcast/" + encodeURIComponent(id) + "/transcribe", {
+      method: "POST",
+      body: body(payload || {}),
+    }),
+  startEpisodeTranscript: (id, options = {}) =>
+    req("/podcast/episode/" + encodeURIComponent(id) + "/transcribe", {
+      method: "POST",
+      body: body(options || {}),
+    }),
+  stopEpisodeTranscript: (id) =>
+    req("/podcast/episode/" + encodeURIComponent(id) + "/transcribe/stop", {
+      method: "POST",
+      body: body({}),
+    }),
+  deleteEpisodeTranscript: (id) =>
+    req("/podcast/episode/" + encodeURIComponent(id) + "/transcript", {
+      method: "DELETE",
+    }),
+  episodeTranscript: (id, options = {}) => {
+    const qs = new URLSearchParams();
+    const source = options || {};
+    if (source.offset != null) qs.set("offset", String(source.offset));
+    if (source.limit != null) qs.set("limit", String(source.limit));
+    if (source.at != null && source.at !== "") qs.set("at", String(source.at));
+    if (source.q) qs.set("q", String(source.q));
+    const suffix = qs.toString();
+    return req(
+      "/podcast/episode/" + encodeURIComponent(id) + "/transcript" + (suffix ? "?" + suffix : ""),
+    );
+  },
+  showTranscriptSearch: (id, q, limit = 50) => {
+    const qs = new URLSearchParams({ q: String(q == null ? "" : q) });
+    if (limit != null) qs.set("limit", String(limit));
+    return req(
+      "/podcast/" + encodeURIComponent(id) + "/transcript/search?" + qs.toString(),
+    );
+  },
+  searchTranscripts: (q, limit = 20) => {
+    const qs = new URLSearchParams({ q: String(q == null ? "" : q) });
+    if (limit != null) qs.set("limit", String(limit));
+    return req("/transcripts/search?" + qs.toString());
+  },
+
   // podcasts — per-user progress & markers (server-side, follow you anywhere).
   // Saves are fire-and-forget (keepalive survives a page unload) — losing one
   // position tick must never surface as an error.
@@ -618,7 +673,11 @@ export const api = {
         (list.length ? "?seen=" + encodeURIComponent(list.join(",")) : "")
     );
   },
-  onboardingArtistsDone: () => req("/onboarding/artists/done", { method: "POST" }),
+  onboardingArtistsDone: (payload) =>
+    req("/onboarding/artists/done", {
+      method: "POST",
+      body: payload ? body(payload) : undefined,
+    }),
   onboardingFeedRetry: () => req("/onboarding/feed/retry", { method: "POST" }),
   onboardingAccountOptions: () => req("/onboarding/account/options"),
   onboardingAccountLink: (payload) =>

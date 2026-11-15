@@ -26,6 +26,7 @@
   import { toggleFavorite, toggleDislike, buildTrackMenu, startTrackRadio } from "../lib/actions.js";
   import { addMarkerAt } from "../lib/markers.js";
   import { chaptersByEpisode, chapterAt, chapterLabel, chapterCountLabel, nextChapter, podcastAbout } from "../lib/chapters.js";
+  import { panelRequest, takePanelRequest } from "../lib/transcript.js";
   import { duration as fmtDuration, hiResCover, resolveCover, cssUrl } from "../lib/format.js";
   import { nameOf } from "../lib/sources.js";
   import { playbackLabel, playbackBusy } from "../lib/playback.js";
@@ -83,6 +84,10 @@
   import ChapterTicks from "./ChapterTicks.svelte";
 
   let tab = "queue";
+  let panelSeg = null;
+  let panelPosition = null;
+  let panelToken = 0;
+  let panelSegTimer = null;
   // How much of the stage goes to reading, decided by what the columns need.
   // 1200 px is where the sleeve column, the player and the queue still hold
   // their comfortable widths; 1600 px adds a fourth column (the facts) without
@@ -216,10 +221,32 @@
   $: styleLabel = $vizShowStyle ? $servedStyleLabel : "";
 
   $: podcast = !!$current?.podcast;
-  $: aboutAvailable = !!$current && (!podcast || podcastAbout($current));
+  $: aboutAvailable = !!$current && (!podcast || podcastAbout($current) || $current.transcript != null);
   $: hasSecondTab = CAN_BROWSE && ((!podcast && !roomy) || (aboutAvailable && !wide));
   $: if (tab === "more" && !aboutAvailable) tab = "queue";
   $: if (tab === "lyrics" && podcast) tab = "queue";
+
+  $: if (
+    $panelRequest &&
+    $current?.podcast &&
+    String($panelRequest.episodeId) === String($current.id)
+  ) {
+    applyPanelRequest();
+  }
+
+  function applyPanelRequest() {
+    const request = takePanelRequest();
+    if (!request) return;
+    panelSeg = request.seg || "transcript";
+    panelPosition = request.position;
+    panelToken += 1;
+    if (aboutAvailable && !wide) tab = "more";
+    clearTimeout(panelSegTimer);
+    panelSegTimer = setTimeout(() => {
+      panelSeg = null;
+      panelPosition = null;
+    }, 3000);
+  }
 
   $: chapterEntry = podcast ? $chaptersByEpisode[String($current?.id || "")] || null : null;
   $: chapterList = chapterEntry?.chapters || [];
@@ -239,6 +266,7 @@
 
   onDestroy(() => {
     bg.destroy();
+    clearTimeout(panelSegTimer);
   });
 </script>
 
@@ -274,7 +302,13 @@
       </div>
     </div>
   {/if}
-  <NowPlayingMore track={$current} position={$player.currentTime} />
+  <NowPlayingMore
+    track={$current}
+    position={$player.currentTime}
+    seg={panelSeg}
+    initialPosition={panelPosition}
+    segToken={panelToken}
+  />
 {/snippet}
 
 <div class="d" transition:fade={{ duration: 150 }}>

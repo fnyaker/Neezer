@@ -3,8 +3,9 @@
   import { push } from "svelte-spa-router";
   import { REMOTE, CAN_KEEP, CAN_ADMIN, CAN_BROWSE } from "../lib/remote/mode.js";
   import { api } from "../lib/api.js";
+  import { online } from "../lib/net.js";
   import { get } from "svelte/store";
-  import { player, currentId, playing, isAdmin, toasts, seekTo, openMenu, openExport } from "../lib/stores.js";
+  import { player, currentId, playing, isAdmin, toasts, seekTo, openMenu, openExport, immersiveOpen } from "../lib/stores.js";
   import { podcastProgress, setResumePoint } from "../lib/podcastProgress.js";
   import { episodeMarkers, loadShowMarkers, removeMarker } from "../lib/markers.js";
   import { chaptersByEpisode, loadChapters, chapterAt, chapterCountLabel } from "../lib/chapters.js";
@@ -12,13 +13,23 @@
   import { downloadTrack } from "../lib/offline.js";
   import { isMobile } from "../lib/viewport.js";
   import { duration as fmtDuration } from "../lib/format.js";
-  import { onDestroy } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import {
+    batchOptions,
+    isActiveStatus,
+    loadTranscribeSettings,
+    reasonText,
+    requestEpisodePanel,
+    transcribeSettings,
+    transcriptNote,
+  } from "../lib/transcript.js";
   import Cover from "../components/Cover.svelte";
   import GradientHeader from "../components/GradientHeader.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import Icon from "../components/Icon.svelte";
   import ChapterList from "../components/ChapterList.svelte";
   import ChapterSheet from "../components/ChapterSheet.svelte";
+  import TranscriptHits from "../components/TranscriptHits.svelte";
 
   export let params = {};
 
@@ -30,17 +41,45 @@
   let chapterPos = {};
   let chapterCap = {};
   let sheet = null;
+  let backlogMode = "all";
+  let batchCount = 5;
+  let batchBusy = false;
+  let transcribeBusy = {};
+  let searching = false;
+  let searchQ = "";
+  let searchTimer = null;
+  let searchSeq = 0;
+  let searchHits = [];
+  let searchTotal = 0;
+  let searchScope = null;
+  let searchFor = "";
+  let searchAttempt = "";
+  let searchLoading = false;
+  let searchError = null;
+  let searchRetryLeft = 0;
+  let searchRetryTimer = null;
+  let seenNote = 0;
 
   $: if (params.id && params.id !== id) {
     id = params.id;
     load(id);
   }
 
+  onMount(() => {
+    if ($isAdmin && CAN_ADMIN) loadTranscribeSettings();
+  });
+
   let loadSeq = 0;
   async function load(pid) {
     const mine = ++loadSeq;
     archiving = false; // another show: its own count, not this one's
     clearTimeout(pollTimer);
+    pollTimer = null;
+    backlogMode = "all";
+    batchBusy = false;
+    transcribeBusy = {};
+    searchQ = "";
+    resetSearchState();
     loading = true;
     data = null;
     chapterOpen = new Set();
@@ -50,14 +89,322 @@
     loadShowMarkers(pid); // fail-soft, fills the markers store as it lands
     try {
       const r = await api.podcast(pid);
-      if (mine === loadSeq) data = r;
+      if (mine === loadSeq) {
+        data = r;
+        if (hasActiveTranscript(r)) watchTranscript();
+      }
     } catch {
       if (mine === loadSeq) data = null;
     }
     if (mine === loadSeq) loading = false;
   }
 
+  function hasActiveTranscript(show) {
+    return (show?.episodes || []).some(
+      (ep) => ep.transcript && isActiveStatus(ep.transcript.status),
+    );
+  }
+
+  function setEpisodeTranscript(episodeId, transcript) {
+    if (!data) return;
+    data = {
+      ...data,
+      episodes: (data.episodes || []).map((ep) =>
+        String(ep.id) === String(episodeId) ? { ...ep, transcript: transcript || null } : ep,
+      ),
+    };
+  }
+
+  function transcribeError(error) {
+    const code = (error && error.body && error.body.code) || (error && error.code) || "";
+    const why = error && error.body && error.body.reason;
+    if (why) return reasonText(why);
+    if (code === "too_long") return "L'épisode dépasse la durée maximale de transcription.";
+    if (code === "not_archived") return "L'épisode doit d'abord être archivé sur le serveur.";
+    if (code === "no_duration") return "La durée de l'épisode est inconnue ; impossible de la borner.";
+    if (code === "queue_full") return "La file de transcription est pleine.";
+    if (code === "already_running") return "Cet épisode est déjà en cours de transcription.";
+    return (error && error.body && error.body.error) || (error && error.message) || "La transcription n'a pas pu démarrer.";
+  }
+
+  function openSettings() {
+    push("/settings/server");
+  }
+
+  async function toggleShowTranscribe() {
+    if (!data || batchBusy || !transcribe) return;
+    const on = !data.auto_transcribe;
+    const before = data;
+    data = { ...data, auto_transcribe: on };
+    batchBusy = true;
+    try {
+      const payload = on
+        ? { auto: true, backlog: backlogMode, language: data.transcribe_language || "auto" }
+        : { auto: false };
+      const r = await api.setShowTranscribe(data.id, payload);
+      if (data?.id === r.id) {
+        data = {
+          ...data,
+          auto_transcribe: r.auto_transcribe,
+          transcribe_language: r.transcribe_language,
+        };
+      }
+      if (r.backlog) backlogMode = r.backlog;
+      if (on) {
+        const skipped = r.skipped && typeof r.skipped === "object"
+          ? Object.values(r.skipped).reduce((a, b) => a + (Number(b) || 0), 0)
+          : Number(r.skipped) || 0;
+        if (r.queued) toasts.push(`${r.queued} épisode${r.queued > 1 ? "s" : ""} en file de transcription.`);
+        else if (skipped) toasts.push(`${skipped} épisode${skipped > 1 ? "s" : ""} ignoré${skipped > 1 ? "s" : ""} (trop longs ou hors budget).`, "error");
+        else toasts.push("Aucun épisode à transcrire pour le moment.");
+        watchTranscript();
+      }
+    } catch (error) {
+      data = before;
+      toasts.push(transcribeError(error), "error");
+    } finally {
+      batchBusy = false;
+    }
+  }
+
+  async function setShowLanguage(value) {
+    const previous = data?.transcribe_language || "auto";
+    data = { ...data, transcribe_language: value };
+    try {
+      const r = await api.setShowTranscribe(data.id, { language: value });
+      if (data?.id === r.id) data = { ...data, transcribe_language: r.transcribe_language };
+    } catch (error) {
+      data = { ...data, transcribe_language: previous };
+      toasts.push(transcribeError(error), "error");
+    }
+  }
+
+  async function startOne(ep) {
+    if (!transcribeAvailable || transcribeBusy[ep.id]) return;
+    const previous = ep.transcript || null;
+    setEpisodeTranscript(ep.id, { status: "queued", progress: 0 });
+    transcribeBusy = { ...transcribeBusy, [ep.id]: true };
+    try {
+      await api.startEpisodeTranscript(ep.id, {});
+      toasts.push("Épisode en file de transcription.");
+      watchTranscript();
+    } catch (error) {
+      setEpisodeTranscript(ep.id, previous);
+      toasts.push(transcribeError(error), "error");
+    } finally {
+      const next = { ...transcribeBusy };
+      delete next[ep.id];
+      transcribeBusy = next;
+    }
+  }
+
+  async function startBatch() {
+    if (!transcribeAvailable || batchBusy || !data) return;
+    const wanted = eligible.slice(0, batchCount);
+    if (!wanted.length) return;
+    batchBusy = true;
+    const previous = new Map(wanted.map((ep) => [ep.id, ep.transcript || null]));
+    for (const ep of wanted) setEpisodeTranscript(ep.id, { status: "queued", progress: 0 });
+    let accepted = 0;
+    let skipped = 0;
+    let cause = null;
+    try {
+      for (let index = 0; index < wanted.length; index++) {
+        const ep = wanted[index];
+        try {
+          await api.startEpisodeTranscript(ep.id, {});
+          accepted++;
+        } catch (error) {
+          const code = error?.body?.code || error?.code || "";
+          setEpisodeTranscript(ep.id, previous.get(ep.id));
+          if (code === "already_running") {
+            accepted++;
+            setEpisodeTranscript(ep.id, { status: "queued", progress: 0 });
+          } else {
+            skipped++;
+            cause = cause || transcribeError(error);
+            if (code === "queue_full" || error?.status === 429) {
+              for (const rest of wanted.slice(index + 1)) {
+                setEpisodeTranscript(rest.id, previous.get(rest.id));
+              }
+              break;
+            }
+          }
+        }
+      }
+      if (accepted) toasts.push(`${accepted} épisode${accepted > 1 ? "s" : ""} en file de transcription.`);
+      if (skipped) toasts.push(`${skipped} ignoré${skipped > 1 ? "s" : ""}${cause ? ` : ${cause}` : ""}`, "error");
+      if (!accepted && !skipped) toasts.push("Aucun épisode à transcrire.");
+      if (accepted) watchTranscript();
+    } finally {
+      batchBusy = false;
+    }
+  }
+
+  async function stopTranscript(ep) {
+    try {
+      await api.stopEpisodeTranscript(ep.id);
+      setEpisodeTranscript(ep.id, { ...(ep.transcript || {}), status: "stopped" });
+      toasts.push("Transcription arrêtée.");
+    } catch (error) {
+      toasts.push(transcribeError(error), "error");
+    }
+  }
+
+  async function openTranscript(ep, at = null) {
+    const index = episodes.findIndex((item) => String(item.id) === String(ep.id));
+    const start = at == null ? ($currentId === trackKey(ep) ? get(player).currentTime : ($podcastProgress[trackKey(ep)]?.t || 0)) : at;
+    if ($currentId === trackKey(ep)) {
+      if (at != null) {
+        player.setProgress(at, ep.duration || 0);
+        seekTo.set(at);
+        player.play();
+      }
+    } else if (index >= 0) {
+      playAt(index, ep, start);
+    }
+    requestEpisodePanel(ep.id, "transcript", start);
+    immersiveOpen.set(true);
+  }
+
+  function pickTranscriptHit(hit) {
+    const ep = episodes.find((item) => String(item.id) === String(hit.episode_id));
+    if (!ep) return;
+    const index = episodes.findIndex((item) => String(item.id) === String(ep.id));
+    playAt(index, ep, hit.start);
+    requestEpisodePanel(ep.id, "transcript", hit.start);
+    immersiveOpen.set(true);
+  }
+
+  function resetSearchState() {
+    clearTimeout(searchTimer);
+    clearInterval(searchRetryTimer);
+    searchRetryTimer = null;
+    searchSeq++;
+    searching = false;
+    searchHits = [];
+    searchTotal = 0;
+    searchScope = null;
+    searchFor = "";
+    searchAttempt = "";
+    searchLoading = false;
+    searchError = null;
+    searchRetryLeft = 0;
+  }
+
+  function clearShowSearch() {
+    searchQ = "";
+    resetSearchState();
+  }
+
+  function onSearchInput() {
+    const term = searchQ.trim();
+    if (term.length < 2) {
+      resetSearchState();
+      return;
+    }
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => runShowSearch(term), 300);
+  }
+
+  function onSearchKey(event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      clearTimeout(searchTimer);
+      runShowSearch(searchQ.trim(), true);
+      event.currentTarget.blur();
+    }
+  }
+
+  function startSearchRetry(seconds) {
+    clearInterval(searchRetryTimer);
+    searchRetryLeft = Math.max(1, Math.ceil(Number(seconds) || 0));
+    searchRetryTimer = setInterval(() => {
+      searchRetryLeft = Math.max(0, searchRetryLeft - 1);
+      if (searchRetryLeft === 0) {
+        clearInterval(searchRetryTimer);
+        searchRetryTimer = null;
+      }
+    }, 1000);
+  }
+
+  async function runShowSearch(term, force = false) {
+    if (!term || term.length < 2) {
+      resetSearchState();
+      return;
+    }
+    if (!force && (term === searchFor || (term === searchAttempt && searchLoading))) return;
+    if (searchRetryLeft > 0) return;
+    const mine = ++searchSeq;
+    searchAttempt = term;
+    searchLoading = true;
+    searchError = null;
+    searching = true;
+    if (!$online) {
+      searchError = { offline: true };
+      searchLoading = false;
+      searching = false;
+      return;
+    }
+    try {
+      const payload = await api.showTranscriptSearch(id, term, 50);
+      if (mine !== searchSeq) return;
+      searchHits = payload.hits || [];
+      searchTotal = Number(payload.total) || searchHits.length;
+      searchScope = payload.scope || null;
+      searchFor = term;
+    } catch (error) {
+      if (mine !== searchSeq) return;
+      searchHits = [];
+      searchTotal = 0;
+      searchScope = null;
+      searchFor = term;
+      searching = false;
+      if (error?.status === 0 || !$online) searchError = { offline: true };
+      else {
+        searchError = error;
+        const retry = Number(error?.retryIn || error?.body?.retry_in || 0);
+        if (error?.status === 429 && retry > 0) startSearchRetry(retry);
+      }
+    } finally {
+      if (mine === searchSeq) searchLoading = false;
+    }
+  }
+
+  $: if ($transcriptNote && $transcriptNote.seq !== seenNote) {
+    seenNote = $transcriptNote.seq;
+    if (data && $transcriptNote.episodeId) {
+      setEpisodeTranscript($transcriptNote.episodeId, $transcriptNote.transcript);
+      if ($transcriptNote.transcript && isActiveStatus($transcriptNote.transcript.status)) {
+        watchTranscript();
+      }
+    }
+  }
+
   $: episodes = data?.episodes || [];
+
+  $: archivedEpisodes = episodes.filter((ep) => ep.archived);
+  $: readyCount = episodes.filter((ep) => ep.transcript?.status === "ready").length;
+  $: eligible = episodes.filter(
+    (ep) =>
+      ep.archived &&
+      (!ep.transcript ||
+        ep.transcript.status === "none" ||
+        ep.transcript.status === "error" ||
+        ep.transcript.status === "stopped"),
+  );
+  $: choices = batchOptions(eligible.length);
+  $: if (choices.length && !choices.includes(batchCount)) batchCount = choices[0];
+  $: transcribe = $transcribeSettings.state === "ready" ? $transcribeSettings.data : null;
+  $: transcribeAvailable = !!transcribe && transcribe.available !== false;
+  $: activeTranscript = episodes.find(
+    (ep) => ep.transcript && (ep.transcript.status === "running" || ep.transcript.status === "leased"),
+  );
+  $: queuedCount = episodes.filter((ep) => ep.transcript?.status === "queued").length;
+  $: showSearch = episodes.some((ep) => ep.transcript?.status === "ready") || searching;
+  $: audioSeconds = eligible.reduce((sum, ep) => sum + (Number(ep.duration) || 0), 0);
+  $: audioHours = Math.round((audioSeconds / 3600) * 10) / 10;
+  $: cpuHours = Math.round((audioHours / 2) * 10) / 10;
 
   // -- "Archiver automatiquement les nouveaux épisodes" ------------------------
   // The show's own switch (Pocket Casts' per-podcast auto-download, design S16).
@@ -89,6 +436,7 @@
   }
 
   const POLL_MS = 6000;
+  const TRANSCRIPT_POLL_MS = 15000;
   const STALL_POLLS = 5; // ~30 s without a new file: stop asking
   let pollTimer = null;
   let stalled = 0;
@@ -99,11 +447,19 @@
     archiving = true;
     pollTimer = setTimeout(pollArchive, POLL_MS);
   }
+  function watchTranscript() {
+    if (pollTimer) return;
+    pollTimer = setTimeout(pollArchive, TRANSCRIPT_POLL_MS);
+  }
+  function pollDelay() {
+    return archiving ? POLL_MS : TRANSCRIPT_POLL_MS;
+  }
   async function pollArchive() {
     pollTimer = null;
-    if (!data || !archiving) return;
+    if (!data) return;
+    if (!archiving && !hasActiveTranscript(data)) return;
     if (document.visibilityState === "hidden") {
-      pollTimer = setTimeout(pollArchive, POLL_MS);
+      pollTimer = setTimeout(pollArchive, pollDelay());
       return;
     }
     const pid = data.id;
@@ -116,9 +472,15 @@
     } catch {
       stalled++;
     }
-    const done = !data.auto_archive || data.archived_count >= reachable(data);
-    if (done || stalled >= STALL_POLLS) archiving = false;
-    else pollTimer = setTimeout(pollArchive, POLL_MS);
+    const archiveDone =
+      !archiving ||
+      !data.auto_archive ||
+      data.archived_count >= reachable(data) ||
+      stalled >= STALL_POLLS;
+    if (archiveDone) archiving = false;
+    if (archiving || hasActiveTranscript(data)) {
+      pollTimer = setTimeout(pollArchive, pollDelay());
+    }
   }
   // Episodes Deezer no longer serves cannot be archived: they don't count
   // against "complete".
@@ -126,7 +488,11 @@
     const gone = (d?.episodes || []).filter((e) => e.unavailable && !e.archived).length;
     return Math.max(0, (d?.episode_count || 0) - gone);
   }
-  onDestroy(() => clearTimeout(pollTimer));
+  onDestroy(() => {
+    clearTimeout(pollTimer);
+    clearTimeout(searchTimer);
+    clearInterval(searchRetryTimer);
+  });
 
   function playFrom(i) {
     if (episodes.length) player.playQueue(episodes, i, { kind: "podcast", id });
@@ -336,7 +702,188 @@
       </button>
     {/if}
 
-    {#if !episodes.length}
+    {#if $isAdmin && CAN_ADMIN}
+      <section class="tr-card" aria-labelledby="tr-card-title">
+        <div class="tr-head">
+          <h2 id="tr-card-title">Transcription des épisodes</h2>
+          <span class="tr-count">{readyCount} sur {archivedEpisodes.length}</span>
+        </div>
+        <p class="tr-sub">
+          Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun audio n'est
+          envoyé à un tiers.
+        </p>
+
+        {#if $transcribeSettings.state === "loading" && !transcribe}
+          <p class="tr-state" role="status" aria-busy="true">Vérification de la transcription…</p>
+        {:else if $transcribeSettings.state === "error" && !transcribe}
+          <p class="tr-state" role="alert">Impossible de vérifier la transcription.</p>
+          <button type="button" class="tr-btn ghost" on:click={() => loadTranscribeSettings(true)}>
+            <Icon name="refresh" size={15} /> Réessayer
+          </button>
+        {:else if !transcribe}
+          <p class="tr-state" role="status" aria-busy="true">Vérification de la transcription…</p>
+        {:else if transcribe.available === false}
+          <p class="tr-state warn">{reasonText(transcribe.reason)}</p>
+          <button type="button" class="tr-btn ghost" on:click={openSettings}>
+            <Icon name="settings" size={15} /> Ouvrir Réglages
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="tr-switch"
+            role="switch"
+            aria-checked={!!data.auto_transcribe}
+            disabled={batchBusy}
+            on:click={toggleShowTranscribe}
+          >
+            <span class="tr-switch-text">
+              <span class="tr-switch-title">Transcrire automatiquement les nouveaux épisodes</span>
+              <span class="tr-switch-hint">
+                {data.auto_transcribe ? "Activé" : "Désactivé"} · {readyCount} sur {archivedEpisodes.length} épisode{archivedEpisodes.length > 1 ? "s" : ""} archivé{archivedEpisodes.length > 1 ? "s" : ""} transcrit{readyCount > 1 ? "s" : ""}
+              </span>
+            </span>
+            <span class="sw" class:on={data.auto_transcribe}><span class="knob"></span></span>
+          </button>
+
+          <div class="tr-fields">
+            <label class="tr-field">
+              <span>Rattrapage à l'activation</span>
+              <select value={backlogMode} on:change={(e) => (backlogMode = e.currentTarget.value)}>
+                <option value="all">Tout l'historique archivé</option>
+                <option value="recent">Les 10 épisodes archivés les plus récents</option>
+                <option value="none">Aucun rattrapage</option>
+              </select>
+            </label>
+            <label class="tr-field">
+              <span>Langue de l'émission</span>
+              <select
+                value={data.transcribe_language || "auto"}
+                on:change={(e) => setShowLanguage(e.currentTarget.value)}
+              >
+                {#each ["auto", "fr", "en", "es", "de", "it", "pt"] as code (code)}
+                  <option value={code}>
+                    {code === "auto" ? "Détection automatique" : code === "fr" ? "Français" : code === "en" ? "Anglais" : code === "es" ? "Espagnol" : code === "de" ? "Allemand" : code === "it" ? "Italien" : "Portugais"}
+                  </option>
+                {/each}
+              </select>
+            </label>
+          </div>
+
+          {#if eligible.length}
+            <p class="tr-estimate">
+              {eligible.length} épisode{eligible.length > 1 ? "s" : ""} · {audioHours} h d'audio,
+              environ {cpuHours} h de calcul.
+            </p>
+            <div class="tr-batch">
+              <label class="tr-batch-label">
+                Transcrire les
+                <select bind:value={batchCount}>
+                  {#each choices as count (count)}
+                    <option value={count}>{count}</option>
+                  {/each}
+                </select>
+                épisodes archivés les plus récents
+              </label>
+              <button type="button" class="tr-btn primary" on:click={startBatch} disabled={batchBusy}>
+                {batchBusy ? "Envoi…" : "Transcrire"}
+              </button>
+            </div>
+            <p class="tr-help">
+              Un seul épisode à la fois, en arrière-plan. La transcription se met en pause pendant
+              l'écoute.
+            </p>
+          {:else}
+            <p class="tr-state">Aucun épisode archivé à transcrire.</p>
+          {/if}
+        {/if}
+
+        {#if activeTranscript}
+          {@const pct = Math.round((Number(activeTranscript.transcript?.progress) || 0) * 100)}
+          <div class="tr-progress">
+            <span class="tr-progress-title">{activeTranscript.title}</span>
+            <span
+              class="tr-bar"
+              role="progressbar"
+              aria-label="Progression de la transcription"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={pct}
+            >
+              <span style={`width:${pct}%`}></span>
+            </span>
+            <span class="tr-pct">{pct} %</span>
+            <button type="button" class="tr-btn tiny" on:click={() => stopTranscript(activeTranscript)}>
+              Arrêter
+            </button>
+          </div>
+        {/if}
+        {#if queuedCount}
+          <p class="tr-help">{queuedCount} épisode{queuedCount > 1 ? "s" : ""} en attente de transcription.</p>
+        {/if}
+      </section>
+    {/if}
+
+    {#if showSearch}
+      <form
+        class="tr-search"
+        on:submit|preventDefault={() => runShowSearch(searchQ.trim(), true)}
+      >
+        <Icon name="search" size={16} />
+        <input
+          type="search"
+          bind:value={searchQ}
+          placeholder="Rechercher dans le texte des épisodes…"
+          aria-label="Rechercher dans les transcriptions de cette émission"
+          enterkeyhint="search"
+          on:input={onSearchInput}
+          on:keydown={onSearchKey}
+        />
+        {#if searchQ}
+          <button type="button" class="tr-clear" on:click={clearShowSearch} aria-label="Effacer la recherche">
+            Effacer
+          </button>
+        {/if}
+      </form>
+      {#if searchQ.trim().length === 1}
+        <p class="tr-help">2 caractères minimum.</p>
+      {/if}
+    {/if}
+
+    {#if searchError}
+      <p class="tr-search-error" role="alert">
+        {#if searchError.offline}
+          La recherche dans les transcriptions a besoin du serveur.
+        {:else if searchError.status === 429}
+          Trop de recherches. Réessayez dans {searchRetryLeft} s.
+        {:else}
+          La recherche a échoué.
+          <button type="button" class="tr-link" on:click={() => runShowSearch(searchFor || searchQ.trim(), true)}>
+            Réessayer
+          </button>
+        {/if}
+      </p>
+    {/if}
+
+    {#if searching}
+      {#if searchLoading}
+        <p class="tr-state" role="status">Recherche dans les épisodes…</p>
+      {:else}
+        <div class="tr-results-head">
+          <span>{searchTotal} passage{searchTotal > 1 ? "s" : ""}</span>
+          <button type="button" class="tr-link" on:click={clearShowSearch}>Effacer</button>
+        </div>
+        {#if searchScope?.truncated}
+          <p class="tr-help">
+            Recherche dans les {searchScope.episodes} épisodes transcrits les plus récents.
+          </p>
+        {/if}
+        {#if searchHits.length}
+          <TranscriptHits hits={searchHits} query={searchFor} showChannel={false} onPick={pickTranscriptHit} />
+        {:else}
+          <p class="tr-state">Aucun passage pour « {searchQ.trim()} » dans cette émission.</p>
+        {/if}
+      {/if}
+    {:else if !episodes.length}
       <p class="muted">Aucun épisode disponible.</p>
     {:else}
       <ul class="episodes">
@@ -351,6 +898,8 @@
           {@const cCap = chapterCap[key] || 8}
           {@const cPos = chapterPos[key] || 0}
           {@const cAt = $currentId === key ? chapterAt(cList, cPos) : null}
+          {@const tr = ep.transcript === undefined ? undefined : ep.transcript || null}
+          {@const trPct = Math.round((Number(tr?.progress) || 0) * 100)}
           <li class:active>
             <button class="pl" on:click={() => toggle(i, ep)} aria-label="Lire l'épisode">
               <Icon name={active && $playing ? "pause" : "play"} size={18} />
@@ -400,6 +949,55 @@
                     <span>{chapterCountLabel(ep.chapter_count)}</span>
                     <span class="chev" class:rot={cOpen}><Icon name="chevronDown" size={14} /></span>
                   </button>
+                {/if}
+                {#if tr !== undefined}
+                  {#if tr?.status === "ready"}
+                    <button
+                      type="button"
+                      class="tr-chip"
+                      title="Ouvrir la transcription dans le lecteur"
+                      aria-label={"Lire la transcription de " + ep.title}
+                      on:click={() => openTranscript(ep)}
+                    >
+                      <Icon name="transcript" size={14} /> Transcription
+                    </button>
+                  {:else if tr && (tr.status === "running" || tr.status === "leased" || tr.status === "queued")}
+                    {#if $isAdmin && CAN_ADMIN}
+                      <button
+                        type="button"
+                        class="tr-chip stop"
+                        aria-label="Arrêter la transcription"
+                        on:click={() => stopTranscript(ep)}
+                      >
+                        <Icon name="transcript" size={14} />
+                        {tr.status === "queued" ? "En attente" : `${trPct} %`} · Arrêter
+                      </button>
+                    {:else}
+                      <span class="tr-chip static">
+                        <Icon name="transcript" size={14} />
+                        {tr.status === "queued" ? "En attente" : `${trPct} %`}
+                      </span>
+                    {/if}
+                  {:else if tr?.status === "stopped"}
+                    <span class="tr-chip static">
+                      <Icon name="transcript" size={14} />
+                      {$isAdmin && CAN_ADMIN ? `Arrêtée · ${trPct} %` : "Arrêtée"}
+                    </span>
+                  {:else if tr?.status === "error"}
+                    <span class="tr-chip static">
+                      <Icon name="alert" size={14} /> Échec
+                    </span>
+                  {:else if (!tr || tr.status === "none") && $isAdmin && CAN_ADMIN && ep.archived && transcribeAvailable}
+                    <button
+                      type="button"
+                      class="tr-chip"
+                      disabled={!!transcribeBusy[ep.id]}
+                      aria-label={"Transcrire " + ep.title}
+                      on:click={() => startOne(ep)}
+                    >
+                      {transcribeBusy[ep.id] ? "Envoi…" : "Transcrire"}
+                    </button>
+                  {/if}
                 {/if}
               </div>
               {#if resume && !resume.done}
@@ -928,9 +1526,346 @@
   .mdel:hover {
     color: var(--text);
   }
+  .tr-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 4px 0 18px;
+    padding: 16px;
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    min-width: 0;
+  }
+  .tr-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .tr-head h2 {
+    margin: 0;
+    font-family: var(--font-body);
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .tr-count {
+    flex: none;
+    color: var(--dim);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tr-sub,
+  .tr-help {
+    margin: 0;
+    color: var(--dim);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    max-width: 70ch;
+  }
+  .tr-state {
+    margin: 0;
+    color: var(--dim);
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+  .tr-state.warn {
+    color: var(--accent-2, #e05252);
+  }
+  .tr-switch {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 56px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: var(--s1);
+    text-align: left;
+    color: var(--text);
+  }
+  .tr-switch:hover:not(:disabled) {
+    background: var(--s2);
+  }
+  .tr-switch:disabled {
+    opacity: 0.65;
+    cursor: default;
+  }
+  .tr-switch:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
+  }
+  .tr-switch-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .tr-switch-title {
+    font-weight: 650;
+    font-size: 0.9rem;
+  }
+  .tr-switch-hint {
+    color: var(--dim);
+    font-size: 0.78rem;
+  }
+  .tr-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px 16px;
+  }
+  .tr-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    color: var(--dim);
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  .tr-field select {
+    min-height: 44px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid var(--bg-hover);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.86rem;
+    font-weight: 600;
+    max-width: 100%;
+  }
+  .tr-estimate {
+    margin: 0;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    line-height: 1.5;
+  }
+  .tr-batch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .tr-batch-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    color: var(--text-dim);
+    font-size: 0.86rem;
+  }
+  .tr-batch-label select {
+    min-height: 44px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid var(--bg-hover);
+    background: var(--bg);
+    color: var(--text);
+    font-weight: 650;
+  }
+  .tr-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 15px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.86rem;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .tr-btn.primary {
+    background: var(--btn);
+    color: var(--onbtn);
+  }
+  .tr-btn.ghost {
+    border-color: var(--ln);
+    color: var(--ac-text);
+  }
+  .tr-btn.ghost:hover {
+    background: var(--s2);
+  }
+  .tr-btn.tiny {
+    min-height: 44px;
+    padding: 0 12px;
+    border-color: var(--ln);
+    color: var(--ac-text);
+    font-size: 0.8rem;
+  }
+  .tr-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .tr-btn:focus-visible,
+  .tr-chip:focus-visible,
+  .tr-clear:focus-visible,
+  .tr-link:focus-visible,
+  .tr-search:focus-within {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
+  }
+  .tr-progress {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .tr-progress-title {
+    grid-column: 1 / -1;
+    min-width: 0;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tr-bar {
+    display: block;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--bg-hover);
+    overflow: hidden;
+  }
+  .tr-bar span {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+  .tr-pct {
+    flex: none;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tr-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 44px;
+    margin: 4px 0 10px;
+    padding: 0 12px;
+    border: 1px solid var(--ln);
+    border-radius: 999px;
+    background: var(--s1);
+    color: var(--dim);
+  }
+  .tr-search input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-size: 0.9rem;
+    text-overflow: ellipsis;
+  }
+  .tr-search input::placeholder {
+    color: var(--dim);
+    opacity: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tr-search input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+  }
+  .tr-search input:focus-visible {
+    outline: none;
+  }
+  .tr-clear {
+    flex: none;
+    min-height: 36px;
+    padding: 0 8px;
+    color: var(--ac-text);
+    font-size: 0.8rem;
+    font-weight: 650;
+  }
+  .tr-search-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 0 10px;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+  .tr-results-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 8px 0;
+    color: var(--dim);
+    font-size: 0.8rem;
+  }
+  .tr-link {
+    padding: 0;
+    color: var(--ac-text);
+    font-size: inherit;
+    font-weight: 650;
+  }
+  .tr-link:hover {
+    text-decoration: underline;
+  }
+  .tr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--ln);
+    color: var(--dim);
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .tr-chip > :global(svg) {
+    color: var(--ac-text);
+  }
+  .tr-chip:hover:not(:disabled) {
+    background: var(--s2);
+    color: var(--tx);
+  }
+  .tr-chip.stop {
+    color: var(--ac-text);
+    border-color: var(--ac-text);
+  }
+  .tr-chip.static {
+    cursor: default;
+  }
+  .tr-chip:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  @media (pointer: coarse) {
+    .tr-chip {
+      height: 44px;
+      padding: 0 14px;
+    }
+    .tr-clear {
+      min-height: 44px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tr-bar span {
+      transition: none;
+    }
+  }
   @media (max-width: 640px) {
     .art {
       width: 150px;
+    }
+    .tr-card {
+      padding: 14px;
     }
   }
 </style>

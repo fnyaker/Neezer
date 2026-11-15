@@ -2899,6 +2899,8 @@
     if (!s.autoplay || s.index < 0) return;
     if (s.index < s.queue.length - 3) return; // still buffered
     if (extending) return;
+    const currentTrack = s.queue[s.index];
+    if ((currentTrack && currentTrack.podcast) || (s.context && s.context.kind === "podcast")) return;
     // The Flow chooses its next title itself, late (lib/flow.js#tick).
     if (s.context && s.context.kind === "flow") return;
     const seed = radioSeed(s);

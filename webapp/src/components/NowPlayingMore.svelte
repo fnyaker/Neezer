@@ -24,6 +24,9 @@
 
   export let track = null;
   export let position = 0;
+  export let seg = null;
+  export let initialPosition = null;
+  export let segToken = 0;
 
   $: podcast = !!track?.podcast;
 
@@ -135,6 +138,9 @@
     <PodcastEpisodePanel
       episode={track}
       {position}
+      {initialPosition}
+      {seg}
+      {segToken}
       isCurrent={true}
       onSeek={(seconds) => {
         player.setProgress(seconds, $player.duration);

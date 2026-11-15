@@ -6,10 +6,10 @@
   // The search itself is unchanged: lib/searchrank.js decides the best result,
   // the library answers first and the main provider joins it, and a pasted
   // playlist link becomes an import offer (lib/linkimport.js).
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
   import { api } from "../lib/api.js";
-  import { isAdmin, player, toasts } from "../lib/stores.js";
+  import { isAdmin, player, toasts, seekTo, immersiveOpen } from "../lib/stores.js";
   import { rememberScreen, recallScreen } from "../lib/nav.js";
   import Card from "../components/Card.svelte";
   import PodcastCard from "../components/PodcastCard.svelte";
@@ -21,6 +21,7 @@
   import { access } from "../lib/access.js";
   import { playlistLink, importRoute } from "../lib/linkimport.js";
   import { entityRef } from "../lib/entity.js";
+  import { compactNumber } from "../lib/format.js";
   import { topResult, mixPodcasts, rankSearchResults } from "../lib/searchrank.js";
   import {
     countSearchResults,
@@ -28,6 +29,17 @@
     offerRadio,
   } from "../lib/queryradio.js";
   import TopResult from "../components/TopResult.svelte";
+  import TranscriptHits from "../components/TranscriptHits.svelte";
+  import { online } from "../lib/net.js";
+  import { trackKey } from "../lib/trackkey.js";
+  import { setResumePoint } from "../lib/podcastProgress.js";
+  import {
+    hitEpisode,
+    loadTranscribeStatus,
+    requestEpisodePanel,
+    transcribeStatus,
+  } from "../lib/transcript.js";
+  import { cacheStats, searchCached } from "../lib/transcriptcache.js";
 
   export let params = {};
 
@@ -46,6 +58,22 @@
   // library = what a search always reaches (the library + the main source);
   // podcasts = the shows only, for when that is what you are after.
   let scope = saved?.scope ?? "library";
+  let podsTab = saved?.podsTab ?? "passages";
+  let trHits = saved?.trHits ?? [];
+  let trTotal = saved?.trTotal ?? 0;
+  let trScope = saved?.trScope ?? null;
+  let trMore = saved?.trMore ?? false;
+  let trFor = saved?.trFor ?? "";
+  let trAttempt = "";
+  let trPending = "";
+  let trLoading = false;
+  let trError = saved?.trError ?? null;
+  let trLocal = saved?.trLocal ?? false;
+  let trTimer = null;
+  let trSeq = 0;
+  let trRetryLeft = 0;
+  let trRetryTimer = null;
+  let cachedPages = 0;
   let timer;
   let seq = 0;
   let inputEl;
@@ -149,6 +177,7 @@
     !!yt && ytAvailable && !!ytTerm && !playlistLink(ytTerm) && !ytAnswerHere && !ytErrorHere;
 
   async function runYoutube(force = false) {
+    if (scope !== "library") return;
     const term = q.trim();
     // A pasted playlist link is an import, not something to search YouTube for.
     if (!yt || !ytAvailable || !term || playlistLink(term)) return;
@@ -213,6 +242,8 @@
   // to it, the Podcasts chip narrows the screen to the shows. Pressing the
   // library chip comes back to the full answer.
   function resetScope() {
+    const term = q.trim();
+    if (scope === "podcasts" && term && term !== searchedFor) run(term);
     scope = "library";
     inputEl?.focus();
   }
@@ -223,16 +254,35 @@
   function onKey(e) {
     if (e.key !== "Enter") return;
     clearTimeout(timer);
+    clearTimeout(trTimer);
     const term = q.trim();
-    // Enter is "search now": the regular search at once, YouTube too.
-    run(term);
+    if (scope !== "podcasts" || $isAdmin) run(term);
     runYoutube();
+    if (scope === "podcasts") runTranscriptSearch(term, true);
     noteSearch(term);
     e.currentTarget.blur(); // drop the phone keyboard over the results
   }
 
   // Whatever the screen is showing, ready for the next time we come back to it.
-  $: rememberScreen({ q, tab, results, yt, ytTracks, ytFor, ytError, ytErrorFor, scope });
+  $: rememberScreen({
+    q,
+    tab,
+    results,
+    yt,
+    ytTracks,
+    ytFor,
+    ytError,
+    ytErrorFor,
+    scope,
+    podsTab,
+    trHits,
+    trTotal,
+    trScope,
+    trMore,
+    trFor,
+    trLocal,
+    trError,
+  });
 
   // Deep link support (/search/:q from the sidebar).
   //
@@ -266,7 +316,116 @@
   function onInput() {
     clearTimeout(timer);
     const term = q.trim();
-    timer = setTimeout(() => run(term), 280);
+    timer = setTimeout(() => {
+      if (scope !== "podcasts" || $isAdmin) run(term);
+      else loading = false;
+    }, 280);
+  }
+
+  function resetTranscriptSearch() {
+    clearTimeout(trTimer);
+    clearTimeout(trRetryTimer);
+    trRetryTimer = null;
+    trSeq++;
+    trPending = "";
+    trHits = [];
+    trTotal = 0;
+    trScope = null;
+    trMore = false;
+    trAttempt = "";
+    trLoading = false;
+    trError = null;
+    trLocal = false;
+    trRetryLeft = 0;
+  }
+
+  function startTranscriptRetry(seconds) {
+    clearInterval(trRetryTimer);
+    trRetryLeft = Math.max(1, Math.ceil(Number(seconds) || 0));
+    trRetryTimer = setInterval(() => {
+      trRetryLeft = Math.max(0, trRetryLeft - 1);
+      if (trRetryLeft === 0) {
+        clearInterval(trRetryTimer);
+        trRetryTimer = null;
+      }
+    }, 1000);
+  }
+
+  async function localTranscriptSearch(term, mine) {
+    const local = await searchCached(term, 20);
+    if (mine !== trSeq) return;
+    trHits = local.hits || [];
+    trTotal = Number(local.total) || trHits.length;
+    trScope = null;
+    trMore = false;
+    trError = null;
+    trLocal = true;
+    trFor = term;
+    trLoading = false;
+  }
+
+  async function runTranscriptSearch(term, force = false) {
+    if (!term || term.length < 2) {
+      resetTranscriptSearch();
+      return;
+    }
+    if (!force && (term === trFor || (term === trAttempt && trLoading))) return;
+    if (trRetryLeft > 0 && !force) return;
+    clearTimeout(trTimer);
+    const mine = ++trSeq;
+    trAttempt = term;
+    trLoading = true;
+    trError = null;
+    trLocal = false;
+    if (!$online) {
+      await localTranscriptSearch(term, mine);
+      return;
+    }
+    try {
+      const payload = await api.searchTranscripts(term, 20);
+      if (mine !== trSeq) return;
+      trHits = payload.hits || [];
+      trTotal = Number(payload.total) || trHits.length;
+      trScope = payload.scope || null;
+      trMore = !!payload.more;
+      trError = null;
+      trLocal = false;
+      trFor = term;
+    } catch (error) {
+      if (mine !== trSeq) return;
+      if (error?.status === 0 || !$online) {
+        await localTranscriptSearch(term, mine);
+        return;
+      }
+      trHits = [];
+      trTotal = 0;
+      trScope = null;
+      trMore = false;
+      trError = error;
+      trFor = term;
+      const retry = Number(error?.retryIn || error?.body?.retry_in || 0);
+      if (error?.status === 429 && retry > 0) startTranscriptRetry(retry);
+    } finally {
+      if (mine === trSeq) trLoading = false;
+    }
+  }
+
+  function pickPassage(hit) {
+    const episode = hitEpisode(hit);
+    if (!episode) return;
+    const start = Number(hit.start) || 0;
+    const current = get(player);
+    const playing = current.queue[current.index];
+    if (playing && trackKey(playing) === trackKey(episode)) {
+      player.setProgress(start, episode.duration || 0);
+      seekTo.set(start);
+      player.play();
+    } else {
+      setResumePoint(trackKey(episode), start, episode.duration || 0);
+      player.playQueue([episode], 0, { kind: "podcast", id: episode.channel_id });
+    }
+    requestEpisodePanel(episode.id, "transcript", start);
+    immersiveOpen.set(true);
   }
 
   async function run(term) {
@@ -293,15 +452,49 @@
   onDestroy(() => {
     clearTimeout(timer);
     clearTimeout(ytTimer);
+    clearTimeout(trTimer);
+    clearTimeout(trRetryTimer);
     // A term the person actually searched is worth remembering; a half-typed
     // word the box still holds is not.
     if (searchedFor && searchedFor === q.trim()) noteSearch(searchedFor);
   });
 
-  // A saved scope from an older session, or from an account that is no longer
-  // the admin: the shows are not served to it, so the filter has nothing to
-  // show — fall back to the library rather than an empty screen.
-  $: if (scope === "podcasts" && !$isAdmin) scope = "library";
+  onMount(async () => {
+    if (!$isAdmin && $transcribeStatus.state === "idle") loadTranscribeStatus();
+    cachedPages = (await cacheStats()).pages;
+  });
+
+  $: statusReady =
+    $transcribeStatus.state === "ready" || $transcribeStatus.state === "error";
+  $: statusReadyCount = Number($transcribeStatus.data?.queue?.ready) || 0;
+  $: canPodcastMode = $isAdmin || (statusReady && statusReadyCount > 0) || cachedPages > 0;
+  $: if (scope === "podcasts" && statusReady && !canPodcastMode) scope = "library";
+
+  $: trTerm = q.trim();
+  $: trBusy = trLoading || (!!trPending && trPending === trTerm);
+  $: {
+    clearTimeout(trTimer);
+    if (
+      scope === "podcasts" &&
+      canPodcastMode &&
+      podsTab === "passages" &&
+      trTerm.length >= 2 &&
+      !playlistLink(trTerm) &&
+      trFor !== trTerm &&
+      trPending !== trTerm &&
+      !(trAttempt === trTerm && trLoading)
+    ) {
+      trPending = trTerm;
+      trTimer = setTimeout(() => {
+        trPending = "";
+        runTranscriptSearch(trTerm);
+      }, 300);
+    } else if (trPending) {
+      trPending = "";
+    }
+  }
+
+  $: if (podsTab === "shows" && !$isAdmin) podsTab = "passages";
 
   // A pasted playlist link is not a search: offer to import it instead.
   $: shared = playlistLink(q);
@@ -379,6 +572,7 @@
   $: if (tab === "podcasts") tab = "albums";
   $: podcasts = $isAdmin ? results.podcasts || [] : [];
   $: shows = scope === "podcasts" ? podcasts : [];
+  $: passages = trHits || [];
   $: top = tab === "all" && scope === "library" ? topResult(q, results, $isAdmin) : null;
   $: shelfArtists = (results.artists || []).filter((a) => !(top?.kind === "artist" && a === top.item));
   $: albumsAndShows = mixPodcasts(
@@ -403,7 +597,7 @@
   >
     Ma bibliothèque
   </button>
-  {#if ytAvailable}
+  {#if ytAvailable && scope !== "podcasts"}
     <button
       class="chip"
       class:chip-active={yt}
@@ -416,13 +610,14 @@
       <Icon name={iconOf(fb.id)} size={15} /> {fb.name}
     </button>
   {/if}
-  {#if $isAdmin}
+  {#if canPodcastMode}
     <button
       class="chip"
       class:chip-active={scope === "podcasts"}
       aria-pressed={scope === "podcasts"}
       on:click={toggleShows}
-      title="Ne montrer que les podcasts"
+      title="Chercher dans les titres des émissions et le texte des épisodes transcrits"
+      aria-label="Chercher dans les titres des émissions et le texte des épisodes transcrits"
     >
       Podcasts
     </button>
@@ -435,8 +630,8 @@
     bind:this={inputEl}
     type="search"
     enterkeyhint="search"
-    placeholder="Titres, artistes, albums, podcasts…"
-    aria-label="Rechercher un titre, un artiste, un album ou un podcast"
+    placeholder={scope === "podcasts" ? "Rechercher dans les podcasts…" : "Titres, artistes, albums, podcasts…"}
+    aria-label={scope === "podcasts" ? "Rechercher dans les podcasts" : "Rechercher un titre, un artiste, un album ou un podcast"}
     bind:value={q}
     on:input={onInput}
     on:keydown={onKey}
@@ -487,13 +682,17 @@
           {/each}
         </div>
       </section>
-    {:else}
+    {:else if scope === "library"}
       <p class="muted lead">
         Cherche un titre, un artiste, un album ou un podcast — les titres de ta bibliothèque
         d'abord, puis le catalogue, et YouTube quand il a ce que le catalogue n'a pas.
       </p>
     {/if}
-    <ExplorerStyles />
+    {#if scope === "podcasts"}
+      <p class="muted lead">Tape un mot pour chercher dans le texte des épisodes transcrits.</p>
+    {:else}
+      <ExplorerStyles />
+    {/if}
   </div>
 {/if}
 
@@ -507,17 +706,111 @@
   </div>
 {/if}
 
-{#if scope === "podcasts"}
-  {#if loading}
-    <Skeleton kind="shelf" />
-  {:else if q.trim() && !shared}
-    {#if shows.length}
+{#if scope === "podcasts" && !shared}
+  {#if $isAdmin}
+    <div class="pods-tabs" role="tablist" aria-label="Recherche dans les podcasts">
+      <button
+        type="button"
+        role="tab"
+        class="chip"
+        class:chip-active={podsTab === "passages"}
+        aria-selected={podsTab === "passages"}
+        on:click={() => (podsTab = "passages")}
+      >
+        Passages
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="chip"
+        class:chip-active={podsTab === "shows"}
+        aria-selected={podsTab === "shows"}
+        on:click={() => (podsTab = "shows")}
+      >
+        Émissions
+      </button>
+    </div>
+  {/if}
+
+  {#if q.trim()}
+  {#if podsTab === "passages" || !$isAdmin}
+    {#if q.trim().length < 2}
+      <p class="muted hint">2 caractères minimum pour chercher dans les transcriptions.</p>
+    {:else if trError?.status === 404}
+      <p class="muted hint">
+        La recherche dans les transcriptions n'est pas disponible sur ce serveur.
+      </p>
+    {:else if trError?.offline || (!$online && !trHits.length)}
+      <p class="muted hint">La recherche dans les transcriptions a besoin du serveur.</p>
+    {:else if trError}
+      <p class="muted hint">
+        {trError?.status === 429
+          ? `Trop de recherches. Réessayez dans ${trRetryLeft} s.`
+          : "La recherche dans les transcriptions a échoué."}
+        {#if trError?.status !== 404}
+          <button
+            type="button"
+            class="tr-retry"
+            disabled={trRetryLeft > 0}
+            on:click={() => runTranscriptSearch(trTerm, true)}
+          >
+            Réessayer
+          </button>
+        {/if}
+      </p>
+    {:else}
+      {#if trBusy || trLocal || trTotal > 0}
+        <p class="tr-summary" role="status" aria-live="polite">
+          {#if trBusy}
+            Recherche dans les transcriptions…
+          {:else if trLocal}
+            Recherche locale — {trTotal} passage{trTotal > 1 ? "s" : ""} dans les pages déjà lues.
+          {:else}
+            {trTotal} passage{trTotal > 1 ? "s" : ""}{#if $isAdmin}{" "}dans {shows.length} émission{shows.length > 1 ? "s" : ""}{/if}
+          {/if}
+        </p>
+      {/if}
+      {#if trScope && !trBusy}
+        <p class="tr-scope">
+          {compactNumber(trScope.episodes)} épisode{trScope.episodes > 1 ? "s" : ""}
+          {#if trScope.segments != null}{" "}· {compactNumber(trScope.segments)} segments{/if}
+          {#if trScope.truncated}{" "}· les plus récents{/if}
+        </p>
+      {/if}
+      {#if !trBusy && !trLocal && trMore}
+        <p class="tr-scope">20 passages affichés — la recherche s'arrête là.</p>
+      {/if}
+
+      {#if trBusy}
+        <Skeleton kind="list" />
+      {:else if trHits.length}
+        <TranscriptHits hits={trHits} query={trFor || trTerm} showChannel onPick={pickPassage} />
+      {:else if !trBusy}
+        {#if $isAdmin && shows.length}
+          <p class="muted hint">Aucun passage parlé pour « {q.trim()} ».</p>
+        {:else}
+          <p class="muted hint">Rien pour « {q.trim()} » dans les podcasts.</p>
+          <p class="muted hint">
+            La recherche porte sur les titres des émissions et sur le texte des épisodes déjà
+            transcrits.
+          </p>
+        {/if}
+      {/if}
+    {/if}
+  {:else}
+    {#if loading}
+      <Skeleton kind="shelf" />
+    {:else if !q.trim()}
+      <p class="muted hint">Tape un mot pour chercher un podcast.</p>
+    {:else if shows.length}
+      <p class="tr-scope">{shows.length} émission{shows.length > 1 ? "s" : ""}</p>
       <div class="grid">
         {#each shows as p (entityRef(p))}<PodcastCard item={p} />{/each}
       </div>
     {:else}
       <p class="muted hint">Aucun podcast pour « {q} ».</p>
     {/if}
+  {/if}
   {/if}
 {:else if loading}
   <Skeleton kind="shelf" />
@@ -821,6 +1114,44 @@
   }
   .hint {
     margin-top: 20px;
+  }
+  .pods-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 4px 0 12px;
+  }
+  .tr-summary {
+    margin: 8px 0 2px;
+    color: var(--dim);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+  }
+  .tr-scope {
+    margin: 0 0 8px;
+    color: var(--dim);
+    font-size: 0.74rem;
+    line-height: 1.4;
+  }
+  .tr-retry {
+    min-height: 44px;
+    margin-left: 8px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--ln);
+    color: var(--ac-text);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .tr-retry:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .tr-retry:focus-visible {
+    outline: 2px solid var(--ac-text);
+    outline-offset: 2px;
   }
   /* The best result beside the titles where there is room for both (the way
      Spotify and YouTube Music lay it out), above them on a phone. */

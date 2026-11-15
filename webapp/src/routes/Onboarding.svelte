@@ -675,7 +675,7 @@
     finishing = true;
     finishStatus = "";
     try {
-      const result = await api.onboardingArtistsDone();
+      const result = await api.onboardingArtistsDone({ skip: true });
       const reached = (result && result.step) || "done";
       user.update((current) => (current ? { ...current, onboarding: reached === "account" ? "account" : "done" } : current));
       if (reached === "account") push("/onboarding/accounts");

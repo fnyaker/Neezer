@@ -44,6 +44,7 @@
   import DiscoverySlider from "../components/DiscoverySlider.svelte";
   import DislikedTracks from "../components/DislikedTracks.svelte";
   import AdminUsers from "../components/AdminUsers.svelte";
+  import TranscribeSettings from "../components/TranscribeSettings.svelte";
 
   const QUALITIES = [
     { id: "FLAC", label: "FLAC", hint: "Sans perte — lourd" },
@@ -1003,8 +1004,42 @@
       </label>
     {/if}
   </div>
-</section>
 
+  <h3>Chapitres des épisodes</h3>
+  <div class="rules">
+    <label class="rule">
+      <input
+        type="checkbox"
+        checked={rules.chapters}
+        disabled={rulesSaving}
+        on:change={(e) => saveRule("chapters", e.currentTarget.checked)}
+      />
+      <span>
+        Lire les chapitres à l'archivage
+        <em class="note">— depuis le fichier de l'épisode, sans requête à personne</em>
+      </span>
+    </label>
+    <label class="rule">
+      <input
+        type="checkbox"
+        checked={rules.chapter_urls}
+        disabled={rulesSaving}
+        on:change={(e) => saveRule("chapter_urls", e.currentTarget.checked)}
+      />
+      <span>
+        Suivre aussi le lien de chapitres du fichier
+        <em class="note">— une requête tierce par épisode ; désactivé par défaut</em>
+      </span>
+    </label>
+  </div>
+</section>
+{/if}
+
+{#if $user?.admin && CAN_ADMIN}
+  <TranscribeSettings />
+{/if}
+
+{#if $user?.admin && CAN_ADMIN && rules}
 <section class="card danger">
   <h2>Nettoyage automatique</h2>
   <p class="muted sub">
@@ -1792,6 +1827,11 @@
   }
   .rule input:disabled {
     cursor: default;
+  }
+  @media (pointer: coarse) {
+    .rule {
+      min-height: 44px;
+    }
   }
   .row {
     display: flex;

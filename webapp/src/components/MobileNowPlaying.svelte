@@ -47,6 +47,7 @@
   import Visualizer from "./Visualizer.svelte";
   import { currentLyricLine } from "../lib/lyrics.js";
   import { chaptersByEpisode, chapterAt, chapterLabel, chapterCountLabel, nextChapter, podcastAbout } from "../lib/chapters.js";
+  import { panelRequest, takePanelRequest } from "../lib/transcript.js";
   import Cover from "./Cover.svelte";
   import PartyButton from "./PartyButton.svelte";
   import RemoteButton from "./RemoteButton.svelte";
@@ -65,6 +66,10 @@
 
   let showQueue = false;
   let showLyrics = false;
+  let panelSeg = null;
+  let panelPosition = null;
+  let panelToken = 0;
+  let panelSegTimer = null;
 
   // One sheet at a time: the lyrics view, the queue and the À propos panel all
   // live over the same player, and two stacked scrollers would fight for the
@@ -100,7 +105,10 @@
   $: styleLabel = $vizShowStyle ? $servedStyleLabel : "";
 
   $: podcast = !!$current?.podcast;
-  $: moreAvailable = CAN_BROWSE && !!$current && (!podcast || podcastAbout($current));
+  $: moreAvailable =
+    CAN_BROWSE &&
+    !!$current &&
+    (!podcast || podcastAbout($current) || $current.transcript != null);
   $: chapterEntry = podcast ? $chaptersByEpisode[String($current?.id || "")] || null : null;
   $: chapterList = chapterEntry?.chapters || [];
   $: chapterNow = podcast ? chapterAt(chapterList, $player.currentTime) : null;
@@ -244,6 +252,28 @@
     closeMore();
     return false;
   }
+  $: if (
+    $panelRequest &&
+    $current?.podcast &&
+    String($panelRequest.episodeId) === String($current.id)
+  ) {
+    applyPanelRequest();
+  }
+
+  function applyPanelRequest() {
+    const request = takePanelRequest();
+    if (!request) return;
+    panelSeg = request.seg || "transcript";
+    panelPosition = request.position;
+    panelToken += 1;
+    openMore();
+    clearTimeout(panelSegTimer);
+    panelSegTimer = setTimeout(() => {
+      panelSeg = null;
+      panelPosition = null;
+    }, 3000);
+  }
+
   function openMore() {
     if (!moreAvailable) return;
     lastFocus = document.activeElement;
@@ -270,7 +300,10 @@
       }
     }, 320);
   }
-  onDestroy(() => clearTimeout(hideTimer));
+  onDestroy(() => {
+    clearTimeout(hideTimer);
+    clearTimeout(panelSegTimer);
+  });
   // A swipe down anywhere on the panel drags it back down: on its header always,
   // on its body when the body is scrolled to the top and the finger's first
   // move is DOWN. A gesture that commits to anything else (a scroll, a
@@ -1112,7 +1145,13 @@
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="under-b" bind:this={panelBody} tabindex={podcast ? "0" : undefined}>
-        <NowPlayingMore track={$current} position={$player.currentTime} />
+        <NowPlayingMore
+          track={$current}
+          position={$player.currentTime}
+          seg={panelSeg}
+          initialPosition={panelPosition}
+          segToken={panelToken}
+        />
       </div>
     </div>
   {/if}
