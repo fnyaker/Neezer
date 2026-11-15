@@ -488,6 +488,26 @@ class AdminUsersTestCase(unittest.TestCase):
         self.assertNotIn(f"u:{self.bob.id}", subjects)
         self.assertIn(f"u:{self.alice.id}", subjects)
 
+    def test_delete_removes_the_person_provider_account_and_its_grants(self):
+        from neezer.db import ProviderGrant
+
+        row = ProviderAccount.create(
+            provider="deezer", user=self.bob, mode="arl", status="ok", secret="gcm:x"
+        )
+        ProviderGrant.create(
+            provider="deezer", account=str(row.id), feature="*", subject="all"
+        )
+        self._login()
+        self.assertEqual(
+            self.client.delete(f"/api/admin/users/{self.bob.id}").status_code, 200
+        )
+        self.assertFalse(
+            ProviderAccount.select().where(ProviderAccount.id == row.id).exists()
+        )
+        self.assertFalse(
+            ProviderGrant.select().where(ProviderGrant.account == str(row.id)).exists()
+        )
+
     def test_delete_refuses_the_holder_of_the_server_deezer_account(self):
         row = ProviderAccount.create(
             provider="deezer", user=self.bob, mode="server", status="ok"

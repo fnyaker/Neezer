@@ -474,6 +474,15 @@ class UserManager:
                 & (Invite.expires > stamp)
             ).execute()
             access.forget_subject(f"u:{target.id}")
+            accounts = list(
+                ProviderAccount.select().where(ProviderAccount.user == target.id)
+            )
+            for account in accounts:
+                access.forget_account(account.id)
+            if accounts:
+                ProviderAccount.delete().where(
+                    ProviderAccount.user == target.id
+                ).execute()
             moved = (
                 Track.update(owner=actor.id).where(Track.owner == target.id).execute()
             )
