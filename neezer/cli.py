@@ -16,7 +16,13 @@ from .daemon.client import DaemonClient
 from .daemon.exceptions import DaemonUnavailableError
 from .db import Folder, User, init_database, release_database
 from .managers.folder import FolderManager
-from .managers.user import InvalidUserName, UserManager, UserNameTaken
+from .managers.user import (
+    InvalidUserName,
+    LastAdmin,
+    ServerAccountHolder,
+    UserManager,
+    UserNameTaken,
+)
 from .scanner import Scanner
 
 
@@ -288,10 +294,26 @@ def user_delete(name):
     """
 
     try:
-        UserManager.delete_by_name(name)
-        click.echo(f"Deleted user '{name}'")
+        target = User.get(name=name)
     except User.DoesNotExist as e:
         raise ClickException(f"User '{name}' does not exist.") from e
+    actor = (
+        User.select()
+        .where(
+            (User.admin == True)  # noqa: E712
+            & (User.disabled == False)  # noqa: E712
+            & (User.id != target.id)
+        )
+        .order_by(User.id)
+        .first()
+    )
+    if actor is None:
+        raise ClickException("Cannot delete the last active administrator.")
+    try:
+        UserManager.delete_guarded(target.id, actor)
+        click.echo(f"Deleted user '{name}'")
+    except (LastAdmin, ServerAccountHolder) as e:
+        raise ClickException(str(e)) from e
 
 
 def _echo_role_change(username, name, value):

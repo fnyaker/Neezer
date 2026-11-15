@@ -123,11 +123,14 @@ class CLITestCase(unittest.TestCase):
         self.assertFalse(User.select().where(User.name == "carol").exists())
 
     def test_user_delete(self):
+        self.__invoke("user add -p Alic3 boss")
+        self.__invoke("user setroles -A boss")
         self.__invoke("user add -p Alic3 alice")
         self.__invoke("user delete alice")
         self.__invoke("user delete bob", True)
 
-        self.assertEqual(User.select().count(), 0)
+        self.assertEqual(User.select().count(), 1)
+        self.assertTrue(User.get(name="boss").admin)
 
     def test_user_list(self):
         self.__invoke("user add -p Alic3 alice")
