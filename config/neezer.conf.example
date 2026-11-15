@@ -81,6 +81,8 @@ enabled = no
 ;bin = /usr/local/bin/whisper-cli
 ;model = /models/ggml-large-v3-turbo-q8_0.bin
 ; inline (this process) or external (the sidecar container; jobs wait for it).
+; GUNICORN_WORKERS > 1 requires external: several inline runners would each
+; requeue the jobs the others are transcribing, so inline refuses to start.
 runner = inline
 ; Minutes of audio per rolling 24 h for automatic jobs. 0 = unlimited.
 daily_minutes = 120

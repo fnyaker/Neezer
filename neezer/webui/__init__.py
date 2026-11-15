@@ -3501,14 +3501,107 @@ def _transcript_cards(ids: list) -> dict:
     return out
 
 
-def _channel(c, with_episodes=False, counts=None):
-    """A podcast channel for the SPA. `counts` is (episodes, archived) from
-    ``_channel_counts``; without it this channel is counted on its own."""
-    if counts is None:
-        counts = (
-            c.episodes.count(),
-            c.episodes.where(PodcastEpisode.path.is_null(False)).count(),
+#: One page of a show's episodes: what a phone screen opens with, and the most
+#: one answer may carry. A three-year daily show serialized every episode on
+#: every open — ~450 B each, unbounded — which is what the page cost.
+PODCAST_EPISODES_PAGE = 50
+PODCAST_EPISODES_MAX = 200
+#: A cursor is a sort key, not a token: bound what is parsed before it is used.
+PODCAST_CURSOR_MAX = 96
+
+
+def _transcribed_count(channel):
+    """How many of a show's episodes have a finished transcript, in one query."""
+    return (
+        PodcastTranscript.select(fn.COUNT(PodcastTranscript.episode))
+        .join(PodcastEpisode, on=(PodcastTranscript.episode == PodcastEpisode.id))
+        .where(
+            (PodcastEpisode.channel == channel.id)
+            & (PodcastTranscript.status == "ready")
         )
+        .scalar()
+    ) or 0
+
+
+def _episode_key(episode):
+    """The opaque keyset cursor of a page: its last episode's sort key."""
+    published = episode.publish_date.isoformat() if episode.publish_date else ""
+    created = episode.created.isoformat() if episode.created else ""
+    return "%s|%s|%s" % (published, created, episode.id)
+
+
+def _episode_cursor(raw):
+    """``(published, created, id)`` from a ``next`` value; ValueError if junk.
+
+    The three parts are exactly what the page is ordered by, so a second page
+    never overlaps or skips a row, whatever was published while it was open.
+    """
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str) or len(raw) > PODCAST_CURSOR_MAX:
+        raise ValueError("invalid cursor")
+    parts = raw.split("|")
+    if len(parts) != 3:
+        raise ValueError("invalid cursor")
+    published_text, created_text, id_text = parts
+    try:
+        episode_id = uuid.UUID(id_text)
+        created = (
+            datetime.datetime.fromisoformat(created_text) if created_text else None
+        )
+        published = (
+            datetime.datetime.fromisoformat(published_text)
+            if published_text
+            else None
+        )
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("invalid cursor")
+    if created is None:
+        raise ValueError("invalid cursor")
+    return (published, created, episode_id)
+
+
+def _episodes_after(cursor):
+    """Rows strictly after ``cursor`` in the page's (published, created, id) order.
+
+    NULL-dated episodes sort last (the page's own ORDER BY), so a cursor on a
+    dated row also lets the NULL tail through, and a cursor inside the tail
+    only lets the tail rows older than it through.
+    """
+    published, created, episode_id = cursor
+    older = (PodcastEpisode.created < created) | (
+        (PodcastEpisode.created == created) & (PodcastEpisode.id < episode_id)
+    )
+    if published is None:
+        return PodcastEpisode.publish_date.is_null(True) & older
+    return (
+        PodcastEpisode.publish_date.is_null(True)
+        | (PodcastEpisode.publish_date < published)
+        | ((PodcastEpisode.publish_date == published) & older)
+    )
+
+
+def _episode_limit(raw):
+    """``(limit, None)`` or ``(None, response)``: 1..200, 50 by default."""
+    if raw is None or raw == "":
+        return PODCAST_EPISODES_PAGE, None
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        return None, (jsonify({"error": "invalid limit"}), 400)
+    if value < 1 or value > PODCAST_EPISODES_MAX:
+        return None, (jsonify({"error": "invalid limit"}), 400)
+    return value, None
+
+
+def _channel(c, with_episodes=False, counts=None, limit=None, cursor=None):
+    """A podcast channel for the SPA. `counts` is (episodes, archived) from
+    ``_channel_counts``; without it this channel is counted in one grouped
+    query. ``limit`` pages the episodes (newest first) and adds a ``next``
+    cursor; without it every episode is listed, as the subscribe answer wants.
+    """
+    if counts is None:
+        counts = _channel_counts([c.id]).get(c.id, (0, 0))
     info = {
         "id": str(c.id),
         "deezer_id": c.deezer_id,
@@ -3541,16 +3634,29 @@ def _channel(c, with_episodes=False, counts=None):
     if with_episodes:
         from ..deezer.chapters import counts_for as _chapter_counts
 
-        episodes = list(
-            c.episodes.order_by(
-                PodcastEpisode.publish_date.desc(), PodcastEpisode.created.desc()
-            )
+        query = c.episodes.order_by(
+            # NULL-dated episodes last on every engine: PostgreSQL sorts them
+            # first under DESC, which a keyset cursor cannot follow.
+            PodcastEpisode.publish_date.is_null().asc(),
+            PodcastEpisode.publish_date.desc(),
+            PodcastEpisode.created.desc(),
+            PodcastEpisode.id.desc(),
         )
+        if cursor is not None:
+            query = query.where(_episodes_after(cursor))
+        page = list(query if limit is None else query.limit(int(limit) + 1))
+        has_more = limit is not None and len(page) > int(limit)
+        episodes = page[: int(limit)] if limit is not None else page
         chapter_counts = _chapter_counts([e.id for e in episodes])
         transcripts = _transcript_cards([e.id for e in episodes])
-        info["transcribed_count"] = sum(
-            1 for card in transcripts.values() if card["status"] == "ready"
-        )
+        if has_more:
+            # The page cannot say how much of the show is transcribed: ask the
+            # show once, so the counter does not reset at each page boundary.
+            info["transcribed_count"] = _transcribed_count(c)
+        else:
+            info["transcribed_count"] = sum(
+                1 for card in transcripts.values() if card["status"] == "ready"
+            )
         info["episodes"] = [
             _episode(
                 e,
@@ -3560,6 +3666,8 @@ def _channel(c, with_episodes=False, counts=None):
             )
             for e in episodes
         ]
+        if limit is not None:
+            info["next"] = _episode_key(episodes[-1]) if has_more else None
     return info
 
 
@@ -3637,7 +3745,14 @@ def podcast(pid):
             return jsonify({"error": "not found"}), 404
     except PodcastChannel.DoesNotExist:
         return jsonify({"error": "not found"}), 404
-    return jsonify(_channel(c, with_episodes=True))
+    limit, error = _episode_limit(request.args.get("limit"))
+    if error:
+        return error
+    try:
+        cursor = _episode_cursor(request.args.get("cursor"))
+    except ValueError:
+        return jsonify({"error": "invalid cursor"}), 400
+    return jsonify(_channel(c, with_episodes=True, limit=limit, cursor=cursor))
 
 
 @webapi.route("/podcasts", methods=["POST"])
@@ -4588,8 +4703,7 @@ def create_playlist():
         PlaylistMember.create(
             playlist=pl, user=user, role="owner", added=pl.created
         )
-        for track in track_rows:
-            pl.add(track)
+        pl.add_many(track_rows)
         if wants_placement:
             place_new_playlist(user, pl, folder)
     from ..deezer import backfill
@@ -4690,8 +4804,7 @@ def add_playlist_tracks(playlist_id):
     try:
         with db.atomic():
             new_version = placcess.bump_version(pl, expected, request.webuser)
-            for track in tracks:
-                pl.add(track)
+            pl.add_many(tracks)
             nb_tracks = _visible_playlist_count(pl, request.webuser)
     except placcess.VersionConflict as exc:
         return _playlist_conflict(exc.playlist, "content")

@@ -770,6 +770,76 @@ class LeaseTestCase(_Base):
         self.assertEqual(PodcastTranscript.get().status, "queued")
         self.assertEqual(PodcastTranscript.get().done_ms, 600_000)
 
+    def test_a_claim_that_fails_after_the_move_leaves_the_job_queued(self):
+        """The move and its lease are ONE transaction now.
+
+        They used to be two statements with nothing around them: a crash in
+        between left ``status='leased'`` with no lease row, a state no code
+        repaired (``expire_leases`` walks the leases that exist,
+        ``resume_if_interrupted`` only requeues ``running``), so the job held
+        one of the twenty slots for ever. Measured: one claim, one rollback, the
+        row back to ``queued`` and the next claim takes it.
+        """
+        episode = self.episode()
+        job.enqueue(episode.id, app=self.config)
+        worker = self.worker()
+        with mock.patch.object(
+            PodcastTranscriptLease, "create", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                job.claim_next(worker, app=self.config)
+        row = PodcastTranscript.get()
+        self.assertEqual(row.status, "queued")
+        self.assertIsNone(row.started_at)
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+        self.assertEqual(self.claimed(episode, worker)["episode_id"], str(episode.id))
+
+    def test_a_leased_row_without_a_lease_is_requeued_at_boot(self):
+        """The repair for what the old claim could leave behind.
+
+        Only once the row is older than a whole lease: a worker that is alive
+        has its lease row, so a missing one plus an old ``started_at`` means
+        nobody is working on it.
+        """
+        episode = self.episode()
+        job.enqueue(episode.id, app=self.config)
+        PodcastTranscript.update(
+            status="leased",
+            started_at=now() - timedelta(seconds=job.LEASE_SECONDS + 60),
+        ).where(PodcastTranscript.episode == episode.id).execute()
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+        out = job.resume_if_interrupted(self.config)
+        self.assertEqual(out["orphaned"], 1)
+        self.assertEqual(PodcastTranscript.get().status, "queued")
+
+        # A fresh one is left alone: somebody may be about to hold it.
+        PodcastTranscript.update(
+            status="leased", started_at=now()
+        ).where(PodcastTranscript.episode == episode.id).execute()
+        self.assertEqual(job.resume_if_interrupted(self.config)["orphaned"], 0)
+        self.assertEqual(PodcastTranscript.get().status, "leased")
+
+    def test_an_expired_lease_of_a_finished_row_is_dropped(self):
+        """A lease the row no longer backs is not a live claim.
+
+        ``expire_leases`` used to skip those rows without deleting the lease, so
+        a job another path had finished stayed listed under the worker that once
+        held it.
+        """
+        episode = self.episode()
+        job.enqueue(episode.id, app=self.config)
+        worker = self.worker()
+        job.claim_next(worker, app=self.config)
+        PodcastTranscript.update(status="ready").where(
+            PodcastTranscript.episode == episode.id
+        ).execute()
+        lease = PodcastTranscriptLease.get()
+        lease.expires_at = now() - timedelta(seconds=1)
+        lease.save()
+        self.assertEqual(job.expire_leases(), 0)
+        self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+        self.assertEqual(PodcastTranscript.get().status, "ready")
+
 
 class ProcessGateTestCase(unittest.TestCase):
     def test_a_stream_stops_and_resumes_the_process_group(self):
@@ -928,6 +998,94 @@ class RunnerTestCase(_Base):
         self.assertEqual(PodcastTranscript.get().status, "queued")
         status = external.status()
         self.assertEqual((status["runner"], status["started"]), ("external", False))
+
+    def test_the_external_runner_refills_the_backlog_without_duplicating(self):
+        """``resume_auto`` had no caller outside the inline loop, so with
+        ``runner = external`` nothing ever filled the queue after the first
+        batch: the backlog stopped at 20 episodes for ever, silently."""
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, runner="external")
+        channel = self.channel(auto_transcribe=True)
+        for number in range(1, 31):
+            self.episode(number=number, duration=60, channel=channel)
+        external = runner.build_runner(self.config)
+        first = job.queue_backlog(channel=channel, backlog="all", app=self.config)
+        self.assertEqual(first["queued"], 20)
+        self.assertEqual(PodcastTranscript.select().count(), 20)
+
+        # A finished job frees one slot; one scheduler pass queues the 21st.
+        done = PodcastTranscript.select().first()
+        done.status = "ready"
+        done.done_ms = done.duration_ms = 60_000
+        done.save(
+            only=(
+                PodcastTranscript.status,
+                PodcastTranscript.done_ms,
+                PodcastTranscript.duration_ms,
+            )
+        )
+        self.assertEqual(external.refill(), 1)
+        self.assertEqual(PodcastTranscript.select().count(), 21)
+        self.assertEqual(external.refill(), 0)
+        self.assertEqual(PodcastTranscript.select().count(), 21)
+        self.assertEqual(
+            len({row.episode_id for row in PodcastTranscript.select()}), 21
+        )
+        # Requeuing a job is not transcribing it: no engine process was started.
+        self.assertEqual(self.log_lines(), [])
+
+    def test_the_external_runner_requeues_what_a_restart_interrupted(self):
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, runner="external")
+        episode = self.episode(duration=60)
+        job.enqueue(episode.id, app=self.config)
+        PodcastTranscript.update(status="running").where(
+            PodcastTranscript.episode == episode.id
+        ).execute()
+        external = runner.build_runner(self.config)
+        out = external.resume()
+        self.assertEqual(out["requeued"], 1)
+        self.assertEqual(PodcastTranscript.get().status, "queued")
+        # The scheduler itself is a request-free background thread.
+        external.start()
+        self.assertIsNone(external._thread)
+        self.assertFalse(external.status()["started"])
+
+    def test_the_inline_runner_refuses_a_multi_worker_deployment(self):
+        """``GUNICORN_WORKERS > 1`` would give every worker its own inline
+        runner: each boot requeues the jobs its siblings are transcribing and
+        each holds a copy of the model. Transcription then needs the external
+        runner, and the refusal names it instead of stealing jobs."""
+        with mock.patch.dict(os.environ, {runner.WORKERS_ENV: "4"}):
+            self.assertEqual(runner.workers(), 4)
+            self.assertEqual(runner.inline_blocked(self.config), "multi_worker")
+            inline = runner.InlineRunner(self.config)
+            with self.assertLogs("neezer.transcribe.runner", level="WARNING") as logs:
+                inline.start()
+        self.assertIsNone(inline._thread)
+        # The operator must find the cause and the fix in the server log: the
+        # queue stays queued and no route says why.
+        self.assertIn("runner = external", logs.output[0])
+        status = inline.status()
+        self.assertFalse(status["started"])
+        self.assertEqual(status["reason"], "multi_worker")
+
+        with mock.patch.dict(os.environ, {runner.WORKERS_ENV: "1"}):
+            self.assertIsNone(runner.inline_blocked(self.config))
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, runner="external")
+        with mock.patch.dict(os.environ, {runner.WORKERS_ENV: "4"}):
+            self.assertIsNone(runner.inline_blocked(self.config))
+
+    def test_a_multi_worker_server_says_its_jobs_wait_for_a_sidecar(self):
+        """No button that does nothing: the queue and the episode answer say
+        they are waiting, and `neezer-cli transcribe --status` names the cause."""
+        episode = self.episode(duration=60)
+        with mock.patch.dict(os.environ, {runner.WORKERS_ENV: "4"}):
+            out = job.enqueue(episode.id, app=self.config)
+            self.assertTrue(out["waiting"])
+            state = job.queue_status(self.config)
+        self.assertEqual(state["runner"], "inline")
+        self.assertFalse(state["available"])
+        self.assertEqual(state["reason"], "multi_worker")
+        self.assertEqual(state["counts"]["queued"], 1)
 
 
 class AutoTranscribeTestCase(_Base):

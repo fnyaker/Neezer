@@ -829,10 +829,10 @@ class ChaptersApiTestCase(PodcastAppTestCase):
         self.assertEqual(by_id[str(first.id)]["chapter_count"], 2)
         self.assertEqual(by_id[str(second.id)]["chapter_count"], 1)
         self.assertNotIn("chapters", by_id[str(first.id)])
-        # The session, the channel, its two pre-existing counts, its episodes,
-        # ONE grouped chapter count and ONE grouped transcription state: +2
-        # over the five it cost before.
-        self.assertEqual(counts["SELECT"], 7, counts)
+        # The session, the channel, its ONE grouped counts read (episodes and
+        # archived in a single query), its episodes, ONE grouped chapter count
+        # and ONE grouped transcription state.
+        self.assertEqual(counts["SELECT"], 6, counts)
 
     def test_a_show_with_no_chapters_says_zero(self):
         channel = self.channel()

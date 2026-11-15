@@ -32,7 +32,7 @@ import unicodedata
 import uuid
 from datetime import timedelta
 
-from peewee import fn
+from peewee import SqliteDatabase, fn
 
 from ..db import (
     Meta,
@@ -182,6 +182,21 @@ def _check_limits(episode, path, values):
     return duration
 
 
+def _no_local_runner(values):
+    """True when this process will not run whisper itself.
+
+    ``external`` has no engine here by design; a multi-worker deployment
+    refuses the inline runner (see ``runner.inline_blocked``), so a queued job
+    waits for a sidecar there too — saying "waiting" is what the client needs
+    instead of a progress bar that never moves.
+    """
+    if values["runner"] == "external":
+        return True
+    from . import runner as _runner
+
+    return _runner.workers() > 1
+
+
 def enqueue(episode_id, user=None, force=False, language=None, app=None,
             source="server"):
     """Put one archived episode in the queue; never run the engine here."""
@@ -210,7 +225,7 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
                 "status": transcript.status,
                 "episode_id": eid,
                 "position": None,
-                "waiting": values["runner"] == "external",
+                "waiting": _no_local_runner(values),
             }
         if transcript.status == "ready" and not force:
             raise QueueError("ready", "cet épisode est déjà transcrit")
@@ -285,7 +300,7 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
         "status": "queued",
         "episode_id": eid,
         "position": position,
-        "waiting": values["runner"] == "external",
+        "waiting": _no_local_runner(values),
     }
 
 
@@ -415,6 +430,13 @@ def expire_leases(at=None):
         if transcript is None:
             lease.delete_instance()
             continue
+        if transcript.status not in ("leased", "queued"):
+            # A finished or stopped job left its lease behind: no claim on that
+            # row any more, and listing it under the worker's jobs would be a
+            # lie. A `queued` row KEEPS its lease on purpose — it is the
+            # attempt counter the third expiry turns into ``lease_lost``.
+            lease.delete_instance()
+            continue
         if transcript.status != "leased":
             continue
         lease.attempts = int(lease.attempts or 0) + 1
@@ -476,6 +498,21 @@ def _live_server_lease():
     )
 
 
+def _claim_atomic():
+    """The claim's transaction, taking SQLite's write lock up front.
+
+    Both claimers read the queue before they write. Under SQLite's deferred
+    ``BEGIN`` the second one then cannot upgrade its read lock while the first
+    holds RESERVED, and the deadlock comes back as ``database is locked``
+    immediately (the busy handler does not help a lock upgrade) — a 500 where
+    the lost race must be a clean 204. ``BEGIN IMMEDIATE`` serialises the two
+    claims instead; the other engines take their row locks normally.
+    """
+    if isinstance(db.obj, SqliteDatabase):
+        return db.atomic("IMMEDIATE")
+    return db.atomic()
+
+
 def claim_next(worker, app=None):
     """Give one queued episode to an external worker, or None."""
     if isinstance(worker, TranscribeWorker):
@@ -503,62 +540,68 @@ def claim_next(worker, app=None):
         if PodcastTranscript.select().where(PodcastTranscript.status == "running").exists():
             return None
     for _attempt in range(5):
-        candidate = (
-            PodcastTranscript.select()
-            .where(PodcastTranscript.status == "queued")
-            .order_by(
-                PodcastTranscript.user.is_null(),
-                PodcastTranscript.queued_at,
-                PodcastTranscript.episode,
+        # The move and its lease are ONE transaction: a crash in between used
+        # to leave a `leased` row with no lease, a slot nobody could reclaim
+        # (expire_leases walks the leases that exist). The worker's liveness
+        # update above stays outside it, so a rolled-back claim still counts as
+        # the worker being seen.
+        with _claim_atomic():
+            candidate = (
+                PodcastTranscript.select()
+                .where(PodcastTranscript.status == "queued")
+                .order_by(
+                    PodcastTranscript.user.is_null(),
+                    PodcastTranscript.queued_at,
+                    PodcastTranscript.episode,
+                )
+                .first()
             )
-            .first()
-        )
-        if candidate is None:
-            return None
-        moved = (
-            PodcastTranscript.update(
-                status="leased",
-                started_at=when,
-                updated=when,
-                cancel_requested=False,
-                source=holder.kind if holder.kind in SOURCES else "server",
-                worker_name=(holder.name or "")[:64] or None,
+            if candidate is None:
+                return None
+            moved = (
+                PodcastTranscript.update(
+                    status="leased",
+                    started_at=when,
+                    updated=when,
+                    cancel_requested=False,
+                    source=holder.kind if holder.kind in SOURCES else "server",
+                    worker_name=(holder.name or "")[:64] or None,
+                )
+                .where(
+                    (PodcastTranscript.episode == candidate.episode_id)
+                    & (PodcastTranscript.status == "queued")
+                )
+                .execute()
             )
-            .where(
-                (PodcastTranscript.episode == candidate.episode_id)
-                & (PodcastTranscript.status == "queued")
+            if not moved:
+                continue
+            token = secrets.token_urlsafe(24)
+            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            lease = PodcastTranscriptLease.get_or_none(
+                PodcastTranscriptLease.episode == candidate.episode_id
             )
-            .execute()
-        )
-        if not moved:
-            continue
-        token = secrets.token_urlsafe(24)
-        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        lease = PodcastTranscriptLease.get_or_none(
-            PodcastTranscriptLease.episode == candidate.episode_id
-        )
-        attempts = int(lease.attempts or 0) if lease is not None else 0
-        if lease is None:
-            lease = PodcastTranscriptLease.create(
-                episode=candidate.episode_id,
-                worker=holder,
-                lease_token_hash=digest,
-                acquired_at=when,
-                expires_at=when + timedelta(seconds=LEASE_SECONDS),
-                heartbeat_at=when,
-                chunk_start_ms=candidate.done_ms,
-                attempts=attempts,
-            )
-        else:
-            lease.worker = holder
-            lease.lease_token_hash = digest
-            lease.acquired_at = when
-            lease.expires_at = when + timedelta(seconds=LEASE_SECONDS)
-            lease.heartbeat_at = when
-            lease.chunk_start_ms = candidate.done_ms
-            lease.attempts = attempts
-            lease.last_error = None
-            lease.save()
+            attempts = int(lease.attempts or 0) if lease is not None else 0
+            if lease is None:
+                lease = PodcastTranscriptLease.create(
+                    episode=candidate.episode_id,
+                    worker=holder,
+                    lease_token_hash=digest,
+                    acquired_at=when,
+                    expires_at=when + timedelta(seconds=LEASE_SECONDS),
+                    heartbeat_at=when,
+                    chunk_start_ms=candidate.done_ms,
+                    attempts=attempts,
+                )
+            else:
+                lease.worker = holder
+                lease.lease_token_hash = digest
+                lease.acquired_at = when
+                lease.expires_at = when + timedelta(seconds=LEASE_SECONDS)
+                lease.heartbeat_at = when
+                lease.chunk_start_ms = candidate.done_ms
+                lease.attempts = attempts
+                lease.last_error = None
+                lease.save()
         values = settings.load(app)
         return {
             "lease": token,
@@ -1070,7 +1113,14 @@ def stop_all(app=None):
 
 
 def resume_if_interrupted(app=None):
-    """A restart leaves ``running`` rows behind; put them back in the queue."""
+    """A restart leaves ``running`` rows behind; put them back in the queue.
+
+    Also repairs the one state the old non-transactional claim could leave —
+    ``leased`` with no lease row at all — since ``expire_leases`` can only walk
+    leases that exist: such a row would occupy a slot for ever, with no button
+    to free it. ``started_at`` older than a whole lease is the proof nobody is
+    working on it any more; a live worker always has its lease row.
+    """
     when = now()
     requeued = (
         PodcastTranscript.update(
@@ -1079,9 +1129,30 @@ def resume_if_interrupted(app=None):
         .where(PodcastTranscript.status == "running")
         .execute()
     )
+    orphaned = (
+        PodcastTranscript.update(
+            status="queued", started_at=None, updated=when
+        )
+        .where(
+            (PodcastTranscript.status == "leased")
+            & (
+                PodcastTranscript.started_at
+                < when - timedelta(seconds=LEASE_SECONDS)
+            )
+            & PodcastTranscript.episode.not_in(
+                PodcastTranscriptLease.select(PodcastTranscriptLease.episode)
+            )
+        )
+        .execute()
+    )
     expired = expire_leases()
     filled = resume_auto(app)
-    return {"requeued": requeued, "expired": expired, "filled": filled}
+    return {
+        "requeued": requeued + orphaned,
+        "orphaned": orphaned,
+        "expired": expired,
+        "filled": filled,
+    }
 
 
 _progress_lock = threading.Lock()
@@ -1191,6 +1262,13 @@ def queue_status(app=None):
         )
     budget = _budget_state(values)
     available, reason = settings.available(app)
+    if available and values["runner"] == "inline":
+        from . import runner as _runner
+
+        if _runner.workers() > 1:
+            # The inline runner refuses a multi-worker deployment: the queue
+            # would sit there with nothing to move it.
+            available, reason = False, "multi_worker"
     return {
         "enabled": values["enabled"],
         "runner": values["runner"],

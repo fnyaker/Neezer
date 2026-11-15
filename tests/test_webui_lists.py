@@ -32,10 +32,15 @@ from neezer.db import (
     Artist,
     Folder,
     Playlist,
+    PlaylistMember,
     PlaylistTrack,
+    PodcastChannel,
+    PodcastEpisode,
+    PodcastTranscript,
     StarredTrack,
     Track,
     User,
+    db,
     release_database,
 )
 from neezer.managers.user import UserManager
@@ -325,6 +330,168 @@ class ListsTestCase(unittest.TestCase):
         self.assertEqual(by["Show 0"]["episode_count"], 0)
         self.assertEqual(by["Show 0"]["archived_count"], 0)
         self.assertLessEqual(counts["SELECT"], 3, counts)
+
+    def _bulk_tracks(self, count):
+        """``count`` rows of one album, one transaction."""
+        from neezer.deezer import library
+
+        with self.app.app_context():
+            root = library.get_root_folder(self.archive)
+            artist = Artist.get(Artist.name == "Sans id")
+            album = Album.get(Album.name == "Maison")
+            made = []
+            with db.atomic():
+                for i in range(count):
+                    made.append(
+                        Track.create(
+                            disc=1,
+                            number=i + 1,
+                            title="Gros %04d" % i,
+                            duration=60,
+                            album=album,
+                            artist=artist,
+                            bitrate=320,
+                            path=os.path.join(self.archive, "bulk", "%d.mp3" % i),
+                            last_modification=0,
+                            root_folder=root,
+                            folder=root,
+                        )
+                    )
+        return [str(track.id) for track in made]
+
+    def test_creating_a_playlist_of_2000_tracks_costs_14_statements(self):
+        """The route used to call ``Playlist.add`` per title — a ``MAX(index)``
+        read plus an INSERT each, 4 005 statements for 2 000 tracks under the
+        request thread. One ``MAX`` and seven 300-row INSERTs make it 14, and the
+        stored order is still 0..n-1."""
+        ids = self._bulk_tracks(2000)
+        self._login()
+        with count_statements() as counts:
+            rv = self.client.post(
+                "/api/playlists", json={"title": "Grosse", "tracks": ids}
+            )
+        self.assertEqual(rv.status_code, 200, rv.get_data()[:200])
+        pid = rv.get_json()["id"]
+        self.assertLessEqual(sum(counts.values()), 15, counts)
+        with self.app.app_context():
+            stored = [
+                row.index
+                for row in PlaylistTrack.select(PlaylistTrack.index)
+                .where(PlaylistTrack.playlist == pid)
+                .order_by(PlaylistTrack.index)
+            ]
+        self.assertEqual(stored, list(range(2000)))
+
+        with count_statements() as counts:
+            rv = self.client.post(
+                "/api/playlist/%s/tracks" % pid, json={"tracks": ids}
+            )
+        self.assertEqual(rv.status_code, 200, rv.get_data()[:200])
+        self.assertLessEqual(sum(counts.values()), 15, counts)
+        self.assertEqual(rv.get_json()["added"], 2000)
+        with self.app.app_context():
+            stored = [
+                row.index
+                for row in PlaylistTrack.select(PlaylistTrack.index)
+                .where(PlaylistTrack.playlist == pid)
+                .order_by(PlaylistTrack.index)
+            ]
+        self.assertEqual(stored, list(range(4000)))
+
+    def test_a_show_of_a_thousand_episodes_is_one_page_of_fifty(self):
+        """A three-year daily show serialized every episode on every open: the
+        payload grew with the catalogue (≈450 B each) and the page cost grew
+        with it. One page is 50 by default, 200 at most, and the counters stay
+        the show's own."""
+        with self.app.app_context():
+            alice = User.get(name="alice")
+            show = PodcastChannel.create(
+                user=alice, url="https://example.org/big", title="Grand"
+            )
+            with db.atomic():
+                for i in range(1000):
+                    episode = PodcastEpisode.create(
+                        channel=show,
+                        title="Épisode %04d" % i,
+                        description="Une description courte.",
+                        duration=600,
+                        publish_date=datetime(2020, 1, 1) + timedelta(hours=i),
+                        status="completed",
+                    )
+                    if i < 3:
+                        PodcastTranscript.create(
+                            episode=episode, status="ready", n_segments=1
+                        )
+            cid = str(show.id)
+        self._login()
+        with count_statements() as counts:
+            rv = self.client.get("/api/podcast/" + cid)
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_json()
+        self.assertEqual(body["episode_count"], 1000)
+        self.assertEqual(body["archived_count"], 0)
+        self.assertEqual(len(body["episodes"]), 50)
+        self.assertEqual(body["episodes"][0]["title"], "Épisode 0999")
+        self.assertEqual(body["episodes"][-1]["title"], "Épisode 0950")
+        # Three transcripts exist on the three OLDEST episodes: the counter is
+        # the show's, not the page's.
+        self.assertEqual(body["transcribed_count"], 3)
+        self.assertIsNotNone(body["next"])
+        self.assertLessEqual(sum(counts.values()), 10, counts)
+        self.assertLess(len(rv.get_data()), 40000)
+        first_page = [e["id"] for e in body["episodes"]]
+
+        rv = self.client.get("/api/podcast/%s?cursor=%s" % (cid, body["next"]))
+        second = rv.get_json()
+        self.assertEqual(len(second["episodes"]), 50)
+        self.assertEqual(second["episodes"][0]["title"], "Épisode 0949")
+        self.assertFalse(set(first_page) & {e["id"] for e in second["episodes"]})
+        # A page boundary of a thousand episodes: 20 requests, all distinct.
+        seen = list(first_page) + [e["id"] for e in second["episodes"]]
+        cursor = second["next"]
+        while cursor:
+            page = self.client.get(
+                "/api/podcast/%s?cursor=%s" % (cid, cursor)
+            ).get_json()
+            seen.extend(e["id"] for e in page["episodes"])
+            cursor = page["next"]
+        self.assertEqual(len(seen), 1000)
+        self.assertEqual(len(set(seen)), 1000)
+
+    def test_the_episode_page_takes_a_bounded_limit_and_refuses_junk(self):
+        with self.app.app_context():
+            alice = User.get(name="alice")
+            show = PodcastChannel.create(
+                user=alice, url="https://example.org/small", title="Petit"
+            )
+            for i in range(3):
+                PodcastEpisode.create(
+                    channel=show,
+                    title="Ép %d" % i,
+                    publish_date=datetime(2026, 1, 1) + timedelta(days=i),
+                    status="completed",
+                )
+            cid = str(show.id)
+        self._login()
+        # A show that fits its page answers exactly what it used to: every
+        # episode, and no next page.
+        body = self.client.get("/api/podcast/" + cid).get_json()
+        self.assertEqual(
+            [e["title"] for e in body["episodes"]], ["Ép 2", "Ép 1", "Ép 0"]
+        )
+        self.assertIsNone(body["next"])
+        # 200 is the cap; 1 is the smallest page.
+        for query, expected in (("limit=1", 1), ("limit=200", 3)):
+            page = self.client.get(
+                "/api/podcast/%s?%s" % (cid, query)
+            ).get_json()
+            self.assertEqual(len(page["episodes"]), expected, query)
+        for query in ("limit=0", "limit=201", "limit=abc", "cursor=junk",
+                      "cursor=1|2",
+                      "cursor=2026-01-01T00:00:00|2026-01-01T00:00:00|pas-un-uuid"):
+            rv = self.client.get("/api/podcast/%s?%s" % (cid, query))
+            self.assertEqual(rv.status_code, 400, query)
+            self.assertIn("error", rv.get_json())
 
 
 if __name__ == "__main__":

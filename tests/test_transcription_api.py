@@ -1038,7 +1038,10 @@ class TranscriptionApiTestCase(unittest.TestCase):
         with statements() as sql:
             body = self.client.get("/api/podcast/%s" % channel.id).get_json()
         self.assertEqual(len(body["episodes"]), 2)
-        self.assertEqual(len(sql), 7, sql)
+        # The session, the show, its one grouped counts read (episodes and
+        # archived in a single query), the page's episodes, their chapters and
+        # their transcript state.
+        self.assertEqual(len(sql), 6, sql)
 
     def test_no_route_calls_a_provider(self):
         channel = self.channel()

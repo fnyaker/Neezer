@@ -1530,5 +1530,97 @@ class TranscriptionLeaseSchemaTestCase(_TempDatabaseTestCase):
         self.assertEqual(PodcastTranscriptLease.select().count(), 0)
 
 
+class PlaylistShareForeignKeyTestCase(unittest.TestCase):
+    """20261122: the cascade `playlist_share` always assumed.
+
+    20261113 wrote ``REFERENCES playlist(id) ON DELETE CASCADE`` inside the
+    column list. MySQL parses that and keeps NOTHING (``SHOW CREATE TABLE`` had
+    no FOREIGN KEY at all), so deleting a playlist or an account left its public
+    links behind for ever — and the same schema version then behaved
+    differently on SQLite/PostgreSQL and on MySQL.
+    """
+
+    def _schema(self, provider):
+        path = os.path.join(
+            os.path.dirname(dbmod.__file__), "schema", f"{provider}.sql"
+        )
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def _table_body(self, sql):
+        m = re.search(
+            r"CREATE TABLE IF NOT EXISTS playlist_share \((.*?)\n\)", sql, re.S
+        )
+        self.assertIsNotNone(m, "playlist_share missing")
+        return m.group(1)
+
+    def test_mysql_declares_both_foreign_keys(self):
+        body = self._table_body(self._schema("mysql"))
+        self.assertIn("CONSTRAINT playlist_share_playlist_fk FOREIGN KEY", body)
+        self.assertIn("CONSTRAINT playlist_share_user_fk FOREIGN KEY", body)
+        # Both cascade: a deleted playlist or account takes its links with it.
+        self.assertEqual(body.count("ON DELETE CASCADE"), 2)
+        # The inline form MySQL ignores must be gone.
+        self.assertNotRegex(body, r"playlist_id CHAR\(32\) NOT NULL REFERENCES")
+
+    def test_every_engine_ships_the_migration(self):
+        for provider in PROVIDERS:
+            folder = os.path.join(MIGRATION_ROOT, provider)
+            self.assertTrue(
+                os.path.exists(os.path.join(folder, "20261122.py"))
+                or os.path.exists(os.path.join(folder, "20261122.sql")),
+                provider,
+            )
+        with open(
+            os.path.join(MIGRATION_ROOT, "mysql", "20261122.py"), encoding="utf-8"
+        ) as fh:
+            text = fh.read()
+        # Idempotent BEFORE the ALTER: the orphans it removes are exactly what
+        # would make ADD CONSTRAINT fail with error 1452.
+        self.assertLess(
+            text.index("DELETE FROM playlist_share"),
+            text.index("ALTER TABLE playlist_share ADD CONSTRAINT"),
+        )
+        self.assertIn("information_schema.table_constraints", text)
+        self.assertIn("ON DELETE CASCADE", text)
+
+    def test_the_orphan_sweep_removes_a_link_without_its_playlist(self):
+        """The 20261122 statement, twice (it is replayed on a skipped boot)."""
+        fd, path = tempfile.mkstemp()
+        uri = "sqlite:///" + path
+        try:
+            init_database(uri)
+            from neezer.db import PlaylistShare, User
+            from neezer.managers.user import UserManager
+
+            alice = UserManager.add("alice", "Alic3", admin=True)
+            playlist = Playlist.create(user=alice, name="Partagée")
+            # An orphan can only be born with the check off (that is what a
+            # MySQL server without the constraint did every day).
+            raw = dbmod.db.obj
+            raw.execute_sql("PRAGMA foreign_keys = OFF")
+            PlaylistShare.create(
+                id="orphan",
+                playlist=playlist,
+                user=alice,
+                created=datetime(2026, 1, 1),
+            )
+            Playlist.delete().where(Playlist.id == playlist.id).execute()
+            raw.execute_sql("PRAGMA foreign_keys = ON")
+            self.assertEqual(PlaylistShare.select().count(), 1)
+            for _ in range(2):
+                dbmod.execute_sql_resource_script(
+                    "schema/migration/sqlite/20261122.sql"
+                )
+            self.assertEqual(PlaylistShare.select().count(), 0)
+            self.assertEqual(
+                User.select().where(User.name == "alice").count(), 1
+            )
+        finally:
+            release_database()
+            os.close(fd)
+            os.remove(path)
+
+
 if __name__ == "__main__":
     unittest.main()

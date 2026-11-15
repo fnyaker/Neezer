@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261121"
+SCHEMA_VERSION = "20261122"
 
 
 def now():
@@ -284,27 +284,30 @@ class Album(_Model):
     release_date = CharField(10, null=True)
 
     def as_subsonic_album(self, user):  # "AlbumID3" type in XSD
-        duration, created, year = self.tracks.select(
+        tracks = Track.visible(self.tracks, user)
+        duration, created, year = tracks.select(
             fn.sum(Track.duration), fn.min(Track.created), fn.min(Track.year)
         ).scalar(as_tuple=True)
+        if created is None:
+            created = self.tracks.select(fn.min(Track.created)).scalar() or now()
 
         info = {
             "id": str(self.id),
             "name": self.name,
             "artist": self.artist.name,
             "artistId": str(self.artist.id),
-            "songCount": self.tracks.count(),
+            "songCount": tracks.count(),
             "duration": duration,
             "created": created.isoformat(),
         }
 
         track_with_cover = (
-            self.tracks.join(Folder).where(Folder.cover_art.is_null(False)).first()
+            tracks.join(Folder).where(Folder.cover_art.is_null(False)).first()
         )
         if track_with_cover is not None:
             info["coverArt"] = str(track_with_cover.folder.id)
         else:
-            track_with_cover = self.tracks.where(Track.has_art).first()
+            track_with_cover = tracks.where(Track.has_art).first()
             if track_with_cover is not None:
                 info["coverArt"] = str(track_with_cover.id)
 
@@ -317,7 +320,7 @@ class Album(_Model):
 
         genre = ", ".join(
             g
-            for (g,) in self.tracks.select(Track.genre)
+            for (g,) in tracks.select(Track.genre)
             .where(Track.genre.is_null(False))
             .distinct()
             .tuples()
@@ -428,7 +431,7 @@ class Track(PathMixin, _Model):
         )
 
     @classmethod
-    def prime_credits(cls, tracks):
+    def prime_credits(cls, tracks, playlist=None):
         """Load the credit rows for a whole response in ONE query.
 
         ``as_subsonic_child`` reads the credits per track, which is an N+1 as
@@ -437,22 +440,95 @@ class Track(PathMixin, _Model):
         cache instead. Returns the tracks as a list, so a lazy query can be
         primed and iterated in one go. Not priming is always safe — a track
         that wasn't primed simply pays for its own lookup.
+
+        ``playlist`` names every row of that list in the join, so a 4 000-title
+        playlist is one statement instead of ten ``IN`` chunks; without it the
+        given ids are read in chunks small enough for SQLite's parameter cap.
         """
         tracks = list(tracks)
         ids = [t.id for t in tracks]
         by_track = {}
-        # SQLite caps host parameters (999 by default); chunk the IN clause.
-        for i in range(0, len(ids), 400):
-            rows = (
-                TrackArtist.select(TrackArtist, Artist)
-                .join(Artist)
-                .where(TrackArtist.track << ids[i : i + 400])
-                .order_by(TrackArtist.track, TrackArtist.position)
-            )
+
+        def read(rows):
             for r in rows:
                 by_track.setdefault(r.track_id, []).append((r.artist, r.role))
+
+        if playlist is not None:
+            # One statement for the whole list: the playlist's own rows name
+            # them, so no host-parameter cap applies.
+            read(
+                TrackArtist.select(TrackArtist, Artist)
+                .join(Artist)
+                .join(Track, on=(TrackArtist.track == Track.id))
+                .join(PlaylistTrack, on=(PlaylistTrack.track == Track.id))
+                .where(PlaylistTrack.playlist == getattr(playlist, "id", playlist))
+                .order_by(TrackArtist.track, TrackArtist.position)
+            )
+        else:
+            # SQLite caps host parameters (999 by default); chunk the IN clause.
+            for i in range(0, len(ids), 400):
+                read(
+                    TrackArtist.select(TrackArtist, Artist)
+                    .join(Artist)
+                    .where(TrackArtist.track << ids[i : i + 400])
+                    .order_by(TrackArtist.track, TrackArtist.position)
+                )
         for t in tracks:
             t._credits_cache = by_track.get(t.id, [])
+        return tracks
+
+    @classmethod
+    def prime_subsonic(cls, tracks, user, playlist=None):
+        """Load what :meth:`as_subsonic_child` reads per row for a whole list.
+
+        Three statements instead of three per title — the caller's stars, their
+        ratings and the average — which is what made a 4 000-title Subsonic
+        playlist 28 016 statements. ``playlist`` reads them through that
+        playlist's own ``IN (SELECT …)`` so a big list stays one statement per
+        table; without it the given ids are chunked under the parameter cap.
+        Returns the tracks as a list, like :meth:`prime_credits`.
+        """
+        tracks = list(tracks)
+        if not tracks:
+            return tracks
+        ids = [t.id for t in tracks]
+        if playlist is not None:
+            scopes = [
+                PlaylistTrack.select(PlaylistTrack.track).where(
+                    PlaylistTrack.playlist == getattr(playlist, "id", playlist)
+                )
+            ]
+        else:
+            # SQLite caps host parameters (999 by default); chunk the IN clause.
+            scopes = [ids[i : i + 400] for i in range(0, len(ids), 400)]
+        starred, ratings, averages = {}, {}, {}
+        for track_scope in scopes:
+            starred.update(
+                StarredTrack.select(StarredTrack.starred, StarredTrack.date)
+                .where(
+                    (StarredTrack.user == user)
+                    & (StarredTrack.starred.in_(track_scope))
+                )
+                .tuples()
+            )
+            ratings.update(
+                RatingTrack.select(RatingTrack.rated, RatingTrack.rating)
+                .where(
+                    (RatingTrack.user == user) & (RatingTrack.rated.in_(track_scope))
+                )
+                .tuples()
+            )
+            averages.update(
+                RatingTrack.select(
+                    RatingTrack.rated, fn.avg(RatingTrack.rating, coerce=False)
+                )
+                .where(RatingTrack.rated.in_(track_scope))
+                .group_by(RatingTrack.rated)
+                .tuples()
+            )
+        cache = {"starred": starred, "rating": ratings, "average": averages}
+        for t in tracks:
+            t._subsonic_cache = cache
         return tracks
 
     def credited_artists(self):
@@ -535,25 +611,37 @@ class Track(PathMixin, _Model):
             # getCoverArt fetches from Deezer on demand.
             info["coverArt"] = str(self.album_id)
 
-        try:
-            starred = StarredTrack[user.id, self.id]
-            info["starred"] = starred.date.isoformat()
-        except StarredTrack.DoesNotExist:
-            pass
+        primed = getattr(self, "_subsonic_cache", None)
+        if primed is None:
+            try:
+                starred = StarredTrack[user.id, self.id]
+                info["starred"] = starred.date.isoformat()
+            except StarredTrack.DoesNotExist:
+                pass
 
-        try:
-            rating = RatingTrack[user.id, self.id]
-            info["userRating"] = rating.rating
-        except RatingTrack.DoesNotExist:
-            pass
+            try:
+                rating = RatingTrack[user.id, self.id]
+                info["userRating"] = rating.rating
+            except RatingTrack.DoesNotExist:
+                pass
 
-        avgRating = (
-            RatingTrack.select(fn.avg(RatingTrack.rating, coerce=False))
-            .where(RatingTrack.rated == self)
-            .scalar()
-        )
-        if avgRating:
-            info["averageRating"] = avgRating
+            avgRating = (
+                RatingTrack.select(fn.avg(RatingTrack.rating, coerce=False))
+                .where(RatingTrack.rated == self)
+                .scalar()
+            )
+            if avgRating:
+                info["averageRating"] = avgRating
+        else:
+            starred_date = primed["starred"].get(self.id)
+            if starred_date is not None:
+                info["starred"] = starred_date.isoformat()
+            user_rating = primed["rating"].get(self.id)
+            if user_rating is not None:
+                info["userRating"] = user_rating
+            avgRating = primed["average"].get(self.id)
+            if avgRating:
+                info["averageRating"] = avgRating
 
         if (
             prefs is not None
@@ -907,12 +995,10 @@ class Playlist(_Model):
     last_edited_by = CharField(null=True)
     last_edited_at = DateTimeField(null=True)
 
-    def as_subsonic_playlist(self, user):
-        counts = self.__tracks_query(fn.count("*"), fn.sum(Track.duration))
-        visible = Track.visible_clause(user)
-        if visible is not None:
-            counts = counts.where(visible)
-        tracks, duration = counts.scalar(as_tuple=True)
+    def as_subsonic_playlist(self, user, counts=None):
+        if counts is None:
+            counts = self.__track_counts(user)
+        tracks, duration = counts
         info = {
             "id": str(self.id),
             "name": (
@@ -931,6 +1017,14 @@ class Playlist(_Model):
         if self.deezer_id:
             info["coverArt"] = str(self.id)
         return info
+
+    def __track_counts(self, user):
+        """``(visible rows, their total duration)`` for the caller."""
+        counts = self.__tracks_query(fn.count("*"), fn.sum(Track.duration))
+        visible = Track.visible_clause(user)
+        if visible is not None:
+            counts = counts.where(visible)
+        return counts.scalar(as_tuple=True)
 
     def get_tracks(self):
         return [t for t in self.__tracks_query().order_by(PlaylistTrack.index)]
@@ -960,6 +1054,39 @@ class Playlist(_Model):
         )
         index = 0 if index is None else index + 1
         PlaylistTrack.create(playlist=self, track=tid, index=index)
+
+    def add_many(self, tracks, batch=300):
+        """Append many tracks after one ``MAX(index)``, ``batch`` rows per INSERT.
+
+        ``add`` re-reads the last index for every title — two round-trips each,
+        so a 2 000-title request paid 4 000 of them, past a second on a network
+        database. Here the last index is read once and the rows are written 300
+        at a time; the caller's transaction is what makes the block atomic.
+        Returns how many rows were written.
+        """
+        ids = []
+        for track in tracks:
+            if isinstance(track, UUID):
+                ids.append(track)
+            elif isinstance(track, Track):
+                ids.append(track.id)
+            else:
+                ids.append(UUID(str(track)))
+        if not ids:
+            return 0
+        index = (
+            PlaylistTrack.select(fn.max(PlaylistTrack.index))
+            .where(PlaylistTrack.playlist == self)
+            .scalar()
+        )
+        start = 0 if index is None else index + 1
+        fields = (PlaylistTrack.playlist, PlaylistTrack.track, PlaylistTrack.index)
+        rows = [
+            (self.id, tid, start + offset) for offset, tid in enumerate(ids)
+        ]
+        for i in range(0, len(rows), batch):
+            PlaylistTrack.insert_many(rows[i : i + batch], fields=fields).execute()
+        return len(rows)
 
     def remove_at_indexes(self, indexes):
         max_index, count = (
@@ -1552,8 +1679,8 @@ class ProviderAccount(_Model):
     user = ForeignKeyField(User, null=True, backref="+", on_delete="CASCADE")
     label = CharField(64, null=True)
     secret = TextField(null=True)
-    # How it was signed in (``server``: the server's ARL, kept where it always
-    # was, in Meta or the config; ``arl``, ``browser``, ``headers``…).
+    # How it was signed in (``server``: the server's ARL, encrypted in this
+    # row's secret; ``arl``, ``browser``, ``headers``…).
     mode = CharField(16, null=True)
     # JSON: what is imported from the account automatically (lot P2), and how
     # the last import went. Never a secret.

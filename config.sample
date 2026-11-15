@@ -308,6 +308,8 @@ sync_interval = 0
 ;model = /models/ggml-large-v3-turbo-q8_0.bin
 ; inline (this process, for a bare install) or external (the sidecar
 ; container; jobs wait until a worker enrols). Default: inline
+; With GUNICORN_WORKERS > 1 the inline runner refuses to start (every worker
+; would requeue the jobs its siblings are transcribing): use external there.
 ;runner = inline
 ; Minutes of audio per rolling 24 h that automatic jobs may reserve.
 ; 0 = unlimited. Default: 120

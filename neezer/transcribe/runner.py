@@ -36,10 +36,20 @@ from . import engine, job, settings
 logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 5.0
+#: The external runner's refill tick: how long a completion can wait before the
+#: next job is queued. One light pass every minute, never a whisper process.
+EXTERNAL_POLL_SECONDS = 60.0
 ASR_DIR = "asr"
 TEMP_MAX_AGE = 24 * 3600
 GATE_POLL = 2.0
 GATE_CLEAR_SECONDS = 15.0
+
+#: Gunicorn's worker count, as ``docker/gunicorn.conf.py`` reads it from the
+#: same variable. The inline runner is one thread on one process: under N
+#: workers each one would requeue what a sibling is transcribing (its boot
+#: ``resume_if_interrupted``), and N whisper models is N times the memory.
+WORKERS_ENV = "GUNICORN_WORKERS"
+DEFAULT_WORKERS = 1
 
 
 class _Shutdown(Exception):
@@ -148,6 +158,26 @@ def _testing(app):
     return bool((getattr(app, "config", None) or {}).get("TESTING"))
 
 
+def workers():
+    """How many server processes this deployment runs (1 when it says nothing)."""
+    raw = os.environ.get(WORKERS_ENV, str(DEFAULT_WORKERS))
+    try:
+        return max(1, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return DEFAULT_WORKERS
+
+
+def inline_blocked(app=None):
+    """Why this process must not run the inline runner, or None.
+
+    ``GUNICORN_WORKERS > 1`` is the one case: the external sidecar is then the
+    only supported deployment for transcription.
+    """
+    if settings.runner(app) != "inline":
+        return None
+    return "multi_worker" if workers() > 1 else None
+
+
 class JobQueue:
     """What the API promises a runner; the inline one is in this process."""
 
@@ -184,6 +214,18 @@ class InlineRunner(JobQueue):
 
     def start(self):
         if self._thread is not None:
+            return self
+        blocked = inline_blocked(self.app)
+        if blocked:
+            self._reason = blocked
+            logger.warning(
+                "transcription: runner=inline cannot serve %d Gunicorn workers — "
+                "each worker would requeue the jobs its siblings are transcribing "
+                "and hold its own copy of the model. Set runner = external in the "
+                "[transcribe] section (a sidecar claims the jobs) or run one "
+                "worker; jobs stay queued meanwhile, they are not lost.",
+                workers(),
+            )
             return self
         if _testing(self.app):
             return self
@@ -469,32 +511,80 @@ class InlineRunner(JobQueue):
 class ExternalRunner(JobQueue):
     """The sidecar container's contract: claim, heartbeat, chunk, complete.
 
-    It is deliberately not implemented in the API process. A job stays
-    ``queued`` until a worker enrols, which is a waiting state, not an error.
+    It never runs whisper in the API process. It does keep the *queue* moving:
+    a light scheduler thread (one pass a minute, reniced, BULK) requeues what a
+    restart left ``running``, expires lost leases and refills the free slots
+    from the marked shows. Without it the backlog stopped at its first batch
+    for ever — ``resume_auto`` had no other caller outside the inline runner.
     """
 
     name = "external"
 
-    def __init__(self, app=None):
+    def __init__(self, app=None, poll=EXTERNAL_POLL_SECONDS):
         self.app = app
+        self.poll = poll
         self.reason = "external_runner_not_started"
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread = None
 
     def start(self):
+        if self._thread is not None:
+            return self
+        if _testing(self.app):
+            return self
+        self._thread = threading.Thread(
+            target=self._loop, name="transcribe-scheduler", daemon=True
+        )
+        self._thread.start()
         return self
 
-    def stop(self):
-        return None
+    def stop(self, timeout=5.0):
+        self._stop.set()
+        self._wake.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
 
     def wake(self):
-        return None
+        self._wake.set()
 
     def status(self):
         return {
             "runner": self.name,
-            "started": False,
+            "started": self._thread is not None,
             "reason": self.reason,
             "active": None,
         }
+
+    def resume(self):
+        """Requeue what a restart interrupted, then fill the free slots once."""
+        return job.resume_if_interrupted(self.app)
+
+    def refill(self):
+        """Fill the free queue slots from the marked shows; runs no engine."""
+        return job.resume_auto(self.app)
+
+    def _loop(self):
+        try:
+            db.connect(reuse_if_open=True)
+        except Exception:
+            logger.debug(
+                "transcription scheduler could not open the database", exc_info=True
+            )
+        workload.renice(15)
+        try:
+            self.resume()
+        except Exception:
+            logger.exception("could not resume interrupted transcriptions")
+        self.reason = None
+        while not self._stop.is_set():
+            try:
+                self.refill()
+            except Exception:
+                logger.exception("transcription scheduler failed")
+            self._wake.wait(self.poll)
+            self._wake.clear()
 
     def drain(self, limit=None):
         return 0
