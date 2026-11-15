@@ -747,7 +747,8 @@ a successful one cannot be lost) and read with `neezer-cli audit list [-n N]`. T
 and idempotent on all three engines.
 
 **The account dashboard** (`webui/admin_users.py`, blueprint `admin_users_api`) exposes
-`GET /api/admin/users` (keyset `after`, `q` folded over `name_key`/`mail`, `limit` 1..200),
+`GET /api/admin/users` (keyset `after`, `q` folded over `name_key`, the raw name and `mail`, so a
+historical duplicate whose `name_key` is NULL stays findable, `limit` 1..200),
 `GET /api/admin/users/<id>` with upload and playlist counts, `PATCH` (role/state) and `DELETE`,
 which requires the exact account name in `{"confirm": "…"}` (400 `confirm_mismatch` otherwise).
 Every non-admin gets a bare 403 whatever the id, so the dashboard is not an enumeration oracle.
@@ -755,7 +756,10 @@ Every non-admin gets a bare 403 whatever the id, so the dashboard is not an enum
 (checked in the write and re-checked after it, since SQLite has no row locks), refuse
 self-disable/self-delete and the holder of the server's Deezer account, bump `session_epoch` on
 demotion/disable/re-enable (not on promotion), and reassign `Track.owner` to the acting admin
-before deleting — no file is touched and no upload becomes public. Pending invitations created by
+before deleting — no file is touched and no upload becomes public. The account's podcast shows are
+reassigned to the acting admin in the same transaction (their archived episodes stay playable, the
+response carries `podcasts_reassigned`), and its provider accounts are deleted with their grants
+(Peewee would otherwise null the nullable owner and keep the credential serving). Pending invitations created by
 the deleted account are revoked and its `u:<id>` grants forgotten. Measured at 50 accounts: list
 **3 statements / 8 147 B (1 500 gzip)**, detail 4, promotion 3, demotion 5. The legacy `/user`
 routes and Subsonic `createUser|deleteUser|updateUser` go through the same guards; the CLI keeps

@@ -334,13 +334,16 @@ names are mapped. Benches open the category they test (`#/settings/playback`, `#
 **The admin user dashboard** (`components/AdminUsers.svelte`, `InviteSheet.svelte`,
 `lib/adminusers.js`) is a category **Utilisateurs**, mounted only for a local admin — never for a
 remote controller and never for a member. The pane widens to 1100 px: a real table at ≥ 1280 px,
-cards below. It loads **2 GET** (one account page + pending invitations), then **1 GET** per
+cards below. Opening the category no longer fires the eight server-card loads (they wait for their
+own tab). It loads **2 GET** (one account page + pending invitations), then **1 GET** per
 search or « Charger plus », **0** for a local state/role filter, **2** for Rafraîchir, and **1**
 per mutation; it never polls, keeps a 60 s memory copy, and caps the loaded set at 250 accounts /
 200 invitations. Because the server page has no `state`/`role` parameter yet, those filters apply
 to the loaded rows and the screen says so; the client is ready for a server filter when it lands.
 Pending invitations are rows of the same list (`kind:"invite"`), with their state and expiry, and
-the token is shown **once** in `InviteSheet` (copy with a manual fallback, revoke, renew). Deleting
+the header stays under the top bar (`top: var(--topbar-h)`), a failed search says
+« Recherche indisponible » instead of counting stale rows, and the invite row's date column reads
+its expiry (« expire dans 3 j »). The token is shown **once** in `InviteSheet` (copy with a manual fallback, revoke, renew). Deleting
 an account asks for its exact name and shows the upload/playlist counts; the server's 403
 `self_disable`/`self_delete` and 409 `last_admin`/`server_account_holder` are translated to French
 administrative sentences. The account's own row pre-disables destructive actions, but the server
