@@ -52,6 +52,18 @@ duration of a first FLAC fetch would write back a stale `disabled`/`session_epoc
 …)`) or `save(only=(…))`; the same rule covers `TranscribeWorker` and `PodcastChannel`. A
 revoked worker is checked in the `UPDATE` itself, not only on the instance read earlier.
 
+**Foreground first on the provider link.** The shared Deezer window (40 calls / 5 s) has lanes:
+`USER` (a tapped page or play), `PREFETCH`, `BULK`; a freed slot goes to the most urgent, and
+`workload.renice()` now also declares the thread's Deezer calls `BULK`. A slow provider call never
+runs in a request thread when it can be moved: Subsonic `refreshPodcasts` and
+`downloadPodcastEpisode` answer immediately and use a single reniced worker (the download queue is
+bounded and deduplicated by episode; the first play keeps its synchronous download),
+`GET /me/accounts/<id>/library/<kind>` serves the held listing and refreshes behind it (one
+refresh per account/kind/5 min, retried 60 s after a failure), and `/api/android/apk` answers
+**202 + Retry-After** while one worker fetches the APK. The archive backfills and nightly sync call
+`renice`/`Throttle` between items, so a person's play always wins. A 4xx from `media.deezer.com` is
+a transport failure (`DeezerError`), never a verdict that the title is unavailable.
+
 **Resilience rules (learned from a production outage — do not regress).** The governing rule:
 **Deezer is optional to the app running.** Everything on disk — playing archived music, browsing,
 playlists, favourites, uploads, the SPA itself — must keep working at full speed while Deezer is
