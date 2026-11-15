@@ -69,6 +69,15 @@ closes the account afterwards stays closed — the key is written once. Enforcem
 `X-NS-Error: deezer-denied`), `webui/youtube.allowed`, and Subsonic's stream (`api/media._may_use`). `/api/me` carries
 `access` and the SPA hides what would be refused (`lib/access.js`). `tests/test_access.py`.
 
+**No user-scoped Deezer call ever runs for somebody else** (Flow, user mixes, favourites, user playlists,
+profile tabs — everything under `get_user_*`). The server account's shared grant covers only CATALOGUE and
+SOUND features (search, browse, stream, track_info…): a personal feature is resolved before the grant table
+and stays the holder's (`Snapshot.serving`, `F.is_personal`). `myaccounts` re-checks `ProviderAccount.user`
+against the caller on every listing/import/unlink, so even an admin cannot open another person's account
+picker; `DeezerAdapter.import_account` is the admin/CLI one-off and is never reachable from a shared route.
+A test (`test_a_member_cannot_read_the_server_accounts_own_library`) pins the server-account case. When a
+route starts using a `get_user_*` method, it belongs to `my_*` and MUST be refused to every non-owner.
+
 **Each person's own account and their library (lot P2)** (`neezer/libraryimport.py`, `webui/myaccounts.py`,
 `components/MyAccounts.svelte` + `AccountPicker.svelte`, Réglages → Sources → *Mes comptes*). A person links their own
 Deezer (an ARL typed, or read off Deezer's login page by the Android app; checked by signing in, stored encrypted in

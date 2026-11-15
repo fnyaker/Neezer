@@ -10,7 +10,7 @@
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPlaywright, startServer, silence, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix } from "../harness.mjs";
 const { chromium } = await loadPlaywright();
 const LEN = 40;
 const wavPath = join(mkdtempSync(join(tmpdir(), "nsskip-")), "track.wav");
@@ -22,6 +22,7 @@ const song = (id) => ({ deezer_id: id, title: "Song " + id, duration: LEN, artis
 async function run(output) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await ctx.route((url) => /(^|\.)(dzcdn\.net|deezer\.com)$/.test(url.hostname), (r) => r.abort());
+  await ctx.addInitScript(installSessionPrefix);
   await ctx.addInitScript(() => {
     const Native = window.Audio;
     window.__els = [];
@@ -48,7 +49,7 @@ async function run(output) {
       }, ms);
     };
     try {
-      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+      const pkey = window.__nsPkey;
       const j = sessionStorage.getItem("__inject");
       if (j) {
         const { session, settings } = JSON.parse(j);

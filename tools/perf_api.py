@@ -819,7 +819,6 @@ def main():
 
     routes = [
         ("GET", "/api/me", None),
-        ("GET", "/api/home", None),
         ("GET", "/api/releases", None),
         ("GET", "/api/me/artists", None),
         ("GET", "/api/me/albums", None),
@@ -882,7 +881,6 @@ def main():
             t = Track.select().where(Track.play_count > 0).first()
             seed, artist = str(t.id), str(t.artist_id)
         routes += [
-            ("GET", "/api/home/mix/techno", None),
             ("GET", "/api/moods/energie?limit=40", None),
             ("GET", "/api/radio/genre/Techno", None),
             ("GET", f"/api/radio/track/{seed}", None),

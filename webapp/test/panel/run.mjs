@@ -131,7 +131,8 @@ if (DESKTOP) {
   await page.waitForTimeout(700);
   check(
     await page.evaluate(() => {
-      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+      const uid = sessionStorage.getItem("__uid");
+      const pkey = (k) => `neezer:${location.origin}/${uid ? "id:" + uid : "bench"}:${k}`;
       return JSON.parse(localStorage.getItem(pkey("player.session"))).queue.length;
     }) === 12,
     "‘Tout lire’ plays them",

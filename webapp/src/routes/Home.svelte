@@ -107,10 +107,6 @@
     return out;
   })();
 
-  // -- mixes ------------------------------------------------------------------
-  let mixes = [];
-  let homeLoaded = false;
-
   // -- moods ("Mixes d'ambiance") ---------------------------------------------
   // The catalog is computed by the server from the measured energy, tempo,
   // spectral colour and flux of the archived files: one request on mount, one
@@ -163,7 +159,7 @@
   // -- what could not be loaded ----------------------------------------------
   let failures = 0;
   function loadAll() {
-    releasesLoaded = artistsLoaded = homeLoaded = recoLoaded = moodsLoaded = false;
+    releasesLoaded = artistsLoaded = recoLoaded = moodsLoaded = false;
     failures = 0;
     loadRecapYears().catch(() => {});
     api.swr("/releases", takeReleases).catch(() => {
@@ -178,15 +174,6 @@
       .catch(() => {
         failures += 1;
         artistsLoaded = true;
-      });
-    api
-      .swr("/home", (d) => {
-        mixes = d.mixes || [];
-        homeLoaded = true;
-      })
-      .catch(() => {
-        failures += 1;
-        homeLoaded = true;
       });
     api
       .moods()
@@ -217,16 +204,15 @@
     return onDiscoverySettled((lv) => loadReco(lv));
   });
 
-  $: everythingLoaded = releasesLoaded && artistsLoaded && homeLoaded && recoLoaded && moodsLoaded;
+  $: everythingLoaded = releasesLoaded && artistsLoaded && recoLoaded && moodsLoaded;
   $: empty =
     everythingLoaded &&
     !newShown.length &&
     !artists.length &&
     !reco?.tracks?.length &&
     !recentAlbums.length &&
-    !mixes.length &&
     !readyMoods.length;
-  $: allFailed = empty && failures >= 4;
+  $: allFailed = empty && failures >= 3;
 
   function artistMenu(e, artist) {
     openMenu(e, buildEntityMenu("artist", artist, push));
@@ -334,19 +320,6 @@
 
   {#if recap}
     <RecapHomeCard year={recap} />
-  {/if}
-
-  {#if mixes.length}
-    <section>
-      <div class="section-head">
-        <h2 class="section-title">Tes mixes</h2>
-      </div>
-      <div class="shelf">
-        {#each mixes as m (m.id)}<Card item={{ ...m, deezer_id: m.id }} kind="mix" />{/each}
-      </div>
-    </section>
-  {:else if !homeLoaded}
-    <Skeleton kind="shelf" />
   {/if}
 
   {#if readyMoods.length}

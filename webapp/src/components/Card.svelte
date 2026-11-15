@@ -7,7 +7,7 @@
   import { isLocalId } from "../lib/format.js";
   import Icon from "./Icon.svelte";
 
-  // item: {id, deezer_id, title|name, cover|picture}, kind: album|artist|playlist|mix
+  // item: {id, deezer_id, title|name, cover|picture}, kind: album|artist|playlist
   export let item;
   export let kind = "album";
 
@@ -19,16 +19,14 @@
       ? item.artist?.name || item.year || ""
       : kind === "artist"
         ? "Artiste"
-        : kind === "mix"
-          ? "Mix"
-          : item.owner || "Playlist");
+        : item.owner || "Playlist");
 
   // A card opens its entity by the row's `id`; a catalogue result the library
   // does not hold yet has only the id its provider lists it under.
   $: routeId = entityRef(item);
 
   function open() {
-    push((kind === "mix" ? "/mix/" : "/" + kind + "/") + routeId);
+    push("/" + kind + "/" + routeId);
   }
   function play(e) {
     e.stopPropagation();

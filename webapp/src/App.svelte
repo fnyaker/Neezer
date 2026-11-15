@@ -64,7 +64,6 @@
   import Artist from "./routes/Artist.svelte";
   import Album from "./routes/Album.svelte";
   import Playlist from "./routes/Playlist.svelte";
-  import Mix from "./routes/Mix.svelte";
   import Library from "./routes/Library.svelte";
   import Podcasts from "./routes/Podcasts.svelte";
   import Show from "./routes/Show.svelte";
@@ -89,7 +88,6 @@
     "/artist/:id": Artist,
     "/album/:id": Album,
     "/playlist/:id": Playlist,
-    "/mix/:id": Mix,
     "/library": Library,
     "/library/:tab": Library,
     "/podcasts": Podcasts,

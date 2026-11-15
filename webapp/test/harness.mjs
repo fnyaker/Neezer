@@ -69,13 +69,25 @@ export function silence(seconds = 60) {
 
 export async function login(page, base) {
   await page.goto(base + "/app/");
-  await page.evaluate(() =>
-    fetch("/api/login", {
+  await page.evaluate(async () => {
+    const r = await fetch("/api/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: "bench", password: "Bench1" }),
-    })
-  );
+    });
+    if (!r.ok) return;
+    const me = await fetch("/api/me").then((x) => x.json());
+    if (me?.user?.id) sessionStorage.setItem("__uid", String(me.user.id));
+  });
+}
+
+/** Page script (ctx.addInitScript, BEFORE the injection one): personal values
+ *  live under the account's id, not a name (lib/account.js). login() leaves
+ *  that id in sessionStorage, so an injected queue lands where the app reads
+ *  it, whatever account the bench runs as. */
+export function installSessionPrefix() {
+  const uid = sessionStorage.getItem("__uid");
+  window.__nsPkey = (k) => `neezer:${location.origin}/${uid ? "id:" + uid : "bench"}:${k}`;
 }
 
 export function checker() {

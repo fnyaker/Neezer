@@ -146,7 +146,6 @@ class UpgradeTestCase(TestBase):
             self.assertEqual(client.get("/api/flow").status_code, 200)
             for gone in ("/api/flow/clusters", "/api/recommendations", "/api/smarttracklist/discovery"):
                 self.assertEqual(client.get(gone).status_code, 404, gone)
-            self.assertEqual(client.get("/api/home").status_code, 200)
         finally:
             release_database()
 

@@ -375,15 +375,6 @@ class WebUITestCase(unittest.TestCase):
 
     # -- discovery -------------------------------------------------------
 
-    def test_home(self):
-        self._login()
-        # The home is the library's own answer (tests/test_detach_f.py has the
-        # rows); an empty library gives empty shelves, not an error.
-        data = self.client.get("/api/home").get_json()
-        self.assertEqual(
-            sorted(data), ["forgotten", "mixes", "popular", "recent"]
-        )
-
     def test_search(self):
         self._login()
         data = self.client.get("/api/search?q=foo").get_json()
@@ -1912,7 +1903,7 @@ class WebUITestCase(unittest.TestCase):
     def test_discovery_rows_go_quiet_instead_of_failing(self):
         self._login()
         self._deezer_login_fails()
-        for path in ("/api/radio/artist/500", "/api/search/podcasts?q=x", "/api/home"):
+        for path in ("/api/radio/artist/500", "/api/search/podcasts?q=x"):
             rv = self.client.get(path)
             self.assertEqual(rv.status_code, 200, path)
 
@@ -3705,10 +3696,6 @@ class WebUIGuestTestCase(unittest.TestCase):
 
     def test_no_personalized_discovery(self):
         self._login()
-        self.assertEqual(
-            self.client.get("/api/home").get_json(),
-            {"mixes": [], "recent": [], "popular": [], "forgotten": []},
-        )
         self.assertEqual(self.client.get("/api/flow").get_json(), {"tracks": []})
 
     def test_no_owner_playlists(self):

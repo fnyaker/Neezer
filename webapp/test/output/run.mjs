@@ -27,7 +27,7 @@
 // not measured; what is measured is which path each element is on, where it
 // is, and what the analysers hear.
 import { join } from "node:path";
-import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const { base, stop } = await startServer();
@@ -122,9 +122,10 @@ await ctx.addInitScript(() => {
   };
   window.Audio.prototype = Native.prototype;
 });
+await ctx.addInitScript(installSessionPrefix);
 await ctx.addInitScript(() => {
   try {
-    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+    const pkey = window.__nsPkey;
     const j = sessionStorage.getItem("__inject");
     if (j) {
       localStorage.setItem(pkey("player.session"), j);

@@ -250,6 +250,18 @@ class ServerAccountTestCase(_ImportCase):
             True,
         )
 
+    def test_a_member_cannot_read_the_server_accounts_own_library(self):
+        self.as_alice()
+        acc = str(self.server_account().id)
+        self.as_bob()
+        self.assertNotIn(acc, [a["id"] for a in self.my_accounts()])
+        self.assertEqual(
+            self.client.get(f"/api/me/accounts/{acc}/library/tracks").status_code, 404
+        )
+        self.assertEqual(
+            self.client.post(f"/api/me/accounts/{acc}/import").status_code, 404
+        )
+
     def test_the_holder_of_the_server_account_cannot_link_a_second_deezer(self):
         self.as_alice()
         self.server_account()

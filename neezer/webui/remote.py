@@ -182,7 +182,6 @@ POLICY = {
     "shared_playlist_cover": "queue",
     "shared_playlist_stream": "queue",
     # reading the library
-    "home": "read",
     "search": "read",
     "search_podcasts": "read",
     "youtube_search": "read",
@@ -357,7 +356,6 @@ POLICY = {
     "enrich_backfill_start": "admin",
     "enrich_backfill_status": "admin",
     "credits_backfill": "admin",
-    "home_mix": "read",
     "genre_tree": "read",
     "genre_tree_edge": "admin",
     "genre_tree_move": "admin",

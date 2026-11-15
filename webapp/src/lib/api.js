@@ -307,8 +307,6 @@ export const api = {
     req("/me/accounts/" + encodeURIComponent(id) + "/library/" + kind, { method: "PUT", body: body({ refs, on }) }),
 
   // discovery
-  home: () => req("/home"),
-  homeMix: (id) => req("/home/mix/" + encodeURIComponent(id)),
   // The Flow's next title(s), chosen now with what the session said
   // (lib/flow.js builds the body).
   // The genres a Flow can be set to, with what the library holds of each.

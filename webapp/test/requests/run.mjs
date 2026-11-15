@@ -45,6 +45,11 @@ async function loadPlaywright() {
   throw new Error("Playwright is not installed (npm i -g playwright).");
 }
 const { chromium } = await loadPlaywright();
+
+function installSessionPrefix() {
+  const uid = sessionStorage.getItem("__uid");
+  window.__nsPkey = (k) => `neezer:${location.origin}/${uid ? "id:" + uid : "bench"}:${k}`;
+}
 const WINDOW_MS = 10000;
 const MAX_REQUESTS = 40; // four attempts a track, a few tracks: generous on purpose
 const MAX_COVERS = 4; // the media session and the visualizer, once each: room to spare
@@ -87,7 +92,11 @@ try {
     if (r.status() === 503) refused++;
   });
   await page.goto(base + "/app/");
-  await page.evaluate(() => fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "bench", password: "Bench1" }) }));
+  await page.evaluate(async () => {
+    await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "bench", password: "Bench1" }) });
+    const me = await fetch("/api/me").then((x) => x.json());
+    if (me?.user?.id) sessionStorage.setItem("__uid", String(me.user.id));
+  });
   await page.reload();
   await page.waitForTimeout(1500);
   await page.goto(base + "/app/#/album/" + ready.ids.album);
@@ -110,9 +119,10 @@ try {
     artist: { deezer_id: "1000000", name: "Band" }, album: { deezer_id: "2000000", title: "Album", cover: "" } }));
   const ctx2 = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   await ctx2.route(/dzcdn\.net|api\.deezer\.com|lrclib/, (r) => r.abort());
+  await ctx2.addInitScript(installSessionPrefix);
   await ctx2.addInitScript(() => {
     try {
-      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+      const pkey = window.__nsPkey;
       const j = sessionStorage.getItem("__inject");
       if (j) {
         localStorage.setItem(pkey("player.session"), j);
@@ -125,7 +135,11 @@ try {
   });
   const p2 = await ctx2.newPage();
   await p2.goto(base + "/app/");
-  await p2.evaluate(() => fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "bench", password: "Bench1" }) }));
+  await p2.evaluate(async () => {
+    await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "bench", password: "Bench1" }) });
+    const me = await fetch("/api/me").then((x) => x.json());
+    if (me?.user?.id) sessionStorage.setItem("__uid", String(me.user.id));
+  });
   await p2.evaluate((j) => sessionStorage.setItem("__inject", j), JSON.stringify({ queue: tracks, index: 0, start: 0, currentTime: 0, context: null, shuffle: false, repeat: "off", _orig: null, at: Date.now() }));
   await p2.reload();
   await p2.locator("footer.player .pp").waitFor({ timeout: 30000 });

@@ -4,7 +4,7 @@
 # Distributed under terms of the GNU AGPLv3 license.
 
 """"Je n'aime pas" (neezer/dislikes.py): the title, its other rows and the
-titles that sound almost the same leave the radios, the Flow and the mixes;
+titles that sound almost the same leave the radios, the Flow and the moods;
 the farther neighbours are only pushed down; nothing a person plays
 themselves is touched."""
 
@@ -171,14 +171,6 @@ class RoutesTestCase(_Disliked):
         self.assertEqual(guest.get("/api/me/dislikes").json["tracks"], [])
         bob = User.get(User.name == "bob")
         self.assertFalse(dislikes.load(bob))
-
-    def test_a_home_mix_leaves_them_out(self):
-        self.dislike()
-        r = self.client.get("/api/home/mix/techno")
-        self.assertEqual(r.status_code, 200)
-        ids = {t["deezer_id"] for t in r.json["tracks"]}
-        self.assertTrue(ids)
-        self.assertFalse(ids & {str(self.bad.id), str(self.twin.id), "777"})
 
     def test_the_route_needs_a_login(self):
         anon = self.app.test_client()

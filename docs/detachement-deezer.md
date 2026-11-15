@@ -220,20 +220,17 @@ Fini quand : le planificateur n'appelle plus aucune de ces fonctions.
 
 ## D6. Accueil et lecture continue sans les algorithmes Deezer
 
-État actuel :
-- `/api/home` : cartes des smart tracklists Deezer (`provider.get_smart_tracklist`).
-- `/api/smarttracklist/<sid>`, `routes/Mix.svelte`.
-- `/api/flow`, `/api/flow/clusters` (GraphQL, `deezerpy/graphql.py`) et leurs réglages.
-- `/api/recommendations` : sorties éditoriales et classements (`get_editorial_releases`,
-  `get_chart_artists`, `get_chart_playlists`) sur `routes/Home.svelte`.
-- `/api/radio/track/<id>` (`get_track_mix`) et `/api/radio/artist/<id>` : la lecture automatique à
-  la fin de la file (`Player.svelte#ensureUpcoming`, contexte `flow` ou radio) et la rangée
-  « titres qui sonnent pareil » sous le lecteur plein écran (`NowPlayingMore.svelte`, dont le
-  commentaire dit déjà « jusqu'à ce qu'on puisse les calculer avec notre propre analyse »).
-- `/api/artist/<id>` : « artistes similaires » (`get_artist_related`) et « top » (`get_artist_top`,
-  le classement de popularité Deezer).
+État actuel (livré) :
+- **Supprimés** : `/api/home`, `/api/home/mix/<slug>`, `routes/Mix.svelte`, `/api/smarttracklist`,
+  `/api/recommendations`, les grappes GraphQL du Flow et la rangée « Tes mixes » — aucune
+  catégorie de mixes Deezer ne subsiste, même pour l'admin.
+- **Local** : `/api/flow` (`discover.py`), `/api/radio/track|artist|next` (`radio.py`, voisins
+  stockés), la rangée « titres qui sonnent pareil » (`/api/radio/track`, plus aucun
+  `get_track_mix`), et `/api/artist/<id>` (top = écoutes locales, similaires = `similar.py`).
+- Les mixes d'ambiance (`/api/moods`) restent : ils sont calculés sur les mesures de la
+  bibliothèque, sans provider.
 
-À faire : remplacer par du calcul local, à partir de ce que le serveur sait déjà :
+Le remplacement est fait à partir de ce que le serveur sait déjà :
 - **Radio / lecture continue / titres similaires** : plus proches voisins dans les embeddings
   (`embedding.py`, vecteurs déjà stockés) pondérés par tempo et genre servis (`track_analysis`),
   restreints à la bibliothèque archivée ; repli sur même artiste / même genre quand un titre n'a

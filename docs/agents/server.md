@@ -613,7 +613,7 @@ app looked untouched — and the cleanup decides what to drop from exactly this 
 - **"Je n'aime pas"** (`neezer/dislikes.py`, `track_dislike`, schema `20261031`, `POST /api/dislike`) is about
   RECOMMENDATIONS only (Deezer's "Ne pas recommander", Spotify's taste-profile exclusion): the title, its other rows
   (`match_key`) and the neighbours at >= 0.9 among the first 3 of EITHER list leave the radios, the Flow and the
-  genre mixes; its first 20 neighbours are pushed by RANK (x0.3 for the nearest up to x1 at rank 20 — by rank
+  mood mixes; its first 20 neighbours are pushed by RANK (x0.3 for the nearest up to x1 at rank 20 — by rank
   because stored scores sit at 0.9 throughout a dense genre, measured in the test graph). A radio seeded on a
   disliked title still plays; albums, playlists and search never filter. In a generated queue the playing title is
   skipped at once. A third title of one artist offers muting it (`artist_hint`). Cached 120 s per person, one

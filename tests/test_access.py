@@ -282,6 +282,15 @@ class GrantsTestCase(_Case):
         rv = self.client.get("/api/search?q=x")
         self.assertEqual(rv.status_code, 200)
 
+    def test_the_server_account_never_serves_a_personal_feature_to_a_member(self):
+        self.as_alice()
+        self.server_account()
+        self.as_bob()
+        snap = access.snapshot()
+        self.assertEqual(snap.serving(str(self.bob.id), "deezer", "my_tracks"), [])
+        self.assertEqual(snap.serving(str(self.bob.id), "deezer", "my_playlists"), [])
+        self.assertTrue(snap.serving(str(self.bob.id), "deezer", "stream"))
+
     def test_a_personal_feature_is_never_lent(self):
         self.as_alice()
         self.grant("my_tracks", ["all"], status=400)

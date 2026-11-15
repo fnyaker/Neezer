@@ -12,7 +12,7 @@
 // fix). This plays a tone, pauses, skips three times, closes and reopens the
 // full-screen player, and requires the analysers to hear the tone after each.
 import { join } from "node:path";
-import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const { base, stop } = await startServer();
@@ -109,9 +109,10 @@ await ctx.addInitScript(() => {
   };
   window.Audio.prototype = Native.prototype;
 });
+await ctx.addInitScript(installSessionPrefix);
 await ctx.addInitScript(() => {
   try {
-    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+    const pkey = window.__nsPkey;
     const j = sessionStorage.getItem("__inject");
     if (j) {
       localStorage.setItem(pkey("player.session"), j);

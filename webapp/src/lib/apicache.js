@@ -59,8 +59,6 @@ const CACHE_PREFIXES = [
   "/playlist/",
   "/album/",
   "/artist/",
-  "/home/mix/",
-  "/home",
   // The mood mixes' catalog and their track lists: they are built from the
   // measured library and change slowly, so the Home row and a mood page paint
   // offline and skip a doomed refetch on a bad link.

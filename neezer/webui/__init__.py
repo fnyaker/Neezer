@@ -16,10 +16,8 @@ from __future__ import annotations
 import logging
 import os.path
 import re
-import random
 import sys
 import threading
-import unicodedata
 import datetime
 import json
 import time
@@ -853,14 +851,6 @@ _DEEZER_ID_RE = re.compile(r"\A[0-9]{1,20}\Z")
 def _valid_id(value):
     """A Deezer numeric id (track/album/artist/playlist). Rejects junk early."""
     return bool(_DEEZER_ID_RE.fullmatch(str(value or "")))
-
-
-# Smart-tracklist ids are slugs ("new-releases", "inspired-by-3"), not numbers.
-_SLUG_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
-
-
-def _valid_slug(value):
-    return bool(_SLUG_RE.fullmatch(str(value or "")))
 
 
 # -- upload quota -----------------------------------------------------------
@@ -2033,164 +2023,6 @@ def me():
 # -- discovery --------------------------------------------------------------
 
 
-# -- the home, from the library -----------------------------------------------
-# Every row is the database's own answer: no call to Deezer, so the first
-# screen opens as fast as the disk and works the same offline. The rows are
-# albums (cards) and genre mixes; a mix is a deterministic daily draw from the
-# tracks the server has measured as that genre.
-
-_HOME_ROW = 12
-_MIX_SIZE = 25
-_MIN_MIX_TRACKS = 5
-_FORGOTTEN_AFTER = 60 * 24 * 3600
-_FORGOTTEN_MIN_PLAYS = 3
-
-
-def _archived_tracks():
-    """Peewee expression: on disk, playable."""
-    return (Track.last_modification > 0) & Track.unavailable.is_null(True)
-
-
-def _home_albums(cutoff):
-    """The three album shelves, ``(recent, popular, forgotten)``, from ONE
-    grouped read of the tracks (no joins, tuples) and one for the few albums
-    that make the cut: ranking a few thousand groups in Python is cheaper than
-    scanning the table once per shelf."""
-    plays = fn.SUM(Track.play_count)
-    q = _visible_tracks(
-        Track.select(
-            Track.album,
-            fn.COUNT(Track.id),
-            fn.MIN(Track.year),
-            fn.MAX(Track.created),
-            plays,
-            # Compared in SQL: a date comes back as text or as a datetime
-            # depending on the engine, a boolean comes back as a boolean.
-            fn.MAX(Track.last_play) < cutoff,
-        )
-        .where(_archived_tracks())
-        .group_by(Track.album)
-    )
-    groups = [
-        {"album": r[0], "nb": r[1], "year": r[2], "added": r[3], "plays": r[4] or 0, "old": bool(r[5])}
-        for r in q.tuples()
-    ]
-    # `added` is whatever the engine returns for a date; they order alike.
-    recent = sorted(groups, key=lambda g: (g["added"] is not None, g["added"]), reverse=True)[:_HOME_ROW]
-    by_plays = sorted((g for g in groups if g["plays"] > 0), key=lambda g: -g["plays"])
-    forgotten = [g for g in by_plays if g["old"] and g["plays"] >= _FORGOTTEN_MIN_PLAYS][:_HOME_ROW]
-    gone = {g["album"] for g in forgotten}
-    popular = [g for g in by_plays if g["album"] not in gone][:_HOME_ROW]
-    wanted = {g["album"] for g in recent + popular + forgotten}
-    albums = {
-        a.id: a
-        for a in Album.select(Album, Artist).join(Artist).where(Album.id.in_(list(wanted)))
-    } if wanted else {}
-
-    def card(g):
-        a = albums[g["album"]]
-        return {
-            "id": str(a.id),
-            "deezer_id": str(a.deezer_id or ""),
-            "title": a.name,
-            "cover": _image("cover", a.cover_md5),
-            "artist": {
-                "id": str(a.artist.id),
-                "deezer_id": str(a.artist.deezer_id or ""),
-                "name": a.artist.name,
-            },
-            "nb_tracks": g["nb"] or 0,
-            "year": g["year"] or None,
-        }
-
-    return tuple([card(g) for g in rows if g["album"] in albums] for rows in (recent, popular, forgotten))
-
-
-def _slug(text) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", str(text)).encode(
-        "ascii", "ignore").decode().lower()).strip("-")
-
-
-def _style_tracks():
-    """The base query of "tracks measured as a genre": Track joined to its
-    analysis, restricted to what the caller may play."""
-    from ..db import TrackAnalysis
-
-    q = (
-        Track.select()
-        .join(TrackAnalysis, on=(TrackAnalysis.track == Track.id))
-        .where(_archived_tracks() & TrackAnalysis.style.is_null(False))
-    )
-    return _visible_tracks(q)
-
-
-def _mix_title(style: str) -> str:
-    name = style if not style.islower() else style.capitalize()
-    return "Mix " + name
-
-
-@webapi.route("/home")
-@login_required
-def home():
-    """The home's shelves, all from the library: albums added lately, played
-    a lot, loved once and left for months, and a mix of each of the three
-    genres the library holds most of."""
-    from ..db import TrackAnalysis
-
-    now_ = now()
-    cutoff = now_ - datetime.timedelta(seconds=_FORGOTTEN_AFTER)
-    recent, popular, forgotten = _home_albums(cutoff)
-    count = fn.COUNT(Track.id)
-    styles = [
-        r[0]
-        for r in _visible_tracks(
-            Track.select(TrackAnalysis.style, count)
-            .join(TrackAnalysis, on=(TrackAnalysis.track == Track.id))
-            .where(_archived_tracks() & TrackAnalysis.style.is_null(False))
-            .group_by(TrackAnalysis.style)
-            .having(count >= _MIN_MIX_TRACKS)
-            .order_by(count.desc(), TrackAnalysis.style)
-            .limit(3)
-        ).tuples()
-    ]
-    covers = {}
-    if styles:
-        base = _style_tracks().select(TrackAnalysis.style, Album.cover_md5, Track.id)
-        rows = (
-            base.join(Album, on=(Track.album == Album.id))
-            .where(TrackAnalysis.style.in_(styles))
-            .order_by(Track.play_count.desc(), Track.id)
-            .limit(200)
-            .tuples()
-        )
-        for style, md5, _tid in rows:
-            covers.setdefault(style, md5)
-        for style in styles:
-            if style not in covers:  # a genre nothing was played in
-                r = (
-                    _style_tracks()
-                    .select(Album.cover_md5)
-                    .join(Album, on=(Track.album == Album.id))
-                    .where(TrackAnalysis.style == style)
-                    .order_by(Track.play_count.desc(), Track.id)
-                    .tuples()
-                    .first()
-                )
-                covers[style] = r[0] if r else None
-    mixes = [
-        {
-            "id": _slug(st),
-            "title": _mix_title(st),
-            "subtitle": "Selon ce que vous avez dans votre bibliothèque",
-            "cover": _image("cover", covers.get(st)),
-        }
-        for st in styles
-    ]
-    return jsonify(
-        {"mixes": mixes, "recent": recent, "popular": popular, "forgotten": forgotten}
-    )
-
-
 def _tracks_in_order(ids):
     """The API dicts of the tracks ``ids`` (row UUIDs), in that order."""
     ids = list(ids)
@@ -2209,60 +2041,6 @@ def _tracks_in_order(ids):
     )
     by_key = {r["deezer_id"]: r for r in rows}
     return [by_key[key[i]] for i in ids if i in key and key[i] in by_key]
-
-
-@webapi.route("/home/mix/<slug>")
-@login_required
-def home_mix(slug):
-    """A genre mix: the genre's most played track first, then a draw of the
-    rest that is the same all day (so the card and the page agree) and new
-    tomorrow."""
-    if not _valid_slug(slug):
-        return jsonify({"error": "invalid id"}), 400
-    from ..db import TrackAnalysis
-
-    style = next(
-        (
-            r[0]
-            for r in _style_tracks()
-            .select(TrackAnalysis.style)
-            .group_by(TrackAnalysis.style)
-            .tuples()
-            if _slug(r[0]) == slug
-        ),
-        None,
-    )
-    if style is None:
-        return jsonify({"error": "not found"}), 404
-    ids = [
-        r[0]
-        for r in _style_tracks()
-        .select(Track.id)
-        .where(TrackAnalysis.style == style)
-        .order_by(Track.play_count.desc(), Track.id)
-        .tuples()
-    ]
-    from .. import dislikes
-
-    gone = dislikes.load(request.webuser).excluded
-    if gone:
-        ids = [i for i in ids if i not in gone]
-    rest = ids[1:]
-    random.Random(f"{slug}:{now().date().isoformat()}").shuffle(rest)
-    picked = ids[:1] + rest[: _MIX_SIZE - 1]
-    tracks = _tracks_in_order(picked)
-    return jsonify(
-        {
-            "playlist": {
-                "deezer_id": slug,
-                "title": _mix_title(style),
-                "description": "Un tirage du jour parmi vos titres de ce style.",
-                "cover": _db_playlist_cover(tracks),
-                "nb_tracks": len(tracks),
-            },
-            "tracks": tracks,
-        }
-    )
 
 
 def _data(fn):

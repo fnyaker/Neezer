@@ -85,7 +85,7 @@ export function carPin(id, title, nbTracks) {
 }
 
 /** The kinds the overlay may launch; anything else is ignored. */
-const KINDS = new Set(["flow", "favorites", "track", "playlist", "album", "artist", "mix"]);
+const KINDS = new Set(["flow", "favorites", "track", "playlist", "album", "artist"]);
 /** One track's JSON from the page: a few kilobytes, never a whole queue. */
 const MAX_PAYLOAD = 64 * 1024;
 

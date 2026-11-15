@@ -8,7 +8,7 @@
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPlaywright, startServer, silence, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const LEN = 4;
@@ -54,9 +54,10 @@ async function scenario(name, { queue = ["s1"], index = 0, repeat = "one", setti
     };
     window.Audio.prototype = Native.prototype;
   });
+  await ctx.addInitScript(installSessionPrefix);
   await ctx.addInitScript(() => {
     try {
-      const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+      const pkey = window.__nsPkey;
       const j = sessionStorage.getItem("__inject");
       if (j) {
         const { session, settings } = JSON.parse(j);

@@ -7,7 +7,7 @@
 // Each action is measured with the Event Timing API: from the input to the
 // next frame painted after its handlers ran (what Chrome calls INP), plus the
 // long tasks (> 50 ms) in the second after it. Median of the rounds.
-import { loadPlaywright, startServer, login, silence } from "../harness.mjs";
+import { loadPlaywright, startServer, login, silence, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const THROTTLE = +(process.env.THROTTLE || 4);
@@ -61,8 +61,9 @@ await ctx.addInitScript(() => {
 });
 // The page saves its own (empty) session as it unloads, so a queue is put in
 // BEFORE the app starts.
+await ctx.addInitScript(installSessionPrefix);
 await ctx.addInitScript(() => {
-  const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+  const pkey = window.__nsPkey;
   const j = sessionStorage.getItem("__inject");
   if (j) {
     localStorage.setItem(pkey("player.session"), j);

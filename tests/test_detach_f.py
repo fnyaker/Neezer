@@ -358,90 +358,6 @@ class RouteTest(Base):
         self.assertEqual(len(neigh), 1)  # artist 2 sounds like artist 1; 3 does not
 
 
-class HomeTest(Base):
-    def test_the_rows(self):
-        old = now() - datetime.timedelta(days=200)
-        a = self.track("Loved long ago", album="10", plays=5, last_play=old)
-        self.track("Loved long ago 2", album="10", plays=4, last_play=old)
-        self.track("Played lately", album="20", artist="2", plays=7, last_play=now())
-        self.track("Never played", album="30", artist="3")
-        Track.update(created=now() - datetime.timedelta(days=30)).where(Track.id == a.id).execute()
-        self._login()
-        data = self.client.get("/api/home").get_json()
-        self.assertEqual(data["recent"][0]["title"], "Album 30")
-        self.assertEqual({x["title"] for x in data["recent"]}, {"Album 10", "Album 20", "Album 30"})
-        self.assertEqual([x["title"] for x in data["popular"]], ["Album 20"])
-        self.assertEqual([x["title"] for x in data["forgotten"]], ["Album 10"])
-        card = data["forgotten"][0]
-        self.assertEqual(card["nb_tracks"], 2)
-        self.assertEqual(card["artist"]["name"], "Artist 1")
-        self.assertTrue(card["id"] and card["deezer_id"])
-
-    def test_the_mixes_are_the_three_most_present_genres(self):
-        for style, count in (("frenchcore", 7), ("techno", 6), ("house", 5), ("trance", 5), ("rare", 4)):
-            for i in range(count):
-                self.track(f"{style}{i}", style=style, plays=i if style == "techno" else 0,
-                           album=str(40 + i % 3))
-        self._login()
-        data = self.client.get("/api/home").get_json()
-        self.assertEqual(
-            [m["title"] for m in data["mixes"]], ["Mix Frenchcore", "Mix Techno", "Mix House"]
-        )
-        self.assertEqual([m["id"] for m in data["mixes"]], ["frenchcore", "techno", "house"])
-        self.assertTrue(all(m["cover"] for m in data["mixes"]))
-
-    def test_the_home_is_six_reads_at_most(self):
-        for i in range(20):
-            self.track(f"T{i}", style="techno" if i % 2 else "house", album=str(i % 4),
-                       plays=i, last_play=now() - datetime.timedelta(days=100))
-        self._login()
-        with count_statements() as n:
-            self.assertEqual(self.client.get("/api/home").status_code, 200)
-        self.assertLessEqual(sum(n.values()), AUTH + 6, n)
-
-    def test_a_mix_leads_with_the_most_played_and_is_the_same_all_day(self):
-        for i in range(40):
-            self.track(f"T{i}", style="techno", plays=100 if i == 17 else 0)
-        self.track("Other", style="house")
-        self._login()
-        data = self.client.get("/api/home/mix/techno").get_json()
-        self.assertEqual(data["playlist"]["title"], "Mix Techno")
-        titles = [t["title"] for t in data["tracks"]]
-        self.assertEqual(len(titles), 25)
-        self.assertEqual(titles[0], "T17")
-        self.assertEqual(len(set(titles)), 25)
-        self.assertNotIn("Other", titles)
-        self.assertEqual(self.titles("/api/home/mix/techno"), titles)
-        self.assertTrue(data["playlist"]["cover"])
-        tomorrow = now() + datetime.timedelta(days=1)
-        with mock.patch("neezer.webui.now", return_value=tomorrow):
-            other = self.titles("/api/home/mix/techno")
-        self.assertEqual(other[0], "T17")
-        self.assertNotEqual(other, titles)
-
-    def test_a_mix_that_does_not_exist_or_is_malformed(self):
-        self.track("T", style="techno")
-        self._login()
-        self.assertEqual(self.client.get("/api/home/mix/nothing").status_code, 404)
-        self.assertIn(self.client.get("/api/home/mix/..%2Fx").status_code, (400, 404))
-        self.assertEqual(self.client.get("/api/home/mix/" + "a" * 80).status_code, 400)
-
-    def test_the_home_needs_no_deezer(self):
-        self.track("T", style="techno", plays=1)
-        self._login()
-        self.app.deezer = None
-        self.assertEqual(self.client.get("/api/home").status_code, 200)
-        self.assertEqual(self.client.get("/api/home/mix/techno").status_code, 200)
-
-    def test_a_guest_sees_the_shared_library_not_a_private_upload(self):
-        mine = self.track("Private", style="techno")
-        Track.update(owner=User.get(name="alice")).where(Track.id == mine.id).execute()
-        self.client.post("/api/login", json={"username": "bob", "password": "B0b"})
-        data = self.client.get("/api/home").get_json()
-        self.assertEqual(data["recent"], [])
-        self.assertEqual(self.client.get("/api/home/mix/techno").status_code, 404)
-
-
 class RebuildRouteTest(Base):
     def test_admin_only(self):
         self.client.post("/api/login", json={"username": "bob", "password": "B0b"})
@@ -547,9 +463,6 @@ class UpgradeTest(unittest.TestCase):
         body = client.get(f"/api/radio/track/{rows[0].id}").get_json()
         self.assertEqual(len(body["tracks"]), 5)
         self.assertEqual(client.get("/api/flow").status_code, 200)
-        home = client.get("/api/home").get_json()
-        self.assertEqual([a["title"] for a in home["recent"]], ["Old Album"])
-        self.assertEqual(home["mixes"], [])  # nothing measured yet
 
         # The button fills the index from the vectors already on disk.
         job = similar.rebuild_job()

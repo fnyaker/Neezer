@@ -15,7 +15,7 @@
 import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPlaywright, startServer, silence, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const LEN = 30;
@@ -132,8 +132,9 @@ ctx.on("request", (r) => {
   if (r.url().includes("/api/stream/")) seen.stream.push(r.url());
 });
 await ctx.addInitScript(fakeApp);
+await ctx.addInitScript(installSessionPrefix);
 await ctx.addInitScript(() => {
-  const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+  const pkey = window.__nsPkey;
   const j = sessionStorage.getItem("__inject");
   if (!j) return;
   const { session } = JSON.parse(j);

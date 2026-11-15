@@ -18,7 +18,7 @@
     else push("/");
   }
 
-  const DETAIL = ["/album/", "/artist/", "/playlist/", "/mix/", "/podcast/"];
+  const DETAIL = ["/album/", "/artist/", "/playlist/", "/podcast/"];
   $: show = DETAIL.some((p) => $location.startsWith(p));
 </script>
 

@@ -123,7 +123,7 @@ the modal's checkboxes, and no information carried by colour alone.
 **Web app** (`webapp/`): Svelte 5 + Vite 7 SPA, hash routing (svelte-spa-router), consuming `/api`.
 Existing components still use the legacy `$:` / `export let` syntax; follow the file you edit.
 Builds into `neezer/webui/dist`. No emoji in the UI — all glyphs go through
-`src/components/Icon.svelte` (Lucide-style SVG). Home is **card-based** (mixes / recommended
+`src/components/Icon.svelte` (Lucide-style SVG). Home is **card-based** (recommended
 playlists / albums / artists), not track shelves. Podcasts have their own pages
 (`routes/Podcasts.svelte` grid + subscribe, `routes/Show.svelte` episode list) consuming
 `/api/podcasts`, `/api/podcast/<id>` and streaming episodes through `/api/stream/<episode-uuid>`
@@ -158,7 +158,7 @@ discovery level behind one chip, the energy notches under it — `EnergyPicker.s
 `artist_release.tracks`, which the releases watcher fills when it finds a release — `releases._fill_tracklists`,
 `TRACKLISTS_PER_RUN` a run, an outage leaves it for the next run, Deezer answering "gone" keeps `[]`), the favourite
 artists (`/me/artists`: stars + library count + the person's listens, three statements), Pour toi (titles), recently
-played shortcuts, mixes. **Mixes d'ambiance** closes the home (`MoodCard.svelte`, `GET /api/moods`):
+played shortcuts. **Mixes d'ambiance** closes the home (`MoodCard.svelte`, `GET /api/moods`):
 one catalog request on mount, no section when nothing is ready, one `/api/moods/<id>` per card tap;
 the card is a single 44 px+ button (sleeve, name, subtitle, title count), and the queue it starts is
 FINITE (`autoplay: false`), so the endless radio continuation never turns a 40-title mix into a

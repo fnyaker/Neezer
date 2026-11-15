@@ -9,7 +9,7 @@
 // page's clock is Playwright's: a sleep timer is minutes long, and the point
 // is what the <audio> element does at each moment of it (its volume, whether it
 // is paused), read off the element itself, not off what the UI claims.
-import { loadPlaywright, startServer, silence, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const { base, stop } = await startServer();
@@ -36,9 +36,10 @@ await ctx.addInitScript(() => {
 // The player saves its own (empty) state as a page unloads, over anything a test
 // wrote before reloading. So a session to start from is handed to the NEXT page
 // through sessionStorage, and written by a script that runs before the app boots.
+await ctx.addInitScript(installSessionPrefix);
 await ctx.addInitScript(() => {
   try {
-    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+    const pkey = window.__nsPkey;
     const j = sessionStorage.getItem("__inject");
     if (j) {
       localStorage.setItem(pkey("player.session"), j);

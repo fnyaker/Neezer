@@ -112,12 +112,6 @@ async function list({ name, path, pattern, wrong }) {
   await ctx.close();
 }
 
-const { ctx: probe, page: probePage } = await fresh({ path: "#/" });
-const MIX = await probePage.evaluate(() =>
-  fetch("/api/home").then((x) => x.json()).then((r) => String(r.mixes?.[0]?.id || "1")).catch(() => "1")
-);
-await probe.close();
-
 await failurePage({
   name: "album",
   path: "#/album/" + ids.album,
@@ -154,12 +148,6 @@ await retryOnce({
   path: "#/playlist/" + ids.small,
   pattern: /\/api\/playlist\/[0-9a-f-]+$/,
   settle: "header.banner h1",
-});
-await failurePage({
-  name: "mix",
-  path: "#/mix/" + MIX,
-  pattern: /\/api\/home\/mix\//,
-  wrong: "Mix introuvable",
 });
 await failurePage({
   name: "album-offline",

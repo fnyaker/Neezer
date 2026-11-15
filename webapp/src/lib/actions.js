@@ -691,7 +691,7 @@ export async function toggleFavorite(track) {
 // "not this one", so it is skipped at once (Pandora's thumbs down). In an album
 // or a playlist the person chose it: the dislike only concerns what is
 // recommended (Deezer, Spotify), and the title plays on.
-const GENERATED = new Set(["flow", "radio", "artist-radio", "reco", "mix", "genre-radio"]);
+const GENERATED = new Set(["flow", "radio", "artist-radio", "reco", "genre-radio"]);
 
 // "Je n'aime pas" / back. Optimistic, with "Annuler" in the toast; a third
 // title of one artist offers to stop recommending the artist (Deezer does).
@@ -993,13 +993,12 @@ export async function downloadEntity(kind, id, quality = null) {
   }
 }
 
-// Load and play an album/playlist/artist/mix as a queue.
+// Load and play an album/playlist/artist as a queue.
 export async function playEntity(kind, id, context = null) {
   try {
     let tracks = [];
     if (kind === "album") tracks = (await api.album(id)).tracks;
     else if (kind === "playlist") tracks = (await api.playlist(id)).tracks;
-    else if (kind === "mix") tracks = (await api.homeMix(id)).tracks;
     else if (kind === "artist") tracks = (await api.artistRadio(id)).tracks;
     if (tracks && tracks.length) {
       player.playQueue(tracks, 0, context || { kind, id });
@@ -1023,9 +1022,9 @@ export function entityMeta(kind, item) {
   return { title: item.title || item.name };
 }
 
-// Context menu for an album/artist/playlist/mix card.
+// Context menu for an album/artist/playlist card.
 export function buildEntityMenu(kind, item, nav) {
-  const route = kind === "mix" ? "/mix/" : "/" + kind + "/";
+  const route = "/" + kind + "/";
   const routeId = entityRef(item);
   const items = [
     { label: "Lire", icon: "play", action: () => playEntity(kind, routeId) },

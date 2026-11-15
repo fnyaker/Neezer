@@ -20,7 +20,7 @@ import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
-import { loadPlaywright, startServer, silence, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const LINK = +process.env.LINK || 32768;
@@ -105,6 +105,7 @@ const song = (id, k) => ({
 async function run({ downloads }) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.route((u) => /(^|\.)(deezer\.com|dzcdn\.net)$/.test(new URL(u).hostname), (r) => r.abort());
+  await ctx.addInitScript(installSessionPrefix);
   await ctx.addInitScript(() => {
     // An app whose downloads are not in its storage, but that hears the lease:
     // the page's own downloads run (the web path), and offYield is recorded.
@@ -120,7 +121,7 @@ async function run({ downloads }) {
       return el;
     };
     window.Audio.prototype = Native.prototype;
-    const pkey = (k) => `neezer:${location.origin}/bench:${k}`;
+    const pkey = window.__nsPkey;
     const j = sessionStorage.getItem("__inject");
     if (j) {
       const { session } = JSON.parse(j);

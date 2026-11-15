@@ -168,7 +168,7 @@ class RemoteTestCase(unittest.TestCase):
         c, _ = self._controller("queue")
         self.assertEqual(c.get("/api/remote/state").status_code, 200)
         self.assertNotEqual(c.get("/api/cover/123").status_code, 403)
-        for path in ("/api/search?q=a", "/api/me/favorites", "/api/lyrics/1", "/api/home"):
+        for path in ("/api/search?q=a", "/api/me/favorites", "/api/lyrics/1"):
             self.assertEqual(c.get(path).status_code, 403, path)
 
     def test_a_queue_controller_cannot_read_the_owner_s_styles_or_start_deezer(self):
