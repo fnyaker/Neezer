@@ -652,7 +652,7 @@ class AdminUsersTestCase(unittest.TestCase):
     def test_rest_create_user_turns_a_bad_name_into_a_clean_error(self):
         for name in ("..", "a", "x y", "bob"):
             response = self._rest(
-                "createUser", username=name, password="Quiet9-Meadow", email="x@y.z"
+                "createUser", username=name, password="test", email="x@y.z"
             )
             self.assertEqual(response.get("status"), "failed", name)
             error = response.find(SUB + "error")
