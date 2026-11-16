@@ -7,6 +7,7 @@
   // No colour of its own: the badge is the accent's outline, the menu is the
   // raised surface (--s2), so all three themes repaint without touching it.
   import { quality } from "../lib/stores.js";
+  import { pop } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
   import SourceBadge from "./SourceBadge.svelte";
 
@@ -15,6 +16,11 @@
   // rightwards.
   export let placement = "up"; // up | down
   export let align = "right"; // right | left
+
+  // O4: the list pops out of the corner nearest its badge (motion.js owns the
+  // 0.96 scale, the 4 px lean and the 200/140 ms), and the values come from the
+  // same two props that place it.
+  $: origin = `${placement === "down" ? "top" : "bottom"} ${align}`;
 
   const QUALITIES = ["FLAC", "OPUS_320", "OPUS_256", "OPUS_192", "OPUS_128", "OPUS_64"];
   const LABEL = {
@@ -60,7 +66,7 @@
       <Icon name="chevronDown" size={11} />
     </button>
     {#if open}
-      <ul class="menu {placement} {align}" role="listbox" aria-label="Qualité de streaming">
+      <ul class="menu {placement} {align}" role="listbox" aria-label="Qualité de streaming" transition:pop={{ origin, placement }}>
         {#each QUALITIES as q}
           <li>
             <button role="option" aria-selected={$quality === q} class:sel={$quality === q} on:click|stopPropagation={() => pick(q)}>
@@ -112,7 +118,7 @@
     outline-offset: 2px;
   }
   .trigger :global(svg) {
-    transition: transform 0.15s ease;
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .trigger.open :global(svg) {
     transform: rotate(180deg);

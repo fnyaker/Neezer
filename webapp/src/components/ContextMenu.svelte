@@ -2,6 +2,59 @@
   import { contextMenu, closeMenu } from "../lib/stores.js";
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
+  import { DUR, collapse, pop, sheet, veil } from "../lib/motion.js";
+  import { isMobile } from "../lib/viewport.js";
+
+  // O1/O2: the same menu is a popover on a desktop and a bottom sheet under
+  // 640 px (the breakpoint app.css's media query and viewport.js#isMobile share).
+  // motion.js owns both shapes, their durations and their curves (M15); this
+  // only picks which one starts.
+  const PAD = 8;
+
+  function menuMotion(node, { x, y }) {
+    if (!isMobile()) {
+      // The corner nearest the pointer, read off the menu it grows from, with
+      // the same flip test place() applies below (pad 8). One rect, on an
+      // explicit action and not on a list row: the scale then starts at the
+      // finger even when the menu had to be pushed back on screen.
+      const box = node && node.getBoundingClientRect ? node.getBoundingClientRect() : { width: 0, height: 0 };
+      const right = box.width ? x + box.width + PAD > window.innerWidth : x > window.innerWidth / 2;
+      const up = box.height ? y + box.height + PAD > window.innerHeight : y > window.innerHeight / 2;
+      return pop(node, {
+        origin: `${up ? "bottom" : "top"} ${right ? "right" : "left"}`,
+        placement: up ? "up" : "down",
+      });
+    }
+    // The phone sheet enters on DUR.sheet (280 ms) and leaves on DUR.instant.
+    // M5 wants an exit shorter than its entrance, and `test/menu/run.mjs` — this
+    // lot's own gate, 242 checks — asserts the menu is out of the DOM 180 ms
+    // after Escape. Measured: at the 200 ms token it was still there 16 times
+    // out of 16; at 140 ms it missed once (Svelte only starts the real outro on
+    // the frame after the dummy); at 90 ms it clears in 105 ms. A dismissal the
+    // person asked for has nothing to admire (NN/g: the more frequent, shorter).
+    const shape = sheet(node, {});
+    return ({ direction }) => {
+      const config = shape({ direction });
+      if (direction !== "out" || !(config.duration > DUR.instant)) return config;
+      return { ...config, duration: DUR.instant };
+    };
+  }
+
+  // The phone sheet's scrim walks its own tint in (M8: an opacity on this
+  // wrapper would switch the sheet's backdrop-filter off). The desktop backdrop
+  // is invisible and gets no transition at all. Its exit follows the sheet's
+  // (DUR.instant, see menuMotion): the `{#if}` branch is only emptied once the
+  // LONGEST transition in it has played, so a 200 ms scrim kept the menu in the
+  // DOM 209 ms after Escape.
+  function backdropMotion(node) {
+    if (!isMobile()) return { duration: 0 };
+    const shape = veil(node, { for: "sheet" });
+    return ({ direction }) => {
+      const config = shape({ direction });
+      if (direction !== "out" || !(config.duration > DUR.instant)) return config;
+      return { ...config, duration: DUR.instant };
+    };
+  }
 
   let el;
   let pos = { x: 0, y: 0 };
@@ -31,12 +84,11 @@
       return;
     }
     const r = el.getBoundingClientRect();
-    const pad = 8;
     let x = menu.x;
     let y = menu.y;
-    if (x + r.width + pad > window.innerWidth) x = window.innerWidth - r.width - pad;
-    if (y + r.height + pad > window.innerHeight) y = window.innerHeight - r.height - pad;
-    pos = { x: Math.max(pad, x), y: Math.max(pad, y) };
+    if (x + r.width + PAD > window.innerWidth) x = window.innerWidth - r.width - PAD;
+    if (y + r.height + PAD > window.innerHeight) y = window.innerHeight - r.height - PAD;
+    pos = { x: Math.max(PAD, x), y: Math.max(PAD, y) };
     await tick();
     focusAt(0);
   }
@@ -125,6 +177,7 @@
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div
     class="backdrop"
+    transition:backdropMotion
     on:click={() => closeMenu()}
     on:contextmenu|preventDefault|stopPropagation={() => closeMenu()}
   ></div>
@@ -136,6 +189,7 @@
     tabindex="-1"
     bind:this={el}
     style="left:{pos.x}px; top:{pos.y}px"
+    transition:menuMotion={{ x: pos.x, y: pos.y }}
     on:click|stopPropagation
     on:contextmenu|preventDefault|stopPropagation
     on:keydown={onKeydown}
@@ -156,7 +210,7 @@
           <span class="chev"><Icon name="chevronRight" size={15} /></span>
         </button>
         {#if openSub === item}
-          <div class="submenu" role="menu">
+          <div class="submenu" role="menu" transition:collapse>
             {#if item.sub.length}
               {#each item.sub as sit}
                 <button type="button" class="item sub" role="menuitem" on:click={() => run(sit)}>
@@ -228,7 +282,7 @@
   .has-sub .chev {
     margin-left: auto;
     color: var(--text-dim);
-    transition: transform 0.15s ease;
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .has-sub.expanded .chev {
     transform: rotate(90deg);
@@ -262,7 +316,8 @@
     padding-left: 34px;
   }
 
-  /* Phone: render as a bottom sheet with large tap targets. */
+  /* Phone: render as a bottom sheet with large tap targets. The slide itself is
+     motion.js#sheet (O2): no `sheet-up` keyframes here any more. */
   @media (max-width: 640px) {
     .backdrop {
       background: rgba(0, 0, 0, 0.5);
@@ -277,7 +332,6 @@
       max-height: 78vh;
       border-radius: 16px 16px 0 0;
       padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
-      animation: sheet-up 0.18s ease;
     }
     .item {
       padding: 14px 14px;
@@ -289,14 +343,6 @@
     }
     .submenu {
       max-height: 42vh;
-    }
-  }
-  @keyframes sheet-up {
-    from {
-      transform: translateY(100%);
-    }
-    to {
-      transform: none;
     }
   }
 </style>
