@@ -2041,7 +2041,9 @@ mod journey {
         cx.cx.run_until_parked();
         // The ROWS, not the request: a count on the stub says the question left,
         // and `Entrée`/`Menu` below act on the answer
-        // (`docs/agents/desktop.md`, D12 *Pitfalls*).
+        // (`docs/agents/desktop.md`, D12 *Pitfalls*). The menu is the same
+        // family — an app-level action delivered one effect flush later — so it
+        // is waited for on its own state too.
         stub::until(&runtime, cx, "the search's results", |cx| {
             !view.read(cx).list.is_empty()
         });
@@ -2052,12 +2054,10 @@ mod journey {
             "Entrée met le clavier sur les résultats"
         );
 
+        // The menu is opened by an APP-level handler that defers by one effect
+        // flush (D8a's pitfall), so the wait is on the menu itself.
         cx.simulate_keystrokes("menu");
-        cx.run_until_parked();
-        assert!(
-            cx.update(|_, cx| view.read(cx).menu.is_open()),
-            "Menu ouvre le menu de la ligne"
-        );
+        wait_menu(&runtime, cx, &view);
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         let current = cx.update(|_, cx| {
@@ -2072,6 +2072,19 @@ mod journey {
         stub.stop();
     }
 
+    /// The same for a menu: `Menu` is an app-level action delivered one effect
+    /// flush later (D8a's pitfall), so the state is what a test waits on.
+    fn wait_menu(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui_kit::Entity<Screen>,
+    ) {
+        let view = view.clone();
+        stub::until(runtime, cx, "the row's menu", move |cx| {
+            view.read(cx).menu.is_open()
+        });
+    }
+
     /// A right click opens the same menu on the row under the pointer, and the
     /// arrows/`Entrée` run its items: two `Bas` reach `Ajouter à la file`, which
     /// appends ONE title without starting anything — an outcome the list's own
@@ -2083,9 +2096,11 @@ mod journey {
         cx.simulate_input("kaya");
         cx.cx.dispatcher.advance_clock(Duration::from_millis(200));
         cx.cx.run_until_parked();
-        stub::until(&runtime, cx, "the search's answer", |_| {
-            stub.count("/api/search") == 1
+        let rows = view.clone();
+        stub::until(&runtime, cx, "the search's rows", move |cx| {
+            !rows.read(cx).list.rows().is_empty()
         });
+        assert_eq!(stub.count("/api/search"), 1, "one ask for the settled term");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
 
@@ -2119,11 +2134,7 @@ mod journey {
         let at = point(px(600.), px(row_y as f32));
         cx.simulate_mouse_move(at, None, Modifiers::default());
         cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
-        cx.run_until_parked();
-        assert!(
-            cx.update(|_, cx| view.read(cx).menu.is_open()),
-            "un clic droit ouvre le menu de la ligne"
-        );
+        wait_menu(&runtime, cx, &view);
         cx.simulate_keystrokes("down");
         cx.simulate_keystrokes("down");
         cx.simulate_keystrokes("enter");

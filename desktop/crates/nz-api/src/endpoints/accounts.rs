@@ -21,8 +21,11 @@ impl Api {
 
     /// `POST /api/me/accounts/deezer` — link a Deezer account with its ARL.
     ///
-    /// `mode` is `"shared"` (the server's account, cached metadata) or
-    /// `"personal"`; `None` lets the server choose its default.
+    /// `mode` is `"browser"` when the ARL came from Deezer's own login page, and
+    /// anything else (or `None`) for an ARL the person typed: the server only
+    /// tells those two apart (`neezer/webui/myaccounts.py#link_deezer`:
+    /// `mode = "browser" if data.get("mode") == "browser" else "arl"`). The
+    /// doc used to name `"shared"`/`"personal"`, which the server never read.
     pub async fn link_deezer(&self, arl: &str, mode: Option<&str>) -> Result<Value, ApiError> {
         let body = serde_json::json!({ "arl": arl, "mode": mode });
         self.send_json(Method::POST, "/me/accounts/deezer", &body)
@@ -36,10 +39,25 @@ impl Api {
             .await
     }
 
-    /// `PUT /api/me/accounts/<id>` — turn this account's automatic import on or
-    /// off.
-    pub async fn set_account_auto(&self, id: &str, auto: bool) -> Result<Value, ApiError> {
+    /// `PUT /api/me/accounts/<id>` — what this account imports automatically.
+    ///
+    /// The server requires `{"auto": {<kind>: bool}}` and answers `400 auto
+    /// invalide` for anything else (`neezer/webui/myaccounts.py#my_accounts_options`
+    /// checks `isinstance(auto, dict)`, then that every key is one of
+    /// `libraryimport.KINDS`). A bare boolean was refused with that `400`, which
+    /// is why this takes the kinds the account announced (`MyAccount::kinds`)
+    /// rather than one flag. A kind left out keeps its saved value.
+    pub async fn set_account_auto(
+        &self,
+        id: &str,
+        kinds: &[String],
+        on: bool,
+    ) -> Result<Value, ApiError> {
         let path = format!("/me/accounts/{}", encode(id));
+        let mut auto = serde_json::Map::new();
+        for kind in kinds {
+            auto.insert(kind.clone(), serde_json::Value::Bool(on));
+        }
         let body = serde_json::json!({ "auto": auto });
         self.send_json(Method::PUT, &path, &body).await
     }

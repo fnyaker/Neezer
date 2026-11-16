@@ -21,7 +21,6 @@ use gpui_kit::{
 };
 use gpui_omarchy::{ButtonVariant, button, input, switch};
 use nz_model::{AccessAccount, AccessProvider, Account, MyAccounts, Source, Sources};
-use reqwest::Method;
 
 use super::{
     Field, Load, Screen, card, card_title, eid, failed, hint, loading, text_field, value_line,
@@ -1189,11 +1188,10 @@ impl Screen {
         self.post_sources(serde_json::json!({ "enabled": { id: on } }), cx);
     }
 
-    /// The per-kind automatic import: the server wants `{"auto": {kind: bool}}`
-    /// and only accepts `libraryimport.KINDS` — `nz-api`'s
-    /// `set_account_auto(id, bool)` sends a bare boolean, which the route
-    /// refuses with a 400, so the correct body is sent through the client's own
-    /// `send` (documented in `desktop.md`, D14a).
+    /// The per-kind automatic import: the server takes `{"auto": {kind: bool}}`
+    /// and only accepts the kinds the account announced (`libraryimport.KINDS`),
+    /// which is what `Api::set_account_auto` now builds — the client used to post
+    /// a bare boolean and had to be bypassed through `Api::send`.
     fn set_account_auto(&mut self, id: String, on: bool, cx: &mut Context<Self>) {
         let Some(api) = self.api(cx) else {
             return;
@@ -1214,25 +1212,11 @@ impl Screen {
             self.fail("Ce compte n'annonce aucun import automatique.", cx);
             return;
         }
-        let mut auto = serde_json::Map::new();
-        for kind in kinds {
-            auto.insert(kind, serde_json::Value::Bool(on));
-        }
-        let body = serde_json::json!({ "auto": auto });
-        let path = format!("/me/accounts/{}", encode(&id));
         let reply = self.reply();
         let runtime = self.runtime(cx);
         self.saving = Some("auto");
         runtime.spawn(async move {
-            match api
-                .send::<serde_json::Value, serde_json::Value>(
-                    nz_api::Lane::User,
-                    Method::PUT,
-                    &path,
-                    Some(&body),
-                )
-                .await
-            {
+            match api.set_account_auto(&id, &kinds, on).await {
                 Ok(_) => {
                     let answer = api.my_accounts().await.map_err(cause);
                     reply.send(super::Reply::AccountsSaved(answer));

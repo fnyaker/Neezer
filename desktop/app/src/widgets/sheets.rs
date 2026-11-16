@@ -281,19 +281,16 @@ fn follow_download(
 }
 
 /// Whether an error is a version conflict — the list moved under us.
+/// Whether an error is a version conflict — the list moved under us.
 ///
-/// `nz-api` classifies EVERY `409` as `NotReady` (“nothing on disk yet, a writer
-/// is at work”, which is what a stream's ready probe answers), so a playlist's
-/// stale `version` arrives in the same shape as a stream that is still being
-/// produced. On the playlist mutations this lot makes, the ONLY `409` the server
-/// answers is the version conflict (`playlist.py`), so it is read as one — and
-/// the imprecision is written down for the client's owner: a `Conflict` variant
-/// carrying the body's `scope` would say it once, for every screen.
+/// `nz-api` now tells the two `409`s apart (`ApiError::Conflict` vs
+/// `ApiError::NotReady`, by the server's own `Retry-After`: only
+/// `_not_archived` sets it), so a playlist's stale `version` is matched as what
+/// it is and a stream still being produced is not mistaken for one. This
+/// predicate used to read EVERY `409` as a conflict, which was the best a screen
+/// could do before the client made the distinction.
 pub fn is_conflict(error: &ApiError) -> bool {
-    matches!(
-        error,
-        ApiError::Http { status: 409, .. } | ApiError::NotReady { .. }
-    )
+    matches!(error, ApiError::Conflict { .. })
 }
 
 /// Whether the server refused the action for want of rights (`403`).

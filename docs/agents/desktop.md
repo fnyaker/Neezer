@@ -7,7 +7,8 @@ player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
 **Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D16, M1,
-P1, T1 and V1 delivered; the rest planned.**
+P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`,
+`409` told apart, the `auto` payload, the output list); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -167,6 +168,13 @@ The SPA's `lib/api.js#req` is the contract; port it, do not reinvent it:
   already classified a Deezer failure; never re-ask.
 - `401` → session ended: the login screen, unless the body is `{"error":"remote ended"}` (remote
   control loan ended: `ApiError::RemoteEnded { restored }`).
+- `409` → **two different failures, told apart by the server's own header**: `409` +
+  `Retry-After` is `ApiError::NotReady { retry_after }` (nothing on disk yet, a writer is at
+  work — `neezer/webui/__init__.py#_not_archived`, the only 409 that sets the header), and a
+  `409` WITHOUT it is `ApiError::Conflict { message, code, scope }` (a playlist whose `version`
+  moved, a track that became available, a group that already exists, a finished file asked for a
+  `?start=` slice). Only the first is retried as it was; the second is a verdict, and the screen
+  re-reads what it was editing.
 - Timeouts: connect 4 s; an API answer 12 s; a stream with no byte for 15 s reconnects (byte range
   when the file is finished, `?start=<s>` otherwise, see *Streams*).
 - A screen that cannot load shows the cause and "Réessayer" (the `LoadFailed.svelte` equivalent),
@@ -573,6 +581,15 @@ Waves that can run in parallel (disjoint files):
   - `Service Unavailable` from `_admit_by_priority` and the stream's `{"queued": true}` are the same
     status: the difference is the lane. A User-lane 503 is an ordinary `Http { 503 }` the GET may
     retry; a background one becomes `Busy { retry_after }` and is repeated once only.
+  - **A `409` is not one failure.** The first version read every `409` as `NotReady` ("nothing on
+    disk yet"), which made a playlist's stale `version` arrive as "pas encore prêt" and be retried;
+    `neezer/webui` uses the status for both. The header is the whole difference — `_not_archived`
+    sets `Retry-After: 2`, and no other 409 does — so the classifier now returns `NotReady` only
+    with that header and `Conflict { message, code, scope }` without it. `code` matters: the
+    refusal sentences of Réglages → Utilisateurs (`last_admin`), Serveur (`unavailable`) and the
+    transcription routes are 409s, and they are read through `ApiError::code()`. Pinned against the
+    real server in `tests/bench.rs`: an unarchived seek is `NotReady { 2 }`, a `PATCH` with a stale
+    version is `Conflict { scope: "content" }`, **one request each**.
 
 ### D3 — `nz-cache` (delivered 2026-11-16)
 
@@ -817,6 +834,16 @@ Waves that can run in parallel (disjoint files):
   accepted only when they are plausible (`trim.rs`): ≤ 10 s at either end, a measured file length
   within 2.5 s of the track's metadata duration, an end at least 0.2 s inside the file, and a start
   worth a seek above 0.25 s. A trim ends a voice HARD; a *duration* does not (see the pitfalls).
+  **The app primes them ahead of the play** (`AppState::load`/`preload`, D14a's follow-up): the
+  playing track's bounds at USER priority, the next one's at PREFETCH, and the next one's VOICE is
+  built only once its answer has landed — the head is skipped when the voice is built, so a voice
+  built at 0 plays the silence the trim exists to remove. A failure is logged and forgotten (the
+  next play asks once more), and a `ready:false` is remembered for the session as "not measured".
+  Measured on a 5.5 s fixture (0.5 s of silence, 2 s of tone, 3 s of silence): untrimmed the first
+  sample is **0.0000** and the head window is silent; trimmed, the voice starts at **0.500 s**, the
+  first rendered window peaks at **0.2500**, and the track ends at **2.500 s** — `nz-audio`'s
+  `a_measured_head_and_tail_of_silence_are_both_skipped`, and the app's own chain in
+  `state::tests::the_servers_bounds_reach_the_engine_before_the_next_voice`.
 - **The rule, the gain**: the server's `/api/gain/<id>` value is Deezer's LOUDNESS, not a gain. The
   adjustment is `-(loudness + 18.4)` dB (deemix's ReplayGain transform) plus the level's offset
   (`off` 0, `low` +2, `medium` +5, `high` +8), clamped to −24…+12 dB; a track with no measurement is
@@ -1503,15 +1530,23 @@ Waves that can run in parallel (disjoint files):
   Compte 1, Assistance 2; Lecture, Apparence and Raccourcis ask nothing), **+1** for
   an admin's Découverte (`/releases/settings`) and **+2** for their Sources
   (`/settings`, `/deezer/status`), and **0** on a revisit.
-- **The rule, the sink list is the machine's**: `nz-audio` publishes no enumeration,
-  so the output card reads `pw-dump` (`media.class == "Audio/Sink"`, one
-  `node.description` each — exactly the string `probe` matches, so a chosen sink
-  survives a restart) on a blocking thread, sorted so a node's creation order never
-  moves a chip under the pointer, and falls back to the device in use when the tool
-  is absent. `set_output_device` hands the mixer to the new stream (nothing stops),
-  and « Sortie en cours » is re-read 400 ms later, once PipeWire has it. Measured:
-  `pw-dump` **29 ms median over 7 runs, 246 KB** of JSON (15.8–43.4 ms), one read per
-  visit.
+- **The rule, the sink list is the machine's, and `nz-audio` publishes it**:
+  `nz_audio::output_devices()` lists the first host of `HOSTS` that has anything —
+  PipeWire's own `node.description`s, or ALSA's devices on a box with no session
+  manager — so the names are exactly the strings `probe` opens by and a chosen sink
+  survives a restart. It replaced the card's own `pw-dump` subprocess: **2 real
+  sinks in 13.0 ms** instead of 29 ms and 246 KB of JSON, no parsing, and a headset
+  plugged in since the engine started is seen (a fresh host and registry snapshot).
+  Two filters are the difference between a chip row and a device dump (rule 5):
+  only the FIRST host that has devices is listed (PipeWire's two sinks beside
+  **nine** ALSA plumbing lines — `Discard all samples…` — was the measurement), and
+  the session manager's aliases (`default_sink`, `default_output`) are dropped
+  because the « Sortie par défaut » chip already IS that choice. The same list is
+  what `probe` walks, and `probe` was fixed with it: a NAMED device now matches on
+  any host before any host's default is used, so a sink only ALSA reports opens on
+  ALSA instead of silently becoming PipeWire's default. `set_output_device` hands
+  the mixer to the new stream (nothing stops — proven below), and « Sortie en
+  cours » is re-read 400 ms later, once PipeWire has it.
 - **Measured** (this machine, Rust 1.99.1; `cargo test -p neezer-desktop`):
   - **102 tests, 0 failed** for the app (D14b's included), 38 of them this lot's
     (33 rules + 5 headless UI).
@@ -1521,7 +1556,10 @@ Waves that can run in parallel (disjoint files):
     **2560×1600**, **1280×800** and **660×800** — the laptop with the 420 px queue
     panel open: the root is the window (±1 px), the body never leaves the window
     sideways, never grows past it vertically and never starts off-screen. 30 renders,
-    no panic.
+    no panic. **Every pane is walked too, not only the first** (Playback's three,
+    Sources' three): a card added to a pane is exactly what breaks the rule above,
+    and the follow-up's « Tronquer les silences » card is asserted that way at all
+    three sizes.
   - **keyboard**: the Son pane has **25 distinct tab stops** and the order comes back
     to its first one (walked with `Window::focus_next`, the call gpui-omarchy's Tab
     makes), Shift+Tab retraces it, and the search field narrows the strip to
@@ -1582,22 +1620,55 @@ Waves that can run in parallel (disjoint files):
     thread and panicked the deterministic scheduler. The read is now gated on an
     engine existing (`audio.is_some()`), which is also the honest rule: no output, no
     sinks to choose.
-- **Two seams outside this lot, reported and not shipped** (both live in `state.rs`,
+  - **A paused `OfflineSink` never consumes the mixer's commands.** `Engine::send`
+    pushes into a bounded `rtrb` queue that only `render` drains, so a test that
+    loads a voice and waits for `Started` without rendering never gets it (measured:
+    5 s of waiting, no event, the install command dropped after its 500 ms retry).
+    Pump the sink while waiting — which is also what makes the clock advance only
+    for audio that was really rendered.
+- **Two seams this lot reported, landed by the follow-up** (both live in `state.rs`,
   D7's file: a screen cannot reach a track change):
-  - **Tronquer les silences** needs `TrackMeta::edges` primed per track
-    (`GET /api/audio/edges/<id>?db=`), for the current track and the next, in
-    `AppState::load`/`preload`. The option is absent from the page rather than dead
-    (rule 2).
-  - **The saved sound is applied when this page is built** (and again if the engine
-    arrives while it is open); a session that never opens Réglages runs with the
-    engine's defaults. The fix is ~15 lines in `AppEvent::AudioReady`: read the same
-    `kv` keys and call the same `Values::apply`.
-- **A contract that was wrong**: `nz-api`'s `set_account_auto(id, bool)` posts
-  `{"auto": true}`, while `myaccounts.my_accounts_options` requires
-  `{"auto": {kind: bool}}` and answers `400 auto invalide`; the screen sends the right
-  body through `Api::send`. `link_deezer`'s doc names `"shared"`/`"personal"` while
-  the server only distinguishes `"browser"` from every other value (a typed ARL) —
-  harmless, but D2's note should say so.
+  - **Tronquer les silences** is now a real switch in the Transitions pane, with the
+    SPA's threshold slider (−70…−25 dB, default −45). `AppState::load` asks the
+    playing track's bounds at USER priority and `preload` the next one's at
+    PREFETCH, then sets `TrackMeta::edges` before a voice is built; the session
+    keeps 512 answers and asks once per (track, threshold). `set_trim` changes the
+    sound at once: off drops the bounds of what is playing, a new threshold throws
+    the old answers away. Measured: the two requests leave in that order, one ask
+    each, `db=-45`; the engine's meta for the next track is `{0.5, 2.5, 5.5}`; the
+    first rendered window peaks at **0.2500** and the clock starts at **0.500 s**
+    (details in *D6 — the rule, the trim*). The switch is a control that ACTS
+    (rule 2): one real click on it at 1280×800 turns the trim off, writes
+    `audio.trim = false` on the device and turns it back on — and the headless
+    layout walk asserts the card's geometry in the Transitions pane at
+    **2560×1600**, **1280×800** and **660×800**.
+  - **The saved sound** is applied at `AppEvent::AudioReady`, not when this page is
+    built: the EQ (10 bands), the normalisation level, the bass lift, mono, the
+    balance and the crossfade reach the engine at a cold start, and the saved
+    output device is opened too (`set_output_device`, whose failure is logged there
+    — the engine reports a real device that refuses through `EngineEvent::Error`).
+    Measured: an engine that starts `eq(0) = 0`, `Off` reads **6.0 dB on 31 Hz,
+    9.0 dB of bass, `Medium`, mono, −0.30** after the one event.
+  - **A switch stops cutting the music**: `changing_the_output_hands_the_mixer_over_and_the_music_keeps_playing`
+    (`nz-audio`) plays a real FLAC and switches sink mid-track — **0.597 s → 1.088 s**
+    across the handover, **0 underruns**, same track, no `Ended`/`Error`. On CI (no
+    sound server) the pump has no device to switch and the test asserts the honest
+    `Err` instead.
+  - **Counted**: the desktop workspace is **246 app tests + 6 child-process
+    benches**, **75 in `nz-audio`** (the head+tail trim and the sink handover are
+    two of them) and **38 in `nz-api`** (22 unit, 9 lanes, 3 real-server bench —
+    the `409` pair and the `auto` payload among them); **634 in the whole
+    workspace**. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
+    warnings` and `cargo test --workspace` clean.
+- **A contract that was wrong, fixed**: `nz-api`'s `set_account_auto(id, bool)`
+  posted `{"auto": true}`, while `myaccounts.my_accounts_options` requires
+  `{"auto": {kind: bool}}` and answers `400 auto invalide`. The function now takes
+  the kinds the account announced and builds that map, so the Sources screen calls
+  it instead of hand-building the body through `Api::send`. Pinned against
+  `perf_api.py`: the typed call is **200** with every announced kind at the value
+  asked, one kind alone leaves the others untouched, and the old bare boolean is
+  **400 `auto invalide`**. `link_deezer`'s doc was corrected too: the server only
+  distinguishes `"browser"` from every other value (a typed ARL).
 
 ### D14b — Réglages (admin sections) (delivered 2026-11-16)
 

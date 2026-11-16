@@ -848,9 +848,35 @@ impl Api {
         let retry_after =
             header_text(headers, RETRY_AFTER.as_str()).and_then(|value| value.parse::<u32>().ok());
         if status == 409 {
-            // "Nothing on disk yet, a writer is at work": wait, do not fail.
-            return ApiError::NotReady {
-                retry_after: retry_after.unwrap_or(2),
+            // `neezer/webui` uses 409 for two different things, and the header
+            // is what tells them apart: `_not_archived` ("nothing on disk yet, a
+            // writer is at work") sets `Retry-After`, and every other 409 — a
+            // playlist version that moved (`_playlist_conflict`), a track that
+            // became available, a group that already exists, a finished file
+            // asked for a `?start=` slice — does not. The first is a wait, the
+            // second is a verdict: reading them the same way made a playlist
+            // screen retry a stale order and called a real conflict "pas encore
+            // prêt".
+            return match retry_after {
+                Some(retry_after) => ApiError::NotReady { retry_after },
+                None => {
+                    let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+                    ApiError::Conflict {
+                        message: parsed
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("HTTP {status}")),
+                        code: parsed
+                            .get("code")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        scope: parsed
+                            .get("scope")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                    }
+                }
             };
         }
         if lane.is_background()
