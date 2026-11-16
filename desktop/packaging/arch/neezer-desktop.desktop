@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Neezer
+GenericName=Lecteur de musique
+Comment=Votre musique et vos podcasts, hors ligne aussi
+Exec=neezer-desktop
+Icon=neezer-desktop
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=musique;podcast;radio;deezer;subsonic;
+StartupWMClass=neezer-desktop
