@@ -51,7 +51,10 @@ def load_tool():
 
 class PerfLibraryTestCase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="nsperf-test-")
+        # NOT prefixed `nsperf-`: this directory is the TMPDIR its benches run
+        # in, and another worker's bench sweeping the machine's /tmp must never
+        # mistake it for a library it may delete.
+        self.tmp = tempfile.mkdtemp(prefix="perf-api-test-")
         self.children = []
 
     def tearDown(self):
