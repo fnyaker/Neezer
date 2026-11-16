@@ -1,0 +1,21 @@
+# The GPUI shell: the window, the screens, the keymap, the wiring.
+# Owned by D7 and the screen lots (docs/agents/desktop.md). D0 opens one empty
+# omarchy window — the smallest thing that still proves the whole GPU stack
+# (gpui-pre + wgpu/Vulkan + gpui-kit + gpui-omarchy) builds and paints here.
+
+[package]
+name = "neezer-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "neezer-desktop"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = { workspace = true }
+gpui-omarchy = { workspace = true }

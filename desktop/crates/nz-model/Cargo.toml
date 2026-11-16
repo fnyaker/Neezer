@@ -1,0 +1,16 @@
+# The server's JSON as Rust types: serde, tolerant. Owns the ids, the tracks,
+# albums, artists, playlists, podcasts, transcripts and admin payloads.
+# No I/O, no network, no database (docs/agents/desktop.md, "Workspace").
+
+[package]
+name = "nz-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

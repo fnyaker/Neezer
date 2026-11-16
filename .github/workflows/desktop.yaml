@@ -1,0 +1,245 @@
+name: Desktop
+
+# The GPUI desktop app's workspace (desktop/): format, lints, tests, a release
+# build of both binaries (neezer-desktop, neezer-transcribe) and a real
+# headless launch of its window under Xvfb.
+#
+# The system dependency list IS the point of this workflow. A fresh Ubuntu has
+# none of what GPUI (xkbcommon, Wayland/X11, fontconfig, freetype, Vulkan),
+# cpal's PipeWire host (libpipewire, ALSA) and whisper.cpp's Vulkan backend
+# (the Vulkan HEADERS, not only the loader, plus glslc) need. Zed's
+# `script/linux` is the reference for the GPUI side; the Vulkan-headers recipe
+# is the whisper.cpp build script's. Getting this wrong is cheap to fix here
+# and expensive on a person's laptop.
+#
+# Paths: the app links the repository's Rust crates (webapp/rhythm,
+# webapp/appcore, android/nscore), and it speaks the server's /api surface, so
+# a change there re-runs this workflow too.
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - desktop/**
+      - webapp/rhythm/**
+      - webapp/appcore/**
+      - android/nscore/**
+      - neezer/webui/**
+      - neezer/api/**
+      - neezer/transcribe/**
+      - tools/perf_api.py
+      - .github/workflows/desktop.yaml
+  pull_request:
+    paths:
+      - desktop/**
+      - webapp/rhythm/**
+      - webapp/appcore/**
+      - android/nscore/**
+      - neezer/webui/**
+      - neezer/api/**
+      - neezer/transcribe/**
+      - tools/perf_api.py
+      - .github/workflows/desktop.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Deterministic lints: `clippy -D warnings` against a moving `stable` goes red
+  # on a toolchain release instead of on a change. Bump deliberately.
+  RUST_TOOLCHAIN: "1.99.1"
+  # Everything GPUI, cpal's PipeWire host, whisper.cpp's Vulkan backend and the
+  # Rust glue around them link against (Zed's script/linux, plus PipeWire, ALSA
+  # and D-Bus). One list, used by every job that builds anything.
+  APT_DEPS: >
+    build-essential clang cmake pkg-config
+    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev
+    libvulkan-dev glslc mesa-vulkan-drivers
+    libasound2-dev libpipewire-0.3-dev libdbus-1-dev
+    libfontconfig-dev libfreetype-dev libglib2.0-dev libzstd-dev libssl-dev
+    xvfb xauth
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_DEPS
+      # whisper.cpp's CMake build needs the Vulkan HEADERS on the include path;
+      # on Linux `whisper-rs-sys` does not read VULKAN_SDK itself, CMake's
+      # `FindVulkan` does. CI keeps them in $RUNNER_TEMP so no system package
+      # is required (Arch's `vulkan-headers` + `shaderc` are the local
+      # equivalents).
+      - name: Vulkan headers for whisper.cpp
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \
+            https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.333.tar.gz
+          mkdir -p "$RUNNER_TEMP/vk"
+          tar xzf "$RUNNER_TEMP/vk.tar.gz" -C "$RUNNER_TEMP/vk" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/vk/lib"
+          ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
+            "$RUNNER_TEMP/vk/lib/libvulkan.so"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: cargo test + window
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_DEPS
+      - name: Vulkan headers for whisper.cpp
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \
+            https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.333.tar.gz
+          mkdir -p "$RUNNER_TEMP/vk"
+          tar xzf "$RUNNER_TEMP/vk.tar.gz" -C "$RUNNER_TEMP/vk" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/vk/lib"
+          ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
+            "$RUNNER_TEMP/vk/lib/libvulkan.so"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Test the workspace
+        run: cargo test --workspace --locked
+      # The window is the one thing a unit test cannot prove: it opens a real
+      # GPU surface. Xvfb + lavapipe (mesa-vulkan-drivers) give it one, and the
+      # binary prints the time to the first painted frame before quitting.
+      - name: The window opens and quits on its first frame
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            ./target/debug/neezer-desktop --self-test-quit-after-first-frame \
+            | tee "$RUNNER_TEMP/first-frame.log"
+          grep -E '^first_frame_ms=[0-9]+$' "$RUNNER_TEMP/first-frame.log"
+      - name: The transcription binary reports what it links
+        run: ./target/debug/neezer-transcribe --version
+
+  build:
+    name: release binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_DEPS
+      - name: Vulkan headers for whisper.cpp
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \
+            https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.333.tar.gz
+          mkdir -p "$RUNNER_TEMP/vk"
+          tar xzf "$RUNNER_TEMP/vk.tar.gz" -C "$RUNNER_TEMP/vk" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/vk/lib"
+          ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
+            "$RUNNER_TEMP/vk/lib/libvulkan.so"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Build the two binaries
+        run: cargo build --release --locked --workspace
+      - name: Binary sizes
+        run: |
+          du -h target/release/neezer-desktop target/release/neezer-transcribe
+      - name: Upload the binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-desktop-linux-x86_64
+          path: |
+            desktop/target/release/neezer-desktop
+            desktop/target/release/neezer-transcribe
+          if-no-files-found: error
+          retention-days: 7
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # RustSec advisories against the committed Cargo.lock: the desktop app
+      # ships its whole dependency graph, so a finding is a dependency to bump,
+      # not a warning to silence.
+      - name: Audit dependencies
+        run: cargo audit

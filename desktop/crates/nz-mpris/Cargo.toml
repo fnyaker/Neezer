@@ -1,0 +1,16 @@
+# The MPRIS 2.2 server the bar's player widget and the media keys drive.
+# Owned by M1 (docs/agents/desktop.md).
+
+[package]
+name = "nz-mpris"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+mpris-server = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

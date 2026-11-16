@@ -1,0 +1,14 @@
+# The visualiser's geometry: bars and the oscilloscope, computed from the same
+# analyser the web app uses. Owned by V1 (docs/agents/desktop.md). D0 leaves it
+# empty: V1 adds the `rhythm` path dependency when it builds the geometry.
+
+[package]
+name = "nz-viz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
