@@ -30,7 +30,6 @@ use gpui_kit::{
     Bounds, Context, Entity, Hsla, InteractiveElement as _, IntoElement, ParentElement, Render,
     SharedString, Styled, Subscription, Task, Window, canvas, div, fill, px, rems,
 };
-use nz_viz::MAX_COLS;
 use nz_viz::palette::Rgb;
 
 use crate::screens::settings::viz::{
@@ -328,6 +327,9 @@ impl Render for Scope {
             move |bounds, _window, _cx| bounds.size,
             move |bounds, _size, window, cx| {
                 let started = Instant::now();
+                // Même règle que les barres : les quadrilatères sont en
+                // coordonnées de fenêtre, l'origine de l'élément s'ajoute.
+                let origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
                 let width = f32::from(bounds.size.width);
                 let height = f32::from(bounds.size.height);
                 if width < 16. || height < 16. {
@@ -337,7 +339,11 @@ impl Render for Scope {
                 let Some(viz) = &state.viz else {
                     return;
                 };
-                let (rect_a, rect_b) = lanes(width, height, prefs.orientation);
+                let (mut rect_a, mut rect_b) = lanes(width, height, prefs.orientation);
+                for rect in [&mut rect_a, &mut rect_b] {
+                    rect.x += origin.0;
+                    rect.y += origin.1;
+                }
                 let (Some(lane_a), Some(lane_b)) = (
                     Lane::of(rect_a, prefs.orientation),
                     Lane::of(rect_b, prefs.orientation),
@@ -456,7 +462,7 @@ impl Render for Scope {
                     }
                 });
                 log.borrow_mut()
-                    .note("scope", started.elapsed().as_secs_f32() * 1e3);
+                    .note("scope", started.elapsed().as_secs_f32() * 1e6);
             },
         )
         .size_full();
@@ -489,6 +495,8 @@ impl Render for Scope {
 
 #[cfg(test)]
 mod tests {
+    use nz_viz::MAX_COLS;
+
     use super::*;
 
     #[test]
@@ -544,7 +552,7 @@ mod tests {
             Rect {
                 x: 0.,
                 y: 0.,
-                w: 60.,
+                w: 20.,
                 h: 60.,
             },
             Orientation::Horizontal,
@@ -552,8 +560,8 @@ mod tests {
         .expect("a lane");
         assert_eq!(
             (small.len.round() as usize).clamp(32, SCOPE_POINTS),
-            49,
-            "une voie de 60 px garde 49 colonnes (une par pixel de base de temps)"
+            32,
+            "une voie de 12 px de base de temps garde le plancher de 32 colonnes"
         );
     }
 }

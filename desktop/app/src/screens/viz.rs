@@ -284,6 +284,13 @@ impl Host for Screen {
     }
 }
 
+/// Ce que l'écran dit quand il n'y a rien à voir : plein cadre pour ce qui
+/// manque (aucun titre, analyse indisponible), discret en bas pour une pause.
+enum Notice {
+    Full(&'static str, &'static str),
+    Quiet(&'static str, &'static str),
+}
+
 /// La carte du titre, en bas à gauche : la pochette, le titre, l'artiste, et
 /// les touches du visualiseur.
 fn now_card(
@@ -563,17 +570,20 @@ impl Render for Screen {
         // Ce que l'écran dit quand il n'y a rien à voir (règle 3) : la cause,
         // pas un spinner.
         let notice = if !has_track {
-            Some((
+            Some(Notice::Full(
                 "Rien en lecture",
                 "Lancez un titre : la scène suit ce que vous entendez, pas une horloge.",
             ))
         } else if !has_analysis {
-            Some((
+            Some(Notice::Full(
                 "Analyse indisponible",
                 "La sortie audio n'est pas ouverte : aucun échantillon n'arrive à l'analyseur.",
             ))
         } else if !playing {
-            Some(("En pause", "L'animation reprend dès que la lecture repart."))
+            Some(Notice::Quiet(
+                "En pause",
+                "L'animation reprend dès que la lecture repart.",
+            ))
         } else {
             None
         };
@@ -593,35 +603,67 @@ impl Render for Screen {
             }))
             .child(div().absolute().inset_0().p(rems(0.5)).child(scene));
 
-        if let Some((title, cause)) = notice {
-            stage = stage.child(
-                div()
-                    .id("viz-notice")
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(rems(0.5))
-                    .child(
-                        div()
-                            .text_size(rems(1.5))
-                            .font_weight(gpui_kit::FontWeight::BOLD)
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .max_w(rems(38.))
-                            .text_center()
-                            .text_size(rems(0.8125))
-                            .text_color(theme::secondary(cx))
-                            .child(cause),
-                    ),
-            );
+        match notice {
+            Some(Notice::Full(title, cause)) => {
+                stage = stage.child(
+                    div()
+                        .id("viz-notice")
+                        .debug_selector(|| "viz-notice".to_owned())
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(rems(0.5))
+                        .child(
+                            div()
+                                .text_size(rems(1.5))
+                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .max_w(rems(38.))
+                                .text_center()
+                                .text_size(rems(0.8125))
+                                .text_color(theme::secondary(cx))
+                                .child(cause),
+                        ),
+                );
+            }
+            Some(Notice::Quiet(title, cause)) => {
+                stage = stage.child(
+                    div()
+                        .id("viz-notice")
+                        .debug_selector(|| "viz-notice".to_owned())
+                        .absolute()
+                        .bottom(rems(1.5))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(rems(0.125))
+                        .child(
+                            div()
+                                .text_size(rems(0.8125))
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .text_color(theme::text(cx).opacity(0.75))
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(rems(0.6875))
+                                .text_color(theme::secondary(cx).opacity(0.8))
+                                .child(cause),
+                        ),
+                );
+            }
+            None => {}
         }
 
         // La carte et la barre : visibles au premier geste, effacées après

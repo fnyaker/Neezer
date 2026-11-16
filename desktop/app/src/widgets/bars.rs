@@ -220,6 +220,10 @@ impl Render for Bars {
             move |bounds, _window, _cx| bounds.size,
             move |bounds, _size, window, cx| {
                 let started = Instant::now();
+                // `paint_quad` peint en coordonnées de FENÊTRE : sans l'origine
+                // de l'élément, la rangée se dessinerait au coin de la fenêtre,
+                // par-dessus la barre latérale (vu à la première exécution).
+                let origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
                 let width = f32::from(bounds.size.width);
                 let height = f32::from(bounds.size.height);
                 if width < 8. || height < 8. {
@@ -276,14 +280,14 @@ impl Render for Bars {
                         };
                         let min_half = half_w * (1. + 0.46 * (0.5 + 0.5 * swing) * rest);
                         let half = min_half.max(v * reach);
-                        let x = i as f32 * bw + (bw - half_w * 2.) / 2.;
+                        let x = origin.0 + i as f32 * bw + (bw - half_w * 2.) / 2.;
                         let colour = colour_at(&stops, t);
                         let peak = peaks.get(i).copied().unwrap_or(0.) * reach * loud;
                         if layout == Layout::Full && !eco && peak > half + 1.5 {
                             window.paint_quad(
                                 fill(
                                     Bounds {
-                                        origin: gpui_kit::point(px(x), px(axis - peak)),
+                                        origin: gpui_kit::point(px(x), px(origin.1 + axis - peak)),
                                         size: gpui_kit::size(px(half_w * 2.), px(peak * 2.)),
                                     },
                                     hsla(colour, 0.14),
@@ -292,7 +296,7 @@ impl Render for Bars {
                             );
                         }
                         let rect = Bounds {
-                            origin: gpui_kit::point(px(x), px(axis - half)),
+                            origin: gpui_kit::point(px(x), px(origin.1 + axis - half)),
                             size: gpui_kit::size(px(half_w * 2.), px(half * 2.)),
                         };
                         window.paint_quad(fill(rect, hsla(colour, 0.92)).corner_radii(px(half_w)));
@@ -311,7 +315,7 @@ impl Render for Bars {
                                     Bounds {
                                         origin: gpui_kit::point(
                                             px(x + inset),
-                                            px(axis - half + inset),
+                                            px(origin.1 + axis - half + inset),
                                         ),
                                         size: gpui_kit::size(px(inner_w), px(inner_h)),
                                     },
@@ -325,7 +329,10 @@ impl Render for Bars {
                         window.paint_quad(
                             fill(
                                 Bounds {
-                                    origin: gpui_kit::point(px(x + inset), px(axis - core_h)),
+                                    origin: gpui_kit::point(
+                                        px(x + inset),
+                                        px(origin.1 + axis - core_h),
+                                    ),
                                     size: gpui_kit::size(
                                         px((half_w * 2. - inset * 2.).max(0.6)),
                                         px(core_h * 2.),
@@ -338,7 +345,7 @@ impl Render for Bars {
                     }
                 });
                 log.borrow_mut()
-                    .note("bars", started.elapsed().as_secs_f32() * 1e3);
+                    .note("bars", started.elapsed().as_secs_f32() * 1e6);
             },
         )
         .size_full();
