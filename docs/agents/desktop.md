@@ -1086,7 +1086,11 @@ Waves that can run in parallel (disjoint files):
 - **CI**: the `test` job fetches `ggml-tiny.bin` and `jfk.wav` (at the `v1.8.3` tag this build
   vendors) into an `actions/cache` keyed by their SHA-256, verifies both with `sha256sum -c`, and
   runs the suite with `NZ_REQUIRE_VULKAN=1` so the Vulkan half is proven on `lavapipe` — the
-  software device `mesa-vulkan-drivers` (already in `APT_DEPS`) provides, not skipped.
+  software device `mesa-vulkan-drivers` (already in `APT_DEPS`) provides, not skipped. **`lavapipe`
+  needs `GGML_VK_VISIBLE_DEVICES=0`**: ggml's Vulkan backend keeps only `DISCRETE_GPU` and
+  `INTEGRATED_GPU` devices, and lavapipe reports `CPU`, so with the driver installed and working the
+  probe still answered `no_vulkan_device` on the runner until the variable named device 0
+  (measured in CI, run 43897207709).
 - **Pitfalls found by building**: the shader-cache trap below hit again — an aborted first build
   (no `VULKAN_SDK`) left `whisper-rs-sys`'s `OUT_DIR` in a state where the next build *compiles*
   and then fails at link on `get_rows_iq2_xxs_data`; `cargo clean -p whisper-rs-sys` with

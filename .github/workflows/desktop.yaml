@@ -214,6 +214,13 @@ jobs:
           # Fail the run when the runner has no Vulkan device at all: the point
           # of this job is that `lavapipe` transcribes, not that the CPU does.
           NZ_REQUIRE_VULKAN: "1"
+          # ggml's Vulkan backend only keeps `DISCRETE_GPU` and `INTEGRATED_GPU`
+          # devices; `lavapipe` reports `CPU`, so without this it is invisible
+          # and the probe answers `no_vulkan_device` on a runner where the
+          # software device is installed and works. `GGML_VK_VISIBLE_DEVICES`
+          # names the device index unconditionally (ggml-vulkan.cpp, the
+          # `CUDA_VISIBLE_DEVICES` emulation).
+          GGML_VK_VISIBLE_DEVICES: "0"
       # `nz-model` is proven against the REAL server's answers, not a sample: the
       # committed fixtures under `crates/nz-model/tests/fixtures/` are regenerated
       # here from THIS commit's server, and the same test then reads what was just

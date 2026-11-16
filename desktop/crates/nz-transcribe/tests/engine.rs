@@ -366,7 +366,16 @@ fn the_engine_child_transcribes_the_same_chunk_as_the_file_command() {
         nz_transcribe::segments::OVERLAP_MS,
     );
     assert_eq!(from_child, from_file, "{}", text(&chunk));
-    assert_eq!(from_child.len(), 2, "{from_child:?}");
+    // The line split is the model's (`ggml-tiny` says the whole sentence in one
+    // line where `ggml-base` says two): what must hold is the text.
+    assert!(!from_child.is_empty());
+    assert!(
+        from_child.iter().any(|segment| segment
+            .text
+            .to_lowercase()
+            .contains("ask not what your country")),
+        "{from_child:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
