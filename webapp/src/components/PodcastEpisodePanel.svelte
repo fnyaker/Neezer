@@ -16,6 +16,7 @@
   import Icon from "./Icon.svelte";
   import { isAdmin } from "../lib/stores.js";
   import { CAN_ADMIN } from "../lib/remote/mode.js";
+  import { animate, DUR, EASE_CSS } from "../lib/motion.js";
 
   export let episode = null;
   export let position = 0;
@@ -28,6 +29,8 @@
 
   let root = null;
   let descEl = null;
+  let chaptersPanel = null;
+  let transcriptPanel = null;
   let descOpen = false;
   let descCan = false;
   let lastEp = "";
@@ -120,7 +123,26 @@
   function choose(next) {
     if (next === "transcript" && !canTranscript) return;
     if (next === "chapters" && !hasChapters) return;
+    if (next === view) return;
     view = next;
+    // I2 (M7): the panel that replaces the other one enters with a 140 ms
+    // opacity fade, no translate — the two panels differ in height. Both are
+    // kept mounted (the transcript must not refetch), so the fade is played on
+    // the panel that is now shown rather than by remounting it.
+    tick().then(() => reveal(next === "chapters" ? chaptersPanel : transcriptPanel));
+  }
+
+  /** A `fadeIn` on an element that is already in the DOM (M7, I2/I4). */
+  function reveal(el) {
+    if (!el) return;
+    animate(el, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+  }
+
+  function toggleDesc(el) {
+    descOpen = !descOpen;
+    // I4: the clamp lifts at once (the block can be taller than M10's 400 px,
+    // so no height walk) and the text fades back in.
+    if (descOpen) reveal(el);
   }
 
   function onTabsKey(event) {
@@ -183,7 +205,7 @@
         <div class="podcast-h"><h2>Transcription</h2></div>
       {/if}
 
-      <div class="seg-panel" id="tp-panel" role="tabpanel" hidden={both && view !== "chapters"}>
+      <div class="seg-panel" id="tp-panel" role="tabpanel" bind:this={chaptersPanel} hidden={both && view !== "chapters"}>
       {#if showChapters}
         <div class="podcast-block" aria-busy={loading}>
           <div class="podcast-h">
@@ -266,7 +288,7 @@
       </div>
 
       {#if canTranscript && transcriptMounted}
-        <div class="seg-panel" id="tp-transcript" role="tabpanel" hidden={both ? view !== "transcript" : false}>
+        <div class="seg-panel" id="tp-transcript" role="tabpanel" bind:this={transcriptPanel} hidden={both ? view !== "transcript" : false}>
           {#key segToken}
             <TranscriptPanel
               {episode}
@@ -296,10 +318,10 @@
             class="more-btn"
             aria-expanded={descOpen}
             aria-controls={descId}
-            on:click={() => (descOpen = !descOpen)}
+            on:click={() => toggleDesc(descEl)}
           >
             {descOpen ? "Réduire" : "Lire la suite"}
-            <Icon name={descOpen ? "chevronUp" : "chevronDown"} size={15} />
+            <span class="chev" class:rot={descOpen}><Icon name="chevronDown" size={15} /></span>
           </button>
         {/if}
       </section>
@@ -374,6 +396,11 @@
     font-size: 0.84rem;
     font-weight: 650;
     white-space: nowrap;
+    /* I3: the active tab is a pill, not an underline, so the colour IS the
+       indicator — --dur-instant, never a sliding box. */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .seg-tabs button.on {
     background: var(--s1);
@@ -574,6 +601,20 @@
   .more-btn:focus-visible {
     outline: 2px solid var(--ac-text);
     outline-offset: 2px;
+  }
+  /* I4: the disclosure chevron turns (a chevronDown rotated 180° IS the
+     chevronUp it used to mount), --dur-base on EASE.standard. */
+  .chev {
+    display: inline-flex;
+    transition: transform var(--dur-base) var(--ease-standard);
+  }
+  .chev.rot {
+    transform: rotate(180deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chev {
+      transition: none;
+    }
   }
 
   .infos {

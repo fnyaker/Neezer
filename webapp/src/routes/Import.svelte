@@ -18,6 +18,7 @@
   import TrackBrowser from "../components/TrackBrowser.svelte";
   import Icon from "../components/Icon.svelte";
   import VirtualList from "../components/VirtualList.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let params = {};
 
@@ -167,7 +168,7 @@
 </script>
 
 {#if !job || job.state === "error" || error}
-  <div class="intro fade-in">
+  <div class="intro" in:fadeIn>
     <h1>Importer une playlist</h1>
     <p class="muted lead">
       Colle le lien d'une playlist qu'on t'a partagée : Deezer, Spotify, YouTube ou Apple Music. Chaque titre est
@@ -191,7 +192,7 @@
       <p class="detected muted">Lien {recognised.label} reconnu.</p>
     {/if}
     {#if error || job?.state === "error"}
-      <p class="err" role="alert"><Icon name="alert" size={16} /> {error || job.error}</p>
+      <p class="err" role="alert" in:fadeIn><Icon name="alert" size={16} /> {error || job.error}</p>
     {/if}
     <ul class="sources muted">
       <li>Deezer</li>
@@ -201,7 +202,7 @@
     </ul>
   </div>
 {:else if RUNNING.has(job.state) && job.state !== "saving"}
-  <div class="working fade-in" aria-live="polite">
+  <div class="working" in:fadeIn aria-live="polite">
     {#if job.cover}
       <div class="wart"><Cover src={job.cover} alt="" kind="playlist" eager /></div>
     {/if}
@@ -210,7 +211,7 @@
       <h1>{job.name || "Lecture de la playlist…"}</h1>
       {#if job.state === "reading"}
         <p class="muted">Lecture de la playlist…</p>
-        <div class="track indeterminate"><span></span></div>
+        <div class="track indeterminate"><span data-motion="status"></span></div>
       {:else}
         <p class="muted">
           Recherche des titres · {job.done} / {job.total}
@@ -221,7 +222,7 @@
     </div>
   </div>
 {:else}
-  <div class="fade-in">
+  <div in:fadeIn>
     <GradientHeader cover={job.cover}>
       <div class="art"><Cover src={job.cover || tracks[0]?.album?.cover} alt={job.name} kind="playlist" eager /></div>
       <div class="meta">
@@ -275,7 +276,7 @@
       </p>
     {/if}
     {#if job.error && job.state !== "error"}
-      <p class="err small"><Icon name="info" size={15} /> {job.error}</p>
+      <p class="err small" in:fadeIn><Icon name="info" size={15} /> {job.error}</p>
     {/if}
     {#if job.truncated}
       <p class="note muted">Seuls les {items.length} premiers titres de la playlist ont pu être lus.</p>
@@ -437,7 +438,8 @@
     height: 100%;
     background: var(--accent);
     transform-origin: left;
-    transition: transform 0.35s ease;
+    /* I8: a job's progress is a scaleX on --dur-base linear, never a width. */
+    transition: transform var(--dur-base) linear;
   }
   .track.indeterminate span {
     width: 35%;
@@ -452,6 +454,9 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
+    .track span {
+      transition: none;
+    }
     .track.indeterminate span {
       animation: none;
       width: 100%;

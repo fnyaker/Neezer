@@ -14,7 +14,8 @@
   import { downloadTrack } from "../lib/offline.js";
   import { isMobile } from "../lib/viewport.js";
   import { duration as fmtDuration } from "../lib/format.js";
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
+  import { animate, fadeIn, DUR, EASE_CSS } from "../lib/motion.js";
   import {
     batchOptions,
     isActiveStatus,
@@ -583,24 +584,40 @@
     }
   }
 
-  function toggleExpand(eid) {
+  function toggleExpand(eid, el) {
     const n = new Set(expanded);
-    n.has(eid) ? n.delete(eid) : n.add(eid);
+    const opening = !n.has(eid);
+    if (opening) n.add(eid);
+    else n.delete(eid);
     expanded = n;
+    // I4: the clamp lifts at once (a description can be taller than M10's
+    // 400 px) and the text fades back in; no height walk above a long list.
+    if (opening) reveal(el);
   }
 
-  function toggleChapters(ep) {
+  /** A `fadeIn` on an element already in the DOM (M7, I4). */
+  function reveal(el) {
+    if (!el) return;
+    animate(el, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+  }
+
+  async function toggleChapters(ep) {
     const key = trackKey(ep);
     const next = new Set(chapterOpen);
     if (next.has(key)) {
       next.delete(key);
-    } else {
-      next.add(key);
-      chapterCap = { ...chapterCap, [key]: isMobile() ? 4 : 8 };
-      chapterPos = { ...chapterPos, [key]: $currentId === key ? get(player).currentTime : 0 };
-      loadChapters(ep.id);
+      chapterOpen = next;
+      return;
     }
+    next.add(key);
+    chapterCap = { ...chapterCap, [key]: isMobile() ? 4 : 8 };
+    chapterPos = { ...chapterPos, [key]: $currentId === key ? get(player).currentTime : 0 };
     chapterOpen = next;
+    loadChapters(ep.id);
+    // I4: the chapter list appears instantly (M10: up to 8 rows above a long
+    // episode list is not a small block) and fades in; the chevron turns.
+    await tick();
+    reveal(document.getElementById("echapters-" + key));
   }
 
   function seekChapter(ep, i, start) {
@@ -658,7 +675,7 @@
 {:else if !data}
   <LoadFailed error={loadError} notFound="Podcast introuvable." on:retry={() => load(id)} />
 {:else}
-  <div class="fade-in">
+  <div in:fadeIn>
     <GradientHeader cover={data.cover}>
       <div class="art"><Cover src={data.cover} alt={data.title} kind="podcast" fallbackId={data.id} eager /></div>
       <div class="meta">
@@ -720,7 +737,7 @@
           </span>
           {#if data.auto_archive && data.episode_count}
             <span class="auto-bar" aria-hidden="true">
-              <span style={`width:${Math.min(100, (data.archived_count / data.episode_count) * 100)}%`}></span>
+              <span style={`transform:scaleX(${Math.min(1, data.archived_count / data.episode_count)})`}></span>
             </span>
           {/if}
         </span>
@@ -835,7 +852,7 @@
               aria-valuemax="100"
               aria-valuenow={pct}
             >
-              <span style={`width:${pct}%`}></span>
+              <span style={`transform:scaleX(${pct / 100})`}></span>
             </span>
             <span class="tr-pct">{pct} %</span>
             <button type="button" class="tr-btn tiny" on:click={() => stopTranscript(activeTranscript)}>
@@ -951,7 +968,7 @@
                   type="button"
                   class="edesc"
                   class:clamped={!expanded.has(trackKey(ep))}
-                  on:click={() => toggleExpand(trackKey(ep))}
+                  on:click={(e) => toggleExpand(trackKey(ep), e.currentTarget)}
                 >
                   {ep.description}
                 </button>
@@ -1188,7 +1205,9 @@
     display: block;
     height: 100%;
     background: var(--accent);
-    transition: width 0.4s ease;
+    transform-origin: left;
+    /* I8: a job's progress is a scaleX on --dur-base linear, never a width. */
+    transition: transform var(--dur-base) linear;
   }
   .sw {
     flex: none;
@@ -1198,7 +1217,9 @@
     background: var(--s2);
     border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .sw.on {
     background: var(--btn);
@@ -1212,7 +1233,9 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease, background 0.15s ease;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .sw.on .knob {
     background: var(--onbtn);
@@ -1422,7 +1445,7 @@
   }
   .chev {
     display: inline-flex;
-    transition: transform 0.15s ease;
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .chev.rot {
     transform: rotate(180deg);
@@ -1494,6 +1517,13 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .chev {
+      transition: none;
+    }
+    /* M14: the switch's thumb is a displacement, and a job's bar grows by a
+       scale — both land as cuts under reduced motion. */
+    .sw,
+    .knob,
+    .auto-bar span {
       transition: none;
     }
   }
@@ -1786,6 +1816,9 @@
     height: 100%;
     border-radius: 999px;
     background: var(--accent);
+    transform-origin: left;
+    /* I8: the transcription job's progress, on --dur-base linear. */
+    transition: transform var(--dur-base) linear;
   }
   .tr-pct {
     flex: none;

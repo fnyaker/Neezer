@@ -160,6 +160,7 @@
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import ReleaseCard from "../components/ReleaseCard.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   let items = [];
   let tracks = [];
@@ -350,7 +351,7 @@
   </div>
 
   {#if cards.length}
-    <div class="shelves-wrap">
+    <div class="shelves-wrap" in:fadeIn>
       <div class="shelves" class:two={cards.length > 1}>
         {#each cards as s (s.key)}
           <ReleaseCard shelf={s} />
@@ -364,7 +365,7 @@
       <div class="section-head all-head">
         <h2 class="section-title">Toutes les sorties <span class="mono count">{releaseTotal}</span></h2>
         <button class="btn btn-ghost btn-sm" on:click={toggleAll} aria-expanded={showAll}>
-          <Icon name={showAll ? "chevronUp" : "chevronDown"} size={15} />
+          <span class="chev" class:rot={showAll}><Icon name="chevronDown" size={15} /></span>
           {showAll ? "Replier" : "Afficher"}
         </button>
       </div>
@@ -378,7 +379,7 @@
           </p>
         {/if}
         {#if groups.length}
-          <div class="rels">
+          <div class="rels" in:fadeIn>
             {#each groups as g (g.id)}
               <section class="rel">
                 <div class="rel-cover"><Cover src={g.meta.cover} alt={g.meta.title} kind="album" /></div>
@@ -405,12 +406,12 @@
                       class="btn btn-ghost btn-sm"
                       on:click={() => toggleGroup(g.id)}
                       aria-expanded={opened.has(g.id)}>
-                      <Icon name={opened.has(g.id) ? "chevronUp" : "chevronDown"} size={15} />
+                      <span class="chev" class:rot={opened.has(g.id)}><Icon name="chevronDown" size={15} /></span>
                       {opened.has(g.id) ? "Masquer les titres" : g.tracks.length > 1 ? `Voir les ${g.tracks.length} titres` : "Voir le titre"}
                     </button>
                   </div>
                   {#if opened.has(g.id)}
-                    <div class="rel-tracks">
+                    <div class="rel-tracks" in:fadeIn>
                       <TrackList tracks={g.tracks} numbered showAlbum={false} showCover={false} context={{ kind: "album", id: g.id }} />
                     </div>
                   {/if}
@@ -421,7 +422,7 @@
         {/if}
         {#if albumsOnly.length}
           <h3 class="sub-title">{groups.length ? "Autres sorties" : "Sorties"}</h3>
-          <div class="grid">
+          <div class="grid" in:fadeIn>
             {#each albumsOnly as r (r.deezer_id)}
               <div class="cell" class:new={r.new}><Card item={card(r)} kind="album" /></div>
             {/each}
@@ -564,6 +565,20 @@
   }
   .rel-actions .btn:disabled {
     opacity: 0.55;
+  }
+  /* I4: the disclosure chevron turns (a chevronDown rotated 180° IS the
+     chevronUp it used to mount), --dur-base on EASE.standard. */
+  .chev {
+    display: inline-flex;
+    transition: transform var(--dur-base) var(--ease-standard);
+  }
+  .chev.rot {
+    transform: rotate(180deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chev {
+      transition: none;
+    }
   }
   .rel-tracks {
     margin-top: 10px;
