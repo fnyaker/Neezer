@@ -15,9 +15,11 @@ Captures de la retouche de la vue des paroles dans le lecteur plein écran.
   étroite, onglet « Paroles » de la carte de file) : elle garde son verre
   liquide. Les deux prises sont identiques à 0,01 % des pixels près (JPEG).
 - `apres-390-telephone` — le panneau de paroles du téléphone, inchangé (verre
-  du palier 3 sur la pochette) ; la prise est identique à l'octet avant/après.
+  du palier 3 sur la pochette).
 
 Les deux prises d'une même paire sont la même page, la même piste, la même
 pochette et le même format : seule la feuille de style de la vue des paroles
-change. Les contrastes sont relevés sur les pixels peints par
-`webapp/test/lyrics/run.mjs` (3 thèmes × pochette claire et sombre, 26 contrôles).
+change. L'onglet intégré à 1024 px diffère de 0,018 % des pixels et le téléphone
+de 0,008 % — le bruit du JPEG et de l'horloge de lecture, pas la vue. Les
+contrastes sont relevés sur les pixels peints par `webapp/test/lyrics/run.mjs`
+(3 thèmes × pochette claire et sombre, 26 contrôles).

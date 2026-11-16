@@ -739,7 +739,8 @@ backdrop, glyphs and shadow hidden; 3 themes × white and black sleeve, 1440×90
 **5.42:1**, above AA. `levelFactor` (PR #205) is what keeps that white sleeve from washing out in the
 first place — it is the ground's brightness the text sits on. The integrated shapes are deliberately
 untouched: the narrow player's queue-card tab keeps its 64 % glass card and the phone's sheet its tier-3
-frost (`test/lyrics/run.mjs` checks both; the phone shot is byte-identical before/after).
+frost (`test/lyrics/run.mjs` checks both; before/after the phone shot differs on 0.008 % of its
+pixels, the 1024 px card on 0.018 % — JPEG and playback-clock noise, not the view).
 
 **The phone's lyrics are a view, not a hidden gesture** (`MobileNowPlaying.svelte`): the labelled « Paroles »
 door in the thumb row opens a full-height sheet whose own header names the track and the artist, with a 44 px
