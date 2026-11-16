@@ -121,8 +121,10 @@ cd webapp && node test/motion/run.mjs                # the motion table (docs/ag
                                                      # eco guard (getAnimations() empty after a .btn hover AND a .btn toggle, a
                                                      # [data-motion="status"] spinner still 1 s), the CSS expressions lib/motion.js
                                                      # emits (calc() slides, a veil's color-mix), then every lot's
-                                                     # scenarios/<lot>.mjs — identical requests in the three levels. SHOTS=<dir>,
-                                                     # ONLY=full, DIST=<dir>, PYTHON=<venv python>
+                                                     # scenarios/<lot>.mjs — each file on its own page, the same requests in the
+                                                     # three levels. VIEWPORT=390, FILES=home-search, ONLY=full (one level),
+                                                     # SELFTEST=1 (the canary: a fetch added at full motion MUST fail the request
+                                                     # check), SHOTS=<dir>, DIST=<dir>, PYTHON=<venv python>
 cd webapp && node test/vizdirect/run.mjs [FADE=1]   # the animations on the DIRECT output through pauses, skips and a reopening: they
                                                      # must still hear the music (the copy's dead-track bug)
 cd webapp && node test/download/run.mjs              # a playlist downloading on a shared 256 kbit/s link (LINK=bytes/s) while a track is
