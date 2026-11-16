@@ -170,6 +170,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
+      # The Python server comes FIRST: `cargo test` runs two benches that start
+      # `tools/perf_api.py` themselves — `nz-api`'s session round trip (D2,
+      # login → me → 401 on a real Flask cookie) and, later, `nz-transcribe`'s
+      # worker protocol (T3). Without it the first `cargo test` has no `peewee`
+      # and fails for a reason that has nothing to do with the change.
+      - name: Set up Python for the API benches
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the server the benches start
+        run: pip install --disable-pip-version-check -e .
+        working-directory: ${{ github.workspace }}
       - name: Test the workspace
         run: cargo test --workspace --locked
       # `nz-model` is proven against the REAL server's answers, not a sample: the
@@ -178,13 +190,6 @@ jobs:
       # written. A payload change that would break the desktop fails this job
       # (docs/agents/desktop.md, lot D1). The bench is throwaway SQLite in a temp
       # directory: it never touches a real install.
-      - name: Set up Python for the API fixtures
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install the server the bench starts
-        run: pip install --disable-pip-version-check -e .
-        working-directory: ${{ github.workspace }}
       - name: Regenerate the API fixtures from this commit's server
         run: python desktop/tools/dump_fixtures.py --out "$RUNNER_TEMP/fixtures"
         working-directory: ${{ github.workspace }}

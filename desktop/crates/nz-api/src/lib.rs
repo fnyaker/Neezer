@@ -1,27 +1,60 @@
-//! The only HTTP client of the app: session, lanes, errors, one typed function
-//! per server route.
+//! `nz-api` — the app's ONLY HTTP client.
 //!
-//! Owned by lot D2 (`docs/agents/desktop.md`, *Network errors* and *Rule 1 on
-//! the device: lanes*). This is D0's skeleton: it proves the pinned reqwest
-//! (rustls, cookie jar, stream) and tokio actually build and link here.
+//! It owns five things, and nothing else in the app may re-implement any of
+//! them (docs/agents/desktop.md, lot D2):
+//!
+//! - **the lanes of rule 1** ([`lanes`]): a request says what it is — the action
+//!   just taken, the next track, or background work that must yield — and the
+//!   gates make that true;
+//! - **the failure shapes of `lib/api.js#req`** ([`ApiError`]): offline, session
+//!   ended, provider refusal (`X-NS-Error`, final), not-ready, busy, HTTP,
+//!   undecodable;
+//! - **the retry rules**: a GET retries (3 tries, 400·2ⁿ ms + jitter, capped at
+//!   6 s), a mutation NEVER does, and a background request repeats only on the
+//!   server's own `Retry-After`;
+//! - **the offline copy** ([`ResponseCache`], implemented by `nz-cache`): the
+//!   paths `lib/apicache.js` keeps, keyed by account;
+//! - **the session cookie** ([`SessionJar`]): one file, mode 0600, one entry per
+//!   server URL.
+//!
+//! Plus one typed function per SPA `api.*` method, in [`endpoints`], with the
+//! same names in snake_case.
+//!
+//! ```no_run
+//! # async fn example() -> Result<(), nz_api::ApiError> {
+//! use nz_api::{Api, Lane, Quality, TrackId};
+//!
+//! let api = Api::new("http://127.0.0.1:5000")?;
+//! api.login("bench", "Bench1").await?;
+//! let me = api.me().await?;
+//! println!("{}", me.user.name);
+//! // The tapped track: User lane, never behind anything else.
+//! let mut stream = api
+//!     .stream(Lane::User, &TrackId::from("3000168"), Quality::Opus320, None, None)
+//!     .await?;
+//! while let Some(bytes) = stream.chunk().await? {
+//!     let _ = bytes;
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
-#[cfg(test)]
-mod tests {
-    /// The cookie jar and rustls TLS backend D2 relies on, built once with no
-    /// network involved: `Api` holds exactly this client.
-    #[test]
-    fn a_client_with_a_cookie_jar_builds() {
-        let client = reqwest::Client::builder()
-            .cookie_store(true)
-            .build()
-            .expect("reqwest client");
-        assert!(client.get("http://127.0.0.1:1/api/me").build().is_ok());
-    }
+pub mod cache_trait;
+pub mod client;
+pub mod endpoints;
+pub mod error;
+pub mod lanes;
+pub mod session;
 
-    /// The runtime the request lanes and the MPRIS server run on.
-    #[tokio::test]
-    async fn the_multi_thread_runtime_runs_task_macros() {
-        let value = tokio::spawn(async { 6 * 7 }).await.expect("join");
-        assert_eq!(value, 42);
-    }
-}
+pub use cache_trait::{NoCache, ResponseCache, is_cacheable};
+pub use client::{
+    ANSWER_TIMEOUT, Api, ApiBuilder, BACKGROUND_HEADER, CONNECT_TIMEOUT, Fresh, NO_RETRY_HEADER,
+    Quality, START_HEADER, StreamReady, StreamResponse, TrackId,
+};
+pub use endpoints::library::DownloadQueued;
+pub use endpoints::playlists::ImportJob;
+pub use endpoints::remote::RemoteCreated;
+pub use error::ApiError;
+pub use lanes::{Lane, bulk_cap_from_stream};
+pub use reqwest::Method;
+pub use session::SessionJar;
