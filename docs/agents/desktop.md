@@ -1753,6 +1753,12 @@ Waves that can run in parallel (disjoint files):
   toutes ses requêtes sur `Lane::Bulk`, et un drapeau `Control::yield_now` que l'écran lève tant
   qu'un titre démarre (`current_time() < 8 s`). L'entraînement a son thread, le même nice, le même
   drapeau. Rien ne touche l'état GPUI : tout revient par `wiring::events`.
+- **La règle, l'écran est ATTEIGNABLE** : D7 avait enregistré la route sans lui donner
+  d'entrée. D16 ajoute donc, hors de sa liste de fichiers mais avec l'accord de l'orchestrateur,
+  un « Genres » dans `sidebar()` (`app.rs`, administrateurs seulement, comme la webapp) et le
+  raccourci `g e` (`keymap.rs`, avec sa ligne dans la table des raccourcis qui alimente `?` et
+  Réglages → Raccourcis). Rien d'autre dans ces deux fichiers ; D15a les modifie aussi (entrée
+  Contrôle distant), d'où un rebase qui garde les deux côtés.
 - **La règle, le clavier ne prend pas l'ancre** : l'écran ne focalise rien (D8a). `1`…`9` et `z`
   sont liés GLOBALEMENT (`KeyBinding::new("1", GenrePick(1), None)`) et livrés au studio VIVANT par
   un handle faible, exactement comme les touches de liste de `track_list::own` ; `Entrée`,
