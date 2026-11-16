@@ -116,6 +116,13 @@ cd webapp && node test/offline/run.mjs              # downloads kept by the Andr
 cd webapp && node test/clicks/run.mjs               # what a click costs before the screen answers (Event Timing, 4x CPU throttle): the
                                                      # nav, opening and closing the full-screen player; PHONE=1, PROFILE="<action>" for
                                                      # its heaviest functions (build with `npx vite build --minify false` to read them)
+cd webapp && node test/motion/run.mjs                # the motion table (docs/agents/transitions.md) on the real app, 1440×900 and
+                                                     # 390×844 × full / reduced / eco: the tokens resolve to the plan's numbers, the
+                                                     # eco guard (getAnimations() empty after a .btn hover AND a .btn toggle, a
+                                                     # [data-motion="status"] spinner still 1 s), the CSS expressions lib/motion.js
+                                                     # emits (calc() slides, a veil's color-mix), then every lot's
+                                                     # scenarios/<lot>.mjs — identical requests in the three levels. SHOTS=<dir>,
+                                                     # ONLY=full, DIST=<dir>, PYTHON=<venv python>
 cd webapp && node test/vizdirect/run.mjs [FADE=1]   # the animations on the DIRECT output through pauses, skips and a reopening: they
                                                      # must still hear the music (the copy's dead-track bug)
 cd webapp && node test/download/run.mjs              # a playlist downloading on a shared 256 kbit/s link (LINK=bytes/s) while a track is

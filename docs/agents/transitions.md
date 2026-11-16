@@ -5,8 +5,12 @@ rules apply here. Other areas: [docs/agents/](./). Read [webapp.md](webapp.md) (
 `nav.js`) and [playback.md](playback.md) (big-list cost) before coding a lot; [animations.md](animations.md)
 owns the visualizer and the eco switch itself.
 
-**Status (2026-11-16): PLAN ONLY.** Nothing below is coded yet. Lots T0 → T7 (*Lots*) implement it; each
-lot updates the *Status per lot* table at the end of this file in its own PR, with its measured numbers.
+**Status (2026-11-16): T0 landed; T1–T7 to do.** The foundation is merged — `lib/motion.js` (the
+tokens, the three levels, the transitions, `screenKey`/`pageEnter`/`shiftRows`), `lib/portal.js`, the
+tokens and the eco/reduced guard in `app.css`, `test/motion.test.mjs` (unit + the frozen import
+allowlist) and `test/motion/run.mjs` (the Chromium bench every later lot adds a scenario to). Nothing
+in the app uses it yet: T1 → T7 consume it, one lot per row of the inventory below, and each updates
+the *Status per lot* table at the end of this file in its own PR with its measured numbers.
 
 ## The need
 
@@ -164,6 +168,7 @@ CSS, in `app.css`'s `:root` block (T0). Names are final; values are the plan's.
 | `--move-m` | 8px | page enter, toast, notice, popover offset |
 | `--scale-pop` | 0.96 | menus, popovers |
 | `--scale-dialog` | 0.97 | centered dialogs |
+| `--scale-screen` | 0.98 | the desktop full-screen player (T0 added it: the `screen` row names 0.98, and a literal in `motion.js` would be the drift M15 forbids) |
 
 Under `html[data-eco="1"]` every `--dur-*` is `0ms` and every `--move-*` is `0px`, `--scale-*` `1`; under
 `@media (prefers-reduced-motion: reduce)` every `--move-*` is `0px`, `--scale-*` `1`, and every `--dur-*`
@@ -231,8 +236,8 @@ default for anything that can be toggled; `in:` alone where M7 applies.
 | `fadeIn` | opacity 0→1 | `DUR.fast`, `EASE.enter` | (use `in:` only) | `duration` |
 | `fade` | opacity | `DUR.base`, enter | `DUR.fast`, exit | `duration`, `out` |
 | `rise` | opacity + `translateY(y → 0)` | `DUR.base`, enter | `DUR.fast`, exit | `y` (default `MOVE.m`; negative = from above) |
-| `swap` | opacity + `translateY(MOVE.s → 0)` | `DUR.fast`, enter | (in only) | — (glyphs, titles, counters) |
-| `pop` | opacity + `scale(SCALE.pop → 1)` + `translateY(±4px)` toward the anchor | `DUR.base`, enter | `DUR.fast`, exit | `origin` (CSS transform-origin, e.g. `"top right"`), `placement` (`"down"`/`"up"`) |
+| `swap` | opacity + `translateY(MOVE.s → 0)` | `DUR.fast`, enter | (in only) | `y`, `scale` (P13's glyph wants `scale: 0.85` instead of the translate) |
+| `pop` | opacity + `scale(SCALE.pop → 1)` + `translateY(±MOVE.s)` toward the anchor | `DUR.base`, enter | `DUR.fast`, exit | `origin` (CSS transform-origin, e.g. `"top right"`), `placement` (`"down"`/`"up"`) |
 | `dialog` | opacity + `scale(SCALE.dialog → 1)` | `DUR.base`, enter | `DUR.fast`, exit | — |
 | `sheet` | phone (`viewport.js#isMobile()`): `translateY(100% → 0)`, NO opacity; desktop: same as `dialog` | phone `DUR.sheet` / desktop `DUR.base`, enter | phone `DUR.sheetOut` / desktop `DUR.fast`, exit | `fromY` (px, a dragged start position) |
 | `veil` | `background-color` alpha 0 → the element's computed alpha (read once via `getComputedStyle(node).backgroundColor`) | same duration as the sheet it serves (`for: "sheet"\|"dialog"\|"menu"`) | idem | `for` |
@@ -240,6 +245,28 @@ default for anything that can be toggled; `in:` alone where M7 applies.
 | `screen` | phone: `translateY(100% → 0)`; desktop: opacity + `scale(0.98 → 1)` | `DUR.screen` / `DUR.base` | `DUR.screenOut` / `DUR.fast` | `fromY` |
 | `collapse` | `height` + opacity (Svelte `slide` semantics, M10) | `DUR.base`, standard | `DUR.fast`, standard | `axis` (y only) |
 | `flipSmall` | Svelte `flip` with `duration: DUR.base`, `EASE.standard` | — | — | for keyed lists ≤ 50 items only (M4) |
+
+**What T0 decided where the table left a choice** (all in `lib/motion.js`):
+
+- `sheet`/`screen` on a PHONE are instant under reduced motion (`duration: 0`) rather than faded: their
+  own rule is "no opacity" (M8, the pane is glass), so removing the slide leaves nothing to play — the
+  sheet appears. The desktop shapes keep their fade, capped at 140 ms.
+- `collapse` under reduced motion drops the `height` walk and keeps a 140 ms fade: a block growing
+  pushes everything below it, which is displacement.
+- `shiftRows` and `flipSmall` do nothing at all when the level is not `"full"`: they are pure
+  displacement, and `animate()` would otherwise be asked to play empty keyframes.
+- `veil` builds its fade with `color-mix(in srgb, <the computed colour> t%, transparent)` rather than
+  parsing the colour: it lands exactly on the tint the element's own sheet asked for, whatever
+  serialisation the browser produces (`rgba(…)`, `color(srgb …)`, `oklab(…)`). Its own alpha is
+  preserved at `t = 1`. `params.color` overrides the computed read (that is how `node --test` drives it).
+- `swap` takes a `scale` as well as the `y` offset, so P13's play/pause glyph can be "opacity + scale
+  0.85 → 1" without editing this file (a lot does not own it).
+- The `screen` transforms are written as `translateY(calc(u * 100%))`, not `translateY(100%)` scaled by
+  the transition's own `t`: Svelte samples `css(t, u)` and the browser resolves the percentage against
+  the element's height, which is what makes a bottom sheet slide by its own size on any phone.
+- `pageEnter` and `shiftRows` go through `animate()`, so a fast second navigation cancels the first and
+  reduced motion drops the movement there too (one implementation of the level, not two).
+
 
 Helpers:
 
@@ -502,7 +529,7 @@ settle(page) }`. Checks per scenario:
 
 | Lot | State | PR | Measured |
 |---|---|---|---|
-| T0 | to do | — | — |
+| T0 | done | #_PR_ | `npm test` 779/779 (12 new); `EASE.enter(0.5)` = 0.950248 against the CSS curve's 0.950247 (worst \|JS−CSS\| 1.4e-6 over 57 samples, cap 1e-3); the bench 116 checks / 0 failure in 15 s, at 1440×900 and 390×844 × full/reduced/eco: computed tokens 90/140/200/280/320 ms, 8 px/4 px, 0.96/0.97/0.98 — 0 ms, 0 px, 1 in eco, and 140 ms, 0 px, 1 under reduced; `document.getAnimations()` empty after a real `.btn` hover (and three frames later) in eco with the `.btn`'s own computed `transition-duration` 1e-05 s, against 1 × 120 ms `background-color` at full motion; an unmarked 1 s CSS animation stopped in eco (1e-05 s) while `[data-motion="status"]` keeps its 1 s and stays on the timeline; the emitted `translateY(calc(u * 100%))`, `calc(u * 120px)` and `scale(0.96)` resolve to the right matrices and a 50 % veil to alpha 0.3; 0 page error. |
 | T1 | to do | — | — |
 | T2a | to do | — | — |
 | T2b | to do | — | — |

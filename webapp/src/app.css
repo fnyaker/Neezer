@@ -1006,6 +1006,80 @@ html[data-eco="1"] *::after {
   backdrop-filter: none !important;
 }
 
+/* ==========================================================================
+   MOTION — the tokens, and the two guards that stop everything
+   --------------------------------------------------------------------------
+   The numbers are the PLAN's (docs/agents/transitions.md, "The tokens"), and
+   the JS table in lib/motion.js carries the same ones: test/motion.test.mjs
+   parses this block and fails if the two drift. Nothing in the app writes a
+   literal duration, easing or distance into a `transition:`/`animation:` any
+   more — it writes `var(--dur-base) var(--ease-enter)`, and the source-side
+   lint (same test, T7) forbids the literal.
+   `--dur-*` are milliseconds, `--move-*` pixels, `--scale-*` unitless.
+   `--scale-screen` is the desktop full-screen player's own 0.98: the plan's
+   transition table names it, so it is a token here rather than a literal in
+   the JS.
+   ========================================================================== */
+:root {
+  --dur-instant: 90ms; /* hover, press, selection, switch thumb */
+  --dur-fast: 140ms; /* small exits, glyph swaps, traversal page fade */
+  --dur-base: 200ms; /* menus, toasts, page enter, collapse, row shift */
+  --dur-sheet: 280ms; /* phone bottom sheet enter */
+  --dur-sheet-out: 200ms; /* phone bottom sheet exit */
+  --dur-screen: 320ms; /* phone full-screen player enter */
+  --dur-screen-out: 240ms; /* phone full-screen player exit */
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1); /* M3 emphasized-decelerate */
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15); /* M3 emphasized-accelerate */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1); /* in-place moves */
+  --move-s: 4px; /* glyph/title swap */
+  --move-m: 8px; /* page enter, toast, popover offset */
+  --scale-pop: 0.96; /* menus, popovers */
+  --scale-dialog: 0.97; /* centred dialogs */
+  --scale-screen: 0.98; /* desktop full-screen player */
+}
+
+/* ECO = NOTHING MOVES (M13). The tokens go to zero first, so a component that
+   writes `transition: transform var(--dur-base) var(--ease-standard)` needs no
+   eco check of its own. */
+html[data-eco="1"] {
+  --dur-instant: 0ms;
+  --dur-fast: 0ms;
+  --dur-base: 0ms;
+  --dur-sheet: 0ms;
+  --dur-sheet-out: 0ms;
+  --dur-screen: 0ms;
+  --dur-screen-out: 0ms;
+  --move-s: 0px;
+  --move-m: 0px;
+  --scale-pop: 1;
+  --scale-dialog: 1;
+  --scale-screen: 1;
+}
+
+/* THE CENTRAL GUARD, CSS half (M13). It stops every CSS transition and every
+   keyframe animation, INCLUDING the ones still written with a literal duration
+   the token sweep has not reached yet — which is why it is a rule and not a
+   hope. `0.01ms`, not `0s`: a `0s` transition does not run at all, so it fires
+   no `transitionend` and a future listener would hang forever.
+   `[data-motion="status"]` is the one exception: a spinner or an
+   indeterminate bar that freezes reads as a hung app, and CLAUDE.md rule 2
+   requires a running job to SAY so. To revert the exception, delete the three
+   `:not([data-motion="status"])` below.
+   Measured (transitions.md, prototype): 0.4 ms of style the moment eco turns
+   on with a windowed list, 60 ms with 8 000 plain nodes — once, on the toggle.
+   The JS half is in lib/motion.js: Svelte's transitions are WAAPI and a CSS
+   `!important` never stops them. */
+html[data-eco="1"] :not([data-motion="status"]),
+html[data-eco="1"] :not([data-motion="status"])::before,
+html[data-eco="1"] :not([data-motion="status"])::after {
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  animation-duration: 0.01ms !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+}
+
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --glass-bg: var(--s1);
@@ -1030,19 +1104,20 @@ html[data-eco="1"] *::after {
 /* THE MATERIAL ARRIVES, IT DOES NOT APPEAR. A menu or a sheet used to switch
    from nothing to its full tint in one frame, under an entrance that fades and
    slides: the fill landed before the movement. `@starting-style` makes the
-   first computed style a clear pane, so the tint WALKS in over 160 ms while
-   the popover settles — the "materialise by modulating the light" of Apple's
-   material, with no keyframes, no timer, and nothing to re-run on a re-render.
-   A theme switch walks the same 160 ms, which is what keeps a Pochette accent
-   change (already a 600 ms colour walk) continuous through the glass.
+   first computed style a clear pane, so the tint WALKS in while the popover
+   settles — the "materialise by modulating the light" of Apple's material,
+   with no keyframes, no timer, and nothing to re-run on a re-render.
+   It was a literal `160ms ease-out`; it is the motion tokens now (200 ms,
+   EASE.enter), so a theme switch and the tint walk the same curve as the menu
+   itself, and eco's guard stops it with everything else.
    `prefers-reduced-motion` removes it with the rest. */
 @media (prefers-reduced-motion: no-preference) {
   .menu,
   .sheet,
   .dialog {
     transition:
-      background-color 160ms ease-out,
-      border-color 160ms ease-out;
+      background-color var(--dur-base) var(--ease-enter),
+      border-color var(--dur-base) var(--ease-enter);
   }
   @starting-style {
     .menu,
@@ -1085,13 +1160,19 @@ html[data-eco="1"] *::after {
   font-weight: 700;
 }
 
+/* The generic block entrance (LoadFailed, a page's content branch, Import's
+   intro). It was `0.3s ease` and a 6 px rise, both literals: it is the motion
+   tokens now — 200 ms on EASE.enter, and the SMALL move, because these are
+   blocks appearing inside a page rather than pages (docs/agents/transitions.md
+   M5/M6). Eco's guard stops it; reduced motion turns it into a plain fade
+   because the `transform` leaves with the keyframes' distance at 0px. */
 .fade-in {
-  animation: fadeIn 0.3s ease;
+  animation: fadeIn var(--dur-base) var(--ease-enter);
 }
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(var(--move-s));
   }
   to {
     opacity: 1;
@@ -1115,7 +1196,26 @@ html[data-eco="1"] *::after {
   }
 }
 
+/* REDUCED MOTION (M14): no displacement, short fades. HIG and the App Store's
+   criteria are explicit — reduce the motion, do not strip the meaning — so the
+   opacity work stays and every distance and scale goes to zero. The duration
+   tokens above 140 ms cap at 140 ms; `--dur-instant` (90) and `--dur-fast`
+   (140) are already at or under the cap. `main { scroll-behavior: auto }` is
+   the same rule for a programmatic scroll (T1's Back restore lands in one
+   frame). The JS half is lib/motion.js's "reduced" level. */
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-base: 140ms;
+    --dur-sheet: 140ms;
+    --dur-sheet-out: 140ms;
+    --dur-screen: 140ms;
+    --dur-screen-out: 140ms;
+    --move-s: 0px;
+    --move-m: 0px;
+    --scale-pop: 1;
+    --scale-dialog: 1;
+    --scale-screen: 1;
+  }
   main {
     scroll-behavior: auto;
   }
