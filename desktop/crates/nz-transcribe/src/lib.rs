@@ -53,19 +53,21 @@ pub fn system_info() -> &'static str {
     whisper_rs::print_system_info()
 }
 
-// DO NOT enumerate Vulkan devices from this crate yet. whisper.cpp's ggml
-// backend answers `ggml_backend_vk_get_device_count()` by creating a
-// `vk::Instance`, and with no usable Vulkan driver (a machine without
-// `vulkan-radeon`/`vulkan-intel`, or `VK_ICD_FILENAMES=/nonexistent`) that
-// throws `vk::IncompatibleDriverError` through Rust as a C++ exception: the
-// process is `terminate()`d (SIGABRT, exit 134). Measured on this machine:
-// `VK_ICD_FILENAMES=/nonexistent neezer-transcribe --version` aborted, while
-// the same binary reported `vulkan : 1 appareil(s)` (RADV 780M) normally and
-// `0 appareil(s)` on a driver-less GitHub runner whose loader was fine.
+// DO NOT enumerate Vulkan devices in this process. whisper.cpp's ggml backend
+// answers `ggml_backend_vk_get_device_count()` by creating a `vk::Instance`, and
+// with no usable Vulkan driver (a machine without `vulkan-radeon`/`vulkan-intel`,
+// or `VK_ICD_FILENAMES=/nonexistent`) that throws `vk::IncompatibleDriverError`
+// through Rust as a C++ exception: the process is `terminate()`d (SIGABRT, exit
+// 134). Measured on this machine: `VK_ICD_FILENAMES=/nonexistent
+// neezer-transcribe --version` aborted, while the same binary reported
+// `vulkan : 1 appareil(s)` (RADV 780M) normally and `0 appareil(s)` on a
+// driver-less GitHub runner whose loader was fine.
 //
-// T2 owns the probe: it must enumerate in a child process (the `engine` child
-// already exists for SIGSTOP) or behind an explicit "no driver" check, and turn
-// the absence into the explained CPU fallback.
+// T2 owns the probe, and does exactly that: [`engine::Availability::detect`]
+// enumerates in the `--vulkan-devices` child of this same binary and turns a
+// crash or an empty list into a named [`engine::FallbackCause`]. Enumerating
+// in-process still aborts, so nothing else — no `--version`, no startup path, no
+// test — may call [`engine::enumerate_devices`].
 
 #[cfg(test)]
 mod tests {

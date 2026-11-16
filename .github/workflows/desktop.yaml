@@ -182,8 +182,45 @@ jobs:
       - name: Install the server the benches start
         run: pip install --disable-pip-version-check -e .
         working-directory: ${{ github.workspace }}
+      # Local transcription is proven on a REAL model, not a stub: eleven seconds
+      # of speech (whisper.cpp's `jfk.wav`, at the tag this build vendors) go
+      # through `neezer-transcribe file` on the CPU and on `lavapipe` (the
+      # software Vulkan device `mesa-vulkan-drivers` installs), and the two
+      # transcripts must be identical. `ggml-tiny` is 78 MB, so it is cached by
+      # its pinned sizes and hashes: a bumped model is a new key, never a silent
+      # change, and both files are checked with `sha256sum -c` on every run.
+      - name: Cache the transcription fixtures
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/whisper
+          key: whisper-fixtures-tiny-be07e048-59dfb9a4
+      - name: Fetch the transcription fixtures (SHA-256 pinned)
+        run: |
+          mkdir -p "$RUNNER_TEMP/whisper"
+          cd "$RUNNER_TEMP/whisper"
+          test -f ggml-tiny.bin || curl -sSLo ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          test -f jfk.wav || curl -sSLo jfk.wav \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.8.3/samples/jfk.wav
+          echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  ggml-tiny.bin" \
+            | sha256sum -c -
+          echo "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  jfk.wav" \
+            | sha256sum -c -
       - name: Test the workspace
         run: cargo test --workspace --locked
+        env:
+          NZ_WHISPER_MODEL: ${{ runner.temp }}/whisper/ggml-tiny.bin
+          NZ_WHISPER_AUDIO: ${{ runner.temp }}/whisper/jfk.wav
+          # Fail the run when the runner has no Vulkan device at all: the point
+          # of this job is that `lavapipe` transcribes, not that the CPU does.
+          NZ_REQUIRE_VULKAN: "1"
+          # ggml's Vulkan backend only keeps `DISCRETE_GPU` and `INTEGRATED_GPU`
+          # devices; `lavapipe` reports `CPU`, so without this it is invisible
+          # and the probe answers `no_vulkan_device` on a runner where the
+          # software device is installed and works. `GGML_VK_VISIBLE_DEVICES`
+          # names the device index unconditionally (ggml-vulkan.cpp, the
+          # `CUDA_VISIBLE_DEVICES` emulation).
+          GGML_VK_VISIBLE_DEVICES: "0"
       # `nz-model` is proven against the REAL server's answers, not a sample: the
       # committed fixtures under `crates/nz-model/tests/fixtures/` are regenerated
       # here from THIS commit's server, and the same test then reads what was just

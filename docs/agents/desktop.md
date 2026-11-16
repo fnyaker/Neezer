@@ -34,7 +34,7 @@ Every choice below was checked against several sources and then **built together
 | Output | [cpal 0.18 README](https://docs.rs/crate/cpal/0.18.2), [cpal pipewire host](https://docs.rs/crate/cpal/0.18.0/source/src/host/pipewire/mod.rs) | `cpal = { version = "0.18.2", features = ["pipewire"] }`, PipeWire host first, ALSA host as fallback. |
 | Gapless / crossfade | [playback-rs](https://docs.rs/crate/playback-rs/0.4.3/source/docs.md) (one playing + one queued song), [Musicat discussion](https://github.com/basharovV/musicat/discussions/6) (decoder thread + ring buffer, no flow control), [Symphonia case study](https://cherbie-github-io.vercel.app/blog/symphonia-case-study) (back-pressure), [pleezer](https://docs.rs/crate/pleezer/0.14.2/source/src/player.rs) (Rust Deezer player) | Two voices (current + next) decoded ahead into a lock-free ring, mixed in the output callback; the crossfade/trim RULES are the web player's (`Player.svelte`, [playback.md](playback.md)). |
 | MPRIS | [MPRIS 2.2 spec](https://specifications.freedesktop.org/mpris-spec/latest/), [mpris-server](https://docs.rs/crate/mpris-server), [ferrosonic](https://docs.rs/crate/ferrosonic/0.5.3/source/src/mpris/server.rs) (Subsonic TUI using it) | `mpris-server = "0.11.0"` (zbus 6) on a tokio `LocalSet`. Omarchy's media keys call `playerctl`, which speaks MPRIS. |
-| Transcription | [whisper-rs](https://github.com/tazz4843/whisper-rs) (moved to Codeberg), `whisper-rs-sys` 0.15 `build.rs` (read), [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (Vulkan `GGML_VULKAN`, built-in Silero VAD `--vad`), [vad-speech-segments](https://gitea.mueller.network/extern/whisper.cpp/src/branch/master/examples/vad-speech-segments), the server's own `neezer/transcribe/` and `docker/transcribe/worker.py` | `whisper-rs = "0.16.0"`, feature `vulkan`; VAD through `FullParams::enable_vad` + `set_vad_model_path` (Silero GGML); same model ladder and segment rules as the server. |
+| Transcription | [whisper-rs](https://github.com/tazz4843/whisper-rs) (moved to Codeberg), `whisper-rs-sys` 0.15 `build.rs` (read), [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (Vulkan `GGML_VULKAN`, built-in Silero VAD `--vad`), [vad-speech-segments](https://gitea.mueller.network/extern/whisper.cpp/src/branch/master/examples/vad-speech-segments), the server's own `neezer/transcribe/` and `docker/transcribe/worker.py` | `whisper-rs = "0.16.0"`, feature `vulkan`; VAD through whisper-rs's `WhisperVadContext` (Silero GGML) — **not** `FullParams::enable_vad`, which is a no-op there because `WhisperState::full` calls `whisper_full_with_state`, where whisper.cpp does not run VAD; same model ladder and segment rules as the server. |
 | Time stretch (podcast speed) | [signalsmith-stretch](https://crates.io/crates/signalsmith-stretch), [rubberband](https://crates.io/crates/rubberband) | `signalsmith-stretch` (MIT, no system library); the SPA's `playbackRate` keeps pitch, so must we. |
 | Packaging | [ArchWiki Rust package guidelines](https://wiki.archlinux.org/title/Rust_package_guidelines), the `omarchy-app` packaging convention (an Arch package so it shows in the launcher) | `PKGBUILD` with `cargo fetch --locked --target host-tuple` in `prepare()`, `--frozen` build. |
 
@@ -1101,22 +1101,87 @@ Waves that can run in parallel (disjoint files):
   `const { assert!(…) }`; and the two cleaners differ on purpose (see *Why*), which is why the
   golden cases carry `sidecar_segments` apart from the engine's output.
 
-### T2 — Engine (whisper Vulkan, models, VAD, audio, fallback)
+### T2 — Engine (whisper Vulkan, models, VAD, audio, fallback) — delivered 2026-11-16
 
-- **Files**: `src/{engine,audio,models}.rs`, the `engine` and `file` subcommands in `src/main.rs`.
-- **Contract**: `neezer-transcribe file <audio> [--lang auto] [--model <path>] [--cpu] --out
-  <x.json>`; `neezer-transcribe engine --pcm <f32le 16k mono file> --model … --lang … --out …`
-  (the child); `neezer-transcribe probe` prints the `engine` event JSON. Fallback causes as in
-  *Transcription*.
-- **Acceptance**: `jfk.wav` transcribed identically with `--cpu` and Vulkan; speed on this machine
-  with `ggml-base` ≥ 40× real time Vulkan and ≥ 12× CPU (the prototype's numbers); with
-  `VK_ICD_FILENAMES=/nonexistent` the probe reports `no_vulkan_device` and the file still
-  transcribes on the CPU; CI runs the Vulkan path on lavapipe (`mesa-vulkan-drivers`) with
-  `ggml-tiny` (cached `actions/cache`, SHA-256 checked); an MP3 and an M4A episode decode to the
-  right duration ± 50 ms.
-- **Pitfalls**: Vulkan headers (see above); the first GPU call compiles pipelines (seconds): warm
-  once per process, not per chunk; VAD model path must be set before `enable_vad(true)` or the crate
-  panics.
+- **The rule, enumeration**: ggml's Vulkan enumeration ABORTS the process when no driver is
+  usable, so it happens in a CHILD of the same binary and a crash becomes a named cause. Measured:
+  `VK_ICD_FILENAMES=/nonexistent neezer-transcribe probe` → `{"backend":"cpu","reason":
+  "no_vulkan_device"}`, exit 0, in **91 ms** (one child spawn); the same enumeration in-process is
+  SIGABRT 134. `--version` survives the same dead ICD (exit 0, pinned by a test), and `file` still
+  transcribes on the CPU with the cause written into its document. The child is found by name
+  (`neezer-transcribe`) beside the current executable, because under `cargo test` the current
+  executable is the libtest harness, which refuses `--vulkan-devices`.
+- **The rule, fallback**: the ladder is observed, never guessed — device list → whisper context with
+  `use_gpu(true)` → a one-second silent decode (the first GPU call compiles whisper.cpp's shaders),
+  once per process; a failure at any rung falls back to the CPU with `gpu_init_failed`, or
+  `gpu_out_of_memory` when the model is bigger than the device's free VRAM. **Vulkan 72.2× real time
+  against CPU 13.1× on the same 330 s** (`ggml-base`, warm, best of two passes, measured here:
+  Vulkan 4.57 s, CPU 25.18 s and 13.3× on the CPU-seconds it spent). The same GPU run measured
+  **45.0×** while the machine was at load 25: a CPU starved of cores cannot feed the 780M, which is
+  why the CPU half is scored on its CPU-seconds and the GPU number is quoted with its load.
+- **The rule, VAD**: **`FullParams::enable_vad` is a NO-OP in whisper-rs 0.16.** `WhisperState::full`
+  calls `whisper_full_with_state`, and whisper.cpp 1.8.3 only runs VAD in `whisper_full` /
+  `whisper_full_parallel` (read in `whisper-rs-sys-0.15.0/whisper.cpp/src/whisper.cpp`: lines 7750
+  and 7778 are in those two, none is in `whisper_full_with_state`). The crate runs Silero itself
+  (`WhisperVadContext`) and puts the timestamps back with whisper.cpp's own interpolation table
+  (integer for integer), and **keeps it OFF by default**: that path is CPU-only and unbatched —
+  measured **23.6 s of CPU for 11 s of speech** (2.1× real time, 4 threads) against **0.24 s** of
+  Vulkan decoding, i.e. 98× the cost of the audio it removes, for the same text on `jfk.wav`. A
+  one-hour episode would spend two hours in VAD before whisper saw a sample (rule 1). `--vad <path>`
+  turns it on, and a VAD model that was named but cannot load fails the run instead of being
+  ignored.
+- **The rule, audio**: decoded in-process, never by `ffmpeg`: symphonia for Ogg Opus, FLAC, MP3 and
+  MP4/AAC (the workspace's feature set has no WAV), `hound` for WAV, mono `(l + r) / 2` like
+  `ffmpeg -ac 1`, rubato's FFT resampler to 16 kHz with its delay dropped and the last partial block
+  trimmed to the ratio. Measured on a 5.000 s tone: MP3 **5025 ms** (its encoder delay, 1152 samples
+  at 44,1 kHz), M4A **5000**, Ogg Opus **5000**, FLAC **5000** — the criterion is ±50 ms. A window
+  (`decode_range`) keeps an hour-long episode's memory to the window, which is how T3 gives the
+  engine one 600 s chunk.
+- **The rule, a window is `ms × 16` samples, never `ms`:** `decode_range` passed milliseconds where
+  the collector counts 16 kHz samples, so a 600 s chunk decoded **13.6 s** of audio and every
+  transcript after the first was shifted in silence, with no error. T3 found it on a real file:
+  `(5000, 1000)` of a 3 s file returned **16 000 samples instead of 0**. The tests now pin both
+  halves — a window past the end is 0 samples, and a middle window is `samples[2000×16 .. 2500×16]`
+  of the whole decode and says 880 Hz where the file says 440 Hz before 2 s — on WAV, MP3, M4A, Ogg
+  Opus and FLAC.
+- **The contract T3 consumes**: `neezer-transcribe engine --pcm <raw f32le 16k mono> --model …
+  --lang … --out …` writes `engine::Document`, i.e. whisper's own `-oj` keys
+  (`result.language`, `transcription[].offsets/text`) plus `backend`, `device`, `reason`, `model`;
+  the offsets are the chunk's own, so the supervisor's `normalize_segments` gives the same absolute
+  lines the server would store. `file <audio> --out …` is the whole episode: decoded, chunked like
+  the server (600 s, 2 s overlap), normalised per chunk, absolute offsets. Both write `.tmp` then
+  rename. `probe` prints the `{"event":"engine",…}` line T4 shows. The supervisor's own seam is
+  `audio::write_pcm_range(audio, start_ms, length_ms, out) -> Result<u64, Error>`: it decodes that
+  window straight into a `--pcm` file and returns the **duration written in milliseconds**, so a
+  short file (killed child, truncated episode) is visible instead of silent.
+- **Models are pinned**: the server's ladder (`TURBO_FREE_BYTES`, `ORDER_FREE`/`ORDER_TIGHT`,
+  `MIN_MODEL_BYTES`, the GGML magics), `valid_model`'s three refusals, the choice by `MemAvailable`,
+  and the **six** files' sizes + SHA-256 the settings screen may download (VAD included), with a
+  SHA-256 written here (the workspace has no hashing dependency) and held to the FIPS 180-4 vectors
+  including the million-`a` case.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, RADV 780M; `cargo test -p nz-transcribe`):
+  **43 lib tests in 0.4 s**, the **7 acceptance tests in `tests/engine.rs` in 5.5 s** with
+  `ggml-base` (they skip with a printed reason without `NZ_WHISPER_MODEL`/`NZ_WHISPER_AUDIO`, and
+  fail if the variable names a missing file, so a broken CI cache cannot pass), and the 2 golden
+  tests. `jfk.wav` gives the **same `transcription` array** on Vulkan and on the CPU, and in CI on
+  `llvmpipe (LLVM 20.1.2, 256 bits)` too.
+- **CI**: the `test` job fetches `ggml-tiny.bin` and `jfk.wav` (at the `v1.8.3` tag this build
+  vendors) into an `actions/cache` keyed by their SHA-256, verifies both with `sha256sum -c`, and
+  runs the suite with `NZ_REQUIRE_VULKAN=1` so the Vulkan half is proven on `lavapipe` — the
+  software device `mesa-vulkan-drivers` (already in `APT_DEPS`) provides, not skipped. **`lavapipe`
+  needs `GGML_VK_VISIBLE_DEVICES=0`**: ggml's Vulkan backend keeps only `DISCRETE_GPU` and
+  `INTEGRATED_GPU` devices, and lavapipe reports `CPU`, so with the driver installed and working the
+  probe still answered `no_vulkan_device` on the runner until the variable named device 0
+  (measured in CI, run 43897207709).
+- **Pitfalls found by building**: the shader-cache trap below hit again — an aborted first build
+  (no `VULKAN_SDK`) left `whisper-rs-sys`'s `OUT_DIR` in a state where the next build *compiles*
+  and then fails at link on `get_rows_iq2_xxs_data`; `cargo clean -p whisper-rs-sys` with
+  `VULKAN_SDK` set rebuilds it (5 min 41 s here). `--version` calls `print_system_info()`, which is
+  not the compile-time string T1's comment claimed (it prints a `ggml_vulkan:` device row when a
+  driver exists) — it survived a dead ICD here, and the test now pins it. whisper's segment
+  timestamps are in **centiseconds**, and with VAD the mapping is integer arithmetic on that unit:
+  mixing units moves every line by 90 %.
+
 
 ### T3 — Worker protocol and supervisor
 
