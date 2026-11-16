@@ -160,6 +160,10 @@ jobs:
           workspaces: desktop
       - name: Test the workspace
         run: cargo test --workspace --locked
+      # `cargo test` builds the test harnesses, not the binaries themselves:
+      # the two launch steps below need the real executables.
+      - name: Build the debug binaries
+        run: cargo build --workspace --locked
       # The window is the one thing a unit test cannot prove: it opens a real
       # GPU surface. Xvfb + lavapipe (mesa-vulkan-drivers) give it one, and the
       # binary prints the time to the first painted frame before quitting.
