@@ -1785,6 +1785,8 @@ Waves that can run in parallel (disjoint files):
   - `pacman -U -dd` into a throwaway root installs exactly the five paths (two binaries, the
     `.desktop`, the icon, the licence), and `neezer-transcribe --version` from that root reports the
     RADV 780M device and `whisper.cpp 1.8.3 (backend vulkan compilé)`.
+  - the `arch` job in CI (`archlinux:latest`, cold container and cold crate cache): **11 min 08 s**
+    end to end, `namcap` gate green, the `files` job correctly skipped on a pull request.
 - **Pitfalls found by building**:
   - makepkg runs `build()` with the distro's hardening `CFLAGS`/`CXXFLAGS`/`LDFLAGS`, and its `lto`
     option is what broke the link (see the rule above); the failure looks like a C library problem
