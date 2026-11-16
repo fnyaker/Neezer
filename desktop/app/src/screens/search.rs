@@ -2043,7 +2043,7 @@ mod journey {
         // and `Entrée`/`Menu` below act on the answer
         // (`docs/agents/desktop.md`, D12 *Pitfalls*).
         stub::until(&runtime, cx, "the search's results", |cx| {
-            view.read(cx).list.len() > 0
+            !view.read(cx).list.is_empty()
         });
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();

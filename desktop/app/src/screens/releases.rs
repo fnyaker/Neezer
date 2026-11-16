@@ -567,6 +567,8 @@ impl Render for Screen {
             .flex_col()
             .flex_1()
             .min_h(px(0.))
+            .w_full()
+            .max_w(px(1800.))
             .gap(rems(1.25))
             .p(rems(1.5));
 
@@ -676,22 +678,24 @@ impl Screen {
                     .child(label),
             );
         }
+        // Real buttons: the keymap has no route to these two screens, so a
+        // keyboard reaches them the way a mouse does — by activating a control.
         bar = bar
             .child(div().flex_1())
-            .child(card::chip(
-                "releases-recap".into(),
-                "Mon récap",
-                false,
-                cx,
-                |this: &mut Self, _, cx| this.open(Route::Recap { year: None }, cx),
-            ))
-            .child(card::chip(
-                "releases-history".into(),
-                "Historique",
-                false,
-                cx,
-                |this: &mut Self, _, cx| this.open(Route::History, cx),
-            ));
+            .child(
+                button("releases-recap", "Mon récap", ButtonVariant::Secondary, cx).on_click(
+                    cx.listener(|this, _, _, cx| this.open(Route::Recap { year: None }, cx)),
+                ),
+            )
+            .child(
+                button(
+                    "releases-history",
+                    "Historique",
+                    ButtonVariant::Secondary,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.open(Route::History, cx))),
+            );
         page = page.child(bar);
 
         // The two shelves.

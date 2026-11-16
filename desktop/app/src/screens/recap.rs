@@ -390,6 +390,8 @@ impl Render for Screen {
             .flex_col()
             .flex_1()
             .min_h(px(0.))
+            .w_full()
+            .max_w(px(1800.))
             .gap(rems(1.))
             .p(rems(1.5));
 
@@ -434,18 +436,16 @@ impl Render for Screen {
         // The year chips: one per year that holds an event, newest first.
         let chips = recap_story::year_chips(&self.years, self.now_year);
         if chips.len() > 1 {
-            let mut row = div().flex().items_center().gap(rems(0.375)).flex_wrap();
-            for (year, label) in chips {
+            let mut group = gpui_omarchy::toggle_group("recap-years", cx);
+            for (index, (year, label)) in chips.into_iter().enumerate() {
                 let active = self.year == Some(year);
-                row = row.child(card::chip(
-                    format!("recap-year-{year}").into(),
-                    &label,
-                    active,
-                    cx,
-                    move |this: &mut Self, _, cx| this.open(year, cx),
-                ));
+                group = group.child(
+                    gpui_omarchy::toggle(("recap-year", index), label, active, cx)
+                        .debug_selector(move || format!("recap-year-{index}"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.open(year, cx))),
+                );
             }
-            page = page.child(row);
+            page = page.child(group);
         }
 
         // The payload is moved out for the paint and put back (a year is a few

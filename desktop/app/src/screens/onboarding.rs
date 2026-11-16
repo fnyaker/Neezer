@@ -977,6 +977,8 @@ impl Render for Screen {
             .flex_col()
             .flex_1()
             .min_h(px(0.))
+            .w_full()
+            .max_w(px(1800.))
             .gap(rems(1.))
             .p(rems(2.));
 

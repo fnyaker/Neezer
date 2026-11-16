@@ -337,6 +337,8 @@ impl Render for Screen {
             .flex_col()
             .flex_1()
             .min_h(px(0.))
+            .w_full()
+            .max_w(px(1800.))
             .gap(rems(0.75));
 
         // The 30-day summary: three figures and the two tops.
@@ -717,6 +719,7 @@ fn day_row<V: Render>(
     }
     div()
         .h(px(DAY_H))
+        .w_full()
         .flex()
         .items_center()
         .gap(rems(0.5))
@@ -758,6 +761,7 @@ fn event_row(event: &HistoryEvent, file: Option<PathBuf>, cx: &mut Context<Scree
     let row = div()
         .id(SharedString::from(format!("history-event-{}", event.id)))
         .h(px(EVENT_H))
+        .w_full()
         .flex()
         .items_center()
         .gap(rems(0.625))
@@ -1227,6 +1231,55 @@ mod tests {
             &[event(1, "2026-11-16T20:31:00", 1, 20)],
             &summary
         ));
+    }
+
+    /// The worst realistic log this screen can hold: 5 000 events, one per
+    /// line plus its day headers. The footprint is computed from the OBJECT's
+    /// own allocations (`size_of` + the strings' capacity), never from a test
+    /// process's RSS: two tests measuring one process's RSS cannot both be
+    /// right (D8a's `in_child` recorded exactly that).
+    #[test]
+    fn five_thousand_events_stay_a_windowed_model_not_five_thousand_widgets() {
+        let events: Vec<HistoryEvent> = (0..5_000)
+            .map(|index| {
+                let day = 1 + index / 50;
+                event(
+                    i64::from(index),
+                    &format!("2026-11-{:02}T20:31:00", day.min(30)),
+                    1,
+                    200,
+                )
+            })
+            .collect();
+        let rows = flatten(&events);
+        let headers = rows
+            .iter()
+            .filter(|row| matches!(row, Row::Day { .. }))
+            .count();
+        assert_eq!(rows.len(), 5_000 + headers, "each day carries its header");
+        assert_eq!(headers, 30, "the log spans the 30 days the fixture builds");
+        let mut model = 0usize;
+        for row in &rows {
+            model += std::mem::size_of::<Row>();
+            if let Row::Day { key, label, .. } = row {
+                model += key.capacity() + label.capacity();
+            }
+        }
+        let sizes = rows.len() * std::mem::size_of::<Size<gpui_kit::Pixels>>();
+        println!(
+            "history_5000: {} rows, model {} KB + size vec {} KB = {} KB",
+            rows.len(),
+            model / 1024,
+            sizes / 1024,
+            (model + sizes) / 1024
+        );
+        // The SPA's rows are 44 px and 72 px of geometry, not data: one row is
+        // a district and an index, and the sizes vector is two pixels each.
+        assert!(
+            model + sizes < 400 * 1024,
+            "5 000 events hold {} KB of model",
+            (model + sizes) / 1024
+        );
     }
 
     /// The filter is the server's own `outcome` vocabulary (`lib/api.js`).
