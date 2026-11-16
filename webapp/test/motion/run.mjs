@@ -6,6 +6,8 @@
 //   DIST=/tmp/build node test/motion/run.mjs        # a build made elsewhere
 //   SHOTS=/tmp/motion node test/motion/run.mjs      # PNGs of every leg
 //   ONLY=eco node test/motion/run.mjs               # one motion level
+//   VIEWPORT=390 FILES=home-search node test/motion/run.mjs   # one viewport, one file
+//   SELFTEST=1 node test/motion/run.mjs             # the requests check's canary
 //   PYTHON=<venv python> …                          # a project venv
 //
 // The runner starts `tools/perf_api.py --serve` through test/harness.mjs (an
@@ -21,17 +23,39 @@
 // targets outside `[data-motion="status"]` is EMPTY in eco, while the same two
 // gestures leave running transitions at full motion. The `status` exception is
 // proven both ways: a spinner marked `data-motion="status"` keeps its 1 s
-// animation in eco, an unmarked one is stopped.
+// animation in eco, an unmarked one is stopped. The reduced-motion hover rule
+// is judged on the PROBE's own animations: the app may legitimately still be
+// moving elsewhere (a lot's page or shelf entrance is a 140 ms fade that lands
+// right after boot), and holding that against the `.btn` rule reported the
+// app's work as a broken guard — what matters is that a `.btn` hover starts
+// nothing, which is what is checked.
 //
 // EVERY LATER LOT adds `scenarios/<lot>.mjs` (see scenarios/README.md) with one
 // scenario per inventory row that has a clickable trigger; this runner then
 // holds each of them, in the three levels, to:
-//   - identical /api and image requests across the three levels (a transition
-//     never adds a request: CLAUDE.md rule 3);
+//   - the same requests in the three levels (a transition never adds a request:
+//     CLAUDE.md rule 3) — as SHAPES (a UUID is `<id>`), unique by URL, minus the
+//     named background families below;
 //   - eco: no animation at all outside `[data-motion="status"]`;
 //   - reduced: no running Animation whose keyframes carry a transform, and no
 //     duration over 140 ms (M14);
 // and takes the pictures the plan asks for (SHOTS=<dir>).
+//
+// ONE FRESH PAGE PER SCENARIO FILE (and one for the foundation): a page is a
+// session, and a session warms the cover cache and starts the shell's own
+// background work. Sharing one page across files made a scenario's requests
+// depend on the file that ran before it (measured: the same home scenario read
+// 0 failure alone and 5 across the three levels once three files shared the
+// page), so every file now boots its own. Before a window is read the page is
+// also made QUIET — nothing new asked for three frames running, no picture
+// still loading, no instant transition left — because the cover queue admits six
+// pictures at a time from a horizon it re-scores every frame. The families of
+// requests that are NOT a scenario's own (the shell's warm-up, playback, the
+// sleeve pipeline) are named in `BACKGROUND_REQUESTS` below.
+//
+// SELFTEST=1 arms one extra scenario that adds a fetch while a transition runs
+// (full motion only), so the requests check MUST fail: it is how the bench
+// proves it has not gone blind. Run it after changing that check.
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -44,6 +68,14 @@ const LEVELS = (process.env.ONLY ? process.env.ONLY.split(",") : ["full", "reduc
 const SHOTS = process.env.SHOTS || null;
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 
+/** Two switches for a shared machine: one viewport (`VIEWPORT=390`) and one or
+ *  several scenario files (`FILES=home-search,library`, the file name without
+ *  `.mjs`). A full walk boots a page per file per level; narrowing it is what
+ *  makes a run fit beside nineteen other workers' benches, and it is how a lot
+ *  proves its own file alone AND beside the others. */
+const ONLY_VIEWPORT = process.env.VIEWPORT || null;
+const ONLY_FILES = process.env.FILES ? process.env.FILES.split(",").map((name) => name.trim()) : null;
+
 const VIEWPORTS = [
   ["bureau 1440", { viewport: { width: 1440, height: 900 } }, false],
   [
@@ -51,7 +83,7 @@ const VIEWPORTS = [
     { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
     true,
   ],
-];
+].filter(([, , phone]) => !ONLY_VIEWPORT || String(phone ? 390 : 1440) === ONLY_VIEWPORT);
 
 const { check, state } = checker();
 const say = (text) => console.log(text);
@@ -327,7 +359,15 @@ async function foundation(page, level, phone) {
       `${tag}: nothing but a 0 ms remnant starts on a .btn hover in eco`,
       json(hover.early),
     );
-    check(hover.later.length === 0, `${tag}: getAnimations() empty after a .btn hover in eco`, json(hover.later));
+    // What must be gone three frames later is MOTION. The guard's own 0.01 ms
+    // is a remnant, not motion (`describe` rounds it to 0), and any surface of
+    // the app can make one at any moment — a sleeve decoding, a row mounting.
+    // Measured: a cover's `.loaded` remnant, on an eco page where nothing else
+    // moved, failed this check while the guard itself was holding.
+    const moving = hover.later.filter((animation) => animation.duration > 0);
+    check(moving.length === 0, `${tag}: nothing moves three frames after a .btn hover in eco`, json(moving));
+    const remnants = hover.later.length - moving.length;
+    if (remnants) say(`  ${tag} : ${remnants} instant remnant(s) on the timeline (0 ms, not motion)`);
     check(secs(spinner.plain.duration) <= 0.00001, `${tag}: an unmarked 1 s animation is stopped`, spinner.plain.duration);
     check(spinner.plain.running === 0, `${tag}: … and it is not on the timeline`);
     check(secs(spinner.status.duration) === 1, `${tag}: a [data-motion="status"] spinner keeps its 1 s`, spinner.status.duration);
@@ -359,8 +399,21 @@ async function foundation(page, level, phone) {
     );
   } else {
     // Reduced motion: the app's own `.btn` rules are off (app.css), and the
-    // bench says so rather than trusting a comment.
-    check(hover.early.length === 0, `${tag}: a .btn hover starts no transition under reduced motion`, json(hover.early));
+    // bench says so rather than trusting a comment. What is judged here is the
+    // PROBE's own animations — the button this bench created and hovered. The
+    // app may still be moving somewhere else at this instant (a shelf or page
+    // entrance is a 140 ms fade that lands right after boot, which is a lot's
+    // work and not a broken `.btn` rule); those are reported, never counted as
+    // a failure. The intent is unchanged: a `.btn` hover starts NOTHING.
+    const probe = hover.early.filter((animation) => animation.probe);
+    check(probe.length === 0, `${tag}: a .btn hover starts no transition under reduced motion`, json(probe));
+    const elsewhere = hover.early.filter((animation) => !animation.probe);
+    if (elsewhere.length) {
+      say(
+        `  ${tag} : ${elsewhere.length} animation(s) of the app still running (not the probe, so not the .btn rule) — ` +
+          json(elsewhere.map((animation) => [animation.name, animation.duration])),
+      );
+    }
   }
 
   return tokens;
@@ -386,20 +439,147 @@ async function shot(page, name) {
 
 // -- scenarios ---------------------------------------------------------------
 
+/** One entry per scenario FILE: each file gets its own page per level (below). */
 const scenarioDir = fileURLToPath(new URL("./scenarios/", import.meta.url));
-const scenarioFiles = readdirSync(scenarioDir).filter((name) => name.endsWith(".mjs"));
-const scenarios = [];
-for (const name of scenarioFiles) {
+const files = [];
+for (const name of readdirSync(scenarioDir).filter((entry) => entry.endsWith(".mjs")).sort()) {
   const module = await import(pathToFileURL(join(scenarioDir, name)).href);
-  for (const scenario of module.scenarios || []) scenarios.push({ file: name, ...scenario });
+  if (!module.scenarios?.length) continue;
+  const short = name.replace(/\.mjs$/, "");
+  if (ONLY_FILES && !ONLY_FILES.includes(short)) continue;
+  files.push({ name, scenarios: module.scenarios });
 }
 
-/** The /api and image requests a page asked for: the "nothing extra" check. */
+/** SELFTEST: the requests check's canary. One scenario that ADDS a fetch — at
+ *  full motion only, where a transition runs — must make check (5) fail. It is
+ *  never part of a normal run. */
+if (process.env.SELFTEST) {
+  files.push({
+    name: "selftest",
+    scenarios: [
+      {
+        name: "auto-test: un fetch ajouté pendant la transition",
+        async act(page) {
+          const level = await page.evaluate(() =>
+            document.documentElement.dataset.eco === "1"
+              ? "eco"
+              : matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? "reduced"
+                : "full",
+          );
+          // Only where motion is the difference between the levels.
+          if (level === "full") await page.evaluate(() => fetch("/api/selftest-transition").catch(() => {}));
+        },
+      },
+    ],
+  });
+  say("SELFTEST: a scenario that adds a fetch is armed — check (5) MUST fail on it.");
+}
+
+/** The /api and image requests a page asked for: the "nothing extra" check.
+ *  `image` marks the pictures, which are compared by URL (see askedFor). */
 function watch(page, requests) {
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (url.pathname.startsWith("/api/") || request.resourceType() === "image") {
-      requests.push(url.pathname.replace(/\?.*$/, ""));
+    const image = request.resourceType() === "image";
+    if (url.pathname.startsWith("/api/") || image) {
+      requests.push({ path: url.pathname.replace(/\?.*$/, ""), image });
+    }
+  });
+}
+
+/** Requests that are NOT a scenario's own, and therefore must not be held
+ *  against a level: the shell's background work and whatever is playing. Both
+ *  are driven by their own clocks, so they land in whichever window happens to
+ *  be open — measured on the merged tree (T4: the warm-up drips once every
+ *  1.5 s; a playing track pulls its bytes, gains, analysis and edges). A fetch
+ *  a TRANSITION added is still caught: it happens at full motion only, so the
+ *  three levels disagree on a path that is not in this list. */
+const BACKGROUND_REQUESTS = [
+  // warmPlaylists (lib/actions.js): ten seconds after a boot, `/me/favorites`
+  // then up to 25 `/playlist/<id>` payloads, one every WARM_GAP (1.5 s), to
+  // warm the offline cache. Every fresh page restarts it.
+  /^\/api\/me\/favorites$/,
+  /^\/api\/playlist\/[^/]+$/,
+  // The sleeve pipeline (lib/coverqueue.js): six pictures in flight, admitted
+  // from a horizon it re-scores every frame, each slot freed by a decode — so
+  // WHICH sleeves a window asked for depends on decode timing, not on the
+  // screen: the same home scenario asked for 76 `/api/cover/<id>` in full and
+  // 80–87 in the other two levels. Named here, and measured by its own benches
+  // (test/glass, test/backdrop, T4's list), never a verdict on a transition.
+  /^\/api\/cover\//,
+  /^\/images\/cover\//,
+  // Playback: the bytes of the track and everything the player asks about it.
+  /^\/api\/stream\//,
+  /^\/api\/gains$/,
+  /^\/api\/analyses$/,
+  /^\/api\/audio\/edges\//,
+  /^\/api\/lyrics\//,
+];
+const isBackground = (path) => BACKGROUND_REQUESTS.some((pattern) => pattern.test(path));
+
+/** A path's SHAPE: its UUIDs and long numbers become `<id>`/`<n>`. A scenario's
+ *  own setup may legitimately ask about a different entity in another level —
+ *  the fixture's "first followed artist" drifts as the walks play things — and
+ *  no transition changes WHICH entity is asked for; what a transition could add
+ *  is a KIND of request, and that is what check (5) must see. */
+const shape = (path) =>
+  path
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>")
+    .replace(/\/(\d{3,})(?=\/|$)/g, "/<n>");
+
+/** What one scenario asked for, as check (5) compares it: the SHAPE of every
+ *  /api path and every image URL, UNIQUE (the same picture requested twice is
+ *  one picture — the cover queue is frame-sliced and may re-ask), without the
+ *  background families above. */
+function askedFor(requests) {
+  const paths = new Set();
+  for (const request of requests) {
+    if (isBackground(request.path)) continue;
+    paths.add(shape(request.path));
+  }
+  return [...paths].sort();
+}
+
+/** A window is read on a QUIET page, and "quiet" is about what the page ASKS
+ *  FOR, not about the pictures we happen to know: the cover queue admits six
+ *  pictures at a time and re-scores what is mounted on every frame, so a window
+ *  that ends mid-admission has asked for a different set of art at each level —
+ *  measured on the merged tree as ~45 `/api/cover/<id>` against ~44.
+ *  `PerformanceObserver` sees every resource the page loads (a fetch, an XHR, an
+ *  `<img>`), so quiescence is "three frames in a row with nothing new asked
+ *  for", plus no image still loading so a decode that lands on the last frame
+ *  is not missed, plus no instant transition left (eco's guard is 0.01 ms, and
+ *  the animation checks would read that remnant as "something still runs").
+ *  Frames, not a clock, with a 240-frame budget so a page that never settles
+ *  cannot hang the bench. */
+async function quiet(page) {
+  await page.evaluate(async () => {
+    if (!window.__quietSeen) {
+      window.__quietSeen = 0;
+      const watch = new PerformanceObserver((list) => {
+        window.__quietSeen += list.getEntries().length;
+      });
+      try {
+        watch.observe({ type: "resource", buffered: false });
+      } catch {
+        /* no resource timing: the image and animation waits below still hold */
+      }
+      window.__quietWatch = watch;
+    }
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    let still = 0;
+    let last = -1;
+    for (let i = 0; i < 240; i++) {
+      const seen = window.__quietSeen;
+      const loading = [...document.images].some((img) => img.isConnected && !img.complete);
+      const instant = document
+        .getAnimations()
+        .some((animation) => animation.effect && animation.effect.getTiming().duration < 0.1);
+      still = !loading && !instant && seen === last ? still + 1 : 0;
+      last = seen;
+      if (still >= 3) return;
+      await frame();
     }
   });
 }
@@ -411,6 +591,7 @@ async function runScenario(page, requests, scenario, level, tag) {
   if (scenario.act) await scenario.act(page);
   if (SHOTS && scenario.midway) await shot(page, `${tag}-${scenario.name}-50`);
   if (scenario.settle) await scenario.settle(page);
+  await quiet(page);
 
   // (6) eco = nothing moves, outside the status indicators.
   if (level === "eco") {
@@ -426,56 +607,81 @@ async function runScenario(page, requests, scenario, level, tag) {
       check(moved.length === 0, `${tag} ${scenario.name}: ${animation.name} carries no transform`, json(moved));
     }
   }
-  return requests.slice(mark).sort();
+  return askedFor(requests.slice(mark));
 }
 
 // -- the walk ----------------------------------------------------------------
 
+/** Each scenario's window, per viewport and level: keyed with its FILE, so two
+ *  files may name a scenario the same. */
 const requestSets = new Map();
 
-for (const [label, viewport, phone] of VIEWPORTS) {
-  for (const level of LEVELS) {
-    say(`\n— ${label} · ${level}`);
-    const { ctx, page, errors, authed } = await open(level, viewport);
-    const requests = [];
-    watch(page, requests);
+/** (5) A transition never adds a request: the three levels ask for the same
+ *  /api paths and pictures. `full` is the reference and runs first. */
+function compareRequests(file, scenarios, label, level) {
+  if (level === "full") return;
+  for (const scenario of scenarios) {
+    const mine = requestSets.get(`${file}|${scenario.name}|${label}|${level}`);
+    const reference = requestSets.get(`${file}|${scenario.name}|${label}|full`);
+    if (!reference) continue;
+    check(
+      json(mine) === json(reference),
+      `${label} ${file} ${scenario.name}: requests unchanged in ${level}`,
+      `${json(mine)} vs ${json(reference)}`,
+    );
+  }
+}
 
+for (const [label, viewport, phone] of VIEWPORTS) {
+  const tagOf = (level) => `${phone ? "390" : "1440"}-${level}`;
+
+  // The foundation (tokens, guard, probe), on a page of its own: it answers for
+  // the whole app, not for a file.
+  for (const level of LEVELS) {
+    say(`\n— ${label} · ${level} · fondation`);
+    const { ctx, page, errors, authed } = await open(level, viewport);
     check(authed, `${label} · ${level}: signed in (the shell, not the login screen)`);
     await foundation(page, level, phone);
-    await shot(page, `${phone ? "390" : "1440"}-${level}-accueil`);
-
-    for (const scenario of scenarios) {
-      const tag = `${phone ? "390" : "1440"}-${level}`;
-      const seen = await runScenario(page, requests, scenario, level, tag);
-      requestSets.set(`${scenario.name}|${label}|${level}`, seen);
-      await shot(page, `${tag}-${scenario.name}`);
-    }
-
-    // (5) A transition never adds a request: the three levels ask for the same
-    // /api paths and images, in the same multiset.
-    for (const scenario of scenarios) {
-      const mine = requestSets.get(`${scenario.name}|${label}|${level}`);
-      const reference = requestSets.get(`${scenario.name}|${label}|full`);
-      if (level !== "full" && reference) {
-        check(
-          json(mine) === json(reference),
-          `${label} ${scenario.name}: requests unchanged in ${level}`,
-          `${json(mine)} vs ${json(reference)}`,
-        );
-      }
-    }
-
+    await shot(page, `${tagOf(level)}-accueil`);
     check(errors.length === 0, `${label} · ${level}: no page error`, errors.join(" | "));
     await ctx.close();
+  }
+
+  // Then a FRESH page per file and per level: a page is a session, and a
+  // session's warm caches and background work must not decide what the next
+  // file's windows ask for (measured: one home scenario read 0 failure alone
+  // and 5 across levels once three files shared a page).
+  for (const level of LEVELS) {
+    for (const file of files) {
+      say(`\n— ${label} · ${level} · ${file.name}`);
+      const { ctx, page, errors, authed } = await open(level, viewport);
+      const requests = [];
+      watch(page, requests);
+      check(authed, `${label} · ${level} ${file.name}: signed in (the shell, not the login screen)`);
+
+      for (const scenario of file.scenarios) {
+        const tag = tagOf(level);
+        requestSets.set(
+          `${file.name}|${scenario.name}|${label}|${level}`,
+          await runScenario(page, requests, scenario, level, tag),
+        );
+        await shot(page, `${tag}-${scenario.name}`);
+      }
+
+      compareRequests(file.name, file.scenarios, label, level);
+      check(errors.length === 0, `${label} · ${level} ${file.name}: no page error`, errors.join(" | "));
+      await ctx.close();
+    }
   }
 }
 
 await browser.close();
 server.stop();
 
+const total = files.reduce((count, file) => count + file.scenarios.length, 0);
 say(
-  `\n${state.failed === 0 ? "OK" : "ÉCHEC"} — ${scenarios.length} scénario(s) ` +
-    `(${scenarioFiles.length} fichier(s)) × ${VIEWPORTS.length} viewports × ${LEVELS.length} niveaux ` +
+  `\n${state.failed === 0 ? "OK" : "ÉCHEC"} — ${total} scénario(s) ` +
+    `(${files.length} fichier(s)) × ${VIEWPORTS.length} viewports × ${LEVELS.length} niveaux ` +
     `(${LEVELS.join(", ")}), ${state.failed} échec(s).`,
 );
 process.exit(state.failed === 0 ? 0 : 1);

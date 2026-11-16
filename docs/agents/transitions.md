@@ -575,8 +575,15 @@ settle(page) }`. Checks per scenario:
 3. **Compositor only**: `Performance.getMetrics` LayoutCount delta over the animation window ≤ 3 (prototype:
    2), except scenarios declared `collapse` (≤ 1 per frame).
 4. **No long task** (> 50 ms) during the animation window at THROTTLE=1.
-5. **Requests unchanged**: the `/api` and image requests during act+settle are the same multiset in the
-   three levels and equal to the parent commit's (`page.on("request")`).
+5. **Requests unchanged**: the `/api` and image requests of a scenario's window (act → settle, read on a QUIET
+   page) are the same set in the three levels (`page.on("request")`). The set, not the multiset, and by URL:
+   the cover queue is frame-sliced and may re-ask the same picture. Two families of requests are NOT a
+   scenario's own and are named in `BACKGROUND_REQUESTS` — the shell's `warmPlaylists` warm-up
+   (`/api/me/favorites`, `/api/playlist/<id>`, ten seconds after a boot then one every 1.5 s) and whatever is
+   playing (`/api/stream/`, `/api/gains`, `/api/analyses`, `/api/audio/edges/`, `/api/lyrics/`). Each file
+   also gets a **fresh page per level** (a page is a session: its warm cover cache and its background work
+   must not decide what the next file's windows ask for), and `SELFTEST=1` arms a scenario that adds a fetch at
+   full motion only, so this check MUST fail — the bench's own canary.
 6. **Eco = nothing moves**: two rAF after the act, `document.getAnimations()` filtered to targets outside
    `[data-motion="status"]` is empty, and no element's computed `transition-duration` exceeds `0.00001s`
    (sampled on the scenario's selectors).
@@ -611,6 +618,30 @@ settle(page) }`. Checks per scenario:
 - **A detail page for the Back scenario is a SHORT playlist.** A 4 000-track page keeps mounting rows and
   their sleeves after any reasonable baseline, and a cover that arrives on the wrong side of the window makes
   the request check compare two different pages.
+
+*The foundation's hover probe, the requests check and the pictures* (measured while fixing the bench after
+T6a, `test/motion/run.mjs`):
+
+- **The reduced-motion hover rule is judged on the PROBE's OWN animations.** `open()` waits (bounded) for
+  the shell's first-paint entrances, but a lot's page or shelf entrance is a 140 ms fade that can still be
+  landing — counting it against the `.btn` rule reported another lot's work as a broken guard. What is
+  asserted is unchanged: a `.btn` hover starts NOTHING, and eco's tokens and guard still hold on it. The
+  app's other animations are printed, never failed.
+- **Eco must be empty of MOTION, not of 0.01 ms remnants.** The guard's own duration is a remnant
+  (`describe` rounds it to 0) and any surface can make one at any moment (a sleeve decoding): the check
+  fails on anything still moving three frames later.
+- **One fresh page per scenario file** (and one for the foundation). A page is a session, and its warm
+  cover cache and background work decided what the NEXT file's windows asked for — measured: the same home
+  scenario read 0 failure alone and 5 request failures across the levels with three files on one page.
+- **A window is read on a QUIET page**: nothing new asked for three frames running, no picture loading, no
+  instant remnant. The sleeve queue admits six pictures at a time from a horizon it re-scores every frame,
+  so the same scenario asked for 76 `/api/cover/<id>` in full against 80–87 in the other levels.
+- **Check 5 compares SHAPES, unique by URL, minus the named background families** — `warmPlaylists`,
+  playback, the sleeve pipeline (each commented with what it is and why). A UUID becomes `<id>`, so a
+  scenario whose own setup legitimately picks a different entity in another level does not fail, while a
+  transition that adds a fetch still does.
+- **The "50 %" picture cannot be half the TIME**: `EASE.enter(0.5)` is 0.95, so the frame is taken where the
+  element's computed opacity is about half.
 
 ## Prompt for a coding worker (one per lot)
 
