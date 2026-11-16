@@ -2128,32 +2128,25 @@ mod ui {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// The page's own weight, measured: the RSS of a process that already
-    /// holds a 4 000-row restored queue, before and after every settings
-    /// section has been built and laid out at 1280×800.
+    /// The page's own weight, measured: the bytes the test's own thread still
+    /// holds after every user section has been built and laid out at 1280×800,
+    /// with a 4 000-row restored queue in place.
     ///
-    /// The shell and wgpu dominate a real app's RSS (D7: 103 MB at the home
-    /// screen); what a screen may NOT do is add tens of megabytes of its own
-    /// (a decoded image per row, a widget per list item). The budget here is
-    /// 2 MB for the ten user sections once their strings are shaped, which the
-    /// numbers below stay under.
+    /// The reading is `testmem`'s counting allocator (`allocated - freed` on
+    /// this thread), never `VmRSS`: the suite runs its tests in parallel in one
+    /// process, so the process's resident set moves with its neighbours and with
+    /// glibc's arenas — the same page read 8 404 KB in CI under load while it
+    /// holds a few hundred KB of its own (PR #236). Bytes cannot move with a
+    /// neighbour, so the budget can stay tight and mean "what the page keeps".
     #[gpui::test]
     async fn the_whole_settings_page_costs_a_few_megabytes(cx: &mut gpui::TestAppContext) {
-        fn rss_kb() -> u64 {
-            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-            status
-                .lines()
-                .find_map(|line| line.strip_prefix("VmRSS:"))
-                .and_then(|value| value.split_whitespace().next())
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(0)
-        }
+        use crate::testmem::Meter;
 
         cx.update(|cx| {
             gpui_omarchy::init(cx);
             crate::keymap::install(cx);
         });
-        let dir = temp_dir("rss");
+        let dir = temp_dir("weight");
         let state = signed_in(cx, true, &dir);
         // The worst realistic queue: 4 000 rows, restored paused, as a restart
         // leaves it (D7 measured the model at +24 MB for 8 000 + 4 000).
@@ -2201,24 +2194,44 @@ mod ui {
             cx.update(|_, cx| host.update(cx, |host, cx| host.show(*section, &state, cx)));
             cx.run_until_parked();
         }
-        let before = rss_kb();
-        for section in SettingsSection::USER.iter() {
-            cx.update(|_, cx| host.update(cx, |host, cx| host.show(*section, &state, cx)));
-            cx.run_until_parked();
-            assert!(
-                cx.debug_bounds("settings-screen").is_some(),
-                "{section:?} did not paint"
+        let mut deltas = Vec::new();
+        for pass in 0..5 {
+            let before = Meter::now();
+            for section in SettingsSection::USER.iter() {
+                cx.update(|_, cx| host.update(cx, |host, cx| host.show(*section, &state, cx)));
+                cx.run_until_parked();
+                assert!(
+                    cx.debug_bounds("settings-screen").is_some(),
+                    "{section:?} did not paint"
+                );
+            }
+            deltas.push(before.since());
+            println!(
+                "settings heap: tour {pass} retains {} B ({} B live on this thread)",
+                deltas[pass],
+                crate::testmem::retained_bytes()
             );
         }
-        let after = rss_kb();
-        let delta = after.saturating_sub(before);
-        println!(
-            "settings RSS: {before} KB -> {after} KB (+{delta} KB for the ten user \
-             sections, 4 000-row queue in place)"
-        );
+        // Several tours, then the smallest: one tour's own weight, with a
+        // neighbour that happened to leave a cache behind on this thread
+        // unable to inflate it. A page that keeps anything proportional to the
+        // library, the queue or an image per row adds it to EVERY tour, so the
+        // minimum still catches it.
+        let delta = deltas.iter().copied().min().unwrap_or(u64::MAX);
+        // Measured: 20 560 B per tour, the same byte count on 30 consecutive
+        // runs (and on a loaded machine), 260 280 B for the first tour through
+        // caches the warm-up had not built yet. The 20 560 B is nearly all
+        // retention the page does not own: ~2 KiB per `Screen` GPUI keeps
+        // alive for its pending drain task (a separate probe read 520 B per
+        // `Screen::new` + drop with no window). The budget below is three
+        // times the measured weight and 32 times tighter than the RSS one it
+        // replaces: any page that starts keeping a track-sized or image-sized
+        // buffer fails here at once.
+        const BUDGET_BYTES: u64 = 64 * 1024;
         assert!(
-            delta < 2 * 1024,
-            "the ten user sections must stay under 2 MB once warm, they cost {delta} KB"
+            delta < BUDGET_BYTES,
+            "one tour of the ten user sections must stay under {BUDGET_BYTES} B \
+             (measured 20 560 B), it retains {delta} B"
         );
         // Every queued row is still there: the page did not disturb the queue.
         cx.update(|_, cx| assert_eq!(state.read(cx).player.len(), 4_000));
