@@ -22,6 +22,7 @@
   import Icon from "../components/Icon.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import Skeleton from "../components/Skeleton.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   const PAGE = 50;
   const DAY_H = 44;
@@ -316,9 +317,9 @@
   }
 </script>
 
-<div class="history fade-in" bind:this={pageEl}>
+<div class="history" bind:this={pageEl}>
   {#if summary && !emptyHistory}
-    <section class="summary card" aria-labelledby="sum-title">
+    <section class="summary card" aria-labelledby="sum-title" in:fadeIn>
       <div class="sum-head">
         <h2 class="section-title" id="sum-title">{summary.days} derniers jours</h2>
         <div class="sum-side">
@@ -441,7 +442,7 @@
       {/if}
     </div>
   {:else}
-    <div class="vlist" bind:this={listEl} style={`height:${totalH}px`}>
+    <div class="vlist" bind:this={listEl} style={`height:${totalH}px`} in:fadeIn>
       <div class="vwin" style={`transform:translateY(${vTop}px)`}>
         {#each visible as row (row.key)}
           {#if row.kind === "day"}
@@ -487,7 +488,7 @@
       {#if next}
         <button class="btn btn-ghost" on:click={loadMore} disabled={loading}>
           {#if loading}
-            <span class="spin"><Icon name="refresh" size={16} /></span> Chargement…
+            <span class="spin" data-motion="status"><Icon name="refresh" size={16} /></span> Chargement…
           {:else}
             <Icon name="plus" size={16} /> Charger plus
           {/if}
@@ -812,7 +813,7 @@
     background: rgba(0, 0, 0, 0.42);
     color: #fff;
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--dur-instant) var(--ease-standard);
   }
   .ev-cover:hover .ev-play,
   .ev-cover:focus-visible .ev-play {

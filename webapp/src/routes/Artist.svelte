@@ -12,6 +12,7 @@
   import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
   import { rememberScreen, recallScreen } from "../lib/nav.js";
+  import { fadeIn } from "../lib/motion.js";
 
   export let params = {};
 
@@ -169,7 +170,7 @@
 {:else if !data?.artist}
   <LoadFailed error={loadError} notFound="Artiste introuvable." on:retry={() => load(id)} />
 {:else}
-  <div class="fade-in">
+  <div in:fadeIn>
     <!-- §6: a plain `--s2` band under a hairline, not a gradient. The photo is
          round and 168 px, the name set at 88 in Bricolage 800. -->
     <header class="banner gh">
@@ -225,6 +226,12 @@
       {/if}
     </div>
 
+    <!-- I2: the artist stays the same page (screenKey is /artist/x), so the
+         TAB is the motion — one element fades, opacity only, no translate
+         (the tabs differ in height, M7). A keyed block, so a tab click is the
+         one committed change that plays it. -->
+    {#key tab}
+    <div class="tab-pane" in:fadeIn>
     {#if tab === "credits" && data.credited}
       <PersonCredits name={data.artist.name} />
     {:else if tab === "tracks"}
@@ -285,6 +292,8 @@
         <p class="bio muted">{data.bio}</p>
       {/if}
     {/if}
+    </div>
+    {/key}
   </div>
 {/if}
 

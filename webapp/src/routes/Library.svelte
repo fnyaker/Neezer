@@ -37,6 +37,7 @@
   import { listDownloads } from "../lib/offline.js";
   import { api } from "../lib/api.js";
   import { rememberScreen, recallScreen } from "../lib/nav.js";
+  import { animate, fadeIn, DUR, EASE_CSS } from "../lib/motion.js";
   import { bytes as fmtBytes, isLocalId } from "../lib/format.js";
   import { groupPlaylists, idsOf, moveItem } from "../lib/playlistfolders.js";
   import Card from "../components/Card.svelte";
@@ -558,6 +559,49 @@
     const r = e.currentTarget.getBoundingClientRect();
     openMenu({ preventDefault() {}, stopPropagation() {}, clientX: r.right, clientY: r.bottom + 4 }, items);
   }
+
+  // -- the panel's motion (I1/I2) ---------------------------------------------
+  // A leaf is written with `replace()`, so `screenKey` does not change and the
+  // page does not enter again (S1 skips it): THIS is the only motion a tab gets.
+  // The identity changes on a leaf switch AND on the moment the leaf's data
+  // lands (skeleton → content, I1), so one committed change plays exactly ONE
+  // fade — never the panel's and the content's superimposed, which reads as a
+  // drop in brightness. Svelte's local rule keeps the first paint of the page
+  // still (the page enter is T1's).
+  const loaded = (value) => (value === null ? "wait" : "ready");
+  // The dependencies must be READ here (Svelte tracks identifiers in the
+  // statement, not through a helper's closure), hence the inline chain.
+  $: viewState =
+    tab === "favorites"
+      ? loaded(favorites)
+      : tab === "artists"
+        ? loaded(artists)
+        : tab === "albums"
+          ? loaded(albums)
+          : tab === "playlists"
+            ? loaded(myPlaylists)
+            : tab === "downloaded"
+              ? loaded(offline)
+              : tab === "gone"
+                ? loaded(gone)
+                : tab === "local"
+                  ? loaded(local)
+                  : "ready";
+  $: viewKey = `${tab}:${viewState}`;
+
+  // The podcast grid is MOUNTED ONCE and kept hidden across a world switch (its
+  // search survives, a return costs no request — webapp.md), so it cannot get a
+  // keyed intro: its appearance is animated imperatively on the one element,
+  // through `animate()` (eco → null, reduced → opacity only).
+  let podcastsEl = null;
+  let world = tab === "podcasts" ? "podcasts" : "music";
+  $: if (podcastsEl && (tab === "podcasts" ? "podcasts" : "music") !== world) {
+    world = tab === "podcasts" ? "podcasts" : "music";
+    if (world === "podcasts")
+      tick().then(() =>
+        animate(podcastsEl, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter }),
+      );
+  }
 </script>
 
 <div class="head">
@@ -569,7 +613,7 @@
     </a>
     {#if CAN_KEEP || CAN_BROWSE}
     <button class="btn btn-icon add" on:click={addMenu} disabled={uploading || $syncing} aria-label="Ajouter à la bibliothèque" title="Ajouter">
-      {#if uploading || $syncing}<span class="spin"><Icon name="refresh" size={20} /></span>{:else}<Icon name="plus" size={20} />{/if}
+      {#if uploading || $syncing}<span class="spin" data-motion="status"><Icon name="refresh" size={20} /></span>{:else}<Icon name="plus" size={20} />{/if}
     </button>
     {/if}
   </span>
@@ -585,7 +629,7 @@
 
 {#if usage && !usage.unlimited && usage.quota}
   <div class="quota">
-    <div class="quota-bar"><span style={`width:${usagePct}%`} class:warn={usagePct > 90}></span></div>
+    <div class="quota-bar"><span style={`transform:scaleX(${usagePct / 100})`} class:warn={usagePct > 90}></span></div>
     <span class="muted quota-txt label-mono">{fmtBytes(usage.used)} / {fmtBytes(usage.quota)} d'espace d'upload utilisé</span>
   </div>
 {/if}
@@ -638,6 +682,8 @@
 {/snippet}
 
 <div id="library-view" role="tabpanel" aria-labelledby={panelLabel}>
+{#key viewKey}
+<div class="lib-pane" in:fadeIn>
 {#if tab === "favorites"}
   {#if favorites === null && !$favTracksError}
     <Skeleton kind="list" />
@@ -884,7 +930,12 @@
                   aria-expanded={!closedKeys.has(String(s.key))}
                   aria-controls={closedKeys.has(String(s.key)) ? undefined : "pl-sec-" + s.key}
                 >
-                  <Icon name={closedKeys.has(String(s.key)) ? "chevronRight" : "chevronDown"} size={18} />
+                  <!-- I4: one chevron, ROTATED (a swap between two glyphs is a
+                       cut); the body fades in rather than walking its height —
+                       a folder's card grid is taller than M10 allows. -->
+                  <span class="sec-chevron" class:closed={closedKeys.has(String(s.key))} aria-hidden="true">
+                    <Icon name="chevronDown" size={18} />
+                  </span>
                   <span class="sec-title">{s.title}</span>
                   <span class="sec-count mono">{playlistCount(s.count)}</span>
                 </button>
@@ -899,7 +950,7 @@
               {/if}
             </div>
             {#if !closedKeys.has(String(s.key))}
-              <div class="pl-sec-body" id={"pl-sec-" + s.key}>
+              <div class="pl-sec-body" id={"pl-sec-" + s.key} in:fadeIn>
                 {#if s.rows.length}
                   <div class="pl-grid">
                     {#each s.rows.slice(0, cardLimit) as p (p.id)}
@@ -996,9 +1047,11 @@
 {:else if tab === "history"}
   <History />
 {/if}
+</div>
+{/key}
 
 {#if podcastsMounted}
-  <div hidden={tab !== "podcasts"}><Podcasts embedded /></div>
+  <div class="lib-podcasts" bind:this={podcastsEl} hidden={tab !== "podcasts"}><Podcasts embedded /></div>
 {/if}
 </div>
 
@@ -1053,9 +1106,12 @@
   }
   .quota-bar span {
     display: block;
+    width: 100%;
     height: 100%;
     background: var(--ac);
-    transition: width 0.25s ease;
+    transform-origin: left center;
+    /* I8: a bar is a transform, never a width (one layout per frame). */
+    transition: transform var(--dur-base) linear;
   }
   .quota-bar span.warn {
     background: var(--tx);
@@ -1225,6 +1281,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .sec-chevron {
+    flex: none;
+    display: grid;
+    place-items: center;
+    transform: rotate(0deg);
+    transition: transform var(--dur-base) var(--ease-standard);
+  }
+  .sec-chevron.closed {
+    transform: rotate(-90deg);
   }
   .sec-count {
     flex: none;
@@ -1552,6 +1618,13 @@
     }
     .empty-title {
       font-size: 20px;
+    }
+  }
+  /* M14: a rotation is a movement, not a fade — reduced motion places the
+     chevron in its new orientation at once. */
+  @media (prefers-reduced-motion: reduce) {
+    .sec-chevron {
+      transition: none;
     }
   }
 </style>
