@@ -20,3 +20,6 @@ tracing = { workspace = true }
 # The quality of a cached stream is part of the file name and of every key, and
 # the app already types it once: never keep a second spelling of it here.
 nz-model = { path = "../nz-model" }
+# The client's cache seam (`ResponseCache`): the trait lives there so `nz-api`
+# never depends on SQLite, and this crate is its implementation (D2 + D3).
+nz-api = { path = "../nz-api" }

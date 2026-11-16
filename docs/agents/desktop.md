@@ -617,7 +617,11 @@ Waves that can run in parallel (disjoint files):
 - **The rule, the API cache is the page's**: the same prefixes, the same `LIVE_PATHS` exclusions,
   the same 400 newest entries, bodies kept as the wire's TEXT and keyed by owner. The filter sits
   on BOTH sides (`get` refuses a non-cacheable path as well as `put`), so a caller cannot
-  resurrect a stale `/playlist/<id>/version`.
+  resurrect a stale `/playlist/<id>/version`. `Cache` implements `nz_api::ResponseCache` (the
+  trait lives in the client so `nz-api` never depends on SQLite), and a test asserts that the two
+  ports of `isCacheable` — the client's and the store's — answer the same for 32 paths: the
+  client decides what to ASK for, the store what to KEEP, and a disagreement is a screen empty
+  offline or a stale admin one served from disk.
 - **What it is now**: `Cache::open(dir)` (resolving the XDG cache directory) and
   `open_with_cache_dir` (the tests never write into the real `$XDG_CACHE_HOME`), `covers()`,
   `play_cache()`, `downloads()`, `kv()`, `queue()`, `pending_progress()` and `statements()`. Every
@@ -626,7 +630,7 @@ Waves that can run in parallel (disjoint files):
   `-> PathBuf`: a full disk is a cause a screen can print, not a panic. `pending_progress()` is the
   offline podcast position queue the schema already promised (last write wins per episode, sent
   then forgotten one at a time).
-- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-cache`): **47 tests + 2 doc tests,
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-cache`): **49 tests + 2 doc tests,
   0 failed**, 0.10 s debug and 0.04 s release; `cargo fmt --check` and `cargo clippy --workspace
   --all-targets -- -D warnings` clean.
 - **Pitfalls found by building**: serde's imperfect derive adds `E: Default` to a generic struct

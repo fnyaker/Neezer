@@ -384,6 +384,74 @@ mod tests {
         Ok(())
     }
 
+    /// The client's cache seam, end to end: what goes in through `nz_api`'s
+    /// trait comes back through it.
+    #[test]
+    fn the_store_is_the_clients_response_cache() -> Result<()> {
+        let dir = TempDir::new("api-trait");
+        let cache = dir.open();
+        let seen: &dyn nz_api::ResponseCache = &cache;
+
+        assert_eq!(seen.get("42", "/me/playlists"), None);
+        seen.put("42", "/me/playlists", r#"[{"id":"p1"}]"#);
+        assert_eq!(
+            seen.get("42", "/me/playlists").as_deref(),
+            Some(r#"[{"id":"p1"}]"#)
+        );
+        seen.delete("42", "/me/playlists");
+        assert_eq!(seen.get("42", "/me/playlists"), None);
+        Ok(())
+    }
+
+    /// Two ports of `lib/apicache.js#isCacheable` now exist — this crate's and
+    /// `nz-api`'s — and they must answer the same thing for every path. The
+    /// client decides what to ASK for, the store decides what to KEEP: a
+    /// disagreement is a screen that stays empty offline, or a stale admin one
+    /// served from disk.
+    #[test]
+    fn the_two_ports_of_is_cacheable_agree() {
+        let paths = [
+            "/me",
+            "/me/playlists",
+            "/me/playlists?page=2",
+            "/me/favorites",
+            "/me/favorite-ids",
+            "/me/local",
+            "/me/accounts",
+            "/playlist/abc",
+            "/playlist/abc/version",
+            "/playlist/abc/version?since=3",
+            "/album/2000000",
+            "/album/2000000/tracks",
+            "/artist/42",
+            "/artist/42/tracks",
+            "/moods",
+            "/moods/abc",
+            "/moods/abc/tracks",
+            "/lyrics/3135556",
+            "/credits/person/xyz",
+            "/credits/person?name=Camille",
+            "/track/3135556",
+            "/track/3135556/credits",
+            "/track/3135556/credits/x",
+            "/track//credits",
+            "/podcast/episode/e-1/chapters",
+            "/admin",
+            "/admin/users",
+            "/invites/new",
+            "/onboarding/artists",
+            "/search?q=kaya",
+            "/stream/3135556/ready?q=OPUS_128",
+        ];
+        for path in paths {
+            assert_eq!(
+                super::is_cacheable(path),
+                nz_api::is_cacheable(path),
+                "the two ports disagree about {path}"
+            );
+        }
+    }
+
     /// A put is one `INSERT`/`UPSERT` plus the cheap `COUNT(*)` guard; the
     /// delete only appears once the cache is over its cap.
     #[test]

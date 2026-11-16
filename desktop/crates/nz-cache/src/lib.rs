@@ -321,6 +321,27 @@ impl Cache {
     }
 }
 
+/// This store as the HTTP client sees it: `nz-api`'s [`nz_api::ResponseCache`].
+///
+/// The trait lives in `nz-api` so the client never depends on SQLite, and its
+/// three methods are exactly this crate's API-cache store — the paths the page
+/// caches, the wire's TEXT, keyed by owner. The cacheable-path filter stays in
+/// [`api_cache`] and runs on both sides, so a caller cannot resurrect a live
+/// endpoint (`/playlist/<id>/version`) by asking for it.
+impl nz_api::ResponseCache for Cache {
+    fn get(&self, owner: &str, path: &str) -> Option<String> {
+        Cache::get(self, owner, path)
+    }
+
+    fn put(&self, owner: &str, path: &str, body: &str) {
+        Cache::put(self, owner, path, body);
+    }
+
+    fn delete(&self, owner: &str, path: &str) {
+        Cache::delete(self, owner, path);
+    }
+}
+
 /// `$XDG_CACHE_HOME/neezer`, or `<data_dir>/cache` on a machine without a home
 /// directory (a container, a test). The evictable files must never land next to
 /// the database by accident when the environment is unusual.
