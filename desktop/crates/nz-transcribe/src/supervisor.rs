@@ -960,7 +960,12 @@ impl Supervisor {
                 Outcome::Idle
             }
             Failure::Incomplete { done_ms } => {
-                let message = format!("le transcript s'arrête à {done_ms} ms");
+                // The server will not advance any further: that is a verdict,
+                // not something to retry (`worker.py`: "le serveur n'avance plus").
+                let message = format!("le serveur s'arrête à {done_ms} ms");
+                let _ = client
+                    .send_fail(episode_id, lease, &FailBody::new("incomplete", &message))
+                    .await;
                 self.sink
                     .emit(Event::error(episode_id, "incomplete", message));
                 Outcome::Idle

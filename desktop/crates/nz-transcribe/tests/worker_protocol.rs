@@ -50,12 +50,16 @@ struct State {
     fail_claims: u32,
     /// Cancel the job once this many heartbeats arrived.
     cancel_at_beat: Option<u32>,
+    /// Answer the first `complete` with `409 incomplete` at this position (the
+    /// server ahead of the worker), then the truth.
+    incomplete_at: Option<i64>,
     /// The server's transcript.
     status: String,
     done_ms: i64,
     segments: usize,
     // Recorded.
     requests: Vec<(String, String)>,
+    ranges: Vec<String>,
     beats: Vec<Instant>,
     chunks: Vec<Value>,
     failed: Vec<Value>,
@@ -74,10 +78,12 @@ impl State {
             rate_limit_claims: 0,
             fail_claims: 0,
             cancel_at_beat: None,
+            incomplete_at: None,
             status: "queued".to_owned(),
             done_ms: 0,
             segments: 0,
             requests: Vec::new(),
+            ranges: Vec::new(),
             beats: Vec::new(),
             chunks: Vec::new(),
             failed: Vec::new(),
@@ -254,6 +260,9 @@ fn answer(
                 &[],
             );
         }
+        state
+            .ranges
+            .push(headers.get("range").cloned().unwrap_or_default());
         let total = state.audio.len() as u64;
         let from = headers
             .get("range")
@@ -339,6 +348,15 @@ fn answer(
                 );
             }
             ("POST", "/complete") => {
+                if let Some(at) = state.incomplete_at.take() {
+                    state.done_ms = at;
+                    return respond(
+                        stream,
+                        409,
+                        json!({"code": "incomplete", "error": "pas complet", "done_ms": at}),
+                        &[],
+                    );
+                }
                 if state.done_ms < state.duration_ms - 5_000 {
                     return respond(
                         stream,
@@ -1119,5 +1137,100 @@ fn the_real_decoder_answers_the_window_it_was_asked_for() {
         peak < 0.01,
         "a window at 600 ms of a file that is silent after 500 ms is silence (peak {peak})"
     );
+    std::fs::remove_dir_all(&directory).expect("clean up");
+}
+
+/// A download that finds bytes already on disk asks only for the rest, with
+/// `Range`, and finishes the file (`worker.download_audio`).
+#[tokio::test]
+async fn a_partial_download_resumes_with_range() {
+    let directory = scratch("resume");
+    let state = Arc::new(Mutex::new(State::new()));
+    state.lock().expect("state").audio = b"0123456789".to_vec();
+    let fake = Fake::start(state);
+    let client =
+        Client::new(&fake.base, Token::new("device-token").expect("token")).expect("client");
+    let dest = directory.join("audio");
+    std::fs::write(&dest, b"01234").expect("the first five bytes");
+
+    let bytes = client
+        .download(EPISODE, "lease-token", &dest, || false)
+        .await
+        .expect("the rest downloads");
+    assert_eq!(bytes, 10);
+    assert_eq!(std::fs::read(&dest).expect("audio"), b"0123456789");
+    assert_eq!(fake.state().ranges, ["bytes=5-"], "the request resumes");
+    assert_eq!(fake.state().requests.len(), 1, "one request, not a restart");
+    std::fs::remove_dir_all(&directory).expect("clean up");
+}
+
+/// `POST …/complete` answering `409 incomplete` at or behind the worker's own
+/// position is a verdict, not something to retry: the worker stores the cause
+/// and stops, once (`worker.py`: "le serveur n'avance plus").
+#[tokio::test]
+async fn an_incomplete_answer_is_a_verdict_not_a_retry_loop() {
+    let directory = scratch("incomplete");
+    let state = Arc::new(Mutex::new(State::new()));
+    state.lock().expect("state").incomplete_at = Some(1_200_000);
+    let fake = Fake::start(state);
+    let mut run = harness(&fake, &directory, Retry::default(), Duration::from_secs(5));
+    let claim = claim(&run.client).await;
+    let outcome = run.supervisor.run_claim(claim).await;
+    assert_eq!(outcome, Outcome::Idle, "{:?}", run.sink.tags());
+    let state = fake.state();
+    assert_eq!(state.count("/complete"), 1, "one attempt, not a loop");
+    let failed = state.failed.first().expect("the cause is stored");
+    assert_eq!(failed["code"], "incomplete", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("1200000")),
+        "{failed}"
+    );
+    drop(state);
+    assert_eq!(
+        run.sink.tags().last().map(String::as_str),
+        Some("error"),
+        "{:?}",
+        run.sink.tags()
+    );
+    std::fs::remove_dir_all(&directory).expect("clean up");
+}
+
+/// The `local` command on the control channel runs one local job on a worker
+/// that is enrolled and idle, and the app sees its events.
+#[tokio::test]
+async fn a_local_command_runs_a_job_between_two_claims() {
+    let directory = scratch("local-command");
+    let audio = directory.join("episode.mp3");
+    std::fs::write(&audio, b"1200000\n").expect("audio");
+    let state = Arc::new(Mutex::new(State::new()));
+    // Nothing in the server's queue: the worker is idle.
+    state.lock().expect("state").status = "ready".to_owned();
+    let fake = Fake::start(state);
+    let mut run = harness(&fake, &directory, Retry::default(), Duration::from_secs(5));
+    run.supervisor.poll = Duration::from_millis(50);
+    let (sender, receiver) = tokio::sync::mpsc::channel(4);
+    sender
+        .send(Command::Local {
+            episode_id: EPISODE.to_owned(),
+            audio: audio.to_string_lossy().into_owned(),
+            language: Some("fr".to_owned()),
+        })
+        .await
+        .expect("send");
+    sender.send(Command::Stop).await.expect("send");
+    let outcome = run.supervisor.run_worker(Some(receiver)).await;
+    assert_eq!(outcome, Outcome::Idle);
+    let tags = run.sink.tags();
+    assert!(tags.contains(&"done".to_owned()), "{tags:?}");
+    let document = nz_transcribe::sidecar::load(
+        &directory
+            .join("transcripts")
+            .join(format!("{EPISODE}.transcript.json")),
+    )
+    .expect("the local sidecar");
+    assert_eq!(document.duration_ms, 1_200_000);
+    assert_eq!(document.segments.len(), 4, "two chunks, two lines each");
     std::fs::remove_dir_all(&directory).expect("clean up");
 }
