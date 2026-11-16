@@ -1574,7 +1574,9 @@
     background: var(--s2);
     border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .sw.on {
     background: var(--btn);
@@ -1588,11 +1590,21 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease, background 0.15s ease;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .sw.on .knob {
     background: var(--onbtn);
     transform: translateX(16px);
+  }
+
+  /* Reduced motion keeps the STATE and drops the displacement (M14): the knob
+     is where it belongs at once, the track's colour still fades. */
+  @media (prefers-reduced-motion: reduce) {
+    .knob {
+      transition: none;
+    }
   }
   /* -- the equalizer's presets -------------------------------------------- */
   .eq-card {
@@ -1987,19 +1999,22 @@
     height: 100%;
     border-radius: 4px;
     background: color-mix(in srgb, var(--m-ok) 30%, transparent);
+    /* The level meter is fed live: it IS the motion, nothing smooths it (M6). */
     transform: scaleY(var(--lvl, 0));
     transform-origin: 50% 100%;
-    transition: transform 90ms linear, background-color 160ms ease;
   }
   .fader-fill {
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    height: calc(var(--p, 0.5) * 100%);
+    /* The fill follows the finger 1:1 and cannot animate a height (M1/M6):
+       a full-height block scaled from the bottom is the same pixels. */
+    height: 100%;
     border-radius: 4px;
     background: var(--accent);
-    transition: height 70ms linear;
+    transform: scaleY(var(--p, 0.5));
+    transform-origin: 50% 100%;
   }
   .fader-zero {
     position: absolute;
@@ -2167,11 +2182,6 @@
     .pan-slider::-moz-range-thumb {
       width: 24px;
       height: 24px;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .fader-level {
-      transition: none;
     }
   }
 </style>

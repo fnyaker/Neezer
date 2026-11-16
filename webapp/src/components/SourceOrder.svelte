@@ -6,6 +6,7 @@
   // what is chosen here is what they say at once.
   import { onMount } from "svelte";
   import { failureCause } from "../lib/api.js";
+  import { flipSmall } from "../lib/motion.js";
   import { iconOf, loadSources, saveSources } from "../lib/sources.js";
   import { toasts } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
@@ -153,7 +154,7 @@
     <ol class="rows">
       {#each rows as s (s.id)}
         {@const fi = fallbacks.indexOf(s)}
-        <li class="src" class:main={s.place === "main"} class:off={s.place === "off"}>
+        <li class="src" class:main={s.place === "main"} class:off={s.place === "off"} animate:flipSmall>
           <span class="pos" class:accent={s.place === "main"}>{placeLabel(s)}</span>
           <span class="glyph"><Icon name={iconOf(s.id)} size={18} /></span>
           <span class="txt">
@@ -360,7 +361,9 @@
     background: var(--s2);
     border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .sw.on {
     background: var(--btn);
@@ -377,11 +380,21 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease, background 0.15s ease;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .sw.on .knob {
     background: var(--onbtn);
     transform: translateX(16px);
+  }
+
+  /* Reduced motion keeps the STATE and drops the displacement (M14): the knob
+     is where it belongs at once, the track's colour still fades. */
+  @media (prefers-reduced-motion: reduce) {
+    .knob {
+      transition: none;
+    }
   }
   .ghost-btn {
     display: inline-flex;

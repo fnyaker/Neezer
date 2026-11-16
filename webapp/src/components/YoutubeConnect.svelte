@@ -3,6 +3,7 @@
   // (ytmusicapi's "browser" sign-in: the only route without a Google Cloud app,
   // and the one that holds up). Desktop work by nature, so the steps say so.
   import { createEventDispatcher } from "svelte";
+  import { fadeIn } from "../lib/motion.js";
   import { linkYoutube } from "../lib/services.js";
   import Icon from "./Icon.svelte";
 
@@ -46,7 +47,7 @@
     Ces en-têtes valent une session YouTube : ils sont chiffrés sur le serveur et
     ne servent qu'à créer vos playlists. Se déconnecter de ce navigateur les annule.
   </p>
-  {#if error}<p class="err">{error}</p>{/if}
+  {#if error}<p class="err" in:fadeIn>{error}</p>{/if}
   <div class="row">
     <button class="pill" on:click={submit} disabled={busy || !headers.trim()}>
       {busy ? "Vérification…" : "Relier YouTube Music"}

@@ -41,7 +41,9 @@
     padding: 4px;
     color: var(--dim);
     cursor: pointer;
-    transition: color 0.16s ease;
+    /* Turning eco ON is already eco (the guard zeroes this); turning it OFF
+       is the one time the glyph has anything to animate. */
+    transition: color var(--dur-instant) var(--ease-standard);
   }
   .eco:hover {
     color: var(--tx);

@@ -5,6 +5,7 @@
   import { onMount } from "svelte";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
+  import { fadeIn } from "../lib/motion.js";
   import { disliked, toasts } from "../lib/stores.js";
   import { buildTrackMenu } from "../lib/actions.js";
   import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
@@ -68,7 +69,7 @@
       <span class="muted">Aucun pour l'instant. Touchez <strong>Je n'aime pas</strong> dans le lecteur ou le menu d'un titre.</span>
     </div>
   {:else}
-    <ul class="list">
+    <ul class="list" in:fadeIn>
       {#each tracks.slice(0, shown) as t (trackKey(t))}
         <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
         <li

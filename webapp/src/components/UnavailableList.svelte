@@ -280,7 +280,7 @@
     </button>
     {#if progress}
       <span class="bar-txt">Suppression… {progress.done} / {progress.total}</span>
-      <span class="bar-prog"><span style={`width:${(progress.done / progress.total) * 100}%`}></span></span>
+      <span class="bar-prog"><span style={`transform:scaleX(${progress.done / progress.total})`}></span></span>
     {:else if count}
       <span class="bar-txt">{count} sélectionné{count > 1 ? "s" : ""}</span>
       <div class="bar-actions">
@@ -408,7 +408,7 @@
     margin-bottom: 6px;
     border-radius: 12px;
     background: var(--bg);
-    transition: background 0.15s ease;
+    transition: background var(--dur-instant) var(--ease-standard);
   }
   .bar.sel {
     background: color-mix(in srgb, var(--accent) 10%, var(--bg-card));
@@ -434,8 +434,10 @@
   .bar-prog span {
     display: block;
     height: 100%;
+    width: 100%;
     background: var(--accent);
-    transition: width 0.3s ease;
+    transform-origin: left center;
+    transition: transform var(--dur-base) linear;
   }
   .confirm-note {
     margin: -2px 8px 12px;
@@ -494,7 +496,9 @@
     height: 18px;
     border-radius: 5px;
     border: 1.5px solid var(--text-dim);
-    transition: background 0.12s ease, border-color 0.12s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .box :global(svg) {
     position: relative;
@@ -608,7 +612,9 @@
     border-radius: 12px;
     border: 1px solid var(--bg-hover);
     background: var(--bg-card);
-    transition: border-color 0.15s ease, background 0.15s ease;
+    transition:
+      border-color var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .sug:hover,
   .sug.playing {
@@ -698,7 +704,9 @@
     font-size: 0.76rem;
     color: var(--accent);
     background: color-mix(in srgb, var(--accent) 12%, transparent);
-    transition: background 0.15s ease, color 0.15s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .sug-main:hover .sug-go,
   .sug-main:focus-visible .sug-go {

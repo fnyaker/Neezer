@@ -800,7 +800,7 @@
     border-right: 2px solid var(--text-dim);
     border-bottom: 2px solid var(--text-dim);
     transform: translateY(-2px) rotate(45deg);
-    transition: transform 0.16s ease;
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .screen-world[open] summary::after {
     transform: translateY(2px) rotate(-135deg);
@@ -839,8 +839,8 @@
     color: var(--text-dim);
     cursor: pointer;
     transition:
-      border-color 0.16s ease,
-      background 0.16s ease;
+      border-color var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .mode:hover {
     background: var(--bg-hover);
@@ -983,7 +983,7 @@
     background: var(--bg);
     border: 1px solid var(--bg-hover);
     opacity: 0.55;
-    transition: opacity 0.3s ease;
+    transition: opacity var(--dur-fast) var(--ease-standard);
   }
   .readout.live {
     opacity: 1;
@@ -1033,7 +1033,7 @@
     display: block;
     height: 100%;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transition: width 0.3s ease;
+    /* A reading fed by the analysis, not a job: it jumps (M6). */
   }
   /* The projector's two actions sit side by side: opening the second screen
      and muting this one are the same decision seen from two ends. */
@@ -1059,7 +1059,9 @@
     font: inherit;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .ghost:hover {
     background: var(--s2);

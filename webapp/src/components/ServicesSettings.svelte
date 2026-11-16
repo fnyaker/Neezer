@@ -4,6 +4,7 @@
   import { onMount } from "svelte";
   import { services, loadServices, linkSpotify, unlink } from "../lib/services.js";
   import { api } from "../lib/api.js";
+  import { collapse } from "../lib/motion.js";
   import { toasts, isAdmin } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
   import YoutubeConnect from "./YoutubeConnect.svelte";
@@ -121,7 +122,7 @@
           {/if}
         </li>
         {#if s.id === "youtube" && openYt && !s.linked}
-          <li class="expand"><YoutubeConnect on:linked={() => { openYt = false; toasts.push("YouTube Music relié"); }} /></li>
+          <li class="expand" transition:collapse><YoutubeConnect on:linked={() => { openYt = false; toasts.push("YouTube Music relié"); }} /></li>
         {/if}
       {/each}
     </ul>

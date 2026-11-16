@@ -9,6 +9,7 @@
   // failures with the reason each one gave, and this is the way out — folded
   // away by default (a healthy run should not shout), one tap to open, and one
   // tap to copy the lot into a bug report.
+  import { collapse } from "../lib/motion.js";
   import { toasts } from "../lib/stores.js";
   import { copyText } from "../lib/log.js";
   import Icon from "./Icon.svelte";
@@ -53,33 +54,35 @@
     </button>
 
     {#if open}
-      {#if reasons.length}
-        <ul class="tally">
-          {#each reasons as [reason, n] (reason)}
-            <li><b>{n}×</b> <code>{reason}</code></li>
+      <div class="detail" transition:collapse>
+        {#if reasons.length}
+          <ul class="tally">
+            {#each reasons as [reason, n] (reason)}
+              <li><b>{n}×</b> <code>{reason}</code></li>
+            {/each}
+          </ul>
+        {/if}
+
+        <ul class="rows">
+          {#each items as f, i (f.id || f.path || i)}
+            <li>
+              <span class="name" title={f.path || ""}>{f.track || "?"}</span>
+              <code class="why">{f.reason}</code>
+            </li>
           {/each}
         </ul>
-      {/if}
 
-      <ul class="rows">
-        {#each items as f, i (f.id || f.path || i)}
-          <li>
-            <span class="name" title={f.path || ""}>{f.track || "?"}</span>
-            <code class="why">{f.reason}</code>
-          </li>
-        {/each}
-      </ul>
+        {#if hidden}
+          <p class="muted small more">
+            … et {hidden} autre{hidden > 1 ? "s" : ""} non détaillé{hidden > 1 ? "s" : ""}
+            (le serveur en garde un échantillon).
+          </p>
+        {/if}
 
-      {#if hidden}
-        <p class="muted small more">
-          … et {hidden} autre{hidden > 1 ? "s" : ""} non détaillé{hidden > 1 ? "s" : ""}
-          (le serveur en garde un échantillon).
-        </p>
-      {/if}
-
-      <button class="copy" on:click={copy}>
-        <Icon name="download" size={14} /> Copier le détail
-      </button>
+        <button class="copy" on:click={copy}>
+          <Icon name="download" size={14} /> Copier le détail
+        </button>
+      </div>
     {/if}
   </div>
 {/if}

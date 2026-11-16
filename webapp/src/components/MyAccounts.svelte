@@ -315,10 +315,13 @@
         {#if a.running}
           {@const p = progress(a.running)}
           <div class="run" role="status" aria-live="polite">
+            <!-- An indeterminate import is a running job: `status` keeps its
+                 sweep in eco (CLAUDE.md rule 2), the determinate one is a
+                 scaleX paint (I8). -->
             <div class="bar" class:busy={p.share === null}
               role="progressbar" aria-label="Avancement de l'import"
               aria-valuemin="0" aria-valuemax="100" aria-valuenow={p.share === null ? undefined : Math.round(p.share * 100)}>
-              <span style="width:{p.share === null ? 100 : Math.max(2, p.share * 100)}%"></span>
+              <span data-motion="status" style={`transform:scaleX(${p.share === null ? 1 : Math.max(0.02, p.share)})`}></span>
             </div>
             <span class="st">{p.text}</span>
             <span class="fine muted">L'import continue sur le serveur si vous quittez cette page.</span>
@@ -503,6 +506,11 @@
     color: var(--text-dim);
     font-size: 0.84rem;
     font-weight: 600;
+    /* A checkbox: colour only, instantly (I5/M6). */
+    transition:
+      color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .kind:hover {
     color: var(--text);
@@ -520,6 +528,9 @@
     place-items: center;
     border: 1.5px solid var(--text-dim);
     color: var(--onac);
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .kind.on .box {
     background: var(--ac);
@@ -598,12 +609,16 @@
   .bar span {
     display: block;
     height: 100%;
+    width: 100%;
     border-radius: inherit;
     background: var(--accent);
-    transition: width 0.4s ease;
+    transform-origin: left center;
+    transition: transform var(--dur-base) linear;
   }
   .bar.busy span {
-    width: 35% !important;
+    width: 35%;
+    transform: none;
+    transition: none;
     animation: slide 1.4s ease-in-out infinite;
   }
   @keyframes slide {
