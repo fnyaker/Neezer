@@ -23,8 +23,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, StreamConfig, SupportedStreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::dsp::Settings;
 use crate::events::{EngineEvent, EventBus, MixerNote};
 use crate::mixer::{Mixer, MixerCmd, MixerShared};
+use crate::tap::Tap;
 
 /// What the app shows about the output, and what the voice rings are sized for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -610,6 +612,7 @@ impl Drop for DeviceOutput {
 
 /// Start the engine's output: the real device when there is one, the pump
 /// otherwise. Returns the mixer's command producer with the output.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     choice: &OutputChoice,
     preferred_rate: u32,
@@ -617,19 +620,28 @@ pub(crate) fn start(
     period_frames: u32,
     bus: Arc<EventBus>,
     notes: Producer<MixerNote>,
+    settings: Arc<Settings>,
+    tap: Tap,
 ) -> (Output, Arc<MixerShared>, Producer<MixerCmd>, OutputInfo) {
     match probe(choice, preferred_rate, period_frames) {
         Ok(setup) => {
             let rate = setup.config.sample_rate();
             let shared = Arc::new(MixerShared::new(rate, volume));
-            let (mixer, cmds) = Mixer::new(Arc::clone(&shared), notes);
+            let (mixer, cmds) = Mixer::new(
+                Arc::clone(&shared),
+                notes,
+                settings,
+                tap,
+                setup.config.sample_rate(),
+            );
             let info = info_of(&setup);
             let output = build_device_output(setup, mixer, Arc::clone(&shared), bus);
             (Output::Device(output), shared, cmds, info)
         }
         Err(_) => {
             let shared = Arc::new(MixerShared::new(preferred_rate, volume));
-            let (mixer, cmds) = Mixer::new(Arc::clone(&shared), notes);
+            let (mixer, cmds) =
+                Mixer::new(Arc::clone(&shared), notes, settings, tap, preferred_rate);
             let pump = NullOutput::start(mixer, preferred_rate, period_frames);
             let info = OutputInfo {
                 device: "sans sortie audio".into(),
@@ -648,9 +660,11 @@ pub(crate) fn start_offline(
     sample_rate: u32,
     volume: f32,
     notes: Producer<MixerNote>,
+    settings: Arc<Settings>,
+    tap: Tap,
 ) -> (Output, OfflineSink, Arc<MixerShared>, Producer<MixerCmd>) {
     let shared = Arc::new(MixerShared::new(sample_rate, volume));
-    let (mixer, cmds) = Mixer::new(Arc::clone(&shared), notes);
+    let (mixer, cmds) = Mixer::new(Arc::clone(&shared), notes, settings, tap, sample_rate);
     let sink = OfflineSink {
         mixer,
         shared: Arc::clone(&shared),
@@ -673,7 +687,13 @@ mod tests {
     fn callback_with_voice(device_channels: usize, samples: &[f32], generation: u64) -> Callback {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
         let (notes, _notes_rx) = RingBuffer::new(8);
-        let (mixer, mut cmds) = Mixer::new(Arc::clone(&shared), notes);
+        let (mixer, mut cmds) = Mixer::new(
+            Arc::clone(&shared),
+            notes,
+            Settings::new(),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+            48_000,
+        );
         let (mut producer, consumer, _status) =
             crate::voice::voice_ring(48_000, 0.5, generation, 0.0);
         assert_eq!(producer.push(samples), samples.len());

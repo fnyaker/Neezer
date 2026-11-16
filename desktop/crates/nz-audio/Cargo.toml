@@ -16,6 +16,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+nscore = { path = "../../../android/nscore" }
 cpal = { workspace = true }
 symphonia = { workspace = true }
 symphonia-adapter-libopus = { workspace = true }

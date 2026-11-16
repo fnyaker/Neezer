@@ -15,20 +15,30 @@
 //! callback ever allocates, locks or waits.
 
 mod clock;
+mod crossfade;
 mod decode;
+mod dsp;
 mod engine;
 mod events;
 mod mixer;
 mod output;
 mod source;
+mod stretch;
+mod tap;
+mod trim;
 mod voice;
 
 pub use clock::Clock;
-pub use engine::{Engine, EngineConfig, EngineError};
+pub use crossfade::{FadeSettings, equal_power};
+pub use dsp::{Normalization, Settings, gain_db};
+pub use engine::{Engine, EngineConfig, EngineError, TrackMeta};
 pub use events::EngineEvent;
 pub use mixer::MixerShared;
 pub use output::{OfflineSink, OutputChoice, OutputError, OutputInfo};
 pub use source::{ByteStream, Lane, Quality, SourceError, StreamOpener, StreamReady, TrackId};
+pub use stretch::{MAX_SPEED, MIN_SPEED, clamp_speed};
+pub use tap::{TAP_FRAMES, TapReader};
+pub use trim::{EDGE_LENGTH_SLACK, Edges, MAX_EDGE_TRIM, Trim, trim_for};
 
 #[cfg(test)]
 mod tests {

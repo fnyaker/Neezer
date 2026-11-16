@@ -6,9 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, D2, D4, D5, M1 and V1 delivered; the rest planned.** This note is the plan
-the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what was
-learned (rule, why, number) — a delivered lot is not a changelog.
+**Status (2026-11-16): D0, D1, D2, D4, D5, D6, M1 and V1 delivered; the rest planned.** This note
+is the plan the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by
+what was learned (rule, why, number) — a delivered lot is not a changelog.
 
 ## The need
 
@@ -733,27 +733,98 @@ Waves that can run in parallel (disjoint files):
   - symphonia 0.6: `AudioDecoderOptions` is `#[non_exhaustive]`, and the Opus decoder must be
     registered in a custom `CodecRegistry` (the default one has no Opus).
 
-### D6 — `nz-audio` II: DSP, crossfade, trim, speed, tap
+### D6 — `nz-audio` II: DSP, crossfade, trim, speed, tap (delivered 2026-11-16)
 
-- **Goal**: the web player's sound: normalisation, EQ, bass, mono/balance, crossfade + silence
-  trim, podcast speed, and the analysis tap.
-- **Files**: `desktop/crates/nz-audio/src/{dsp,crossfade,trim,stretch,tap}.rs` (+ the lines in
-  `engine.rs` that call them).
-- **Contract**: DSP is `nscore::dsp::Chain` (gain ramp, 10-band EQ, bass, fades — the Android
-  chain, whose `Compressor` is the bass/normalisation stage); track gain from `/api/gain/<id>` /
-  `POST /api/gains` applied as `lib/gaincache.js` does, and `normalization` = `off|low|medium|high`
-  (compressor + make-up gain, `stores.js` `fx.normalize`), the first track of a session normalised
-  like the next ([playback.md](playback.md));
-  crossfade (`fade.enabled`, `fade.seconds` 6, `fade.onSkip`, `fade.skipSeconds` 1.5) and trim
-  (`fade.trim`, `fade.trimDb` −45, bounds from `/api/audio/edges/<id>?db=`) follow
-  `Player.svelte#maybeCrossfade`/`maybeTrimEnding` exactly ([playback.md](playback.md)); speed
-  0.5–3× through `signalsmith-stretch`, pitch kept, podcasts only; the tap copies post-DSP stereo
-  frames into an `rtrb` ring the analysis thread reads (drop when full, never block).
-- **Acceptance**: equal-power crossfade measured on two generated tones (sum of powers within
-  ±0.5 dB across the fade); trim skips a generated 3 s silence at the end; a skip during a
-  crossfade wins at once (`playback.md` *A transport action always wins*); EQ magnitude at the band
-  centres equals `Biquad::magnitude` ±0.1 dB; output callback time p99 < 25 % of the period with
-  every effect on (measured, in the PR).
+- **The rule, the shape of the sound**: **a chain per voice, a chain on the sum.** During a
+  crossfade two tracks are audible at once and each has its own loudness, so the normalisation gain
+  and the fade envelope belong to the VOICE; the ten-band EQ, the bass shelf, its compressor and the
+  safety limiter belong to the MIX, exactly where the page puts them (`graph.js`: `srcA → normA →
+  fadeA` into `input → eq → bass → bassComp → limiter`). Both are `nscore::dsp::Chain` — the Android
+  chain, whose own tests pin the Web Audio biquad formulas, the quarter-circle fade and the two
+  compressors — so nothing of the maths is re-implemented and a setting sounds the same in the
+  browser, on the phone and here. With everything flat the chain is a plain gain and the mix is
+  bit-transparent (asserted).
+- **The rule, the handover**: **the current track changes at the START of the fade**, not at its end
+  — the incoming voice takes the generation, the clock (`start_at`) and the `Started` event the
+  moment the two begin to blend, so the bar, the queue and MPRIS name what is being heard
+  (`Player.svelte#adoptIncoming`). The old voice is only *stopped* when its ramp reaches zero (or it
+  ends), and a transport action during the ramp wins at once: the new track is current in the next
+  buffer and the overlap is cut in the web player's 60 ms (`crossfade::SKIP_CUT_SECONDS`).
+- **The rule, the trim**: a voice carries `trim.end_s` and the mixer **stops pulling at it**, even
+  though its file goes on — so the 3 s of digital silence a master carries after its last note is
+  never played, and the preloaded next voice starts in the same buffer. The bounds are the page's,
+  accepted only when they are plausible (`trim.rs`): ≤ 10 s at either end, a measured file length
+  within 2.5 s of the track's metadata duration, an end at least 0.2 s inside the file, and a start
+  worth a seek above 0.25 s. A trim ends a voice HARD; a *duration* does not (see the pitfalls).
+- **The rule, the gain**: the server's `/api/gain/<id>` value is Deezer's LOUDNESS, not a gain. The
+  adjustment is `-(loudness + 18.4)` dB (deemix's ReplayGain transform) plus the level's offset
+  (`off` 0, `low` +2, `medium` +5, `high` +8), clamped to −24…+12 dB; a track with no measurement is
+  never given an invented one, and `off` is exactly nothing. The app hands it over with the rest of
+  the track's metadata BEFORE the voice is built (`Engine::set_track_meta`), which is what keeps the
+  first track of a session normalised like the next one.
+- **The rule, the speed**: 0.5–3× through `signalsmith-stretch`, pitch kept, **episodes only**
+  (`TrackMeta::podcast` decides, not the app's current setting: music always plays at 1×), and the
+  stage runs on the DECODE thread, in front of the voice ring, never in the callback. The timeline
+  stays media time: the clock advances by `frames × speed`, so a 2× episode shows its real duration.
+- **The rule, the tap**: post-DSP and **pre-mono/balance** (`pan.js`: the analysers keep the original
+  stereo), an `rtrb` ring of 8 192 frames (170 ms), pushed by the callback with
+  `push_partial_slice` and DROPPED when the analysis thread is behind — a hidden window costs the
+  music nothing. `TapReader::dropped()` says how many frames were lost.
+- **Files**: the five modules the lot named (`dsp.rs`, `crossfade.rs`, `trim.rs`, `stretch.rs`,
+  `tap.rs`) plus the crate's integration points — `mixer.rs` (where the callback's chains and the
+  fade state live), `engine.rs` (the settings handle, `TrackMeta`, the tap), `output.rs` (the mixer's
+  new ends), `decode.rs` (the sink the resampler and the stretch stage share), `voice.rs` (per-voice
+  meta), `tests/dsp.rs`. No other lot edits `nz-audio`, so this stayed inside the wave's rule.
+- **Measured** (this machine: 16 threads, Rust 1.99.1; `cargo test -p nz-audio`):
+  - **61 tests, 0 failed** (`54` in the crate + `7` end-to-end in `tests/dsp.rs`); `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - **crossfade, equal power**: two generated tones (440 and 610 Hz, 0.25), a 1.0 s fade; 23 windows
+    of 50 ms across it, **worst deviation 0.00 dB** from the pre-fade power, **0** windows below
+    −0.5 dB (criterion ±0.5 dB), and the last track alone is at **+0.00 dB** of it.
+  - **trim**: a 5 s file (2 s of tone + 3 s of silence) ends at **2.000 s** with the server's bounds
+    (event at 2.015 s, clock stopped at 2.000 s) and is still playing at **2.600 s** without them.
+  - **a skip during a fade** (1.7 s of overlap left): only the new track is audible after **50–80 ms**
+    — the 60 ms cut plus one buffer.
+  - **EQ**: +6 dB on the 250 Hz band lifts a 250 Hz tone by **5.999 dB** measured on the samples
+    (criterion ±0.1 dB), and the band's transfer function is `Biquad::magnitude` to 1e-5.
+  - **output callback**, every effect on (10 bands, bass +9, normalisation high, mono, balance −0.2,
+    two voices with gains and fades, the tap and the pan stage), 480-frame buffers: **p99 215 µs in
+    debug, 107 µs in release** of a 10 000 µs period (criterion 25 %).
+  - **speed**: a 2.000 s episode at 2× is **48 000 frames** (1.000 s) and 64000 at 0.75×, the 440 Hz
+    tone stays **440.0 Hz**, and the engine reads **1.000 s of media after 0.5 s of output** while the
+    same file as music reads **0.500 s**.
+  - **tap vs speakers**: with mono on, speakers **0.1768/0.1768**, tap **0.4000/0.1000** — the tap
+    keeps the stereo image the fold removes.
+- **Pitfalls confirmed by building**:
+  - **`Stretch::flush` silently does nothing when the buffer is shorter than `2 × output_latency`**
+    (the C++ `SignalsmithStretch::flush` returns false). Flushing with exactly `output_latency`
+    frames lost the tail: a 2.000 s episode at 2× came out at **47 296 frames instead of 48 000**
+    (measured), i.e. 14 ms of the last word gone. Size the flush buffer at `2 × latency` and the
+    length is exact.
+  - **A phase vocoder cannot start sample-exact.** Its own latency is `input_latency +
+    output_latency` = **5 760 frames (120 ms at 48 kHz)**: the first output frame reconstructs the
+    silence before the track. At FULL scale the window sum overshoots by **+4.7 dB for one 10 ms
+    window** (1.715 for a 1.0 source); at speech level (0.1) the peak is 0.1715 — a podcast sits 10
+    to 20 dB below full scale and the master limiter is behind this stage for a hot file. Do not
+    "fix" the onset by dropping the latency: it would cut the first 120 ms of the episode.
+  - **`nscore`'s chain carries a static makeup gain** (`Compressor`: `−0.6 × curve(0)` = **+0.285 dB**
+    at the limiter's settings, as Web Audio's `DynamicsCompressorNode` does). An EQ measured straight
+    through it reads +6.285 dB for a +6 dB band; measure the LIFT against the same chain with a
+    transparent band (0.001 dB), which cancels it.
+  - **The D5 clock over-counted a gapless handover by the frames before the switch** (it advanced the
+    whole buffer after `start_at` had reset it). The mixer now advances per span, so after a 4-frame
+    buffer with a 2-frame handover the new track reads **2 frames**, not 4 — one D5 assertion changed
+    with that number.
+  - **A duration is not a trim.** Retiring a voice when its *container duration* is reached cut the
+    last samples of a file whose decoder ran a hair short (Opus reports to the granule). Only an
+    explicit trim end retires a voice; the duration is only where a crossfade has to fit in front of.
+  - **The repository's crates are now COMPILED by the desktop job.** `nz-audio` depends on `nscore`
+    (and through it on `webapp/rhythm`), so the sound the phone and the browser get is compiled into
+    the desktop binary instead of a copy of it — and a change in either can break `desktop`. They are
+    not workspace members: `cargo fmt --check` never reformats them and clippy never lints them, so
+    their hand-formatted sources (whose exact bytes the committed `rhythm.wasm` hashes) stay
+    untouched, which is why the job keeps `cargo fmt --check` and not `--all`.
+
 
 ### M1 — `nz-mpris` (delivered 2026-11-16)
 
