@@ -47,7 +47,35 @@ export async function startServer(extra = []) {
     });
     srv.on("exit", () => rej(new Error("server exited")));
   });
-  return { base: `http://127.0.0.1:${ready.port}`, ids: ready.ids, stop: () => srv.kill() };
+  // `stop` is fire-and-forget (a `process.on("exit")` handler cannot await) and
+  // a promise at the same time, for the callers that want to see the server go.
+  return { base: `http://127.0.0.1:${ready.port}`, ids: ready.ids, stop: () => stopServer(srv) };
+}
+
+/** How long a bench server gets between SIGTERM and SIGKILL. */
+const STOP_GRACE_MS = 15000;
+
+/**
+ * Stop a bench server the way `tools/perf_api.py` expects: SIGTERM first — it
+ * removes its 5 MB to 2.3 GB library on SIGTERM, and `/tmp` is RAM — with
+ * SIGKILL only as the last resort, which leaves the directory for the next
+ * launch's sweep. Safe to call twice, and from `process.on("exit")`.
+ * Returns a promise that resolves true once the child is gone.
+ */
+export function stopServer(srv) {
+  if (srv.exitCode !== null || srv.signalCode !== null) return Promise.resolve(true);
+  srv.kill("SIGTERM");
+  return new Promise((res) => {
+    const timer = setTimeout(() => {
+      if (srv.exitCode === null && srv.signalCode === null) srv.kill("SIGKILL");
+      res(srv.exitCode !== null || srv.signalCode !== null);
+    }, STOP_GRACE_MS);
+    timer.unref();
+    srv.once("exit", () => {
+      clearTimeout(timer);
+      res(true);
+    });
+  });
 }
 
 /** Silence as a WAV (8 kHz, 8-bit, mono) — the tracks in that library have no audio. */

@@ -22,6 +22,7 @@ import { dirname, join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execSync } from "node:child_process";
+import { stopServer } from "../harness.mjs";
 
 async function loadPlaywright() {
   for (const spec of ["playwright", "playwright-core"]) {
@@ -97,4 +98,6 @@ for (let k = 0; k < N; k++) {
 }
 for (const [k, v] of Object.entries(res)) console.log(`${k.padEnd(6)} median long-task ms ${med(v).toFixed(0).padStart(5)}   runs ${v.map((x) => x.toFixed(0)).join(" ")}`);
 await browser.close();
-srv.kill();
+// SIGTERM first: the server removes its throwaway library on it, and /tmp is
+// RAM (tools/perf_api.py). SIGKILL is the fallback inside stopServer.
+await stopServer(srv);

@@ -32,7 +32,7 @@ use serde_json::Value;
 
 const EPISODE_INDEX: usize = 5;
 
-/// A bench server, killed when the test ends.
+/// A bench server, stopped when the test ends.
 struct Bench {
     child: Child,
     base: String,
@@ -41,9 +41,38 @@ struct Bench {
 
 impl Drop for Bench {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        stop(&mut self.child);
     }
+}
+
+/// Stop the bench the way it expects: SIGTERM first, SIGKILL only as a last
+/// resort.
+///
+/// `tools/perf_api.py` removes its throwaway library when it is asked to stop,
+/// and `/tmp` is a tmpfs on most machines: `Child::kill()` is SIGKILL, which
+/// cannot be caught and left the directory to the next launch's sweep.
+fn stop(child: &mut Child) {
+    const SIGTERM: i32 = 15;
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    // SAFETY: `kill` is handed the pid of a child this struct owns and the
+    // platform's own SIGTERM number, and nothing else.
+    unsafe {
+        kill(child.id() as i32, SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn repo_root() -> PathBuf {
