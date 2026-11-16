@@ -24,8 +24,9 @@ use gpui_kit::{AnyView, Context, Entity, IntoElement, ParentElement, Render, Sty
 use crate::nav::{Route, SettingsSection};
 use crate::state::AppState;
 
-/// The Réglages view for one section. It is the stub until D14a lands; the
-/// constructor's shape is the contract.
+/// The Réglages view for one section. D14a owns the user sections' bodies and
+/// this module's dispatch for them; D14b's two admin screens are routed here,
+/// and a section no lot has filled yet keeps D7's stub.
 pub struct Screen {
     inner: AnyView,
 }
@@ -33,9 +34,13 @@ pub struct Screen {
 impl Screen {
     pub fn new(section: SettingsSection, state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let route = Route::Settings { section };
-        let inner: AnyView = cx
-            .new(|cx| crate::screens::StubScreen::new(route, state, cx))
-            .into();
+        let inner: AnyView = match section {
+            SettingsSection::Users => cx.new(|cx| users::Screen::new(section, state, cx)).into(),
+            SettingsSection::Server => cx.new(|cx| server::Screen::new(section, state, cx)).into(),
+            _ => cx
+                .new(|cx| crate::screens::StubScreen::new(route, state, cx))
+                .into(),
+        };
         Self { inner }
     }
 }
