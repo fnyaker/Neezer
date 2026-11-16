@@ -307,6 +307,16 @@ fn seek_in_a_finished_network_file_uses_a_byte_range() {
     }
     let landing = landing.expect("the seek landed");
     let position = engine.position();
+    // The clock lands when the mixer installs the new voice; its ring may still
+    // be empty while the decode thread fetches the range (five requests for a
+    // 10 s FLAC, and a CI runner takes longer over them than a laptop). Wait for
+    // the sound, then measure the block that follows it — the position of that
+    // block's first sample is what the clock reads at that instant.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && render(&mut sink, 48).iter().all(|sample| *sample == 0.0) {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let block_position = engine.position();
     let ranges: Vec<_> = server
         .requests()
         .iter()
@@ -325,7 +335,7 @@ fn seek_in_a_finished_network_file_uses_a_byte_range() {
     let block = render(&mut sink, 480);
     let mut max_error = 0.0f64;
     for frame in 0..480 {
-        let time = position + frame as f64 / 48_000.0;
+        let time = block_position + frame as f64 / 48_000.0;
         let expected = 0.5 * (std::f64::consts::TAU * freq * time).cos();
         max_error = max_error.max((f64::from(block[frame * 2]) - expected).abs());
     }

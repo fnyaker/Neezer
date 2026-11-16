@@ -249,10 +249,18 @@ fn seek_in_a_finished_file_lands_within_20_ms() {
     );
 
     // The samples after the seek are the file's samples at 6.0 s, not at 0.
+    // The clock lands when the mixer installs the voice; its ring is filled by
+    // the decode thread a moment later, so wait for the sound before measuring
+    // (a pull-driven test races the decoder — D5's own *Pitfalls*).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && render(&mut sink, 48).iter().all(|sample| *sample == 0.0) {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let block_position = engine.position();
     let block = render(&mut sink, 480);
     let mut max_error = 0.0f64;
     for frame in 0..480 {
-        let time = position + frame as f64 / 48_000.0;
+        let time = block_position + frame as f64 / 48_000.0;
         let expected = 0.5 * (std::f64::consts::TAU * freq * time).cos();
         max_error = max_error.max((f64::from(block[frame * 2]) - expected).abs());
     }
