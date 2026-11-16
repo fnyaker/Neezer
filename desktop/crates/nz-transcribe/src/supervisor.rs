@@ -121,10 +121,9 @@ pub trait PcmSource: Send + Sync + 'static {
 
 /// The production [`PcmSource`]: the crate's own decoder (`audio.rs`, T2).
 ///
-/// `decode_range` decodes only the window asked for, so a three-hour episode
-/// costs one chunk's samples in memory, and the sample count it returns is the
-/// chunk's real length — a file shorter than its claim is a short PCM, which is
-/// exactly how the local run learns where the episode ends.
+/// `audio::write_pcm_range` decodes one window to the raw f32le file the engine
+/// child reads, and returns its duration — a file shorter than the window is a
+/// short PCM, which is exactly how the local run learns where the episode ends.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AudioPcm;
 
@@ -136,12 +135,7 @@ impl PcmSource for AudioPcm {
         length_ms: u64,
         out: &Path,
     ) -> Result<u64, Error> {
-        let samples = crate::audio::decode_range(audio, start_ms as i64, length_ms as i64)?;
-        crate::audio::write_pcm(out, &samples).map_err(|error| {
-            tracing::warn!("PCM {} : {error}", out.display());
-            Error::NoAudio
-        })?;
-        Ok(crate::audio::samples_duration_ms(samples.len()))
+        crate::audio::write_pcm_range(audio, start_ms, length_ms, out)
     }
 }
 

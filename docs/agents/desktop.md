@@ -1214,7 +1214,7 @@ Waves that can run in parallel (disjoint files):
   `worker`/`local` subcommands. A local transcript lands in
   `$XDG_DATA_HOME/neezer/transcripts/<episode_id>.transcript.json` + `.srt` (T1's `sidecar::write`).
 - **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-transcribe`): **13 tests against a fake
-  server in 19.5 s** (the 15 s pause is most of it) and **53 lib tests in 0.4 s**. The full
+  server in 19 s** (the 15 s pause is most of it) and the crate's **65 lib tests in 0.4 s**. The full
   claim → audio → chunks → complete is **6 requests** (claim, audio, 3 chunks, complete) for a
   3-chunk episode, 12 lines stored; a `429 Retry-After` + a `500` are retried to exactly the
   schedule's attempt count (**3 claims, not a storm**). Against the REAL server
