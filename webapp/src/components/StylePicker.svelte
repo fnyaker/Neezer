@@ -46,6 +46,7 @@
   import { onMount } from "svelte";
   import { startStyles, setStartStyles, STYLES_MAX } from "../lib/flow.js";
   import { STYLE_FALLBACK } from "../lib/sillon.js";
+  import { fadeIn } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   let rows = [];
@@ -128,7 +129,7 @@
       {/each}
     </div>
     {#if open}
-      <div class="subs">
+      <div class="subs" in:fadeIn>
         <button
           type="button"
           class="chip sub all"
@@ -187,6 +188,15 @@
   .chips::-webkit-scrollbar {
     display: none;
   }
+  /* A style is picked, not moved (M6): the chip's own colour is the feedback.
+     The global design-system `.chip` carries no transition of its own, so the
+     studio's motion tokens say it here. */
+  .chips .chip {
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
+  }
   @media (min-width: 900px) {
     .chips {
       flex-wrap: wrap;
@@ -240,5 +250,13 @@
   }
   .tag:hover {
     border-color: var(--dim);
+  }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    .chips .chip {
+      transition: none;
+    }
   }
 </style>

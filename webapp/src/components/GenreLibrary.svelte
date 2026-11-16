@@ -11,6 +11,7 @@
   import GenreExtractor from "./GenreExtractor.svelte";
   import SimilarRebuild from "./SimilarRebuild.svelte";
   import { clientJob } from "../lib/analysis/runner.js";
+  import { fadeIn } from "../lib/motion.js";
 
   /** `status.extractor` from /genre/status. */
   export let extractor = { available: false };
@@ -173,6 +174,7 @@
   {#if !plan}
     <p class="st-dim">Chargement…</p>
   {:else}
+    <div class="hero-body" in:fadeIn>
     <div class="top">
       <div class="big">
         <span class="num">{n(current)}</span>
@@ -221,7 +223,7 @@
 
     {#if onClient && (cj.running || cj.done || cj.failed || cj.error)}
       <div class="live">
-        <div class="bar"><i style={`width:${cpct}%`}></i></div>
+        <div class="bar"><i style={`--p:${cpct / 100}`}></i></div>
         <p class="st-dim">
           <strong>{cj.running ? "Mesure sur cet ordinateur" : cj.stopped ? "Arrêtée" : "Terminée"}</strong>
           · {n(cj.done)} analysés{#if cj.total}{" "}sur {n(cj.total)}{/if}
@@ -234,7 +236,7 @@
       </div>
     {:else if !onClient && running}
       <div class="live">
-        <div class="bar"><i style={`width:${pct}%`}></i></div>
+        <div class="bar"><i style={`--p:${pct / 100}`}></i></div>
         <p class="st-dim">
           <strong>{STAGES[job.stage] || "Analyse"}</strong>
           · {n(job.scanned)} / {n(job.total)} parcourus · {n(job.done)} analysés
@@ -251,11 +253,12 @@
       <div class="st-note bad"><Icon name="alert" size={16} /><span>{job.error}</span></div>
     {/if}
     <JobFailures job={onClient ? cj : job} label="analyse" />
+    </div>
   {/if}
 </section>
 
 {#if plan}
-  <section class="st-card">
+  <section class="st-card" in:fadeIn>
     <h2>Les trois étapes</h2>
     <ol class="steps">
       {#each steps as s, i}
@@ -270,7 +273,7 @@
                 {#if s.off}—{:else if s.late}{n(s.late)} à faire{:else}<Icon name="check" size={14} />{/if}
               </span>
             </div>
-            <div class="mini"><i style={`width:${s.off ? 0 : share(done)}%`}></i></div>
+            <div class="mini"><i style={`--p:${(s.off ? 0 : share(done)) / 100}`}></i></div>
           </div>
         </li>
       {/each}
@@ -280,7 +283,7 @@
     </p>
   </section>
 
-  <section class="st-card">
+  <section class="st-card" in:fadeIn>
     <h2><Icon name="moon" size={18} /> Analyse automatique</h2>
     <div class="sched">
       <label class="switch">
@@ -304,7 +307,7 @@
   </section>
 
   {#if explorer}
-    <section class="st-card">
+    <section class="st-card" in:fadeIn>
       <h2><Icon name="compass" size={18} /> Exploration automatique</h2>
       <label class="switch top">
         <input type="checkbox" bind:checked={explorer.enabled} on:change={saveExplorer} />
@@ -332,7 +335,7 @@
     </section>
   {/if}
 
-  <details class="st-card adv">
+  <details class="st-card adv" in:fadeIn>
     <summary>Avancé</summary>
     <div class="adv-body">
       <label class="fld">
@@ -358,7 +361,7 @@
   .num { font-size: 2.4rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
   .of { font-size: 0.86rem; }
   .stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--surface-2, #1b1d21); margin: 18px 0 8px; }
-  .stack i { display: block; height: 100%; transition: width 0.4s; }
+  .stack i { display: block; height: 100%; }
   .stack .ok, .dot.ok { background: var(--accent, #22d3ee); }
   .stack .old, .dot.old { background: #f59e0b; }
   .stack .new, .dot.new { background: #64748b; }
@@ -366,7 +369,9 @@
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .live { margin-top: 16px; }
   .bar { height: 5px; background: var(--surface-2, #1b1d21); border-radius: 3px; overflow: hidden; }
-  .bar i { display: block; height: 100%; background: var(--accent, #22d3ee); transition: width 0.3s; }
+  /* A job bar fills by transform, never by width (M1/I8): one compositor
+     property, no layout per frame. */
+  .bar i { display: block; width: 100%; height: 100%; background: var(--accent, #22d3ee); transform-origin: left center; transform: scaleX(var(--p, 0)); transition: transform var(--dur-base) linear; }
   .live p, .line, .foot { font-size: 0.84rem; margin: 8px 0 0; }
   .line { display: flex; align-items: center; gap: 7px; margin-top: 14px; }
   .pause { display: flex; align-items: center; gap: 7px; color: #fbbf24; }
@@ -381,11 +386,11 @@
   .line2 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .line2 .cnt { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 0.86rem; display: inline-flex; align-items: center; gap: 4px; }
   .mini { height: 6px; border-radius: 3px; background: var(--surface-2, #1b1d21); margin-top: 8px; overflow: hidden; }
-  .mini i { display: block; height: 100%; background: var(--accent, #22d3ee); transition: width 0.4s; }
+  .mini i { display: block; width: 100%; height: 100%; background: var(--accent, #22d3ee); transform-origin: left center; transform: scaleX(var(--p, 0)); transition: transform var(--dur-base) linear; }
   .foot { margin-top: 16px; }
 
   .where { display: flex; width: 100%; max-width: 420px; gap: 4px; padding: 4px; margin: 4px 0 14px; border-radius: 12px; background: color-mix(in srgb, var(--tx) 6%, transparent); }
-  .where button { flex: 1; justify-content: center; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  .where button { flex: 1; justify-content: center; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: inherit; font: inherit; cursor: pointer; transition: background-color var(--dur-instant) var(--ease-standard), color var(--dur-instant) var(--ease-standard); }
   .where button.on { background: var(--ac); color: var(--onac); font-weight: 600; }
   .where button:disabled { cursor: default; opacity: 0.6; }
   .sched { display: flex; align-items: center; gap: 14px 22px; flex-wrap: wrap; }
@@ -404,4 +409,12 @@
   .adv summary { cursor: pointer; font-weight: 600; min-height: 28px; }
   .adv-body { display: grid; gap: 14px; margin-top: 14px; }
   .adv h3 { margin: 6px 0 0; font-size: 0.95rem; }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    .where button {
+      transition: none;
+    }
+  }
 </style>

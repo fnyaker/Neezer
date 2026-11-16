@@ -68,9 +68,10 @@
     font-size: 14px;
     font-weight: 600;
     white-space: nowrap;
+    /* A selection is colour only (M1/M6): the notch repaints, nothing moves. */
     transition:
-      background-color 0.15s ease,
-      color 0.15s ease;
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   button:hover {
     background: color-mix(in srgb, var(--onac) 12%, transparent);
@@ -91,6 +92,14 @@
   @media (pointer: coarse) {
     button {
       height: 44px;
+    }
+  }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    button {
+      transition: none;
     }
   }
 </style>

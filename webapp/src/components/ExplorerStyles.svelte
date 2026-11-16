@@ -26,6 +26,7 @@
   import { playEntity } from "../lib/actions.js";
   import { grooveBackground } from "../lib/sillon.js";
   import { filterStyles, stationContext, stationTracks, stylesOf } from "../lib/genrestation.js";
+  import { fadeIn, sheet, veil } from "../lib/motion.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
 
@@ -705,7 +706,7 @@
   </div>
 
   {#if styles.length}
-    <div class="tiles">
+    <div class="tiles" in:fadeIn>
       {#each styles as s (s.name)}
         <!-- One card, two actions: the card opens the discovery sheet, the
              disc starts the station. The disc is a real button ABOVE the
@@ -734,7 +735,7 @@
             on:click={() => startStation(s.name)}
           >
             {#if stationBusy === s.name}
-              <span class="spin" aria-hidden="true"></span>
+              <span class="spin" aria-hidden="true" data-motion="status"></span>
             {:else}
               <Icon name="play" size={18} />
             {/if}
@@ -769,7 +770,7 @@
 
 {#if picked}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="veil" use:toBody on:click={(e) => e.target === e.currentTarget && close()}>
+  <div class="veil" use:toBody transition:veil={{ for: "sheet" }} on:click={(e) => e.target === e.currentTarget && close()}>
     <div
       class="panel"
       role="dialog"
@@ -777,6 +778,7 @@
       aria-labelledby="discover-title"
       tabindex="-1"
       bind:this={dialog}
+      transition:sheet
     >
       <header>
         <div class="ttl">
@@ -825,7 +827,7 @@
         aria-busy={pending}
       >
         {#if pending}
-          <span class="spin" aria-hidden="true"></span> Recherche…
+          <span class="spin" aria-hidden="true" data-motion="status"></span> Recherche…
         {:else}
           <Icon name="search" size={15} /> Découvrir
         {/if}
@@ -865,7 +867,7 @@
             {/if}
           </div>
         {:else if phase === "ready"}
-          <div class="rows">
+          <div class="rows" in:fadeIn>
             {#each playlists as p (p.id)}
               <div class="row">
                 <span class="thumb">
@@ -899,7 +901,7 @@
 
 {#if allOpen}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="veil" use:toBody on:click={(e) => e.target === e.currentTarget && closeStations()}>
+  <div class="veil" use:toBody transition:veil={{ for: "sheet" }} on:click={(e) => e.target === e.currentTarget && closeStations()}>
     <div
       class="panel all"
       role="dialog"
@@ -907,6 +909,7 @@
       aria-labelledby="all-stations-title"
       tabindex="-1"
       bind:this={allDialog}
+      transition:sheet
     >
       <header>
         <div class="ttl">
@@ -950,7 +953,7 @@
             Aucun style analysé ne correspond{allQuery ? " à cette recherche" : " à votre bibliothèque"}.
           </p>
         {:else}
-          <ul class="stations">
+          <ul class="stations" in:fadeIn>
             {#each shownStations as row (row.name)}
               <li class="srow">
                 <span class="smeta">
@@ -968,7 +971,7 @@
                   on:click={() => startStation(row.name, true)}
                 >
                   {#if stationBusy === row.name}
-                    <span class="spin" aria-hidden="true"></span>
+                    <span class="spin" aria-hidden="true" data-motion="status"></span>
                   {:else}
                     <Icon name="play" size={13} />
                   {/if}
@@ -1048,7 +1051,7 @@
     text-align: left;
     content-visibility: auto;
     contain-intrinsic-size: auto 112px;
-    transition: border-color 0.15s ease;
+    transition: border-color var(--dur-instant) var(--ease-standard);
   }
   .open {
     position: absolute;
@@ -1101,9 +1104,9 @@
     background: var(--btn);
     color: var(--onbtn);
     box-shadow: 0 8px 20px color-mix(in srgb, var(--onac) 32%, transparent);
-    transition:
-      transform 0.14s ease,
-      filter 0.14s ease;
+    /* The press/lift is a transform; the brightness is painted, not eased
+       (M1: a filter is never animated). */
+    transition: transform var(--dur-instant) var(--ease-standard);
   }
   .station:hover:not(:disabled) {
     transform: scale(1.07);
@@ -1629,7 +1632,8 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .tile {
+    .tile,
+    .station {
       transition: none;
     }
     .spin {

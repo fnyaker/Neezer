@@ -7,6 +7,7 @@
   import { api } from "../lib/api.js";
   import { toasts } from "../lib/stores.js";
   import { bytes as fmtBytes } from "../lib/format.js";
+  import { fadeIn } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   /** `status.extractor` from /genre/status. */
@@ -165,11 +166,13 @@
     </div>
 
     {#if testing && !r}
-      <div class="bar indet"><i></i></div>
+      <!-- An indeterminate bar says a job runs: it is a status indicator, the
+           one thing eco mode keeps moving (M13). -->
+      <div class="bar indet" data-motion="status"><i></i></div>
     {/if}
     {#if r}
       {#if r.same_track !== undefined}
-        <div class="st-note" class:ok={result.ok} class:bad={!result.ok}>
+        <div class="st-note" in:fadeIn class:ok={result.ok} class:bad={!result.ok}>
           <Icon name={result.ok ? "check" : "alert"} size={16} />
           <span>
             {#if result.ok}
@@ -181,10 +184,10 @@
           </span>
         </div>
       {:else}
-        <div class="st-note"><Icon name="info" size={16} /><span>{r.reason || "vérification impossible pour l'instant"}</span></div>
+        <div class="st-note" in:fadeIn><Icon name="info" size={16} /><span>{r.reason || "vérification impossible pour l'instant"}</span></div>
       {/if}
     {:else if result?.error}
-      <div class="st-note bad"><Icon name="alert" size={16} /><span>{result.error}</span></div>
+      <div class="st-note bad" in:fadeIn><Icon name="alert" size={16} /><span>{result.error}</span></div>
     {/if}
   {:else}
     <div class="empty">
