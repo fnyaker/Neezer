@@ -2,6 +2,11 @@
   // What a YouTube track REALLY plays at, next to the quality badge, when the
   // badge asks for more than YouTube has (FLAC, Opus 320…). The badge stays the
   // setting; this says the truth about the one track that cannot honour it.
+  //
+  // F8: the value changes in place (nothing → a rate, or one rate → another),
+  // so the new string enters with `swap` (opacity + 4 px, 140 ms) and the old
+  // one is simply gone — M7, an outro on an in-flow badge would shift the row.
+  import { swap } from "../lib/motion.js";
   import { trackKey } from "../lib/trackkey.js";
   import { current, player, quality } from "../lib/stores.js";
   import { isYoutube, realBitrate, realBitrateBadge } from "../lib/youtube.js";
@@ -29,7 +34,9 @@
 </script>
 
 {#if badge}
-  <span class="src mono" title={badge.title}>{badge.short}</span>
+  {#key badge.short}
+    <span class="src mono" title={badge.title} in:swap>{badge.short}</span>
+  {/key}
 {/if}
 
 <style>

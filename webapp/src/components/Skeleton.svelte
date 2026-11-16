@@ -1,4 +1,8 @@
 <script>
+  // The shimmer is DECORATIVE (F7): it says "something is coming", it is not a
+  // status a frozen bar would lie about. Eco stops every keyframe through the
+  // central guard in app.css; `prefers-reduced-motion` gets a plain --s2 block
+  // here, because a moving gradient is exactly what that setting is about.
   export let kind = "shelf"; // shelf | list | header
   export let count = 6;
 </script>
@@ -52,6 +56,15 @@
     }
     100% {
       background-position: -100% 0;
+    }
+  }
+  /* A still block, not a stopped gradient caught mid-walk: the theme's own
+     second surface. Eco needs no rule here — the central guard already takes
+     `animation-duration` to 0.01 ms. */
+  @media (prefers-reduced-motion: reduce) {
+    .sk {
+      animation: none;
+      background: var(--s2);
     }
   }
   .sq {

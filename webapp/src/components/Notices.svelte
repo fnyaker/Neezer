@@ -3,7 +3,14 @@
   // an expired Deezer credential, a downloaded update waiting to be applied, a
   // newer Android build. They sit above the content, stack quietly, and stay
   // until resolved or dismissed.
-  import { fly } from "svelte/transition";
+  //
+  // Motion (F2): `rise` from −8 px — the strip lives under the top bar, so a
+  // notice comes DOWN into its place — and `flipSmall` when the stack closes
+  // the gap a dismissed one leaves. The transform is on the notice, never on
+  // `.notices`: the strip is `position: sticky`, and a transform on it would
+  // both shift the whole page's notices and hand the sticky box a new
+  // containing block.
+  import { rise, flipSmall, MOVE } from "../lib/motion.js";
   import { notices } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
 
@@ -19,24 +26,28 @@
   }
 </script>
 
-{#if $notices.length}
-  <div class="notices" role="status" aria-live="polite">
-    {#each $notices as n (n.id)}
-      <div class="notice {n.kind}" transition:fly={{ y: -12, duration: 220 }}>
-        <span class="ico"><Icon name={ICONS[n.kind] || "info"} size={17} /></span>
-        <span class="msg">{n.message}</span>
-        {#if n.action}
-          <button class="act" on:click={() => run(n)}>{n.actionLabel || "Ouvrir"}</button>
-        {/if}
-        {#if n.dismissible !== false}
-          <button class="x" on:click={() => notices.dismiss(n.id)} aria-label="Masquer">
-            <Icon name="close" size={16} />
-          </button>
-        {/if}
-      </div>
-    {/each}
-  </div>
-{/if}
+<!-- The strip is always rendered, and that is what makes the LAST notice's
+     outro visible: an `{#if $notices.length}` around it destroyed the block the
+     row's transition lived in, so dismissing the only notice removed it in one
+     frame (measured: Element.prototype.animate was never called, the count went
+     1 → 0 between two frames). `class:has` takes the empty strip's padding away,
+     so an app with no notice looks exactly as before. -->
+<div class="notices" class:has={$notices.length > 0} role="status" aria-live="polite">
+  {#each $notices as n (n.id)}
+    <div class="notice {n.kind}" transition:rise={{ y: -MOVE.m }} animate:flipSmall>
+      <span class="ico"><Icon name={ICONS[n.kind] || "info"} size={17} /></span>
+      <span class="msg">{n.message}</span>
+      {#if n.action}
+        <button class="act" on:click={() => run(n)}>{n.actionLabel || "Ouvrir"}</button>
+      {/if}
+      {#if n.dismissible !== false}
+        <button class="x" on:click={() => notices.dismiss(n.id)} aria-label="Masquer">
+          <Icon name="close" size={16} />
+        </button>
+      {/if}
+    </div>
+  {/each}
+</div>
 
 <style>
   /* Sticky, so a notice stays reachable when you're deep in a long list — with
@@ -56,6 +67,12 @@
        surfaces, and a notice is the one material the HIG wants thick, so it
        reads as an alert even while rows pass between two of them. */
     background: none;
+  }
+  /* Nothing to say: the strip takes no room at all (its own 16 px of padding
+     would push every screen down by a hair). */
+  .notices:not(.has) {
+    padding: 0;
+    gap: 0;
   }
   .notice {
     display: flex;

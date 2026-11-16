@@ -6,18 +6,17 @@
   //
   // Sillon's pill: --s2 on --tx, one glyph and the sentence. The glyph carries
   // the meaning as much as the words do — nothing here is said by colour alone.
-  import { fly } from "svelte/transition";
+  //
+  // Motion (F3): `rise` from −8 px, i.e. down out of the top bar it hangs from,
+  // 200 ms in and 140 ms out. The level comes from lib/motion.js and is LIVE —
+  // the read-once matchMedia this file used to keep is gone (turning reduced
+  // motion on mid-session was ignored until the next launch).
+  import { rise, MOVE } from "../lib/motion.js";
   import { online, reconnectedAt } from "../lib/net.js";
   import { REMOTE } from "../lib/remote/mode.js";
   import Icon from "./Icon.svelte";
 
-  // Read once: §10 asks the pill not to animate itself for someone who asked
-  // for less motion, and a change of system setting lands with the next launch
-  // anyway. (Svelte 5's prefersReducedMotion is a MediaQuery, not a store — the
-  // `$…` auto-subscription threw "e.subscribe is not a function".)
-  const reduced =
-    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const slide = { y: -16, duration: reduced ? 0 : 200 };
+  const slide = { y: -MOVE.m };
 
   let showOffline = false;
   let offTimer = null;
@@ -42,23 +41,24 @@
 </script>
 
 {#if !$online && showOffline}
-  <div class="net chip" role="status" aria-live="polite" transition:fly={slide}>
+  <div class="net chip" role="status" aria-live="polite" transition:rise={slide}>
     <Icon name="cloudOff" size={15} />
     <!-- A remote control plays nothing here: what it can promise is to pick
          the player back up by itself. -->
     {REMOTE ? "Hors ligne — reprise automatique" : "Hors ligne — lecture locale disponible"}
   </div>
 {:else if justReconnected}
-  <div class="net chip" role="status" aria-live="polite" transition:fly={slide}>
+  <div class="net chip" role="status" aria-live="polite" transition:rise={slide}>
     <Icon name="check" size={15} />
     Reconnecté
   </div>
 {/if}
 
 <style>
-  /* Centred by the box, not by a transform: the fly transition animates
-     `transform` itself and would drop a translateX(-50%) for its duration —
-     the pill used to jump to the middle-left while it appeared. */
+  /* Centred by the box, not by a transform: the rise transition animates
+     `translateY` itself, and a translateX(-50%) on the element would be
+     dropped for its duration — the pill used to jump to the middle-left while
+     it appeared. */
   .net {
     position: fixed;
     top: calc(var(--topbar-h, 68px) + 12px);

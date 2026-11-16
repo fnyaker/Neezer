@@ -6,11 +6,34 @@
   //
   // When the grant ends (the owner cut it, it expired) it becomes a full-screen
   // notice with the account this browser had before, if it had one.
-  import { fly, fade } from "svelte/transition";
+  //
+  // Motion (F4/P23): the pill rises from below, the "ended" screen is the
+  // plan's `veil` + `dialog` pair — the veil fades the overlay's OWN background
+  // alpha rather than its opacity, so the pane's `backdrop-filter` keeps working
+  // for the whole entrance (M8). Opening the player moves the pill from above
+  // the player bar to under the top bar: the class flips at once (the state is
+  // the truth, M2) and the pill fades back in where it now belongs instead of
+  // teleporting across the screen. Its dot's `pulse`/`blink` say "connected /
+  // live": that is a status indicator, so it keeps moving in eco (M13).
+  import { afterUpdate } from "svelte";
+  import { rise, veil, dialog, animate, DUR, EASE_CSS, MOVE } from "../lib/motion.js";
   import { immersiveOpen } from "../lib/stores.js";
   import { remoteStatus, leaveRemote, reloadHome } from "../lib/remote/controller.js";
   import { LEVEL_INFO } from "../lib/remote/mode.js";
   import Icon from "./Icon.svelte";
+
+  // The anchor the pill was PAINTED at (null before the first paint, so the
+  // entrance transition is not doubled by a fade): a plain object, never a
+  // reactive dependency, or the statement would feed itself.
+  let pillEl = null;
+  const anchor = { top: null };
+  afterUpdate(() => {
+    if (!pillEl) return;
+    if (anchor.top === $immersiveOpen) return;
+    const moved = anchor.top !== null;
+    anchor.top = $immersiveOpen;
+    if (moved) animate(pillEl, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+  });
 
   let leaving = false;
   $: st = $remoteStatus;
@@ -32,8 +55,8 @@
 </script>
 
 {#if st.phase === "ended"}
-  <div class="ended" transition:fade={{ duration: 160 }} role="alertdialog" aria-label="Contrôle terminé">
-    <div class="card">
+  <div class="ended" transition:veil={{ for: "dialog" }} role="alertdialog" aria-label="Contrôle terminé">
+    <div class="card" transition:dialog>
       <span class="badge"><Icon name="remote" size={26} /></span>
       <h2>Le contrôle est terminé</h2>
       <p class="muted">
@@ -46,9 +69,9 @@
     </div>
   </div>
 {:else}
-  <div class="pill" class:top={$immersiveOpen} transition:fly={{ y: 12, duration: 180 }} role="status">
+  <div class="pill" class:top={$immersiveOpen} transition:rise={{ y: MOVE.m }} bind:this={pillEl} role="status">
     <span class="who">
-      <span class="dot {state.cls}" aria-hidden="true"></span>
+      <span class="dot {state.cls}" aria-hidden="true" data-motion="status"></span>
       <Icon name="remote" size={15} />
       <span class="txt">
         <span class="l1">Lecteur de {st.owner || "…"}{#if st.device}<span class="dev">· {st.device}</span>{/if}</span>
