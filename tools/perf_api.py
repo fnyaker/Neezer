@@ -372,6 +372,34 @@ def seed_onboarding(app, tracks):
         }
 
 
+def seed_provider_account(app):
+    """One linked provider account for ``bench``, and nothing that reaches out.
+
+    ``/api/me/accounts`` lists what a person linked; without a row the whole
+    surface answers an empty list, and a client cannot be tested against the
+    ``PUT /api/me/accounts/<id>`` contract (the shape of ``auto``). The row
+    carries no secret and the provider is never called: ``li.options`` only
+    reads the row's own JSON, and ``li.status`` its in-memory dict.
+
+    Opt-in (``--seed-provider-account``): the default bench output is what every
+    other bench and fixture already pins, so it must not grow an entry.
+    """
+    from neezer.db import ProviderAccount, User, now
+
+    with app.app_context():
+        user = User.get(name="bench")
+        row = ProviderAccount.create(
+            provider="deezer",
+            user=user.id,
+            label="Banque essentielle",
+            mode="arl",
+            status="ok",
+            checked=now(),
+            created=now(),
+        )
+        return {"id": str(row.id)}
+
+
 def seed_admin(app, users, invite_count):
     """The accounts and pending invitations Réglages → Utilisateurs lists.
 
@@ -743,6 +771,13 @@ def main():
         help="seed a show with chapters, a ready transcript, a running and a "
         "failed one, and expose the transcription engine as external",
     )
+    ap.add_argument(
+        "--seed-provider-account",
+        action="store_true",
+        help="link one Deezer provider account to 'bench' so /api/me/accounts "
+        "lists a row and PUT /api/me/accounts/<id> can be exercised; no "
+        "provider is ever called",
+    )
     args = ap.parse_args()
 
     work = tempfile.mkdtemp(prefix="nsperf-")
@@ -808,6 +843,9 @@ def main():
     if args.podcasts:
         print("seeding podcasts…", file=sys.stderr)
         ids["podcast"] = seed_podcasts(app)
+    if args.seed_provider_account:
+        print("seeding a provider account…", file=sys.stderr)
+        ids["account"] = seed_provider_account(app)
     # Each request opens its own connection (web.py), as the server does.
     from neezer.db import close_connection
 

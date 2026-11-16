@@ -6,8 +6,8 @@
 //! body says the remote-control loan ended), a server answer carrying
 //! `X-NS-Error` is [`ApiError::Provider`] and *final* (Deezer was already
 //! retried server-side), a `409`/`503` + `Retry-After` is [`ApiError::NotReady`],
-//! and a background request refused by `_admit_by_priority` is
-//! [`ApiError::Busy`].
+//! a `409` WITHOUT one is [`ApiError::Conflict`], and a background request
+//! refused by `_admit_by_priority` is [`ApiError::Busy`].
 
 use serde_json::Value;
 
@@ -46,8 +46,32 @@ pub enum ApiError {
     /// Nothing on disk yet, but a writer is at work: wait exactly `retry_after`
     /// seconds and ask again (a first play's 409, or a prefetch queued on a
     /// cold track). Not a verdict about the track.
+    ///
+    /// The `409` the server uses for this ALWAYS carries `Retry-After`
+    /// (`neezer/webui/__init__.py#_not_archived`), which is what tells it apart
+    /// from a [`ApiError::Conflict`].
     #[error("not ready, retry in {retry_after}s")]
     NotReady { retry_after: u32 },
+
+    /// The world disagreed with the request: a playlist moved under this client
+    /// (a stale `version`), a track became available before a replacement, a
+    /// group already exists, an analysis version is not the running one, a
+    /// finished file is asked for a `?start=` slice instead of a byte range.
+    ///
+    /// A `409` WITHOUT `Retry-After` is one of these (`neezer/webui/*`: the
+    /// only 409 that sets the header is `_not_archived`). Re-sending the same
+    /// body changes nothing, so this is never retried as it was: the caller
+    /// re-reads what it was editing and says so (a playlist screen re-reads
+    /// once and offers the action again). `scope` is the part the server names
+    /// (`content`/`members` on a playlist), and it is what lets a screen say
+    /// WHICH half moved.
+    #[error("conflict: {message}")]
+    Conflict {
+        /// The server's own label (`{"error": "conflict"}`).
+        message: String,
+        /// What the server says the conflict is about, when it says.
+        scope: Option<String>,
+    },
 
     /// A background request the server did not admit (`503` + `Retry-After`).
     /// It waited once, exactly as long as it was told, and is still refused.
@@ -71,7 +95,10 @@ impl ApiError {
     /// `true` when the person can retry the action as it was ("Réessayer").
     ///
     /// A provider refusal is not retryable by the client (the server's job),
-    /// and neither is a bad session or a payload this app cannot read.
+    /// and neither is a bad session or a payload this app cannot read. A
+    /// [`ApiError::Conflict`] is not either: the request was valid and the
+    /// world moved, so re-sending the same body fetches the same `409` — the
+    /// caller re-reads and offers the action again.
     pub fn retryable(&self) -> bool {
         matches!(
             self,
@@ -121,6 +148,13 @@ impl ApiError {
             ApiError::NotReady { retry_after } => {
                 format!("pas encore prêt, réessayez dans {retry_after} s")
             }
+            ApiError::Conflict { scope, .. } => match scope.as_deref() {
+                // The playlist kept moving under this client: say which half, so
+                // the screen can name it and the person knows what to re-read.
+                Some("members") => "le partage a changé : la liste a été relue".to_owned(),
+                Some("content") => "la playlist a changé : la liste a été relue".to_owned(),
+                _ => "cette action est impossible dans l'état actuel".to_owned(),
+            },
             ApiError::Busy { retry_after } => {
                 format!("serveur occupé, réessayez dans {retry_after} s")
             }
@@ -201,5 +235,41 @@ mod tests {
         );
         assert!(ApiError::NotReady { retry_after: 2 }.retryable());
         assert_eq!(ApiError::NotReady { retry_after: 2 }.retry_after(), Some(2));
+    }
+
+    /// A `409` the server means as "wait" and a `409` the server means as "the
+    /// world moved" are two different failures, and only the first is retried
+    /// as it was. Measured through the two real routes in
+    /// `tests/bench.rs` (`/stream/<id>?start=` and a stale playlist
+    /// `version`), so the pair cannot drift from the server.
+    #[test]
+    fn a_conflict_is_not_a_not_ready_and_says_which_half_moved() {
+        let conflict = ApiError::Conflict {
+            message: "conflict".into(),
+            scope: Some("content".into()),
+        };
+        assert!(
+            !conflict.retryable(),
+            "re-sending the same body re-conflicts"
+        );
+        assert_eq!(conflict.retry_after(), None);
+        assert_eq!(
+            conflict.cause_fr(),
+            "la playlist a changé : la liste a été relue"
+        );
+        assert_eq!(
+            ApiError::Conflict {
+                message: "track is available".into(),
+                scope: None,
+            }
+            .cause_fr(),
+            "cette action est impossible dans l'état actuel"
+        );
+        // The two are distinct values, never the same shape read two ways.
+        assert_ne!(
+            conflict,
+            ApiError::NotReady { retry_after: 0 },
+            "a caller matching one must not catch the other"
+        );
     }
 }
