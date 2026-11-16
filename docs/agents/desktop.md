@@ -6,9 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D13, D14a, D14b, M1, P1, T1
-and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`, `409`
-told apart, the `auto` payload, the output list); the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, M1,
+P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`,
+`409` told apart, the `auto` payload, the output list); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1295,12 +1295,104 @@ Waves that can run in parallel (disjoint files):
   remembered (`podcast.speeds`); transcript panel follows playback and searches; server
   transcription start/stop with its state; episode list paged by cursor (no unbounded fetch).
 
-### D12 — Discovery
+### D12 — Discovery (delivered 2026-11-17)
 
-- **Files**: `screens/{releases,recap,history,onboarding}.rs`, `app/src/widgets/{flow,
-  discovery_slider,mood_card,recap_story}.rs`.
-- **Acceptance**: flow and radios top the queue up before it runs dry (no gap); releases badge and
-  "vu"; recap story navigable by keys; onboarding complete with keyboard only.
+- **The rule, a station never runs dry**: the player announces `Effect::NeedMore` on the queue's
+  LAST row, which is already a gap, so `widgets/flow.rs` keeps `UPCOMING_MIN = 2` titles after the
+  playing one and asks while they are still queued. Measured (stub server, `cargo test -p
+  neezer-desktop`): a Flow start is 1 request (2 titles: the playing one and its next), then ONE
+  per title consumed — 6 requests for 5 titles — and the queue never held fewer than 2 upcoming
+  when a beat looked at it. The `n` the server accepts is 1 or 2 (`discover.py#flow_next` clamps
+  it), so a "the next two ahead" buffer costs exactly the SPA's one-request-per-title.
+- **The rule, one attempt, then the cause**: one request in flight, `MIN_EXTEND_MS = 5 s` between
+  two, a `(source, queue length)` key asked ONCE when its answer added nothing (the SPA's
+  `exhausted`, which is what stopped a request storm there), and a failing choice retried
+  `5 s / 15 s / 45 s` for the same row, then given up on with the cause on a toast (rule 3).
+  Asserted on the stub's counters: a second beat right after the start asks nothing, an exhausted
+  source is never asked twice at that length, and four `failed` calls are the end of the line.
+- **The rule, the beat**: ONE task on the app's own entity reads the player every second while a
+  station plays and every 20 s otherwise (`beat_period`, asserted), and it never repaints on its
+  own. It is installed by the first D12 screen opened (`flow::ensure`); the shell is D7's file, so
+  a session that never opens one of these four screens does not top up a radio started from an
+  artist page — one line in `app.rs` closes that seam, reported rather than taken.
+- **The rule, the level**: `widgets/discovery_slider.rs` writes the device copy at once
+  (`discover.level`, the SPA's own key) and `PUT /api/discover/prefs` once per SETTLE (450 ms):
+  twenty clicks in three seconds are one request, with the last value — a click is a value, never
+  a drag of requests. The server's answer is adopted into the same copy, so the phone and the
+  desktop agree.
+- **The rule, Nouveautés**: `GET /api/releases` (the device's copy paints first), `GET
+  /api/discover/prefs`, and `POST /releases/seen` once per fetched feed when it carries unseen
+  releases — the badge keeps THIS visit's count, so a back navigation does not call the same
+  releases new twice (asserted: 4 routes and the page's sleeves, nothing else). The two shelves
+  come from the payload's `close_to`, and a card's click costs 0 requests: `ReleaseShelf` is a
+  ROUTE in the SPA and `nav.rs` is frozen after D7, so a card opens the album and a release row
+  folds its titles out in the shared windowed list.
+- **The rule, the Récap**: 2 requests cold (`/recap/years` then the latest year), 1 per year change,
+  **0 per card** — the whole year is one bounded payload. `←`/`→` are APP-level keystroke
+  interceptors (a screen may not take the focus, D8a's rule, and `keymap.rs` is frozen), so the deck
+  is navigable with nothing focused; `j`/`k`, `Page préc./suiv.` and `Début/Fin` come through
+  `track_list::own`. The 7 s auto-advance runs only under 900 px and never under reduced motion
+  (the SPA's own two conditions), and the year is NOT rewritten into the route (a `replace` would
+  rebuild the screen and buy a second `/recap/years`).
+- **The rule, the Historique**: one page per request with the keyset cursor, « Charger plus »
+  appends and a duplicate id is dropped even if a page overlapped (asserted: two pages of the same
+  body stay 2 events), the filter is the server's own `outcome` word (asserted on the query), and
+  the rows are windowed at the SPA's exact geometry (44 px a day header, 72 px an event, so the
+  virtual offsets need no measurement). A row plays and turns into its radio
+  (`lib/actions.js#playThenRadio`), which is also what feeds the Flow service.
+- **The rule, Bienvenue**: a like is optimistic AND one request; offline it waits in a queue that is
+  flushed in order, and « Continuer » refuses while any of it is unsent (a finished onboarding that
+  lost the choices is worse than one that waited). The tiles are real `Toggle`s — `Entrée` and
+  `Espace` keep an artist exactly as a click does — and the first step has 4 tab stops (asserted:
+  « Continuer », the search field, the two tiles; a disabled « Voir plus » is not one). The account
+  step's import is a JOB the screen polls every 1.5 s with its progress and each failure's cause.
+- **Measured** (this machine: 16 threads, Rust 1.99.1; `cargo test -p neezer-desktop`):
+  - **162 tests, 0 failed** (26 of them this lot's: 12 pure rules + 8 headless UI). `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - **RSS**, debug build under Xvfb + software Vulkan (the same bench as D8a, `/proc/<pid>/status`):
+    **236 724 kB** on Nouveautés, **236 756 kB** on the Récap (+32), **236 756 kB** on the Historique,
+    **236 852 kB** with the 420 px queue panel open (+96). The discovery screens cost ~130 kB over
+    the shell — they hold one page of events, one year, one feed: nothing per-row (D8a's 237 MB is
+    the shell's own, and the software Vulkan driver is most of the difference with D7's 103 MB).
+  - **visual**: Nouveautés (with and without the 420 px panel open), the Récap's cards 1 and 4, and
+    the Historique were looked at at **1280×800**, and Nouveautés at **2560×1600**, on an isolated
+    Xvfb display (never the user's session; the window is resized through XTest because Xvfb has no
+    window manager — D7/D8a's recorded limit). The screens cap their content column at 1800 px, so a
+    2560 px window is margins, not a two-metre line of text. The shots are committed under
+    `docs/desktop/d12/` (`nouveautes-1280`, `nouveautes-2560`, `nouveautes-panneau-1280`,
+    `recap-1280`, `recap-carte-4-1280`, `historique-1280`), against `tools/perf_api.py --serve
+    --recap --tracks 400`.
+- **A contract that was wrong**: `nz-api`'s `Api::radio_next(seed: &str)` sends `{"seed": "<id>"}`
+  while the route requires an OBJECT (`neezer/webui/__init__.py#radio_next` answers `400 invalid
+  seed`), so the radios' refill goes through the client's generic `Api::send` with the SPA's own
+  body (`Player.svelte#nextBatch`). A typed `RadioSeed { kind, id }` in `nz-api` is the 3-line fix
+  its owner can make; nothing else uses the function today.
+- **Pitfalls found by building**:
+  - **`Toggle::on_change` is not a GPUI listener** (`Fn(bool, &ClickEvent, &mut Window, &mut App)`),
+    so a tile holds a WEAK entity: a screen that is gone answers nothing.
+  - **A test that waits on the REQUEST, not the answer, races**: D8a's menu test waited for the
+    stub's `/api/search` count and pressed `Entrée`/`Menu` on results that had not landed — 1 run in
+    6 failed once this lot's 41 extra tests loaded the machine (10/10 green before them). It now
+    waits for the list, which is what those keys act on.
+  - **`Entity::update` must not read the entity again**: `ask` was written against the `Entity` and
+    panicked `cannot read AppState while it is already being updated` when the beat called it from
+    inside `update`. The service's functions take `&mut AppState` + `&mut Context<AppState>`.
+  - **`add_window_view` hands back `&mut VisualTestContext`**, not a value: `&mut cx` there is a
+    `&mut &mut` and clippy's `needless_borrow` is right.
+  - **`cargo test`'s tab walks need a laid-out frame**: `Window::focus_next` before the first
+    `window.draw()` finds no stops, and `--test-threads` paranoia aside, the count must be read on
+    a painted frame (D14a recorded the same for `Window::focus_next`).
+  - **A `→` press needs an interceptor, an `Entrée` on a chip needs a button**: `card::chip` is a
+    `div` with a click handler, so the year chips, the history filters and the two navigation chips
+    became `toggle`s/`button`s — a mouse-only control in a discovery screen is a keyboard hole.
+  - The bench (`tools/perf_api.py`) cannot seed an archived+measured library in ONE run:
+    `--archived` inserts `track_analysis` rows a second time when `--recap` already wrote them
+    (`UNIQUE constraint failed: track_analysis.track_id`), so `/api/flow/next` answers an empty list
+    on it and the live Flow panel was proven by the tests, not by a screenshot.
+- **What it is now**: `screens/{releases,recap,history,onboarding}.rs` and
+  `widgets/{flow,discovery_slider,recap_story}.rs`; `widgets/mood_card.rs` stays empty on purpose
+  (D8a's Accueil draws its own mood tiles, so the widget this lot was allotted has no caller — a
+  delivered stub with nothing to say is not worth an unused module).
 
 ### D13 — Offline: the downloads worker and its screen (delivered 2026-11-16)
 

@@ -2039,12 +2039,14 @@ mod journey {
         cx.simulate_input("kaya");
         cx.cx.dispatcher.advance_clock(Duration::from_millis(200));
         cx.cx.run_until_parked();
-        // The answer is waited for ON THE SCREEN, not on the request count: the
-        // stub logs a request when it arrives, and the rows still have to come
-        // back and be applied (under a loaded machine one pump is not enough).
-        let rows = view.clone();
-        stub::until(&runtime, cx, "the search's rows", move |cx| {
-            !rows.read(cx).list.rows().is_empty()
+        // The ROWS, not the request: a count on the stub says the question left,
+        // and `Entrée`/`Menu` below act on the answer
+        // (`docs/agents/desktop.md`, D12 *Pitfalls*). The menu is the same
+        // family — an app-level action delivered one effect flush later — so it
+        // is waited for on its own state too.
+        stub::until(&runtime, cx, "the search's results", |cx| {
+            !view.read(cx).list.is_empty()
+        });
         });
         assert_eq!(stub.count("/api/search"), 1, "one ask for the settled term");
         cx.simulate_keystrokes("enter");
@@ -2057,10 +2059,7 @@ mod journey {
         // The menu is opened by an APP-level handler that defers by one effect
         // flush (D8a's pitfall), so the wait is on the menu itself.
         cx.simulate_keystrokes("menu");
-        let opened = view.clone();
-        stub::until(&runtime, cx, "the row menu", move |cx| {
-            opened.read(cx).menu.is_open()
-        });
+        wait_menu(&runtime, cx, &view);
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         let current = cx.update(|_, cx| {
@@ -2073,24 +2072,6 @@ mod journey {
         assert_eq!(current.as_deref(), Some("row-3000001"));
         runtime.shutdown_background();
         stub.stop();
-    }
-
-    /// Wait until the ANSWER IS ON SCREEN, not merely requested.
-    ///
-    /// The stub logs a request the moment it arrives; the answer still has to
-    /// come back and be applied. Under load (the suite runs its tests in
-    /// parallel) one `run_until_parked` is not always enough, and a test that
-    /// went straight on clicked and keyed an EMPTY list — measured twice on a
-    /// loaded machine, never in isolation.
-    fn wait_rows(
-        runtime: &tokio::runtime::Runtime,
-        cx: &mut gpui::VisualTestContext,
-        view: &gpui_kit::Entity<Screen>,
-    ) {
-        let view = view.clone();
-        stub::until(runtime, cx, "the rows on screen", move |cx| {
-            !view.read(cx).list.rows().is_empty()
-        });
     }
 
     /// The same for a menu: `Menu` is an app-level action delivered one effect
