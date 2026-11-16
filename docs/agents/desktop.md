@@ -1507,13 +1507,107 @@ Waves that can run in parallel (disjoint files):
   the server only distinguishes `"browser"` from every other value (a typed ARL) —
   harmless, but D2's note should say so.
 
-### D14b — Réglages (admin sections)
+### D14b — Réglages (admin sections) (delivered 2026-11-16)
 
-- **Files**: `screens/settings/{users,server}.rs`.
-- **Acceptance**: users and invitations; archive/rules/cleanup preview then run; storage; backfills
-  with progress and failure causes (`JobFailures` equivalent); server transcription settings and
-  worker list (create shows the token once, revoke); everything a long job does runs as a job with
-  progress (rule 2).
+- **The rule**: an admin screen is a column of CARDS, and every card that can
+  start work owns its own JOB. The start route returns at once, the card polls
+  its own `*_status` route on the app's `nz-net` runtime at the SPA's own
+  cadence (archive 1.5 s, migration 2 s, MusicBrainz and credits backfills
+  1.5 s), stops when the job says it is done, and then says what it did or the
+  CAUSE of each failure — the tally of reasons, then the rows, then « Copier le
+  détail » (`JobFailures.svelte`'s contract). Measured: a running archive is
+  polled **once per 1.5 s, 2 calls for a job that ends after the first poll**,
+  and an idle Serveur tab makes **0 further requests** over half a second.
+- **The rule, one sequential read pass**: opening Serveur is **10 reads** on
+  `Lane::User`, one after the other, each card painting as its answer lands — so
+  a slow link never sees ten requests compete (rule 3), and one dead route costs
+  its card, not the page. The SPA's Serveur tab makes eleven, because
+  it also reads the Deezer status and the release settings that this app keeps
+  in the Sources and Découverte sections. Measured against a real socket:
+  **10 requests, 2 242 B of JSON** (the harness's bodies; Utilisateurs: **2
+  requests, 573 B**).
+- **The rule, the token is shown once**: enrolling a transcription worker mints
+  the token with the row, shows it in a box that says so, offers « Copier le
+  jeton », and **keeps it nowhere else** — reopening the screen cannot bring it
+  back because the server never answers it again. Revoking sends the DELETE for
+  that worker's own UUID path, and an id that is not a UUID (a hostile payload)
+  never becomes a route. The SPA has no worker screen at all: these three routes
+  (`GET|POST /api/transcribe/workers`, `DELETE …/<id>`) existed on the server
+  with no client, and this lot is their first.
+- **Why some payloads are read as raw JSON, and the contract corrections**:
+  - `/enrich/backfill` answers the shared `libjob` snapshot **plus** its
+    coverage, but `nz_model::EnrichStatus` (D1) typed only the coverage half, so
+    the desktop reads `EnrichLive` locally (`#[serde(flatten)] JobStatus +
+    coverage`) instead of losing `done/failed/failures`. A test pins the payload.
+  - The worker routes have no `nz-api` function (they never existed in
+    `api.js`), so the screen uses the seam D2 left public — `Api::get` and
+    `Api::send` — rather than editing a crate this lot does not own.
+  - The inventory's Réglages → Serveur line also names **automatch** and the
+    **similar backfill**: in the SPA they live in Bibliothèque → Titres
+    indisponibles (`AutomatchPanel`) and in the genre studio (`SimilarRebuild`,
+    D16), not in Réglages; this lot does not duplicate them. `POST /api/upload`
+    (multipart) is a library action too, not a Serveur control.
+- **The rule, no invented dates**: the payloads carry naive server-local
+  timestamps and the workspace has no timezone crate, so these screens print
+  the server's own wall clock (`Vu le 16 nov. 2026 à 20:15`) instead of a
+  relative time that would be off by the UTC offset. A trailing "il y a 3 h"
+  needs a clock the client does not have; the absolute date is exact.
+- **The rule, keyboard-only as well as the mouse, and never by taking the
+  focus**: Tab reaches every control through `focus_scope`, and the page takes
+  **Page Down / Page Up** as app-level actions (`actions!(settings_page, …)`,
+  bound once, handled through a **weak handle**). The screen never focuses
+  itself — D8b's trap: a screen that takes the focus breaks the shell's focus
+  anchor when it is unmounted, and every scoped key (`Espace`, `Ctrl+→`) dies
+  with it. A regression test visits Serveur, comes back to the shell and plays
+  with `Espace`. Home/End are deliberately NOT bound: they belong to every text
+  field's caret. A sheet is the only place focus moves, and it gives it back to
+  whoever had it (the shell's anchor included) when it closes.
+- **What it is now**: `screens/settings/server.rs` (archive, migration,
+  MusicBrainz, credits, archive rules, cleanup preview + run, storage + cache
+  flush, server transcription settings, workers, upload quota) and
+  `screens/settings/users.rs` (25-row keyset pages capped at 250, six filters,
+  account sheet with promote/disable/delete-typed, invitations with
+  create/renew/revoke and the link shown once), plus the two dispatch arms in
+  `screens/settings/mod.rs`. Both screens keep their own `Inbox` (an mpsc the
+  GPUI thread drains) because `AppEvent` belongs to D7's shell and may not grow
+  a variant per screen; the requests themselves go through `nz-api`, never a
+  second HTTP path.
+- **Measured** (this machine, Rust 1.99.1, debug build, `cargo test -p
+  neezer-desktop screens::settings`): **25 tests, 0 failed, 1.7 s** (the 1.5 s
+  poll is most of it); `cargo fmt --check` and `cargo clippy --workspace
+  --all-targets -- -D warnings` clean. The screens' own worst case — **250
+  accounts + 200 invitations = +1 380 KB RSS** in a unit test (the caps the
+  screens enforce; the widgets are built per paint, so the count does not
+  follow). The whole process's RSS on these screens could not be measured here:
+  this machine has **no Xvfb and no Xephyr** and Hyprland's headless backend
+  dies with `CBackend::create() failed!` (measured), and the user's session must
+  not be driven — the same wall D7 hit. The layout is a wrapping column capped
+  at 64 rem, so 660 px (1280 with the 420 px panel open) and 1 940 px (2560)
+  scroll the same cards; D17 owns the full-size screenshot pass.
+- **Pitfalls found by building**:
+  - **A GPUI background timer does not fire in the test harness** (it did not
+    advance within 10 s), so a poll that sleeps on `cx.background_executor()` is
+    untestable and, worse, unmeasured. Every timer of these screens (job polls,
+    the search debounce) runs on `nz-net` instead and answers through the same
+    inbox as the requests — one clock, driven by the same loop the D7 journeys
+    use.
+  - **`StatefulInteractiveElement` is what carries `on_click` and
+    `overflow_y_scroll`**, not `InteractiveElement`: a bare `div()` cannot be
+    clicked or scrolled, it needs `.id(...)` first. The modal veil, the scrolling
+    sheet and every row are stateful for that reason.
+  - **`InputState::focus_handle` needs the `Focusable` trait in scope** — the
+    inherent method the docs imply does not exist on `InputBaseState`. Without
+    it, a field cannot be left alone while the person is typing in it.
+  - **A number field and its chips drift** unless the render puts the server's
+    value back into the field: clicking « 180 min » left the text box at 120
+    until `sync_field` wrote the new value (never while it holds the focus).
+  - **`Box::leak` in a render is a leak per paint**: the archive rules' element
+    ids were built with `format!` per frame at first. Static ids per rule
+    (`event_id`) fixed it; clippy would not have caught it.
+  - **A timestamp is hostile input**: `&iso[11..16]` panics when a multi-byte
+    character sits where the clock belongs. Every slice is `str::get`, and a
+    time is printed only when it is `HH:MM` digits (`date_fr`/`datetime_fr`,
+    pinned by a test with `éééé`).
 
 ### D15a — Remote control
 
