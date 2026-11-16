@@ -10,6 +10,8 @@
   // THIS opening has already added. Ticking twice never adds twice.
   import { tick } from "svelte";
   import { get } from "svelte/store";
+  import { sheet as sheetIn, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import { trackRef } from "../lib/trackkey.js";
   import {
     playlistPicker,
@@ -242,22 +244,14 @@
   }
 
   // A fixed overlay inside anything that has a transform is fixed to THAT, not
-  // to the screen: hang the veil on <body> (same reason as FlashWarning).
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
+  // to the screen: hang the veil on <body> (lib/portal.js#toBody, M9).
 </script>
 
 <svelte:window on:keydown={onKey} />
 
 {#if picker}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" use:toBody on:click={(e) => e.target === e.currentTarget && closePlaylistPicker()}>
+  <div class="overlay" use:toBody transition:veil={{ for: "sheet" }} on:click={(e) => e.target === e.currentTarget && closePlaylistPicker()}>
     <div
       class="sheet"
       role="dialog"
@@ -265,6 +259,7 @@
       aria-label={mode === "queue" ? "Enregistrer la file en playlist" : mode === "new" ? "Nouvelle playlist" : "Ajouter à une playlist"}
       tabindex="-1"
       bind:this={sheet}
+      transition:sheetIn
     >
       <header>
         <div class="ttl">

@@ -7,6 +7,7 @@
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onDestroy, tick } from "svelte";
   import { get } from "svelte/store";
+  import { fadeIn, sheet, veil } from "../lib/motion.js";
   import {
     shareSheet,
     closeShare,
@@ -814,7 +815,7 @@
 
 {#if open && track}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="backdrop" on:click={close}>
+  <div class="backdrop" transition:veil={{ for: "sheet" }} on:click={close}>
     <div
       class="sheet"
       role="dialog"
@@ -822,6 +823,7 @@
       aria-label="Partager"
       tabindex="-1"
       on:click|stopPropagation
+      transition:sheet
       use:modalFocus
     >
       <header>
@@ -890,7 +892,7 @@
       </div>
 
       {#if mode === "clip"}
-        <div class="cliprow">
+        <div class="cliprow" in:fadeIn>
           <div class="bounds">
             <button class="bound" on:click={() => setEdgeToPlayhead("start")} title="Début = position de pré-écoute">
               <span class="bl muted">Début</span>
@@ -915,7 +917,7 @@
           Glissez les poignées pour choisir l'extrait — molette ou pincement pour zoomer.
         </p>
       {:else}
-        <div class="cliprow">
+        <div class="cliprow" in:fadeIn>
           <span class="fullinfo muted">
             {track.podcast ? "Épisode complet" : "Titre complet"} · {fmtDuration(Math.round(duration))}
           </span>
@@ -1029,6 +1031,11 @@
     color: var(--text-dim);
     font-weight: 600;
     font-size: 0.85rem;
+    /* I3: the active tab is marked by a surface, so the colour walk is the
+       tab motion (M6: --dur-instant, no movement on a frequent control). */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .modes button.on {
     background: var(--ac);

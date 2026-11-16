@@ -7,7 +7,7 @@
   // committing, and then swaps the track everywhere it appears in one go. The
   // rewrite runs on the server, so it survives closing the app.
   import { trackKey, trackRef } from "../lib/trackkey.js";
-  import { fade, scale } from "svelte/transition";
+  import { fadeIn, sheet, veil } from "../lib/motion.js";
   import { onDestroy } from "svelte";
   import { api } from "../lib/api.js";
   import {
@@ -217,8 +217,8 @@
 
 {#if target}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeReplace}>
-    <div class="sheet" transition:scale={{ duration: 160, start: 0.97 }}>
+  <div class="overlay" transition:veil={{ for: "sheet" }} on:click|self={closeReplace}>
+    <div class="sheet" transition:sheet>
       <header>
         <div class="ttl">
           <h2>Remplacer le titre</h2>
@@ -251,7 +251,7 @@
             Essayez une autre recherche, ou importez votre propre fichier ci-dessous.
           </p>
         {:else}
-          <ul class="list">
+          <ul class="list" in:fadeIn>
             {#each candidates as c (trackKey(c))}
               <li class="cand" class:playing={previewId === trackKey(c)}>
                 <button
