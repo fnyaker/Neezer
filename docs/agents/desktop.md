@@ -6,8 +6,8 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D14a, D14b, M1, T1 and V1 delivered;
-the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D13, D14a, D14b, M1, T1 and V1
+delivered; the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1206,14 +1206,77 @@ Waves that can run in parallel (disjoint files):
 - **Acceptance**: flow and radios top the queue up before it runs dry (no gap); releases badge and
   "vu"; recap story navigable by keys; onboarding complete with keyboard only.
 
-### D13 — Offline
+### D13 — Offline: the downloads worker and its screen (delivered 2026-11-16)
 
-- **Files**: `app/src/wiring/offline.rs`, `screens/settings/downloads.rs`, `app/src/widgets/
-  download_badge.rs`.
-- **Acceptance**: download a 200-track playlist through `Lane::Bulk` while a network track plays:
-  0 underruns and the playing stream's throughput drops by < 30 % (measure both); progress, pause,
-  resume after restart, and each failure's cause listed; with the network cut, every downloaded
-  track plays and every cached screen opens; play-cache cap respected.
+- **The rule, one worker and one lane**: downloads get no queue of their own. `nz-bulk` (one
+  thread, `nice 10`) drains `nz_cache::Downloads`, and every byte it asks for is a `Lane::Bulk`
+  request — so rule 1 is the gates' and not this file's: 1 s of quiet, one in flight,
+  `X-NS-Background: 1`, and a body paced by the token bucket. Measured on an **800 kB/s** shared
+  token-bucket link (loopback alone measures the kernel, not the rule): the same stream reads
+  **797 529 B/s alone and 574 370 B/s while 200 tracks download — a 28.0 % drop** (budget 30 %;
+  25.7–29.6 % over runs, the spread being the two sockets' buffers) and the armed cap reads
+  **127 508 B/s**, a quarter of the *degraded* stream it measured (510 kB/s) — the feedback the plan
+  asks for. With a real 60 s FLAC on the audio engine the same run renders **6.00 s of audio with 0
+  underruns** and fetches **200/200** tracks. Rule 1 has a second half here: the meter. A cap of
+  "25 % of the stream" needs somebody to MEASURE the stream, so `offline::note_stream_bytes` (fed by
+  the player's own reader) publishes an EWMA over 250 ms windows and sets
+  `bulk_cap_from_stream`; with no byte for 4 s the cap is released (a finished stream has no
+  throughput to yield to).
+- **The rule, a failure is never a verdict**: only the server's own classification (`X-NS-Error`, a
+  4xx) or a full disk marks a row `failed`, with the CAUSE stored and printed one row each; a dead
+  link and a `503 + Retry-After` put the row back to `pending` and the worker waits. Measured: a
+  track refused twice with `503 {"queued":true}` then served **completes with `failed == 0` and 3
+  arrivals**; a `404` keeps `HTTP 404 : …` and « Réessayer les échecs » re-asks it. Restart is the
+  store's own `active` row: after a fresh worker start the published track costs **0 requests** and
+  the interrupted one is fetched again.
+- **The rule, the screen never reads SQLite**: the worker publishes one `Snapshot` (version, worker
+  state, progress, sets, failures with causes, settings, both cache sizes) and the screen compares
+  the version and skips the frame. `nz-cache`'s access rule and rule 4 in one shape: the UI thread
+  takes a mutex and clones. That snapshot carries only what a row prints — the labels of the
+  single-track rows, never the whole map (four thousand entries cloned on every publication).
+- **The rule, a long list is paged**: 20 sets and 8 failures a page. Painting 400 rows in one frame
+  cost **405 ms** (debug) — a hitch, not a list — and no per-row control is free: a `Button` per row
+  costs about **5× more inside the shell's `focus_scope` than outside it** (166 ms against 31 ms for
+  the same 28 rows, debug). Paging bounds the element count, so the cost does not follow the library.
+- **Measured** (this machine: 16 threads, Rust 1.99.1; `cargo test -p neezer-desktop`):
+  - `wiring::offline`: **11 tests**, the two acceptance benches included (3 s + 3 s of paced
+    streaming, 6 s of real-time audio); `screens::settings::downloads`: 4, one of them the layout
+    journey below; `widgets::download_badge`: 2.
+  - the screen at 2 560×1 600, 1 280×800 and 420 px: the reading column is **896 px** (56 rem) at
+    x=832 / x=192 and fills 420 px at 420, inside the viewport at all three; a page of 20 sets + 8
+    failures paints in **3.9 ms median / 4.7 ms p95 in release** (45 / 57 ms in a debug build,
+    which is why the assertion quotes the release budget) and costs **+5.2 MB RSS** in release
+    (+7.3 MB debug) for a 200-set, 200-failure workload.
+  - keyboard alone: Tab walks the page in reading order and Espace presses each control (the test
+    sees the four quality chips at tabs 3–6 and the « hors-ligne » switch at 7); mouse alone: a real
+    hit test on the FLAC chip changes the default quality.
+- **What it is now**: `wiring/offline.rs` (`Offline` — `start`/`ensure`/`configure`, `choose`/
+  `choose_track`/`drop_set`/`drop_track`/`retry_failures`, `pause`/`resume`, `set_quality`/
+  `set_offline_only`/`set_play_cache_cap`, `clear_play_cache`, `local`/`is_downloaded`, `snapshot`,
+  and the free `attach`/`local_path`/`note_stream_bytes`/`keep_downloaded`), `Snapshot`/`Failure`/
+  `Running`/`WorkerState`, the SPA's own keys (`offline.quality`, `offline.onlyDownloaded`,
+  `cache.limit`) and the four-rung picker; `screens/settings/downloads.rs` (`Screen::new(state, cx)`
+  for `SettingsSection::Downloads`, five cards, a pager, the failure list, the cache gauges);
+  `widgets/download_badge.rs` (`chip` for a row that repaints anyway, `Badge` for one that does not).
+- **Deliberate difference from the SPA**: the download picker offers four rungs (FLAC, Opus
+  320/128/64), not six — the server answers `OPUS_256`/`OPUS_192` but `nz-audio`'s ladder has no rung
+  for them, so offering them would download a file this app cannot describe.
+- **Two seams this lot could not land inside its own files** (written down rather than guessed):
+  1. `NetOpener::local` (`app/src/wiring/engine.rs`) still answers the play cache only, so a
+     downloaded track is found by `Offline::local` but not yet by the engine: `local_path(track)` is
+     the one-line call it needs (after `cache.play_cache().lookup(...)`).
+  2. Nothing starts the worker at launch: `AppState::on_restored`/`on_logged_in` (`app/src/state.rs`)
+     need one `wiring::offline::attach(self)`, or a queued download waits for the Réglages screen to
+     open. Both files belong to D7 and no wave-5 lot owns them; the calls are `pub` and tested.
+- **Pitfalls found by building**: `simulate_keystrokes` runs key BINDINGS only — `tab` moves the
+  focus, but pressing the focused control needs a real `KeyDownEvent`/`KeyUpEvent` through
+  `simulate_event` (without it a keyboard test presses nothing and passes vacuously). A screen
+  mounted bare has no Tab binding at all: Tab lives in gpui-omarchy's `focus_scope`, so a screen test
+  needs the shell's wrapper. `debug_bounds` records selectors only in a build with
+  `debug_assertions` (a `cargo test --release` run cannot assert geometry). And a screen's frame
+  cost must not be judged in a debug build: GPUI's layout and tab-stop bookkeeping are ~26× slower
+  there (45 ms against 3.9 ms for the same page), which is why the budget is quoted in release and
+  only loosely bounded in debug.
 
 ### D14a — Réglages (user sections) — delivered 2026-11-17
 
