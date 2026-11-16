@@ -11,6 +11,7 @@
   // Colours come from the surface it sits on: `--tc-dim` and `--tc-line`
   // (the player sets them for its dark glass; the sheet keeps the theme's).
   import { entityRef } from "../lib/entity.js";
+  import { fadeIn } from "../lib/motion.js";
 
   export let data = null; // { credits: [{role, label, people}], info }
 
@@ -45,7 +46,7 @@
 </script>
 
 {#if rows.length}
-  <dl class="credits">
+  <dl class="credits" in:fadeIn>
     {#each rows as c (c.role)}
       <div class="crow">
         <dt>{c.label}</dt>
@@ -60,7 +61,7 @@
   </dl>
 {/if}
 {#if release || info.isrc}
-  <p class="release">
+  <p class="release" in:fadeIn>
     {release}
     {#if info.isrc}<span class="isrc">ISRC {info.isrc}</span>{/if}
   </p>

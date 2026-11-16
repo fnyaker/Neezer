@@ -7,7 +7,7 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { REMOTE, CAN_KEEP, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
-  import { fade } from "svelte/transition";
+  import { fade, fadeIn, swap } from "../lib/motion.js";
   import {
     player,
     current,
@@ -312,7 +312,9 @@
   />
 {/snippet}
 
-<div class="d" transition:fade={{ duration: 150 }}>
+<!-- INSIDE ImmersivePlayer's `.player-host`, which owns the `screen` transition
+     (a component root cannot play a local transition): this box fills it. -->
+<div class="d">
   {#if !$ecoMode}
     {#each $bg as layer (layer.id)}
       <div
@@ -380,7 +382,7 @@
       <div class="cur-lyric" aria-hidden="true">
         {#if $currentLyricLine && !$ecoMode}
           {#key $currentLyricLine}
-            <span in:fade={{ duration: 220 }}>{$currentLyricLine}</span>
+            <span in:swap>{$currentLyricLine}</span>
           {/key}
         {/if}
       </div>
@@ -390,7 +392,7 @@
           <div class="glow" style={glow ? `--glow-c:${rgb(glow)}` : ""}></div>
         {/if}
         {#key trackKey($current)}
-          <div class="cover-fade" in:fade={{ duration: 260 }} out:fade={{ duration: 260 }}>
+          <div class="cover-fade" transition:fade>
             <!-- 1000px: 1500 is 2-3× the bytes for a marginal gain, and the CDN
                  generates big sizes on demand (slow). Cover.svelte shows the
                  cached 500px instantly and upgrades when this one is decoded. -->
@@ -400,10 +402,14 @@
       </div>
 
       <div class="info">
-        <div class="txt">
-          <button class="t" on:click={() => trackEntityRef($current, "album", $current.album) && go("/album/" + trackEntityRef($current, "album", $current.album))}>{$current.title}</button>
-          <span class="a" class:status={$playbackLabel}>{#if $playbackLabel}{$playbackLabel}{:else}<ArtistLine track={$current} navigate={go} />{/if}</span>
-        </div>
+        <!-- P7: the STRING key, intro only (M7). The old block goes in the same
+             frame; the new one fades in where it stands. -->
+        {#key trackKey($current)}
+          <div class="txt" in:swap>
+            <button class="t" on:click={() => trackEntityRef($current, "album", $current.album) && go("/album/" + trackEntityRef($current, "album", $current.album))}>{$current.title}</button>
+            <span class="a" class:status={$playbackLabel}>{#if $playbackLabel}{$playbackLabel}{:else}<ArtistLine track={$current} navigate={go} />{/if}</span>
+          </div>
+        {/key}
         {#if CAN_KEEP && !$current.podcast}
           <!-- "not this one" is said less often than "more of this", and must
                never be hit for the other: quieter, and apart from the heart. -->
@@ -444,7 +450,7 @@
       <div class="controls">
         <button class="sm" class:on={$player.shuffle} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={22} /></button>
         <button on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={30} /></button>
-        <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
+        <button class="pp" class:busy={$playbackBusy} data-motion={$playbackBusy ? "status" : undefined} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
         <button on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={30} /></button>
         <button class="sm" class:on={$player.repeat !== "off"} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.cycleRepeat()} aria-label="Répéter"><Icon name={repeatIcon} size={22} /></button>
       </div>
@@ -515,7 +521,7 @@
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="side-body" id="np-side-body" tabindex={podcast ? "0" : undefined}>
         {#if tab === "queue"}
-          <div class="queue">
+          <div class="queue" in:fadeIn>
             <QueueList items={q} {idx} bind:this={queueVL} showDuration />
             <FlowUpNext />
           </div>
@@ -547,9 +553,9 @@
      its scrim, and the theme's own text colours — so Papier reads as paper and
      Encre as ink instead of every theme forcing white on a dark blur. */
   .d {
-    position: fixed;
+    /* The full-screen box inside ImmersivePlayer's fixed `.player-host`. */
+    position: absolute;
     inset: 0;
-    z-index: 200;
     color: var(--tx);
     overflow: hidden;
     background: var(--bg);
@@ -1136,6 +1142,8 @@
     color: var(--dim);
     font-weight: 600;
     font-size: 0.84rem;
+    /* P11/I3: the active pill is a colour change, not a moving indicator. */
+    transition: background-color var(--dur-instant), color var(--dur-instant);
   }
   .tabs button:hover {
     color: var(--tx);

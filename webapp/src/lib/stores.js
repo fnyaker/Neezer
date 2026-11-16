@@ -56,6 +56,11 @@ function persisted(key, initial, personal = false) {
 export const nowPlayingOpen = persisted("ui.nowPlaying", false);
 export const sidebarOpen = writable(false); // mobile drawer
 export const immersiveOpen = writable(false); // full-screen now-playing view
+// The full-screen player is COVERING the screen: true from its `introend` to
+// its `outrostart` (transitions.md M12). The app's ground hides on THIS, not on
+// `immersiveOpen`, so the page keeps its own ground under the still-sliding
+// player instead of blanking beneath it (P3). Event-driven, never a timer.
+export const immersiveShown = writable(false);
 // Seek request (seconds) consumed by the <audio> owner (Player.svelte), so any
 // view can drive the transport without holding the element.
 export const seekTo = writable(null);

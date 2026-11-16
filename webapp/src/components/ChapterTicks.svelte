@@ -1,5 +1,6 @@
 <script>
   import { onMount } from "svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let chapters = [];
   export let duration = 0;
@@ -33,12 +34,16 @@
 
 <div class="chapter-ticks" bind:this={el} aria-hidden="true" style={`--thumb:${thumb}px`}>
   {#if visible}
-    {#each marks as mark (mark.start)}
-      <span
-        class="chapter-tick"
-        style={`--t:${total > 0 ? mark.start / total : 0}`}
-      ></span>
-    {/each}
+    <!-- P21: the marks appear as ONE block (opacity only — the ticks are
+         positioned on the seek bar, so no transform on them, M1). -->
+    <span class="tick-layer" in:fadeIn>
+      {#each marks as mark (mark.start)}
+        <span
+          class="chapter-tick"
+          style={`--t:${total > 0 ? mark.start / total : 0}`}
+        ></span>
+      {/each}
+    </span>
   {/if}
 </div>
 
@@ -52,6 +57,12 @@
     transform: translateY(-50%);
     pointer-events: none;
     overflow: visible;
+  }
+  .tick-layer {
+    /* The marks' positioning box is exactly the rail's: the ticks still resolve
+       `left`/`top` against the same geometry as before. */
+    position: absolute;
+    inset: 0;
   }
   .chapter-tick {
     position: absolute;

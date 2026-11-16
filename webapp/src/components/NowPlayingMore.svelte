@@ -12,6 +12,7 @@
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onMount, onDestroy } from "svelte";
   import { push } from "svelte-spa-router";
+  import { fadeIn } from "../lib/motion.js";
   import { api } from "../lib/api.js";
   import { player, immersiveOpen, toasts, seekTo } from "../lib/stores.js";
   import { compactNumber } from "../lib/format.js";
@@ -133,7 +134,7 @@
   $: related = about?.related || [];
 </script>
 
-<div class="more">
+<div class="more" in:fadeIn>
   {#if podcast}
     <PodcastEpisodePanel
       episode={track}
@@ -152,51 +153,60 @@
     <p class="muted empty">Rien à afficher pour ce titre : les crédits et les titres similaires viennent de Deezer.</p>
   {/if}
 
+  <!-- P17/I6: one section, one fade when its answer arrives — never a per-card
+       intro (M11). The wrapper is a plain block, so the headings' margins
+       collapse exactly as they did without it. -->
   {#if credits && (credits.credits?.length || Object.keys(credits.info || {}).length)}
-    <h3 class="first">Crédits</h3>
-    <TrackCredits data={credits} />
+    <section class="sect" in:fadeIn>
+      <h3 class="first">Crédits</h3>
+      <TrackCredits data={credits} />
+    </section>
   {/if}
 
   {#if about && about.artist}
-    <h3 class="sec">À propos de l'artiste</h3>
-    <button class="artist" on:click={() => push("/artist/" + entityRef(about.artist))}>
-      <span class="pic"><Cover src={about.artist.picture} alt={about.artist.name} kind="artist" round /></span>
-      <span class="ameta">
-        <span class="aname">{about.artist.name}</span>
-        {#if about.artist.nb_fan}<span class="muted">{compactNumber(about.artist.nb_fan)} fans</span>{/if}
-      </span>
-      <Icon name="chevronRight" size={18} />
-    </button>
-    {#if top.length}
-      <h4>Titres populaires</h4>
-      <TrackList tracks={top} numbered showAlbum={false} context={{ kind: "artist", id: entityRef(about.artist) }} />
-    {/if}
-    {#if related.length}
-      <h4>Artistes similaires</h4>
-      <div class="shelf">{#each related as a (entityRef(a))}<Card item={a} kind="artist" />{/each}</div>
-    {/if}
+    <section class="sect" in:fadeIn>
+      <h3 class="sec">À propos de l'artiste</h3>
+      <button class="artist" on:click={() => push("/artist/" + entityRef(about.artist))}>
+        <span class="pic"><Cover src={about.artist.picture} alt={about.artist.name} kind="artist" round /></span>
+        <span class="ameta">
+          <span class="aname">{about.artist.name}</span>
+          {#if about.artist.nb_fan}<span class="muted">{compactNumber(about.artist.nb_fan)} fans</span>{/if}
+        </span>
+        <Icon name="chevronRight" size={18} />
+      </button>
+      {#if top.length}
+        <h4>Titres populaires</h4>
+        <TrackList tracks={top} numbered showAlbum={false} context={{ kind: "artist", id: entityRef(about.artist) }} />
+      {/if}
+      {#if related.length}
+        <h4>Artistes similaires</h4>
+        <div class="shelf">{#each related as a (entityRef(a))}<Card item={a} kind="artist" />{/each}</div>
+      {/if}
+    </section>
   {/if}
 
   {#if id}
-    <div class="head sec">
-      <h3>Titres similaires</h3>
-      {#if similar?.length}
-        <div class="acts">
-          <button class="pill" on:click={playAll}><Icon name="play" size={15} /> Tout lire</button>
-          <button class="ghost" on:click={queueAll} aria-label="Ajouter à la file"><Icon name="queue" size={17} /></button>
-        </div>
+    <section class="sect" in:fadeIn>
+      <div class="head sec">
+        <h3>Titres similaires</h3>
+        {#if similar?.length}
+          <div class="acts">
+            <button class="pill" on:click={playAll}><Icon name="play" size={15} /> Tout lire</button>
+            <button class="ghost" on:click={queueAll} aria-label="Ajouter à la file"><Icon name="queue" size={17} /></button>
+          </div>
+        {/if}
+      </div>
+      {#if similar === null}
+        <p class="muted status">Recherche de titres qui vont bien avec celui-ci…</p>
+      {:else if similar.length}
+        <TrackList tracks={similar} numbered context={{ kind: "similar", id }} showAlbum={false} />
+      {:else}
+        <p class="muted status">
+          {similarFailed ? "Deezer ne répond pas pour le moment." : "Aucun titre similaire trouvé."}
+          {#if similarFailed}<button class="link" on:click={retry}>Réessayer</button>{/if}
+        </p>
       {/if}
-    </div>
-    {#if similar === null}
-      <p class="muted status">Recherche de titres qui vont bien avec celui-ci…</p>
-    {:else if similar.length}
-      <TrackList tracks={similar} numbered context={{ kind: "similar", id }} showAlbum={false} />
-    {:else}
-      <p class="muted status">
-        {similarFailed ? "Deezer ne répond pas pour le moment." : "Aucun titre similaire trouvé."}
-        {#if similarFailed}<button class="link" on:click={retry}>Réessayer</button>{/if}
-      </p>
-    {/if}
+    </section>
   {/if}
   {/if}
 </div>

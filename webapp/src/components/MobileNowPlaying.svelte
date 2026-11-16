@@ -8,13 +8,14 @@
   import { tick, onMount, onDestroy } from "svelte";
   import { REMOTE, CAN_KEEP, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
-  import { fade } from "svelte/transition";
+  import { sheet, swap } from "../lib/motion.js";
   import {
     player,
     current,
     playing,
     favorites,
     immersiveOpen,
+    immersiveShown,
     seekTo,
     buffered,
     openMenu,
@@ -205,8 +206,13 @@
   // natural thing to grab, so it forwards a clearly-vertical gesture here —
   // see onCoverMove. Which is why the three steps below are functions rather
   // than inline code: the carousel drives exactly the same state.
-  let dragY = 0;
-  let dragging = false;
+  //
+  // `dragY` and `dragging` are BOUND to ImmersivePlayer's `.player-host`: that
+  // host is the element the `screen` transition moves (a component root cannot
+  // play one), so the finger drags the host and the closing slide starts from
+  // `dragY` (transitions.md P1).
+  export let dragY = 0;
+  export let dragging = false;
   let dragArmed = false;
   let dragStartX = 0;
   let dragStartY = 0;
@@ -291,7 +297,8 @@
     more = false;
     revealing = false;
     reveal = 0;
-    // Unmounted once it has slid away (the transition is 280 ms).
+    // Unmounted once it has slid away (the glide is --dur-base, 200 ms, and
+    // shorter or instant under reduced motion/eco): a bounded margin after it.
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
       if (reveal === 0 && !revealing) {
@@ -907,17 +914,18 @@
 </script>
 
 <!-- The touch handlers implement swipe-down-to-dismiss on the whole sheet — a
-     purely gestural affordance (the close button is the accessible path). -->
+     purely gestural affordance (the close button is the accessible path).
+     The sheet's own `screen` transition lives on ImmersivePlayer's host (a
+     local transition plays from the block it sits in, which a component root
+     is not): this component only reports the finger's offset (`dragY`) and the
+     fact that a finger owns it (`dragging`), both bound by the parent. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="m"
-  class:dragging
-  style={`transform:translateY(${dragY}px)`}
   on:touchstart|passive={onTouchStart}
   on:touchmove={onTouchMove}
   on:touchend={onTouchEnd}
   on:touchcancel={onTouchCancel}
-  transition:fade={{ duration: 140 }}
 >
   {#if !$ecoMode}
     {#each $bg as layer (layer.id)}
@@ -938,7 +946,7 @@
         intensity={$vizIntensity}
         fps={$vizFps}
         layout="full"
-        active={$immersiveOpen}
+        active={$immersiveShown}
         paused={!$playing}
         scopeOrientation={$vizScopeOrientation}
         scopeColour={$vizScopeColour}
@@ -995,7 +1003,7 @@
       <div class="cur-lyric" class:on={!!$currentLyricLine && !$ecoMode} aria-hidden="true">
         {#if $currentLyricLine && !$ecoMode}
           {#key $currentLyricLine}
-            <span in:fade={{ duration: 220 }}>{$currentLyricLine}</span>
+            <span in:swap>{$currentLyricLine}</span>
           {/key}
         {/if}
       </div>
@@ -1018,10 +1026,15 @@
       </div>
 
       <div class="info">
-        <div class="txt">
-          <button class="t" on:click={() => trackEntityRef($current, "album", $current.album) && go("/album/" + trackEntityRef($current, "album", $current.album))}>{$current.title}</button>
-          <span class="a" class:status={$playbackLabel}>{#if $playbackLabel}{$playbackLabel}{:else}<ArtistLine track={$current} navigate={go} />{/if}</span>
-        </div>
+        <!-- P7: keyed on the track's STRING key (never `$current`, which
+             re-emits on every progress tick), intro only (M7: the old block
+             goes at once, the new one fades in where it stands). -->
+        {#key trackKey($current)}
+          <div class="txt" in:swap>
+            <button class="t" on:click={() => trackEntityRef($current, "album", $current.album) && go("/album/" + trackEntityRef($current, "album", $current.album))}>{$current.title}</button>
+            <span class="a" class:status={$playbackLabel}>{#if $playbackLabel}{$playbackLabel}{:else}<ArtistLine track={$current} navigate={go} />{/if}</span>
+          </div>
+        {/key}
         {#if CAN_KEEP}
           <!-- The heart is the only action beside the title: "je n'aime pas" and
                the genre tag are one tap away in the ⋯ menu, and the room the
@@ -1046,7 +1059,7 @@
       <div class="controls">
         <button class="sm" class:on={$player.shuffle} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={22} /></button>
         <button on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={30} /></button>
-        <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
+        <button class="pp" class:busy={$playbackBusy} data-motion={$playbackBusy ? "status" : undefined} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
         <button on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={30} /></button>
         <button class="sm" class:on={$player.repeat !== "off"} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.cycleRepeat()} aria-label="Répéter"><Icon name={repeatIcon} size={22} /></button>
       </div>
@@ -1062,7 +1075,7 @@
             intensity={$vizIntensity}
             fps={$vizFps}
             layout="strip"
-            active={$immersiveOpen}
+            active={$immersiveShown}
             paused={!$playing}
           />
         </div>
@@ -1157,7 +1170,7 @@
   {/if}
 
   {#if showQueue}
-    <div class="sheet on-photo" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="File d'attente">
+    <div class="sheet on-photo" transition:sheet role="dialog" aria-modal="true" aria-label="File d'attente">
       <div class="sheet-h">
         <span>File d'attente</span>
         <button class="ic" on:click={() => (showQueue = false)} aria-label="Fermer la file d'attente"><Icon name="chevronDown" size={22} /></button>
@@ -1173,7 +1186,7 @@
     <!-- A real view, not a drawer behind a gesture: its own header names the
          track and the artist, the close is a 44 px button, and the only
          scroller is the lyrics list inside it. -->
-    <div class="sheet on-photo lyrics-view" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="Paroles">
+    <div class="sheet on-photo lyrics-view" transition:sheet role="dialog" aria-modal="true" aria-label="Paroles">
       <div class="sheet-h lyrics-h">
         <div class="lyrics-meta">
           <span class="lyrics-k">Paroles</span>
@@ -1196,9 +1209,10 @@
     visibility: hidden;
   }
   .m {
-    position: fixed;
+    /* INSIDE ImmersivePlayer's fixed `.player-host`, which owns the transition
+       (P1): this box just fills it, exactly as it filled the viewport before. */
+    position: absolute;
     inset: 0;
-    z-index: 200;
     color: var(--tx);
     display: flex;
     flex-direction: column;
@@ -1207,10 +1221,6 @@
        theme — Papier's player reads as paper, not as a dark screen with ink
        text on it. */
     background: var(--bg);
-    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .m.dragging {
-    transition: none; /* follow the finger 1:1 while dragging */
   }
   .bg {
     position: absolute;
@@ -1232,6 +1242,12 @@
   @media (prefers-reduced-motion: reduce) {
     .bg {
       animation: none;
+    }
+    /* M14: no displacement. The finger's own drag is not motion we add, but
+       the panel's glide is — it lands at once. (`screen` is ImmersivePlayer's,
+       and motion.js already makes it instant on a phone.) */
+    .under {
+      transition: none;
     }
   }
   .scrim {
@@ -1913,7 +1929,7 @@
     backdrop-filter: var(--glass-filter-3);
     border-radius: 18px 18px 0 0;
     box-shadow: 0 -14px 44px color-mix(in srgb, var(--bg) 70%, transparent);
-    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: transform var(--dur-base) var(--ease-standard);
     will-change: transform;
   }
   .under.revealing {

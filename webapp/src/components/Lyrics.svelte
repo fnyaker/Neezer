@@ -6,6 +6,7 @@
   import { trackKey } from "../lib/trackkey.js";
   import { followScroll } from "../lib/scroll.js";
   import { lyricLines } from "../lib/lyriccard.js";
+  import { fadeIn, scrollBehavior } from "../lib/motion.js";
   import LyricCard from "./LyricCard.svelte";
   import Icon from "./Icon.svelte";
 
@@ -53,14 +54,15 @@
   let firstFollow = true;
   // Keep the active synced line in view as playback advances (centred-ish so
   // the upcoming lines are visible below). Jump without animation the first
-  // time (on open), then smoothly afterwards.
+  // time (on open), then smoothly afterwards — and `scrollBehavior()` (P18) is
+  // the one owner of "smooth": reduced motion and eco jump at once.
   $: follow(activeIdx);
   async function follow(i) {
     if (i < 0 || !box) return;
     await tick();
     const el = box.querySelector("li.active");
     if (!el) return;
-    followScroll(box, el, { ratio: 0.42, smooth: !firstFollow });
+    followScroll(box, el, { ratio: 0.42, smooth: !firstFollow && scrollBehavior() === "smooth" });
     firstFollow = false;
   }
   // Reset the "instant first jump" when the track (lyrics) changes.
@@ -73,7 +75,7 @@
   onMount(() => tick().then(() => follow($activeLyricIndex)));
 </script>
 
-<div class="lyrics-wrap" class:floating>
+<div class="lyrics-wrap" class:floating in:fadeIn>
   <div class="lyrics" class:empty-state={!lyrics} bind:this={box}>
     {#if !lyrics}
       <p class="muted empty" role="status">
@@ -146,7 +148,9 @@
     font-size: 1.1rem;
     font-weight: 600;
     line-height: 1.35;
-    transition: color 0.2s;
+    /* The line being heard takes the accent: a colour change on a frequent
+       event, so it barely moves (M6) and reads from a token (M15). */
+    transition: color var(--dur-fast);
   }
   .synced li.active {
     color: var(--ac-text);
