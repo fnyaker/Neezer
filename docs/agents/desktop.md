@@ -6,7 +6,7 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, D5, M1 and V1 delivered; the rest planned.** This note is the plan
+**Status (2026-11-16): D0, D1, D4, D5, M1 and V1 delivered; the rest planned.** This note is the plan
 the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what was
 learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -549,24 +549,76 @@ Waves that can run in parallel (disjoint files):
   (WAL) does not block.
 - **Pitfalls**: SQLite access happens on `nz-net`/`nz-bulk`, never the main thread.
 
-### D4 — `nz-player`
+### D4 — `nz-player` (delivered 2026-11-16)
 
-- **Goal**: the queue and transport as a pure state machine, with the web player's rules.
-- **Files**: `desktop/crates/nz-player/src/{lib,state,command,effect,shuffle,listen}.rs`, tests.
-- **API**: `PlayerState::apply(&mut self, cmd: Command, now_ms: u64) -> Vec<Effect>`. `Command`
-  carries exactly the player-store methods `webapp/src/lib/remote/commands.js` names (`playQueue`,
-  `playNext`, `addToQueue`, `next`, `prev`, `jump`, `remove`, `removeAt`, `move`, `clearUpcoming`,
-  `toggleShuffle`, `cycleRepeat`, `toggle`, `play`, `pause`, `setVolume`, `toggleMute`, seek),
-  serde-tagged with those names so remote control maps 1:1. `Effect`: `Load { entry, autoplay,
-  start_s }`, `PreloadNext(Option<Entry>)`, `ReportListen { id, listened_s, next_id, context,
-  shuffle }`, `NeedMore { context }` (radio/flow top-up), `Persist`, `Changed`.
-- **Rules to port** (read `lib/stores.js` `player`, `Player.svelte#flushListen`, `lib/flow.js`):
-  shuffle keeps the current track first and is reversible; repeat off/all/one; `prev` restarts the
-  track after 3 s; listen time counts playing time only; radio/flow contexts ask for more before
-  the queue runs dry.
-- **Acceptance**: each rule a test; on a 4 000-entry queue `toggleShuffle`, `move`, `removeAt` each
-  < 1 ms (criterion or a loop of 1 000 with `Instant`, numbers in the PR); a serde round trip of
-  every `Command` matches the JSON `commands.js#commandFor` produces (fixture copied from the JS).
+- **The rule**: the transport is ONE function, `PlayerState::apply(cmd, now_ms) -> Vec<Effect>`, and
+  everything a person can do goes through it — the bar, the queue, MPRIS, a remote controller, the
+  Flow. No I/O, no clock, no threads: `now_ms` is the caller's and is read for one thing (the listen
+  ledger). A command that means nothing (a jump to a row the queue no longer holds, a `next` on an
+  empty queue) changes nothing and returns NO effect, so "refused" and "did nothing" cannot drift
+  apart. Effects come back in the order the app must apply them — `ReportListen`, `Load`,
+  `PreloadNext`, `NeedMore`, `Persist`, `Changed` — each with exactly one owner; `Load` also carries
+  a seek (`start_s`), so a remote drag reopens the engine at that offset instead of restarting at 0.
+- **The rule, the queue row**: an `Entry` is `commands.js#slimTrack`, NOT `nz-model::Track`. This was
+  the lot's one wrong contract: a queue crosses machine to machine, and `slimTrack` keeps `id` (the
+  KEY) while dropping `deezer_id` for a library row, which `Track` requires — so a row taken from a
+  library list and the same row after a remote round trip would not parse into the same type. The
+  five flag fields are `Option<bool>` for the same reason: `slimTrack` omits a key the sender did not
+  have, and only an absent/`false` distinction round-trips its bytes exactly.
+- **The rule, identity**: the queue is keyed the way `trackkey.js` keys it — the row UUID, else the
+  uuid5 of the Deezer id, i.e. the UUID the row WILL have (`ids.track_uuid` is deterministic), so a
+  search result and the row it becomes are the same queue entry for de-duplication, un-shuffle and a
+  remote `jump` by id. `track_key`/`uuid5`/`sha1` are ported in the crate and pinned to the SPA's own
+  output: the fixture's uuid5 (`3000001` → `21408a08-d175-53a4-a02d-733a7bc83812`) is asserted, and
+  `commands.js#resolveIndex`'s rule is the one `jump`/`remove`/`move` use (index when it still holds
+  that id, else the nearest row carrying it, else nothing — a wrong jump is worse than none).
+- **The rule, shuffle and removal**: `Arc<Entry>` rows, so a 4 000-row shuffle is a pointer copy (the
+  queue itself becomes the un-shuffle order; measured **38.5 µs** release). One deliberate
+  divergence: `stores.js#removeAt` leaves `_orig` alone, so removing a row and un-shuffling
+  RESURRECTS it; here the removed row leaves the un-shuffle order too (test
+  `un_shuffle_does_not_resurrect_a_removed_row`).
+- **The rule, listening**: `now_ms` closes the mark, never a ticker, and only playing time counts —
+  the state is constant between two `apply`s, so the wall time since the last one is playing time
+  exactly. A restart (`prev` past 3 s, repeat `one`) keeps counting: the SPA resets there and loses
+  the seconds heard before it. A backwards clock adds 0.
+- **The rule, running dry**: a Flow/radio context is asked for more (`NeedMore`) once PER ROW, when
+  that row becomes the last of the queue — not on every later command (an unasked-once top-up is a
+  `/api/flow` storm), and the answer is `auto_extend` (append AND advance, `stores.js#autoExtend`);
+  anything else stops with `playing: false`, as the SPA does. `clearUpcoming` turns autoplay off so a
+  queue the person just cleared is not refilled.
+- **What it is now**: six modules (`state`, `command`, `effect`, `shuffle`, `listen`, `lib` for the
+  identity helpers), `Command` with one variant per wire op and a constructor per store method
+  (`op()` gives the wire name back for a log or a permission check), `PlayerState::apply`,
+  `track_ended`, `flush_listen`, `extend`/`replace_upcoming`/`auto_extend` (the SPA's non-remote
+  store methods, which the Flow calls), `set_position`/`set_duration` (the engine's 4 Hz position and
+  its own duration), `snapshot`/`restore` (the session, `orig` saved as POSITIONS so a 4 000-row
+  queue stays a few kilobytes), and accessors for the bar.
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-player -- --nocapture`):
+  - **63 tests, 0 failed** — 16 lib, 40 rules, 5 wire, 2 perf. `cargo fmt --check` and
+    `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - 4 000-row queue, mean over a loop of 1 000 (`Instant`), budget 1 ms: `toggleShuffle` **38.5 µs**
+    release — **29 µs** on a second run with other builds on the same cores — **158 µs** in a debug
+    build idle and **570–695 µs** while the rest of the workspace was compiling; `move` **0.9–1 µs**;
+    `removeAt` + its re-append **0.5–1.7 µs**. The test asserts the 1 ms budget in release and a
+    **4 ms** bound in a debug build, the way `nz-viz` does: a debug build has no optimisations, this
+    machine runs several of them at once, and a wall-clock bound that flips with the load teaches
+    nothing. The first shuffle of a process pays one fresh 32 KB allocation (1.5–2.2 ms), so the loop
+    warms up before measuring.
+  - the fixture is the JavaScript's own output: **19 commands, 13 500 B**, produced by running
+    `commands.js#commandFor` under Node (a module hook stubs only `settings.js`, which imports
+    `svelte/store`), with the base commit and both blob hashes recorded in the file. Every command
+    parses into its Rust variant AND serialises back to the same bytes; `seek` is the one op
+    `commandFor` never produces (`controller.js#watchSeek` posts it), and `shuffle_play` is in the
+    server's `remote.py#OPS` while the lot's list did not name it.
+- **Pitfalls confirmed by building**: `#[serde(tag = "op")]` renames nothing by itself — without
+  `rename_all = "snake_case"` the wire op came out as `"Next"` and only the round-trip test noticed.
+  `play_queue` always carries `start` and `shuffle_play` never does, so they are two arg structs; one
+  struct with an optional field adds a `"start": 0` the JavaScript never sends, and a fixture that is
+  regenerated would then disagree with the code. `PreloadNext` is announced only when the row after
+  the playing one CHANGES, so the first `Load` of a fresh state comes with none: the engine's second
+  voice starts empty, and an app that waited for `PreloadNext(None)` before playing would wait
+  forever. `clippy -D warnings` refuses `chunks_exact(64)` on a constant
+  (`chunks_exact_to_as_chunks`) and an explicit lifetime on a `&Vec` return.
 
 ### D5 — `nz-audio` I: source, decode, output, gapless, seek (delivered 2026-11-16)
 
