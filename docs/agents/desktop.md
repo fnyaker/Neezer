@@ -6,7 +6,7 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0 delivered (workspace, pins, CI); D1 onwards planned.** This note is the
+**Status (2026-11-16): D0 and M1 delivered; D1 onwards planned.** This note is the
 plan the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what
 was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -593,20 +593,51 @@ Waves that can run in parallel (disjoint files):
   centres equals `Biquad::magnitude` ±0.1 dB; output callback time p99 < 25 % of the period with
   every effect on (measured, in the PR).
 
-### M1 — `nz-mpris`
+### M1 — `nz-mpris` (delivered 2026-11-16)
 
-- **Files**: `desktop/crates/nz-mpris/src/lib.rs`, an example `examples/fake_player.rs`.
-- **API**: `Mpris::start(name: &str, tx: Sender<MprisCommand>) -> MprisHandle`;
-  `MprisHandle::{set_track(Metadata), set_status(Playing|Paused|Stopped), set_position_s(f64)
-  (emits Seeked only on discontinuity), set_volume, set_shuffle, set_loop}`; commands `PlayPause`,
-  `Play`, `Pause`, `Next`, `Previous`, `Seek(i64 µs)`, `SetPosition(id, µs)`, `Volume(f64)`,
-  `Shuffle(bool)`, `Loop(..)`, `Raise`, `Quit`. Bus name `org.mpris.MediaPlayer2.neezer`;
-  `mpris:artUrl` = `file://` path of the cached cover; `mpris:trackid` an object path derived from
-  the track id.
-- **Acceptance**: `playerctl -p neezer metadata` shows title/artist/album; `playerctl -p neezer
-  play-pause` reaches the sender (test with `dbus-run-session` in CI); no property signal per
-  position tick (count D-Bus messages over 10 s of playback: ≤ 2).
-- **Pitfalls**: run the server on its own `LocalSet` thread (see *Pitfalls*).
+- **The rule**: `MprisHandle` is the app's only D-Bus surface, and MPRIS is optional to the app
+  running. `Mpris::start` owns one thread (current-thread runtime + `LocalSet`), does not return
+  before the bus name is ours, and a missing session bus, a name another instance owns, or a
+  `mpris-server` failure leave an inert handle (`is_serving()` false, one logged reason): the
+  player plays, the bar and the media keys do not. Updates reach that thread on an unbounded
+  channel — the GPUI thread never waits on D-Bus — and commands come back with `try_send`, so the
+  D-Bus thread never waits on the app either.
+- **The rule, position side**: `Position` is **never** announced (MPRIS 2.2: it does not appear in
+  `PropertiesChanged`). `set_position_s` writes it with `Player::set_position` (documented silent)
+  and emits `Seeked` only when the reported position departed from what a client extrapolates, past
+  a 1.5 s tolerance: at the app's 4 Hz a tick may be 0.9 s late for free, while any gesture is
+  announced. A new track and a pause freeze the base, so neither looks like a seek.
+- **The rule, identity side**: `mpris:trackid` is derived, not passed in. A Deezer number is its own
+  path element (`/fr/neezer/track/3135556`); anything else (the UUIDs of uploads, YouTube rows and
+  episodes) is sanitised to `[A-Za-z0-9_]` **and** gets an FNV-1a fingerprint, because sanitising
+  alone merges `a-b` and `a_b` and a stale `SetPosition` would then move the next track. Staleness
+  is checked against that path, so a click from a client that saw the previous track is dropped at
+  the D-Bus thread. `mpris:artUrl` is a **percent-encoded** `file://` URI of the cached cover: a
+  space, a `#` or an accent in a cover name would otherwise truncate or break the URL.
+- **Measured** (this machine, `playerctl` 2.4.1, private `dbus-run-session`):
+  - 100 position ticks over **10.0 s** produce **0** signals (0 `PropertiesChanged` on the player
+    interface, 0 `Seeked`), counted by the test through zbus and confirmed with `dbus-monitor` on a
+    real bus: **2** `PropertiesChanged` in 10 s, both the initial track+status publication, none
+    from the ticks. One real seek (0 → 42.5 s) produces exactly **1** `Seeked` carrying
+    `42 500 000 µs`, and `Position` reads it back; a paused position repeated 20 times emits
+    nothing.
+  - `playerctl -p neezer metadata` → `xesam:title Balancing the Dark`, `xesam:artist Kaya
+    Project`, `xesam:album Songs from the Inside`, `mpris:length 312000000`, `mpris:trackid
+    '/fr/neezer/track/3135556'`. `playerctl -p neezer play-pause` flips the status to `Paused` and
+    arrives as `MprisCommand::PlayPause`; `next` moves the metadata to the next track.
+  - The whole contract test runs itself under `dbus-run-session` (a private bus, so a developer's
+    own player is never shadowed): `cargo test -p nz-mpris` passes 9 tests in **12.0 s**, and the
+    no-bus child proves startup is never held by a missing bus.
+- **Pitfalls confirmed**: the server really is local — nothing answers until `Player::run()` is
+  polled on a `LocalSet`, and a property set before that panics inside the crate with `SendError`
+  (so `start` blocks on a bounded readiness handshake instead). zbus 6.3 proxies cache properties
+  **lazily by default**: a test that reads `Position` after `PlaybackStatus` gets the first
+  `GetAll` snapshot — build the proxy with `CacheProperties::No`. `GetAll` hands back the whole
+  property map with each `a{sv}` value one variant level down and the player's fields inside the
+  `Metadata` dict, so `Get("Metadata")` and the map are not interchangeable. `playerctl` is not on
+  the `ubuntu-24.04` runner image: the CI test asserts the identical surface through zbus and runs
+  `playerctl` wherever it is installed (measured here). zbus 6 already runs on tokio, so no
+  `mpris-server` feature and no manifest change is needed.
 
 ### V1 — `nz-viz` (bars and oscilloscope, pure)
 
