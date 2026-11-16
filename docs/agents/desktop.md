@@ -1213,8 +1213,8 @@ Waves that can run in parallel (disjoint files):
   the claim loop, the local job, the `<episode>.partial.json` resume file), and the
   `worker`/`local` subcommands. A local transcript lands in
   `$XDG_DATA_HOME/neezer/transcripts/<episode_id>.transcript.json` + `.srt` (T1's `sidecar::write`).
-- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-transcribe`): **9 tests against a fake
-  server in 19.7 s** (the 15 s pause is most of it) and **48 lib tests in 0.44 s**. The full
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-transcribe`): **13 tests against a fake
+  server in 19.5 s** (the 15 s pause is most of it) and **53 lib tests in 0.4 s**. The full
   claim → audio → chunks → complete is **6 requests** (claim, audio, 3 chunks, complete) for a
   3-chunk episode, 12 lines stored; a `429 Retry-After` + a `500` are retried to exactly the
   schedule's attempt count (**3 claims, not a storm**). Against the REAL server
@@ -1225,7 +1225,13 @@ Waves that can run in parallel (disjoint files):
   and `kill`/`nice`/`localtime_r` are declared locally (the app is Linux-only); a stopped process
   ignores `SIGTERM` until it is continued, so `terminate` is CONT → TERM → KILL; `nice 19` goes
   through `pre_exec`; the idle loop polls the control channel every 25 ms instead of `select!`ing,
-  because a `local` command has to run a whole job between two claims.
+  because a `local` command has to run a whole job between two claims. **A `SIGSTOP` is not
+  synchronous with `kill`**: a test that reads `/proc/<pid>/stat` right after it sees `R` and calls
+  a working pause broken — read it in a loop for a second (measured: the state flips within 10 ms).
+  And the seam's first caller is what finds the seam's bugs: `audio::decode_range` took `start_ms`
+  as a **sample** count, so a chunk at 600 s decoded from ~13.6 s and every line after the first
+  chunk would have been silently misplaced. The window test that catches it is a file that is loud
+  for half a second then silent (a window at 600 ms must be silence).
 
 ### T4 — Transcription in the app
 
