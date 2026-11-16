@@ -9,12 +9,14 @@
   } from "../lib/stores.js";
   import { userPlaylists, movePlaylistTo } from "../lib/actions.js";
   import { groupPlaylists } from "../lib/playlistfolders.js";
+  import { sheet, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import Icon from "./Icon.svelte";
 
   let opened = false;
   let q = "";
   let busy = false;
-  let sheet = null;
+  let sheetEl = null;
   let searchEl = null;
   let returnFocus = null;
 
@@ -94,15 +96,15 @@
       close();
       return;
     }
-    if (e.key !== "Tab" || !sheet) return;
-    const focusable = [...sheet.querySelectorAll("button, input, [href], [tabindex]:not([tabindex='-1'])")].filter(
+    if (e.key !== "Tab" || !sheetEl) return;
+    const focusable = [...sheetEl.querySelectorAll("button, input, [href], [tabindex]:not([tabindex='-1'])")].filter(
       (el) => !el.disabled && el.offsetParent !== null
     );
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === sheet || !sheet.contains(active))) {
+    if (e.shiftKey && (active === first || active === sheetEl || !sheetEl.contains(active))) {
       e.preventDefault();
       last.focus();
     } else if (!e.shiftKey && active === last) {
@@ -110,28 +112,26 @@
       first.focus();
     }
   }
-
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
 </script>
 
 <svelte:window on:keydown={onKey} />
 
 {#if target}
-  <div class="overlay" role="presentation" use:toBody on:click={(e) => e.target === e.currentTarget && close()}>
+  <div
+    class="overlay"
+    role="presentation"
+    use:toBody
+    transition:veil={{ for: "sheet" }}
+    on:click={(e) => e.target === e.currentTarget && close()}
+  >
     <div
       class="sheet"
       role="dialog"
       aria-modal="true"
       aria-label="Déplacer vers"
       tabindex="-1"
-      bind:this={sheet}
+      transition:sheet
+      bind:this={sheetEl}
     >
       <header>
         <div class="ttl">

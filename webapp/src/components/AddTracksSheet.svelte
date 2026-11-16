@@ -8,6 +8,8 @@
   import LoadFailed from "./LoadFailed.svelte";
   import { modalFocus } from "../lib/modal.js";
   import { iconOf, offMain, sourceTitle } from "../lib/sources.js";
+  import { sheet, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import Cover from "./Cover.svelte";
 
   // Modal (desktop) / bottom-sheet (mobile) to add tracks to a playlist. Search
@@ -95,9 +97,10 @@
 <svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-<div class="backdrop" on:click={() => onclose?.()}>
+<div class="backdrop" use:toBody transition:veil={{ for: "sheet" }} on:click={() => onclose?.()}>
   <div
     class="sheet"
+    transition:sheet
     on:click|stopPropagation
     role="dialog"
     aria-modal="true"

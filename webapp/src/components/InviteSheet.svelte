@@ -7,6 +7,8 @@
     inviteUrl,
     copyText,
   } from "../lib/adminusers.js";
+  import { sheet, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import Icon from "./Icon.svelte";
 
   export let source = null;
@@ -214,26 +216,18 @@
       first.focus();
     }
   }
-
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
 </script>
 
 <svelte:window on:keydown={onKey} />
 
-<div class="overlay" role="presentation" use:toBody>
+<div class="overlay" role="presentation" use:toBody transition:veil={{ for: "sheet" }}>
   <div
     class="sheet"
     role="dialog"
     aria-modal="true"
     aria-labelledby="invite-title"
     tabindex="-1"
+    transition:sheet
     bind:this={sheetEl}
   >
     <header>

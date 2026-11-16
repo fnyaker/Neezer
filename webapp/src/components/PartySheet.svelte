@@ -7,6 +7,7 @@
   import { partySheet, closePartySheet, current, toasts } from "../lib/stores.js";
   import { partyHost, startParty, endParty } from "../lib/party/host.js";
   import { artistLine } from "../lib/format.js";
+  import { sheet, veil } from "../lib/motion.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
   import { modalFocus } from "../lib/modal.js";
@@ -22,6 +23,23 @@
   $: if (open && host && host.link !== qrFor) makeQr(host.link);
   $: if (!open) confirmEnd = false;
   $: count = host ? host.listeners.length : 0;
+
+  // The focus on open, again. `use:modalFocus` focuses once, on mount — and a
+  // sheet that is closed and re-opened INSIDE its own outro is never unmounted
+  // (Svelte reverses the transition instead), so the action does not run a
+  // second time and the focus would be left on the button that re-opened it
+  // (M2: the pane ends open with the focus inside it).
+  let sheetEl = null;
+  let wasOpen = false;
+  $: if (open !== wasOpen) {
+    wasOpen = open;
+    if (open)
+      tick().then(() => {
+        if (!sheetEl || sheetEl.contains(document.activeElement)) return;
+        const first = sheetEl.querySelector("button, [href], input, [tabindex]:not([tabindex='-1'])");
+        (first || sheetEl).focus?.({ preventScroll: true });
+      });
+  }
 
   // The QR library is only needed here, so it is only loaded here.
   async function makeQr(link) {
@@ -114,9 +132,11 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="backdrop" on:click={closePartySheet}>
+  <div class="backdrop" transition:veil={{ for: "sheet" }} on:click={closePartySheet}>
     <div
       class="sheet"
+      transition:sheet
+      bind:this={sheetEl}
       role="dialog"
       aria-modal="true"
       aria-label="Listen party"
@@ -165,7 +185,7 @@
         {/if}
         <footer>
           <button class="primary" on:click={start} disabled={busy}>
-            {#if busy}<span class="spin"></span> Démarrage…{:else}<Icon name="party" size={17} /> Démarrer la party{/if}
+            {#if busy}<span class="spin" data-motion="status"></span> Démarrage…{:else}<Icon name="party" size={17} /> Démarrer la party{/if}
           </button>
         </footer>
       {:else}

@@ -6,6 +6,8 @@
   import { onDestroy, onMount } from "svelte";
   import { api } from "../lib/api.js";
   import { toasts } from "../lib/stores.js";
+  import { sheet, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import Icon from "./Icon.svelte";
   import Cover from "./Cover.svelte";
   import VirtualList from "./VirtualList.svelte";
@@ -119,8 +121,15 @@
 <svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-<div class="backdrop" on:click={() => onclose?.()}>
-  <div class="sheet" on:click|stopPropagation role="dialog" tabindex="-1" aria-label="Choisir ce qui est importé">
+<div class="backdrop" use:toBody transition:veil={{ for: "sheet" }} on:click={() => onclose?.()}>
+  <div
+    class="sheet"
+    transition:sheet
+    on:click|stopPropagation
+    role="dialog"
+    tabindex="-1"
+    aria-label="Choisir ce qui est importé"
+  >
     <header>
       <div class="hd">
         <h2>Choisir ce qui est importé</h2>

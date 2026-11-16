@@ -1,14 +1,10 @@
 <script>
   import { onDestroy, onMount, tick } from "svelte";
-  import { fade } from "svelte/transition";
   import { loadChapters } from "../lib/chapters.js";
+  import { sheet, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import ChapterList from "./ChapterList.svelte";
   import Icon from "./Icon.svelte";
-
-  const reduceMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   export let episode = null;
   export let chapters = [];
@@ -73,21 +69,12 @@
   function backdrop(e) {
     if (e.target === e.currentTarget) onClose?.();
   }
-
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
 </script>
 
 <div
   class="chsheet"
   use:toBody
-  in:fade={{ duration: reduceMotion ? 0 : 150 }}
+  transition:veil={{ for: "sheet" }}
   role="dialog"
   tabindex="-1"
   aria-modal="true"
@@ -95,7 +82,7 @@
   on:click={backdrop}
   on:keydown={onKey}
 >
-  <div class="chsheet-p" bind:this={sheetEl} tabindex="-1">
+  <div class="chsheet-p" transition:sheet bind:this={sheetEl} tabindex="-1">
     <header class="chsheet-h">
       <div class="chsheet-meta">
         <span class="chsheet-k">Chapitres</span>
