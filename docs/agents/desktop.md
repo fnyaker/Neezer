@@ -6,7 +6,7 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, M1,
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D16, M1,
 P1, T1 and V1 delivered; the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
@@ -1724,14 +1724,100 @@ Waves that can run in parallel (disjoint files):
 - **Acceptance**: the repository's party bench (`webapp/test/party/run.mjs`) with the desktop as
   host and as guest: offset ≤ 5 ms median, ≤ 15 ms p95.
 
-### D16 — Genre studio and client analysis
+### D16 — Studio de genres et analyse côté client (livré 2026-11-17)
 
-- **Files**: `screens/genres.rs`, `app/src/widgets/genre_*.rs`, `app/src/wiring/analysis.rs`.
-- **Contract**: the SPA's genre studio over `/genre/*`, `/explorer*`; client-side analysis and
-  training use `webapp/measure` and `webapp/trainer` natively (path deps), as BULK work that yields
-  like the transcription.
-- **Acceptance**: label, tree edit/undo, bulk tag with preview, share import/export; analysis
-  backfill of 100 tracks runs reniced with 0 underruns while playing.
+- **La règle, un studio, pas un second client** : les cinq onglets de `routes/Genres.svelte` —
+  Étiquetage, Bibliothèque, Arbre, Modèle — plus l'Explorer (`components/ExplorerStyles.svelte`,
+  que la page place sur Recherche : D16 possède `genre_explorer.rs` et pas `search.rs`, le studio
+  le porte donc comme cinquième onglet ; un déplacement, pas une différence). `Étiquetage` est le
+  flux « confirmer, pas taper » : un candidat, les neuf genres les plus probables sur `1`…`9`,
+  `Entrée` pour le premier, `z` pour annuler, `j`/`k` pour avancer/reculer, `/` pour chercher
+  (le champ se rejoint avec Tab). L'`Arbre` est le DAG du serveur : multi-parents, création,
+  renommage, suppression, coupe d'un lien, annulation, remise à l'arbre d'origine — chaque écriture
+  répond l'arbre ENTIER (`_tree_answer`) et l'écran peint cette réponse, jamais sa propre
+  supposition. Le `Modèle` entraîne ici, montre le verdict de santé (`health.js` : bon / à
+  surveiller / peu fiable), envoie la tête (`PUT /genre/model`) puis suit le reclassement.
+- **La règle, les nombres et la tête sont ceux de la page, liés NATIVEMENT** : `webapp/measure` et
+  `webapp/trainer` sont des dépendances de chemin de `app/` (`measure = { path = "../../webapp/measure" }`).
+  La mesure locale fait `measure::measure` sur les canaux SOURCE plafonnés à 600 s (le serveur
+  mesure le signal source), `lowband::analyse`, puis `tempo::analyse` sur le mono 44,1 kHz
+  rééchantillonné par rubato (retard du filtre retiré) ; elle n'envoie que des nombres
+  (`POST /analysis/<uuid>/measures`), le serveur décide. L'entraînement fait les plis, les bags,
+  la projection et la température du crate, avec le ménage AVANT (`health.js#prepare` : doublons
+  par `vectorKey`, un enregistrement étiqueté deux fois écarté, un artiste plafonné à 40 % d'un
+  genre, un genre sous 5 titres laissé de côté) et une seule largeur de matrice (v3 3840 quand
+  TOUTES les lignes l'ont, sinon le préfixe v2 2560). Deux calculs dans le studio ne peuvent pas
+  diverger de la page : c'est le même code.
+- **La règle, le fond cède (règle 1)** : un thread `nz-analysis`, `setpriority(0, 0, 10)` (les
+  appels `setpriority`/`getpriority` sont déclarés localement : le workspace ne pin pas `libc`),
+  toutes ses requêtes sur `Lane::Bulk`, et un drapeau `Control::yield_now` que l'écran lève tant
+  qu'un titre démarre (`current_time() < 8 s`). L'entraînement a son thread, le même nice, le même
+  drapeau. Rien ne touche l'état GPUI : tout revient par `wiring::events`.
+- **La règle, l'écran est ATTEIGNABLE** : D7 avait enregistré la route sans lui donner
+  d'entrée. D16 ajoute donc, hors de sa liste de fichiers mais avec l'accord de l'orchestrateur,
+  un « Genres » dans `sidebar()` (`app.rs`, administrateurs seulement, comme la webapp) et le
+  raccourci `g e` (`keymap.rs`, avec sa ligne dans la table des raccourcis qui alimente `?` et
+  Réglages → Raccourcis). Rien d'autre dans ces deux fichiers ; D15a les modifie aussi (entrée
+  Contrôle distant), d'où un rebase qui garde les deux côtés.
+- **La règle, le clavier ne prend pas l'ancre** : l'écran ne focalise rien (D8a). `1`…`9` et `z`
+  sont liés GLOBALEMENT (`KeyBinding::new("1", GenrePick(1), None)`) et livrés au studio VIVANT par
+  un handle faible, exactement comme les touches de liste de `track_list::own` ; `Entrée`,
+  `j`/`k`, `Début`/`Fin` passent par `track_list::own`. Mesuré : avec `Some("Neezer && !Input")`
+  les touches n'arrivaient JAMAIS à l'écran dans le banc (aucune ancre focale hors coque) ; avec
+  `None`, oui. Les deux chemins appellent les mêmes méthodes (`label`, `undo`, `skip`).
+- **Ce que c'est maintenant** : `screens/genres.rs` (les cinq onglets, l'état, les réponses, les
+  requêtes) et sept widgets — `genre_label.rs` (le modèle d'étiquette, le port de
+  `lib/genre/rank.js` épinglé à la sortie Node de la page, les chips), `genre_tag_sheet.rs`
+  (l'étiquette d'UN titre, ouverte du candidat/du lot/de l'arbre), `genre_bulk_sheet.rs` (l'aperçu
+  du lot : un désaccord arrive décoché, seuls les titres cochés partent), `genre_tree.rs` (la liste
+  aplatie du DAG, un nœud dessiné UNE fois sous son premier parent, les autres nommés sur la
+  ligne), `genre_extractor.rs` (l'état de l'extracteur, son autotest, l'installation d'un `.onnx`
+  par CHEMIN — pas de sélecteur natif sans dépendance), `genre_explorer.rs` (les styles parents,
+  les cinq crans, la découverte par POST puis sondage GET seulement) et `wiring/analysis.rs`
+  (le runner local et le module `training`).
+- **Mesuré** (cette machine : 16 threads, Rust 1.99.1, PipeWire 1.6.9 ; `cargo test -p neezer-desktop`) :
+  - **5 tests du studio** (4 journeys + le modèle de données) et **4 tests d'analyse** ; le
+    workspace entier reste vert. `cargo fmt --check` et
+    `cargo clippy --workspace --all-targets -- -D warnings` propres.
+  - **requêtes** : ouvrir le studio = **2** (`/genre/status`, puis `/genre/candidates`) ; un
+    onglet = **1** (`/genre/tree`) ou **4** (`/analysis/plan`, `/analysis/backfill`,
+    `/genre/embed`, `/explorer`) ou **1** (`/explorer/styles`) ; une revisite = **0** (asserté).
+    Un statut peint depuis le cache n'empêche plus la page de candidats (`candidates_asked`) —
+    le piège exact de la règle cache-d'abord de D8a.
+  - **mémoire du studio** : 220 étiquettes + 40 candidats × 24 scores = **677,3 Ko** (modèle de
+    données, budget 1 Mo asserté) ; l'écran ne tient JAMAIS la bibliothèque — la liste de
+    8 000 titres est celle de la coque, fenêtrée par D8a. Sous Xvfb + lavapipe, l'app entière au
+    studio mesure **~247 Mo RSS** (le pilote Vulkan logiciel en fait l'essentiel ; D8a : 226–237 Mo).
+  - **analyse de 100 titres pendant la lecture** (banc `NZ_ANALYSIS_BENCH=1`, vrai PipeWire, vrai
+    ffmpeg, 100 FLAC de 20 s) : **128,9 s, 1,29 s/titre, 0 échec, 0 underrun** (`EngineEvent::
+    Underrun`, compté par le banc), thread à **nice 10**.
+  - **visuel** : 2560×1600, 1280×800 et **660×800** (panneau latéral de 420 px ouvert) regardés sur
+    un Xvfb isolé : la page est centrée, bornée à 100 rem, les rails de la coque restent en place,
+    les cinq onglets peignent, la taille des cibles et les textes français tiennent ; aucun emoji.
+- **Pièges trouvés en construisant** :
+  - **Le contrat `GenreScore` de `nz-model` est faux** : le serveur envoie `scores` comme
+    `[[label, score, head, proto]]` (`genre.py#_scores_json`), pas un objet `{name, score, tag}`.
+    L'écran lit ces tableaux en JSON (`genre_tag_sheet::read_scores`) et n'utilise PAS le type ;
+    le corriger dans `nz-model` est un lot de contrat, pas une édition de D16.
+  - **`nz-api` n'a ni `/genre/share/export`, ni `/explorer/styles`, ni `/explorer/discover`** : ils
+    se lisent avec `Api::get`/`Api::send` (publics, avec la lane) — aucune route inventée. Le seul
+    multipart, `POST /genre/extractor`, vit dans `genre_extractor::upload` avec la feature
+    `multipart` posée sur `app/` : D2 disait qu'elle arriverait « avec D14b, D16 » ; elle est
+    arrivée ici, côté app, et `nz-api` reste JSON-only. `POST /upload` reste à D14b.
+  - **`bind_keys` d'un écran ne suffit pas** : sans ancre focale (un banc d'écran seul), une
+    liaison contextuelle n'est jamais trouvée (D0) ; les touches du studio sont globales et le
+    handler est le handle faible de l'écran vivant.
+  - **`App::update_global` demande `BorrowAppContext`** dans le champ ; sans l'import, la méthode
+    n'existe pas (`no method named update_global`).
+  - **Le rééchantillonneur du tempo perd le retard du filtre** (147 trames à 1024, 3,3 ms) : le
+    tracker lit des onsets, pas une durée ; le banc l'asserte à 5 ms. L'engine, qui doit garder la
+    durée, réalimente ce retard.
+  - **glibc `getpriority` rend le nice directement**, et remonter le nice exige `CAP_SYS_NICE` :
+    le test de priorité nice son propre thread et le laisse mourir (un worker de test laissé à
+    nice 10 ralentirait toute la suite).
+  - **`the_whole_settings_page_costs_a_few_megabytes`** échoue parfois sous charge (D14a le sait) ;
+    `a_right_click_opens_the_row_menu` (D8a) est du même genre : ces deux-là passent seuls, le
+    studio n'y touche pas.
 
 ### T1 — `nz-transcribe` core (segments, sidecar) — delivered 2026-11-16
 

@@ -16,6 +16,7 @@ use gpui_kit::{App, KeyBinding};
 use gpui_omarchy::ActiveTheme;
 
 use crate::actions::*;
+use crate::app::GoGenres;
 
 /// The context every screen binding lives in.
 pub const CONTEXT: &str = "Neezer && !Input";
@@ -103,6 +104,10 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut {
         keys: "g n",
         label: "Lecture en cours",
+    },
+    Shortcut {
+        keys: "g e",
+        label: "Studio de genres",
     },
     Shortcut {
         keys: "g ,",
@@ -233,6 +238,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("g p", GoPodcasts, c),
         KeyBinding::new("g r", GoReleases, c),
         KeyBinding::new("g n", GoNowPlaying, c),
+        KeyBinding::new("g e", GoGenres, c),
         KeyBinding::new("g ,", GoSettings, c),
         // Lists and rows. A screen that does not show a list yet simply has
         // nothing to handle them.

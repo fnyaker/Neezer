@@ -4080,6 +4080,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "measure"
+version = "0.1.0"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4286,6 +4290,7 @@ dependencies = [
  "gpui-kit",
  "gpui-omarchy",
  "gpui-pre",
+ "measure",
  "nz-api",
  "nz-audio",
  "nz-cache",
@@ -4294,10 +4299,14 @@ dependencies = [
  "nz-player",
  "nz-viz",
  "reqwest",
+ "rubato",
  "serde",
  "serde_json",
+ "symphonia",
+ "symphonia-adapter-libopus",
  "tokio",
  "tracing",
+ "trainer",
  "zbus 6.3.0",
 ]
 
@@ -6016,6 +6025,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -7619,6 +7629,10 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
 ]
+
+[[package]]
+name = "trainer"
+version = "0.1.0"
 
 [[package]]
 name = "trait-variant"
