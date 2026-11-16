@@ -354,10 +354,10 @@ impl LyricsView {
     /// Compute the active line from the audible position, scroll to it and arm
     /// the next line's own timer.
     fn advance(&mut self, heard: i64, playing: bool, cx: &mut Context<Self>) {
-        let Some(track) = self.for_track.clone() else {
+        if self.for_track.is_none() {
             self.active = -1;
             return;
-        };
+        }
         let Some(lines) = self.lines().map(<[LyricLine]>::to_vec) else {
             self.active = -1;
             return;
@@ -379,7 +379,6 @@ impl LyricsView {
             self.timer = None;
             return;
         };
-        let _ = track;
         // One wake-up, at the line's own moment. Every state notification
         // re-arms it (the SPA's `run()` does the same on each `timeupdate`), so
         // a seek or a pause moves the wake-up instead of leaving it behind; the

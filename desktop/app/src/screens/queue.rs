@@ -516,7 +516,6 @@ impl Screen {
         let is_now = index as i64 == playing;
         let is_past = (index as i64) < playing;
         let is_selected = index == selected;
-        let cover = self.state.read(cx).cover_path(&entry);
         let mut row = div()
             .id(("queue-row", index))
             .debug_selector(move || format!("queue-row-{index}"))
@@ -551,7 +550,6 @@ impl Screen {
         // times, cost **+291 MB RSS** in the measured run (`docs/agents/desktop.md`,
         // D9) — the plan's decoded-image LRU (64 MB, `coverqueue.js`) is D8a's
         // widget, not this screen's. One glyph instead, like the player bar.
-        let _ = cover;
         row = row.child(row_glyph(cx));
         row = row.child(
             div()
