@@ -23,6 +23,7 @@ import hashlib
 import http.server
 import os
 import random
+import shlex
 import shutil
 import tempfile
 import threading
@@ -108,19 +109,42 @@ def _need_ffmpeg() -> None:
     raise unittest.SkipTest("ffmpeg not installed")
 
 
-def music_flac(directory) -> bytes:
-    """Ten seconds of stereo pink noise as FLAC: ~1.6 MB, a real track's
-    bitrate. The 15 KB of silence above is smaller than the 32 KB ffmpeg
-    reads before it emits anything, so it could not show a stream that
-    starts before its download ends."""
+def write_flac(path, channels, seconds=10) -> Path:
+    """Pink noise as a real FLAC, ``channels`` wide.
+
+    Two INDEPENDENT channels when stereo, not one signal copied into both: a
+    dual-mono source lets libopus halve its own rate (measured 263 kbit/s for a
+    320 kbit/s target), so it can neither show what a stereo track really costs
+    nor what a mono one does. The 15 KB of silence above is smaller than the
+    32 KB ffmpeg reads before it emits anything, so it could not show a stream
+    that starts before its download ends either.
+    """
     import subprocess
 
-    path = Path(directory) / "music.flac"
-    subprocess.run(
-        ["ffmpeg", "-v", "0", "-f", "lavfi", "-i", "anoisesrc=d=10:c=pink:a=0.3:seed=7",
-         "-ac", "2", "-ar", "44100", "-y", str(path)],
-        check=True,
-    )
+    inputs, labels = [], []
+    for i in range(channels):
+        inputs += ["-f", "lavfi", "-i",
+                   f"anoisesrc=d={seconds}:c=pink:a=0.3:seed={7 + 4 * i}"]
+        labels.append(f"[{i}:a]")
+    cmd = ["ffmpeg", "-v", "0", *inputs]
+    if channels > 1:
+        cmd += ["-filter_complex", "".join(labels) + f"amerge=inputs={channels}"]
+    cmd += ["-ac", str(channels), "-ar", "44100", "-y", str(path)]
+    subprocess.run(cmd, check=True)
+    return Path(path)
+
+
+def music_flac(directory) -> bytes:
+    """Ten seconds of stereo pink noise as FLAC: ~2 MB, a real track's bitrate."""
+    path = write_flac(Path(directory) / "music.flac", 2)
+    data = path.read_bytes()
+    path.unlink()
+    return data
+
+
+def mono_flac(directory) -> bytes:
+    """The same, one channel: a mono record, which is what libopus refuses 320k of."""
+    path = write_flac(Path(directory) / "mono.flac", 1)
     data = path.read_bytes()
     path.unlink()
     return data
@@ -1046,6 +1070,74 @@ class EpisodeFetchTestCase(_CdnMixin, unittest.TestCase):
         self.assertEqual(self._files(self.dir), [os.path.relpath(dest, self.dir)])
 
 
+class OpusCeilingTestCase(unittest.TestCase):
+    """libopus takes at most 256 kbit/s PER CHANNEL: ``OPUS_320`` must be clamped.
+
+    On the image's static ffmpeg 9.0.2 (which ships no ffprobe), ``-b:a 320k`` on
+    a MONO input exits 234 with *"The bit rate 320000 bps is unsupported. Please
+    choose a value between 500 and 256000."* The very same request on a stereo
+    input is accepted, and 512k is the stereo ceiling — so the guard cannot be a
+    blanket 256 kbit/s: that would downgrade every stereo track.
+    """
+
+    def test_the_clamp_is_libopus_own_256_kbit_per_channel(self):
+        from neezer.webui import _opus_kbps
+
+        # Measured on ffmpeg 9.0.2: 320k accepted on 2 channels, refused on 1;
+        # 512k accepted on 2, 513k refused.
+        self.assertEqual(_opus_kbps(320, 1), 256)
+        self.assertEqual(_opus_kbps(320, 2), 320)
+        self.assertEqual(_opus_kbps(320, 6), 320)
+        # A request the source can carry is left exactly as it is.
+        self.assertEqual(_opus_kbps(128, 1), 128)
+        self.assertEqual(_opus_kbps(64, 2), 64)
+        self.assertEqual(_opus_kbps(192, 1), 192)
+
+    def test_an_unknown_channel_count_forces_stereo_instead_of_guessing(self):
+        from neezer.webui import _opus_args
+
+        # A live source whose first bytes are not a FLAC (Deezer only has an MP3
+        # when it has no FLAC): nothing to read the layout from, and a mono input
+        # would be refused outright. A stereo output makes every rate we offer
+        # valid and is a no-op on the stereo audio nearly all of it is.
+        self.assertEqual(
+            _opus_args(320, None),
+            ["-c:a", "libopus", "-ac", "2", "-b:a", "320k", "-vbr", "on"],
+        )
+        # Known channels: no down/up-mix, just the ceiling.
+        self.assertEqual(
+            _opus_args(320, 2), ["-c:a", "libopus", "-b:a", "320k", "-vbr", "on"]
+        )
+        self.assertEqual(
+            _opus_args(320, 1), ["-c:a", "libopus", "-b:a", "256k", "-vbr", "on"]
+        )
+
+    def test_a_flac_states_its_channel_count_in_its_first_bytes(self):
+        """The live path has no file yet but already holds the first block.
+
+        ``mediafile`` (mutagen) is the check for a finished file; the FLAC
+        STREAMINFO parse is what makes the live path agree with it, and both are
+        read here off real encoder output rather than a hand-built header.
+        """
+        from neezer.webui import _audio_channels, _flac_channels
+
+        _need_ffmpeg()
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        for channels in (1, 2):
+            with self.subTest(channels=channels):
+                path = write_flac(Path(directory) / f"c{channels}.flac", channels)
+                self.assertEqual(_audio_channels(str(path)), channels)
+                head = path.read_bytes()[:65536]
+                self.assertEqual(_flac_channels(head), channels)  # the live path's read
+        # Anything that is not a FLAC (an MP3 fallback, a short/absent block)
+        # answers None, and the caller then forces stereo instead of guessing.
+        self.assertIsNone(_flac_channels(MP3))
+        self.assertIsNone(_flac_channels(b""))
+        self.assertIsNone(_flac_channels(None))
+        self.assertIsNone(_flac_channels(b"fLaC"))
+
+
 class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
     """``/api/stream/<id>``, the web player's first play of a Deezer track."""
 
@@ -1212,6 +1304,181 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
         self.assertEqual(rv.headers["Accept-Ranges"], "none")
         self.assertAlmostEqual(decoded_seconds(rv.get_data()), 8.0, delta=0.15)
         self.assertEqual(self.cdn.hits.count("/route-stall"), 1)
+
+    # -- OPUS_320: libopus's ceiling is PER CHANNEL ---------------------------
+    # On ffmpeg 9.0.2 `-b:a 320k` is accepted on a stereo source and REFUSED on a
+    # mono one ("The bit rate 320000 bps is unsupported. Please choose a value
+    # between 500 and 256000.", exit 234). What that cost: an empty response, no
+    # cache entry, and on a cold track the live FLAC archive dropped as well.
+
+    def _opus_key(self, bitrate=320):
+        from neezer.webui import _transcode_key
+
+        return _transcode_key(Track[ids.track_uuid(self.SID)], bitrate)
+
+    def _archive_flac(self, name, body):
+        """One FLAC play: leaves the archive on disk, tagged, as a first play does."""
+        self._resolve_to(self.cdn.serve(name, encrypt_like_deezer(body, self.SID), "length"))
+        rv = self.client.get(f"/api/stream/{self.SID}")
+        self.assertEqual(rv.status_code, 200)
+        rv.close()
+        # The live producer publishes (tagged, atomically renamed) right after the
+        # body ends, so the file's presence is the event, not a sleep.
+        self.assertTrue(
+            wait_until(lambda: os.path.isfile(self.track.path), timeout=15),
+            "the FLAC archive was never published",
+        )
+
+    def _transcoded(self, quality="OPUS_320"):
+        rv = self.client.get(f"/api/stream/{self.SID}?q={quality}")
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_data()
+        rv.close()
+        return body
+
+    def _opus_info(self, body, name):
+        import mutagen.oggopus
+
+        path = Path(self.archive_dir) / name
+        path.write_bytes(body)
+        return mutagen.oggopus.OggOpus(path).info
+
+    def test_opus_320_of_a_mono_archive_is_clamped_and_cached(self):
+        _need_ffmpeg()
+        self._archive_flac("route-mono", mono_flac(self.archive_dir))
+        body = self._transcoded()
+        self.assertTrue(body.startswith(b"OggS"), "not an Ogg Opus stream")
+        info = self._opus_info(body, "heard-mono.ogg")
+        # One channel in, one channel out: nothing invented a second one.
+        self.assertEqual(info.channels, 1)
+        self.assertAlmostEqual(info.length, 10.0, delta=0.02)
+        # Complete, not truncated — and no ffprobe in the image, so ffmpeg
+        # decodes the whole thing (`-i file -f null -`).
+        self.assertAlmostEqual(decoded_seconds(body), 10.0, delta=0.05)
+        # The rate the file really carries (not the one asked for): measured
+        # 241 kbit/s, the 256k libopus accepts on ONE channel. A 320k mono encode
+        # would read ~300 and is exactly what the encoder refuses.
+        rate = len(body) * 8 / info.length
+        self.assertGreater(rate, 200_000)
+        self.assertLess(rate, 270_000)
+        # ...and it IS the 256k encode: same length, packet for packet, as the
+        # same file asked for OPUS_256 (a second cache entry, encoded again).
+        self.assertEqual(len(self._transcoded("OPUS_256")), len(body))
+        # Cached, so the next play is a file: a byte range, no second encode.
+        self.assertTrue(self.app.transcode_cache.has(self._opus_key(320)))
+        rv = self.client.get(
+            f"/api/stream/{self.SID}?q=OPUS_320", headers={"Range": "bytes=0-3"}
+        )
+        self.assertEqual(rv.status_code, 206)
+        self.assertEqual(rv.data, b"OggS")
+        rv.close()
+        # A seek into that mono file encodes from the offset: same command, same
+        # ceiling, and never cached (a slice is not the track).
+        rv = self.client.get(f"/api/stream/{self.SID}?q=OPUS_320&start=2")
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.headers["Accept-Ranges"], "none")
+        self.assertAlmostEqual(decoded_seconds(rv.get_data()), 8.0, delta=0.15)
+        rv.close()
+        # The slice never replaced the cached whole-track transcode.
+        self.assertTrue(self.app.transcode_cache.has(self._opus_key(320)))
+
+    def test_opus_320_of_a_stereo_archive_stays_320(self):
+        # The clamp must never be a blanket 256: the normal case keeps its rate.
+        _need_ffmpeg()
+        self._archive_flac("route-stereo", music_flac(self.archive_dir))
+        body = self._transcoded()
+        info = self._opus_info(body, "heard-stereo.ogg")
+        self.assertEqual(info.channels, 2)
+        self.assertAlmostEqual(info.length, 10.0, delta=0.02)
+        rate = len(body) * 8 / info.length
+        # Measured 301 kbit/s for the 320k target on this material (libopus's VBR
+        # lands ~94% of it); a 256k clamp would read 240.
+        self.assertGreater(rate, 280_000)
+        self.assertLess(rate, 360_000)
+        self.assertAlmostEqual(decoded_seconds(body), 10.0, delta=0.05)
+        self.assertTrue(self.app.transcode_cache.has(self._opus_key(320)))
+
+    def test_opus_320_of_a_cold_mono_track_streams_and_keeps_its_flac(self):
+        # The live path has no file to read the layout from: it reads the first
+        # block's FLAC STREAMINFO. Getting that wrong is not a degraded stream —
+        # ffmpeg never starts, and the archive is dropped with the listener.
+        _need_ffmpeg()
+        self._resolve_to(
+            self.cdn.serve(
+                "route-mono-cold", encrypt_like_deezer(mono_flac(self.archive_dir), self.SID), "chunked"
+            )
+        )
+        heard = self._transcoded()
+        self.assertTrue(heard.startswith(b"OggS"), "not an Ogg Opus stream")
+        info = self._opus_info(heard, "heard-mono-cold.ogg")
+        self.assertEqual(info.channels, 1)
+        self.assertAlmostEqual(decoded_seconds(heard), 10.0, delta=0.05)
+        # The FLAC master still landed: mono, complete, and not re-downloaded.
+        audio = mutagen.flac.FLAC(self.track.path)
+        self.assertEqual(audio.info.channels, 1)
+        self.assertEqual(audio.info.total_samples, 441000)
+        self.assertEqual(self.queued, [])
+        self.assertEqual(self.cdn.hits.count("/route-mono-cold"), 1)
+        # The live transcode is the cache entry, as on the file path.
+        self.assertTrue(self.app.transcode_cache.has(self._opus_key(320)))
+
+
+class SubsonicOpusCommandTestCase(unittest.TestCase):
+    """The Subsonic transcode command, run exactly as the image ships it.
+
+    ``docker/default.conf``'s Opus transcoders are command TEMPLATES: one
+    ``%outratek`` and no channel count, so they cannot clamp to libopus's 256
+    kbit/s per channel the way ``/api/stream`` does. They pin the output to
+    stereo instead — measured here, on a mono source, at 320k.
+    """
+
+    def _commands(self):
+        root = Path(__file__).resolve().parents[1]
+        with open(root / "docker" / "default.conf", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        return [
+            line.split("=", 1)[1].strip()
+            for line in lines
+            if line.startswith(("transcoder_flac_opus", "transcoder_mp3_opus"))
+        ]
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_the_shipped_opus_transcoder_takes_320k_on_a_mono_source(self):
+        import subprocess
+
+        import mutagen.oggopus
+
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        source = write_flac(Path(directory) / "mono.flac", 1)
+        commands = self._commands()
+        self.assertEqual(len(commands), 2, "both Opus transcoders are shipped")
+        for i, command in enumerate(commands):
+            with self.subTest(command=command):
+                # ``%outratek`` is ``%outrate`` plus a literal ``k``: that is how
+                # ``media.prepare_transcoding_cmdline`` fills it (it substitutes
+                # ``%outrate`` only, so ``%outratek`` becomes "320k").
+                argv = [
+                    arg.replace("%srcpath", str(source))
+                    .replace("%outrate", "320")
+                    .replace("%outfmt", "ogg")
+                    for arg in shlex.split(command)
+                ]
+                self.assertTrue("-b:a" in argv and "320k" in argv, argv)
+                done = subprocess.run(argv, capture_output=True)
+                # Without -ac 2 this is exit 234: "The bit rate 320000 bps is
+                # unsupported. Please choose a value between 500 and 256000."
+                self.assertEqual(done.returncode, 0, done.stderr.decode()[-300:])
+                out = Path(directory) / f"subsonic-{i}.ogg"
+                out.write_bytes(done.stdout)
+                info = mutagen.oggopus.OggOpus(out).info
+                self.assertEqual(info.channels, 2)  # the down-mix that makes it valid
+                self.assertAlmostEqual(info.length, 10.0, delta=0.02)
+                # Encoded to the 320k budget: measured 263 kbit/s on this
+                # (two-identical-channels) material, where 256k reads 240.
+                rate = len(done.stdout) * 8 / info.length
+                self.assertGreater(rate, 240_000)
+                self.assertLess(rate, 400_000)
 
 
 class EnsureArchivedTestCase(_CdnMixin, TestBase):

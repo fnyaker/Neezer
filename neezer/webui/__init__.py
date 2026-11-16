@@ -5167,6 +5167,68 @@ def _gone(track, deezer_id):
 # Opus transcode bitrates (kbps) the web player may request: q=OPUS_320 etc.
 _OPUS_BITRATES = {320, 256, 192, 128, 64}
 
+#: libopus caps its rate PER CHANNEL, so the ceiling is 256 kbit/s x channels.
+#: Asking 320 kbit/s of a MONO source is refused outright — ffmpeg exits 234
+#: with "The bit rate 320000 bps is unsupported. Please choose a value between
+#: 500 and 256000." — where the same request on a stereo source is fine. OPUS_320
+#: therefore has to be clamped to what the source can take, not lowered for
+#: everyone: a stereo track keeps its 320 kbit/s.
+_OPUS_KBPS_PER_CHANNEL = 256
+
+
+def _opus_kbps(requested, channels):
+    """What libopus will actually take for ``requested`` kbit/s: 256 x channels, at most.
+
+    ``channels`` None means "not known yet", which is only the live path's case
+    when its first bytes are not a FLAC; ``_opus_args`` then forces a stereo
+    output, so the stereo ceiling is the right one.
+    """
+    limit = _OPUS_KBPS_PER_CHANNEL * (channels if channels and channels > 0 else 2)
+    return min(int(requested), limit)
+
+
+def _opus_args(bitrate, channels=None):
+    """ffmpeg's libopus arguments for ``bitrate`` kbit/s, held to the encoder's ceiling.
+
+    One rule for every Opus encode here (the whole file, a seek slice, a live
+    download, a YouTube source): the rate is clamped by the channel count when it
+    is known, and when it is not — a live source whose first bytes say nothing —
+    the output is forced to stereo, which makes every rate we offer valid and is
+    a no-op on the stereo audio that nearly all of the library is.
+    """
+    args = ["-c:a", "libopus"]
+    if not channels:
+        args += ["-ac", "2"]
+    return args + ["-b:a", f"{_opus_kbps(bitrate, channels)}k", "-vbr", "on"]
+
+
+def _audio_channels(path):
+    """How many channels a finished audio file carries, or None.
+
+    ``mediafile`` (mutagen) parses the container header — no decoding, and no
+    ffprobe, which the image deliberately does not ship. 0.2 ms warm on a FLAC.
+    """
+    try:
+        import mediafile
+
+        return int(mediafile.MediaFile(path).channels) or None
+    except Exception:
+        return None
+
+
+def _flac_channels(head):
+    """Channel count from a FLAC stream's first bytes, or None.
+
+    The live Opus path has no file yet — the audio arrives as a generator — but
+    it already holds the stream's first bytes, and a FLAC states its layout 21
+    bytes in: STREAMINFO follows the 4-byte magic and a 4-byte block header,
+    then 20 bits of sample rate and 3 bits of (channels - 1).
+    """
+    if not head or len(head) < 21 or head[:4] != b"fLaC":
+        return None
+    return ((head[20] >> 1) & 0x07) + 1
+
+
 #: Containers a seek slice can be stream-copied from, and their muxer/mimetype.
 _SLICE_COPY = {
     ".mp3": ("mp3", "audio/mpeg"),
@@ -5288,6 +5350,9 @@ def _slice_generator(path, start, bitrate):
     is left out: its muxer needs a seekable output and writes nothing to a pipe,
     and an MP4 upload is served as a file, which a byte range already seeks.
     ``(None, None)`` for a container neither can serve.
+
+    An Opus slice takes the same per-channel ceiling as the whole-track encode
+    (``_opus_args``): a mono archive at ``q=OPUS_320`` used to fail here too.
     """
     import subprocess
 
@@ -5296,7 +5361,7 @@ def _slice_generator(path, start, bitrate):
     suffix = os.path.splitext(str(path))[1].lower()
     if bitrate:
         codec = [
-            "-c:a", "libopus", "-b:a", f"{bitrate}k", "-vbr", "on",
+            *_opus_args(bitrate, _audio_channels(path)),
             "-flush_packets", "1", "-page_duration", "100000",
         ]
         muxer, mimetype = "ogg", "audio/ogg"
@@ -5368,12 +5433,16 @@ def _opus_generator(flac_path, bitrate):
     Raises when ffmpeg did not finish: the cache publishes what the generator
     completed, and a truncated Opus used to be cached for good — the next plays
     then served a 15 kB file that claimed to be the track.
+
+    The rate is held to libopus's 256 kbit/s per channel (``_opus_args``): this
+    used to pass ``OPUS_320`` straight through, which ffmpeg refused on a mono
+    source — an empty answer and nothing cached, every time.
     """
     import subprocess
 
     cmd = [
         "ffmpeg", "-v", "0", "-i", flac_path,
-        "-map", "0:a:0", "-c:a", "libopus", "-b:a", f"{bitrate}k", "-vbr", "on",
+        "-map", "0:a:0", *_opus_args(bitrate, _audio_channels(flac_path)),
         "-vn", "-f", "ogg", "pipe:1",
     ]
     # stderr -> /dev/null so an unread, full stderr pipe can't deadlock ffmpeg.
@@ -5414,6 +5483,12 @@ def _opus_live_generator(first, source, bitrate):
     or, when the listener leaves and ffmpeg is killed, its next write fails
     and it closes ``source``, which drops the partial and queues the archive
     in the background exactly as the FLAC path does.
+
+    The bitrate is held to what libopus accepts for this source's channel count
+    (``_flac_channels`` reads it off the first block, which is already in hand).
+    Getting that wrong is not a degraded stream, it is no stream at all: ffmpeg
+    refuses to start, the feeder's first write fails and the archive itself is
+    dropped — OPUS_320 on a cold mono track used to fail on both counts.
     """
     import subprocess
 
@@ -5422,7 +5497,7 @@ def _opus_live_generator(first, source, bitrate):
     # the first audio page left after 0.77 s without them, 0.26 s with.
     cmd = [
         "ffmpeg", "-v", "0", "-i", "pipe:0",
-        "-map", "0:a:0", "-c:a", "libopus", "-b:a", f"{bitrate}k", "-vbr", "on",
+        "-map", "0:a:0", *_opus_args(bitrate, _flac_channels(first)),
         "-vn", "-flush_packets", "1", "-page_duration", "100000",
         "-f", "ogg", "pipe:1",
     ]

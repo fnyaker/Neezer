@@ -3796,6 +3796,97 @@ class WebUITestCase(unittest.TestCase):
         finally:
             export._media_file = orig
 
+    # -- export as Opus: the same per-channel ceiling as the stream ----------
+    # ``_media_file`` archives a track before handing its path over, so the
+    # export only ever re-encodes a FINISHED file: the header says how many
+    # channels there are, and libopus takes 256 kbit/s per channel.
+
+    def _need_ffmpeg(self):
+        if shutil.which("ffmpeg"):
+            return
+        if os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
+            raise RuntimeError("NS_REQUIRE_FFMPEG=1 but ffmpeg is not on PATH")
+        self.skipTest("ffmpeg not installed")
+
+    def _playlist_with_audio(self, title, audio, ext):
+        """A playlist holding one track whose file is REAL audio."""
+        from neezer.db import Playlist, User
+
+        track = self._make_local_track(title)
+        path = os.path.splitext(track.path)[0] + "." + ext
+        with open(path, "wb") as fh:
+            fh.write(audio)
+        os.remove(track.path)
+        track.path = path
+        track.save()
+        pl = Playlist.create(user=User.get(name="alice"), name="Ma sélection")
+        pl.add(track)
+        pl.save()
+        return pl
+
+    def _opus_entry(self, playlist):
+        """``(name, bytes)`` of the one entry, or ``(None, _erreurs.txt)``."""
+        rv = self.client.get("/api/export/playlist/%s?fmt=opus_320" % playlist.id)
+        self.assertEqual(rv.status_code, 200)
+        z = zipfile.ZipFile(io.BytesIO(rv.data))
+        self.assertIsNone(z.testzip())  # a valid, complete archive
+        names = z.namelist()
+        if "_erreurs.txt" in names:
+            return None, z.read("_erreurs.txt")
+        name = next(n for n in names if n.startswith("001 - "))
+        return name, z.read(name)
+
+    def test_export_opus_320_of_a_mono_track_is_not_a_failure(self):
+        """It used to name a mono title in ``_erreurs.txt`` and ship no file.
+
+        libopus refuses more than 256 kbit/s PER CHANNEL, so "Opus 320" of a mono
+        track never started — while the same request on a stereo track was fine.
+        """
+        import mutagen.oggopus
+
+        from .test_deezer_stream import decoded_seconds, mono_flac
+
+        self._need_ffmpeg()
+        self._login()
+        pl = self._playlist_with_audio("Mono Cut", mono_flac(self.archive), "flac")
+        name, body = self._opus_entry(pl)
+        self.assertIsNotNone(name, body)
+        self.assertTrue(name.endswith(".opus"), name)
+        out = os.path.join(self.archive, "exported-mono.opus")
+        with open(out, "wb") as fh:
+            fh.write(body)
+        info = mutagen.oggopus.OggOpus(out).info
+        self.assertEqual(info.channels, 1)  # the source's layout, no upmix invented
+        self.assertAlmostEqual(info.length, 10.0, delta=0.02)
+        # Complete, not truncated: no ffprobe in the image, ffmpeg decodes it all.
+        self.assertAlmostEqual(decoded_seconds(body), 10.0, delta=0.05)
+        # Measured 241 kbit/s: the 256k libopus accepts on ONE channel. A 320k
+        # mono encode would read ~300 and is exactly what the encoder refuses.
+        rate = len(body) * 8 / info.length
+        self.assertGreater(rate, 200_000)
+        self.assertLess(rate, 270_000)
+
+    def test_export_opus_320_of_a_stereo_track_stays_320(self):
+        import mutagen.oggopus
+
+        from .test_deezer_stream import decoded_seconds, music_flac
+
+        self._need_ffmpeg()
+        self._login()
+        pl = self._playlist_with_audio("Stereo Cut", music_flac(self.archive), "flac")
+        name, body = self._opus_entry(pl)
+        self.assertIsNotNone(name, body)
+        out = os.path.join(self.archive, "exported-stereo.opus")
+        with open(out, "wb") as fh:
+            fh.write(body)
+        info = mutagen.oggopus.OggOpus(out).info
+        self.assertEqual(info.channels, 2)
+        self.assertAlmostEqual(decoded_seconds(body), 10.0, delta=0.05)
+        # Measured 301 kbit/s for the 320k target; a blanket 256 clamp reads 240.
+        rate = len(body) * 8 / info.length
+        self.assertGreater(rate, 280_000)
+        self.assertLess(rate, 360_000)
+
     def test_export_slot_is_released_after_the_download(self):
         self._login()
         pl, _t = self._playlist_with_local_track("Export Me")

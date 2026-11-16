@@ -203,6 +203,30 @@ was not consumed to the end. A network hiccup used to cache the first half of a 
 whole track — a 15 kB "song", served for ever with a length and byte ranges, which no seek could
 get past.
 
+**libopus caps its bitrate PER CHANNEL: 256 kbit/s.** `OPUS_320` is therefore a valid request for a
+stereo source and a refused one for a mono source: on the image's ffmpeg 9.0.2 `-b:a 320k` on a mono
+input exits 234 with *"The bit rate 320000 bps is unsupported. Please choose a value between 500 and
+256000."*, where the same request on stereo is accepted (512k is the stereo ceiling). It used to be
+passed straight through, so `q=OPUS_320` on a mono track answered an EMPTY body and cached nothing —
+and on a cold track it also killed the archive: ffmpeg never starts, the feeder's first write fails,
+`source.close()` drops the partial. Every Opus encode goes through `webui._opus_args` (`_opus_kbps`:
+`min(requested, 256 x channels)`), never a blanket 256 — a stereo track keeps its 320 (measured: 301
+kbit/s in the cached file, against 241 kbit/s for a mono `OPUS_320`, which is exactly the 256k
+encode). The channel count is read without decoding and without ffprobe: `mediafile` (mutagen,
+header only, 0.2 ms warm) for a finished file, and on the LIVE path — no file yet — the first
+block's FLAC STREAMINFO (`_flac_channels`, 21 bytes in); a first block that is not a FLAC (Deezer's
+MP3 fallback) forces `-ac 2` rather than guessing, since a stereo output makes every rate we offer
+valid and is a no-op on stereo audio. The cache key stays the REQUESTED quality (`…-opus320.ogg` can
+hold 256k for a mono track): `/ready` must keep answering `cached` for the `q` the player asked.
+The **Subsonic** path cannot clamp per channel — a command template has one `%outratek` and no
+channel count — so `docker/default.conf` and both sample configs pin `-ac 2` on the Opus
+transcoders: every rate up to 512k is then valid and the file really carries what `%outratek` says
+(measured 316.9 kbit/s for a mono source at 320k), which also keeps `estimateContentLength` honest.
+A config file written before that line keeps the bug until the operator adds `-ac 2` (the image's
+own `/etc/neezer/default.conf` is replaced on upgrade). The **ZIP export** (`webui/export.py`) follows
+the same rule: its Opus formats build their arguments per track (`_opus_format` → `_opus_args` +
+`_audio_channels`), so "Opus 320" of a mono title is no longer a failure listed in `_erreurs.txt`.
+
 **Decrypting a stream** (`provider.decrypt_blocks` / `iter_decrypted`). Deezer encrypts the 2048-byte
 blocks at FILE offsets 0, 6144, 12288… — every third one, each its own CBC chain (IV `00..07`), never
 a short last block. The body is re-cut into those blocks by byte count, whatever pieces the network
