@@ -1654,12 +1654,12 @@ Waves that can run in parallel (disjoint files):
     across the handover, **0 underruns**, same track, no `Ended`/`Error`. On CI (no
     sound server) the pump has no device to switch and the test asserts the honest
     `Err` instead.
-  - **Counted**: the desktop workspace is **204 app tests + 6 child-process
+  - **Counted**: the desktop workspace is **246 app tests + 6 child-process
     benches**, **75 in `nz-audio`** (the head+tail trim and the sink handover are
     two of them) and **38 in `nz-api`** (22 unit, 9 lanes, 3 real-server bench —
-    the `409` pair and the `auto` payload among them); 592 in the whole workspace.
-    `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`
-    and `cargo test --workspace` clean.
+    the `409` pair and the `auto` payload among them); **634 in the whole
+    workspace**. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
+    warnings` and `cargo test --workspace` clean.
 - **A contract that was wrong, fixed**: `nz-api`'s `set_account_auto(id, bool)`
   posted `{"auto": true}`, while `myaccounts.my_accounts_options` requires
   `{"auto": {kind: bool}}` and answers `400 auto invalide`. The function now takes
