@@ -1331,7 +1331,10 @@ Waves that can run in parallel (disjoint files):
     the Historique were looked at at **1280×800**, and Nouveautés at **2560×1600**, on an isolated
     Xvfb display (never the user's session; the window is resized through XTest because Xvfb has no
     window manager — D7/D8a's recorded limit). The screens cap their content column at 1800 px, so a
-    2560 px window is margins, not a two-metre line of text.
+    2560 px window is margins, not a two-metre line of text. The shots are committed under
+    `docs/desktop/d12/` (`nouveautes-1280`, `nouveautes-2560`, `nouveautes-panneau-1280`,
+    `recap-1280`, `recap-carte-4-1280`, `historique-1280`), against `tools/perf_api.py --serve
+    --recap --tracks 400`.
 - **A contract that was wrong**: `nz-api`'s `Api::radio_next(seed: &str)` sends `{"seed": "<id>"}`
   while the route requires an OBJECT (`neezer/webui/__init__.py#radio_next` answers `400 invalid
   seed`), so the radios' refill goes through the client's generic `Api::send` with the SPA's own
