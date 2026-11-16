@@ -79,6 +79,19 @@ async function go(page, path) {
   await page.goto(`${await origin(page)}/app/#${path}`);
 }
 
+/** A scenario ends with the overlays it opened CLOSED: the runner shares one
+ *  page across every lot's scenarios, and the player's panel and the phone's
+ *  full-screen player are toggles — leaving one open turns the next lot's
+ *  "open the panel" click into a close (shell.mjs waits for it). */
+async function leaveClean(page) {
+  await page.evaluate(() => {
+    document.querySelector('.m .sheet button[aria-label="Fermer"]')?.click();
+    document.querySelector('.m button[aria-label="Réduire"]')?.click();
+    document.querySelector('.np button[aria-label="Fermer"]')?.click();
+  });
+  await page.waitForTimeout(250);
+}
+
 const isPhone = (page) => page.evaluate(() => matchMedia("(max-width: 640px)").matches);
 
 /** True when the app is told not to move: eco (the attribute the shell sets on
@@ -159,7 +172,7 @@ async function stubAudio(page) {
  *  pause. The QUEUE is what the scenarios below need, and it is the same. */
 async function playLibrary(page) {
   await stubAudio(page);
-  await go(page, "/library/tracks");
+  await go(page, "/library/favorites");
   await page.waitForSelector(".track .play", { timeout: 30000 });
   if ((await page.locator("footer.player .info .t").count()) === 0) {
     await page.locator(".track .play").first().click();
@@ -384,6 +397,7 @@ export const scenarios = [
       });
       await frames(page, 3);
       await coversReady(page, ".qitem .cover img");
+      await leaveClean(page);
     },
   },
 
@@ -432,6 +446,7 @@ export const scenarios = [
       const first = await rows(page);
       expect(first[1]?.title?.length > 0, "the inserted row sits at index 1");
       await coversReady(page, ".qitem .cover img");
+      await leaveClean(page);
     },
   },
 
@@ -479,6 +494,7 @@ export const scenarios = [
       const left = await page.evaluate(() => document.querySelectorAll(".qitem.up, .qitem.down").length);
       expect(left === 0, "on drop the transforms clear in the same frame as the move");
       await coversReady(page, ".qitem .cover img");
+      await leaveClean(page);
     },
   },
 
@@ -502,6 +518,7 @@ export const scenarios = [
       expect(header === 0, "the header goes with the titles it counted");
       await quiet(page);
       await coversReady(page, ".qitem .cover img");
+      await leaveClean(page);
     },
   },
 
@@ -509,7 +526,7 @@ export const scenarios = [
   {
     name: "piste-survol",
     async setup(page) {
-      await go(page, "/library/tracks");
+      await go(page, "/library/favorites");
       await page.waitForSelector(".track", { timeout: 30000 });
     },
     async act(page) {
@@ -535,6 +552,7 @@ export const scenarios = [
       await page.mouse.move(2, 2);
       await quiet(page);
       await coversReady(page, ".qitem .cover img");
+      await leaveClean(page);
     },
   },
 
@@ -546,6 +564,7 @@ export const scenarios = [
       await page.waitForSelector(".card", { timeout: 30000 });
       await page.waitForTimeout(300);
       await coversReady(page, ".card .cover img");
+      await leaveClean(page);
       await quietNet(page);
     },
     async act(page) {
@@ -593,6 +612,7 @@ export const scenarios = [
       await page.mouse.up();
       await quiet(page);
       await coversReady(page, ".card .cover img");
+      await leaveClean(page);
     },
   },
 ];
