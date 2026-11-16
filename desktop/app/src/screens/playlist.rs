@@ -2096,16 +2096,26 @@ mod journey {
             );
         });
 
-        // The refusal reloads the page (a second GET) and says so.
+        // The refusal reloads the page (a second GET) and says so. The wait is
+        // on the SCREEN, not on the request: the stub logs a request the moment
+        // it arrives, and the answer still has to come back and be applied — a
+        // wait on the count alone read the optimistic order under load (the
+        // suite runs its tests in parallel).
         let reloaded = Arc::clone(&log);
-        wait_for(&runtime, cx, "the reload", move |_| {
-            reloaded
+        let view = screen.clone();
+        wait_for(&runtime, cx, "the reload", move |cx| {
+            let asked = reloaded
                 .lock()
                 .expect("log")
                 .iter()
                 .filter(|(method, path, _)| method == "GET" && path == "/api/playlist/pl-1")
                 .count()
-                >= 2
+                >= 2;
+            asked
+                && cx.update(|cx| {
+                    let shown = ids(view.read(cx));
+                    shown == ["Un", "Deux", "Trois"]
+                })
         });
         cx.update(|cx| {
             let screen = screen.read(cx);

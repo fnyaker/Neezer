@@ -225,6 +225,122 @@ fn the_crossfade_holds_the_summed_power_within_half_a_db() {
     );
 }
 
+/// **Both ends, on one real file**: a master that opens with a beat of digital
+/// silence and closes on three seconds of it is played from the first sample of
+/// its music to the last, and nowhere else.
+///
+/// The fixture is 0.5 s of silence, 2.0 s of tone, 3.0 s of silence (5.5 s), and
+/// the bounds are the ones the server measures (`neezer/webui/edges.py`):
+/// `start: 0.5, end: 2.5, duration: 5.5`. The bounds go in BEFORE the voice is
+/// built (`AppState::preload` primes the next track, which is exactly why this
+/// order is the one that matters): the head trim is a `?start=`/seek decision
+/// taken at build time, the tail trim is a stop command the mixer obeys.
+///
+/// Measured: the first rendered sample is the tone's own **+0.2500**, i.e. the
+/// head silence never reaches the speakers (the same file untrimmed renders
+/// **0.0000** as its first sample and stays silent through the 0.2 s window);
+/// the clock starts at **0.500 s**; the track ends at **2.500 s** with a play of
+/// **1.81 s** of wall clock for 2.00 s of audio, so none of the 3.0 s of tail
+/// silence is played.
+#[test]
+fn a_measured_head_and_tail_of_silence_are_both_skipped() {
+    let dir = scratch("trim-both");
+    let file = dir.join("both.flac");
+    // 0.5 s of silence, then 2 s of tone, then 3 s of silence. The commas are
+    // escaped: ffmpeg's filtergraph parser splits on them.
+    let expression = "if(lt(t\\,0.5)\\,0\\,if(lt(t\\,2.5)\\,0.25*cos(2*PI*440*t)\\,0))";
+    expression_flac(&file, expression, 5.5);
+
+    let bounds = Edges {
+        start: 0.5,
+        end: 2.5,
+        duration: 5.5,
+    };
+
+    // Untrimmed: the head silence IS played, so the first samples are zero.
+    let (plain, mut plain_sink, _plain_events) = primed(
+        &dir,
+        TestOpener::default().with_file("both", &file),
+        "both",
+        None,
+    );
+    plain.set_track_meta("both", meta(5.5));
+    plain.play();
+    let plain_audio = pump_seconds(&mut plain_sink, 0.2);
+    let plain_first = plain_audio.first().copied().unwrap_or(0.0);
+    let plain_peak_head = plain_audio.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+    plain.pause();
+    drop(plain);
+
+    // Trimmed at both ends.
+    let (trimmed, mut trimmed_sink, trimmed_events) = primed_with(
+        &dir,
+        TestOpener::default().with_file("both", &file),
+        "both",
+        None,
+        &[(
+            "both",
+            TrackMeta {
+                edges: Some(bounds),
+                duration_s: Some(5.5),
+                ..TrackMeta::default()
+            },
+        )],
+    );
+    let started_at = trimmed.position();
+    trimmed.play();
+    let head = pump_seconds(&mut trimmed_sink, 0.2);
+    let first = head.first().copied().unwrap_or(0.0);
+    let head_peak = head.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+
+    // Run to the end of what the trim allows.
+    let clock = Instant::now();
+    let mut ended_after = None;
+    while clock.elapsed() < Duration::from_secs(6) {
+        while let Ok(event) = trimmed_events.try_recv() {
+            if matches!(event, EngineEvent::Ended { .. }) {
+                ended_after = Some(clock.elapsed().as_secs_f64());
+            }
+        }
+        if ended_after.is_some() {
+            break;
+        }
+        pump_seconds(&mut trimmed_sink, 0.02);
+    }
+    let end_position = trimmed.position();
+    trimmed.pause();
+    println!(
+        "untrimmed: first sample {plain_first:.4}, head peak {plain_peak_head:.4}; \
+         trimmed: starts at {started_at:.3} s, first sample {first:.4}, head peak {head_peak:.4}, \
+         ends at {end_position:.3} s, the play lasted {:.3} s",
+        ended_after.unwrap_or(f64::NAN)
+    );
+
+    assert!(
+        plain_first.abs() < 0.01 && plain_peak_head < 0.01,
+        "the fixture really opens on silence (first {plain_first:.4}, peak {plain_peak_head:.4})"
+    );
+    assert!(
+        (started_at - 0.5).abs() < 0.02,
+        "the voice starts at the audio's own beginning, got {started_at:.3} s"
+    );
+    assert!(
+        first > 0.2 && head_peak > 0.2,
+        "the first sample played is the tone, not the head silence (first {first:.4})"
+    );
+    let ended_after = ended_after.expect("the trimmed track must end");
+    assert!(
+        (end_position - 2.5).abs() < 0.1,
+        "the clock stops at the audio's own end, got {end_position:.3} s"
+    );
+    // The wall clock bounds what could have been heard: 2.0 s of music plus the
+    // pump's 20 ms granularity. A tail left in would keep it playing for 5 s.
+    assert!(
+        ended_after < 2.4,
+        "the 3 s of tail must be cut: the play lasted {ended_after:.3} s"
+    );
+}
+
 /// The trim criterion: the 3 s of silence a master carries at its tail are never
 /// played. The same file, played without bounds, runs to its end — so the
 /// difference is the trim, not the fixture.

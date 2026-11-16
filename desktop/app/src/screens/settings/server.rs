@@ -47,6 +47,44 @@ use crate::state::AppState;
 use crate::theme;
 use crate::toast::ToastKind;
 
+gpui_kit::actions!(settings_page, [PageDown, PageUp]);
+
+/// `Page Down` / `Page Up` move the settings page, wherever the focus is: the
+/// screen never takes it (D8b: a screen that focuses itself breaks the shell's
+/// focus anchor when it is unmounted), so the keys are app-level actions bound
+/// once for the process and handled through a weak handle per screen.
+pub(super) fn install_scroll_keys(cx: &mut gpui_kit::App) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        cx.bind_keys([
+            gpui_kit::KeyBinding::new("pagedown", PageDown, None),
+            gpui_kit::KeyBinding::new("pageup", PageUp, None),
+        ]);
+    });
+}
+
+/// Hand this screen the two page actions. The weak handle means a screen that
+/// has been dropped (a route change) simply ignores them.
+pub(super) fn bind_scroll_actions<V: 'static>(
+    cx: &mut Context<V>,
+    scroll: impl Fn(&mut V, f32, &mut Context<V>) + 'static + Clone,
+) {
+    let down = scroll.clone();
+    let weak = cx.entity().downgrade();
+    gpui_kit::App::on_action(cx, move |_: &PageDown, cx| {
+        if let Some(view) = weak.upgrade() {
+            view.update(cx, |view, cx| down(view, 1.0, cx));
+        }
+    });
+    let weak = cx.entity().downgrade();
+    gpui_kit::App::on_action(cx, move |_: &PageUp, cx| {
+        if let Some(view) = weak.upgrade() {
+            view.update(cx, |view, cx| scroll(view, -1.0, cx));
+        }
+    });
+}
+
 /// The archive's own poll cadence: the SPA's 1.5 s (`Settings.svelte#pollJob`).
 const ARCHIVE_POLL: Duration = Duration::from_millis(1_500);
 /// The disk migration's, the SPA's 2 s (`Settings.svelte#pollMigrate`).
@@ -419,7 +457,7 @@ pub struct Screen {
     tx: UnboundedSender<Msg>,
     root_focus: FocusHandle,
     scroll: gpui_kit::ScrollHandle,
-    focused: bool,
+    viewport: gpui_kit::Pixels,
     subscriptions: Vec<Subscription>,
     fields: HashMap<Field, Entity<InputState>>,
     pickers: HashMap<Picker, Entity<ChoiceState>>,
@@ -488,7 +526,7 @@ impl Screen {
             tx,
             root_focus,
             scroll: gpui_kit::ScrollHandle::new(),
-            focused: false,
+            viewport: gpui_kit::px(800.),
             subscriptions: vec![subscription],
             fields: HashMap::new(),
             pickers: HashMap::new(),
@@ -531,6 +569,11 @@ impl Screen {
             open_failures: Vec::new(),
         };
         inbox.spawn::<Self>(cx, |this, message, cx| this.on_message(message, cx));
+        install_scroll_keys(cx);
+        bind_scroll_actions::<Self>(cx, |this, direction, cx| {
+            let page = this.viewport * 0.8;
+            this.scroll_by(page * direction, cx);
+        });
         this.load(cx);
         this
     }
@@ -936,13 +979,10 @@ impl Screen {
                         if let Some(settings) = self.transcribe.as_mut() {
                             restore_transcribe(settings, key, previous);
                         }
-                        let message = match (&error, key) {
-                            (
-                                ApiError::Http {
-                                    code: Some(code), ..
-                                },
-                                "enabled",
-                            ) if code == "unavailable" || code == "disabled" => {
+                        let message = match (error.code(), key) {
+                            (Some(code), "enabled")
+                                if code == "unavailable" || code == "disabled" =>
+                            {
                                 let reason = transcribe_reason(
                                     self.transcribe
                                         .as_ref()
@@ -1469,32 +1509,6 @@ impl Screen {
             self.open_failures.push(label);
         }
         cx.notify();
-    }
-
-    /// Keyboard scrolling for a keyboard-only person: Page Down / Page Up by
-    /// four fifths of a screen, Home and End. Handled here (and only the four
-    /// keys, everything else propagates) because `keymap.rs` is D7's file and a
-    /// page is not a list: `j`/`k` move in a track list, not in Réglages.
-    fn on_scroll_key(
-        &mut self,
-        event: &gpui_kit::KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let page = window.viewport_size().height * 0.8;
-        match event.keystroke.key.as_str() {
-            "pagedown" => self.scroll_by(page, cx),
-            "pageup" => self.scroll_by(-page, cx),
-            "home" => {
-                self.scroll.set_offset(Default::default());
-                cx.notify();
-            }
-            "end" => {
-                self.scroll.scroll_to_bottom();
-                cx.notify();
-            }
-            _ => cx.propagate(),
-        }
     }
 
     fn scroll_by(&mut self, distance: gpui_kit::Pixels, cx: &mut Context<Self>) {
@@ -3585,21 +3599,13 @@ impl Render for Screen {
         // same column, and the cards wrap instead of overflowing.
         column = column.child(div().h(rems(0.5)));
 
-        if !self.focused {
-            self.focused = true;
-            window.focus(&self.root_focus, cx);
-        }
+        self.viewport = window.viewport_size().height;
 
         focus_scope("settings-server")
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .track_focus(&self.root_focus)
-            .on_key_down(
-                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
-                    this.on_scroll_key(event, window, cx);
-                }),
-            )
             .bg(theme::shell(cx))
             .font_family(theme::font(cx))
             .text_color(theme::text(cx))
@@ -4071,7 +4077,7 @@ pub(crate) mod stub {
     use gpui_kit::{AppContext as _, Entity};
     use serde_json::json;
 
-    use crate::state::{AppConfig, AppState, Auth, event_channel};
+    use crate::state::{AppState, Auth, event_channel};
 
     /// A throwaway HTTP server: one request line in, one body out, and every
     /// request remembered so a test can count them.
@@ -4199,11 +4205,11 @@ pub(crate) mod stub {
             .enable_all()
             .build()
             .expect("runtime");
-        let config = AppConfig {
+        let config = crate::state::AppConfig {
             server: Some(stub.base.clone()),
             start_audio: false,
             start_mpris: false,
-            ..AppConfig::for_test(&dir)
+            ..crate::state::AppConfig::for_test(&dir)
         };
         let state = {
             let handle = runtime.handle().clone();
@@ -4488,6 +4494,112 @@ mod screen_tests {
             calls,
             "polling stopped"
         );
+
+        std::fs::remove_dir_all(dir).ok();
+        drop(runtime);
+    }
+
+    /// D8b's trap, as a regression test: a screen that takes the focus breaks
+    /// the shell's focus anchor when it is unmounted, and every scoped key
+    /// (Espace, Ctrl+→, `l`) stops working. Visiting Serveur and coming back
+    /// must leave the shell's anchor where it was, so `Espace` still plays.
+    #[gpui::test]
+    async fn visiting_the_server_screen_keeps_the_shells_focus_anchor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::app::RootView;
+        use crate::nav::Route;
+        use nz_player::{Command, Entry, QueueArgs};
+
+        let stub = Stub::start(stub::server_routes());
+        cx.update(gpui_omarchy::init);
+        cx.update(crate::keymap::install);
+        let dir = std::env::temp_dir().join(format!(
+            "neezer-d14b-focus-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let (tx, rx) = crate::state::event_channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = crate::state::AppConfig {
+            server: Some(stub.base.clone()),
+            start_audio: false,
+            start_mpris: false,
+            ..crate::state::AppConfig::for_test(&dir)
+        };
+        let state = {
+            let handle = runtime.handle().clone();
+            cx.update(|cx| cx.new(move |_| AppState::new(config, handle, tx, None)))
+        };
+        let me: nz_model::Me = serde_json::from_str(
+            r#"{"user":{"id":"u1","name":"bench","admin":true,"access":{},"sources":[]}}"#,
+        )
+        .expect("me");
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.auth = crate::state::Auth::LoggedIn { me: Box::new(me) };
+                state.nav.reset(Route::Home);
+            });
+        });
+        let (view, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |window, cx| RootView::new(state, rx, window, cx)
+        });
+        cx.run_until_parked();
+
+        // The journey: the admin screen, then back to the shell.
+        view.update(cx, |view, cx| {
+            view.go(
+                Route::Settings {
+                    section: SettingsSection::Server,
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| view.go(Route::Home, cx));
+        cx.run_until_parked();
+
+        // A queue seeded and paused, exactly like D7's keyboard journey.
+        cx.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.command(
+                    Command::PlayQueue {
+                        args: QueueArgs {
+                            tracks: vec![Entry {
+                                id: "one".into(),
+                                title: "Premier".into(),
+                                duration: 120,
+                                ..Entry::default()
+                            }],
+                            start: 0,
+                            context: None,
+                        },
+                    },
+                    cx,
+                );
+                state.command(
+                    Command::Pause {
+                        args: Default::default(),
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.simulate_keystrokes("space");
+        cx.update(|_, cx| {
+            assert!(
+                state.read(cx).player.playing(),
+                "the shell's scoped keys still work after an admin screen was unmounted"
+            );
+        });
 
         std::fs::remove_dir_all(dir).ok();
         drop(runtime);

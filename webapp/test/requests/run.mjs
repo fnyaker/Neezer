@@ -25,9 +25,10 @@
 // 11 requests in 3 s before, 0 after.
 import { spawn, execSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { stopServer } from "../harness.mjs";
 
 async function loadPlaywright() {
   for (const spec of ["playwright", "playwright-core"]) {
@@ -63,15 +64,19 @@ function wavFile() {
   b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
   b.write("data", 36); b.writeUInt32LE(n * 2, 40);
   for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(800 * Math.sin((2 * Math.PI * 220 * i) / rate)), 44 + i * 2);
-  const p = join(mkdtempSync(join(tmpdir(), "nsreq-")), "tone.wav");
+  const dir = mkdtempSync(join(tmpdir(), "nsreq-"));
+  const p = join(dir, "tone.wav");
   writeFileSync(p, b);
-  return p;
+  return { path: p, dir };
 }
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const py = process.env.PYTHON || (existsSync(join(repo, ".venv/bin/python")) ? join(repo, ".venv/bin/python") : "python3");
+// The WAV lives outside the server's own library directory, so this bench owns
+// its removal too: /tmp is a tmpfs, and a leaked tone is 1 MB of RAM a run.
+const audio = wavFile();
 const srv = spawn(py, [join(repo, "tools/perf_api.py"), "--runs", "1", "--serve", "--tracks", "400",
-  "--favorites", "50", "--big-playlist", "100", "--playlists", "3", "--audio", wavFile()], { stdio: ["pipe", "pipe", "ignore"] });
+  "--favorites", "50", "--big-playlist", "100", "--playlists", "3", "--audio", audio.path], { stdio: ["pipe", "pipe", "ignore"] });
 const ready = await new Promise((res, rej) => {
   let b = "";
   srv.stdout.on("data", (d) => { b += d; const m = b.match(/READY (\d+) (.*)\n/); if (m) res({ port: +m[1], ids: JSON.parse(m[2]) }); });
@@ -164,6 +169,9 @@ try {
   }
 } finally {
   await browser.close();
-  srv.kill();
+  // SIGTERM first: the server removes its throwaway library on it (SIGKILL
+  // would leave it for the next launch's sweep); stopServer escalates.
+  await stopServer(srv);
+  rmSync(audio.dir, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

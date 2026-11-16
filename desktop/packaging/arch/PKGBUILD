@@ -1,0 +1,121 @@
+# Maintainer: the Neezer project <https://github.com/fnyaker/Neezer>
+#
+# Neezer's desktop app is part of the server's monorepo: the GPUI workspace in
+# `desktop/` links three of the repository's own crates as path dependencies
+# (`webapp/rhythm`, `webapp/appcore`, `android/nscore`), so there is no
+# standalone source tarball to point `source=(...)` at. This is the packaging
+# convention the Omarchy apps use: the package builds the checkout it lives in,
+# and the release workflow checks out the tag before running `makepkg`, so the
+# artifact always comes from the tagged tree (docs/agents/desktop.md, P1).
+#
+# `NEEZER_DESKTOP_VERSION` is how the release workflow passes the tag down
+# (`v1.3.1` -> `1.3.1`); a local `makepkg -si` builds the version the Rust
+# workspace declares, so the two never disagree by accident.
+pkgname=neezer-desktop
+pkgver=${NEEZER_DESKTOP_VERSION:-0.1.0}
+pkgrel=1
+pkgdesc='Lecteur de musique et de podcasts Neezer pour Omarchy (GPUI, PipeWire, MPRIS)'
+arch=('x86_64')
+url='https://github.com/fnyaker/Neezer'
+license=('AGPL-3.0-or-later')
+# What the two binaries actually link, read from `ldd` and cross-checked with
+# `namcap` (a missing soname is a binary that does not start):
+#   neezer-desktop     libpipewire (cpal), libasound (cpal's ALSA fallback),
+#                      libxcb + libxkbcommon + libxkbcommon-x11 (GPUI's X11
+#                      backend). Its Vulkan loader is linked STATICALLY (no
+#                      libvulkan in `ldd`), and libwayland-client is dlopen'ed
+#                      by `wayland-sys`, so it is absent from `ldd` and namcap
+#                      calls it unneeded: keep it, the native Wayland surface is
+#                      the one Hyprland gives the window.
+#   neezer-transcribe  libvulkan (whisper.cpp links the loader directly)
+# `dbus` was on the plan's list but is not needed: zbus talks the D-Bus wire
+# protocol itself. `fontconfig` is a BUILD dependency, not a runtime one (see
+# `makedepends`).
+depends=(
+  'pipewire'
+  'alsa-lib'
+  'libxcb'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'wayland'
+  'vulkan-icd-loader'
+  # The launcher finds `neezer-desktop.svg` through the hicolor hierarchy this
+  # package owns (namcap's `E:` was what noticed).
+  'hicolor-icon-theme'
+)
+# The transcription runs on the GPU through Vulkan, but the app is perfectly
+# usable without a device: it falls back to the CPU and says why (T2). So the
+# drivers are optional, one per GPU vendor.
+optdepends=(
+  'vulkan-radeon: transcription GPU AMD'
+  'vulkan-intel: transcription GPU Intel'
+  'nvidia-utils: transcription GPU NVIDIA'
+)
+# whisper.cpp's CMake build needs the Vulkan HEADERS and `glslc`, not only the
+# loader (docs/agents/desktop.md, "Pitfalls found by building").
+#
+# `fontconfig` is a BUILD dependency only: `yeslogic-fontconfig-sys` asks
+# pkg-config for `fontconfig.pc` (and freetype2 comes with it), while the
+# linked binary keeps no `libfontconfig` — rustc's `--as-needed` drops it, so
+# `ldd` is clean and it does not belong in `depends`. The CI's Arch container is
+# what found this: a machine with fontconfig installed builds without knowing.
+#
+# `cargo` is not a package name on Arch: `rust` provides it (ArchWiki Rust
+# package guidelines). Naming both makes `makepkg -si` stop on "two providers
+# available for cargo" on a machine that has neither yet, so only `rust` is
+# listed.
+makedepends=('rust' 'cmake' 'clang' 'vulkan-headers' 'shaderc' 'fontconfig')
+# The release profile already strips (`strip = true` in the workspace's
+# Cargo.toml), so there is no debug info for makepkg to split: asking for no
+# `-debug` subpackage keeps one artefact per release, with the name the release
+# workflow attaches.
+#
+# `!lto` is load-bearing, not taste. makepkg's default `lto` option appends
+# `-flto=auto` to CFLAGS/CXXFLAGS/LDFLAGS, which turns whisper.cpp's and
+# aws-lc's static archives into GCC LTO bitcode; rust-lld cannot read it, so
+# the final link drops every C object and fails on `undefined symbol:
+# aws_lc_0_47_0_AES_set_encrypt_key` / `whisper_full_n_segments_from_state`
+# (measured). The Rust code keeps its own thin LTO from the workspace profile.
+options=('!debug' '!lto')
+source=()
+sha256sums=()
+
+_pkgdir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+_root="$(cd -- "$_pkgdir/../../.." && pwd)"
+
+prepare() {
+  cd "$_root/desktop"
+  # The user's default toolchain must not change what a release builds from
+  # (ArchWiki Rust package guidelines).
+  export RUSTUP_TOOLCHAIN=stable
+  # `--target` keeps crates for other platforms out of the download; the build
+  # below then runs `--frozen`, i.e. it may not touch the network at all.
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_root/desktop"
+  export RUSTUP_TOOLCHAIN=stable
+  # Build inside the package's working directory: `makepkg --clean` then
+  # removes every artefact, and the checkout's own `target/` stays untouched.
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --frozen --release
+}
+
+# No `check()` on purpose: the workspace's suite starts the Python server
+# (`tools/perf_api.py`) for its API and worker benches and runs an audio soak,
+# so it needs the server's own environment and several minutes. The `test` job
+# of `.github/workflows/desktop.yaml` owns it; a package build must not.
+
+package() {
+  install -Dm755 "$srcdir/target/release/neezer-desktop" \
+    "$pkgdir/usr/bin/neezer-desktop"
+  install -Dm755 "$srcdir/target/release/neezer-transcribe" \
+    "$pkgdir/usr/bin/neezer-transcribe"
+  install -Dm644 "$_pkgdir/neezer-desktop.desktop" \
+    "$pkgdir/usr/share/applications/neezer-desktop.desktop"
+  install -Dm644 "$_pkgdir/neezer-desktop.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/neezer-desktop.svg"
+  install -Dm644 "$_root/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -187,12 +187,7 @@ fn invite_link(server: &str, token: &str) -> String {
 
 /// `lib/adminusers.js#REFUSALS`: the server's codes, in the SPA's words.
 fn guard_fr(error: &ApiError) -> String {
-    let code = match error {
-        ApiError::Http {
-            code: Some(code), ..
-        } => Some(code.as_str()),
-        _ => None,
-    };
+    let code = error.code();
     if let Some(code) = code {
         let sentence = match code {
             "last_admin" => "Impossible : c'est le dernier administrateur actif.",
@@ -225,9 +220,7 @@ fn guard_fr(error: &ApiError) -> String {
             "Votre compte n'a plus les droits d'administration.".to_owned()
         }
         ApiError::Http { status: 404, .. } => "Cet élément n'existe plus.".to_owned(),
-        ApiError::Http { status: 409, .. } => {
-            "Cette action est impossible dans l'état actuel.".to_owned()
-        }
+        ApiError::Conflict { .. } => "Cette action est impossible dans l'état actuel.".to_owned(),
         ApiError::Http { status: 429, .. } => {
             "Trop de tentatives. Réessayez dans quelques minutes.".to_owned()
         }
@@ -406,8 +399,11 @@ pub struct Screen {
     subscriptions: Vec<Subscription>,
     root_focus: FocusHandle,
     scroll: gpui_kit::ScrollHandle,
-    focused: bool,
+    viewport: gpui_kit::Pixels,
     sheet_focus: FocusHandle,
+    /// Who had the focus before a sheet opened; the shell's own anchor when the
+    /// person came from outside the screen, restored when the sheet closes.
+    previous_focus: Option<FocusHandle>,
 
     search: Option<Entity<InputState>>,
     term: String,
@@ -448,8 +444,9 @@ impl Screen {
             subscriptions: vec![subscription],
             root_focus,
             scroll: gpui_kit::ScrollHandle::new(),
-            focused: false,
+            viewport: gpui_kit::px(800.),
             sheet_focus,
+            previous_focus: None,
             search: None,
             term: String::new(),
             seq: 0,
@@ -469,6 +466,11 @@ impl Screen {
             mutating: None,
         };
         inbox.spawn::<Self>(cx, |this, message, cx| this.on_message(message, cx));
+        super::server::install_scroll_keys(cx);
+        super::server::bind_scroll_actions::<Self>(cx, |this, direction, cx| {
+            let page = this.viewport * 0.8;
+            this.scroll_by(page * direction, cx);
+        });
         this.load_first(cx);
         this.load_invites(cx);
         this
@@ -810,6 +812,7 @@ impl Screen {
             }),
         };
         self.load_detail(user.id.to_string(), cx);
+        self.previous_focus = window.focused(cx);
         window.focus(&self.sheet_focus, cx);
         cx.notify();
     }
@@ -831,6 +834,7 @@ impl Screen {
         };
         // The note field is built with the sheet: a person who invited someone
         // arrives to type, and the sheet's own focus is taken at once.
+        self.previous_focus = window.focused(cx);
         self.note = Some(cx.new(|cx| {
             InputState::new(window, cx).placeholder("Prénom ou note, pour vous y retrouver")
         }));
@@ -838,7 +842,7 @@ impl Screen {
         cx.notify();
     }
 
-    fn close_sheet(&mut self, cx: &mut Context<Self>) {
+    fn close_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A request in flight owns the answer (and, for an invitation, the only
         // copy of the token): the sheet cannot be dismissed under it.
         if self.mutating.is_some() {
@@ -857,7 +861,18 @@ impl Screen {
         self.sheet = Sheet::none();
         self.note = None;
         self.confirm_name = None;
+        self.restore_focus(window, cx);
         cx.notify();
+    }
+
+    /// Give the keyboard back to whoever had it (the shell's anchor when the
+    /// sheet was opened from outside this screen), never to a dead handle.
+    fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.previous_focus.take() {
+            window.focus(&handle, cx);
+        } else {
+            window.focus(&self.root_focus, cx);
+        }
     }
 
     fn submit_invite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1024,30 +1039,6 @@ impl Screen {
         sheet.copied = true;
         self.toasts(ToastKind::Info, "Lien d'invitation copié.".to_owned(), cx);
         cx.notify();
-    }
-
-    /// Keyboard scrolling (Page Down / Page Up / Home / End); the four keys
-    /// only, everything else propagates to the shell's keymap.
-    fn on_scroll_key(
-        &mut self,
-        event: &gpui_kit::KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let page = window.viewport_size().height * 0.8;
-        match event.keystroke.key.as_str() {
-            "pagedown" => self.scroll_by(page, cx),
-            "pageup" => self.scroll_by(-page, cx),
-            "home" => {
-                self.scroll.set_offset(Default::default());
-                cx.notify();
-            }
-            "end" => {
-                self.scroll.scroll_to_bottom();
-                cx.notify();
-            }
-            _ => cx.propagate(),
-        }
     }
 
     fn scroll_by(&mut self, distance: gpui_kit::Pixels, cx: &mut Context<Self>) {
@@ -1402,12 +1393,14 @@ impl Screen {
             .bg(theme::shell(cx).opacity(0.86))
             .track_focus(&self.sheet_focus)
             .key_context("AdminSheet")
-            .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    this.close_sheet(cx);
-                }
-            }))
-            .on_click(cx.listener(|this, _, _, cx| this.close_sheet(cx)))
+            .on_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_sheet(window, cx);
+                    }
+                }),
+            )
+            .on_click(cx.listener(|this, _, window, cx| this.close_sheet(window, cx)))
             .child(card);
         Some(veil)
     }
@@ -1458,7 +1451,7 @@ impl Screen {
                 )
                 .child(
                     button("invite-close", "Fermer", ButtonVariant::Secondary, cx)
-                        .on_click(cx.listener(|this, _, _, cx| this.close_sheet(cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.close_sheet(window, cx))),
                 ),
         );
 
@@ -1516,11 +1509,14 @@ impl Screen {
                                 ButtonVariant::Secondary,
                                 cx,
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.sheet = Sheet::none();
-                                this.note = None;
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.sheet = Sheet::none();
+                                    this.note = None;
+                                    this.restore_focus(window, cx);
+                                    cx.notify();
+                                },
+                            )),
                         ),
                 );
             if let Some(error) = &sheet.error {
@@ -1549,9 +1545,10 @@ impl Screen {
                             )
                             .child(
                                 button("invite-close-confirm", "Fermer quand même", ButtonVariant::Danger, cx)
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         this.sheet = Sheet::none();
                                         this.note = None;
+                                        this.restore_focus(window, cx);
                                         cx.notify();
                                     })),
                             ),
@@ -1669,7 +1666,7 @@ impl Screen {
                 .flex_wrap()
                 .child(
                     button("invite-cancel", "Annuler", ButtonVariant::Secondary, cx)
-                        .on_click(cx.listener(|this, _, _, cx| this.close_sheet(cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.close_sheet(window, cx))),
                 )
                 .child(
                     button(
@@ -1805,7 +1802,7 @@ impl Screen {
                 )
                 .child(
                     button("user-close", "Fermer", ButtonVariant::Secondary, cx)
-                        .on_click(cx.listener(|this, _, _, cx| this.close_sheet(cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.close_sheet(window, cx))),
                 ),
         );
 
@@ -2155,21 +2152,13 @@ impl Render for Screen {
             .child(self.render_list(cx))
             .child(div().h(rems(0.5)));
 
-        if !self.focused {
-            self.focused = true;
-            window.focus(&self.root_focus, cx);
-        }
+        self.viewport = window.viewport_size().height;
 
         let content = focus_scope("settings-users")
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .track_focus(&self.root_focus)
-            .on_key_down(
-                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
-                    this.on_scroll_key(event, window, cx);
-                }),
-            )
             .bg(theme::shell(cx))
             .font_family(theme::font(cx))
             .text_color(theme::text(cx))
@@ -2239,10 +2228,12 @@ mod tests {
 
     #[test]
     fn a_refusal_is_the_spas_sentence() {
-        let error = ApiError::Http {
-            status: 409,
-            message: "refused".into(),
+        // A last-admin refusal is a 409 WITH a code: `nz-api` hands it over as a
+        // `Conflict`, and the sentence comes from the code, not from the status.
+        let error = ApiError::Conflict {
+            message: "Impossible : c'est le dernier administrateur actif.".into(),
             code: Some("last_admin".into()),
+            scope: None,
         };
         assert_eq!(
             guard_fr(&error),
@@ -2537,8 +2528,8 @@ mod screen_tests {
             let sheet = view.read(cx).sheet.invite.as_ref().expect("the sheet");
             assert!(sheet.copied);
         });
-        cx.update(|_, cx| {
-            view.update(cx, |screen, cx| screen.close_sheet(cx));
+        cx.update(|window, cx| {
+            view.update(cx, |screen, cx| screen.close_sheet(window, cx));
         });
         cx.update(|window, cx| {
             view.update(cx, |screen, cx| screen.open_invite(None, window, cx));

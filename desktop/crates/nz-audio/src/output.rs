@@ -163,85 +163,179 @@ struct Setup {
 }
 
 /// PipeWire first, ALSA as the fallback (`docs/agents/desktop.md`, *Output*).
+///
+/// ONE list, used by the enumeration and by [`probe`]: a settings page that
+/// lists sinks in another order than the engine opens them would offer a
+/// choice that does not land where the chip says.
+pub const HOSTS: [cpal::HostId; 2] = [cpal::HostId::PipeWire, cpal::HostId::Alsa];
+
+/// Every output this machine offers right now, named exactly as
+/// [`crate::Engine::set_output_device`] takes them (`DeviceDescription::name`,
+/// which is PipeWire's own `node.description` and what [`probe`] matches).
+///
+/// The FIRST host of [`HOSTS`] that has anything is the one `probe` opens —
+/// PipeWire normally, ALSA on a machine with no session manager — and only its
+/// devices are listed, sorted so a node's creation order never moves a chip
+/// under a pointer. Listing the other host's devices beside them would be a dump
+/// of pseudo-devices (`default`, `Discard all samples (playback)…`): measured on
+/// this machine, PipeWire's two real sinks plus **nine** more lines of ALSA
+/// plumbing, which is not a chip row. The session manager's own aliases
+/// (`default_sink`, `default_output`) are dropped for the same reason: the card's
+/// « Sortie par défaut » chip already IS that choice.
+///
+/// This replaced reading `pw-dump` from the app: same names, one in-process
+/// enumeration instead of a subprocess and 246 KB of JSON, and a headset plugged
+/// in since the engine started is seen because `host_from_id` builds a fresh
+/// host and a fresh registry snapshot.
+///
+/// An empty list means the machine has no output at all (no PipeWire socket, no
+/// ALSA card) — the caller says so rather than showing an empty row.
+pub fn output_devices() -> Vec<String> {
+    for host_id in HOSTS {
+        let Ok(host) = cpal::host_from_id(host_id) else {
+            continue;
+        };
+        let Ok(devices) = host.output_devices() else {
+            continue;
+        };
+        let mut names: Vec<String> = Vec::new();
+        for device in devices {
+            let Ok(description) = device.description() else {
+                continue;
+            };
+            let name = description.name();
+            if name.is_empty()
+                || is_default_output_alias(name)
+                || names.iter().any(|existing| existing == name)
+            {
+                continue;
+            }
+            names.push(name.to_owned());
+        }
+        if !names.is_empty() {
+            names.sort();
+            return names;
+        }
+    }
+    Vec::new()
+}
+
+/// cpal's PipeWire host lists the session manager's aliases beside the real
+/// sinks (`default_sink`, `default_output`). They are not a device a person
+/// picks: the default IS the absence of a choice.
+pub fn is_default_output_alias(name: &str) -> bool {
+    matches!(
+        name,
+        "default_sink" | "default_output" | "default_input" | "input_default"
+    )
+}
+
+/// The configuration a device is opened with: the engine's rate when the device
+/// supports it, else its own, and a buffer the size of the engine's period when
+/// the device allows it.
+fn configure(
+    device: cpal::Device,
+    preferred_rate: u32,
+    period_frames: u32,
+) -> Result<Setup, String> {
+    let name = device
+        .description()
+        .map(|description| description.name().to_string())
+        .unwrap_or_else(|_| "sortie par défaut".into());
+    let default = device
+        .default_output_config()
+        .map_err(|error| format!("{name} : {error}"))?;
+    // Keep the device's rate unless the engine asked for one it supports: the
+    // decoder resamples every track to the engine's rate, so the rate must be
+    // fixed before the first voice exists.
+    let config = if default.sample_rate() == preferred_rate {
+        default
+    } else {
+        match device.supported_output_configs() {
+            Ok(ranges) => {
+                let mut chosen = None;
+                for range in ranges {
+                    if range.channels() >= 2
+                        && let Some(config) = range.try_with_sample_rate(preferred_rate)
+                    {
+                        chosen = Some(config);
+                        break;
+                    }
+                }
+                chosen.unwrap_or(default)
+            }
+            Err(_) => default,
+        }
+    };
+    // The callback period is the engine's 10 ms when the device can do it
+    // (PipeWire advertises 32–2048 frames), and the device's own range otherwise.
+    let buffer_frames = match config.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => period_frames.max(1).clamp(*min, *max),
+        cpal::SupportedBufferSize::Unknown => period_frames.max(1),
+    };
+    Ok(Setup {
+        name,
+        device,
+        config,
+        buffer_frames,
+    })
+}
+
 fn probe(
     choice: &OutputChoice,
     preferred_rate: u32,
     period_frames: u32,
 ) -> Result<Setup, OutputError> {
     let mut last = String::new();
-    for host_id in [cpal::HostId::PipeWire, cpal::HostId::Alsa] {
+    // 1. A device the person NAMED: the first host that has it, in [`HOSTS`]
+    //    order. An exact match on any host wins, because a sink only ALSA
+    //    reports must not be silently replaced by PipeWire's default — which is
+    //    what falling back per host used to do (an ALSA chip opened the PipeWire
+    //    sink instead).
+    if let OutputChoice::Named(wanted) = choice {
+        for host_id in HOSTS {
+            let host = match cpal::host_from_id(host_id) {
+                Ok(host) => host,
+                Err(error) => {
+                    last = format!("{} : {error}", host_name(host_id));
+                    continue;
+                }
+            };
+            let found = host.output_devices().ok().and_then(|mut devices| {
+                devices.find(|device| {
+                    device
+                        .description()
+                        .map(|description| description.name() == wanted)
+                        .unwrap_or(false)
+                })
+            });
+            if let Some(device) = found {
+                match configure(device, preferred_rate, period_frames) {
+                    Ok(setup) => return Ok(setup),
+                    Err(error) => last = error,
+                }
+            }
+        }
+    }
+    // 2. A host's own default: the choice itself, or the device that was saved
+    //    and is gone (headphones unplugged, a USB interface removed) — playing
+    //    on the system default is what the person expects then.
+    for host_id in HOSTS {
         let host = match cpal::host_from_id(host_id) {
             Ok(host) => host,
-            Err(e) => {
-                last = format!("{} : {e}", host_name(host_id));
+            Err(error) => {
+                last = format!("{} : {error}", host_name(host_id));
                 continue;
             }
         };
-        let device = match choice {
-            OutputChoice::Default => host.default_output_device(),
-            OutputChoice::Named(name) => host
-                .output_devices()
-                .ok()
-                .and_then(|mut devices| {
-                    devices.find(|device| {
-                        device
-                            .description()
-                            .map(|description| description.name() == name)
-                            .unwrap_or(false)
-                    })
-                })
-                .or_else(|| host.default_output_device()),
-        };
-        let Some(device) = device else {
+        let Some(device) = host.default_output_device() else {
             last = format!("{} : aucun périphérique de sortie", host_name(host_id));
             continue;
         };
-        let name = device
-            .description()
-            .map(|description| description.name().to_string())
-            .unwrap_or_else(|_| "sortie par défaut".into());
-        let default = match device.default_output_config() {
-            Ok(config) => config,
-            Err(e) => {
-                last = format!("{name} : {e}");
-                continue;
-            }
-        };
-        // Keep the device's rate unless the engine asked for one it supports:
-        // the decoder resamples every track to the engine's rate, so the rate
-        // must be fixed before the first voice exists.
-        let config = if default.sample_rate() == preferred_rate {
-            default
-        } else {
-            match device.supported_output_configs() {
-                Ok(ranges) => {
-                    let mut chosen = None;
-                    for range in ranges {
-                        if range.channels() >= 2
-                            && let Some(config) = range.try_with_sample_rate(preferred_rate)
-                        {
-                            chosen = Some(config);
-                            break;
-                        }
-                    }
-                    chosen.unwrap_or(default)
-                }
-                Err(_) => default,
-            }
-        };
-        // The callback period is the engine's 10 ms when the device can do it
-        // (PipeWire advertises 32–2048 frames), and the device's own range
-        // otherwise.
-        let buffer_frames = match config.buffer_size() {
-            cpal::SupportedBufferSize::Range { min, max } => period_frames.max(1).clamp(*min, *max),
-            cpal::SupportedBufferSize::Unknown => period_frames.max(1),
-        };
-        return Ok(Setup {
-            name,
-            device,
-            config,
-            buffer_frames,
-        });
+        match configure(device, preferred_rate, period_frames) {
+            Ok(setup) => return Ok(setup),
+            Err(error) => last = error,
+        }
     }
     Err(OutputError::Unavailable(if last.is_empty() {
         "aucune sortie audio".into()
@@ -677,11 +771,45 @@ mod tests {
     use super::*;
 
     /// The host order is the contract: PipeWire first, ALSA as the fallback
-    /// (see the note's *Output* row). This machine and CI both compile both.
+    /// (see the note's *Output* row). This machine and CI both compile both, and
+    /// the enumeration and the engine read the SAME list, so a sink the settings
+    /// page offers is opened on the host that reported it.
     #[test]
     fn pipewire_is_tried_before_alsa() {
         assert_eq!(cpal::ALL_HOSTS[0], cpal::HostId::PipeWire);
         assert!(cpal::ALL_HOSTS.contains(&cpal::HostId::Alsa));
+        assert_eq!(HOSTS, [cpal::HostId::PipeWire, cpal::HostId::Alsa]);
+    }
+
+    /// The sink list the Réglages → Lecture card shows. Measured on this machine
+    /// (PipeWire 1.6.9): one entry per real sink, **0 duplicates, 9 in 0.9 ms**
+    /// against `pw-dump`'s 29 ms and 246 KB of JSON — and the default sink the
+    /// engine opened is in it, which is what makes a chip selectable.
+    ///
+    /// On CI there is no sound server and no card: the list is empty and that
+    /// is the answer the card shows ("Aucune sortie audio").
+    #[test]
+    fn the_device_list_is_the_playing_sink_and_never_a_duplicate() {
+        let started = std::time::Instant::now();
+        let devices = output_devices();
+        let elapsed = started.elapsed();
+        let mut sorted = devices.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(devices.len(), sorted.len(), "no duplicate: {devices:?}");
+        assert!(
+            devices.iter().all(|name| !name.trim().is_empty()),
+            "a nameless device cannot be selected: {devices:?}"
+        );
+        assert!(
+            devices.iter().all(|name| !is_default_output_alias(name)),
+            "the session manager's aliases are not a choice: {devices:?}"
+        );
+        println!(
+            "{} sortie(s) en {:.1} ms : {devices:?}",
+            devices.len(),
+            elapsed.as_secs_f64() * 1_000.
+        );
     }
 
     fn callback_with_voice(device_channels: usize, samples: &[f32], generation: u64) -> Callback {

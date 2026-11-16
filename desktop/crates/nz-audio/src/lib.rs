@@ -34,7 +34,9 @@ pub use dsp::{Normalization, Settings, gain_db};
 pub use engine::{Engine, EngineConfig, EngineError, TrackMeta};
 pub use events::EngineEvent;
 pub use mixer::MixerShared;
-pub use output::{OfflineSink, OutputChoice, OutputError, OutputInfo};
+pub use output::{
+    OfflineSink, OutputChoice, OutputError, OutputInfo, is_default_output_alias, output_devices,
+};
 pub use source::{ByteStream, Lane, Quality, SourceError, StreamOpener, StreamReady, TrackId};
 pub use stretch::{MAX_SPEED, MIN_SPEED, clamp_speed};
 pub use tap::{TAP_FRAMES, TapReader};

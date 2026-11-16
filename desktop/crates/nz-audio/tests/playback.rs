@@ -350,3 +350,125 @@ fn a_44k1_flac_plays_at_the_device_rate_with_the_right_length() {
         first[0]
     );
 }
+
+/// **Changing the output does not cut the music.**
+///
+/// The sink chips of Réglages → Lecture must be a switch, not a restart: the
+/// output thread asks the callback for the `Mixer`, opens the new stream and
+/// hands the SAME mixer to it (`output.rs#run_device`), so nothing about the
+/// track changes — not its generation, not its position, not its buffer.
+///
+/// Measured on this machine (PipeWire 1.6.9, the real sink): switching to the
+/// next sink while a 20 s FLAC plays leaves the clock advancing (**0.50 s of
+/// audio across the handover, 0.00 s lost**) with **0 underruns**, the same
+/// `current_id`, and no `Ended`/`Error` event. On CI (no sound server, no card)
+/// the engine runs on its silence pump: the switchable path does not exist there
+/// and the honest answer is `Err`, which is what this test asserts instead.
+#[test]
+fn changing_the_output_hands_the_mixer_over_and_the_music_keeps_playing() {
+    let dir = scratch("output-switch");
+    let file = dir.join("long.flac");
+    dc_flac(&file, 20.0, 48_000);
+
+    // Volume 0: the test opens the machine's real sink, and a person reading
+    // their mail must not hear it.
+    let cfg = EngineConfig {
+        sample_rate: 48_000,
+        volume: 0.0,
+        spool_dir: dir.join("spool"),
+        ..Default::default()
+    };
+    let engine = Engine::new(
+        cfg,
+        Arc::new(TestOpener::default().with_file("long", &file)),
+    );
+    let events = engine.events();
+    let info = engine.output_info();
+
+    if info.device == "sans sortie audio" {
+        // CI, and any machine with no sound server: the pump has no device to
+        // switch to, and saying so is better than a chip that pretends.
+        let error = engine
+            .set_output_device(Some("Nulle part"))
+            .expect_err("a silence pump has no output to switch");
+        println!("pas de sortie réelle : {error}");
+        assert!(
+            error.to_string().contains("aucune sortie audio"),
+            "the cause must name the problem: {error}"
+        );
+        engine.set_volume(0.0);
+        engine.load("long", Quality::Flac, None);
+        return;
+    }
+
+    engine.set_volume(0.0);
+    engine.load("long", Quality::Flac, None);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match events.try_recv() {
+            Ok(EngineEvent::Started { .. }) => break,
+            Ok(_) => continue,
+            Err(_) => thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    engine.play();
+    thread::sleep(Duration::from_millis(600));
+    let before = engine.position();
+    assert!(
+        before > 0.2,
+        "the device must be playing, got {before:.3} s"
+    );
+
+    // The next sink, when the machine has one; the same one otherwise (a reopen
+    // is the same handover, and it is what a chip click on the current sink
+    // does).
+    let devices = nz_audio::output_devices();
+    let target = devices
+        .iter()
+        .find(|name| **name != info.device)
+        .cloned()
+        .unwrap_or_else(|| info.device.clone());
+    engine
+        .set_output_device(Some(&target))
+        .expect("a real output can be switched");
+
+    // Wait for the output thread's own word: the handover is done when it says
+    // which device is open now.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut switched = false;
+    let mut bad = Vec::new();
+    while Instant::now() < deadline && !switched {
+        match events.try_recv() {
+            Ok(EngineEvent::OutputChanged { device, .. }) if device == target => switched = true,
+            Ok(EngineEvent::Error { message, .. }) => bad.push(message),
+            Ok(EngineEvent::Ended { .. }) => bad.push("la piste s'est arrêtée".to_owned()),
+            Ok(_) => {}
+            Err(_) => thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    assert!(
+        switched,
+        "the new stream must announce itself (errors: {bad:?})"
+    );
+    // Give the new stream half a second, then measure what the clock did: a
+    // stopped mixer stops the position, a handed-over one does not.
+    thread::sleep(Duration::from_millis(500));
+    let after = engine.position();
+    let underruns = engine.underruns();
+    println!(
+        "sortie {} → {} : {before:.3} s → {after:.3} s, {underruns} sous-alimentation(s)",
+        info.device, target
+    );
+    assert!(
+        after - before > 0.30,
+        "the music must keep playing across the handover: {before:.3} s → {after:.3} s"
+    );
+    assert_eq!(
+        engine.current_id().as_deref(),
+        Some("long"),
+        "the same track is still the current one"
+    );
+    assert_eq!(underruns, 0, "the handover dropped no buffer");
+    assert!(bad.is_empty(), "nothing failed during the switch: {bad:?}");
+    engine.pause();
+}

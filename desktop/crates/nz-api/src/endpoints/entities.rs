@@ -106,11 +106,23 @@ impl Api {
     /// stops, for the crossfade's trimming. `ready: false` is a normal answer
     /// for a file that is not archived yet.
     pub async fn audio_edges(&self, id: &str, db: f64) -> Result<AudioEdges, ApiError> {
+        self.audio_edges_on(Lane::User, id, db).await
+    }
+
+    /// The same route on an explicit lane: the NEXT track's bounds are a
+    /// prefetch (`docs/agents/desktop.md`, rule 1 — the current track's answer
+    /// never queues behind the next one's).
+    pub async fn audio_edges_on(
+        &self,
+        lane: Lane,
+        id: &str,
+        db: f64,
+    ) -> Result<AudioEdges, ApiError> {
         let path = format!("/audio/edges/{}", encode(id));
-        self.get_value(&format!(
-            "{path}{}",
-            query(&[("db", Some(format!("{db}")))])
-        ))
+        self.fetch(
+            lane,
+            &format!("{path}{}", query(&[("db", Some(format!("{db}")))])),
+        )
         .await
     }
 

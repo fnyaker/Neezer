@@ -6,8 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D13, D14a, D14b, M1, T1 and
-V1 delivered; the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D16, M1,
+P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`,
+`409` told apart, the `auto` payload, the output list); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -167,6 +168,13 @@ The SPA's `lib/api.js#req` is the contract; port it, do not reinvent it:
   already classified a Deezer failure; never re-ask.
 - `401` → session ended: the login screen, unless the body is `{"error":"remote ended"}` (remote
   control loan ended: `ApiError::RemoteEnded { restored }`).
+- `409` → **two different failures, told apart by the server's own header**: `409` +
+  `Retry-After` is `ApiError::NotReady { retry_after }` (nothing on disk yet, a writer is at
+  work — `neezer/webui/__init__.py#_not_archived`, the only 409 that sets the header), and a
+  `409` WITHOUT it is `ApiError::Conflict { message, code, scope }` (a playlist whose `version`
+  moved, a track that became available, a group that already exists, a finished file asked for a
+  `?start=` slice). Only the first is retried as it was; the second is a verdict, and the screen
+  re-reads what it was editing.
 - Timeouts: connect 4 s; an API answer 12 s; a stream with no byte for 15 s reconnects (byte range
   when the file is finished, `?start=<s>` otherwise, see *Streams*).
 - A screen that cannot load shows the cause and "Réessayer" (the `LoadFailed.svelte` equivalent),
@@ -573,6 +581,15 @@ Waves that can run in parallel (disjoint files):
   - `Service Unavailable` from `_admit_by_priority` and the stream's `{"queued": true}` are the same
     status: the difference is the lane. A User-lane 503 is an ordinary `Http { 503 }` the GET may
     retry; a background one becomes `Busy { retry_after }` and is repeated once only.
+  - **A `409` is not one failure.** The first version read every `409` as `NotReady` ("nothing on
+    disk yet"), which made a playlist's stale `version` arrive as "pas encore prêt" and be retried;
+    `neezer/webui` uses the status for both. The header is the whole difference — `_not_archived`
+    sets `Retry-After: 2`, and no other 409 does — so the classifier now returns `NotReady` only
+    with that header and `Conflict { message, code, scope }` without it. `code` matters: the
+    refusal sentences of Réglages → Utilisateurs (`last_admin`), Serveur (`unavailable`) and the
+    transcription routes are 409s, and they are read through `ApiError::code()`. Pinned against the
+    real server in `tests/bench.rs`: an unarchived seek is `NotReady { 2 }`, a `PATCH` with a stale
+    version is `Conflict { scope: "content" }`, **one request each**.
 
 ### D3 — `nz-cache` (delivered 2026-11-16)
 
@@ -817,6 +834,16 @@ Waves that can run in parallel (disjoint files):
   accepted only when they are plausible (`trim.rs`): ≤ 10 s at either end, a measured file length
   within 2.5 s of the track's metadata duration, an end at least 0.2 s inside the file, and a start
   worth a seek above 0.25 s. A trim ends a voice HARD; a *duration* does not (see the pitfalls).
+  **The app primes them ahead of the play** (`AppState::load`/`preload`, D14a's follow-up): the
+  playing track's bounds at USER priority, the next one's at PREFETCH, and the next one's VOICE is
+  built only once its answer has landed — the head is skipped when the voice is built, so a voice
+  built at 0 plays the silence the trim exists to remove. A failure is logged and forgotten (the
+  next play asks once more), and a `ready:false` is remembered for the session as "not measured".
+  Measured on a 5.5 s fixture (0.5 s of silence, 2 s of tone, 3 s of silence): untrimmed the first
+  sample is **0.0000** and the head window is silent; trimmed, the voice starts at **0.500 s**, the
+  first rendered window peaks at **0.2500**, and the track ends at **2.500 s** — `nz-audio`'s
+  `a_measured_head_and_tail_of_silence_are_both_skipped`, and the app's own chain in
+  `state::tests::the_servers_bounds_reach_the_engine_before_the_next_voice`.
 - **The rule, the gain**: the server's `/api/gain/<id>` value is Deezer's LOUDNESS, not a gain. The
   adjustment is `-(loudness + 18.4)` dB (deemix's ReplayGain transform) plus the level's offset
   (`off` 0, `low` +2, `medium` +5, `high` +8), clamped to −24…+12 dB; a track with no measurement is
@@ -1330,12 +1357,104 @@ Waves that can run in parallel (disjoint files):
   remembered (`podcast.speeds`); transcript panel follows playback and searches; server
   transcription start/stop with its state; episode list paged by cursor (no unbounded fetch).
 
-### D12 — Discovery
+### D12 — Discovery (delivered 2026-11-17)
 
-- **Files**: `screens/{releases,recap,history,onboarding}.rs`, `app/src/widgets/{flow,
-  discovery_slider,mood_card,recap_story}.rs`.
-- **Acceptance**: flow and radios top the queue up before it runs dry (no gap); releases badge and
-  "vu"; recap story navigable by keys; onboarding complete with keyboard only.
+- **The rule, a station never runs dry**: the player announces `Effect::NeedMore` on the queue's
+  LAST row, which is already a gap, so `widgets/flow.rs` keeps `UPCOMING_MIN = 2` titles after the
+  playing one and asks while they are still queued. Measured (stub server, `cargo test -p
+  neezer-desktop`): a Flow start is 1 request (2 titles: the playing one and its next), then ONE
+  per title consumed — 6 requests for 5 titles — and the queue never held fewer than 2 upcoming
+  when a beat looked at it. The `n` the server accepts is 1 or 2 (`discover.py#flow_next` clamps
+  it), so a "the next two ahead" buffer costs exactly the SPA's one-request-per-title.
+- **The rule, one attempt, then the cause**: one request in flight, `MIN_EXTEND_MS = 5 s` between
+  two, a `(source, queue length)` key asked ONCE when its answer added nothing (the SPA's
+  `exhausted`, which is what stopped a request storm there), and a failing choice retried
+  `5 s / 15 s / 45 s` for the same row, then given up on with the cause on a toast (rule 3).
+  Asserted on the stub's counters: a second beat right after the start asks nothing, an exhausted
+  source is never asked twice at that length, and four `failed` calls are the end of the line.
+- **The rule, the beat**: ONE task on the app's own entity reads the player every second while a
+  station plays and every 20 s otherwise (`beat_period`, asserted), and it never repaints on its
+  own. It is installed by the first D12 screen opened (`flow::ensure`); the shell is D7's file, so
+  a session that never opens one of these four screens does not top up a radio started from an
+  artist page — one line in `app.rs` closes that seam, reported rather than taken.
+- **The rule, the level**: `widgets/discovery_slider.rs` writes the device copy at once
+  (`discover.level`, the SPA's own key) and `PUT /api/discover/prefs` once per SETTLE (450 ms):
+  twenty clicks in three seconds are one request, with the last value — a click is a value, never
+  a drag of requests. The server's answer is adopted into the same copy, so the phone and the
+  desktop agree.
+- **The rule, Nouveautés**: `GET /api/releases` (the device's copy paints first), `GET
+  /api/discover/prefs`, and `POST /releases/seen` once per fetched feed when it carries unseen
+  releases — the badge keeps THIS visit's count, so a back navigation does not call the same
+  releases new twice (asserted: 4 routes and the page's sleeves, nothing else). The two shelves
+  come from the payload's `close_to`, and a card's click costs 0 requests: `ReleaseShelf` is a
+  ROUTE in the SPA and `nav.rs` is frozen after D7, so a card opens the album and a release row
+  folds its titles out in the shared windowed list.
+- **The rule, the Récap**: 2 requests cold (`/recap/years` then the latest year), 1 per year change,
+  **0 per card** — the whole year is one bounded payload. `←`/`→` are APP-level keystroke
+  interceptors (a screen may not take the focus, D8a's rule, and `keymap.rs` is frozen), so the deck
+  is navigable with nothing focused; `j`/`k`, `Page préc./suiv.` and `Début/Fin` come through
+  `track_list::own`. The 7 s auto-advance runs only under 900 px and never under reduced motion
+  (the SPA's own two conditions), and the year is NOT rewritten into the route (a `replace` would
+  rebuild the screen and buy a second `/recap/years`).
+- **The rule, the Historique**: one page per request with the keyset cursor, « Charger plus »
+  appends and a duplicate id is dropped even if a page overlapped (asserted: two pages of the same
+  body stay 2 events), the filter is the server's own `outcome` word (asserted on the query), and
+  the rows are windowed at the SPA's exact geometry (44 px a day header, 72 px an event, so the
+  virtual offsets need no measurement). A row plays and turns into its radio
+  (`lib/actions.js#playThenRadio`), which is also what feeds the Flow service.
+- **The rule, Bienvenue**: a like is optimistic AND one request; offline it waits in a queue that is
+  flushed in order, and « Continuer » refuses while any of it is unsent (a finished onboarding that
+  lost the choices is worse than one that waited). The tiles are real `Toggle`s — `Entrée` and
+  `Espace` keep an artist exactly as a click does — and the first step has 4 tab stops (asserted:
+  « Continuer », the search field, the two tiles; a disabled « Voir plus » is not one). The account
+  step's import is a JOB the screen polls every 1.5 s with its progress and each failure's cause.
+- **Measured** (this machine: 16 threads, Rust 1.99.1; `cargo test -p neezer-desktop`):
+  - **162 tests, 0 failed** (26 of them this lot's: 12 pure rules + 8 headless UI). `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - **RSS**, debug build under Xvfb + software Vulkan (the same bench as D8a, `/proc/<pid>/status`):
+    **236 724 kB** on Nouveautés, **236 756 kB** on the Récap (+32), **236 756 kB** on the Historique,
+    **236 852 kB** with the 420 px queue panel open (+96). The discovery screens cost ~130 kB over
+    the shell — they hold one page of events, one year, one feed: nothing per-row (D8a's 237 MB is
+    the shell's own, and the software Vulkan driver is most of the difference with D7's 103 MB).
+  - **visual**: Nouveautés (with and without the 420 px panel open), the Récap's cards 1 and 4, and
+    the Historique were looked at at **1280×800**, and Nouveautés at **2560×1600**, on an isolated
+    Xvfb display (never the user's session; the window is resized through XTest because Xvfb has no
+    window manager — D7/D8a's recorded limit). The screens cap their content column at 1800 px, so a
+    2560 px window is margins, not a two-metre line of text. The shots are committed under
+    `docs/desktop/d12/` (`nouveautes-1280`, `nouveautes-2560`, `nouveautes-panneau-1280`,
+    `recap-1280`, `recap-carte-4-1280`, `historique-1280`), against `tools/perf_api.py --serve
+    --recap --tracks 400`.
+- **A contract that was wrong**: `nz-api`'s `Api::radio_next(seed: &str)` sends `{"seed": "<id>"}`
+  while the route requires an OBJECT (`neezer/webui/__init__.py#radio_next` answers `400 invalid
+  seed`), so the radios' refill goes through the client's generic `Api::send` with the SPA's own
+  body (`Player.svelte#nextBatch`). A typed `RadioSeed { kind, id }` in `nz-api` is the 3-line fix
+  its owner can make; nothing else uses the function today.
+- **Pitfalls found by building**:
+  - **`Toggle::on_change` is not a GPUI listener** (`Fn(bool, &ClickEvent, &mut Window, &mut App)`),
+    so a tile holds a WEAK entity: a screen that is gone answers nothing.
+  - **A test that waits on the REQUEST, not the answer, races**: D8a's menu test waited for the
+    stub's `/api/search` count and pressed `Entrée`/`Menu` on results that had not landed — 1 run in
+    6 failed once this lot's 41 extra tests loaded the machine (10/10 green before them). It now
+    waits for the list, which is what those keys act on.
+  - **`Entity::update` must not read the entity again**: `ask` was written against the `Entity` and
+    panicked `cannot read AppState while it is already being updated` when the beat called it from
+    inside `update`. The service's functions take `&mut AppState` + `&mut Context<AppState>`.
+  - **`add_window_view` hands back `&mut VisualTestContext`**, not a value: `&mut cx` there is a
+    `&mut &mut` and clippy's `needless_borrow` is right.
+  - **`cargo test`'s tab walks need a laid-out frame**: `Window::focus_next` before the first
+    `window.draw()` finds no stops, and `--test-threads` paranoia aside, the count must be read on
+    a painted frame (D14a recorded the same for `Window::focus_next`).
+  - **A `→` press needs an interceptor, an `Entrée` on a chip needs a button**: `card::chip` is a
+    `div` with a click handler, so the year chips, the history filters and the two navigation chips
+    became `toggle`s/`button`s — a mouse-only control in a discovery screen is a keyboard hole.
+  - The bench (`tools/perf_api.py`) cannot seed an archived+measured library in ONE run:
+    `--archived` inserts `track_analysis` rows a second time when `--recap` already wrote them
+    (`UNIQUE constraint failed: track_analysis.track_id`), so `/api/flow/next` answers an empty list
+    on it and the live Flow panel was proven by the tests, not by a screenshot.
+- **What it is now**: `screens/{releases,recap,history,onboarding}.rs` and
+  `widgets/{flow,discovery_slider,recap_story}.rs`; `widgets/mood_card.rs` stays empty on purpose
+  (D8a's Accueil draws its own mood tiles, so the widget this lot was allotted has no caller — a
+  delivered stub with nothing to say is not worth an unused module).
 
 ### D13 — Offline: the downloads worker and its screen (delivered 2026-11-16)
 
@@ -1473,15 +1592,23 @@ Waves that can run in parallel (disjoint files):
   Compte 1, Assistance 2; Lecture, Apparence and Raccourcis ask nothing), **+1** for
   an admin's Découverte (`/releases/settings`) and **+2** for their Sources
   (`/settings`, `/deezer/status`), and **0** on a revisit.
-- **The rule, the sink list is the machine's**: `nz-audio` publishes no enumeration,
-  so the output card reads `pw-dump` (`media.class == "Audio/Sink"`, one
-  `node.description` each — exactly the string `probe` matches, so a chosen sink
-  survives a restart) on a blocking thread, sorted so a node's creation order never
-  moves a chip under the pointer, and falls back to the device in use when the tool
-  is absent. `set_output_device` hands the mixer to the new stream (nothing stops),
-  and « Sortie en cours » is re-read 400 ms later, once PipeWire has it. Measured:
-  `pw-dump` **29 ms median over 7 runs, 246 KB** of JSON (15.8–43.4 ms), one read per
-  visit.
+- **The rule, the sink list is the machine's, and `nz-audio` publishes it**:
+  `nz_audio::output_devices()` lists the first host of `HOSTS` that has anything —
+  PipeWire's own `node.description`s, or ALSA's devices on a box with no session
+  manager — so the names are exactly the strings `probe` opens by and a chosen sink
+  survives a restart. It replaced the card's own `pw-dump` subprocess: **2 real
+  sinks in 13.0 ms** instead of 29 ms and 246 KB of JSON, no parsing, and a headset
+  plugged in since the engine started is seen (a fresh host and registry snapshot).
+  Two filters are the difference between a chip row and a device dump (rule 5):
+  only the FIRST host that has devices is listed (PipeWire's two sinks beside
+  **nine** ALSA plumbing lines — `Discard all samples…` — was the measurement), and
+  the session manager's aliases (`default_sink`, `default_output`) are dropped
+  because the « Sortie par défaut » chip already IS that choice. The same list is
+  what `probe` walks, and `probe` was fixed with it: a NAMED device now matches on
+  any host before any host's default is used, so a sink only ALSA reports opens on
+  ALSA instead of silently becoming PipeWire's default. `set_output_device` hands
+  the mixer to the new stream (nothing stops — proven below), and « Sortie en
+  cours » is re-read 400 ms later, once PipeWire has it.
 - **Measured** (this machine, Rust 1.99.1; `cargo test -p neezer-desktop`):
   - **102 tests, 0 failed** for the app (D14b's included), 38 of them this lot's
     (33 rules + 5 headless UI).
@@ -1491,7 +1618,10 @@ Waves that can run in parallel (disjoint files):
     **2560×1600**, **1280×800** and **660×800** — the laptop with the 420 px queue
     panel open: the root is the window (±1 px), the body never leaves the window
     sideways, never grows past it vertically and never starts off-screen. 30 renders,
-    no panic.
+    no panic. **Every pane is walked too, not only the first** (Playback's three,
+    Sources' three): a card added to a pane is exactly what breaks the rule above,
+    and the follow-up's « Tronquer les silences » card is asserted that way at all
+    three sizes.
   - **keyboard**: the Son pane has **25 distinct tab stops** and the order comes back
     to its first one (walked with `Window::focus_next`, the call gpui-omarchy's Tab
     makes), Shift+Tab retraces it, and the search field narrows the strip to
@@ -1552,30 +1682,157 @@ Waves that can run in parallel (disjoint files):
     thread and panicked the deterministic scheduler. The read is now gated on an
     engine existing (`audio.is_some()`), which is also the honest rule: no output, no
     sinks to choose.
-- **Two seams outside this lot, reported and not shipped** (both live in `state.rs`,
+  - **A paused `OfflineSink` never consumes the mixer's commands.** `Engine::send`
+    pushes into a bounded `rtrb` queue that only `render` drains, so a test that
+    loads a voice and waits for `Started` without rendering never gets it (measured:
+    5 s of waiting, no event, the install command dropped after its 500 ms retry).
+    Pump the sink while waiting — which is also what makes the clock advance only
+    for audio that was really rendered.
+- **Two seams this lot reported, landed by the follow-up** (both live in `state.rs`,
   D7's file: a screen cannot reach a track change):
-  - **Tronquer les silences** needs `TrackMeta::edges` primed per track
-    (`GET /api/audio/edges/<id>?db=`), for the current track and the next, in
-    `AppState::load`/`preload`. The option is absent from the page rather than dead
-    (rule 2).
-  - **The saved sound is applied when this page is built** (and again if the engine
-    arrives while it is open); a session that never opens Réglages runs with the
-    engine's defaults. The fix is ~15 lines in `AppEvent::AudioReady`: read the same
-    `kv` keys and call the same `Values::apply`.
-- **A contract that was wrong**: `nz-api`'s `set_account_auto(id, bool)` posts
-  `{"auto": true}`, while `myaccounts.my_accounts_options` requires
-  `{"auto": {kind: bool}}` and answers `400 auto invalide`; the screen sends the right
-  body through `Api::send`. `link_deezer`'s doc names `"shared"`/`"personal"` while
-  the server only distinguishes `"browser"` from every other value (a typed ARL) —
-  harmless, but D2's note should say so.
+  - **Tronquer les silences** is now a real switch in the Transitions pane, with the
+    SPA's threshold slider (−70…−25 dB, default −45). `AppState::load` asks the
+    playing track's bounds at USER priority and `preload` the next one's at
+    PREFETCH, then sets `TrackMeta::edges` before a voice is built; the session
+    keeps 512 answers and asks once per (track, threshold). `set_trim` changes the
+    sound at once: off drops the bounds of what is playing, a new threshold throws
+    the old answers away. Measured: the two requests leave in that order, one ask
+    each, `db=-45`; the engine's meta for the next track is `{0.5, 2.5, 5.5}`; the
+    first rendered window peaks at **0.2500** and the clock starts at **0.500 s**
+    (details in *D6 — the rule, the trim*). The switch is a control that ACTS
+    (rule 2): one real click on it at 1280×800 turns the trim off, writes
+    `audio.trim = false` on the device and turns it back on — and the headless
+    layout walk asserts the card's geometry in the Transitions pane at
+    **2560×1600**, **1280×800** and **660×800**.
+  - **The saved sound** is applied at `AppEvent::AudioReady`, not when this page is
+    built: the EQ (10 bands), the normalisation level, the bass lift, mono, the
+    balance and the crossfade reach the engine at a cold start, and the saved
+    output device is opened too (`set_output_device`, whose failure is logged there
+    — the engine reports a real device that refuses through `EngineEvent::Error`).
+    Measured: an engine that starts `eq(0) = 0`, `Off` reads **6.0 dB on 31 Hz,
+    9.0 dB of bass, `Medium`, mono, −0.30** after the one event.
+  - **A switch stops cutting the music**: `changing_the_output_hands_the_mixer_over_and_the_music_keeps_playing`
+    (`nz-audio`) plays a real FLAC and switches sink mid-track — **0.597 s → 1.088 s**
+    across the handover, **0 underruns**, same track, no `Ended`/`Error`. On CI (no
+    sound server) the pump has no device to switch and the test asserts the honest
+    `Err` instead.
+  - **Counted**: the desktop workspace is **246 app tests + 6 child-process
+    benches**, **75 in `nz-audio`** (the head+tail trim and the sink handover are
+    two of them) and **38 in `nz-api`** (22 unit, 9 lanes, 3 real-server bench —
+    the `409` pair and the `auto` payload among them); **634 in the whole
+    workspace**. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
+    warnings` and `cargo test --workspace` clean.
+- **A contract that was wrong, fixed**: `nz-api`'s `set_account_auto(id, bool)`
+  posted `{"auto": true}`, while `myaccounts.my_accounts_options` requires
+  `{"auto": {kind: bool}}` and answers `400 auto invalide`. The function now takes
+  the kinds the account announced and builds that map, so the Sources screen calls
+  it instead of hand-building the body through `Api::send`. Pinned against
+  `perf_api.py`: the typed call is **200** with every announced kind at the value
+  asked, one kind alone leaves the others untouched, and the old bare boolean is
+  **400 `auto invalide`**. `link_deezer`'s doc was corrected too: the server only
+  distinguishes `"browser"` from every other value (a typed ARL).
 
-### D14b — Réglages (admin sections)
+### D14b — Réglages (admin sections) (delivered 2026-11-16)
 
-- **Files**: `screens/settings/{users,server}.rs`.
-- **Acceptance**: users and invitations; archive/rules/cleanup preview then run; storage; backfills
-  with progress and failure causes (`JobFailures` equivalent); server transcription settings and
-  worker list (create shows the token once, revoke); everything a long job does runs as a job with
-  progress (rule 2).
+- **The rule**: an admin screen is a column of CARDS, and every card that can
+  start work owns its own JOB. The start route returns at once, the card polls
+  its own `*_status` route on the app's `nz-net` runtime at the SPA's own
+  cadence (archive 1.5 s, migration 2 s, MusicBrainz and credits backfills
+  1.5 s), stops when the job says it is done, and then says what it did or the
+  CAUSE of each failure — the tally of reasons, then the rows, then « Copier le
+  détail » (`JobFailures.svelte`'s contract). Measured: a running archive is
+  polled **once per 1.5 s, 2 calls for a job that ends after the first poll**,
+  and an idle Serveur tab makes **0 further requests** over half a second.
+- **The rule, one sequential read pass**: opening Serveur is **10 reads** on
+  `Lane::User`, one after the other, each card painting as its answer lands — so
+  a slow link never sees ten requests compete (rule 3), and one dead route costs
+  its card, not the page. The SPA's Serveur tab makes eleven, because
+  it also reads the Deezer status and the release settings that this app keeps
+  in the Sources and Découverte sections. Measured against a real socket:
+  **10 requests, 2 242 B of JSON** (the harness's bodies; Utilisateurs: **2
+  requests, 573 B**).
+- **The rule, the token is shown once**: enrolling a transcription worker mints
+  the token with the row, shows it in a box that says so, offers « Copier le
+  jeton », and **keeps it nowhere else** — reopening the screen cannot bring it
+  back because the server never answers it again. Revoking sends the DELETE for
+  that worker's own UUID path, and an id that is not a UUID (a hostile payload)
+  never becomes a route. The SPA has no worker screen at all: these three routes
+  (`GET|POST /api/transcribe/workers`, `DELETE …/<id>`) existed on the server
+  with no client, and this lot is their first.
+- **Why some payloads are read as raw JSON, and the contract corrections**:
+  - `/enrich/backfill` answers the shared `libjob` snapshot **plus** its
+    coverage, but `nz_model::EnrichStatus` (D1) typed only the coverage half, so
+    the desktop reads `EnrichLive` locally (`#[serde(flatten)] JobStatus +
+    coverage`) instead of losing `done/failed/failures`. A test pins the payload.
+  - The worker routes have no `nz-api` function (they never existed in
+    `api.js`), so the screen uses the seam D2 left public — `Api::get` and
+    `Api::send` — rather than editing a crate this lot does not own.
+  - The inventory's Réglages → Serveur line also names **automatch** and the
+    **similar backfill**: in the SPA they live in Bibliothèque → Titres
+    indisponibles (`AutomatchPanel`) and in the genre studio (`SimilarRebuild`,
+    D16), not in Réglages; this lot does not duplicate them. `POST /api/upload`
+    (multipart) is a library action too, not a Serveur control.
+- **The rule, no invented dates**: the payloads carry naive server-local
+  timestamps and the workspace has no timezone crate, so these screens print
+  the server's own wall clock (`Vu le 16 nov. 2026 à 20:15`) instead of a
+  relative time that would be off by the UTC offset. A trailing "il y a 3 h"
+  needs a clock the client does not have; the absolute date is exact.
+- **The rule, keyboard-only as well as the mouse, and never by taking the
+  focus**: Tab reaches every control through `focus_scope`, and the page takes
+  **Page Down / Page Up** as app-level actions (`actions!(settings_page, …)`,
+  bound once, handled through a **weak handle**). The screen never focuses
+  itself — D8b's trap: a screen that takes the focus breaks the shell's focus
+  anchor when it is unmounted, and every scoped key (`Espace`, `Ctrl+→`) dies
+  with it. A regression test visits Serveur, comes back to the shell and plays
+  with `Espace`. Home/End are deliberately NOT bound: they belong to every text
+  field's caret. A sheet is the only place focus moves, and it gives it back to
+  whoever had it (the shell's anchor included) when it closes.
+- **What it is now**: `screens/settings/server.rs` (archive, migration,
+  MusicBrainz, credits, archive rules, cleanup preview + run, storage + cache
+  flush, server transcription settings, workers, upload quota) and
+  `screens/settings/users.rs` (25-row keyset pages capped at 250, six filters,
+  account sheet with promote/disable/delete-typed, invitations with
+  create/renew/revoke and the link shown once), plus the two dispatch arms in
+  `screens/settings/mod.rs`. Both screens keep their own `Inbox` (an mpsc the
+  GPUI thread drains) because `AppEvent` belongs to D7's shell and may not grow
+  a variant per screen; the requests themselves go through `nz-api`, never a
+  second HTTP path.
+- **Measured** (this machine, Rust 1.99.1, debug build, `cargo test -p
+  neezer-desktop screens::settings`): **25 tests, 0 failed, 1.7 s** (the 1.5 s
+  poll is most of it); `cargo fmt --check` and `cargo clippy --workspace
+  --all-targets -- -D warnings` clean. The screens' own worst case — **250
+  accounts + 200 invitations = +1 380 KB RSS** in a unit test (the caps the
+  screens enforce; the widgets are built per paint, so the count does not
+  follow). The whole process's RSS on these screens could not be measured here:
+  this machine has **no Xvfb and no Xephyr** and Hyprland's headless backend
+  dies with `CBackend::create() failed!` (measured), and the user's session must
+  not be driven — the same wall D7 hit. The layout is a wrapping column capped
+  at 64 rem, so 660 px (1280 with the 420 px panel open) and 1 940 px (2560)
+  scroll the same cards; D17 owns the full-size screenshot pass.
+- **Pitfalls found by building**:
+  - **A GPUI background timer does not fire in the test harness** (it did not
+    advance within 10 s), so a poll that sleeps on `cx.background_executor()` is
+    untestable and, worse, unmeasured. Every timer of these screens (job polls,
+    the search debounce) runs on `nz-net` instead and answers through the same
+    inbox as the requests — one clock, driven by the same loop the D7 journeys
+    use.
+  - **`StatefulInteractiveElement` is what carries `on_click` and
+    `overflow_y_scroll`**, not `InteractiveElement`: a bare `div()` cannot be
+    clicked or scrolled, it needs `.id(...)` first. The modal veil, the scrolling
+    sheet and every row are stateful for that reason.
+  - **`InputState::focus_handle` needs the `Focusable` trait in scope** — the
+    inherent method the docs imply does not exist on `InputBaseState`. Without
+    it, a field cannot be left alone while the person is typing in it.
+  - **A number field and its chips drift** unless the render puts the server's
+    value back into the field: clicking « 180 min » left the text box at 120
+    until `sync_field` wrote the new value (never while it holds the focus).
+  - **`Box::leak` in a render is a leak per paint**: the archive rules' element
+    ids were built with `format!` per frame at first. Static ids per rule
+    (`event_id`) fixed it; clippy would not have caught it.
+  - **A timestamp is hostile input**: `&iso[11..16]` panics when a multi-byte
+    character sits where the clock belongs. Every slice is `str::get`, and a
+    time is printed only when it is `HH:MM` digits (`date_fr`/`datetime_fr`,
+    pinned by a test with `éééé`).
 
 ### D15a — Remote control
 
@@ -1600,14 +1857,100 @@ Waves that can run in parallel (disjoint files):
 - **Acceptance**: the repository's party bench (`webapp/test/party/run.mjs`) with the desktop as
   host and as guest: offset ≤ 5 ms median, ≤ 15 ms p95.
 
-### D16 — Genre studio and client analysis
+### D16 — Studio de genres et analyse côté client (livré 2026-11-17)
 
-- **Files**: `screens/genres.rs`, `app/src/widgets/genre_*.rs`, `app/src/wiring/analysis.rs`.
-- **Contract**: the SPA's genre studio over `/genre/*`, `/explorer*`; client-side analysis and
-  training use `webapp/measure` and `webapp/trainer` natively (path deps), as BULK work that yields
-  like the transcription.
-- **Acceptance**: label, tree edit/undo, bulk tag with preview, share import/export; analysis
-  backfill of 100 tracks runs reniced with 0 underruns while playing.
+- **La règle, un studio, pas un second client** : les cinq onglets de `routes/Genres.svelte` —
+  Étiquetage, Bibliothèque, Arbre, Modèle — plus l'Explorer (`components/ExplorerStyles.svelte`,
+  que la page place sur Recherche : D16 possède `genre_explorer.rs` et pas `search.rs`, le studio
+  le porte donc comme cinquième onglet ; un déplacement, pas une différence). `Étiquetage` est le
+  flux « confirmer, pas taper » : un candidat, les neuf genres les plus probables sur `1`…`9`,
+  `Entrée` pour le premier, `z` pour annuler, `j`/`k` pour avancer/reculer, `/` pour chercher
+  (le champ se rejoint avec Tab). L'`Arbre` est le DAG du serveur : multi-parents, création,
+  renommage, suppression, coupe d'un lien, annulation, remise à l'arbre d'origine — chaque écriture
+  répond l'arbre ENTIER (`_tree_answer`) et l'écran peint cette réponse, jamais sa propre
+  supposition. Le `Modèle` entraîne ici, montre le verdict de santé (`health.js` : bon / à
+  surveiller / peu fiable), envoie la tête (`PUT /genre/model`) puis suit le reclassement.
+- **La règle, les nombres et la tête sont ceux de la page, liés NATIVEMENT** : `webapp/measure` et
+  `webapp/trainer` sont des dépendances de chemin de `app/` (`measure = { path = "../../webapp/measure" }`).
+  La mesure locale fait `measure::measure` sur les canaux SOURCE plafonnés à 600 s (le serveur
+  mesure le signal source), `lowband::analyse`, puis `tempo::analyse` sur le mono 44,1 kHz
+  rééchantillonné par rubato (retard du filtre retiré) ; elle n'envoie que des nombres
+  (`POST /analysis/<uuid>/measures`), le serveur décide. L'entraînement fait les plis, les bags,
+  la projection et la température du crate, avec le ménage AVANT (`health.js#prepare` : doublons
+  par `vectorKey`, un enregistrement étiqueté deux fois écarté, un artiste plafonné à 40 % d'un
+  genre, un genre sous 5 titres laissé de côté) et une seule largeur de matrice (v3 3840 quand
+  TOUTES les lignes l'ont, sinon le préfixe v2 2560). Deux calculs dans le studio ne peuvent pas
+  diverger de la page : c'est le même code.
+- **La règle, le fond cède (règle 1)** : un thread `nz-analysis`, `setpriority(0, 0, 10)` (les
+  appels `setpriority`/`getpriority` sont déclarés localement : le workspace ne pin pas `libc`),
+  toutes ses requêtes sur `Lane::Bulk`, et un drapeau `Control::yield_now` que l'écran lève tant
+  qu'un titre démarre (`current_time() < 8 s`). L'entraînement a son thread, le même nice, le même
+  drapeau. Rien ne touche l'état GPUI : tout revient par `wiring::events`.
+- **La règle, l'écran est ATTEIGNABLE** : D7 avait enregistré la route sans lui donner
+  d'entrée. D16 ajoute donc, hors de sa liste de fichiers mais avec l'accord de l'orchestrateur,
+  un « Genres » dans `sidebar()` (`app.rs`, administrateurs seulement, comme la webapp) et le
+  raccourci `g e` (`keymap.rs`, avec sa ligne dans la table des raccourcis qui alimente `?` et
+  Réglages → Raccourcis). Rien d'autre dans ces deux fichiers ; D15a les modifie aussi (entrée
+  Contrôle distant), d'où un rebase qui garde les deux côtés.
+- **La règle, le clavier ne prend pas l'ancre** : l'écran ne focalise rien (D8a). `1`…`9` et `z`
+  sont liés GLOBALEMENT (`KeyBinding::new("1", GenrePick(1), None)`) et livrés au studio VIVANT par
+  un handle faible, exactement comme les touches de liste de `track_list::own` ; `Entrée`,
+  `j`/`k`, `Début`/`Fin` passent par `track_list::own`. Mesuré : avec `Some("Neezer && !Input")`
+  les touches n'arrivaient JAMAIS à l'écran dans le banc (aucune ancre focale hors coque) ; avec
+  `None`, oui. Les deux chemins appellent les mêmes méthodes (`label`, `undo`, `skip`).
+- **Ce que c'est maintenant** : `screens/genres.rs` (les cinq onglets, l'état, les réponses, les
+  requêtes) et sept widgets — `genre_label.rs` (le modèle d'étiquette, le port de
+  `lib/genre/rank.js` épinglé à la sortie Node de la page, les chips), `genre_tag_sheet.rs`
+  (l'étiquette d'UN titre, ouverte du candidat/du lot/de l'arbre), `genre_bulk_sheet.rs` (l'aperçu
+  du lot : un désaccord arrive décoché, seuls les titres cochés partent), `genre_tree.rs` (la liste
+  aplatie du DAG, un nœud dessiné UNE fois sous son premier parent, les autres nommés sur la
+  ligne), `genre_extractor.rs` (l'état de l'extracteur, son autotest, l'installation d'un `.onnx`
+  par CHEMIN — pas de sélecteur natif sans dépendance), `genre_explorer.rs` (les styles parents,
+  les cinq crans, la découverte par POST puis sondage GET seulement) et `wiring/analysis.rs`
+  (le runner local et le module `training`).
+- **Mesuré** (cette machine : 16 threads, Rust 1.99.1, PipeWire 1.6.9 ; `cargo test -p neezer-desktop`) :
+  - **5 tests du studio** (4 journeys + le modèle de données) et **4 tests d'analyse** ; le
+    workspace entier reste vert. `cargo fmt --check` et
+    `cargo clippy --workspace --all-targets -- -D warnings` propres.
+  - **requêtes** : ouvrir le studio = **2** (`/genre/status`, puis `/genre/candidates`) ; un
+    onglet = **1** (`/genre/tree`) ou **4** (`/analysis/plan`, `/analysis/backfill`,
+    `/genre/embed`, `/explorer`) ou **1** (`/explorer/styles`) ; une revisite = **0** (asserté).
+    Un statut peint depuis le cache n'empêche plus la page de candidats (`candidates_asked`) —
+    le piège exact de la règle cache-d'abord de D8a.
+  - **mémoire du studio** : 220 étiquettes + 40 candidats × 24 scores = **677,3 Ko** (modèle de
+    données, budget 1 Mo asserté) ; l'écran ne tient JAMAIS la bibliothèque — la liste de
+    8 000 titres est celle de la coque, fenêtrée par D8a. Sous Xvfb + lavapipe, l'app entière au
+    studio mesure **~247 Mo RSS** (le pilote Vulkan logiciel en fait l'essentiel ; D8a : 226–237 Mo).
+  - **analyse de 100 titres pendant la lecture** (banc `NZ_ANALYSIS_BENCH=1`, vrai PipeWire, vrai
+    ffmpeg, 100 FLAC de 20 s) : **128,9 s, 1,29 s/titre, 0 échec, 0 underrun** (`EngineEvent::
+    Underrun`, compté par le banc), thread à **nice 10**.
+  - **visuel** : 2560×1600, 1280×800 et **660×800** (panneau latéral de 420 px ouvert) regardés sur
+    un Xvfb isolé : la page est centrée, bornée à 100 rem, les rails de la coque restent en place,
+    les cinq onglets peignent, la taille des cibles et les textes français tiennent ; aucun emoji.
+- **Pièges trouvés en construisant** :
+  - **Le contrat `GenreScore` de `nz-model` est faux** : le serveur envoie `scores` comme
+    `[[label, score, head, proto]]` (`genre.py#_scores_json`), pas un objet `{name, score, tag}`.
+    L'écran lit ces tableaux en JSON (`genre_tag_sheet::read_scores`) et n'utilise PAS le type ;
+    le corriger dans `nz-model` est un lot de contrat, pas une édition de D16.
+  - **`nz-api` n'a ni `/genre/share/export`, ni `/explorer/styles`, ni `/explorer/discover`** : ils
+    se lisent avec `Api::get`/`Api::send` (publics, avec la lane) — aucune route inventée. Le seul
+    multipart, `POST /genre/extractor`, vit dans `genre_extractor::upload` avec la feature
+    `multipart` posée sur `app/` : D2 disait qu'elle arriverait « avec D14b, D16 » ; elle est
+    arrivée ici, côté app, et `nz-api` reste JSON-only. `POST /upload` reste à D14b.
+  - **`bind_keys` d'un écran ne suffit pas** : sans ancre focale (un banc d'écran seul), une
+    liaison contextuelle n'est jamais trouvée (D0) ; les touches du studio sont globales et le
+    handler est le handle faible de l'écran vivant.
+  - **`App::update_global` demande `BorrowAppContext`** dans le champ ; sans l'import, la méthode
+    n'existe pas (`no method named update_global`).
+  - **Le rééchantillonneur du tempo perd le retard du filtre** (147 trames à 1024, 3,3 ms) : le
+    tracker lit des onsets, pas une durée ; le banc l'asserte à 5 ms. L'engine, qui doit garder la
+    durée, réalimente ce retard.
+  - **glibc `getpriority` rend le nice directement**, et remonter le nice exige `CAP_SYS_NICE` :
+    le test de priorité nice son propre thread et le laisse mourir (un worker de test laissé à
+    nice 10 ralentirait toute la suite).
+  - **`the_whole_settings_page_costs_a_few_megabytes`** échoue parfois sous charge (D14a le sait) ;
+    `a_right_click_opens_the_row_menu` (D8a) est du même genre : ces deux-là passent seuls, le
+    studio n'y touche pas.
 
 ### T1 — `nz-transcribe` core (segments, sidecar) — delivered 2026-11-16
 
@@ -1810,18 +2153,89 @@ Waves that can run in parallel (disjoint files):
   0 underruns and UI p95 frame time unchanged within 10 % (measure both with and without the job);
   a local transcript shows in the panel and is searchable.
 
-### P1 — Arch packaging and release
+### P1 — Arch packaging and release (delivered 2026-11-16)
 
-- **Files**: `desktop/packaging/arch/{PKGBUILD,neezer-desktop.desktop,neezer-desktop.svg}`,
-  `.github/workflows/release.yaml` (a job that builds the package in `archlinux:latest` and
-  attaches `neezer-desktop-<ver>-x86_64.pkg.tar.zst` on `v*` tags).
-- **Contract**: `makedepends=(rust cargo cmake clang vulkan-headers shaderc)`, `depends=(pipewire
-  libxkbcommon wayland vulkan-icd-loader fontconfig freetype2 dbus)`, `optdepends=('vulkan-radeon:
-  transcription GPU AMD' 'vulkan-intel: transcription GPU Intel' 'nvidia-utils: transcription GPU
-  NVIDIA')`; `prepare()` `cargo fetch --locked --target host-tuple`; `build()` `cargo build --frozen
-  --release`; installs both binaries, the `.desktop` (`StartupWMClass=neezer-desktop`) and the icon.
-- **Acceptance**: `makepkg -si` on this machine installs it, it appears in the Omarchy launcher, and
-  `namcap` reports no error.
+- **The rule**: the app ships as ONE Arch package, `neezer-desktop`, built from the tree it lives in.
+  `desktop/` links `webapp/rhythm`, `webapp/appcore` and `android/nscore` by path, so there is no
+  source tarball to point `source=(...)` at: the PKGBUILD follows the Omarchy apps' convention
+  (`source=()`, `build()` builds the checkout) and the release job checks the `v*` tag out before
+  running `makepkg`, so the artefact always comes from the tagged tree. `prepare()` is the ArchWiki
+  Rust guideline verbatim (`cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"`),
+  `build()` is `cargo build --frozen --release` into `$srcdir/target` under
+  `RUSTUP_TOOLCHAIN=stable`, and the tag's version reaches `pkgver` through
+  `NEEZER_DESKTOP_VERSION` (`v1.3.1` → `1.3.1`): a tag can never ship a package named after the
+  workspace's 0.1.0.
+- **The rule, `!lto` is load-bearing**: makepkg's default `lto` option appends `-flto=auto` to
+  `CFLAGS`/`CXXFLAGS`/`LDFLAGS` (`/usr/share/makepkg/buildenv/lto.sh`), which turns whisper.cpp's
+  and aws-lc's static archives into GCC LTO bitcode; `rust-lld` cannot read it and drops every C
+  object, so the link fails on `undefined symbol: aws_lc_0_47_0_AES_set_encrypt_key` /
+  `whisper_full_n_segments_from_state` (measured twice, once per binary). `options=('!debug' '!lto')`
+  — the ArchWiki's "mixed Rust/C/C++ project" case; the Rust half keeps its own thin LTO.
+- **The rule, `depends` follow `ldd`, not the plan**: `neezer-desktop` links `libpipewire`,
+  `libasound`, `libxcb`, `libxkbcommon` and `libxkbcommon-x11`, and `neezer-transcribe` links
+  `libvulkan`; `dbus` is not needed at all (zbus speaks the D-Bus wire protocol), and `fontconfig`
+  is a **build** dependency only — `yeslogic-fontconfig-sys` asks pkg-config for `fontconfig.pc`
+  (freetype2 comes with it) but rustc's `--as-needed` drops `libfontconfig` from the linked binary,
+  so `ldd` is clean and it belongs in `makedepends`. `namcap`'s `E:` lines named exactly the two
+  MISSING runtime packages (`libxcb`, `libxkbcommon-x11`) and a third (`hicolor-icon-theme`, for the
+  icon hierarchy); `wayland` is dlopen'ed by `wayland-sys` (absent from `ldd`, called "may not be
+  needed" by namcap) and stays, with the reason in the PKGBUILD. `cargo` is not an Arch package name
+  either — `rust` provides it — so only `rust` is in `makedepends`: naming both makes `makepkg -si`
+  stop on "two providers available for cargo" on a machine that has neither yet.
+- **The rule, one artefact**: `!debug` in `options` (the Rust profile already strips), so the release
+  attaches exactly `neezer-desktop-<ver>-x86_64.pkg.tar.zst`.
+- **What it is now**: `desktop/packaging/arch/PKGBUILD` (both binaries, the `.desktop`, the icon, the
+  licence; `package()` installs `neezer-transcribe` beside `neezer-desktop`, which is how T2 finds
+  its child), `neezer-desktop.desktop` (`StartupWMClass=neezer-desktop`, the `app_id` of `main.rs`;
+  `Icon=neezer-desktop`, the web app's own mark, so the launcher entry is recognisable) and
+  `neezer-desktop.svg`. `.github/workflows/release.yaml` gains an `arch` job: `archlinux:latest`,
+  the declared `makedepends` + `depends` installed first (a typo in `depends` fails there),
+  `makepkg` as an ordinary user (it refuses root), `desktop-file-validate`, `namcap` on the package
+  AND the PKGBUILD with `E:` lines failing the job, the artefact uploaded and attached on `v*` only.
+  Like `android.yaml`, the job also runs on pull requests touching `desktop/packaging/**`, so this
+  YAML is proven before the first tag instead of by it.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, Omarchy/Arch, makepkg 7.1.0):
+  - `makepkg -f` from an empty `$srcdir`: **8 min 56 s** wall, 33 min 20 s CPU (`CARGO_BUILD_JOBS=4`);
+    the release build inside is 8 min 52 s.
+  - package **28 020 486 B (26.72 MiB)** compressed, **87.16 MiB** installed —
+    `neezer-desktop` 41 716 736 B, `neezer-transcribe` 49 642 888 B.
+  - `namcap` on the package: **0 error**, 8 warnings (two `ld-linux` "unused library" from its
+    known noise, four "implicitly satisfied" — glibc, libgcc, libstdc++, libpipewire — and the
+    `pipewire`/`wayland` "may not be needed" the two comments above explain). `namcap` on the
+    PKGBUILD: nothing. `desktop-file-validate`: clean, before and after installation.
+  - installed binary, first painted frame on an isolated **2560×1600 X server**:
+    **156, 122, 136 ms** (median 136; D7's criterion is 300 ms).
+  - RSS at the login screen: **175 244 kB** at 2560×1600, **175 340 kB** at 1280×800 — an Xvfb X11
+    run, and Mesa says `No DRI3 support detected`, so it is NOT comparable with D7's **103 MB** on
+    Wayland/Hyprland; P1 adds no screen and the packaged binary is D7's code.
+  - `pacman -U -dd` into a throwaway root installs exactly the five paths (two binaries, the
+    `.desktop`, the icon, the licence), and `neezer-transcribe --version` from that root reports the
+    RADV 780M device and `whisper.cpp 1.8.3 (backend vulkan compilé)`.
+  - the `arch` job in CI (`archlinux:latest`, cold container and cold crate cache): **11 min 08 s**
+    end to end, `namcap` gate green, the `files` job correctly skipped on a pull request.
+- **Pitfalls found by building**:
+  - makepkg runs `build()` with the distro's hardening `CFLAGS`/`CXXFLAGS`/`LDFLAGS`, and its `lto`
+    option is what broke the link (see the rule above); the failure looks like a C library problem
+    (`undefined symbol` reported by `rust-lld`), not a flag problem, and it hits BOTH binaries.
+  - A dependency the binary does not link can still be needed to BUILD it: the CI's Arch container
+    stopped at `yeslogic-fontconfig-sys` ("Package 'fontconfig' not found") while `ldd` on this
+    machine was clean, because this machine happens to have fontconfig installed. `fontconfig` is a
+    `makedepend`; a `depends` list checked only with `ldd` says nothing about the build.
+  - `makepkg` refuses to run as root, so a container job needs a `builder` user, a `chown` of the
+    mounted workspace and a `su -` login shell (so cargo finds its registry).
+  - `actions/checkout`'s node runtime works in `archlinux:latest` without installing node, but the
+    image has no `git` until `pacman -Syu` has run: install the build chain BEFORE checkout. Runtime
+    dependencies belong in that same list — it is what proves every `depends` name exists.
+  - `namcap` prints `<pkgname> E: …` and **exits 0 even with errors** (measured): a gate has to
+    grep for `(^| )E:` or it passes every finding.
+  - `makepkg`'s `-debug` subpackage would be a second artefact; `!debug` (plus the profile's
+    `strip = true`) keeps one, and the release glob names `[0-9]` after `neezer-desktop` so it can
+    never pick up a `-debug` package.
+  - The package still contains whisper.cpp's `__FILE__` paths under `$srcdir`
+    (`makepkg` warns `Le paquet contient une référence à $srcdir`): diagnostic strings only, from
+    GGML's logging macros. It is a known cosmetic reproducibility gap, not a defect of the
+    install.
+
 
 ### D17 — The whole journey, measured
 

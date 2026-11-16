@@ -7,8 +7,8 @@
 //!   just taken, the next track, or background work that must yield — and the
 //!   gates make that true;
 //! - **the failure shapes of `lib/api.js#req`** ([`ApiError`]): offline, session
-//!   ended, provider refusal (`X-NS-Error`, final), not-ready, busy, HTTP,
-//!   undecodable;
+//!   ended, provider refusal (`X-NS-Error`, final), not-ready, conflict, busy,
+//!   HTTP, undecodable;
 //! - **the retry rules**: a GET retries (3 tries, 400·2ⁿ ms + jitter, capped at
 //!   6 s), a mutation NEVER does, and a background request repeats only on the
 //!   server's own `Retry-After`;

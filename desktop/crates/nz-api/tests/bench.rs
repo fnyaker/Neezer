@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nz_api::{Api, ApiError, Lane, Quality, SessionJar, TrackId};
+use nz_api::{Api, ApiError, Lane, Method, Quality, SessionJar, TrackId};
 
 /// The repository root (`desktop/crates/nz-api` → up three).
 fn repo_root() -> PathBuf {
@@ -71,7 +71,9 @@ impl Bench {
         let mut child = Command::new(python())
             .arg(script)
             // The seed is small on purpose: this test proves the SESSION and the
-            // typed routes, not the size of a library.
+            // typed routes, not the size of a library. One linked provider
+            // account, because `/api/me/accounts` is otherwise an empty list and
+            // the `PUT` contract (the `auto` shape) has nothing to act on.
             .args([
                 "--tracks",
                 "12",
@@ -81,6 +83,7 @@ impl Bench {
                 "4",
                 "--big-playlist",
                 "4",
+                "--seed-provider-account",
                 "--serve",
                 "--port",
                 "0",
@@ -135,13 +138,60 @@ impl Bench {
             other => other.to_string(),
         })
     }
+
+    /// The linked provider account `--seed-provider-account` created.
+    fn account(&self) -> String {
+        self.ids["account"]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the bench printed no account: {}", self.ids))
+            .to_owned()
+    }
+
+    /// A playlist of the seed, for the version-conflict proof.
+    fn a_playlist(&self) -> String {
+        self.ids["small"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the bench printed no playlist id: {}", self.ids))
+            .to_owned()
+    }
 }
 
 impl Drop for Bench {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        stop(&mut self.child);
     }
+}
+
+/// Stop the bench the way it expects: SIGTERM first, SIGKILL only as a last
+/// resort.
+///
+/// `tools/perf_api.py` removes its throwaway library (5 MB for a small seed,
+/// 2.3 GB for the 20 000-track one) when it is asked to stop, and `/tmp` is a
+/// tmpfs on most machines: `Child::kill()` is SIGKILL, which cannot be caught
+/// and left that library to the next launch's sweep. Measured 2026-11-17:
+/// 20 of 20 SIGTERM stops left no directory at all.
+fn stop(child: &mut Child) {
+    const SIGTERM: i32 = 15;
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    // SAFETY: `kill` is handed the pid of a child this struct owns and the
+    // platform's own SIGTERM number, and nothing else.
+    unsafe {
+        kill(child.id() as i32, SIGTERM);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn client(bench: &Bench) -> Api {
@@ -212,4 +262,164 @@ async fn login_me_and_401_round_trip_against_the_bench() {
         api.me().await.expect_err("logged out"),
         ApiError::Unauthorized
     );
+}
+
+/// **Two `409`s the server means differently, told apart by its own header.**
+///
+/// `neezer/webui` answers `409 + Retry-After` when a file is not on disk yet
+/// (`_not_archived`) and a bare `409` when the world disagreed with the request
+/// (a playlist whose `version` moved, `_playlist_conflict`). The client used to
+/// read both as `NotReady`, which made a playlist screen retry a stale order and
+/// told the person "pas encore prêt" for a real conflict.
+///
+/// Measured against the real routes: the seek on an unarchived track answers
+/// **409, Retry-After: 2, 1 request** (a `NotReady { retry_after: 2 }`), and the
+/// stale-version `PATCH` answers **409 with `{"error":"conflict",
+/// "scope":"content"}`, no `Retry-After`, 1 request** (a `Conflict`, not
+/// retried because the same body would fetch it again).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_not_ready_and_a_conflict_are_told_apart_by_the_real_server() {
+    let bench = Bench::start();
+    let api = client(&bench);
+    api.login("bench", "Bench1").await.expect("a real login");
+
+    // A seek on a track nothing archived: the server says when to come back.
+    let not_ready = api
+        .stream(
+            Lane::User,
+            &bench.first_track(),
+            Quality::Opus128,
+            Some(1.0),
+            None,
+        )
+        .await
+        .expect_err("nothing is archived on the bench");
+    assert_eq!(
+        not_ready,
+        ApiError::NotReady { retry_after: 2 },
+        "the server's 409 + Retry-After is a wait, not a verdict"
+    );
+    assert!(not_ready.retryable());
+
+    // A playlist edited with the version the screen no longer has: the server
+    // sends the authoritative counters and no Retry-After.
+    let conflict = api
+        .edit_playlist(
+            &bench.a_playlist(),
+            &serde_json::json!({"title": "Suivi"}),
+            // The server's own ceiling (`PLAYLIST_MAX_VERSION`): a valid version
+            // this playlist cannot have, so the answer is the CAS conflict and
+            // not a 400 "invalid version" (which u32::MAX would be).
+            Some(2_147_483_647),
+        )
+        .await
+        .expect_err("a stale version is refused");
+    match &conflict {
+        ApiError::Conflict {
+            message,
+            code,
+            scope,
+        } => {
+            assert_eq!(message, "conflict", "the server's own label");
+            assert_eq!(code, &None, "this refusal carries no machine code");
+            assert_eq!(
+                scope.as_deref(),
+                Some("content"),
+                "which half of the playlist moved"
+            );
+        }
+        other => panic!("a stale version is a Conflict, not {other:?}"),
+    }
+    assert!(
+        !conflict.retryable(),
+        "re-sending the same body fetches the same 409: the screen re-reads first"
+    );
+    assert_eq!(conflict.retry_after(), None);
+}
+
+/// **`PUT /api/me/accounts/<id>` takes `{"auto": {kind: bool}}`, not a boolean.**
+///
+/// `my_accounts_options` checks `isinstance(auto, dict)` and then that every key
+/// is a `libraryimport.KINDS` entry, and answers `400 auto invalide` otherwise.
+/// `nz-api`'s `set_account_auto(id, bool)` posted `{"auto": true}`, so every
+/// toggle from Réglages → Sources lost the request and the screen had to build
+/// the body itself through `Api::send`.
+///
+/// Measured against the real route: the typed call answers **200** and the
+/// account it returns carries every announced kind at the value asked; the old
+/// bare boolean answers **400 `auto invalide`**; a kind left out keeps its saved
+/// value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_accounts_auto_payload_is_the_shape_the_server_reads() {
+    let bench = Bench::start();
+    let api = client(&bench);
+    api.login("bench", "Bench1").await.expect("a real login");
+
+    let accounts = api.my_accounts().await.expect("/api/me/accounts");
+    let account = accounts
+        .accounts
+        .iter()
+        .find(|account| account.id == bench.account())
+        .unwrap_or_else(|| panic!("the seeded account is not listed: {accounts:?}"));
+    assert_eq!(
+        account.kinds,
+        vec![
+            "artists".to_owned(),
+            "tracks".to_owned(),
+            "albums".to_owned(),
+            "playlists".to_owned()
+        ],
+        "the server's own KIND list, which is what the payload may name"
+    );
+
+    // The exact call the settings screen makes.
+    let answer = api
+        .set_account_auto(&account.id, &account.kinds, true)
+        .await
+        .expect("the server accepts the kind map");
+    let auto = answer["account"]["auto"]
+        .as_object()
+        .unwrap_or_else(|| panic!("no auto map in {answer}"));
+    for kind in &account.kinds {
+        assert_eq!(
+            auto.get(kind).and_then(|on| on.as_bool()),
+            Some(true),
+            "{kind}"
+        );
+    }
+
+    // A kind left out keeps its value: this is what "the account announced its
+    // kinds" means for a caller that only touches one.
+    let one = vec!["tracks".to_owned()];
+    let answer = api
+        .set_account_auto(&account.id, &one, false)
+        .await
+        .expect("one kind is a valid map too");
+    let auto = answer["account"]["auto"].as_object().expect("an auto map");
+    assert_eq!(auto.get("tracks").and_then(|on| on.as_bool()), Some(false));
+    assert_eq!(
+        auto.get("artists").and_then(|on| on.as_bool()),
+        Some(true),
+        "a kind the body does not name is untouched"
+    );
+
+    // And the old shape is refused, with the server's own words.
+    let legacy = api
+        .send::<serde_json::Value, serde_json::Value>(
+            Lane::User,
+            Method::PUT,
+            &format!("/me/accounts/{}", account.id),
+            Some(&serde_json::json!({ "auto": true })),
+        )
+        .await
+        .expect_err("the bare boolean is what the server refuses");
+    match legacy {
+        ApiError::Http {
+            status, message, ..
+        } => {
+            assert_eq!(status, 400);
+            assert_eq!(message, "auto invalide");
+        }
+        other => panic!("expected the server's 400, got {other:?}"),
+    }
 }
