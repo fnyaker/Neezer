@@ -7,20 +7,40 @@
   // 64 px EXACTLY, above the home indicator: --safe-bottom is added as padding
   // under the bar (content-box), so a notched phone gets a taller surface while
   // the touch row keeps its 64.
+  //
+  // Motion (docs/agents/transitions.md S9): the pill's colour arrives on
+  // --dur-instant, and the glyph of a tab that just became current SWAPS in
+  // (opacity + a 4 px rise, 140 ms) — a keyed block, because an intro only
+  // plays for an element that is created after the first render. Nothing here
+  // changes the bar's height: the move is a transform.
   import { link } from "svelte-spa-router";
+  import { onMount } from "svelte";
   import { location } from "../lib/router.js";
+  import { isMobile, onMobileChange } from "../lib/viewport.js";
+  import { swap } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   $: active = (prefix) =>
     $location === prefix || (prefix !== "/" && $location.startsWith(prefix)) ? "active" : "";
+
+  // The bar is `display: none` above 640 px, and remounting a glyph inside a
+  // hidden subtree on every navigation would sample keyframes for pixels nobody
+  // sees: one stable key there, the real one on a phone.
+  let mobile = isMobile();
+  onMount(() => onMobileChange((v) => (mobile = v)));
+  $: glyphKey = (on) => (mobile ? on : "hors-ecran");
 </script>
 
 <nav class="mobilenav" aria-label="Navigation principale">
   <a use:link href="/" class={active("/")} aria-current={$location === "/" ? "page" : undefined}>
-    <span class="ico"><Icon name="home" size={22} /></span><span class="l">Accueil</span>
+    <span class="ico">
+      {#key glyphKey(active("/"))}<span class="glyph" in:swap><Icon name="home" size={22} /></span>{/key}
+    </span><span class="l">Accueil</span>
   </a>
   <a use:link href="/search" class={active("/search")} aria-current={$location.startsWith("/search") ? "page" : undefined}>
-    <span class="ico"><Icon name="compass" size={22} /></span><span class="l">Explorer</span>
+    <span class="ico">
+      {#key glyphKey(active("/search"))}<span class="glyph" in:swap><Icon name="compass" size={22} /></span>{/key}
+    </span><span class="l">Explorer</span>
   </a>
   <a
     use:link
@@ -28,10 +48,14 @@
     class={active("/library") || active("/podcast")}
     aria-current={$location.startsWith("/library") || $location.startsWith("/podcast") ? "page" : undefined}
   >
-    <span class="ico"><Icon name="library" size={22} /></span><span class="l">Biblio</span>
+    <span class="ico">
+      {#key glyphKey(active("/library") || active("/podcast"))}<span class="glyph" in:swap><Icon name="library" size={22} /></span>{/key}
+    </span><span class="l">Biblio</span>
   </a>
   <a use:link href="/settings" class={active("/settings")} aria-current={$location.startsWith("/settings") ? "page" : undefined}>
-    <span class="ico"><Icon name="settings" size={22} /></span><span class="l">Réglages</span>
+    <span class="ico">
+      {#key glyphKey(active("/settings"))}<span class="glyph" in:swap><Icon name="settings" size={22} /></span>{/key}
+    </span><span class="l">Réglages</span>
   </a>
 </nav>
 
@@ -82,9 +106,15 @@
       width: 46px;
       height: 26px;
       border-radius: 999px;
+      /* S9/M6: the pill's colour, on the instant token (it was a literal 0.16s
+         ease). Its height is a contract — nothing here changes size. */
       transition:
-        background-color 0.16s ease,
-        color 0.16s ease;
+        background-color var(--dur-instant) var(--ease-standard),
+        color var(--dur-instant) var(--ease-standard);
+    }
+    .glyph {
+      display: grid;
+      place-items: center;
     }
     .l {
       max-width: 100%;

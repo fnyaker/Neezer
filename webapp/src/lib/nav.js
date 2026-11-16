@@ -51,6 +51,11 @@ let currentId = -1;
 // to hand back.
 let traversed = false;
 let scrollBound = false;
+// The entry whose scroll we have already placed. `syncEntry()` may be called by
+// someone else first (the page enter asks `lastNavWasTraversal()` from
+// `onRouteLoaded`, which runs a microtask after the router's own hashchange
+// handling), and back then made this listener skip the restore it owns.
+let handledFor = -1;
 
 const scrolls = new Map(); // entry id -> scrollTop
 const scratch = new Map(); // entry id -> whatever the screen remembered
@@ -168,7 +173,13 @@ function resetScroll() {
 // --- navigation -------------------------------------------------------------
 
 function onNav() {
-  if (!syncEntry()) return; // a replace() of the entry we're already on
+  syncEntry();
+  // A replace() of the entry we are already on (a library tab, a settings
+  // section, a search query) moves no history entry: it must not scroll. The
+  // test is per ENTRY, not on `syncEntry()`'s return value, because another
+  // entry point may have resolved the current entry first.
+  if (currentId === handledFor) return;
+  handledFor = currentId;
   const top = traversed ? scrolls.get(currentId) || 0 : 0;
   if (top > 0) restoreScroll(top);
   else resetScroll();
@@ -221,4 +232,16 @@ export function rememberScreen(patch) {
 export function recallScreen() {
   syncEntry();
   return traversed ? scratch.get(currentId) || null : null;
+}
+
+/**
+ * Did the navigation that put us on the current entry come from the browser's
+ * history (back / forward) rather than from a push? The page enter asks this
+ * (transitions.md S1): a traversal only fades, so a restored scroll offset is
+ * not seen to slide. `syncEntry()` is idempotent, so asking here cannot lose
+ * the entry for the scroll listener.
+ */
+export function lastNavWasTraversal() {
+  syncEntry();
+  return traversed;
 }

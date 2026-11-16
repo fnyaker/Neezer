@@ -230,6 +230,12 @@ async function open(level, viewport) {
   if (level === "eco") {
     await page.waitForFunction(() => document.documentElement.dataset.eco === "1", null, { timeout: 15000 });
   }
+  // The shell's own first-paint entrances (S2's `.layout` fade, a cover's fade)
+  // are still running when the page first answers: let them finish, or the
+  // foundation's "reduced motion starts no transition" probe measures THEM
+  // instead of the `.btn` it hovers. Bounded — a page that never goes quiet is
+  // not this line's business.
+  await page.waitForFunction(() => window.__motion.running().length === 0, null, { timeout: 5000 }).catch(() => {});
   await page.evaluate(() => window.__motion.frames(3));
   const authed = await page.evaluate(() => !document.querySelector('input[type="password"]'));
   return { ctx, page, errors, authed };

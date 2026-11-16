@@ -28,6 +28,11 @@
   import { isLocalId } from "../lib/format.js";
   import { grooveTint } from "../lib/sillon.js";
   import { groupPlaylists } from "../lib/playlistfolders.js";
+  // The folio's motion (docs/agents/transitions.md S4–S7): colour on the
+  // tokens, a folder body that collapses by height when it is small enough
+  // (M10) and fades in when it is not, and a 140 ms fade for a playlist the
+  // person has just created.
+  import { DUR, collapse, fadeIn } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
   import Avatar from "./Avatar.svelte";
   import Cover from "./Cover.svelte";
@@ -105,6 +110,39 @@
   // device is offline, or nothing is wrong that we know of.
   $: status = $syncing ? "Synchronisation…" : !$online ? "Hors ligne" : "Archive à jour";
 
+  // -- S7: a created playlist fades in, the list at boot does not ------------
+  //
+  // M4 forbids an entrance on a row of a list that grows, and a keyed {#each}
+  // plays an intro for EVERY row it gains — including the sixty that arrive
+  // when /me/playlists answers. So the ids of the previous render are the
+  // baseline: a row whose id is not in it is a creation (the sheet, a sync, an
+  // import) and gets the 140 ms fade; everything else gets `duration: 0`, the
+  // instant path with no Animation at all.
+  let seenIds = null;
+  let freshIds = new Set();
+  function trackFresh(items) {
+    const ids = new Set(items.map((p) => String(p.id)));
+    if (seenIds === null) {
+      // Still waiting for the first answer (`$playlists` is null, not empty).
+      if (!ids.size) return;
+      seenIds = ids;
+      freshIds = new Set();
+      return;
+    }
+    const out = new Set();
+    for (const id of ids) if (!seenIds.has(id)) out.add(id);
+    seenIds = ids;
+    freshIds = out;
+  }
+  $: trackFresh([...own, ...shared, ...auto]);
+  $: fadeMs = (p) => (freshIds.has(String(p.id)) ? DUR.fast : 0);
+
+  // A folder body up to 30 rows may grow by height (S5/S6, M10); past that the
+  // height walk is a layout per frame down a list nobody asked to see move, so
+  // it appears (instant) with its content fading in.
+  const COLLAPSE_MAX = 30;
+  $: collapseOk = (list) => (list || []).length <= COLLAPSE_MAX;
+
   async function logout() {
     // On a remote control this account is lent: leaving the loan is the way
     // out, and it hands the browser back its own account (lib/remote/controller.js).
@@ -143,6 +181,58 @@
     return grooveTint(p.id || p.title || "");
   }
 </script>
+
+<!-- The rows of ONE folder, rendered from either arm of S5 (a body small
+     enough to collapse, or one that only appears). A snippet so the two arms
+     cannot drift apart. -->
+{#snippet folderRows(f)}
+  {#each f.playlists as p (p.id)}
+    <li>
+      <a use:link href={"/playlist/" + p.id} class="pl-row child" class:active={isOn("/playlist/" + p.id)}>
+        <span
+          class="thumb"
+          style={p.cover ? undefined : `background-image:${thumb(p)}`}
+          aria-hidden="true"
+        >
+          {#if p.cover}
+            <Cover
+              src={p.cover}
+              alt=""
+              size={26}
+              kind="playlist"
+              fallbackId={isLocalId(p.id) ? p.id : null}
+            />
+          {/if}
+        </span>
+        <span class="pl-name">{p.title}</span>
+        <span class="pl-n mono">{p.nb_tracks || 0}</span>
+      </a>
+    </li>
+  {:else}
+    <li><p class="pl-empty folder-empty">Ce dossier est vide. Déplacez-y une playlist depuis son menu.</p></li>
+  {/each}
+{/snippet}
+
+<!-- The Deezer auto-playlist rows, from either arm of S6 (same rule as S5). -->
+{#snippet autoRows()}
+  {#each auto as p (p.id)}
+    <li>
+      <a use:link href={"/playlist/" + p.id} class="pl-row" class:active={isOn("/playlist/" + p.id)}>
+        <span
+          class="thumb"
+          style={p.cover ? undefined : `background-image:${thumb(p)}`}
+          aria-hidden="true"
+        >
+          {#if p.cover}
+            <Cover src={p.cover} alt="" size={26} kind="playlist" fallbackId={isLocalId(p.id) ? p.id : null} />
+          {/if}
+        </span>
+        <span class="pl-name">{p.title}</span>
+        <span class="pl-n mono">{p.nb_tracks || 0}</span>
+      </a>
+    </li>
+  {/each}
+{/snippet}
 
 <nav class="sidebar" aria-label="Navigation principale">
   <a class="brand" use:link href="/">
@@ -183,6 +273,9 @@
         <span class="label-mono">Playlists</span>
         <span class="pl-actions">
           {#if $user?.admin && CAN_ADMIN}
+            <!-- The sync glyph is a STATUS indicator (M13): an eco device stops
+                 every animation, but a frozen spinner reads as a hung job
+                 (CLAUDE.md rule 2), so it is marked while it spins. -->
             <button
               class="iconbtn"
               class:spin={$syncing}
@@ -190,6 +283,7 @@
               disabled={$syncing}
               title="Synchroniser depuis Deezer"
               aria-label="Synchroniser depuis Deezer"
+              data-motion={$syncing ? "status" : undefined}
             >
               <Icon name="refresh" size={16} />
             </button>
@@ -217,7 +311,7 @@
               aria-expanded={openSet.has(String(f.id))}
               aria-controls={openSet.has(String(f.id)) ? "folder-playlists-" + f.id : undefined}
             >
-              <Icon name={openSet.has(String(f.id)) ? "chevronDown" : "chevronRight"} size={14} />
+              <span class="chev" class:open={openSet.has(String(f.id))} aria-hidden="true"><Icon name="chevronRight" size={14} /></span>
               <span class="folder-ico" aria-hidden="true"><Icon name="folder" size={18} /></span>
               <span class="pl-name">{f.title}</span>
               <span class="pl-n mono">{f.count}</span>
@@ -232,33 +326,15 @@
             </button>
           </div>
           {#if openSet.has(String(f.id))}
-            <ul class="pl-list nested" id={"folder-playlists-" + f.id} data-folder={f.id}>
-              {#each f.playlists as p (p.id)}
-                <li>
-                  <a use:link href={"/playlist/" + p.id} class="pl-row child" class:active={isOn("/playlist/" + p.id)}>
-                    <span
-                      class="thumb"
-                      style={p.cover ? undefined : `background-image:${thumb(p)}`}
-                      aria-hidden="true"
-                    >
-                      {#if p.cover}
-                        <Cover
-                          src={p.cover}
-                          alt=""
-                          size={26}
-                          kind="playlist"
-                          fallbackId={isLocalId(p.id) ? p.id : null}
-                        />
-                      {/if}
-                    </span>
-                    <span class="pl-name">{p.title}</span>
-                    <span class="pl-n mono">{p.nb_tracks || 0}</span>
-                  </a>
-                </li>
-              {:else}
-                <li><p class="pl-empty folder-empty">Ce dossier est vide. Déplacez-y une playlist depuis son menu.</p></li>
-              {/each}
-            </ul>
+            {#if collapseOk(f.playlists)}
+              <ul class="pl-list nested" id={"folder-playlists-" + f.id} data-folder={f.id} transition:collapse>
+                {@render folderRows(f)}
+              </ul>
+            {:else}
+              <ul class="pl-list nested" id={"folder-playlists-" + f.id} data-folder={f.id} in:fadeIn>
+                {@render folderRows(f)}
+              </ul>
+            {/if}
           {/if}
         {/each}
 
@@ -269,7 +345,7 @@
           <ul class="pl-list">
             {#each own as p (p.id)}
               <li>
-                <a use:link href={"/playlist/" + p.id} class="pl-row" class:active={isOn("/playlist/" + p.id)}>
+                <a use:link href={"/playlist/" + p.id} class="pl-row" class:active={isOn("/playlist/" + p.id)} in:fadeIn={{ duration: fadeMs(p) }}>
                   <span
                     class="thumb"
                     style={p.cover ? undefined : `background-image:${thumb(p)}`}
@@ -307,6 +383,7 @@
                   href={"/playlist/" + p.id}
                   class="pl-row"
                   class:active={isOn("/playlist/" + p.id)}
+                  in:fadeIn={{ duration: fadeMs(p) }}
                   title={p.owner ? `Partagée par ${p.owner}` : "Partagée avec vous"}
                 >
                   <span
@@ -341,35 +418,19 @@
             aria-expanded={deezerOpen}
             aria-controls={deezerOpen ? "deezer-playlists" : undefined}
           >
-            <Icon name={deezerOpen ? "chevronDown" : "chevronRight"} size={14} />
+            <span class="chev" class:open={deezerOpen} aria-hidden="true"><Icon name="chevronRight" size={14} /></span>
             <span class="pl-name">Deezer · {auto.length} playlist{auto.length > 1 ? "s" : ""} auto</span>
           </button>
           {#if deezerOpen}
-            <ul class="pl-list auto" id="deezer-playlists">
-              {#each auto as p (p.id)}
-                <li>
-                  <a use:link href={"/playlist/" + p.id} class="pl-row" class:active={isOn("/playlist/" + p.id)}>
-                    <span
-                      class="thumb"
-                      style={p.cover ? undefined : `background-image:${thumb(p)}`}
-                      aria-hidden="true"
-                    >
-                      {#if p.cover}
-                        <Cover
-                          src={p.cover}
-                          alt=""
-                          size={26}
-                          kind="playlist"
-                          fallbackId={isLocalId(p.id) ? p.id : null}
-                        />
-                      {/if}
-                    </span>
-                    <span class="pl-name">{p.title}</span>
-                    <span class="pl-n mono">{p.nb_tracks || 0}</span>
-                  </a>
-                </li>
-              {/each}
-            </ul>
+            {#if collapseOk(auto)}
+              <ul class="pl-list auto" id="deezer-playlists" transition:collapse>
+                {@render autoRows()}
+              </ul>
+            {:else}
+              <ul class="pl-list auto" id="deezer-playlists" in:fadeIn>
+                {@render autoRows()}
+              </ul>
+            {/if}
           {/if}
         {/if}
       </div>
@@ -466,6 +527,12 @@
     color: var(--tx);
     font-size: 15px;
     font-weight: 500;
+    /* S4/M6: the active item is a COLOUR change on the tokens — the one
+       permitted property besides transform and opacity (M1's exception), fast
+       enough that arriving on a screen never waits for it. */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .nav a:hover {
     background: var(--s2);
@@ -527,6 +594,10 @@
     .iconbtn.spin :global(svg) {
       animation: none;
     }
+    /* M14: no displacement — the state still changes, it just does not swing. */
+    .chev {
+      transition: none;
+    }
   }
 
   .pl-scroll {
@@ -553,6 +624,10 @@
     color: var(--tx);
     font-size: 14px;
     text-align: left;
+    /* S4: a playlist row's active state is colour too. */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .pl-row:hover {
     background: var(--s2);
@@ -599,6 +674,17 @@
   }
   .fold:hover {
     color: var(--tx);
+  }
+  /* S5/S6: one chevron that TURNS 90° when its group opens, instead of the
+     glyph being swapped out. A transform, so nothing around it moves. */
+  .chev {
+    flex: none;
+    display: grid;
+    place-items: center;
+    transition: transform var(--dur-base) var(--ease-standard);
+  }
+  .chev.open {
+    transform: rotate(90deg);
   }
   .pl-sub {
     padding: 8px 10px 3px;
