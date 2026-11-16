@@ -37,7 +37,17 @@
     <span class="sub">{mood.subtitle}</span>
     <span class="foot">
       <span class="count mono">{count}</span>
-      <span class="go"><Icon name={loading ? "refresh" : "play"} size={15} /></span>
+      <span class="go">
+        {#if loading}
+          <!-- I9/M13: a job that runs has to SAY so, so the spinner itself is
+               marked `status`: it is the one animation eco keeps, and it spins
+               on the marked element (a child's animation is what the guard
+               stops). -->
+          <span class="spin" data-motion="status"><Icon name="refresh" size={15} /></span>
+        {:else}
+          <Icon name="play" size={15} />
+        {/if}
+      </span>
     </span>
   </span>
 </button>
@@ -63,7 +73,7 @@
     display: block;
     width: 100%;
     border-radius: var(--r-cover);
-    transition: transform 0.14s ease;
+    transition: transform var(--dur-instant) var(--ease-standard);
   }
   .mood:hover .art,
   .mood:focus-visible .art {
@@ -116,7 +126,9 @@
     border-radius: 50%;
     background: var(--btn);
     color: var(--onbtn);
-    transition: transform 0.14s ease, background-color 0.14s ease;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .mood:hover .go,
   .mood:focus-visible .go {
@@ -134,7 +146,9 @@
     background: var(--s2);
     color: var(--dim);
   }
-  .loading .go :global(svg) {
+  .spin {
+    display: grid;
+    place-items: center;
     animation: spin 0.9s linear infinite;
   }
   @keyframes spin {
@@ -153,7 +167,7 @@
     .mood:focus-visible .go {
       transform: none;
     }
-    .loading .go :global(svg) {
+    .spin {
       animation: none;
     }
   }

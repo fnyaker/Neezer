@@ -1,3 +1,21 @@
+<script module>
+  // I10: one card per best result, and a card that DISPLACES another entity
+  // fades in (M7). The memory of what the column showed last lives at MODULE
+  // scope because a new answer replaces the whole results area — so the card is
+  // a new instance every time and could never see the change itself. Svelte
+  // cannot help here with `{#key}` either: a transition registered while a key
+  // block's branch is still initialising is skipped (`transitions.js`:
+  // `run = !block || (block.f & REACTION_RAN) !== 0`), which is why this is the
+  // module's own `animate()` — the same wrapper the page enter uses, so eco and
+  // reduced motion apply without a second implementation.
+  import { animate, DUR, EASE_CSS } from "../lib/motion.js";
+
+  // An object, not a bare `let`: reassigning a module-level declaration from a
+  // component's reactive statement is what Svelte warns about (and the update
+  // it asks for is not one we want — this memory is not a dependency).
+  const memory = { shown: "" };
+</script>
+
 <script>
   // The search's best result: the one artist (or show) the query plainly
   // names, large, with what it is said in a small label and its own play
@@ -10,6 +28,7 @@
   import { isLocalId } from "../lib/format.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let kind = "artist"; // artist | podcast
   export let item;
@@ -19,6 +38,18 @@
   $: title = item.name || item.title || "";
   $: image = item.picture || item.cover || null;
   $: ref = entityRef(item);
+
+  let card = null;
+  $: if (card) {
+    const id = `${kind}:${ref}`;
+    // The same entity settled again (the same term re-searched) does not move;
+    // the first card of a session does not either — the results area it arrives
+    // in already fades (M11: no double entrance).
+    if (memory.shown && memory.shown !== id) {
+      animate(card, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+    }
+    memory.shown = id;
+  }
 
   async function open() {
     if (kind === "artist") return push("/artist/" + ref);
@@ -48,6 +79,7 @@
   class="top"
   role="button"
   tabindex="0"
+  bind:this={card}
   title={title}
   aria-haspopup="menu"
   on:click={open}
@@ -56,6 +88,7 @@
     if (menuKey(e, menu)) return;
     if (e.key === "Enter") open();
   }}
+  in:fadeIn
 >
   <div class="art" class:round={kind === "artist"}>
     <Cover src={image} alt={title} {kind} round={kind === "artist"} fallbackId={isLocalId(item.id) ? item.id : null} />
@@ -66,12 +99,15 @@
   </div>
   <button
     class="play"
-    class:spin={busy}
     on:click={play}
     disabled={busy}
     aria-label={kind === "artist" ? "Lire" : "S'abonner"}
   >
-    <Icon name={kind === "artist" ? "play" : busy ? "refresh" : "plus"} size={22} />
+    {#if busy}
+      <span class="status" data-motion="status"><Icon name="refresh" size={22} /></span>
+    {:else}
+      <Icon name={kind === "artist" ? "play" : "plus"} size={22} />
+    {/if}
   </button>
 </div>
 
@@ -91,8 +127,8 @@
     color: var(--tx);
     cursor: pointer;
     transition:
-      background-color 0.15s ease,
-      border-color 0.15s ease;
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
     min-width: 0;
   }
   .top:hover {
@@ -146,12 +182,14 @@
     place-items: center;
     background: var(--btn);
     color: var(--onbtn);
-    transition: transform 0.15s ease;
+    transition: transform var(--dur-instant) var(--ease-standard);
   }
   .play:hover {
     transform: scale(1.05);
   }
-  .play.spin :global(.icon) {
+  .status {
+    display: grid;
+    place-items: center;
     animation: spin 0.9s linear infinite;
   }
   @keyframes spin {
@@ -161,7 +199,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .play,
-    .play.spin :global(.icon) {
+    .status {
       animation: none;
       transition: none;
     }

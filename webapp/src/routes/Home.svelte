@@ -28,6 +28,10 @@
   import { discoveryLevel, loadDiscovery, onDiscoverySettled } from "../lib/discovery.js";
   import { advertisedYear } from "../lib/recap.js";
   import { loadRecapYears, recapYears } from "../lib/recapyears.js";
+  // The plan's transitions (docs/agents/transitions.md, I10): every section
+  // here ENTERS when its answer arrives — one block, never one per card (I6,
+  // M11) — and nothing animates on mount of a long list (M4).
+  import { fadeIn } from "../lib/motion.js";
 
   const NEW_ROWS = 6;
   const RECO_ROWS = 6;
@@ -233,7 +237,7 @@
   <StylePicker />
 
   {#if newShown.length}
-    <section class="releases">
+    <section class="releases" in:fadeIn>
       <div class="section-head">
         <h2 class="section-title">
           Nouveautés
@@ -266,7 +270,7 @@
   {/if}
 
   {#if artists.length}
-    <section>
+    <section in:fadeIn>
       <div class="section-head">
         <h2 class="section-title">Tes artistes</h2>
         <a class="see-all" href="#/library/artists">Tout afficher</a>
@@ -290,7 +294,7 @@
   {/if}
 
   {#if reco?.tracks?.length}
-    <section>
+    <section in:fadeIn>
       <div class="section-head">
         <h2 class="section-title">Pour toi</h2>
         <button
@@ -311,7 +315,7 @@
   {/if}
 
   {#if recentAlbums.length}
-    <section>
+    <section in:fadeIn>
       <div class="section-head">
         <h2 class="section-title">Écoutés récemment</h2>
       </div>
@@ -341,7 +345,7 @@
   {/if}
 
   {#if readyMoods.length}
-    <section class="mood-section">
+    <section class="mood-section" in:fadeIn>
       <div class="section-head">
         <h2 class="section-title">
           Mixes d'ambiance
@@ -361,7 +365,7 @@
   {/if}
 
   {#if empty}
-    <section class="empty card">
+    <section class="empty card" in:fadeIn>
       <span class="empty-icon"><Icon name={allFailed ? "server" : "compass"} size={26} /></span>
       {#if allFailed}
         <h2>L'accueil n'a pas pu se charger</h2>
@@ -447,10 +451,13 @@
   .rel-art {
     display: block;
     width: 100%;
-    transition: transform 0.14s ease;
+    transition: transform var(--dur-instant) var(--ease-standard);
   }
+  /* M6: a hover barely moves — half the small step, 0 px in eco and under
+     reduced motion, so the lift leaves with the tokens (M14) and needs no
+     local `prefers-reduced-motion` block of its own. */
   .rel:hover .rel-art {
-    transform: translateY(-2px);
+    transform: translateY(calc(var(--move-s) * -0.5));
   }
   .rel-title,
   .rel-sub {
@@ -517,7 +524,7 @@
     border-radius: var(--r-card);
     color: var(--tx);
     text-align: center;
-    transition: background-color 0.14s ease;
+    transition: background-color var(--dur-instant) var(--ease-standard);
   }
   .artist:hover,
   .artist:focus-visible {
@@ -535,7 +542,7 @@
     white-space: nowrap;
   }
   .reco {
-    transition: opacity 0.2s ease;
+    transition: opacity var(--dur-fast) var(--ease-standard);
   }
   .reco.dim {
     opacity: 0.55;
@@ -558,7 +565,9 @@
     color: var(--tx);
     text-align: left;
     overflow: hidden;
-    transition: background-color 0.12s ease, border-color 0.12s ease;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .shortcut:hover,
   .shortcut:focus-visible {
@@ -651,14 +660,6 @@
     }
     .rel-sub {
       font-size: 13px;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .rel-art {
-      transition: none;
-    }
-    .rel:hover .rel-art {
-      transform: none;
     }
   }
   @media (max-width: 640px) {

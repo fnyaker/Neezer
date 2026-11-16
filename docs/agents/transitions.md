@@ -60,6 +60,14 @@ cost layout on a long list.
   durations while staying reversible. `duration: 0` takes an instant path (no Animation object). During an
   outro Svelte sets `inert` on the element. `animate:flip` runs `getComputedStyle` + two rects per item and
   only on **reorders** of a keyed `{#each}`.
+- **An intro never plays inside a `{#key}` block, nor one `{#if}` deeper than the block that changed**
+  (T6a measured both in Chromium). `transition()` registers the entrance while its block effect is still
+  initialising and only runs a local intro once that block has already run (`run = !block || (block.f &
+  REACTION_RAN) !== 0` in `transitions.js`), and it walks up over TRANSPARENT effects only — a `{#key}`
+  branch and a plain `{#if}` branch are not transparent, an `{:else if}` branch is. So: a panel a tab switch
+  must re-enter is its own `{#if}` at the level that already ran (Search's shelves), and a change that keeps
+  its element mounted plays through the module's `animate()` (the best result of another entity, T6a). A
+  `{#key}` around a transition is a transition that does nothing.
 - **Animating windowed lists** (web.dev "Virtualize large lists with react-window"; Stack Overflow "animate
   entry of only new elements in a virtualized list"): rows are recycled as you scroll, so an enter animation
   bound to a row's mount **replays on every scroll**, and a row scrolled out cannot play an exit.
@@ -422,7 +430,9 @@ Generic patterns every T6 lot applies to its files:
   gets `in:fadeIn` on its root element. Svelte's local rule makes it play only when the data arrives AFTER
   mount (a cache hit at mount does not animate — right).
 - **I2 — Tab panels** (`role="tablist"`): the panel root gets `in:fadeIn` (140, opacity only, no translate:
-  panels differ in height, M7).
+  panels differ in height, M7). A panel the previous tab ALREADY showed (a shelf that « Tout » shows and that
+  its own tab shows too) does not re-enter: nothing was replaced (M7). The panel must be its own `{#if}` at
+  the level that already ran — see the `{#key}` note above.
 - **I3 — Tab indicator**: one absolutely positioned underline/pill per tablist moved by `transform:
   translateX() scaleX()`, `transition: transform var(--dur-base) var(--ease-standard)`; if the component
   styles the active tab by a border instead, colour transition `--dur-instant` is acceptable.
@@ -540,7 +550,7 @@ settle(page) }`. Checks per scenario:
 | T3 | to do | — | — |
 | T4 | to do | — | — |
 | T5 | to do | — | — |
-| T6a | to do | — | — |
+| T6a | done | — | `test/motion/scenarios/home-search.mjs` — 7 scenarios × 2 viewports, every `Element.prototype.animate` call logged (a count, not a guess). **Alone on the bench: full motion 225 checks / 0 failure, eco 0 / 0 failure**, and the counts are the rules: an answer's `.leadwrap` + its three shelves enter (140 ms each), a SECOND term of the same visit logs **0** entrance (M6), a tab switch logs **0** for « Artistes » (already on screen under « Tout ») and **1** for « Albums » (140 ms, opacity only), another best result **1 × 140 ms**, the radio offer **200 ms with a transform** (opacity only under reduced), « Reprendre » 140 ms when the track block replaces the idle one, **0** `.rel` card entrance (M11); eco: nothing at all, `[data-motion="status"]` spinners aside. Reduced: 5 failures, **none of this lot's rows** — `Cover.svelte`'s literal `opacity .35s` `.loaded` fade (350 ms > the 140 ms cap, T4's L13) ×3 and T0's foundation check "a `.btn` hover starts no transition under reduced motion", which now sees the home's shelves arriving (it must read its own probe's animations, or wait for the app to settle) ×2. Requests: 1 `/api/search` per settled search, **0 per keystroke**; typing 5 letters at 4× CPU worst event **24 ms / 1 request** (parent build 24 ms / 1); `test/clicks/run.mjs` unchanged (Rechercher 32 ms, Accueil 16–24 ms, plein écran 200/96). `npm test` 779/779, build OK. Merged with the three other scenario files (25 scenarios × 2 viewports × 3 levels, 12 failures): every rule check of this lot still passes; 5 are the request multiset of `sections après le chargement` (0 failure when the file runs alone — the shared page's warm cover cache and the preceding file's timing, the same effect on 5 other lots' scenarios: a bench-level item for T7: one page per file, or compare requests on a cold cache). |
 | T6b | done | #223 | `node test/motion/run.mjs`: 152 checks / 0 failure (6 scenarios × 2 viewports × 3 levels); full: pill 200 ms [transform], panel/podcast/group-body/tab/edit-glyph 140 ms [opacity] (glyph + 4 px), leaf underline 200 ms [transform] + 90 ms [colour], chevron 200 ms [transform]; reduced: opacity only at 140 ms, **zero** transform (the pill is PLACED, the chevron POSED, M14); eco: only the guard's 0 ms remnant, nothing moves (M13); same /api + image request multiset in the three levels; LayoutCount over act+settle 1–117, all of it the content mount (12 cards = 43, 42 artist tiles = 21, the 57-row edit list = 117) — every animated property is opacity/transform; `npm test` 779/779; `test/ui/run.mjs` medians 0/0/0 + 132 ms playlist against 0/0/0 + 139 ms on a base build (5 runs each, 4× CPU). |
 | T6c | to do | — | — |
 | T6d | done | #215 | `npm test` 779/779; the bench 184 checks / 0 failure (4 scenarios × 2 viewports × 3 levels): the section change is ONE animation (desktop `pane-body` 140 ms opacity; phone the pane's 200 ms `rise`), the switch 90 ms on the track's colours and the knob's transform, the admin dialog `dialog` 200 ms transform+opacity plus the veil's own background-colour 200 ms; reduced = 140 ms opacity/colour only, NO transform on the knob or the dialog, veil 140 ms; eco leaves the timeline empty after 4 frames (the click's 0.01 ms remnants swept) and the `/api` + image requests are identical in the three levels; `test/admin/run.mjs` 61 checks, `test/eq/run.mjs` 35 checks green (the fader fill is a `scaleY`, not a `height`); `test/motion.test.mjs`'s importer check became a subset, so converting a file no longer turns the 13 parallel lots red. |

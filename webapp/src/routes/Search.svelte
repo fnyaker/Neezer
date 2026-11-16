@@ -41,10 +41,49 @@
     transcribeStatus,
   } from "../lib/transcript.js";
   import { cacheStats, searchCached } from "../lib/transcriptcache.js";
+  // The plan's transitions (docs/agents/transitions.md, I10): the results area
+  // enters once per visit, the query-radio offer rises, the tabs are I2/I3, and
+  // nothing animates per keystroke (M6).
+  import { fadeIn, rise } from "../lib/motion.js";
 
   export let params = {};
 
   const EMPTY = { artists: [], albums: [], tracks: [], playlists: [], podcasts: [] };
+
+  // -- the entrance of the results area (I10, M6) -----------------------------
+  // Svelte plays an intro again every time its block is RE-CREATED, and this
+  // screen re-creates the results behind the Skeleton branch on every settled
+  // search — unfiltered that is one fade per keystroke, which M6 forbids. So
+  // the entrance is ARMED by the two changes that mean "something new is on
+  // screen": the first answer of the visit, and a tab switch (I2). Every answer
+  // re-states it, so a replacement INSIDE the area stays instant.
+  let libraryIn = true; // read by `in:fadeIn` at the moment the block mounts
+  let libraryShown = false;
+  function noteLibraryReveal(payload) {
+    const any =
+      payload.artists?.length ||
+      payload.albums?.length ||
+      payload.tracks?.length ||
+      payload.playlists?.length ||
+      payload.podcasts?.length;
+    libraryIn = !!any && !libraryShown;
+    if (any) libraryShown = true;
+  }
+  // The transcribed passages are a second region with its own first answer.
+  let hitsIn = true;
+  let hitsShown = false;
+  function noteHitsReveal(list) {
+    const any = !!list?.length;
+    hitsIn = any && !hitsShown;
+    if (any) hitsShown = true;
+  }
+  // I2: the panel a tab switch brings in fades in (opacity only: panels differ
+  // in height, so a translate would shift what is below them).
+  function pickTab(id) {
+    if (tab === id) return;
+    libraryIn = true;
+    tab = id;
+  }
 
   // Coming BACK here (from an album you opened out of the results, say) must
   // land you on the screen you left — query, tab, results and all — not on an
@@ -364,6 +403,7 @@
     trLocal = true;
     trFor = term;
     trLoading = false;
+    noteHitsReveal(trHits);
   }
 
   async function runTranscriptSearch(term, force = false) {
@@ -393,6 +433,7 @@
       trError = null;
       trLocal = false;
       trFor = term;
+      noteHitsReveal(trHits);
     } catch (error) {
       if (mine !== trSeq) return;
       if (error?.status === 0 || !$online) {
@@ -446,6 +487,7 @@
       const r = await api.search(term);
       if (mine !== seq) return; // a newer query already started
       results = { ...EMPTY, ...r };
+      noteLibraryReveal(results);
     } catch (e) {
       if (mine === seq) {
         results = EMPTY;
@@ -590,6 +632,11 @@
   const TOP_TRACKS = 10;
   $: topTracks = tab === "all" ? allTracks.slice(0, TOP_TRACKS) : allTracks;
   $: moreTracks = Math.max(0, allTracks.length - TOP_TRACKS);
+  // The three shelves below show only for the library's own answer (the shows
+  // have their own branch). One condition, read once per section: each shelf
+  // must be its OWN `{#if}` whose parent has already run, or Svelte skips its
+  // entrance (see the note above the shelves).
+  $: shelvesShown = scope === "library" && !loading && !!q.trim() && hasResults;
 </script>
 
 <h1 class="page-title">Explorer</h1>
@@ -651,9 +698,10 @@
       disabled={radioBusy}
       aria-busy={radioBusy}
       title="Écouter des titres qui ressemblent à cette recherche"
+      in:rise
     >
       {#if radioBusy}
-        <span class="radio-spin" aria-hidden="true"></span>
+        <span class="radio-spin" aria-hidden="true" data-motion="status"></span>
         Lancement…
       {:else}
         <Icon name="radio" size={17} />
@@ -706,7 +754,7 @@
 {#if q.trim() && !shared && scope === "library"}
   <div class="tabs" role="tablist">
     {#each [["all", "Tout"], ["tracks", "Titres"], ["artists", "Artistes"], ["albums", "Albums"], ["playlists", "Playlists"]] as [id, label]}
-      <button role="tab" aria-selected={tab === id} class="chip" class:chip-active={tab === id} on:click={() => (tab = id)}>
+      <button role="tab" aria-selected={tab === id} class="chip" class:chip-active={tab === id} on:click={() => pickTab(id)}>
         {label}
       </button>
     {/each}
@@ -791,7 +839,7 @@
       {#if trBusy}
         <Skeleton kind="list" />
       {:else if trHits.length}
-        <TranscriptHits hits={trHits} query={trFor || trTerm} showChannel onPick={pickPassage} />
+        <TranscriptHits hits={trHits} query={trFor || trTerm} showChannel onPick={pickPassage} reveal={hitsIn} />
       {:else if !trBusy}
         {#if $isAdmin && shows.length}
           <p class="muted hint">Aucun passage parlé pour « {q.trim()} ».</p>
@@ -813,7 +861,7 @@
       <LoadFailed error={loadError} inline on:retry={() => run(searchedFor || q.trim())} />
     {:else if shows.length}
       <p class="tr-scope">{shows.length} émission{shows.length > 1 ? "s" : ""}</p>
-      <div class="grid">
+      <div class="grid" in:fadeIn={libraryIn ? undefined : { duration: 0 }}>
         {#each shows as p (entityRef(p))}<PodcastCard item={p} />{/each}
       </div>
     {:else}
@@ -833,10 +881,12 @@
     <p class="muted hint">Aucun résultat pour « {q} ».</p>
   {/if}
 {:else}
-  <div class="leadwrap"><div class="lead" class:withtop={!!top}>
+  <div class="leadwrap" in:fadeIn={libraryIn ? undefined : { duration: 0 }}><div class="lead" class:withtop={!!top}>
     {#if top}
       <section class="topcol">
         <h2>Meilleur résultat</h2>
+        <!-- The card fades on its own when another entity takes the slot: see
+             TopResult.svelte (a `{#key}` there would not play the entrance). -->
         <TopResult kind={top.kind} item={top.item} />
       </section>
     {/if}
@@ -845,7 +895,7 @@
         <div class="sechead">
           <h2>Titres</h2>
           {#if tab === "all" && moreTracks}
-            <button class="seeall" on:click={() => (tab = "tracks")}>
+            <button class="seeall" on:click={() => pickTab("tracks")}>
               Tout afficher<span class="count">{allTracks.length}</span>
             </button>
           {/if}
@@ -867,32 +917,42 @@
     </p>
   {:else if ytWaiting}
     <p class="ytstatus" role="status" aria-live="polite">
-      <span class="ytspin" aria-hidden="true"></span> Recherche sur {fb.name}…
+      <span class="ytspin" aria-hidden="true" data-motion="status"></span> Recherche sur {fb.name}…
     </p>
   {:else if ytAnswerHere && !mixedYt && allTracks.length}
     <p class="ytstatus muted">Rien de plus sur {fb.name} pour « {ytTerm} ».</p>
   {/if}
 {/if}
 
-{#if scope === "library" && !loading && q.trim() && hasResults}
-
-  {#if (tab === "all" || tab === "artists") && shelfArtists.length}
+<!-- I2: a tab switch IS a change of panel — the shelf the new tab brings in is
+     a NEW block, so its `in:fadeIn` plays, and the shelves it drops go in the
+     same frame (M7). Each shelf carries the whole condition itself (rather than
+     sitting one `{#if}` deeper, under a keyed block): Svelte runs a local
+     intro only when the block that CREATED the element has already run, so a
+     block nested under a branch that is running for the first time never
+     animates — the shelves would then enter with the results but not with a
+     tab, or the other way round. The titles panel is the same list before and
+     after a switch to « Titres », so it keeps its one entrance. -->
+{#if shelvesShown && (tab === "all" || tab === "artists") && shelfArtists.length}
+  <section class="shelf-sec" in:fadeIn={libraryIn ? undefined : { duration: 0 }}>
     <div class="sechead">
       <h2>Artistes</h2>
       {#if tab === "all" && shelfArtists.length > 1}
-        <button class="seeall" on:click={() => (tab = "artists")}>Tout afficher</button>
+        <button class="seeall" on:click={() => pickTab("artists")}>Tout afficher</button>
       {/if}
     </div>
     <div class={tab === "artists" ? "grid" : "shelf"}>
       {#each shelfArtists as a (entityRef(a))}<Card item={a} kind="artist" />{/each}
     </div>
-  {/if}
+  </section>
+{/if}
 
-  {#if (tab === "all" || tab === "albums") && albumsAndShows.length}
+{#if shelvesShown && (tab === "all" || tab === "albums") && albumsAndShows.length}
+  <section class="shelf-sec" in:fadeIn={libraryIn ? undefined : { duration: 0 }}>
     <div class="sechead">
       <h2>Albums</h2>
       {#if tab === "all" && albumsAndShows.length > 1}
-        <button class="seeall" on:click={() => (tab = "albums")}>Tout afficher</button>
+        <button class="seeall" on:click={() => pickTab("albums")}>Tout afficher</button>
       {/if}
     </div>
     <div class={tab === "albums" ? "grid" : "shelf"}>
@@ -900,19 +960,21 @@
         {#if a.podcast}<PodcastCard item={a} />{:else}<Card item={a} kind="album" />{/if}
       {/each}
     </div>
-  {/if}
+  </section>
+{/if}
 
-  {#if (tab === "all" || tab === "playlists") && results.playlists?.length}
+{#if shelvesShown && (tab === "all" || tab === "playlists") && results.playlists?.length}
+  <section class="shelf-sec" in:fadeIn={libraryIn ? undefined : { duration: 0 }}>
     <div class="sechead">
       <h2>Playlists</h2>
       {#if tab === "all" && results.playlists.length > 1}
-        <button class="seeall" on:click={() => (tab = "playlists")}>Tout afficher</button>
+        <button class="seeall" on:click={() => pickTab("playlists")}>Tout afficher</button>
       {/if}
     </div>
     <div class={tab === "playlists" ? "grid" : "shelf"}>
       {#each results.playlists as p (entityRef(p))}<Card item={p} kind="playlist" />{/each}
     </div>
-  {/if}
+  </section>
 {/if}
 
 <style>
@@ -1122,6 +1184,24 @@
   }
   .tabs::-webkit-scrollbar {
     display: none;
+  }
+  /* I3: these tablists select by COLOUR (the plan's fallback for a tablist with
+     no sliding indicator), so the choice steps in one short beat instead of
+     cutting — `--dur-instant`, and nothing moves, so a sideways-scrolled rail
+     never has to be measured. The source chips above follow the same rule. */
+  .tabs :global(.chip),
+  .pods-tabs :global(.chip),
+  .sources :global(.chip) {
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
+  }
+  /* One block per results section, so its entrance is ONE animation (I2/I6)
+     rather than one per heading and one per grid. It is a plain block: no
+     margin, no padding, nothing the layout can see. */
+  .shelf-sec {
+    min-width: 0;
   }
   .hint {
     margin-top: 20px;

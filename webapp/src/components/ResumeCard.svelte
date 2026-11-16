@@ -8,6 +8,10 @@
   import { trackRef } from "../lib/trackkey.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  // I10/M7: the card replaces "nothing playing" with the track in the same
+  // place — the idle block goes at once, the track block enters (no outro: an
+  // outro would hold the card's height while the other one arrives).
+  import { fadeIn } from "../lib/motion.js";
 
   $: track = $current;
   $: total = $player.duration || 0;
@@ -19,7 +23,7 @@
 <aside class="resume" aria-label="Reprendre l'écoute">
   <span class="label-mono">Reprendre</span>
   {#if track}
-    <button class="body" on:click={() => nowPlayingOpen.set(true)} title="Ouvrir le lecteur">
+    <button class="body" on:click={() => nowPlayingOpen.set(true)} title="Ouvrir le lecteur" in:fadeIn>
       <span class="art">
         <Cover
           src={track.album?.cover}
@@ -39,7 +43,7 @@
       <span class="track" aria-hidden="true"><span class="fill" style={`width:${pct}%`}></span></span>
     {/if}
   {:else}
-    <div class="idle">
+    <div class="idle" in:fadeIn>
       <span class="idle-title">Rien en cours de lecture.</span>
       <span class="idle-sub">Choisis une énergie et lance le Flow, ou ouvre un titre depuis Explorer.</span>
       <a class="btn btn-ghost btn-sm" href="#/search"><Icon name="search" size={15} /> Explorer</a>

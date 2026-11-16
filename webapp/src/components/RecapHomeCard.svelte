@@ -11,6 +11,9 @@
   import Icon from "./Icon.svelte";
   import { formatNumber, formatMinutes } from "../lib/recap.js";
   import { grooveBackground } from "../lib/sillon.js";
+  // I10/I6: the card is a door that appears once `/api/recap/years` answered
+  // after mount — it enters with the rest of the home's blocks, not on mount.
+  import { fadeIn } from "../lib/motion.js";
 
   export let year = null;
 
@@ -22,6 +25,7 @@
     class="recap-home card"
     href={`#/recap/${year.year}`}
     aria-label={`Voir mon récap ${year.year}`}
+    in:fadeIn
   >
     <span class="art" aria-hidden="true">
       {#each tiles as i (i)}
@@ -53,8 +57,8 @@
     color: var(--tx);
     text-decoration: none;
     transition:
-      background-color 0.14s ease,
-      border-color 0.14s ease;
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .recap-home:hover,
   .recap-home:focus-visible {
@@ -130,11 +134,6 @@
     }
     .recap-home {
       gap: 12px;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .recap-home {
-      transition: none;
     }
   }
 </style>
