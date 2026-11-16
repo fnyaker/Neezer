@@ -1215,8 +1215,8 @@ Waves that can run in parallel (disjoint files):
   rate; music is never touched (the engine re-checks `TrackMeta::podcast`).
 - **Measured on this machine** (release binary, `Xvfb :94 -dpi 96` + `GPUI_X11_SCALE_FACTOR=1`,
   2560×1600 and 1280×800, a real server from `tools/perf_api.py --serve --archived` with a
-  4 000-row queue, a 234 s archived FLAC with 39 `.lrc` lines, and four screenshots attached to the
-  PR — 2560×1600 and 1280×800, each with and without the 420 px queue panel):
+  4 000-row queue, a 234 s archived FLAC with 39 `.lrc` lines, and four screenshots (2560×1600 and
+  1280×800, each with and without the 420 px queue panel) kept with the session):
   - RSS, `/proc/<pid>/status` VmRSS: **267 MB** at 2560×1600 on the empty now-playing screen,
     **306 MB** with the 4 000-row queue, the lyrics and the sleeve (**+39 MB**); **206 MB** at
     1280×800, **214 MB** with the queue (**+8 MB**), **212 MB** with the 420 px panel. The shell's
