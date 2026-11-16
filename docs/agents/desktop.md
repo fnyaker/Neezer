@@ -88,6 +88,9 @@ Every choice below was checked against several sources and then **built together
   interrupted or concurrently rebuilt graph, the link fails on undefined
   `mul_mat_vec_id_iq2_s_…_data` / `im2col_3d_f32_f16_bda_len` symbols although the backend is fine:
   `cargo clean -p whisper-rs-sys` rebuilds them (and a stale CI cache can carry the same state).
+  Measured again in T1: an *aborted first* build counts as interrupted — with no `VULKAN_SDK` CMake
+  stops at `Could NOT find Vulkan (missing: Vulkan_INCLUDE_DIR)`, and the next attempt then fails at
+  link, so set `VULKAN_SDK` (headers + `lib/libvulkan.so`) before the first build, not after.
 
 ## Architecture
 
@@ -843,17 +846,51 @@ Waves that can run in parallel (disjoint files):
 - **Acceptance**: label, tree edit/undo, bulk tag with preview, share import/export; analysis
   backfill of 100 tracks runs reniced with 0 underruns while playing.
 
-### T1 — `nz-transcribe` core (segments, sidecar)
+### T1 — `nz-transcribe` core (segments, sidecar) — delivered 2026-11-16
 
-- **Files**: `desktop/crates/nz-transcribe/Cargo.toml` (all deps for T2/T3 declared now),
-  `src/{lib,segments,sidecar,error}.rs`, empty `src/{engine,audio,worker,protocol,supervisor,
-  control,models}.rs` with `todo!()`-free stubs, `tests/golden.rs`,
-  `desktop/tools/transcribe_golden.py` (calls `neezer.transcribe.engine.normalize_segments`,
-  `clean_text`, `sidecar.build/dumps/srt_bytes` on a set of raw whisper outputs and writes the
-  expected files).
-- **Acceptance**: the Rust output byte-equal to the Python golden files (≥ 12 cases: overlap
-  cutoff, clamp, tag-only, control chars, 2 001 segments, empty, unicode); CI regenerates the golden
-  files from the current Python and re-runs the test.
+- **The rule**: the crate re-implements `engine.py#normalize_segments`/`clean_text` and
+  `sidecar.py#build/dumps/srt_bytes` **byte for byte**, and its proof is a golden corpus written by
+  *the Python functions* — `desktop/tools/transcribe_golden.py` — never by the Rust code, because a
+  fixture the port generated would only prove the port agrees with itself. `tests/golden.rs` walks
+  `tests/golden/<case>/` and compares `segments.json`, `transcript.json` and `transcript.srt`.
+- **Why**: an episode transcribed on a laptop and the same episode transcribed on the server land in
+  the same archive and the same segment table, and the SPA's transcript search folds over whichever
+  arrived first. Anything less than the same bytes is a file that changes when rewritten, a line
+  duplicated at a chunk seam, or a line moved by one millisecond. Three Python details a "reasonable"
+  port gets wrong, each with its case: `round()` rounds **half to even** (`1500.5 → 1500`,
+  `1501.5 → 1502`, so the port needs `round_ties_even` — measured: changing that one call to `round`
+  fails case `10-half-millisecond-rounding`, 1500 → 1501); the engine's control class
+  `[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]` keeps `\t\n\r` for the whitespace pass to collapse while the
+  sidecar's `ord < 0x20` folds them too; and a **document keeps a tag-only line** (`[Musique]`) that
+  the engine dropped, because on disk it is text the person can search.
+- **Measured**: **16 cases, 62 files, 209 907 bytes** of fixtures (the 2 001-segment case is 131 922
+  bytes of them and covers the cap; the rest are kilobytes). `cargo test -p nz-transcribe`: **28 lib
+  tests in 0.30 s + 2 golden tests in 0.01 s**, the corpus covering the overlap cutoff, clamping at
+  both edges, chunk 0 keeping its head, tag-only, control characters, Unicode (CJK, Arabic, an emoji
+  with its variation selector, a decomposed accent), the 2 000-character cut counted in characters,
+  2 001 segments → 2 000, an empty chunk (0 bytes of SRT, not one newline), fractional offsets, and
+  a document built from raw server lines. An hour of dense French speech is **100 695 B of JSON and
+  93 492 B of SRT** (asserted against the server test's own 100–250 kB band). The golden comparison
+  itself is 62 file reads: nothing to time.
+- **What the stubs pin** (T2/T3 own the bodies): `Cargo.toml` declares every dependency T2 and T3
+  need (`rubato`, `reqwest`, `tokio`, `directories` join the whisper/audio set), so no later lot
+  edits the manifest and the lock grows only in `nz-transcribe`'s own dependency list. The empty
+  modules carry only facts that cross a process or a wire boundary, and that two lots would
+  otherwise renegotiate: `FORMAT_ENGINE`, the five fallback causes with their French sentence, the
+  model ladder and its two thresholds, `HEARTBEAT_SECONDS = 5`, `RESUME_AFTER_MS = 3 000`,
+  64 bytes of `--pcm` per millisecond, the nine control-channel words, and the seven worker routes,
+  built only from an id `is_episode_id` recognises so no id can escape its path segment.
+- **Regenerating**: `python3 desktop/tools/transcribe_golden.py` writes the 62 files;
+  `--check` writes nothing and exits 1 when one moved (measured by adding one space to a fixture).
+  The desktop job does not run it yet: that is one line in the `test` job of
+  `.github/workflows/desktop.yaml`, next to D1's `dump_fixtures.py` step, and outside this lot's
+  files. Until it lands, the job catches a **Rust** drift (`cargo test --workspace` runs the
+  committed corpus) and a **Python** drift only through `--check`, by hand.
+- **Pitfalls**: Python's `format` check is `payload.get("format") != 1` and `True == 1` in Python,
+  so the port accepts a JSON `true` there instead of inventing a stricter rule; `clippy -D warnings`
+  rejects `assert!(CONST > CONST)` (`assertions_on_constants`) — pin such orderings with
+  `const { assert!(…) }`; and the two cleaners differ on purpose (see *Why*), which is why the
+  golden cases carry `sidecar_segments` apart from the engine's output.
 
 ### T2 — Engine (whisper Vulkan, models, VAD, audio, fallback)
 

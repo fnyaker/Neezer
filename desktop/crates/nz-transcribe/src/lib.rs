@@ -1,10 +1,42 @@
 //! Local transcription: whisper.cpp on the GPU through Vulkan, in the server's
 //! own segment format and sidecar.
 //!
-//! Owned by lots T1 to T3 (`docs/agents/desktop.md`, *Transcription*). This is
-//! D0's skeleton: the crate, the library, the `neezer-transcribe` binary and
-//! the one thing CI has to be able to print — the whisper.cpp build that is
-//! actually linked, Vulkan included.
+//! Owned by lots T1 to T3 (`docs/agents/desktop.md`, *Transcription*). The crate
+//! is standalone on purpose — `neezer-transcribe` runs, is paused (`SIGSTOP`) and
+//! is tested without the app — so the app is only one of its callers.
+//!
+//! What is finished, and what the later lots fill:
+//!
+//! - [`segments`] (T1): whisper's raw output → absolute, clamped, clean lines,
+//!   exactly as `neezer/transcribe/engine.py` produces them.
+//! - [`sidecar`] (T1): the transcript document and its SRT, the server's bytes.
+//! - [`error`] (T1): the failure codes the server stores and the French sentences
+//!   the person reads.
+//! - [`engine`] (T2): the probe, Vulkan, the model ladder and the explained CPU
+//!   fallback; [`audio`] (T2) and [`models`] (T2) are its two halves.
+//! - [`worker`], [`protocol`], [`supervisor`], [`control`] (T3): the enrolled
+//!   client, the server's routes, the two-process run and its control channel.
+//!
+//! The numbers that cross a process or a wire boundary are pinned here in T1
+//! ([`segments::CHUNK_SECONDS`], [`worker::HEARTBEAT_SECONDS`],
+//! [`models::ORDER_FREE`]), so the lots can be written against them and a change
+//! is visible in one diff instead of three.
+
+pub mod audio;
+pub mod control;
+pub mod engine;
+pub mod error;
+pub mod models;
+pub mod protocol;
+pub mod segments;
+pub mod sidecar;
+pub mod supervisor;
+pub mod worker;
+
+pub use engine::{Backend, FORMAT_ENGINE, FallbackCause};
+pub use error::{Error, SidecarError};
+pub use segments::{Segment, clean_text, normalize_segments};
+pub use sidecar::Sidecar;
 
 /// The whisper.cpp version this binary links, straight from the C build.
 pub const WHISPER_VERSION: &str = whisper_rs::WHISPER_CPP_VERSION;

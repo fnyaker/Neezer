@@ -4491,12 +4491,16 @@ dependencies = [
 name = "nz-transcribe"
 version = "0.1.0"
 dependencies = [
+ "directories",
  "hound",
+ "reqwest",
+ "rubato",
  "serde",
  "serde_json",
  "symphonia",
  "symphonia-adapter-libopus",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "whisper-rs",
 ]
