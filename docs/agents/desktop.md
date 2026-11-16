@@ -425,11 +425,12 @@ Waves that can run in parallel (disjoint files):
   - `cargo test --workspace`: **12 tests, 0 failed**; `cargo fmt --all --check` and
     `cargo clippy --workspace --all-targets -- -D warnings` clean.
   - first painted frame: **94, 96, 97, 97, 101 ms** in release (median 97), 386 ms in debug; CI's
-    debug build under Xvfb/lavapipe: **2 782 ms** — that number says the window paints on a machine
-    with no GPU, it is not a performance target (D7's 300 ms is a release number).
+    debug build under Xvfb/lavapipe: **2 782 ms and 4 728 ms** on two runs — that number says the
+    window paints on a machine with no GPU, it is not a performance target (D7's 300 ms is a release
+    number).
   - release binaries: `neezer-desktop` **25 545 128 B**, `neezer-transcribe` **39 844 208 B**.
-  - fresh release build 3 min 39 s here; CI **8 min 30 s cold, 6 min 3 s warm** (cold: clippy 5 min
-    10 s, release 8 min 28 s, test 5 min 35 s; warm: 1 min 3 s, 2 min 27 s, 5 min 59 s).
+  - fresh release build 3 min 39 s here; CI **8 min 30 s cold, 6 min 3 s the run after, 2 min 13 s
+    with the Rust cache warm** (warm: fmt 24 s, audit 22 s, clippy 47 s, release 2 min, test 2 min 10 s).
   - the window is real: `hyprctl clients` → class `neezer-desktop`, title `Neezer`, 1280×800; a
     `wtype`-injected `Ctrl+Q` exits 0.
 - **What the scanners see of Rust**: Semgrep contributes nothing — its configured packs have no Rust
