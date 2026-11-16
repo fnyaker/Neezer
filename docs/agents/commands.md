@@ -186,6 +186,9 @@ neezer-cli deezer analyze [--force] [--limit N] [--workers N]  # measure tempo +
 neezer-cli deezer bpm-audit [--limit N]             # Deezer's published BPM against the files' measured tempo, per style
 python tools/tempo_eval.py --render /tmp/tempo          # the server's file tempo on the 28 arranged records + beatless tones
 python tools/perf_api.py [--tracks 20000] [--serve] [--recap]   # every screen's /api route timed on a big synthetic library
+python tools/perf_api.py --serve --covers cover.jpg             # the same, with a REAL cover on every album: the only way
+                                                                # to measure the client's sleeve path (decoded images,
+                                                                # atlas tiles, eviction) — without it /api/cover 404s
                                                      # (Deezer off): median ms, SQL statement count, bytes and gzip per route;
                                                      # --recap seeds 37 000 listen events and times /api/recap/years + /<year>
                                                      # cold/warm/304 with exact totals; --onboarding seeds invitation tokens,

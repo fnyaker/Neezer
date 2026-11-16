@@ -1429,4 +1429,94 @@ mod mouse {
         std::fs::remove_dir_all(dir).ok();
         drop(runtime);
     }
+
+    /// A screen built and dropped must not be KEPT by its own reply channel.
+    ///
+    /// Every screen owns one `events::Sender` and one foreground task awaiting
+    /// the other half. Until the channel closed when its last sender dropped,
+    /// nothing ever woke that task: GPUI kept it — and the screen state the
+    /// future had captured — for the life of the process, one screen per
+    /// navigation. Measured in the release app on the isolated display, 1 000
+    /// round trips between Accueil and Bibliothèque: **+321 700 KB of RSS**
+    /// (+161 KB per screen built); after the fix: +4 100 KB (+4 KB), which is
+    /// the shell's own atlas, not the screens.
+    ///
+    /// The number is BYTES the calling thread still holds (`testmem`'s counting
+    /// allocator), never `VmRSS`: the suite runs its tests in parallel in one
+    /// process, so the process's resident set moves with its neighbours (PR
+    /// #236: the same page read +8 404 KB under load). A budget in bytes
+    /// cannot move with a neighbour, and a leak of 161 KB per screen still
+    /// fails it 40 times over.
+    #[gpui::test]
+    async fn building_a_screen_a_thousand_times_keeps_nothing(cx: &mut gpui::TestAppContext) {
+        use crate::testmem::{Meter, retained_bytes};
+
+        cx.update(|cx| {
+            gpui_omarchy::init(cx);
+            crate::keymap::install(cx);
+        });
+        let dir = temp_dir("nav-guard");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (events_tx, _events_rx) = event_channel();
+        let config = AppConfig {
+            start_audio: false,
+            start_mpris: false,
+            ..AppConfig::for_test(&dir)
+        };
+        let runtime_handle = runtime.handle().clone();
+        let state =
+            cx.update(|cx| cx.new(move |_| AppState::new(config, runtime_handle, events_tx, None)));
+        let routes = [
+            Route::Home,
+            Route::Library {
+                tab: crate::nav::LibraryTab::Playlists,
+            },
+        ];
+        // A screen's requests run on the runtime; without driving it they stay
+        // parked, and a parked task holds its own clone of the screen's reply
+        // sender — which is the app's real case (the runtime runs) and must be
+        // the test's too, or the measurement is of a frozen process.
+        let settle = |runtime: &tokio::runtime::Runtime, cx: &mut gpui::TestAppContext| {
+            runtime.block_on(async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            });
+            cx.run_until_parked();
+        };
+        // A first pass warms what the shell allocates once (the text system's
+        // font handles): a screen's own weight is what the second pass measures.
+        for route in routes.iter() {
+            let view = cx.update(|cx| crate::screens::build(route, state.clone(), cx));
+            drop(view);
+            settle(&runtime, cx);
+        }
+        let before = Meter::now();
+        for _ in 0..1_000 {
+            for route in routes.iter() {
+                let view = cx.update(|cx| crate::screens::build(route, state.clone(), cx));
+                drop(view);
+                settle(&runtime, cx);
+            }
+        }
+        let kept = before.since();
+        println!(
+            "navigation: 2 000 screens kept {kept} B (thread holds {})",
+            retained_bytes()
+        );
+        // Measured 892 936 B for 2 000 screens (446 B each: GPUI's own task
+        // arena settles a little later than this test can see). The leak it
+        // guards was 161 KB per screen in the release app — 2 000 of them held
+        // 322 MB — so the budget is 2 MiB: 2.3× the measured weight and 160×
+        // tighter than the leak. A screen that starts keeping a list, a decoded
+        // image or a response fails here at once.
+        const BUDGET_BYTES: u64 = 2 * 1024 * 1024;
+        assert!(
+            kept < BUDGET_BYTES,
+            "2 000 screen builds must keep under {BUDGET_BYTES} B, they kept {kept} B"
+        );
+        std::fs::remove_dir_all(dir).ok();
+        drop(runtime);
+    }
 }
