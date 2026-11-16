@@ -4,6 +4,7 @@
   // the same language as the party button, so the two read as siblings.
   import { openRemoteSheet } from "../lib/stores.js";
   import { remoteHost } from "../lib/remote/hoststate.js";
+  import { swap } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   export let size = 18;
@@ -18,7 +19,7 @@
 <button class="rb" class:live on:click|stopPropagation={openRemoteSheet} title={label} aria-label={label}>
   <Icon name="remote" {size} />
   {#if live}
-    <span class="n">{n}</span>
+    <span class="n" in:swap>{n}</span>
   {/if}
 </button>
 
@@ -31,6 +32,9 @@
     padding: 4px;
     border-radius: 999px;
     line-height: 1;
+    transition:
+      color var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .rb:hover {
     color: var(--tx);

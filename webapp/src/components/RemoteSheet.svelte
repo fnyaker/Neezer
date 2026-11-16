@@ -6,7 +6,7 @@
   // A link drives the device it was made on. Four levels, each a superset of
   // the one before — the server holds the line (neezer/webui/remote.py);
   // this sheet only says plainly what each one lends.
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { remoteSheet, closeRemoteSheet, isAdmin, toasts } from "../lib/stores.js";
   import { api } from "../lib/api.js";
   import { LEVELS, LEVEL_INFO } from "../lib/remote/mode.js";
@@ -15,6 +15,7 @@
   import Icon from "./Icon.svelte";
   import { modalFocus } from "../lib/modal.js";
   import { shortLink } from "../lib/applink.js";
+  import { sheet, veil } from "../lib/motion.js";
 
   const DURATIONS = [
     { id: "1h", label: "1 heure", ttl: 3600 },
@@ -45,6 +46,21 @@
   $: if (!open) stop();
   $: live = $remoteHost.active ? $remoteHost.controllers.length : 0;
   $: if (invite && linkOf(invite) !== qrFor) makeQr(linkOf(invite));
+
+  // The focus on open, again: `use:modalFocus` focuses once, on mount, and a
+  // sheet closed then re-opened INSIDE its own outro is never unmounted (Svelte
+  // reverses the transition), so the action does not run twice (M2).
+  let sheetEl = null;
+  let wasOpen = false;
+  $: if (open !== wasOpen) {
+    wasOpen = open;
+    if (open)
+      tick().then(() => {
+        if (!sheetEl || sheetEl.contains(document.activeElement)) return;
+        const first = sheetEl.querySelector("button, [href], input, [tabindex]:not([tabindex='-1'])");
+        (first || sheetEl).focus?.({ preventScroll: true });
+      });
+  }
 
   function linkOf(l) {
     return shortLink("rc", l.token);
@@ -193,9 +209,11 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="backdrop" on:click={closeRemoteSheet}>
+  <div class="backdrop" transition:veil={{ for: "sheet" }} on:click={closeRemoteSheet}>
     <div
       class="sheet"
+      transition:sheet
+      bind:this={sheetEl}
       role="dialog"
       aria-modal="true"
       aria-label="Contrôle à distance"
@@ -284,7 +302,7 @@
 
           <footer>
             <button class="primary" on:click={create} disabled={busy}>
-              {#if busy}<span class="spin"></span> Création…{:else}<Icon name="link" size={17} /> Créer le lien{/if}
+              {#if busy}<span class="spin" data-motion="status"></span> Création…{:else}<Icon name="link" size={17} /> Créer le lien{/if}
             </button>
           </footer>
         </section>
@@ -460,8 +478,8 @@
     border: 1px solid var(--bg-hover);
     color: var(--text);
     transition:
-      border-color 0.15s ease,
-      background 0.15s ease;
+      border-color var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .level:hover {
     border-color: rgba(255, 255, 255, 0.18);

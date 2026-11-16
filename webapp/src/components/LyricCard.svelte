@@ -42,6 +42,7 @@
     fitLyricLayout,
     cardFilename,
   } from "../lib/lyriccard.js";
+  import { sheet, veil } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   export let track = null;
@@ -767,9 +768,10 @@
 <svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="lc-backdrop" on:click={onBackdropClick} on:wheel|nonpassive={onWheel}>
+<div class="lc-backdrop" transition:veil={{ for: "sheet" }} on:click={onBackdropClick} on:wheel|nonpassive={onWheel}>
   <div
     class="lc-sheet"
+    transition:sheet
     bind:this={sheetEl}
     role="dialog"
     aria-modal="true"
@@ -800,7 +802,7 @@
         <div class="lc-preview" role="img" aria-label={previewLabel}>
           <canvas bind:this={canvasEl} width={CARD_W} height={CARD_H} aria-hidden="true"></canvas>
           {#if preparing}
-            <span class="lc-spin" aria-hidden="true"></span>
+            <span class="lc-spin" data-motion="status" aria-hidden="true"></span>
           {/if}
         </div>
         <p class="lc-format mono">
@@ -857,7 +859,7 @@
       </button>
       <button class="lc-primary" on:click={share} disabled={busy || !!renderError || !lines.length}>
         {#if busy}
-          <span class="lc-spin small" aria-hidden="true"></span> Préparation…
+          <span class="lc-spin small" data-motion="status" aria-hidden="true"></span> Préparation…
         {:else}
           <Icon name="share" size={17} /> Partager
         {/if}
@@ -889,14 +891,7 @@
     border: 1px solid var(--ln);
     border-radius: 24px;
     box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
-    animation: lc-in 0.18s ease;
     touch-action: auto;
-  }
-  @keyframes lc-in {
-    from {
-      opacity: 0;
-      transform: translateY(10px) scale(0.99);
-    }
   }
 
   .lc-head {
@@ -1286,7 +1281,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .lc-sheet,
     .lc-spin {
       animation: none;
     }

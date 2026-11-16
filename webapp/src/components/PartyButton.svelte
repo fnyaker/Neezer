@@ -4,6 +4,7 @@
   // people are hearing this right now, and how many.
   import { openPartySheet } from "../lib/stores.js";
   import { partyHost } from "../lib/party/hostbridge.js";
+  import { swap } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   export let size = 18;
@@ -18,7 +19,7 @@
 <button class="pb" class:live on:click|stopPropagation={openPartySheet} title={label} aria-label={label}>
   <Icon name="party" {size} />
   {#if live}
-    <span class="n">{n}</span>
+    <span class="n" in:swap>{n}</span>
   {/if}
 </button>
 
@@ -31,6 +32,9 @@
     padding: 4px;
     border-radius: 999px;
     line-height: 1;
+    transition:
+      color var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .pb:hover {
     color: var(--tx);
