@@ -110,8 +110,8 @@
     color: var(--text-dim);
     cursor: pointer;
     transition:
-      border-color 0.16s ease,
-      background 0.16s ease;
+      border-color var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .auto:hover {
     background: var(--bg-hover);
@@ -205,9 +205,9 @@
     font-size: 0.84rem;
     cursor: pointer;
     transition:
-      background 0.14s ease,
-      border-color 0.14s ease,
-      color 0.14s ease;
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .chip:hover,
   .chip:focus-visible {

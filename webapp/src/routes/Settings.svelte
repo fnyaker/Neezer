@@ -19,6 +19,7 @@
     toasts,
   } from "../lib/stores.js";
   import { api } from "../lib/api.js";
+  import { fadeIn, rise } from "../lib/motion.js";
   import { listDownloads, removeTrack, clearAll } from "../lib/offline.js";
   import { clearPlayCache, enforce } from "../lib/playcache.js";
   import { bytes as fmtBytes, duration as fmtDuration, artistLine } from "../lib/format.js";
@@ -658,7 +659,7 @@
 {:else}
 <div class="settings" class:wide>
 {#if wide || !tab}
-<div class="side">
+<div class="side" in:rise={wide ? { duration: 0 } : {}}>
   <h1 class="side-title">Réglages</h1>
   <div class="field setsearch">
     <Icon name="search" size={16} />
@@ -697,7 +698,7 @@
 </div>
 {/if}
 {#if tab}
-<div class="pane" class:admin={tab === "users"}>
+<div class="pane" class:admin={tab === "users"} in:rise={wide ? { duration: 0 } : {}}>
 {#if !wide}
   <div class="head sub-head">
     <button class="back" on:click={back} aria-label="Retour aux réglages">
@@ -708,6 +709,12 @@
 {:else}
   <h2 class="pane-title">{current?.label || SECTIONS.find((x) => x.id === tab)?.label || ""}</h2>
 {/if}
+<!-- The section's content: keyed on the section, so switching categories
+     replaces it and the new one fades in (I1/M7). On a phone the pane itself
+     rises above (the two-level list → section move), so the body stays
+     still and only one motion plays. -->
+{#key tab}
+<div class="pane-body" in:fadeIn={wide ? {} : { duration: 0 }}>
 {#if tab === "playback"}
   <AudioEffects />
 {/if}
@@ -815,7 +822,7 @@
   {/if}
 
   <div class="gauge">
-    <div class="bar"><span style={`width:${cachePct}%`} class:warn={cachePct > 90}></span></div>
+    <div class="bar"><span style={`transform:scaleX(${cachePct / 100})`} class:warn={cachePct > 90}></span></div>
     <div class="gauge-txt">
       <span>{fmtBytes($playCacheSize)} en cache</span>
       <span class="muted">limite {fmtBytes($playCacheLimit)}</span>
@@ -896,7 +903,7 @@
 
   {#if job?.running}
     <div class="gauge">
-      <div class="bar"><span style={`width:${jobPct}%`}></span></div>
+      <div class="bar"><span style={`transform:scaleX(${jobPct / 100})`}></span></div>
       <div class="gauge-txt">
         <span>Archivage en cours… {job.done} / {job.total}</span>
         <span class="muted">
@@ -932,7 +939,7 @@
   </p>
   {#if mig?.running}
     <div class="gauge">
-      <div class="bar"><span class="indeterminate"></span></div>
+      <div class="bar"><span class="indeterminate" data-motion="status"></span></div>
       <div class="gauge-txt">
         <span>Mise à niveau en cours… {mig.done} fichier(s)</span>
         <span class="muted">
@@ -1208,7 +1215,7 @@
     </p>
 
     <div class="gauge">
-      <div class="bar"><span style={`width:${diskPct}%`} class:warn={diskPct > 90}></span></div>
+      <div class="bar"><span style={`transform:scaleX(${diskPct / 100})`} class:warn={diskPct > 90}></span></div>
       <div class="gauge-txt">
         <span><strong>{fmtBytes(store.disk_free)}</strong> libres sur le disque d'archives</span>
         <span class="muted">{fmtBytes(store.disk_total)} au total</span>
@@ -1449,6 +1456,8 @@
   {/if}
 </section>
 {/if}
+</div>
+{/key}
 </div>
 {/if}
 </div>
@@ -2227,15 +2236,21 @@
   .bar span {
     display: block;
     height: 100%;
+    width: 100%;
     background: var(--accent);
-    transition: width 0.25s ease;
+    /* I8: a job's progress is a paint, not a layout — scaleX on a full-width
+       element, one curve, linear so the bar reads as steady progress. */
+    transform-origin: left center;
+    transition: transform var(--dur-base) linear;
   }
   .bar span.warn {
     background: var(--accent-2);
   }
   .bar span.indeterminate {
     width: 35%;
+    transform: none;
     animation: bar-slide 1.4s ease-in-out infinite;
+    transition: none;
   }
   @keyframes bar-slide {
     from {
@@ -2307,7 +2322,9 @@
        switch a control before its knob is read. */
     border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .sw.on {
     background: var(--btn);
@@ -2321,13 +2338,23 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease, background 0.15s ease;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   /* --btn/--onbtn is the one accent pair guaranteed in every theme: Papier's
      ink track needs its cream knob, not --onac (ink on ink). */
   .sw.on .knob {
     background: var(--onbtn);
     transform: translateX(16px);
+  }
+
+  /* Reduced motion keeps the STATE and drops the displacement (M14): the knob
+     is where it belongs at once, the track's colour still fades. */
+  @media (prefers-reduced-motion: reduce) {
+    .knob {
+      transition: none;
+    }
   }
   .dl-head {
     display: flex;

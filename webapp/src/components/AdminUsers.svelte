@@ -30,6 +30,8 @@
     clockTime,
     copyText,
   } from "../lib/adminusers.js";
+  import { dialog, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import Icon from "./Icon.svelte";
   import Avatar from "./Avatar.svelte";
   import InviteSheet from "./InviteSheet.svelte";
@@ -781,15 +783,6 @@
       first.focus();
     }
   }
-
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
 </script>
 
 <svelte:window on:keydown={onWindowKey} />
@@ -1167,10 +1160,11 @@
 {/if}
 
 {#if detail}
-  <div class="overlay" role="presentation" use:toBody>
+  <div class="overlay" role="presentation" use:toBody transition:veil={{ for: "dialog" }}>
     <div
       class="dialog"
       role="dialog"
+      transition:dialog
       aria-modal="true"
       aria-labelledby="admin-detail-title"
       tabindex="-1"
@@ -1328,10 +1322,11 @@
 {/if}
 
 {#if confirm}
-  <div class="overlay" role="presentation" use:toBody>
+  <div class="overlay" role="presentation" use:toBody transition:veil={{ for: "dialog" }}>
     <div
       class="dialog confirm-dialog"
       role="dialog"
+      transition:dialog
       aria-modal="true"
       aria-labelledby="admin-confirm-title"
       aria-describedby="admin-confirm-body"
@@ -1410,10 +1405,11 @@
 {/if}
 
 {#if linkFallback}
-  <div class="overlay" role="presentation" use:toBody>
+  <div class="overlay" role="presentation" use:toBody transition:veil={{ for: "dialog" }}>
     <div
       class="dialog link-dialog"
       role="dialog"
+      transition:dialog
       aria-modal="true"
       aria-labelledby="admin-link-title"
       tabindex="-1"

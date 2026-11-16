@@ -7,8 +7,8 @@
   // track's Deezer preview against each plausible candidate's audio, 99 % or
   // nothing. This screen only switches, starts, follows and reports.
   import { onDestroy, onMount } from "svelte";
-  import { slide } from "svelte/transition";
   import { api } from "../lib/api.js";
+  import { collapse } from "../lib/motion.js";
   import { toasts, unavailableChanged } from "../lib/stores.js";
   import { invalidatePlaylists, loadFavorites } from "../lib/actions.js";
   import Icon from "./Icon.svelte";
@@ -187,7 +187,7 @@
                 {#if job.counts?.match}· {job.counts.match} remplacé{job.counts.match > 1 ? "s" : ""}{/if}
               {/if}
             </span>
-            <span class="bar"><span style={`width:${progress * 100}%`}></span></span>
+            <span class="bar"><span style={`transform:scaleX(${progress})`}></span></span>
           </div>
           <button class="ghost" on:click={cancel} disabled={job.cancel}>
             {job.cancel ? "Arrêt…" : "Arrêter"}
@@ -215,7 +215,7 @@
       {/if}
 
       {#if open}
-        <div class="detail" transition:slide={{ duration: 160 }}>
+        <div class="detail" transition:collapse>
           {#if recent.length}
             <h3>Remplacés automatiquement</h3>
             <ul>
@@ -301,7 +301,9 @@
     background: var(--s2);
     border: 1px solid var(--dim);
     position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition:
+      background var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .sw.on {
     background: var(--btn);
@@ -315,11 +317,21 @@
     height: 20px;
     border-radius: 50%;
     background: var(--tx);
-    transition: transform 0.15s ease, background 0.15s ease;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background var(--dur-instant) var(--ease-standard);
   }
   .sw.on .knob {
     background: var(--onbtn);
     transform: translateX(16px);
+  }
+
+  /* Reduced motion keeps the STATE and drops the displacement (M14): the knob
+     is where it belongs at once, the track's colour still fades. */
+  @media (prefers-reduced-motion: reduce) {
+    .knob {
+      transition: none;
+    }
   }
   .run {
     display: flex;
@@ -372,8 +384,11 @@
   .bar span {
     display: block;
     height: 100%;
+    width: 100%;
     background: var(--accent);
-    transition: width 0.3s ease;
+    /* I8: a paint, not a layout — the bar is the same element at every value. */
+    transform-origin: left center;
+    transition: transform var(--dur-base) linear;
   }
   .ghost {
     padding: 8px 14px;

@@ -97,7 +97,7 @@
     font-size: 14px;
     color: var(--text);
     background: var(--bg-hover);
-    transition: background 0.15s;
+    transition: background var(--dur-instant) var(--ease-standard);
   }
   .btn:hover:not(:disabled) {
     background: color-mix(in srgb, var(--text) 14%, var(--bg-hover));

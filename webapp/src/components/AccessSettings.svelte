@@ -4,6 +4,7 @@
   // on the server is everybody's; this screen is about the rest.
   import { onMount } from "svelte";
   import { api, failureCause } from "../lib/api.js";
+  import { collapse } from "../lib/motion.js";
   import { toasts } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
   import { iconOf, sources } from "../lib/sources.js";
@@ -182,7 +183,7 @@
                 Fonction par fonction
               </button>
               {#if openFeatures[a.id]}
-                <div class="per">
+                <div class="per" transition:collapse>
                   {#each shared(p) as f (f.id)}
                     <div class="row">
                       <span class="fl">{f.label}</span>

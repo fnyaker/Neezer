@@ -142,7 +142,10 @@ animates the overlay's `background-color` alpha instead of its opacity (rule M8)
   in the guard.
 - **M14 — Reduced motion = no displacement, short fades.** `prefers-reduced-motion: reduce` keeps opacity
   transitions (capped at 140 ms) and removes every translate/scale (HIG + App Store criteria: reduce, don't
-  strip meaning).
+  strip meaning). The tokens cannot reach a literal a component hard-codes: a switch knob's
+  `transform: translateX(16px)` has to be killed by the component's own `@media (prefers-reduced-motion:
+  reduce) { .knob { transition: none } }`, or the bench's reduced check fails on a running Animation whose
+  keyframes carry a transform (T6d measured exactly that; the knob then jumps, the track still fades).
 - **M15 — One source of truth.** Durations, easings and distances come from `lib/motion.js` (JS) and the
   `--dur-*`/`--ease-*`/`--move-*` tokens of `app.css` (CSS). No component imports `svelte/transition` or
   `svelte/animate` directly, no literal duration in a `transition:`/`animation:` declaration
@@ -540,7 +543,7 @@ settle(page) }`. Checks per scenario:
 | T6a | to do | — | — |
 | T6b | to do | — | — |
 | T6c | to do | — | — |
-| T6d | to do | — | — |
+| T6d | done | #215 | `npm test` 779/779; the bench 184 checks / 0 failure (4 scenarios × 2 viewports × 3 levels): the section change is ONE animation (desktop `pane-body` 140 ms opacity; phone the pane's 200 ms `rise`), the switch 90 ms on the track's colours and the knob's transform, the admin dialog `dialog` 200 ms transform+opacity plus the veil's own background-colour 200 ms; reduced = 140 ms opacity/colour only, NO transform on the knob or the dialog, veil 140 ms; eco leaves the timeline empty after 4 frames (the click's 0.01 ms remnants swept) and the `/api` + image requests are identical in the three levels; `test/admin/run.mjs` 61 checks, `test/eq/run.mjs` 35 checks green (the fader fill is a `scaleY`, not a `height`); `test/motion.test.mjs`'s importer check became a subset, so converting a file no longer turns the 13 parallel lots red. |
 | T6e | to do | — | — |
 | T6f | to do | — | — |
 | T7 | to do | — | — |
