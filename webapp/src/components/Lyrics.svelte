@@ -9,6 +9,13 @@
   import LyricCard from "./LyricCard.svelte";
   import Icon from "./Icon.svelte";
 
+  // Floating: the desktop player's own lyrics column (≥1200 px), where the
+  // words sit directly on the blurred sleeve with no card around them, the way
+  // Spotify, Deezer and Apple Music's full-screen players do it. Everything
+  // else — the queue card's tab, the phone's lyrics sheet, the side panel —
+  // is a card among the others' cards, and keeps its glass surface.
+  export let floating = false;
+
   $: lyrics = $trackLyrics;
   $: activeIdx = $activeLyricIndex;
   // The lyrics are asked for once the audio is under way (lib/lyrics.js): until
@@ -66,7 +73,7 @@
   onMount(() => tick().then(() => follow($activeLyricIndex)));
 </script>
 
-<div class="lyrics-wrap">
+<div class="lyrics-wrap" class:floating>
   <div class="lyrics" class:empty-state={!lyrics} bind:this={box}>
     {#if !lyrics}
       <p class="muted empty" role="status">
@@ -154,6 +161,84 @@
     font-family: inherit;
     color: var(--dim);
     line-height: 1.6;
+  }
+  /* -- the separated (desktop wide) column --------------------------------
+     No card here: the player's blurred sleeve IS the ground, and the words
+     float on it. What keeps them legible is a shadow painted in the theme's
+     own background colour — a local, theme-aware scrim around the glyphs, so
+     a bright sleeve cannot wash the letters out and a dark one cannot swallow
+     them. Nothing else changes: same type, same accent for the line being
+     heard, same scroll-follow. */
+  .floating {
+    /* The secondary lines are lifted toward the theme's own text colour: on a
+       light theme `--dim` over the brightest part of a blurred sleeve measured
+       4.14:1, and a line being read along with is not decoration. 24 % of
+       `--tx` puts Papier's worst pair back above AA while the current line —
+       bigger, bolder, in `--ac-text` — stays plainly the one being heard. */
+    --floating-dim: color-mix(in srgb, var(--dim) 76%, var(--tx));
+  }
+  .floating .lyrics {
+    padding: 10px 6px;
+    /* The words dissolve at the top and bottom edges instead of being cut by
+       the column, as the full-screen players do (Spotify, Apple Music). */
+    -webkit-mask-image: linear-gradient(
+      180deg,
+      transparent 0,
+      #000 28px,
+      #000 calc(100% - 30px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 30px), transparent 100%);
+  }
+  .floating .synced {
+    gap: 14px;
+  }
+  .floating .synced li {
+    color: var(--floating-dim);
+    font-size: 1.08rem;
+    line-height: 1.32;
+    text-shadow:
+      0 1px 2px color-mix(in srgb, var(--bg) 72%, transparent),
+      0 0 18px color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+  .floating .synced li.active {
+    /* The base rule (.synced li.active) is LESS specific than the line rule
+       above, so the accent has to be restated here or the current line loses
+       its colour — the bench caught exactly that. */
+    color: var(--ac-text);
+    font-size: 1.34rem;
+    font-weight: 800;
+    line-height: 1.28;
+    text-shadow:
+      0 1px 2px color-mix(in srgb, var(--bg) 80%, transparent),
+      0 0 22px color-mix(in srgb, var(--bg) 62%, transparent);
+  }
+  .floating .lyrics.empty-state > p,
+  .floating .reason,
+  .floating .plain {
+    color: var(--floating-dim);
+    text-shadow:
+      0 1px 2px color-mix(in srgb, var(--bg) 72%, transparent),
+      0 0 18px color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+  .floating .lyric-tools {
+    padding: 10px 6px 2px;
+  }
+  /* The one control in the column wears the player's clear glass (the pill
+     row beside it), not the card's outline: an outlined pill with no card
+     behind it reads as a leftover from the panel that was removed. */
+  .floating .card-btn {
+    border-color: transparent;
+    background-color: color-mix(in srgb, var(--s1) 28%, transparent);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
+  }
+  .floating .card-btn:hover:not(:disabled) {
+    background-color: var(--glass-hover);
+    border-color: transparent;
   }
   .lyric-tools {
     flex: none;
