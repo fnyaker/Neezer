@@ -6,7 +6,7 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, D2, D3, D4, D5, D6, M1, T1 and V1 delivered; the rest planned.**
+**Status (2026-11-16): D0, D1, D2, D3, D4, D5, D6, D7, M1, T1 and V1 delivered; the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -984,29 +984,95 @@ Waves that can run in parallel (disjoint files):
   picked from a histogram sorted by presence with JS's stable tie order: a Rust sort that is not
   stable colours a two-colour sleeve differently from the browser.
 
-### D7 — App shell and wiring
+### D7 — App shell and wiring (delivered 2026-11-16)
 
-- **Goal**: the window, navigation, player bar, login, and every subsystem wired, with stubs for
-  every screen so later lots never edit shared files.
-- **Files**: `desktop/app/src/{main,app,state,theme,keymap,actions,nav,toast,load_failed,
-  net_indicator,player_bar,login,wiring/*}.rs`, `desktop/app/src/screens/mod.rs` registering EVERY
-  route of the inventory, and one stub file per screen (`screens/{home,search,artist,album,playlist,
-  library,podcasts,show,releases,recap,history,genres,credits,import,party,remote,now_playing,
-  queue,viz,onboarding,settings/{mod,playback,appearance,viz,downloads,discovery,sources,account,
-  users,server,transcribe,help,shortcuts}}.rs`) that renders its title and "Bientôt". D7 also
-  creates, as empty stubs declared in their `mod.rs`, EVERY file a later lot lists under
-  `app/src/widgets/` and `app/src/wiring/`: after D7 no lot edits a `mod.rs`, `keymap.rs`,
-  `actions.rs` or `screens/mod.rs`, which is what lets wave 5 run in parallel.
-- **Contract**: `AppState` (GPUI `Entity`) owns `Api`, `Cache`, `PlayerState`, `Engine` handle,
-  `Mpris`; screens get `&AppState` and emit `Command`s; `nav` is a stack with back/forward
-  history and scroll positions kept per entry; the keymap of *Keyboard AND mouse* is complete here
-  (actions a later lot implements dispatch to its screen); single instance through the D-Bus name
-  `fr.neezer.Desktop` (a second launch raises the window and exits).
-- **Acceptance**: cold start to first painted frame < 300 ms (release, `--self-test` prints it);
-  login → home → play a track → next, with keyboard only and with mouse only (a scripted run of
-  GPUI's test harness for the keyboard path; the mouse path looked at and noted); toasts and
-  `LoadFailed` with the server stopped; RSS idle < 120 MB; the window follows an Omarchy theme
-  change live (`omarchy-theme-set`).
+- **The rule, the shell composes**: one `RootView` (`app.rs`) owns the header, the sidebar,
+  the player bar, the layers (queue panel, toasts, `?`) and the screen table; screens are
+  entities from `screens::build` and keep their own state. Every route of the inventory is
+  registered — **22 routes and 32 stub files** — and every widget file a later lot names is
+  declared in `widgets/mod.rs`, so D8a→D16, T4 and P1 touch only their own files. A stub
+  renders its title and « Bientôt »: every navigation target is reachable and measurable from
+  the first day.
+- **The rule, one runtime for the process's life**: `Application::run` may drop its launch
+  closure after calling it, and a `tokio::Runtime` captured only there loses its workers. The
+  measured symptom was a login that stayed « Connexion… » forever: the request task existed
+  and was never polled (a startup task printed, a later one did not). The app keeps the
+  runtime in a GPUI `Global` (`NetRuntime`) and one event channel carries every worker's
+  [`AppEvent`] to the shell; the shell drains it in a foreground task, so no worker touches
+  GPUI state.
+- **The rule, the keyboard is the mouse**: every control dispatches the action the keymap
+  binds (`cx.listener` → `window.dispatch_action`), and the action handler is the shell's one
+  transport path (`PlayerState::apply`). The single-letter/space bindings live in
+  `Neezer && !Input`: GPUI evaluates the predicate against the whole focus path, so a space
+  typed into any field is a space (gpui-base's editor puts `Input` on the path). The shell
+  also owns the focus anchor: after the login screen leaves, `refocus` gives the keyboard
+  back to the root — without it the scoped bindings are looked up above the view and do
+  nothing, silently (the same failure D0 documented for `Ctrl+Q`).
+- **The rule, explicit icons**: `gpui_kit::assets::Assets` is the **default** bundle (a dozen
+  component glyphs), and an icon outside it renders NOTHING while keeping its hit box — the
+  first real run showed a player bar with only Play and a sidebar without Bibliothèque or
+  Nouveautés. The shell registers `icon_assets!(ShellAssets, [...])` with exactly the glyphs it
+  draws plus gpui-base's own, and a test walks the list through `AssetSource::load` so a
+  missing icon fails CI instead of disappearing.
+- **The rule, single instance**: `fr.neezer.Desktop` is claimed **in the background** (2 s
+  budget for a hung bus): the blocking version delayed the first frame by up to its timeout,
+  and a 250 ms budget made two launches both think they were first — the reason two windows
+  existed during development. A second launch calls `Raise` on the owner (a D-Bus method on
+  the registered object) and quits; no bus is not a reason not to start.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, Hyprland, Omarchy; release build):
+  - **cold start to first painted frame**: fresh XDG dirs **153, 157, 158, 159, 163 ms**
+    (median 158), warm state **111–120 ms**; the first-ever run (fontconfig cache cold) 350 ms.
+    All under the 300 ms criterion; `--self-test-quit-after-first-frame` is unchanged.
+  - **RSS**: **103 148 KB** at the home screen after login, **103 544 KB** with a track playing
+    (release, `/proc/<pid>/status`, a 4 000-entry restored queue); the 8 000-row list plus a
+    4 000-row queue cost **+24 304 KB** in the app's own data model (a unit test prints it) —
+    the lists are windowed, so the widget count does not follow. Idle stays under 120 MB.
+  - **journeys**: 38 app tests, 0 failed — the keyboard one types the login, presses `Entrée`,
+    `g l`, `Space`, `Ctrl+→`, `Alt+←`, `q` through the real keymap and asserts the
+    `PlayerState` transitions; the mouse one clicks Play and Next through real hit testing at
+    1280×800; a dead server gives `Auth::Failed`, a readable cause and one toast.
+  - **theme**: the shell reads every colour through `cx.omarchy()`; a harness test applies a
+    second Omarchy theme and asserts the tokens changed, and gpui-omarchy's watcher is what
+    calls `refresh_windows()` on `omarchy-theme-set`.
+  - **visual**: the login and the shell were looked at at 1280×800 logical (Omarchy palette,
+    French copy, no emoji, real Lucide glyphs). The 2560×1600 and 420 px panel re-shots were
+    not taken: this machine has no isolated compositor or software Vulkan, and the user's
+    session must not be driven (no focus/workspace/clicks). The layout is fixed rails
+    (200 px sidebar, 420 px panel, 72 px bar) plus a flexible centre and rem type, so it
+    scales; D17 owns the full-size pass.
+  - release binary **42 443 784 B** (the shell + reqwest/rustls + bundled SQLite + symphonia/
+    libopus + zbus; D0's 25.5 MB was the empty window).
+- **What it is now**: `app/src/` — `main` (args, runtime global, single instance, window),
+  `app` (RootView, header/sidebar/layers, action handlers), `state` (`AppState`, `Auth`,
+  effects → engine/requests/queue, `entry_from_track`), `theme`, `keymap` (the complete table
+  and the `?` data), `actions` (one action per verb, including later lots'), `nav` (routes,
+  history, per-page scroll), `toast`, `load_failed`, `net_indicator`, `player_bar`, `login`,
+  `wiring/{net,engine,viz,mpris,instance,events}` plus the empty stubs the later lots fill;
+  `screens/` (22 routes, 32 stub files), `widgets/` (28 modules). The engine's only network seam
+  is `wiring/engine.rs` (`StreamOpener` over `nz-api`, blocking reads on the loader thread,
+  `StreamComplete` published into `nz-cache`'s play cache); MPRIS starts off-thread and its
+  commands rejoin `PlayerState::apply`.
+- **Pitfalls found by building**:
+  - **A GPUI test may not be woken by a real runtime thread**: `gpui-pre`'s deterministic
+    scheduler panics when a tokio worker wakes a foreground task
+    (`Detected activity on thread "tokio-rt-worker"`). The journey tests therefore drive a
+    **current-thread** runtime on the test thread (`runtime.block_on(sleep(1ms))` between
+    `run_until_parked`), which makes every wake happen where the test expects it.
+  - **`VisualTestContext::update` takes `(&mut Window, &mut App)`**, unlike `TestAppContext`'s
+    one-argument `update`; and `render_to_image()` needs a `HeadlessRenderer` the test platform
+    does not install (`no HeadlessRenderer configured`), so screenshots are not a CI artefact
+    here.
+  - **`impl IntoElement` captures every input lifetime in edition 2024**: a render helper that
+    takes `&mut Context` keeps that borrow alive in its return type until `+ use<>` is added;
+    without it `player_bar::render(self.state.read(cx), cx)` does not borrow-check.
+  - **The playhead is a 4 Hz foreground tick.** In an X11 run with the window on a workspace
+    the compositor did not show, MPRIS reported `Playing` and the engine had opened the stream,
+    but the tick (and so the bar) did not advance. The transport itself was proven by the
+    stream request and the status; whether GPUI throttles foreground timers for an inactive
+    window is D17's to measure, and the tick must keep running if it does.
+  - `cargo test --workspace` locally needs `NZ_PYTHON` pointing at a Python that can
+    `import neezer` (CI installs the server before the test job); `VULKAN_SDK=/tmp/vk` (headers
+    + `lib/libvulkan.so`) is what builds whisper.cpp outside CI.
 
 ### D8a — Browse: home, search, artist, album, credits
 

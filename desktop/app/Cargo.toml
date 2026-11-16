@@ -19,3 +19,25 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit = { workspace = true }
 gpui-omarchy = { workspace = true }
+nz-api = { path = "../crates/nz-api" }
+nz-cache = { path = "../crates/nz-cache" }
+nz-model = { path = "../crates/nz-model" }
+nz-player = { path = "../crates/nz-player" }
+nz-audio = { path = "../crates/nz-audio" }
+nz-mpris = { path = "../crates/nz-mpris" }
+nz-viz = { path = "../crates/nz-viz" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+directories = { workspace = true }
+tracing = { workspace = true }
+zbus = { workspace = true }
+
+[dev-dependencies]
+# The keyboard journey runs through GPUI's own test harness (`#[gpui::test]`),
+# which only exists when `test-support` is on. It is asked from `gpui-pre`
+# itself, not through `gpui-kit`, because gpui-kit's test-support feature also
+# resolves its optional `gpui-fast` backend — a second GPUI whose macOS
+# dependency pins conflict with the snapshot we build against.
+gpui = { workspace = true, features = ["test-support"] }
