@@ -165,6 +165,26 @@ jobs:
           workspaces: desktop
       - name: Test the workspace
         run: cargo test --workspace --locked
+      # `nz-model` is proven against the REAL server's answers, not a sample: the
+      # committed fixtures under `crates/nz-model/tests/fixtures/` are regenerated
+      # here from THIS commit's server, and the same test then reads what was just
+      # written. A payload change that would break the desktop fails this job
+      # (docs/agents/desktop.md, lot D1). The bench is throwaway SQLite in a temp
+      # directory: it never touches a real install.
+      - name: Set up Python for the API fixtures
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the server the bench starts
+        run: pip install --disable-pip-version-check -e .
+        working-directory: ${{ github.workspace }}
+      - name: Regenerate the API fixtures from this commit's server
+        run: python desktop/tools/dump_fixtures.py --out "$RUNNER_TEMP/fixtures"
+        working-directory: ${{ github.workspace }}
+      - name: Test nz-model against the freshly regenerated fixtures
+        run: cargo test -p nz-model --locked
+        env:
+          NZ_FIXTURES_DIR: ${{ runner.temp }}/fixtures
       # `cargo test` builds the test harnesses, not the binaries themselves:
       # the two launch steps below need the real executables.
       - name: Build the debug binaries

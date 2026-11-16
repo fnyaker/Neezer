@@ -1,0 +1,1 @@
+{"default":"mp3_320","formats":[{"ext":"flac","id":"flac","label":"FLAC"},{"ext":"mp3","id":"mp3_320","label":"MP3 320"},{"ext":"mp3","id":"mp3_192","label":"MP3 192"},{"ext":"m4a","id":"m4a_256","label":"AAC 256"},{"ext":"opus","id":"opus_320","label":"Opus 320"},{"ext":"opus","id":"opus_192","label":"Opus 192"},{"ext":"opus","id":"opus_128","label":"Opus 128"}]}

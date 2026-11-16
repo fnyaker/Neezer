@@ -6,9 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0 and M1 delivered; D1 onwards planned.** This note is the
-plan the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what
-was learned (rule, why, number) — a delivered lot is not a changelog.
+**Status (2026-11-16): D0, D1, M1 and V1 delivered; the rest planned.** This note is the plan the
+coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what was
+learned (rule, why, number) — a delivered lot is not a changelog.
 
 ## The need
 
@@ -443,31 +443,52 @@ Waves that can run in parallel (disjoint files):
   `cargo test` does NOT build the binaries the launch steps run (`./target/debug/neezer-desktop: not
   found`, exit 127): one `cargo build --workspace` between the two.
 
-### D1 — `nz-model` and contract fixtures
+### D1 — `nz-model` and contract fixtures (delivered 2026-11-16)
 
-- **Goal**: Rust types for every payload the app reads, proven against the REAL server's JSON.
-- **Files**: `desktop/crates/nz-model/src/{lib,ids,track,album,artist,playlist,library,search,
-  podcast,transcript,player,discovery,settings,remote,party,admin}.rs`,
-  `desktop/crates/nz-model/tests/fixtures.rs`, `desktop/tools/dump_fixtures.py`, the desktop job
-  step that runs it.
-- **Contract**: `dump_fixtures.py` starts `python tools/perf_api.py --tracks 300 --playlists 5
-  --favorites 120 --big-playlist 200 --podcasts --serve --port 0`, reads the `READY <port> <ids-json>`
-  line, logs in as `bench` / `Bench1`, GETs every read route of `webapp/src/lib/api.js` (one per
-  `api.*` read method, with the seeded ids) and writes each body to `$NZ_FIXTURES_DIR/<name>.json`.
-  The Rust test reads every file of `NZ_FIXTURES_DIR` (default
-  `desktop/crates/nz-model/tests/fixtures/`, a committed copy) and deserializes it with the type
-  named in a table in `fixtures.rs`. CI regenerates the fixtures from the current server and runs
-  the test on them: a server payload change that breaks the desktop fails the desktop job.
-- **Types**: ids are `TrackId(String)` etc. (the `deezer_id` field, a number string or a UUID —
-  never parse to an integer). Every struct `#[serde(default)]` on optional fields and ignores
-  unknown fields (an older or newer server must still parse, rule 7). The track JSON is
-  `neezer/webui/__init__.py#_db_track` / `_local_track` (`id`, `deezer_id`, `title`, `duration`,
-  `artist{deezer_id,name}`, `artists[{deezer_id,name,role}]`, `display_artist`,
-  `album{deezer_id,title,cover}`, `gain`, `unavailable`, `local`, `source`, `explicit`, …).
-- **Acceptance**: ≥ 40 fixture files, all deserialize; a test feeds each fixture with an extra
-  unknown field and with every optional field removed; `cargo test -p nz-model` < 2 s.
-- **Pitfalls**: perf_api's data is random: compare TYPES, never values. Cover URLs are relative
-  (`/api/cover/<id>`): keep them relative in the model.
+- **The rule**: `nz-model` is the server's JSON as types, PROVEN against the server's own answers.
+  `desktop/tools/dump_fixtures.py` starts `tools/perf_api.py` (300 tracks, 5 playlists — one of 200
+  titles, 120 favourites, a show with 8 episodes and a ready transcript, two years of listening
+  history), logs in as `bench`, GETs one route per READ method of `webapp/src/lib/api.js` and writes
+  each body verbatim: **102 fixtures, 393 872 B**, committed under
+  `crates/nz-model/tests/fixtures/`. `tests/fixtures.rs` reads every file with the type its table
+  names, then twice more — with an unknown field added to every struct-shaped object, and with every
+  key the type does not truly need REMOVED (each key is tried and kept deleted when the payload
+  still parses: **500 of 508 keys** are optional). CI regenerates the set from the commit under test
+  and runs the same test on it, so a server payload change that would break the desktop fails the
+  desktop job.
+- **Why the real bench, not samples**: a hand-written sample only proves what its author believed.
+  In one run the fixtures caught four things no plan had: an album's `year` is a four-character
+  STRING from a browse card and an INTEGER from the database (same field, two types — hence
+  `loose::opt_string`); `moods[].tracks` is a COUNT while `mood.tracks` is a LIST; a marker's
+  `position` is MILLISECONDS while a chapter's `start` is seconds; and
+  `genre/status.extractor.onnxruntime` is a BOOLEAN (the runtime is installed), not a version.
+- **The rule, ids**: an id is a newtype over `String`, never an integer — the same `deezer_id` field
+  carries `"3000000"` for a catalogue row and a UUID for an upload/YouTube/episode row, and
+  `/api/stream/<id>` takes both. A field the server always sends stays REQUIRED (a rename must fail
+  the test); everything else is `#[serde(default)]` + `Option`, and unknown fields are ignored
+  (rule 7). Remote URLs stay relative (`cover`/`picture` are `/api/cover/<id>`).
+- **The rule, the seed**: `--podcasts` and `--recap` are part of the command on purpose. Without
+  `--recap`, `/history`, `/recap/years` and `/recap/<year>` answer an empty shell and three types are
+  only ever proven against `[]`. Three read routes are empty until something has been WRITTEN (a
+  listening position, a marker, a public link), so the script does that one write on its throwaway
+  database first. What the seed still cannot fill is what needs an archived library: `/api/search`
+  (its local half lists only rows whose file is on disk), `/api/flow`, `/api/radio/*`,
+  `/api/moods/<id>` and `/api/recommend` answer empty lists there — their envelopes are proven, and
+  their item types arrive with the screens that read them (D8a, D12). `perf_api.py --archived`, which
+  needs numpy (not a dependency), is what would fill them.
+- **Measured** (this machine, debug build, `cargo test -p nz-model`): **31 tests, 0 failed**; the 102
+  fixtures deserialize in **23.3 ms**, stripping their optional keys in **185 ms**, and the whole
+  run is **1.56 s** against the lot's 2 s budget. `cargo fmt --all --check` and
+  `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- **What it is now**: `nz-model` holds 15 modules (`ids`, `track`, `album`, `artist`, `playlist`,
+  `library`, `search`, `podcast`, `transcript`, `player`, `discovery`, `settings`, `remote`, `party`,
+  `admin`) and the tolerant helpers (`loose::opt_string`, `Quality::wire/parse`); the `test` job of
+  `.github/workflows/desktop.yaml` installs the server, regenerates the fixtures from that commit and
+  re-runs `cargo test -p nz-model` on them, after the committed copy has passed.
+- **Pitfalls**: regenerate the fixtures, never edit them (the script deletes a file the server no
+  longer answers, so a removed route cannot keep passing). The bench's library is random: compare
+  TYPES, never values. `perf_api.py` needs its project venv (`pip install -e .`); the bench itself is
+  a throwaway SQLite in a temp directory and never touches a real install.
 
 ### D2 — `nz-api`
 
