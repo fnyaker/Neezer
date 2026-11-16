@@ -33,10 +33,20 @@ mod net_indicator;
 mod player_bar;
 mod screens;
 mod state;
+#[cfg(test)]
+mod testmem;
 mod theme;
 mod toast;
 mod widgets;
 mod wiring;
+
+// The tests that measure a screen's weight count BYTES on their own thread
+// (`testmem`), never the process's RSS: the suite runs its tests in parallel in
+// one process, so `VmRSS` moves with the neighbours and the allocator. The
+// shipped binary links the system allocator untouched.
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: testmem::Counting = testmem::Counting;
 
 use actions::Quit;
 use app::RootView;
