@@ -290,13 +290,12 @@ impl Snapshot {
         self.progress.pending + self.progress.active
     }
 
-    /// `12 / 200` for a set, or a whole-run count.
+    /// `12 / 200` for the run. The denominator counts what the queue ASKED for:
+    /// a failure is a track that was wanted and is not there, so a run that ends
+    /// with six failures reads `215 / 221`, not a reassuring `215 / 215`.
     pub fn done_label(&self) -> String {
-        format!(
-            "{} / {}",
-            self.progress.done,
-            self.progress.done + self.remaining()
-        )
+        let total = self.progress.done + self.remaining() + self.progress.failed;
+        format!("{} / {total}", self.progress.done)
     }
 
     /// The title of a downloaded single track, or its id when it was never
@@ -400,6 +399,8 @@ struct Shared {
     snapshot: Mutex<Snapshot>,
     labels: Mutex<HashMap<String, Labels>>,
     paused: AtomicBool,
+    /// Set by `Offline::shutdown` (a test's "the process ends here").
+    stopped: AtomicBool,
     jobs: Mutex<VecDeque<Job>>,
     /// The condvar's own lock: the worker sleeps on it and every request wakes
     /// it, so a click never waits for the next poll.
@@ -478,6 +479,7 @@ impl Offline {
             }),
             labels: Mutex::new(labels),
             paused: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
             jobs: Mutex::new(VecDeque::new()),
             gate: Mutex::new(()),
             wake: Condvar::new(),
@@ -711,6 +713,18 @@ impl Offline {
         self.local(track).is_some()
     }
 
+    /// End the worker: what a process ending does (and what a restart test
+    /// needs). The row being written stays `active` in the store, which is
+    /// exactly what the next start finds.
+    pub fn shutdown(&self) {
+        self.shared.stopped.store(true, Ordering::Release);
+        self.shared.nudge();
+    }
+
+    fn stopped(&self) -> bool {
+        self.shared.stopped.load(Ordering::Acquire)
+    }
+
     fn note_stream(&self, bytes: u64) {
         if bytes == 0 {
             return;
@@ -829,6 +843,9 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
 fn run(shared: Arc<Shared>) {
     loop {
+        if shared.stopped.load(Ordering::Acquire) {
+            return;
+        }
         drain(&shared);
 
         let (Some(store), Some(api), Some(runtime)) = (
@@ -1283,6 +1300,11 @@ fn step(
             });
             shared.wait(IDLE_POLL);
         }
+        Err(Outcome::Interrupted) => {
+            // Nothing is written: the row stays `active`, the `.part` is a stray
+            // file the next `reserve` overwrites, and the next start resumes.
+            debug!(track = job.track.as_str(), "téléchargement interrompu");
+        }
         Err(Outcome::Failed(cause)) => {
             warn!(track = job.track.as_str(), %cause, "téléchargement abandonné");
             let _ = store
@@ -1301,6 +1323,8 @@ enum Outcome {
     /// Try again in that long, for that reason.
     Later(Duration, String),
     Offline,
+    /// The worker was told to stop: the row stays `active` for the next start.
+    Interrupted,
     /// A cause the person can read, stored with the row.
     Failed(String),
 }
@@ -1343,6 +1367,10 @@ fn fetch(
     let mut bytes = 0u64;
     let mut published = Instant::now();
     loop {
+        if shared.stopped.load(Ordering::Acquire) {
+            let _ = out.flush();
+            return Err(Outcome::Interrupted);
+        }
         match block_on(runtime, response.chunk()) {
             Some(Ok(Some(chunk))) => {
                 if let Err(error) = out.write_all(&chunk) {
@@ -1427,7 +1455,21 @@ pub fn keep_downloaded<T, F>(items: impl IntoIterator<Item = T>, reference: F) -
 where
     F: Fn(&T) -> Option<String>,
 {
-    let Some(service) = Offline::get() else {
+    keep_downloaded_with(Offline::get().as_ref(), items, reference)
+}
+
+/// The same filter against a given service (a test, or a caller that holds one).
+/// `None` keeps everything: with no service nothing is known to be local, and
+/// dropping the queue would be the worse failure.
+pub fn keep_downloaded_with<T, F>(
+    service: Option<&Offline>,
+    items: impl IntoIterator<Item = T>,
+    reference: F,
+) -> Vec<T>
+where
+    F: Fn(&T) -> Option<String>,
+{
+    let Some(service) = service else {
         return items.into_iter().collect();
     };
     items
@@ -1775,6 +1817,32 @@ mod tests {
 
     fn filler(size: usize, seed: u8) -> Payload {
         Payload::Filler { len: size, seed }
+    }
+
+    /// Run a heavy bench in a process of its OWN.
+    ///
+    /// `cargo test` runs a binary's tests in threads of one process, and the
+    /// screens of this app assert on `/proc/self/status`'s RSS: a bench that
+    /// streams 200 tracks and decodes audio beside them makes those measurements
+    /// flaky (measured: D14a's page went from +228 KB to +4 272 KB, and D14b's
+    /// rows test past its 4 MB bound). A child process keeps both numbers true,
+    /// and the bench is still part of `cargo test --workspace`.
+    fn in_its_own_process(name: &str) {
+        let exe = std::env::current_exe().expect("the test binary");
+        let status = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                name,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .status()
+            .expect("the child test process");
+        assert!(
+            status.success(),
+            "the isolated bench {name} failed — its output is above"
+        );
     }
 
     /// Poll `done` until it says so or `timeout`: a test waits on the outcome,
@@ -2145,10 +2213,249 @@ mod tests {
     /// reference (what the queue builders call when the link is down).
     #[test]
     fn the_offline_only_filter_keeps_the_downloaded_tracks() {
+        let scratch = Scratch::new("filter");
+        let store = scratch.store();
+        let server = TestServer::start(Link::new(None), body_map(&["here"], 2048));
+        let runtime = runtime();
+        let api = api_for(&server, &store, &scratch);
+        let service = Offline::start(store.clone());
+        service.configure(api, runtime.handle().clone());
+        service.choose("playlist", "p1", "Sur l'appareil", choices(&["here"]));
+        assert!(wait_for(Duration::from_secs(20), || {
+            service.snapshot().progress.done == 1
+        }));
+
+        let entries = vec!["here".to_owned(), "elsewhere".to_owned()];
+        let kept =
+            keep_downloaded_with(Some(&service), entries.clone(), |entry| Some(entry.clone()));
+        assert_eq!(kept, vec!["here".to_owned()], "seul le titre local reste");
         // No service: the filter is transparent (nothing is known to be local).
-        let entries = vec![(Some("a".to_owned()), 1), (None, 2)];
-        let kept = keep_downloaded(entries.clone(), |entry| entry.0.clone());
-        assert_eq!(kept.len(), 2);
+        let all = keep_downloaded_with(None, entries.clone(), |entry| Some(entry.clone()));
+        assert_eq!(all.len(), 2);
+    }
+
+    /// **A restart mid-download.** The worker is stopped while a track is being
+    /// written (the app quitting), and a NEW worker over the same store finishes
+    /// the set: the interrupted row is `active`, never published, and the file it
+    /// was writing is fetched again rather than trusted.
+    #[test]
+    fn a_restart_mid_download_resumes_the_set() {
+        in_its_own_process("wiring::offline::tests::the_restart_bench_in_its_own_process");
+    }
+
+    #[test]
+    #[ignore = "run by its parent, a process of its own (RSS neighbours)"]
+    fn the_restart_bench_in_its_own_process() {
+        let scratch = Scratch::new("mid-restart");
+        let store = scratch.store();
+        let ids: Vec<String> = (0..40).map(|index| format!("r{index}")).collect();
+        let borrowed: Vec<&str> = ids.iter().map(String::as_str).collect();
+        // A link slow enough to catch the worker in the middle of a body.
+        let server = TestServer::start(Link::new(Some(120_000.0)), body_map(&borrowed, 64 * 1024));
+        let runtime = runtime();
+        let api = api_for(&server, &store, &scratch);
+
+        let first = Offline::start(store.clone());
+        first.configure(api.clone(), runtime.handle().clone());
+        first.choose("playlist", "p1", "Voyage", choices(&borrowed));
+        assert!(
+            wait_for(Duration::from_secs(20), || {
+                let progress = first.snapshot().progress;
+                progress.done >= 1 && progress.pending > 1
+            }),
+            "the set is being downloaded: {:?}",
+            first.snapshot().progress
+        );
+        first.shutdown();
+        let stopped_at = first.snapshot().progress.done;
+        // A stopped worker publishes nothing more.
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(first.snapshot().progress.done, stopped_at);
+        drop(first);
+        // The interruption landed mid-body: exactly one row is `active` in the
+        // store, which is what the next start resumes (a row published before
+        // the stop is `done` and is never fetched again).
+        let jobs = store.downloads().pending("42", 100).expect("the queue");
+        let active = jobs
+            .iter()
+            .filter(|job| job.state == DownloadState::Active)
+            .count();
+        assert_eq!(active, 1, "one track was interrupted while being written");
+        println!(
+            "interrompu : {active} titre actif, {stopped_at} publiés, {} restants",
+            jobs.len()
+        );
+
+        let second = Offline::start(store.clone());
+        second.configure(api, runtime.handle().clone());
+        assert!(
+            wait_for(Duration::from_secs(60), || {
+                second.snapshot().progress.done == borrowed.len()
+            }),
+            "the restarted worker finished the set: {:?}",
+            second.snapshot().progress
+        );
+        assert_eq!(
+            second.snapshot().progress.failed,
+            0,
+            "an interruption is not a failure"
+        );
+        // The row the crash caught was resumed, and no track was fetched twice.
+        for id in &ids {
+            assert!(
+                second.local(id).is_some(),
+                "{id} is on disk after the restart"
+            );
+        }
+    }
+
+    /// **The app starts the worker at restore/login** (D13's second seam, in
+    /// `AppState`): a session that comes back starts the download thread, which
+    /// is what makes a queue left by a previous run resume without anybody
+    /// opening Réglages.
+    #[gpui::test]
+    async fn a_restored_session_starts_the_download_worker(cx: &mut gpui::TestAppContext) {
+        use gpui_kit::AppContext as _;
+
+        use crate::state::{AppConfig, AppEvent, AppState, event_channel};
+
+        cx.update(gpui_omarchy::init);
+        let scratch = Scratch::new("seam");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (events_tx, _events_rx) = event_channel();
+        let config = AppConfig {
+            server: Some("http://127.0.0.1:1".to_owned()),
+            start_audio: false,
+            start_mpris: false,
+            ..AppConfig::for_test(scratch.dir())
+        };
+        let state = {
+            let runtime = runtime.handle().clone();
+            cx.update(|cx| cx.new(move |_| AppState::new(config, runtime, events_tx, None)))
+        };
+        let me: nz_model::Me = serde_json::from_str(
+            r#"{"user":{"id":"u1","name":"bench","admin":false,"access":{},"sources":[]}}"#,
+        )
+        .expect("a session");
+        state.update(cx, |state, cx| {
+            state.on_event(AppEvent::Restored(Ok(Box::new(me))), cx);
+        });
+        let service = Offline::get().expect("the restored session started the worker");
+        let snapshot = service.snapshot();
+        println!(
+            "worker démarré à la restauration : {:?}, {:?}",
+            snapshot.state, snapshot.progress
+        );
+        assert!(
+            matches!(
+                snapshot.state,
+                WorkerState::Idle | WorkerState::Offline | WorkerState::Unavailable
+            ),
+            "the worker exists and says where it stands: {:?}",
+            snapshot.state
+        );
+        service.shutdown();
+        drop(runtime);
+    }
+
+    /// **The network is really cut.** A track that was downloaded plays through
+    /// the engine with a client whose only address is a dead port: the engine's
+    /// opener finds the file on disk (`NetOpener::local`, D13's seam), so nothing
+    /// is asked of the network and the audio still starts.
+    #[test]
+    fn a_downloaded_track_plays_with_the_network_cut() {
+        in_its_own_process("wiring::offline::tests::the_offline_playback_bench_in_its_own_process");
+    }
+
+    #[test]
+    #[ignore = "run by its parent, a process of its own (RSS neighbours)"]
+    fn the_offline_playback_bench_in_its_own_process() {
+        let scratch = Scratch::new("cut");
+        let store = scratch.store();
+        let flac = scratch.dir().join("offline.flac");
+        if !tone_flac(&flac) {
+            println!("ffmpeg absent : la lecture hors ligne n'a pas été mesurée");
+            return;
+        }
+        let audio = std::fs::read(&flac).expect("the generated FLAC");
+        let mut bodies: HashMap<String, Payload> = HashMap::new();
+        bodies.insert("kept".to_owned(), Payload::Bytes(audio));
+        let server = TestServer::start(Link::new(None), bodies);
+        let runtime = runtime();
+        let api = api_for(&server, &store, &scratch);
+        let service = Offline::start(store.clone());
+        service.configure(api, runtime.handle().clone());
+        service.choose("track", "kept", "Titre gardé", choices(&["kept"]));
+        assert!(wait_for(Duration::from_secs(30), || {
+            service.snapshot().progress.done == 1
+        }));
+        let fetched = server.hits("kept");
+        let (path, quality) = service.local("kept").expect("the download is on disk");
+        println!(
+            "téléchargé : {} ({:?}, {} requête(s))",
+            path.display(),
+            quality,
+            fetched
+        );
+
+        // The network goes: a client for a port nothing listens on, and the
+        // verdict the app would have.
+        drop(server);
+        let dead = Arc::new(
+            Api::builder("http://127.0.0.1:1")
+                .cache(Arc::new(store.clone()))
+                .session(Arc::new(SessionJar::at(scratch.dir().join("dead.json"))))
+                .build()
+                .expect("a client"),
+        );
+        dead.set_owner(Some("42".to_owned()));
+        dead.set_online(false);
+        assert!(!dead.is_online());
+
+        let opener = Arc::new(crate::wiring::engine::NetOpener::new(
+            dead,
+            runtime.handle().clone(),
+            store.clone(),
+        ));
+        let config = nz_audio::EngineConfig {
+            sample_rate: 48_000,
+            // A quarter-second ring: the audio a test needs, and half the memory
+            // — `cargo test` runs the screens' RSS assertions in this process.
+            ring_seconds: 0.25,
+            spool_dir: store.audio_dir(),
+            ..nz_audio::EngineConfig::default()
+        };
+        let (engine, mut sink) = nz_audio::Engine::new_offline(config, opener);
+        let events = engine.events();
+        engine.load("kept", nz_audio::Quality::Opus320, None);
+        assert!(
+            pump_until(
+                &mut sink,
+                &events,
+                Duration::from_secs(10),
+                |event| matches!(event, nz_audio::EngineEvent::Started { .. })
+            ),
+            "the downloaded track started with no network at all"
+        );
+        engine.play();
+        let mut buffer = vec![0f32; 480 * 2];
+        let mut heard = 0.0f32;
+        for _ in 0..40 {
+            sink.render(&mut buffer);
+            heard = heard.max(
+                buffer
+                    .iter()
+                    .fold(0.0f32, |loudest, sample| loudest.max(sample.abs())),
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        println!("niveau entendu hors ligne : {heard:.4}");
+        assert!(heard > 0.01, "the audio really played ({heard:.4})");
+        assert_eq!(engine.underruns(), 0, "no underrun with the link cut");
+        assert_eq!(service.snapshot().progress.done, 1);
     }
 
     // --- the acceptance ----------------------------------------------------
@@ -2162,6 +2469,14 @@ mod tests {
     /// unlimited bandwidth, so the measurement is the rule and not the kernel.
     #[test]
     fn a_two_hundred_track_download_keeps_the_playing_streams_share() {
+        in_its_own_process("wiring::offline::tests::the_share_bench_in_its_own_process");
+    }
+
+    /// The bench itself: see the parent above for why it has a process of its
+    /// own.
+    #[test]
+    #[ignore = "run by its parent, a process of its own (RSS neighbours)"]
+    fn the_share_bench_in_its_own_process() {
         let scratch = Scratch::new("share");
         let store = scratch.store();
         let ids: Vec<String> = (0..200).map(|index| format!("bulk{index}")).collect();
@@ -2270,6 +2585,12 @@ mod tests {
     /// `nz-audio`'s own suites; without ffmpeg the test says so and passes.
     #[test]
     fn a_two_hundred_track_download_while_a_track_plays_has_no_underrun() {
+        in_its_own_process("wiring::offline::tests::the_underrun_bench_in_its_own_process");
+    }
+
+    #[test]
+    #[ignore = "run by its parent, a process of its own (RSS neighbours)"]
+    fn the_underrun_bench_in_its_own_process() {
         let scratch = Scratch::new("underrun");
         let store = scratch.store();
         let flac = scratch.dir().join("tone.flac");
@@ -2297,6 +2618,9 @@ mod tests {
         ));
         let config = nz_audio::EngineConfig {
             sample_rate: 48_000,
+            // A quarter-second ring: the audio a test needs, and half the memory
+            // — `cargo test` runs the screens' RSS assertions in this process.
+            ring_seconds: 0.25,
             spool_dir: store.audio_dir(),
             ..nz_audio::EngineConfig::default()
         };

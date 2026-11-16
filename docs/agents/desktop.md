@@ -1239,9 +1239,9 @@ Waves that can run in parallel (disjoint files):
   costs about **5× more inside the shell's `focus_scope` than outside it** (166 ms against 31 ms for
   the same 28 rows, debug). Paging bounds the element count, so the cost does not follow the library.
 - **Measured** (this machine: 16 threads, Rust 1.99.1; `cargo test -p neezer-desktop`):
-  - `wiring::offline`: **11 tests**, the two acceptance benches included (3 s + 3 s of paced
-    streaming, 6 s of real-time audio); `screens::settings::downloads`: 4, one of them the layout
-    journey below; `widgets::download_badge`: 2.
+  - `wiring::offline`: **18 tests** (the two acceptance benches, the restart, the cut link and the
+    session seam among them; the four heavy ones run in a process of their own, see the rule above);
+    `screens::settings::downloads`: 4, one of them the layout journey below; `widgets::download_badge`: 2.
   - the screen at 2 560×1 600, 1 280×800 and 420 px: the reading column is **896 px** (56 rem) at
     x=832 / x=192 and fills 420 px at 420, inside the viewport at all three; a page of 20 sets + 8
     failures paints in **3.9 ms median / 4.7 ms p95 in release** (45 / 57 ms in a debug build,
@@ -1250,24 +1250,40 @@ Waves that can run in parallel (disjoint files):
   - keyboard alone: Tab walks the page in reading order and Espace presses each control (the test
     sees the four quality chips at tabs 3–6 and the « hors-ligne » switch at 7); mouse alone: a real
     hit test on the FLAC chip changes the default quality.
+  - the screen was LOOKED AT, not only asserted: the debug binary on a private `Xvfb :131` (never the
+    person's session), a stub `/api/me`, a seeded store (215 downloads, 6 failures) and the window at
+    **2 560×1 600**, at **1 280×800** and with the queue panel open at 420 px: the column keeps its
+    896 px, the cards keep their order, the status reads « Terminé — 6 échecs » with `215 / 221`,
+    and every failure prints its cause (three screenshots are attached to the lot's PR).
 - **What it is now**: `wiring/offline.rs` (`Offline` — `start`/`ensure`/`configure`, `choose`/
   `choose_track`/`drop_set`/`drop_track`/`retry_failures`, `pause`/`resume`, `set_quality`/
   `set_offline_only`/`set_play_cache_cap`, `clear_play_cache`, `local`/`is_downloaded`, `snapshot`,
   and the free `attach`/`local_path`/`note_stream_bytes`/`keep_downloaded`), `Snapshot`/`Failure`/
   `Running`/`WorkerState`, the SPA's own keys (`offline.quality`, `offline.onlyDownloaded`,
-  `cache.limit`) and the four-rung picker; `screens/settings/downloads.rs` (`Screen::new(state, cx)`
-  for `SettingsSection::Downloads`, five cards, a pager, the failure list, the cache gauges);
+  `cache.limit`) and the four-rung picker; `screens/settings/downloads.rs`
+  (`Screen::new(section, state, cx)` — the module's own shape, `settings/mod.rs`'s arm — five cards,
+  a pager, the failure list, the cache gauges);
   `widgets/download_badge.rs` (`chip` for a row that repaints anyway, `Badge` for one that does not).
 - **Deliberate difference from the SPA**: the download picker offers four rungs (FLAC, Opus
   320/128/64), not six — the server answers `OPUS_256`/`OPUS_192` but `nz-audio`'s ladder has no rung
   for them, so offering them would download a file this app cannot describe.
-- **Two seams this lot could not land inside its own files** (written down rather than guessed):
-  1. `NetOpener::local` (`app/src/wiring/engine.rs`) still answers the play cache only, so a
-     downloaded track is found by `Offline::local` but not yet by the engine: `local_path(track)` is
-     the one-line call it needs (after `cache.play_cache().lookup(...)`).
-  2. Nothing starts the worker at launch: `AppState::on_restored`/`on_logged_in` (`app/src/state.rs`)
-     need one `wiring::offline::attach(self)`, or a queued download waits for the Réglages screen to
-     open. Both files belong to D7 and no wave-5 lot owns them; the calls are `pub` and tested.
+- **The rule, offline is the OPENER's answer**: a downloaded track plays with the link cut because
+  `NetOpener::local` (`wiring/engine.rs`) asks the play cache first and then
+  `cache.downloads().local(owner, track)` — the file is found whatever quality the bar shows, since
+  the bytes on disk are the only ones there are. Measured (`a_downloaded_track_plays_with_the_network_cut`):
+  one request to download, then a client whose only address is a dead port starts the engine, renders
+  **0.2000 of level with 0 underruns**, and asks the network nothing.
+- **The rule, the app starts the worker at the session, not at the screen**:
+  `AppState::on_restored`/`on_logged_in` call `start_offline()` (`state.rs`), so a queue left by a
+  previous run resumes on the next launch. Measured (`a_restart_mid_download_resumes_the_set`): the
+  worker is stopped mid-body (**1 row `active`, 1 published, 39 left**), a NEW worker over the same
+  store finishes all 40 with **0 failures**, and nothing is fetched twice.
+- **The rule, a heavy bench gets its own process**: `cargo test` runs a binary's tests in threads of
+  ONE process, and the screens assert on `/proc/self/status`'s RSS. A bench streaming 200 tracks and
+  decoding audio beside them cost D14a's settings page **+4 272 KB instead of +228 KB** and pushed
+  D14b's 250-row test past its 4 MB bound. The four heavy benches are therefore `#[ignore]`d bodies
+  run by a thin parent that spawns `current_exe() --exact --ignored`: still in `cargo test
+  --workspace`, and every number is measured in the process it belongs to.
 - **Pitfalls found by building**: `simulate_keystrokes` runs key BINDINGS only — `tab` moves the
   focus, but pressing the focused control needs a real `KeyDownEvent`/`KeyUpEvent` through
   `simulate_event` (without it a keyboard test presses nothing and passes vacuously). A screen

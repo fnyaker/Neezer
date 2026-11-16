@@ -176,7 +176,7 @@ impl Render for Screen {
 // --- the run's state --------------------------------------------------------
 
 fn status_card(snapshot: &Snapshot, cx: &mut Context<Screen>) -> AnyElement {
-    let total = snapshot.progress.done + snapshot.remaining();
+    let total = snapshot.progress.done + snapshot.remaining() + snapshot.progress.failed;
     let fraction = if total == 0 {
         0.0
     } else {
@@ -184,29 +184,40 @@ fn status_card(snapshot: &Snapshot, cx: &mut Context<Screen>) -> AnyElement {
     };
     let offline = snapshot.state == WorkerState::Offline;
     let busy = matches!(snapshot.state, WorkerState::Running | WorkerState::Pausing);
+    // A run that ended with failures is not "à jour": the state stays Idle (the
+    // worker really has nothing left to do) but the sentence says what it did
+    // (rule 2) — the causes are listed below, one row each.
+    let failed = snapshot.progress.failed;
+    let idle_with_failures = snapshot.state == WorkerState::Idle && failed > 0;
 
     let head = div()
         .flex()
         .items_center()
         .gap(rems(0.625))
         .child(
-            icon(match &snapshot.state {
-                WorkerState::Running | WorkerState::Pausing => IconName::CloudDownload,
-                WorkerState::Paused => IconName::CirclePause,
-                WorkerState::Offline => IconName::CloudOff,
-                WorkerState::Blocked(_) => IconName::TriangleAlert,
-                WorkerState::Unavailable | WorkerState::Idle => IconName::CircleCheck,
+            icon(if idle_with_failures {
+                IconName::TriangleAlert
+            } else {
+                match &snapshot.state {
+                    WorkerState::Running | WorkerState::Pausing => IconName::CloudDownload,
+                    WorkerState::Paused => IconName::CirclePause,
+                    WorkerState::Offline => IconName::CloudOff,
+                    WorkerState::Blocked(_) => IconName::TriangleAlert,
+                    WorkerState::Unavailable | WorkerState::Idle => IconName::CircleCheck,
+                }
             })
             .size(rems(1.125))
-            .text_color(if matches!(&snapshot.state, WorkerState::Blocked(_)) {
-                theme::danger(cx)
-            } else if offline {
-                theme::warning(cx)
-            } else if busy {
-                theme::accent(cx)
-            } else {
-                theme::secondary(cx)
-            }),
+            .text_color(
+                if idle_with_failures || matches!(&snapshot.state, WorkerState::Blocked(_)) {
+                    theme::danger(cx)
+                } else if offline {
+                    theme::warning(cx)
+                } else if busy {
+                    theme::accent(cx)
+                } else {
+                    theme::secondary(cx)
+                },
+            ),
         )
         .child(
             div()
@@ -214,7 +225,14 @@ fn status_card(snapshot: &Snapshot, cx: &mut Context<Screen>) -> AnyElement {
                 .min_w_0()
                 .text_size(rems(0.875))
                 .font_weight(FontWeight::BOLD)
-                .child(snapshot.state.label().to_owned()),
+                .child(if idle_with_failures {
+                    format!(
+                        "Terminé — {failed} échec{}",
+                        if failed > 1 { "s" } else { "" }
+                    )
+                } else {
+                    snapshot.state.label().to_owned()
+                }),
         )
         .child(
             div()
@@ -608,7 +626,8 @@ fn failures_card(snapshot: &Snapshot, page: usize, cx: &mut Context<Screen>) -> 
         );
     }
     let mut card = card(cx)
-        .child(section_title(
+        .child(titled(
+            IconName::TriangleAlert,
             format!(
                 "{} échec{}",
                 snapshot.failures.len(),
