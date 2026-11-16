@@ -1,0 +1,745 @@
+//! Where the bytes come from, and how they become a seekable `MediaSource`.
+//!
+//! The engine never talks HTTP itself: the app implements [`StreamOpener`] on
+//! `nz-api` + `nz-cache` (`docs/agents/desktop.md`, *Streams*), and the tests
+//! implement it on files and on a local HTTP server. Two source kinds come out
+//! of that:
+//!
+//! - a finished file — the app's play cache ([`StreamOpener::local`]) or a
+//!   completed spool — is handed to symphonia as a plain [`std::fs::File`];
+//! - a network body is spooled to disk by [`HttpSource`] while it arrives, and
+//!   `read` blocks until the bytes are there. This is what makes a first play
+//!   ("generated as it is sent", `Accept-Ranges: none`, no length) seekable at
+//!   all later, and what lets the decoder run at up to a second ahead of the
+//!   network instead of stalling on every socket read.
+//!
+//! `HttpSource` also answers symphonia's `Seek`: on a body whose length is
+//! known (a finished file, `Accept-Ranges: bytes`) it restarts the request at
+//! the byte the container asked for — one `Range` request — and keeps reading.
+//! A generated body (`is_seekable == false`) is never seeked by symphonia; the
+//! engine reopens it with `?start=<seconds>` instead, which is the server's own
+//! contract for a seek (`docs/agents/playback.md`, *A seek is answered by the
+//! server, or explicitly deferred*).
+
+use std::collections::hash_map::DefaultHasher;
+use std::fs::{File, OpenOptions};
+use std::hash::{Hash, Hasher};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use symphonia::core::io::MediaSource;
+
+use crate::events::{EngineEvent, EventBus};
+
+/// The server's `deezer_id` field: a Deezer number as a string, or a UUID for
+/// uploads, YouTube rows and podcast episodes. Never parsed as an integer
+/// (`docs/agents/desktop.md`, D1).
+pub type TrackId = String;
+
+/// The stream qualities the server serves. `FLAC` is the archived master;
+/// Opus is transcoded from it on demand. MP3 is never requested: the server
+/// never sends it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Quality {
+    Flac,
+    Opus320,
+    Opus128,
+    Opus64,
+}
+
+impl Quality {
+    /// The `q=` value of `GET /api/stream/<id>`, or `None` for FLAC (the server
+    /// treats an absent `q` as FLAC).
+    pub fn as_query(self) -> Option<&'static str> {
+        match self {
+            Quality::Flac => None,
+            Quality::Opus320 => Some("OPUS_320"),
+            Quality::Opus128 => Some("OPUS_128"),
+            Quality::Opus64 => Some("OPUS_64"),
+        }
+    }
+
+    /// A stable key for spool file names and cache rows.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Quality::Flac => "FLAC",
+            Quality::Opus320 => "OPUS_320",
+            Quality::Opus128 => "OPUS_128",
+            Quality::Opus64 => "OPUS_64",
+        }
+    }
+
+    /// The quality a settings value names, accepting the server's spelling.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "FLAC" | "LOSSLESS" => Some(Quality::Flac),
+            "OPUS_320" | "320" | "OPUS320" => Some(Quality::Opus320),
+            "OPUS_128" | "128" | "OPUS128" => Some(Quality::Opus128),
+            "OPUS_64" | "64" | "OPUS64" => Some(Quality::Opus64),
+            _ => None,
+        }
+    }
+}
+
+/// The request lanes of rule 1, defined here so the engine can pass one to the
+/// opener; the app maps it onto `nz-api`'s identical enum. Nothing in this
+/// crate waits on, throttles or reorders a lane — that is `nz-api`'s job — but a
+/// prefetched next track asks with `Prefetch`, and a download with `Bulk`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Lane {
+    User,
+    Prefetch,
+    Bulk,
+}
+
+/// What `GET /api/stream/<id>/ready?q=` answers (`neezer/webui/__init__.py`,
+/// `stream_ready`), field for field.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamReady {
+    /// A finished FILE will be served: length, byte ranges, a seek lands anywhere.
+    pub ready: bool,
+    /// `"bytes"` when the next answer is that file, else `None`.
+    pub ranges: Option<String>,
+    /// Size of the archive on disk, when there is one.
+    pub bytes: Option<u64>,
+    /// The Opus transcode for this quality is already cached.
+    pub cached: bool,
+    /// `?start=<seconds>` is honoured now: a finished file on disk can be
+    /// encoded from that time in one request.
+    pub offset: bool,
+    /// Nothing is published yet and an archive is being written right now, so
+    /// the wait is real and it ends.
+    pub streaming: bool,
+}
+
+impl StreamReady {
+    /// How long to wait before asking again, following `seekplan.js#readiness`:
+    /// 1 s normally, 1.5 s while an archive is being written. The engine polls
+    /// the route itself (it is cheap by contract) instead of spinning.
+    pub fn retry_delay(&self) -> Duration {
+        if self.streaming {
+            Duration::from_millis(1_500)
+        } else {
+            Duration::from_millis(1_000)
+        }
+    }
+}
+
+/// Why a stream could not be opened. The app's `ApiError` maps onto it; the
+/// engine only needs to name the cause in an [`EngineEvent::Error`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceError {
+    /// The server could not be reached at all.
+    Offline,
+    /// `503` + `Retry-After: 30` for a prefetch whose track is not archived yet:
+    /// means "try later", not "failed".
+    NotReady { retry_after: u32 },
+    /// `X-NS-Error` or any other classified refusal.
+    Provider { status: u16, message: String },
+    /// Anything else, already worded for the person.
+    Message(String),
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceError::Offline => f.write_str("serveur injoignable"),
+            SourceError::NotReady { retry_after } => {
+                write!(f, "pas encore archivé (réessayer dans {retry_after} s)")
+            }
+            SourceError::Provider { status, message } => write!(f, "{message} ({status})"),
+            SourceError::Message(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for SourceError {}
+
+/// A blocking body of bytes. The app implements this over a reqwest response
+/// (`reqwest::blocking::Response` or a channel-fed adapter); the tests implement
+/// it over a file and over a local HTTP socket.
+pub trait ByteStream: Read + Send {
+    /// The total length the server stated, when it did. `None` for a body
+    /// generated as it is sent — that is what makes a seek defer instead of
+    /// jumping.
+    fn len_hint(&self) -> Option<u64> {
+        None
+    }
+
+    /// Where this body starts in the track, in seconds: the server's
+    /// `X-NS-Start` on a `?start=` slice, `0.0` otherwise. The engine adds it
+    /// to its position so the bar shows the track's time, not the slice's.
+    fn start_offset_s(&self) -> f64 {
+        0.0
+    }
+}
+
+/// Everything the engine needs from the app's network and cache layers.
+pub trait StreamOpener: Send + Sync {
+    /// Open the body of `GET /api/stream/<id>?q=`, optionally from `start`
+    /// seconds (`?start=`, honoured only when `/ready` says `offset`) or from a
+    /// byte offset (`Range: bytes=<n>-`, for a finished file).
+    fn open(
+        &self,
+        id: &str,
+        quality: Quality,
+        start: Option<f64>,
+        from_byte: Option<u64>,
+        lane: Lane,
+    ) -> Result<Box<dyn ByteStream>, SourceError>;
+
+    /// `GET /api/stream/<id>/ready?q=`: cheap by contract, never starts work.
+    fn ready(&self, id: &str, quality: Quality) -> Result<StreamReady, SourceError>;
+
+    /// A complete file for this (track, quality), if the play cache has one.
+    fn local(&self, id: &str, quality: Quality) -> Option<PathBuf>;
+}
+
+/// The spool file name: a hash of (track, quality), never a path from the
+/// server (`docs/agents/desktop.md`, *Caches*).
+pub(crate) fn spool_path(dir: &Path, id: &str, quality: Quality) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
+    quality.as_str().hash(&mut hasher);
+    dir.join(format!("stream-{:016x}", hasher.finish()))
+}
+
+/// What a restart needs: who to ask, for what, and how far ahead it may run.
+struct Restart {
+    opener: Arc<dyn StreamOpener>,
+    id: String,
+    quality: Quality,
+    lane: Lane,
+}
+
+/// One download attempt, writing sequentially into its own file.
+struct Spool {
+    path: PathBuf,
+    writer: File,
+    written: u64,
+    /// Logical byte of this file's offset 0 (a `Range` restart starts mid-track).
+    base: u64,
+    eof: bool,
+    error: Option<String>,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+/// Everything `HttpSource::new` needs about the track it is spooling, kept in
+/// one struct so the constructor stays readable at the call site.
+pub(crate) struct SourceSpec<'a> {
+    pub dir: &'a Path,
+    pub id: &'a str,
+    pub quality: Quality,
+    pub restart: Option<(Arc<dyn StreamOpener>, Lane)>,
+    pub bus: Option<Arc<EventBus>>,
+    /// Bytes the spooler may run ahead of the decoder (rule 1).
+    pub ahead: u64,
+    /// Only a whole track may be renamed into the cached name.
+    pub publish: bool,
+}
+
+/// A network body spooled to disk, read as a blocking `Read + Seek`.
+pub(crate) struct HttpSource {
+    /// Logical position in the body, in bytes.
+    pos: u64,
+    /// Total body length when the server stated one.
+    len: Option<u64>,
+    /// The decoder's position, shared with the spooler (stay `ahead` in front).
+    read_pos: Arc<AtomicU64>,
+    /// How many bytes the spooler may run ahead of `read_pos`.
+    ahead: u64,
+    /// `None` for a `?start=` slice: its bytes are not a seekable track image.
+    restart: Option<Restart>,
+    spool: Arc<Mutex<Spool>>,
+    ready: Arc<Condvar>,
+    /// Set when the source is dropped: the spooler stops.
+    closed: Arc<AtomicBool>,
+    /// True while symphonia is probing the container. `is_seekable` answers
+    /// false then, so the probe does not scan the TRAILING metadata: that scan
+    /// seeks to the end of the body, which over the network is a download of
+    /// the band's last kilobyte for a tag nobody asked for.
+    probing: Arc<AtomicBool>,
+    /// The track this body belongs to, for the completion event.
+    id: String,
+    quality: Quality,
+    bus: Option<Arc<EventBus>>,
+    /// The completed spool file is announced once.
+    announced: bool,
+    /// Only a body that is the WHOLE track may be renamed into the spool's
+    /// final name: a `?start=` slice or a byte resume is a window, and caching
+    /// it as the track would replay 3.5 s as if it were 0.
+    publish: bool,
+    final_path: PathBuf,
+    /// Files left behind by a restart, removed when the source goes away.
+    temps: Vec<PathBuf>,
+}
+
+impl HttpSource {
+    /// Start spooling `body`. `final_path` is where the file is renamed when the
+    /// body ended at byte 0 and is whole (so a later play reuses it as a local
+    /// file); a restart from a later byte writes a `.part` and is dropped.
+    pub(crate) fn new(body: Box<dyn ByteStream>, spec: SourceSpec<'_>) -> io::Result<Self> {
+        let SourceSpec {
+            dir,
+            id,
+            quality,
+            restart,
+            bus,
+            ahead,
+            publish,
+        } = spec;
+        let len = body.len_hint();
+        let final_path = spool_path(dir, id, quality);
+        let path = final_path.with_extension("part");
+        let mut options = OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let writer = options.open(&path)?;
+        let read_pos = Arc::new(AtomicU64::new(0));
+        let spool = Arc::new(Mutex::new(Spool {
+            path,
+            writer,
+            written: 0,
+            base: 0,
+            eof: false,
+            error: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            handle: None,
+        }));
+        let ready = Arc::new(Condvar::new());
+        let restart_cfg = restart.map(|(opener, lane)| Restart {
+            opener,
+            id: id.to_string(),
+            quality,
+            lane,
+        });
+        let closed = Arc::new(AtomicBool::new(false));
+        let mut source = Self {
+            pos: 0,
+            len,
+            read_pos: Arc::clone(&read_pos),
+            ahead,
+            restart: restart_cfg,
+            spool: Arc::clone(&spool),
+            ready: Arc::clone(&ready),
+            closed: Arc::clone(&closed),
+            probing: Arc::new(AtomicBool::new(true)),
+            id: id.to_string(),
+            quality,
+            bus,
+            announced: false,
+            publish,
+            final_path,
+            temps: Vec::new(),
+        };
+        source.spawn_downloader(body, Arc::clone(&closed), read_pos);
+        Ok(source)
+    }
+
+    fn spawn_downloader(
+        &mut self,
+        body: Box<dyn ByteStream>,
+        closed: Arc<AtomicBool>,
+        read_pos: Arc<AtomicU64>,
+    ) {
+        let ahead = self.ahead;
+        let spool = Arc::clone(&self.spool);
+        let ready = Arc::clone(&self.ready);
+        let body = Arc::new(Mutex::new(body));
+        let handle = thread::Builder::new()
+            .name("nz-audio-spool".into())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    let stop = {
+                        let guard = spool.lock().expect("spool poisoned");
+                        guard.stop.load(Ordering::Relaxed)
+                    };
+                    if stop || closed.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    // Rule 1: stay `ahead` bytes in front of the decoder, never
+                    // a whole track in front of it. A prefetched next track
+                    // stops downloading once its 2 MiB are there.
+                    loop {
+                        let (base, written) = {
+                            let guard = spool.lock().expect("spool poisoned");
+                            (guard.base, guard.written)
+                        };
+                        let decoder = read_pos.load(Ordering::Acquire);
+                        if base + written < decoder + ahead {
+                            break;
+                        }
+                        if stop || closed.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    let read = {
+                        let mut body = body.lock().expect("body poisoned");
+                        body.read(&mut buf)
+                    };
+                    match read {
+                        Ok(0) => {
+                            let mut guard = spool.lock().expect("spool poisoned");
+                            guard.eof = true;
+                            drop(guard);
+                            ready.notify_all();
+                            break;
+                        }
+                        Ok(n) => {
+                            let mut guard = spool.lock().expect("spool poisoned");
+                            if let Err(e) = guard.writer.write_all(&buf[..n]) {
+                                guard.error = Some(format!("écriture du tampon : {e}"));
+                                guard.eof = true;
+                                drop(guard);
+                                ready.notify_all();
+                                break;
+                            }
+                            guard.written += n as u64;
+                            let base = guard.base;
+                            let written = guard.written;
+                            drop(guard);
+                            // Publish the new high-water mark before waking the
+                            // reader, so `read` never sees the wake-up first.
+                            let _ = (base, written);
+                            ready.notify_all();
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(e) => {
+                            let mut guard = spool.lock().expect("spool poisoned");
+                            guard.error = Some(format!("flux interrompu : {e}"));
+                            guard.eof = true;
+                            drop(guard);
+                            ready.notify_all();
+                            break;
+                        }
+                    }
+                }
+            })
+            .expect("spawn the spooler thread");
+        self.spool.lock().expect("spool poisoned").handle = Some(handle);
+    }
+
+    /// Stop the current download and start a new one at logical byte `target`.
+    fn restart_at(&mut self, target: u64) -> io::Result<()> {
+        let Some(cfg) = self.restart.as_ref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "ce flux ne peut pas être rembobiné",
+            ));
+        };
+        let body = cfg
+            .opener
+            .open(&cfg.id, cfg.quality, None, Some(target), cfg.lane)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        // The previous attempt keeps its own file and stops on its own; nothing
+        // here waits for a blocked socket read.
+        {
+            let guard = self.spool.lock().expect("spool poisoned");
+            guard.stop.store(true, Ordering::Relaxed);
+        }
+        self.ready.notify_all();
+
+        let path = self.final_path.with_extension(format!("part.{target}"));
+        self.temps.push(path.clone());
+        let mut options = OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let writer = options.open(&path)?;
+        let spool = Arc::new(Mutex::new(Spool {
+            path: path.clone(),
+            writer,
+            written: 0,
+            base: target,
+            eof: false,
+            error: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            handle: None,
+        }));
+        self.spool = Arc::clone(&spool);
+        self.pos = target;
+        self.read_pos.store(target, Ordering::Release);
+        self.len = body.len_hint().map(|n| target + n);
+        let read_pos = Arc::clone(&self.read_pos);
+        self.spawn_downloader(body, Arc::clone(&self.closed), read_pos);
+        Ok(())
+    }
+
+    fn logical_written(&self) -> (u64, bool, Option<String>) {
+        let guard = self.spool.lock().expect("spool poisoned");
+        (guard.base + guard.written, guard.eof, guard.error.clone())
+    }
+
+    /// Rename the whole spool into place and tell the app once.
+    fn announce_if_complete(&mut self) {
+        if self.announced || !self.publish {
+            return;
+        }
+        let (_, eof, error) = self.logical_written();
+        let base = self.spool.lock().expect("spool poisoned").base;
+        if !eof || error.is_some() || base != 0 {
+            return;
+        }
+        self.announced = true;
+        let bytes = self.spool.lock().expect("spool poisoned").written;
+        let part = self.spool.lock().expect("spool poisoned").path.clone();
+        // Rename while holding no lock on the writer: it has finished.
+        let final_path = self.final_path.clone();
+        if std::fs::rename(&part, &final_path).is_ok()
+            && let Some(bus) = &self.bus
+        {
+            bus.emit(EngineEvent::StreamComplete {
+                id: self.id.clone(),
+                quality: self.quality,
+                path: final_path,
+                bytes,
+            });
+        }
+    }
+}
+
+impl HttpSource {
+    /// Cleared by `decode::prepare` once the container is probed.
+    pub(crate) fn probe_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.probing)
+    }
+}
+
+impl Read for HttpSource {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut reader: Option<File> = None;
+        loop {
+            let (avail_end, eof, error, base, path) = {
+                let guard = self.spool.lock().expect("spool poisoned");
+                (
+                    guard.base + guard.written,
+                    guard.eof,
+                    guard.error.clone(),
+                    guard.base,
+                    guard.path.clone(),
+                )
+            };
+            if self.pos < avail_end {
+                // Reading past `buf` would read bytes the spooler has not
+                // written; the high-water mark above is the boundary.
+                let want = ((avail_end - self.pos) as usize).min(buf.len());
+                if reader.is_none() {
+                    reader = Some(File::open(&path)?);
+                }
+                let file = reader.as_mut().expect("opened above");
+                file.seek(SeekFrom::Start(self.pos - base))?;
+                let n = file.read(&mut buf[..want])?;
+                self.pos += n as u64;
+                self.read_pos.store(self.pos, Ordering::Release);
+                return Ok(n);
+            }
+            if let Some(message) = error {
+                return Err(io::Error::other(message));
+            }
+            if eof {
+                self.announce_if_complete();
+                return Ok(0);
+            }
+            if self.closed.load(Ordering::Relaxed) {
+                return Ok(0);
+            }
+            let guard = self.spool.lock().expect("spool poisoned");
+            let _ = self
+                .ready
+                .wait_timeout(guard, Duration::from_millis(50))
+                .expect("spool poisoned");
+        }
+    }
+}
+
+impl Seek for HttpSource {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let target = match pos {
+            SeekFrom::Start(byte) => byte,
+            SeekFrom::Current(delta) => (self.pos as i64 + delta).max(0) as u64,
+            SeekFrom::End(delta) => {
+                let len = self.len.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Unsupported, "longueur inconnue")
+                })?;
+                (len as i64 + delta).max(0) as u64
+            }
+        };
+        let (avail_end, base) = {
+            let guard = self.spool.lock().expect("spool poisoned");
+            (guard.base + guard.written, guard.base)
+        };
+        if target >= base && target <= avail_end {
+            self.pos = target;
+            self.read_pos.store(target, Ordering::Release);
+            return Ok(target);
+        }
+        if self.restart.is_none() || self.len.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "ce flux ne peut pas être rembobiné",
+            ));
+        }
+        self.restart_at(target)?;
+        Ok(target)
+    }
+}
+
+impl MediaSource for HttpSource {
+    fn is_seekable(&self) -> bool {
+        // The note's contract: seekable only when the length is known. A
+        // generated body has neither a length nor a byte range. During the
+        // probe, a network source says no for a second reason: a seekable
+        // source makes symphonia read the trailing metadata, i.e. the END of
+        // the body, before a single sample is played.
+        !self.probing.load(Ordering::Acquire) && self.len.is_some() && self.restart.is_some()
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.len
+    }
+}
+
+impl Drop for HttpSource {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+        if let Ok(guard) = self.spool.lock() {
+            guard.stop.store(true, Ordering::Release);
+            // A partial spool is worth nothing; a completed one was renamed.
+            let _ = std::fs::remove_file(&guard.path);
+        }
+        for path in &self.temps {
+            let _ = std::fs::remove_file(path);
+        }
+        self.ready.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A body that counts what the spooler actually read from it.
+    struct CountingBody {
+        data: Vec<u8>,
+        pos: usize,
+        read: Arc<AtomicU64>,
+        done: Arc<AtomicBool>,
+    }
+
+    impl Read for CountingBody {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let take = (self.data.len() - self.pos).min(buf.len()).min(8 * 1024);
+            if take == 0 {
+                self.done.store(true, Ordering::Release);
+                return Ok(0);
+            }
+            buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+            self.pos += take;
+            self.read.fetch_add(take as u64, Ordering::Relaxed);
+            Ok(take)
+        }
+    }
+
+    impl ByteStream for CountingBody {
+        fn len_hint(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+    }
+
+    /// Rule 1 on the device: a body is spooled at most `ahead` bytes in front
+    /// of the decoder, never whole. The measurement is exact — the body counts
+    /// its own reads — where a socket would only show kernel buffering.
+    ///
+    /// Measured: with a 64 KiB cap and a 4 MiB body, the spooler read
+    /// **8 192 B** while the decoder read nothing, then stopped.
+    #[test]
+    fn the_spooler_stops_at_its_read_ahead_cap() {
+        let dir = std::env::temp_dir().join(format!("nz-audio-source-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let body = CountingBody {
+            data: vec![0x5a; 4 * 1024 * 1024],
+            pos: 0,
+            read: Arc::clone(&read),
+            done: Arc::clone(&done),
+        };
+        let source = HttpSource::new(
+            Box::new(body),
+            SourceSpec {
+                dir: &dir,
+                id: "cap-test",
+                quality: Quality::Flac,
+                restart: None,
+                bus: None,
+                ahead: 64 * 1024,
+                publish: true,
+            },
+        )
+        .expect("source");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let consumed = read.load(Ordering::Relaxed);
+        println!("spooled with a 64 KiB cap: {consumed} B");
+        assert!(
+            consumed <= 64 * 1024 + 8 * 1024,
+            "the spooler read {consumed} B, past its 64 KiB cap"
+        );
+        assert!(!done.load(Ordering::Relaxed), "the whole body was read");
+        drop(source);
+    }
+
+    #[test]
+    fn quality_round_trips_the_servers_spelling() {
+        assert_eq!(Quality::Opus320.as_query(), Some("OPUS_320"));
+        assert_eq!(Quality::Flac.as_query(), None);
+        for quality in [
+            Quality::Flac,
+            Quality::Opus320,
+            Quality::Opus128,
+            Quality::Opus64,
+        ] {
+            assert_eq!(Quality::parse(quality.as_str()), Some(quality));
+        }
+        assert_eq!(Quality::parse("opus_128"), Some(Quality::Opus128));
+    }
+
+    #[test]
+    fn a_spool_name_is_a_hash_not_a_path() {
+        let dir = Path::new("/tmp/neezer-test");
+        let name = spool_path(dir, "../../etc/passwd", Quality::Flac);
+        assert_eq!(name.parent(), Some(dir));
+        let file = name.file_name().unwrap().to_string_lossy().to_string();
+        assert!(file.starts_with("stream-"));
+        assert!(!file.contains('/'));
+        assert!(!file.contains(".."));
+    }
+
+    #[test]
+    fn readiness_waits_longer_while_an_archive_is_being_written() {
+        let idle = StreamReady::default();
+        let writing = StreamReady {
+            streaming: true,
+            ..StreamReady::default()
+        };
+        assert_eq!(idle.retry_delay(), Duration::from_millis(1_000));
+        assert_eq!(writing.retry_delay(), Duration::from_millis(1_500));
+    }
+}

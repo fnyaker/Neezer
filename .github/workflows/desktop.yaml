@@ -65,6 +65,10 @@ env:
     libasound2-dev libpipewire-0.3-dev libdbus-1-dev
     libfontconfig-dev libfreetype-dev libglib2.0-dev libzstd-dev libssl-dev
     xvfb xauth
+    # D5's tests decode REAL audio: two FLACs cut from one sine (the gapless
+    # seam), an Ogg Opus (pre-skip), a 44.1 kHz FLAC (resampling). ffmpeg is the
+    # only encoder in the stack, and the runner image is not a contract.
+    ffmpeg
 
 jobs:
   fmt:
