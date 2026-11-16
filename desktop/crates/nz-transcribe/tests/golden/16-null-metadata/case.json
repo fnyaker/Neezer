@@ -1,0 +1,1 @@
+{"items":[{"offsets":{"from":0,"to":2400},"text":"Une seule ligne."}],"chunk_start_ms":0,"chunk_duration_ms":60000,"overlap_ms":2000,"sidecar":{"episode_id":"6f0a4d3c-6b1e-4a4e-9d0e-2f0c9f6f1a11","language":null,"engine":"whisper.cpp","model":null,"engine_version":null,"duration_ms":0,"created":null,"updated":null},"sidecar_segments":null}

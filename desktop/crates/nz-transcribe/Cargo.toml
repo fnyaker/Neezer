@@ -2,6 +2,12 @@
 # the engine can run, be paused (SIGSTOP) and be tested without the app.
 # Owned by T1, T2 and T3 (docs/agents/desktop.md).
 #
+# T1 declares every dependency, including the ones only T2 and T3 use: the later
+# lots own engine/audio/models and worker/protocol/supervisor, not this file, and
+# a manifest edited by three lots in three PRs is a lock file that conflicts for
+# no reason. A dependency nothing calls yet costs a compile only because the
+# workspace already pins it (`desktop/Cargo.toml`), so the lock does not move.
+#
 # whisper-rs is pinned with the `vulkan` feature from D0 on: the CI job must
 # prove the Vulkan toolchain (headers + glslc + loader) is really there, which
 # is the one system dependency that fails late and expensively on a fresh
@@ -25,10 +31,17 @@ name = "neezer-transcribe"
 path = "src/main.rs"
 
 [dependencies]
+# --- the engine (T2): whisper.cpp on Vulkan, audio decoded in-process ------
 whisper-rs = { workspace = true, features = ["vulkan"] }
 symphonia = { workspace = true }
 symphonia-adapter-libopus = { workspace = true }
+rubato = { workspace = true }
 hound = { workspace = true }
+# --- the server's worker protocol (T3), and the token on disk --------------
+reqwest = { workspace = true }
+tokio = { workspace = true }
+directories = { workspace = true }
+# --- what every lot needs --------------------------------------------------
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
