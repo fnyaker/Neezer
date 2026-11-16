@@ -499,6 +499,30 @@ fn script(directory: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
+/// The fail-fast bound of a fixture waiting for its own fake engine.
+///
+/// The wait itself is an event (`pid` exists); this is only the point where a
+/// fixture that will never produce it fails. Measured on this machine: the fake
+/// engine writes its pid in **3 ms** idle and in **0.6 s** with eight spinners
+/// on its core (the supervisor starts the child `nice 19`, so it is scheduled
+/// last), which leaves 16x the worst measurement.
+const FIXTURE_GUARD: Duration = Duration::from_secs(10);
+
+/// Wait until `path` exists — the event a verdict is armed on, never a sleep.
+///
+/// Returns false when the guard expired, so the caller decides how to fail
+/// (a supervisor whose engine never comes must still be stopped).
+async fn wait_for_file(path: &Path, guard: Duration) -> bool {
+    let deadline = Instant::now() + guard;
+    while !path.exists() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    true
+}
+
 /// The fake decoder: the episode's length is the first line of the audio file,
 /// and a chunk is `min(asked, what is left)` milliseconds of silence at 64 bytes
 /// per millisecond (`audio::BYTES_PER_MS`). The real one is T2's
@@ -699,7 +723,6 @@ async fn a_cancel_stops_within_one_heartbeat() {
     // by the server's cancel.
     std::fs::write(directory.join("wait-for-go"), b"1").expect("marker");
     let state = Arc::new(Mutex::new(State::new()));
-    state.lock().expect("state").cancel_at_beat = Some(1);
     let fake = Fake::start(state.clone());
     let mut run = harness(
         &fake,
@@ -708,13 +731,33 @@ async fn a_cancel_stops_within_one_heartbeat() {
         Duration::from_millis(300),
     );
     let claim = claim(&run.client).await;
-    let started = Instant::now();
-    let outcome = run.supervisor.run_claim(claim).await;
-    let elapsed = started.elapsed();
+    // A cancel is a verdict about a RUNNING job, so it is armed on the event
+    // that the engine is up — its `pid` file, written before the fake blocks on
+    // `wait-for-go` — never on the clock. A loaded runner can take longer than
+    // one 300 ms beat to download, decode and spawn; that beat then cancelled a
+    // job whose engine had never existed, and the test read a `pid` nobody had
+    // written (CI on PR #237: "the engine wrote its pid: No such file or
+    // directory"; reproduced at iteration 1 under 8 spinners on one core).
+    let arm = async {
+        if !wait_for_file(&directory.join("pid"), FIXTURE_GUARD).await {
+            // Unblock the engine so the job cannot wait out the engine's 900 s
+            // floor, then fail the fixture with a readable cause.
+            std::fs::write(directory.join("go"), b"1").ok();
+            panic!("the fake engine never wrote its pid");
+        }
+        let mut state = state.lock().expect("state");
+        state.cancel_at_beat = Some(state.beats.len() as u32 + 1);
+        Instant::now()
+    };
+    let (outcome, armed_at) = tokio::join!(run.supervisor.run_claim(claim), arm);
+    // One heartbeat (300 ms) plus the shutdown of a stopped child: 62-420 ms
+    // measured over 65 passes, 25 of them pinned to one core under eight
+    // spinners. The bound is 7x the worst of those, for a starved runner.
+    let elapsed = armed_at.elapsed();
+    eprintln!("MEASURE cancel -> idle: {elapsed:?} (one 300 ms beat)");
 
     assert!(state.lock().expect("state").released, "the lease goes back");
     assert_eq!(outcome, Outcome::Idle);
-    // One heartbeat (300 ms) plus the shutdown of a stopped child.
     assert!(
         elapsed < Duration::from_secs(3),
         "the cancel took {elapsed:?}"
@@ -754,8 +797,13 @@ async fn a_stopped_engine_keeps_its_lease() {
     let halt = run.supervisor.halt.clone();
     let job = async { run.supervisor.run_claim(claim).await };
     let pause = async {
-        // Let the engine start and the supervisor warn the first chunk in.
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        // A pause is a verdict about a RUNNING engine, so it waits for the pid
+        // (an event), not 600 ms of clock: under load the sleep fired first and
+        // `/proc/<pid>` did not exist yet.
+        assert!(
+            wait_for_file(&directory.join("pid"), FIXTURE_GUARD).await,
+            "the fake engine never wrote its pid"
+        );
         halt.pause(true);
         let paused_at = Instant::now();
         tokio::time::sleep(Duration::from_secs(15)).await;
@@ -937,17 +985,29 @@ async fn the_control_channel_stops_a_running_job() {
         .await
         .expect("send");
     let stopper = sender.clone();
-    let started = Instant::now();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let _ = stopper.send(Command::Stop).await;
-    });
+    // A stop is an order to a RUNNING job: wait for the engine's `pid` (written
+    // before it blocks on `wait-for-go`), not 500 ms of clock — under load the
+    // sleep fired before the engine existed and the `pid` read below failed
+    // (reproduced at iteration 1 under 8 spinners on one core).
+    let watcher = {
+        let pid = directory.join("pid");
+        tokio::spawn(async move {
+            // Even if the guard expires, the stop is sent: a worker left
+            // waiting would hang the suite, and the `pid` read below is the
+            // readable failure.
+            let _ = wait_for_file(&pid, FIXTURE_GUARD).await;
+            let _ = stopper.send(Command::Stop).await;
+            Instant::now()
+        })
+    };
     let outcome = run.supervisor.run_worker(Some(receiver)).await;
+    let stop_sent = watcher.await.expect("watcher");
     assert_eq!(outcome, Outcome::Idle);
+    eprintln!("MEASURE stop -> worker idle: {:?}", stop_sent.elapsed());
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        stop_sent.elapsed() < Duration::from_secs(5),
         "the stop reached the running job ({:?})",
-        started.elapsed()
+        stop_sent.elapsed()
     );
     let tags = run.sink.tags();
     assert!(!tags.contains(&"done".to_owned()), "{tags:?}");

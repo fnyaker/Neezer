@@ -1604,6 +1604,18 @@ Waves that can run in parallel (disjoint files):
   schedule's attempt count (**3 claims, not a storm**). Against the REAL server
   (`NZ_PERF_API=1`, `perf_api.py --podcasts`, `bench` enrolling a `client` worker):
   **6 chunks, 12 lines, the row `ready` with `source: client`, `worker: banc-t3`, in 0.9 s**.
+- **The rule, arm a verdict on the event, never on the clock**: a fixture that cancels after
+  one 300 ms beat, or sends a `stop` after a 500 ms sleep, can land before the engine exists on a
+  loaded runner. The job is then released without ever spawning, and the test reads a `pid` nobody
+  wrote — the `a_cancel_stops_within_one_heartbeat` failure of PR #237 ("the engine wrote its pid:
+  No such file or directory"), reproduced at **iteration 1** under 8 spinners on one core. Both
+  tests now wait for the fake engine's `pid` (it writes it before it blocks), arm the cancel or send
+  the stop on that event, and assert the cancel→idle time: **62-420 ms measured** over 65 passes
+  (25 of them pinned to one core), **50/50 passes each, 10 of them pinned to one core** under that
+  load. The same event
+  replaced the pause test's 600 ms sleep. The `pid` itself appears in **3 ms** idle and **0.6 s**
+  under that load (the child runs `nice 19`, so it is scheduled last), which is what justifies the
+  fixtures' 10 s fail-fast guard — 16x the worst measurement, and it never becomes a pass.
 - **Pitfalls found by building**: a pause needs `process_group(0)` on the child **and**
   `kill(-pgid, SIGSTOP)` — the `libc` crate is not available to this lot, so the four signal numbers
   and `kill`/`nice`/`localtime_r` are declared locally (the app is Linux-only); a stopped process
