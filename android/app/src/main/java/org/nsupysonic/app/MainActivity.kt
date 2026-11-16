@@ -76,9 +76,12 @@ class MainActivity : AppCompatActivity() {
          * can hold a long list, repeat one/all, ask the page for more when it
          * runs low (`__nsNeedNext`) and say when the list is exhausted, 11 its
          * player answers a state probe (op `state`) and can fold the sound to
-         * mono and pan it (the `mono` / `balance` of op `fx`).
+         * mono and pan it (the `mono` / `balance` of op `fx`), 12 its state
+         * carries the output's own numbers (`un` AudioTrack underruns, `br`
+         * rebuffers, `bb` the AudioTrack buffer in ms), its sink buffer is
+         * 500 ms..1 s and it resumes 0.5 s after a rebuffer.
          */
-        private const val BRIDGE_VERSION = 11
+        private const val BRIDGE_VERSION = 12
         /** Upper bound on one analyser command (the family table is ~16 kB). */
         private const val MAX_ANALYSIS_CMD = 64 * 1024
         /** Upper bound on one piece of a download moved into the app (base64 chars). */

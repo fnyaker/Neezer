@@ -368,6 +368,13 @@ export class NativeAudioElement extends EventTarget {
     this._probes = [];
     this._lastDesyncAt = 0;
     this._desyncReason = "";
+    // What the app's audio output really did (counted natively, cumulative for
+    // this player): AudioTrack underruns, rebuffers after a ready state, and the
+    // buffer Media3 actually created. Logged when they move, so a "it cuts"
+    // report has a number instead of a feeling.
+    this._underruns = 0;
+    this._rebuffers = 0;
+    this._sinkMs = 0;
     this._clear();
   }
 
@@ -497,6 +504,19 @@ export class NativeAudioElement extends EventTarget {
     return this._advPending ? this._advKey : "";
   }
 
+  /** AudioTrack underruns the app's sink reported for this player (cumulative). */
+  get underruns() {
+    return this._underruns;
+  }
+  /** Rebuffers after a ready state (the source starved, not the sink). */
+  get rebuffers() {
+    return this._rebuffers;
+  }
+  /** The AudioTrack buffer Media3 created, in ms (0 until a track is up). */
+  get sinkBufferMs() {
+    return this._sinkMs;
+  }
+
   _fire(type) {
     // Until the page takes over a track the app went on to, every event would
     // be read as being about the track the page still thinks is playing.
@@ -567,6 +587,34 @@ export class NativeAudioElement extends EventTarget {
       logInfo("audio", `titre ignoré par le lecteur de l'application (${s.fault})`, null, {
         important: true,
       });
+    }
+    // The app's OWN output, as numbers (bridge 12). `un` is an AudioTrack
+    // underrun — the sink starved, the audio thread was not fed in time; `br` is
+    // a rebuffer after the source had been ready — the network starved. They
+    // need opposite fixes, and until this line the journal could not tell them
+    // apart. `bb` is the AudioTrack buffer, which says whether the 500 ms..1 s
+    // sizing is really in force on this device.
+    const un = +s.un || 0;
+    const br = +s.br || 0;
+    const bb = +s.bb || 0;
+    if (un !== this._underruns || br !== this._rebuffers || (bb && bb !== this._sinkMs)) {
+      const firstUnder = un > 0 && !this._underruns;
+      const newRebuffer = br > this._rebuffers;
+      this._underruns = un;
+      this._rebuffers = br;
+      if (bb) this._sinkMs = bb;
+      // A device that underruns ten times a second must not turn the journal
+      // into the cause of the next one: one line a second, and only the first
+      // underrun and a new rebuffer are flushed as important.
+      if (firstUnder || newRebuffer || now() - (this._lastOutAt || 0) >= 1000) {
+        this._lastOutAt = now();
+        logInfo(
+          "audio",
+          `sortie de l'application : ${un} sous-alimentation(s), ${br} reprise(s) de buffer, AudioTrack ${bb || "?"} ms`,
+          null,
+          { important: firstUnder || newRebuffer }
+        );
+      }
     }
     if (typeof s.k === "string" && s.k && s.k !== this._advKey) {
       // The app went on to the track the page named (its first state about it,

@@ -711,3 +711,16 @@ test("a seek the app has received but not applied does not move the bar", async 
   assert.equal(el.seeking, false);
   assert.ok(Math.abs(el.currentTime - 60) < 0.3);
 });
+
+test("the app's output numbers are exposed, and an old state reports zero", () => {
+  app({ version: 12 });
+  const el = N.createNativeElement();
+  el.src = "/api/stream/a";
+  el.load();
+  // An APK before bridge 12 sends none of them: the element still works, at 0.
+  report(el, { c: 1, pc: 1, tc: 1, st: 3, p: true, t: 0, sk: true, sc: true, bg: false });
+  assert.deepEqual([el.underruns, el.rebuffers, el.sinkBufferMs], [0, 0, 0]);
+  report(el, { c: 1, pc: 1, tc: 1, st: 3, p: true, t: 0, sk: true, sc: true, bg: false, un: 3, br: 2, bb: 500 });
+  assert.deepEqual([el.underruns, el.rebuffers, el.sinkBufferMs], [3, 2, 500]);
+  el.release();
+});
