@@ -227,22 +227,29 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   on right-click, long press and Maj+F10; `stores.js#openMenu` returns the focus to it), and the
   attribute adds no focusable and no second target — measured 36/36 cards, one target each, Escape
   from a keyboard-opened menu lands back on the card with its focus ring.
-  Measured (`test/glass/run.mjs`, 3 themes × 1280×900 and 390×900, **57 surfaces**): the catch is
-  **+27.6 / +21.1 / +30.6 / +34.6 / +30.7 / +23.0 over 255** above the trough (card, menu, sheet, side
-  card, phone door), with **+10 to +14 within the same 1 px row** (a uniform border cannot fake that)
-  and **0/255 in eco**; the surfaces this lot adds measure the phone's doors **6.28:1**, the player's
-  queue sheet **5.70:1**, the À propos panel **5.18:1** and the desktop side card **6.44:1**; 1
-  `backdrop-filter` + the ground's image with one overlay open, 3 values in the app, 0 in eco.
-  Cost: the finish is background paint, not a pass — an interleaved A/B (four passes over the same
-  menu opens at 4× CPU under SwiftShader) puts the beams, the shadow and the tint's arrival inside
-  the noise of the bare material (medians **49.5–53.5 ms** against **50.0** for the whole open), and
-  the bench's own paired numbers stay where they were: the blur of a sheet **under 30 ms**, of a menu
-  **under 10 ms**; the card grid scrolls at **16.7 ms** a frame on the phone and 16.7–33.3 on the
-  desktop, long tasks **59–170 ms** over the run. The bench's two known
-  environment flaws are written down where they happen: the top bar's text sits in an opaque field
-  (its tint is not comparable, so only its contrast is asserted), and headless SwiftShader drops a
-  `backdrop-filter` layer for a few frames now and then (measured: three opens in a row out of
-  sixteen), so a sample that cannot be the material is re-taken.
+  Measured (`test/glass/run.mjs`, 3 themes × 1280×900 and 390×900, **57 surfaces, 0 failure**): the
+  catch is **+23.4 / +21.1 / +26.6 over 255** above the trough on a card, **+31.5 / +8.4 / +34.3** on
+  a menu, **+30.9 / +24.4 / +35.5** on a sheet, **+30.6 / +10.1 / +33.5** on the desktop side card and
+  **+23.0 / +8.4 / +25.6** on the phone's thumb door (Encre / Papier / Pochette), with **+4.1 to
+  +14.9 inside the same 1 px row** (a uniform border cannot fake that) and **0.0/255 in eco**. The
+  surfaces this lot adds measure the phone's doors **6.02–6.72:1**, the player's queue sheet
+  **5.97–6.66:1**, the À propos panel **5.18–6.36:1** and the desktop side card **5.76 / 6.16 /
+  6.44:1**; worst of the run **5.09:1**, the top bar's ⌘K hint (unchanged: the theme's own `--dim` on
+  its own field); 1 `backdrop-filter` + the ground's image with one overlay open, 3 values in the app,
+  0 in eco. Cost: the finish is background paint, not a pass. Before → after on the same bench, phone
+  leg (4× CPU, SwiftShader): menu **50.2 → 49.8 ms**, sheet **106.9 → 101.0 ms**, card-grid scroll
+  **16.7 → 16.7 ms** a frame (p95 16.8), long tasks **53 → 53 ms**. The desktop legs were taken on a
+  machine at load 8–22 of 16 cores (several agents benching) and their absolutes are not comparable,
+  but the BEST frame of that scroll is **16.6 ms in all four variants** (with the finish, without the
+  shadow, without the beams, without both) — the light costs no frame. An interleaved A/B in one
+  session (four passes over the same opens) finds a menu open at **50.0–53.5 ms** with the finish,
+  without the tint arrival, without the shadow and without the beams alike, and a sheet at **103–133**
+  against **100–118 ms** with all three off. The bench's two known environment flaws are written down
+  where they happen: the top bar's text sits in an opaque field (its tint is not comparable, so only
+  its contrast is asserted), and headless SwiftShader drops a composited layer for a few frames now
+  and then (measured: three opens in a row out of sixteen), so a sample that cannot be the material is
+  re-taken; the desktop side card's TAB PILLS are not sampled for the same reason (their accent fill
+  is a child layer the artifact can drop — the pair itself is `--onac` on `--ac`).
 - **The sleeve-derived header gradient fades too** (`components/GradientHeader.svelte`, used by a
   show, an import job and the credits page): `--gh-c` is the second registered `<color>`, and the
   gradient is built from it with `color-mix` — 90 % of the sleeve at 0 %, 45 % of it mixed with black
