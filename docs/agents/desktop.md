@@ -354,7 +354,8 @@ of its callers.
 
 Rules for every lot (they are part of each worker prompt below):
 
-- One lot = one branch `desktop/<lot-id>-<slug>` = one PR into `master`; CI fully green (every job,
+- One lot = one branch `desktop/<lot-id>-<slug>` (under Orchestrator: the worker's own session
+  namespace, e.g. `<session-branch>/<lot-id>-<slug>`) = one PR into `master`; CI fully green (every job,
   including `security.yaml`'s findings) before merge; merge without asking.
 - Only the files the lot names. A lot that needs a file another lot owns stops and reports.
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
@@ -820,7 +821,8 @@ Each coding worker receives this text with `<LOT>` replaced by the lot's id and 
 > et les fichiers SPA/serveur qu'il nomme. Ne touche QUE les fichiers que le lot liste ; si tu as
 > besoin d'un autre fichier, arrête-toi et signale-le. Respecte les contrats (API Rust, routes,
 > payloads) exactement comme écrits ; si un contrat est faux face au code réel, corrige la note dans
-> la même PR et dis pourquoi. Branche `desktop/<lot>-<slug>` depuis `master`. Avant de pousser, dans
+> la même PR et dis pourquoi. Branche `desktop/<lot>-<slug>` depuis `master` (sous Orchestrator : dans l'espace de
+> branches de ta session). Avant de pousser, dans
 > `desktop/` : `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
 > `cargo test --workspace`. Mesure chaque critère d'acceptation, écris les nombres à côté des
 > assertions et dans la PR (avec les commandes). Pour un lot d'interface, lance l'app et regarde-la
