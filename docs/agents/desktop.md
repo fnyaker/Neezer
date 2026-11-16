@@ -6,7 +6,7 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, D2, D3, D4, D5, D6, D7, M1, T1, V1 and D14b delivered; the rest
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D14a, D14b, M1, T1 and V1 delivered; the rest
 planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
@@ -1012,18 +1012,9 @@ Waves that can run in parallel (disjoint files):
 - **The rule, explicit icons**: `gpui_kit::assets::Assets` is the **default** bundle (a dozen
   component glyphs), and an icon outside it renders NOTHING while keeping its hit box — the
   first real run showed a player bar with only Play and a sidebar without Bibliothèque or
-  Nouveautés. The shell registers `icon_assets!(ShellAssets, [...])`, and a test walks the list
-  through `AssetSource::load` so a missing icon fails CI instead of disappearing.
-  **The list is now the superset the WHOLE plan draws — 146 glyphs — not the shell's own**,
-  because six screen lots run in parallel and each one named a glyph D7's list did not carry
-  (Folder, Trash, Heart, Download, ChevronUp, RefreshCw, Link2, Eye, Archive, Ellipsis…): every
-  one of those buttons existed and was invisible. The names are the web app's own 92
-  (`webapp/src/components/Icon.svelte`) mapped to Lucide, plus what each remaining lot in this
-  file describes; **a second test walks `app/src` for every `IconName::X` and fails when one is
-  not registered**, so a lot cannot forget to add its own. Cost, measured: **42 443 784 B →
-  42 497 416 B (+53 632 B, +0.13 %)** and `first_frame_ms` median **103 → 105 ms** (5 runs each,
-  release, Xvfb/Vulkan; one 123 ms outlier after) — the glyphs are already-compressed SVGs and
-  only the ones drawn are loaded.
+  Nouveautés. The shell registers `icon_assets!(ShellAssets, [...])` with exactly the glyphs it
+  draws plus gpui-base's own, and a test walks the list through `AssetSource::load` so a
+  missing icon fails CI instead of disappearing.
 - **The rule, single instance**: `fr.neezer.Desktop` is claimed **in the background** (2 s
   budget for a hung bus): the blocking version delayed the first frame by up to its timeout,
   and a 250 ms budget made two launches both think they were first — the reason two windows
@@ -1143,114 +1134,110 @@ Waves that can run in parallel (disjoint files):
   resume after restart, and each failure's cause listed; with the network cut, every downloaded
   track plays and every cached screen opens; play-cache cap respected.
 
-### D14a — Réglages (user sections)
+### D14a — Réglages (user sections) — delivered 2026-11-17
 
-- **Files**: `screens/settings/{mod,playback,appearance,discovery,sources,account,help,shortcuts}.rs`.
-- **Acceptance**: every option the SPA's Réglages offers to a non-admin is here, saved to the
-  server where the SPA saves it (`/settings`, `/sources`, `/me/accounts*`, `/discover/prefs`,
-  `/releases/settings`) and to `kv` where the SPA keeps it locally; output device chooser lists
-  PipeWire sinks and switches without stopping the music.
-
-### D14b — Réglages (admin sections) (delivered 2026-11-16)
-
-- **The rule**: an admin screen is a column of CARDS, and every card that can
-  start work owns its own JOB. The start route returns at once, the card polls
-  its own `*_status` route on the app's `nz-net` runtime at the SPA's own
-  cadence (archive 1.5 s, migration 2 s, MusicBrainz and credits backfills
-  1.5 s), stops when the job says it is done, and then says what it did or the
-  CAUSE of each failure — the tally of reasons, then the rows, then « Copier le
-  détail » (`JobFailures.svelte`'s contract). Measured: a running archive is
-  polled **once per 1.5 s, 2 calls for a job that ends after the first poll**,
-  and an idle Serveur tab makes **0 further requests** over half a second.
-- **The rule, one sequential read pass**: opening Serveur is **10 reads** on
-  `Lane::User`, one after the other, each card painting as its answer lands — so
-  a slow link never sees ten requests compete (rule 3), and one dead route costs
-  its card, not the page. The SPA's Serveur tab makes eleven, because
-  it also reads the Deezer status and the release settings that this app keeps
-  in the Sources and Découverte sections. Measured against a real socket:
-  **10 requests, 2 242 B of JSON** (the harness's bodies; Utilisateurs: **2
-  requests, 573 B**).
-- **The rule, the token is shown once**: enrolling a transcription worker mints
-  the token with the row, shows it in a box that says so, offers « Copier le
-  jeton », and **keeps it nowhere else** — reopening the screen cannot bring it
-  back because the server never answers it again. Revoking sends the DELETE for
-  that worker's own UUID path, and an id that is not a UUID (a hostile payload)
-  never becomes a route. The SPA has no worker screen at all: these three routes
-  (`GET|POST /api/transcribe/workers`, `DELETE …/<id>`) existed on the server
-  with no client, and this lot is their first.
-- **Why some payloads are read as raw JSON, and the contract corrections**:
-  - `/enrich/backfill` answers the shared `libjob` snapshot **plus** its
-    coverage, but `nz_model::EnrichStatus` (D1) typed only the coverage half, so
-    the desktop reads `EnrichLive` locally (`#[serde(flatten)] JobStatus +
-    coverage`) instead of losing `done/failed/failures`. A test pins the payload.
-  - The worker routes have no `nz-api` function (they never existed in
-    `api.js`), so the screen uses the seam D2 left public — `Api::get` and
-    `Api::send` — rather than editing a crate this lot does not own.
-  - The inventory's Réglages → Serveur line also names **automatch** and the
-    **similar backfill**: in the SPA they live in Bibliothèque → Titres
-    indisponibles (`AutomatchPanel`) and in the genre studio (`SimilarRebuild`,
-    D16), not in Réglages; this lot does not duplicate them. `POST /api/upload`
-    (multipart) is a library action too, not a Serveur control.
-- **The rule, no invented dates**: the payloads carry naive server-local
-  timestamps and the workspace has no timezone crate, so these screens print
-  the server's own wall clock (`Vu le 16 nov. 2026 à 20:15`) instead of a
-  relative time that would be off by the UTC offset. A trailing "il y a 3 h"
-  needs a clock the client does not have; the absolute date is exact.
-- **The rule, keyboard-only as well as the mouse**: Tab reaches every control
-  through `focus_scope`; the page itself takes **Page Down / Page Up** (four
-  fifths of a screen), **Home** and **End** on its own focus — those four keys
-  only, everything else propagates to D7's `keymap.rs`, because `j`/`k` are the
-  track-list keys and Réglages is not a list. The screen takes the focus once
-  when it is built, so the first Page Down scrolls instead of doing nothing.
-  The sheets (invitation, account) are modals: the veil holds the focus,
-  Échap closes, and a click outside closes.
-- **What it is now**: `screens/settings/server.rs` (archive, migration,
-  MusicBrainz, credits, archive rules, cleanup preview + run, storage + cache
-  flush, server transcription settings, workers, upload quota) and
-  `screens/settings/users.rs` (25-row keyset pages capped at 250, six filters,
-  account sheet with promote/disable/delete-typed, invitations with
-  create/renew/revoke and the link shown once), plus the two dispatch arms in
-  `screens/settings/mod.rs`. Both screens keep their own `Inbox` (an mpsc the
-  GPUI thread drains) because `AppEvent` belongs to D7's shell and may not grow
-  a variant per screen; the requests themselves go through `nz-api`, never a
-  second HTTP path.
-- **Measured** (this machine, Rust 1.99.1, debug build, `cargo test -p
-  neezer-desktop screens::settings`): **25 tests, 0 failed, 1.7 s** (the 1.5 s
-  poll is most of it); `cargo fmt --check` and `cargo clippy --workspace
-  --all-targets -- -D warnings` clean. The screens' own worst case — **250
-  accounts + 200 invitations = +1 380 KB RSS** in a unit test (the caps the
-  screens enforce; the widgets are built per paint, so the count does not
-  follow). The whole process's RSS on these screens could not be measured here:
-  this machine has **no Xvfb and no Xephyr** and Hyprland's headless backend
-  dies with `CBackend::create() failed!` (measured), and the user's session must
-  not be driven — the same wall D7 hit. The layout is a wrapping column capped
-  at 64 rem, so 660 px (1280 with the 420 px panel open) and 1 940 px (2560)
-  scroll the same cards; D17 owns the full-size screenshot pass.
+- **The rule, one page**: Réglages is ONE entity (`settings::Screen`) with the SPA's
+  category strip at the top (`SettingsSection::USER`, plus the two an administrator
+  gets) and a « Chercher un réglage… » field that narrows it by label, accent- and
+  case-blind. Each section is a file with one `body(screen, window, cx)` function; the
+  two ADMIN sections are D14b's own screens and this page hands them the whole area
+  (`delegated: Option<AnyView>`), while a section no lot has filled yet keeps D7's
+  « Bientôt ». Switching a tab calls `nav.replace`, so `Alt+←` leaves Réglages instead
+  of walking ten tabs back.
+- **The rule, the sound changes the moment it is set**: the device settings are the
+  SPA's `localStorage` in `nz-cache`'s `kv` (`audio.eq`, `audio.bass`,
+  `audio.normalization`, `audio.mono`, `audio.balance`, `audio.fade.*`,
+  `audio.presets`, `audio.output.device`, `ui.reduce_motion`, and the stream quality
+  already in `playback.quality`), and every control writes the engine the instant it
+  moves — D6's setters are atomic stores the output callback reads at the top of its
+  next buffer. The stream quality is the one exception and its card says so ("au
+  prochain titre").
+- **The rule, the sections that do not fit get panes**: at 1280×800 with the queue
+  panel open the content column is 660 px. Lecture et son is three panes (Son,
+  Égaliseur, Transitions), Sources three (Ordre, Mes comptes, Accès), so each pane
+  fits that window without a wheel — asserted by the headless layout test below.
+- **The rule, one reply channel**: a request is spawned on `nz-net` and answers
+  through the screen's own `events::channel::<Reply>()`, drained by one foreground
+  task, so no worker touches GPUI state (D7's rule). Each section asks its routes
+  ONCE (`loaded`): **8 GETs** for a person's whole tour (Découverte 2, Sources 3,
+  Compte 1, Assistance 2; Lecture, Apparence and Raccourcis ask nothing), **+1** for
+  an admin's Découverte (`/releases/settings`) and **+2** for their Sources
+  (`/settings`, `/deezer/status`), and **0** on a revisit.
+- **The rule, the sink list is the machine's**: `nz-audio` publishes no enumeration,
+  so the output card reads `pw-dump` (`media.class == "Audio/Sink"`, one
+  `node.description` each — exactly the string `probe` matches, so a chosen sink
+  survives a restart) on a blocking thread, sorted so a node's creation order never
+  moves a chip under the pointer, and falls back to the device in use when the tool
+  is absent. `set_output_device` hands the mixer to the new stream (nothing stops),
+  and « Sortie en cours » is re-read 400 ms later, once PipeWire has it. Measured:
+  `pw-dump` **29 ms median over 7 runs, 246 KB** of JSON (15.8–43.4 ms), one read per
+  visit.
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p neezer-desktop`):
+  - **102 tests, 0 failed** for the app (D14b's included), 38 of them this lot's
+    (33 rules + 5 headless UI).
+    `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`
+    clean.
+  - **layout**: all **10 user sections** (the three other lots' stubs excluded) at
+    **2560×1600**, **1280×800** and **660×800** — the laptop with the 420 px queue
+    panel open: the root is the window (±1 px), the body never leaves the window
+    sideways, never grows past it vertically and never starts off-screen. 30 renders,
+    no panic.
+  - **keyboard**: the Son pane has **25 distinct tab stops** and the order comes back
+    to its first one (walked with `Window::focus_next`, the call gpui-omarchy's Tab
+    makes), Shift+Tab retraces it, and the search field narrows the strip to
+    « Découverte » and back. Page Down / Page Up scroll the page itself and Home / End
+    jump to its ends (Assistance is the long one), on the page's own focus — four keys
+    only, so `j`/`k` stay the lists'.
+  - **mouse**: the Apparence tab, the Mono switch and the « Normale » chip are
+    hit-tested at 1280×800 and move the same state a key would (the route changes
+    with `replace`, `values.mono` flips, the level is saved).
+  - **RSS**: **+228 KB** for the ten user sections on the second pass with a
+    **4 000-row queue** in place (`VmRSS` 57 936 → 58 164 KB; two runs 228 / 236 KB),
+    the window's and the first pass's cost excluded — the page holds no per-row data, so
+    the worst case stays the queue the shell owns. The first pass through the sections
+    reads 1 016 KB alone and 5 960 KB beside the rest of the suite: that is the glyph
+    cache being filled with strings nobody had shaped yet, which is why the test warms
+    up once and measures the structures, never the font cache.
+  - **requests**: the table above is asserted by a test; a revisit asks nothing.
 - **Pitfalls found by building**:
-  - **A GPUI background timer does not fire in the test harness** (it did not
-    advance within 10 s), so a poll that sleeps on `cx.background_executor()` is
-    untestable and, worse, unmeasured. Every timer of these screens (job polls,
-    the search debounce) runs on `nz-net` instead and answers through the same
-    inbox as the requests — one clock, driven by the same loop the D7 journeys
-    use.
-  - **`StatefulInteractiveElement` is what carries `on_click` and
-    `overflow_y_scroll`**, not `InteractiveElement`: a bare `div()` cannot be
-    clicked or scrolled, it needs `.id(...)` first. The modal veil, the scrolling
-    sheet and every row are stateful for that reason.
-  - **`InputState::focus_handle` needs the `Focusable` trait in scope** — the
-    inherent method the docs imply does not exist on `InputBaseState`. Without
-    it, a field cannot be left alone while the person is typing in it.
-  - **A number field and its chips drift** unless the render puts the server's
-    value back into the field: clicking « 180 min » left the text box at 120
-    until `sync_field` wrote the new value (never while it holds the focus).
-  - **`Box::leak` in a render is a leak per paint**: the archive rules' element
-    ids were built with `format!` per frame at first. Static ids per rule
-    (`event_id`) fixed it; clippy would not have caught it.
-  - **A timestamp is hostile input**: `&iso[11..16]` panics when a multi-byte
-    character sits where the clock belongs. Every slice is `str::get`, and a
-    time is printed only when it is `HH:MM` digits (`date_fr`/`datetime_fr`,
-    pinned by a test with `éééé`).
+  - **`.id()` returns `Stateful<Div>`**, not `Div`, and edition 2024 refuses `use<>`
+    on a generic `impl IntoElement` return: the shared builders return
+    `Stateful<Div>` (or `AnyElement` when generic).
+  - **A GPUI test window that re-focuses its anchor on every paint steals the
+    keyboard back.** The Tab walk saw 2 stops and bounced until the harness view
+    anchored ONCE (as `RootView` does): the same walk then found 25 stops that wrap.
+  - **`Window::use_keyed_state` may only be called during layout/paint**: the search
+    and ARL fields are created in `render` (per window, so a draft survives a tab
+    switch), not in `Screen::new`, which the route table calls without a window.
+  - **D7's "a tokio worker must not wake a GPUI foreground task" bit again**: the
+    sink read is a `spawn_blocking` whose reply woke the screen from a blocking-pool
+    thread and panicked the deterministic scheduler. The read is now gated on an
+    engine existing (`audio.is_some()`), which is also the honest rule: no output, no
+    sinks to choose.
+- **Two seams outside this lot, reported and not shipped** (both live in `state.rs`,
+  D7's file: a screen cannot reach a track change):
+  - **Tronquer les silences** needs `TrackMeta::edges` primed per track
+    (`GET /api/audio/edges/<id>?db=`), for the current track and the next, in
+    `AppState::load`/`preload`. The option is absent from the page rather than dead
+    (rule 2).
+  - **The saved sound is applied when this page is built** (and again if the engine
+    arrives while it is open); a session that never opens Réglages runs with the
+    engine's defaults. The fix is ~15 lines in `AppEvent::AudioReady`: read the same
+    `kv` keys and call the same `Values::apply`.
+- **A contract that was wrong**: `nz-api`'s `set_account_auto(id, bool)` posts
+  `{"auto": true}`, while `myaccounts.my_accounts_options` requires
+  `{"auto": {kind: bool}}` and answers `400 auto invalide`; the screen sends the right
+  body through `Api::send`. `link_deezer`'s doc names `"shared"`/`"personal"` while
+  the server only distinguishes `"browser"` from every other value (a typed ARL) —
+  harmless, but D2's note should say so.
 
+### D14b — Réglages (admin sections)
+
+- **Files**: `screens/settings/{users,server}.rs`.
+- **Acceptance**: users and invitations; archive/rules/cleanup preview then run; storage; backfills
+  with progress and failure causes (`JobFailures` equivalent); server transcription settings and
+  worker list (create shows the token once, revoke); everything a long job does runs as a job with
+  progress (rule 2).
 
 ### D15a — Remote control
 
