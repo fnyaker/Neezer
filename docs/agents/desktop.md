@@ -1011,9 +1011,18 @@ Waves that can run in parallel (disjoint files):
 - **The rule, explicit icons**: `gpui_kit::assets::Assets` is the **default** bundle (a dozen
   component glyphs), and an icon outside it renders NOTHING while keeping its hit box — the
   first real run showed a player bar with only Play and a sidebar without Bibliothèque or
-  Nouveautés. The shell registers `icon_assets!(ShellAssets, [...])` with exactly the glyphs it
-  draws plus gpui-base's own, and a test walks the list through `AssetSource::load` so a
-  missing icon fails CI instead of disappearing.
+  Nouveautés. The shell registers `icon_assets!(ShellAssets, [...])`, and a test walks the list
+  through `AssetSource::load` so a missing icon fails CI instead of disappearing.
+  **The list is now the superset the WHOLE plan draws — 146 glyphs — not the shell's own**,
+  because six screen lots run in parallel and each one named a glyph D7's list did not carry
+  (Folder, Trash, Heart, Download, ChevronUp, RefreshCw, Link2, Eye, Archive, Ellipsis…): every
+  one of those buttons existed and was invisible. The names are the web app's own 92
+  (`webapp/src/components/Icon.svelte`) mapped to Lucide, plus what each remaining lot in this
+  file describes; **a second test walks `app/src` for every `IconName::X` and fails when one is
+  not registered**, so a lot cannot forget to add its own. Cost, measured: **42 443 784 B →
+  42 497 416 B (+53 632 B, +0.13 %)** and `first_frame_ms` median **103 → 105 ms** (5 runs each,
+  release, Xvfb/Vulkan; one 123 ms outlier after) — the glyphs are already-compressed SVGs and
+  only the ones drawn are loaded.
 - **The rule, single instance**: `fr.neezer.Desktop` is claimed **in the background** (2 s
   budget for a hung bus): the blocking version delayed the first frame by up to its timeout,
   and a 250 ms budget made two launches both think they were first — the reason two windows
