@@ -6,8 +6,8 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, M1 and V1 delivered; the rest planned.** This note is the plan the
-coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what was
+**Status (2026-11-16): D0, D1, D5, M1 and V1 delivered; the rest planned.** This note is the plan
+the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what was
 learned (rule, why, number) — a delivered lot is not a changelog.
 
 ## The need
@@ -568,32 +568,83 @@ Waves that can run in parallel (disjoint files):
   < 1 ms (criterion or a loop of 1 000 with `Instant`, numbers in the PR); a serde round trip of
   every `Command` matches the JSON `commands.js#commandFor` produces (fixture copied from the JS).
 
-### D5 — `nz-audio` I: source, decode, output, gapless, seek
+### D5 — `nz-audio` I: source, decode, output, gapless, seek (delivered 2026-11-16)
 
-- **Goal**: a track plays through PipeWire from the network or a file, gaplessly into the next.
-- **Files**: `desktop/crates/nz-audio/src/{lib,engine,source,decode,voice,mixer,output,clock,
-  events}.rs`, tests with real audio made by ffmpeg in a build-time test helper.
-- **API**: as in *Architecture*: `Engine::new(cfg, opener: Arc<dyn StreamOpener>)`, `load`,
-  `preload_next`, `play`, `pause`, `seek`, `set_volume`, `set_mute`, `set_output_device`,
-  `position()`, `events() -> Receiver<EngineEvent>`; `trait StreamOpener { fn open(&self, id, q,
-  start: Option<f64>, from_byte: Option<u64>, lane) -> Result<Box<dyn ByteStream>>; fn ready(&self,
-  id, q) -> Result<StreamReady>; fn local(&self, id, q) -> Option<PathBuf>; }` (the app implements
-  it on `nz-api` + `nz-cache`; tests implement it on files and a local HTTP server).
-- **Design**: the source writes the HTTP body to a play-cache file and exposes a blocking
-  `Read + Seek` over the bytes received so far (symphonia's `MediaSource`, `is_seekable` only when
-  the length is known); decode threads push f32 frames at the device rate into an `rtrb` ring of
-  0.5 s per voice; the cpal callback (period 10 ms) pops from the current voice and, at its
-  end-of-stream, from the next one in the same callback: no gap, no click. Seek follows *Streams*.
-  The output reports underruns and the device's latency.
-- **Acceptance**: gapless: two generated sine files back to back, the sample at the seam
-  continuous (|Δ| below one sine step) and the output length = the sum of both ± 1 frame; click to
-  first sample from a local file < 50 ms, from `perf_api --audio` over loopback < 250 ms (median of
-  10, in the PR); 0 underruns over 10 min with the UI busy (stress test: a thread spinning on
-  allocations); RSS of the engine < 40 MB while playing; seek in a finished file lands within
-  20 ms of the target; seek in a generated stream uses `?start=` (assert the request).
-- **Pitfalls**: never allocate or lock in the callback (`rtrb`, preallocated buffers); Opus is
-  always 48 kHz but FLAC may be 44.1: resample with rubato in the decode thread, never in the
-  callback; Ogg Opus pre-skip must be honoured for gapless.
+- **The seam is a ring, not an event.** A voice is one decoded track: an `rtrb` ring of 0.5 s of
+  interleaved stereo f32 at the device rate, filled by one decode thread, drained by the output
+  callback. When the callback finds the current ring empty **and its decoder ended**, it installs
+  the preloaded next voice and keeps writing in the SAME buffer. Nothing starts a stream, waits on
+  a timer or pads a frame at a track change. Measured: two FLACs cut out of one 2 s cosine decode
+  **sample-identical** to the whole file (max difference `0.000000000` over 96 000 frames), seam
+  Δ **0.000829** against a waveform step of 0.0576 — and frame 96 000 is silence, so the length is
+  the sum of both exactly.
+- **Nothing blocks the UI thread, nothing blocks the callback.** `load`, `preload_next` and `seek`
+  bump a generation and return; a loader thread opens, probes and seeks; the decode thread
+  resamples and pushes; the callback allocates nothing, locks nothing, waits for nothing. It reads
+  atomics and preallocated buffers, takes commands from an 8-slot `rtrb` ring and sends notes
+  through a 64-slot one that an ordinary thread turns into `EngineEvent`s (a `std::sync::mpsc`
+  send allocates, so it can never be the callback's). The mixer is the truth about what is playing
+  (`MixerShared::current_generation`), because after a gapless handover the engine's own "current"
+  is the previous track: `seek` and `current_id()` read the mixer, or they aim at the wrong track.
+- **A seek is the server's answer, in the server's three forms.** A finished local file is seeked
+  with a file seek; a finished network file with `Range` requests (symphonia's `FormatReader::seek`,
+  5 `Range` requests for a 10 s FLAC — its index search walks back and forth, and each restart
+  discards the previous spool); a source that must be encoded is reopened with `?start=<seconds>`
+  (exactly ONE request, asserted); a source that cannot answer yet is polled on `/ready`
+  (1 s, 1.5 s while `streaming`) and announced as `SeekDeferred` until it lands — never a restart
+  from 0. `Seeked` is emitted only after the mixer holds the new base, so the bar cannot move
+  before the sound (`docs/agents/playback.md`, *A transport action always wins*).
+- **What it is now**: `Engine::new(cfg, opener)` on PipeWire (ALSA fallback, a paced silence pump
+  when neither exists), and `Engine::new_offline` returning an `OfflineSink` the caller renders —
+  what the tests use, so a seam is an assertion and not a race with a sound card. `StreamOpener` is
+  the app's only network seam: `open` returns a `ByteStream` (`len_hint`, `start_offset_s`), plus
+  `ready` and `local`; `Quality` and `Lane` live in this crate and the app maps them onto
+  `nz-api`'s. A network body is spooled to `EngineConfig::spool_dir` while it arrives, read as a
+  blocking `Read + Seek` over the bytes received, and capped `read_ahead_bytes` in front of the
+  decoder (rule 1: a prefetched next track stops instead of downloading itself whole — measured
+  **65 536 B** with a 64 KiB cap on a 4 MiB body). A whole spool is renamed into place and announced
+  as `EngineEvent::StreamComplete` so the app can publish it into the play cache; a `?start=` slice
+  is never published (it is a window, not the track).
+- **Measured** (this machine: 16 threads, Rust 1.99.1, PipeWire 1.6.9; `cargo test -p nz-audio`):
+  - click to first sample: local FLAC median **1.1 ms** (max 1.1, budget 50); over loopback on a
+    body generated as it is sent median **1.1 ms** (max 1.1, budget 250), 10 runs each. (`perf_api
+    --audio` seeds WAV files, and this crate's format set is FLAC, Ogg Opus, MP3 and MP4 — a WAV
+    stream is not something the app plays, so the loopback budget is measured on a local server
+    that reproduces `/stream`'s headers, including `Accept-Ranges: none` and `X-NS-Start`.)
+  - seek in a finished 48 kHz FLAC to 6.0 s: landing **6.000000 s** (clock 6.001000 a millisecond
+    later), first sample matching the generated cosine to **0.000000**; the same over HTTP with a
+    byte range, same landing.
+  - Ogg Opus: a 1.000 s file decodes to exactly **48 000 frames** (pre-skip and final granule
+    honoured; ignoring the pre-skip is +312 frames = 6.5 ms). 44.1 → 48 kHz FLAC: **1.000000 s**,
+    first sample 0.488459 (the resampler's delay dropped, not left as leading silence).
+  - soak: **0 underruns in 600 s** with a thread allocating in a loop on the same cores, 10 ms
+    buffers (CI runs 20 s; `NZ_SOAK_SECS` sets it).
+  - engine memory: **+0.4 to +2.9 MB** RSS over 5 s of playback across runs (two rings = 384 KB,
+    spool capped); the device latency comes from cpal's playback timestamps (480 frames here).
+  - real PipeWire: `default_output`, 48 000 Hz, 2 ch, the 10 ms period (480 frames), 0 underruns
+    over 3 s (throwaway binary, not committed); `cargo test --workspace` green.
+- **Pitfalls confirmed by building**:
+  - **rubato 5's `output_frames_max()` is not `output_frames_next()`.** Emitting the maximum after
+    every call adds a tail of stale samples: one second at 44.1 kHz produced **54 954** frames
+    instead of 48 000. And the opposite trap: the last partial chunk still produces a full FFT
+    block, and dropping its overflow cut **246 frames** off the second. Count the real input frames
+    and trim the output to `round(fed × ratio)`.
+  - **A pull-driven test races the decoder.** Rendering 72 000 frames in a microsecond found no
+    audio at all (the decode thread had not started), and reading `position()` right after an event
+    showed the old track until the mixer drained the install command. Pump in real time; make
+    `Seeked` wait for the clock.
+  - **Dropping a `VoiceConsumer` does not stop its decoder**: `rtrb` keeps accepting pushes until
+    the ring is full, so a replaced voice is stopped through its `VoiceStatus` flag.
+  - **A seekable network source makes symphonia's probe scan the trailing metadata**, which seeks to
+    the END of the body before the first sample (seen as a pull of the file's tail on a 60 s
+    track). `HttpSource::is_seekable()` answers false while `decode::prepare` probes — one
+    `probe_handle` flag, cleared after the probe — so the probe is head-only while the reader still
+    seeks for real; a finished-file seek then issues only the `Range` requests the container's own
+    index search needs.
+  - cpal 0.18: `SampleRate` is a `u32` alias (`.0` does not compile), `DeviceTrait::name()` became
+    `description().name()`, and an underrun arrives as `ErrorKind::Xrun` in the error callback.
+  - symphonia 0.6: `AudioDecoderOptions` is `#[non_exhaustive]`, and the Opus decoder must be
+    registered in a custom `CodecRegistry` (the default one has no Opus).
 
 ### D6 — `nz-audio` II: DSP, crossfade, trim, speed, tap
 

@@ -58,6 +58,12 @@ env:
   # Everything GPUI, cpal's PipeWire host, whisper.cpp's Vulkan backend and the
   # Rust glue around them link against (Zed's script/linux, plus PipeWire, ALSA
   # and D-Bus). One list, used by every job that builds anything.
+  #
+  # `ffmpeg` is D5's: its tests decode REAL audio — two FLACs cut from one sine
+  # (the gapless seam), an Ogg Opus (pre-skip), a 44.1 kHz FLAC (resampling).
+  # It is the only encoder in the stack, and the runner image is not a contract.
+  # (A comment INSIDE the folded `>` block below becomes a package name: apt
+  # tried to install "seam)," and failed every job. Keep comments out here.)
   APT_DEPS: >
     build-essential clang cmake pkg-config
     libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev
@@ -65,6 +71,7 @@ env:
     libasound2-dev libpipewire-0.3-dev libdbus-1-dev
     libfontconfig-dev libfreetype-dev libglib2.0-dev libzstd-dev libssl-dev
     xvfb xauth
+    ffmpeg
 
 jobs:
   fmt:

@@ -1,11 +1,34 @@
 //! The audio engine: source, decode, mix (gapless and crossfade), DSP, output
 //! and the analysis tap.
 //!
-//! Owned by lots D5 and D6 (`docs/agents/desktop.md`). This is D0's skeleton;
-//! its tests are the ones that must stay true for the whole crate's life: the
-//! output backend is cpal with its PipeWire host, Opus comes from the bundled
-//! libopus (symphonia has no native decoder), and the decode→callback handoff
-//! is an `rtrb` ring that never allocates in the callback.
+//! Owned by lots D5 and D6 (`docs/agents/desktop.md`). D5 is this document's
+//! *D5* lot: a track plays through PipeWire from the network or from a file,
+//! gaplessly into the next, and a seek is answered by the server or explicitly
+//! deferred. D6 adds the web player's sound on top (DSP chain, crossfade,
+//! silence trim, podcast speed, analysis tap).
+//!
+//! The shape, in one paragraph: [`Engine`] is a cheap handle; every blocking
+//! step (open a source, probe a container, seek) runs on a loader thread, and
+//! every sample is decoded on a per-voice thread into a 0.5 s `rtrb` ring. The
+//! output callback owns the `Mixer`, which pops the current voice and, when it
+//! ends, the preloaded next one **in the same buffer** — the gapless seam. No
+//! callback ever allocates, locks or waits.
+
+mod clock;
+mod decode;
+mod engine;
+mod events;
+mod mixer;
+mod output;
+mod source;
+mod voice;
+
+pub use clock::Clock;
+pub use engine::{Engine, EngineConfig, EngineError};
+pub use events::EngineEvent;
+pub use mixer::MixerShared;
+pub use output::{OfflineSink, OutputChoice, OutputError, OutputInfo};
+pub use source::{ByteStream, Lane, Quality, SourceError, StreamOpener, StreamReady, TrackId};
 
 #[cfg(test)]
 mod tests {
@@ -29,16 +52,5 @@ mod tests {
             <symphonia_adapter_libopus::OpusDecoder as RegisterableAudioDecoder>::supported_codecs(
             );
         assert!(!codecs.is_empty());
-    }
-
-    /// 0.5 s of stereo at 48 kHz per voice, the ring D5 hands to the output
-    /// callback: writing and reading it must not allocate on the hot path.
-    #[test]
-    fn an_half_second_voice_ring_round_trips() {
-        let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(48_000 * 2 / 2);
-        producer.push(0.25).expect("space");
-        producer.push(-0.25).expect("space");
-        assert_eq!(consumer.pop().expect("sample"), 0.25);
-        assert_eq!(consumer.pop().expect("sample"), -0.25);
     }
 }
