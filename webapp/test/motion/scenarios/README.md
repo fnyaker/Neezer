@@ -1,3 +1,1 @@
-# One scenario per transition, one file per lot (shell.mjs, menus.mjs, …).
-
-Each file exports `scenarios`: `{ name, setup(page), act(page), settle(page) }`.
+# One scenario per inventory row, one file per lot (shell.mjs, menus.mjs, …): `export const scenarios = [{ name, setup(page), act(page), settle(page) }]`.

@@ -208,7 +208,14 @@ async function open(level, viewport) {
     // and the tokens have to be zero from the first paint.
     await ctx.addInitScript(() => localStorage.setItem("viz.eco", JSON.stringify(true)));
   }
-  await ctx.route(/api\.deezer\.com|dzcdn\.net/, (route) => route.abort());
+  // Deezer's CDN and public API are never reached by a bench: matched on the
+  // HOSTNAME with a predicate, not on the URL text — an unanchored pattern may
+  // match anywhere in the URL (CodeQL: "missing regular expression anchor",
+  // reported on this very line).
+  await ctx.route(
+    (url) => url.hostname === "api.deezer.com" || url.hostname === "dzcdn.net" || url.hostname.endsWith(".dzcdn.net"),
+    (route) => route.abort(),
+  );
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
