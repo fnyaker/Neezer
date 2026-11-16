@@ -62,6 +62,7 @@
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
+  import { fadeIn, swap } from "../lib/motion.js";
 
   export let params = {};
 
@@ -909,7 +910,7 @@
 {:else if !data?.playlist}
   <LoadFailed error={loadError} notFound="Playlist introuvable." on:retry={() => load(id)} />
 {:else}
-  <div class="fade-in">
+  <div in:fadeIn>
     <header class="banner gh">
       <div class="art"><Cover src={data.playlist.cover} alt={data.playlist.title} kind="playlist" fallbackId={isLocalId(id) ? id : null} eager /></div>
       <div class="meta">
@@ -977,7 +978,13 @@
           disabled={!manualView || !ready}
           title={!manualView ? "Repassez en « Ordre d'origine » pour réorganiser" : ""}
           on:click={toggleEditing}>
-          <Icon name={editing ? "check" : "edit"} size={16} /> {editing ? "Terminé" : "Modifier"}
+          <!-- M6/I2: the mode's glyph SWAPS (opacity + 4 px, 140 ms) in the same
+               frame as the state — nothing waits for it, and the list itself is
+               the answer (M7/M4: no entrance on a 4 000-row edit list). -->
+          {#key editing}
+            <span class="mode-glyph" in:swap><Icon name={editing ? "check" : "edit"} size={16} /></span>
+          {/key}
+          {editing ? "Terminé" : "Modifier"}
         </button>
       {:else if CAN_KEEP}
         <button class="btn btn-icon" class:on={fav} on:click={toggleFav} aria-label="Favori"><Icon name={fav ? "heartFilled" : "heart"} size={20} /></button>
@@ -1048,7 +1055,9 @@
 
     {#if showRecommendations}
       <!-- Where the playlist stops: library titles near its own, loaded after
-           the list is on screen (never in its way). -->
+           the list is on screen (never in its way). I6: the ANSWER fades in —
+           one block, never a per-row intro (M11) — and the section itself has
+           no entrance, so the two can't be superimposed (M7). -->
       <section class="recs" aria-labelledby="recs-title">
         <div class="rec-head">
           <h2 class="section-title" id="recs-title">Titres recommandés</h2>
@@ -1067,7 +1076,7 @@
             </button>
           </div>
         {:else if recs.length}
-          <ul class="rec-list">
+          <ul class="rec-list" in:fadeIn>
             {#each recs as t (trackKey(t))}
               <li class="rec">
                 <span class="rec-cover">
@@ -1304,6 +1313,11 @@
     gap: 8px;
     flex-wrap: wrap;
     margin: 0 0 16px;
+  }
+  /* The edit mode's glyph: one box, so the swap never nudges the label. */
+  .mode-glyph {
+    display: grid;
+    place-items: center;
   }
   .btn-icon.on {
     color: var(--hrt);

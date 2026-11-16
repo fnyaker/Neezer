@@ -32,7 +32,9 @@
   }
 </script>
 
-<div class="fade-in">
+<!-- No entrance of its own: the shell's page enter is the page's motion (S1,
+     M3) and this screen's content arrives in PersonCredits' fade. -->
+<div>
   <GradientHeader>
     <div class="art" aria-hidden="true"><Icon name="users" size={64} /></div>
     <div class="meta">

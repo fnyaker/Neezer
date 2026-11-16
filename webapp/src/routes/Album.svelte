@@ -11,6 +11,7 @@
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let params = {};
 
@@ -112,7 +113,7 @@
 {:else if !data?.album}
   <LoadFailed error={loadError} notFound="Album introuvable." on:retry={() => load(id)} />
 {:else}
-  <div class="fade-in">
+  <div in:fadeIn>
     <!-- §6: the same band as the artist and playlist pages — `--s2`, a
          hairline, a 200 px sleeve and the title at 72. -->
     <header class="banner gh">

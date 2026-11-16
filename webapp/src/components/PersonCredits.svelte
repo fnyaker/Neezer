@@ -12,6 +12,7 @@
   import LoadFailed from "./LoadFailed.svelte";
   import Skeleton from "./Skeleton.svelte";
   import TrackList from "./TrackList.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let name = "";
 
@@ -55,24 +56,26 @@
 {:else if !tracks.length}
   <p class="muted empty">Aucun titre de la bibliothèque ne crédite {data.name || name} pour l'instant.</p>
 {:else}
-  <div class="bar">
-    <button class="pill" on:click={playAll}><Icon name="play" size={18} /> Tout lire</button>
-    {#if data.roles?.length > 1}
-      <div class="chips" role="tablist" aria-label="Rôle">
-        <button class="chip" class:on={!role} role="tab" aria-selected={!role} on:click={() => (role = "")}>
-          Tout <span class="n">{tracks.length}</span>
-        </button>
-        {#each data.roles as r (r.role)}
-          <button class="chip" class:on={role === r.role} role="tab" aria-selected={role === r.role} on:click={() => (role = r.role)}>
-            {r.label} <span class="n">{r.count}</span>
+  <div in:fadeIn>
+    <div class="bar">
+      <button class="pill" on:click={playAll}><Icon name="play" size={18} /> Tout lire</button>
+      {#if data.roles?.length > 1}
+        <div class="chips" role="tablist" aria-label="Rôle">
+          <button class="chip" class:on={!role} role="tab" aria-selected={!role} on:click={() => (role = "")}>
+            Tout <span class="n">{tracks.length}</span>
           </button>
-        {/each}
-      </div>
-    {:else if data.roles?.length === 1}
-      <span class="muted only">{data.roles[0].label}</span>
-    {/if}
+          {#each data.roles as r (r.role)}
+            <button class="chip" class:on={role === r.role} role="tab" aria-selected={role === r.role} on:click={() => (role = r.role)}>
+              {r.label} <span class="n">{r.count}</span>
+            </button>
+          {/each}
+        </div>
+      {:else if data.roles?.length === 1}
+        <span class="muted only">{data.roles[0].label}</span>
+      {/if}
+    </div>
+    <TrackList tracks={shown} context={{ kind: "credits", id: name }} />
   </div>
-  <TrackList tracks={shown} context={{ kind: "credits", id: name }} />
 {/if}
 
 <style>

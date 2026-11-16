@@ -109,6 +109,10 @@
 
 <div class="library-nav">
   <div class="cat-group" role="tablist" aria-label="Section de la bibliothèque" aria-orientation="horizontal">
+    <!-- I3: the selection is ONE pill that slides, not a fill that switches
+         between two buttons in one frame. It is decorative: the buttons keep
+         `aria-selected`, the check mark and the roving tab index. -->
+    <span class="cat-pill" class:right={category === "podcasts"} aria-hidden="true"></span>
     {#each CATEGORIES as c (c.id)}
       <button
         type="button"
@@ -189,6 +193,7 @@
      solid accent surface with a check mark — not colour alone (§10). 54 px
      outer for a 44 px target inside. */
   .cat-group {
+    position: relative;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 4px;
@@ -200,7 +205,27 @@
     border-radius: 999px;
     background: var(--s1);
   }
+  /* The sliding selection (I3): one accent pill under the labels, moved by
+     `transform` only — no layout, no width animation. Its width is a segment
+     of the padding box: `50% − 6px` (4 px of padding each side + the 4 px gap). */
+  .cat-pill {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 4px;
+    width: calc(50% - 6px);
+    border-radius: 999px;
+    background: var(--ac);
+    transform: translateX(0);
+    transition: transform var(--dur-base) var(--ease-standard);
+    pointer-events: none;
+  }
+  .cat-pill.right {
+    transform: translateX(calc(100% + 4px));
+  }
   .cat {
+    position: relative;
+    z-index: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -218,16 +243,14 @@
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;
-    transition:
-      background-color 0.16s ease,
-      color 0.16s ease;
+    /* The colour of the label follows the pill in the global 120 ms the shared
+       `button` rule gives every control (M6: a selection barely moves). */
   }
   .cat:hover:not(.on) {
     background: var(--s2);
     color: var(--tx);
   }
   .cat.on {
-    background: var(--ac);
     color: var(--onac);
   }
   .cat :global(svg) {
@@ -306,7 +329,7 @@
     white-space: nowrap;
     scroll-snap-align: start;
     cursor: pointer;
-    transition: color 0.14s ease;
+    transition: color var(--dur-instant) var(--ease-standard);
   }
   .subtab::after {
     content: "";
@@ -319,7 +342,7 @@
     background: var(--ac-text);
     transform: scaleX(0);
     transform-origin: left center;
-    transition: transform 0.18s ease;
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .subtab:hover,
   .subtab.on {
@@ -433,6 +456,10 @@
     .cat,
     .subtab,
     .subtab::after {
+      transition: none;
+    }
+    /* M14: a movement is not a fade. The pill is placed, not slid. */
+    .cat-pill {
       transition: none;
     }
   }
