@@ -11,6 +11,7 @@
   // go but Home, where you already are.
   import { push } from "svelte-spa-router";
   import { location } from "../lib/router.js";
+  import { DUR, fade } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   function back() {
@@ -23,7 +24,10 @@
 </script>
 
 {#if show}
-  <button class="back" on:click={back} aria-label="Retour" title="Retour">
+  <!-- S11: the button fades in and out (140 ms each way, opacity only) instead
+       of popping. Svelte keeps the box in the flow for the whole outro, so the
+       search field beside it does not jump while the arrow is still visible. -->
+  <button class="back" on:click={back} aria-label="Retour" title="Retour" transition:fade={{ duration: DUR.fast, out: DUR.fast }}>
     <Icon name="chevronLeft" size={18} />
   </button>
 {/if}

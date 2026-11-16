@@ -16,7 +16,7 @@
   import { loadFavorites, playEntity, toggleFavorite, isFavorite } from "./lib/actions.js";
   import { initPodcastProgress } from "./lib/podcastProgress.js";
   import { initVersionWatch } from "./lib/appversion.js";
-  import { initNav } from "./lib/nav.js";
+  import { initNav, lastNavWasTraversal } from "./lib/nav.js";
   import { isMobile, onMobileChange } from "./lib/viewport.js";
   import { initDeezerHealth } from "./lib/deezerhealth.js";
   import { initVizHost } from "./lib/viz/host.js";
@@ -24,6 +24,9 @@
   import { startFlow } from "./lib/flow.js";
   import { trackKey } from "./lib/trackkey.js";
   import { location } from "./lib/router.js";
+  // The app's ONE source of motion (docs/agents/transitions.md): the page enter
+  // and the two entrances the shell itself owns.
+  import { screenKey, pageEnter, fadeIn, rise } from "./lib/motion.js";
   import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
   import MobileNav from "./components/MobileNav.svelte";
@@ -244,6 +247,42 @@
   let mobile = isMobile();
   onMount(() => onMobileChange((v) => (mobile = v)));
   $: if (mobile && $nowPlayingOpen) nowPlayingOpen.set(false);
+
+  // -- the page enter (transitions.md S1) ------------------------------------
+  //
+  // The box the router renders the page in, and the last screen it showed. A
+  // push rises 8 px over 200 ms; a back / forward only fades over 140 ms, so
+  // the offset the scroll memory restored is not seen to slide. Driven by
+  // `onRouteLoaded`, not by `$location`: the heavy screens (Réglages, Genres,
+  // Import, Nouveautés, Crédits, Récap) load their chunk first and only then
+  // have a page to animate.
+  //
+  // The first screen of the session does not animate (S2: the very first paint
+  // never does), and neither does a move inside one screen — a library tab, a
+  // settings section, a search query overwrite the same history entry.
+  let routeHost;
+  let lastScreen = null;
+  function onRouteLoaded() {
+    const key = screenKey($location);
+    if (key === lastScreen) return;
+    const first = lastScreen === null;
+    lastScreen = key;
+    if (first || !routeHost) return;
+    pageEnter(routeHost, { traversal: lastNavWasTraversal() });
+  }
+
+  // -- the Now-Playing column (S3) ------------------------------------------
+  //
+  // `npMounted` is what the {#if} mounts, `npOpen` the third column on .layout:
+  // the class has to outlive the mount by the aside's outro, because dropping
+  // the column in the same frame makes the leaving aside wrap to a NEW grid row
+  // (it sits after </main>). The aside reports its own `outroend`.
+  let npMounted = false;
+  let npOpen = false;
+  $: if ($nowPlayingOpen && !mobile) {
+    npMounted = true;
+    npOpen = true;
+  } else npMounted = false;
 
   onMount(async () => {
     // A party guest needs none of the app's own machinery (the library, the
@@ -545,7 +584,7 @@
        It is the FIRST child so its negative-z layers paint under the rest;
        the full-screen player hides it while it is open. -->
   <GlobalBackdrop />
-  <div class="layout" class:np-open={$nowPlayingOpen}>
+  <div class="layout" class:np-open={npOpen} in:fadeIn>
     <Sidebar />
     <main bind:this={mainEl}>
       <!-- The shell's top bar scrolls with the page but stays at its top, and
@@ -554,15 +593,20 @@
       <TopBar />
       <Notices />
       {#if bootProblem}
-        <div class="boot-banner" role="alert">
+        <div class="boot-banner" role="alert" transition:rise={{ y: -8 }}>
           <p>Le serveur ne répond pas : {failureCause(bootProblem)}. Ta session et ce qui est déjà sur cet appareil restent disponibles.</p>
           <button class="btn btn-sm btn-ghost" on:click={bootSession}>Réessayer</button>
         </div>
       {/if}
-      <Router {routes} />
+      <!-- The page's own box: the ONLY thing the page enter animates, and a
+           plain block — `display: contents` would have no box to animate, and
+           padding here would double the page's margin. -->
+      <div class="route-host" bind:this={routeHost}>
+        <Router {routes} onRouteLoaded={onRouteLoaded} />
+      </div>
     </main>
-    {#if $nowPlayingOpen && !mobile}
-      <NowPlaying />
+    {#if npMounted}
+      <NowPlaying onOutroEnd={() => (npOpen = false)} />
     {/if}
   </div>
   <MobileNav />
@@ -664,6 +708,11 @@
     grid-template-columns: var(--sidebar-w) 1fr;
     height: 100vh;
     padding-bottom: var(--player-h);
+  }
+  /* The page enter's box (S1): a plain block, no padding of its own, so the
+     page's layout is exactly what it was as a direct child of <main>. */
+  .route-host {
+    display: block;
   }
   /* The Now-Playing panel is a real third column only on wide screens. On
      narrower (but still desktop) windows it floats as an overlay instead, so

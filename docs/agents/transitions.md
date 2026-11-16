@@ -559,6 +559,23 @@ settle(page) }`. Checks per scenario:
    the full-screen player's narrow side panel; `VIDEO=1` records a Playwright video. Looked at by the lot's
    author and attached to the PR.
 
+**What the bench costs the app, and what the app costs the bench** (learned in T1, `test/motion/scenarios/shell.mjs`):
+
+- **Wait the offline warmer out before measuring.** `lib/actions.js#warmPlaylists` starts 10 s after
+  `/me/playlists` answers and then pulls one playlist every `WARM_GAP` = 1 500 ms, up to `WARM_MAX` = 25 — about
+  48 s of deliberate background traffic. A window that catches one of those requests asks for a playlist the
+  other two levels did not, and check 5 fails on a request the transition never made. T1's first scenario drains
+  it (the warm is over once ≥ 1 playlist has been pulled and the link has been silent for 2.5 s, capped at its
+  whole budget) — 50 s once per context, then every window is clean.
+- **A scenario's destination should carry no cover art of its own** while `Cover.svelte` still fades an image
+  in with the literal `0.35s ease` of row L13: that fade is 350 ms in reduced motion and is measured as if the
+  shell had made it. Pick screens without sleeves (Réglages, Explorer) and let the source page's own entrances
+  finish in `setup`.
+- **The frozen import allowlist is a CEILING, not an equality.** `test/motion.test.mjs` fails when a file
+  OUTSIDE its 19-name list imports `svelte/transition`/`svelte/animate`; a lot that moves one of those files
+  onto `lib/motion.js` simply stops matching, and the list is emptied in T7. (An equality would have turned
+  red on every lot of group A at once — it did, for T6b and T1.)
+
 ## Prompt for a coding worker (one per lot)
 
 > Tu codes le lot **{LOT}** du plan `docs/agents/transitions.md` (Neezer, webapp Svelte 5). Lis d'abord
@@ -578,7 +595,7 @@ settle(page) }`. Checks per scenario:
 | Lot | State | PR | Measured |
 |---|---|---|---|
 | T0 | done | #213 | `npm test` 779/779 (12 new); `EASE.enter(0.5)` = 0.950248 against the CSS curve's 0.950247 (worst \|JS−CSS\| 1.4e-6 over 57 samples, cap 1e-3); the bench 116 checks / 0 failure in 15 s, at 1440×900 and 390×844 × full/reduced/eco: computed tokens 90/140/200/280/320 ms, 8 px/4 px, 0.96/0.97/0.98 — 0 ms, 0 px, 1 in eco, and 140 ms, 0 px, 1 under reduced; `document.getAnimations()` empty after a real `.btn` hover (and three frames later) in eco with the `.btn`'s own computed `transition-duration` 1e-05 s, against 1 × 120 ms `background-color` at full motion; an unmarked 1 s CSS animation stopped in eco (1e-05 s) while `[data-motion="status"]` keeps its 1 s and stays on the timeline; the emitted `translateY(calc(u * 100%))`, `calc(u * 120px)` and `scale(0.96)` resolve to the right matrices and a 50 % veil to alpha 0.3; 0 page error. |
-| T1 | to do | — | — |
+| T1 | done | #222 | `npm test` 779/779 ; `node test/motion/run.mjs` **164 vérifications, 0 échec** pour les 8 scénarios de ce lot (× 1440/390 × plein/réduit/éco), et **350 vérifications / 0 échec** sur le banc complet rebasé (26 scénarios, 4 fichiers) ; `test/clicks/run.mjs` (4× CPU, médiane de 9) clic→peinture des nav : Accueil **16 → 16 ms**, Rechercher **56 → 48**, Bibliothèque **64 → 48**, Réglages **64 → 64**, Accueil(2) **48 → 48** (les onglets de bibliothèque et le plein écran varient de ±40 % d'un passage à l'autre : bruit de la machine, T1 ne touche à aucun de ces fichiers) ; `test/mobile/run.mjs` 360/390/639/640/641 tout vert ; `test/backdrop/run.mjs` tout vert. S1 : la page monte de 8 px en 200 ms sur un push, fondu seul de 140 ms en traversal, rien sur un changement d'onglet (même `screenKey`) ni au premier écran ; S3 : la colonne tient `.np-open` jusqu'à `outroend` de l'aside (sinon la colonne qui part se replie sur une nouvelle rangée de grille) ; S5/S6 : corps de dossier par `collapse` jusqu'à 30 playlists, fondu au-delà, chevron qui tourne de 90° ; S7 : seul un id absent du rendu précédent reçoit le fondu de 140 ms (les 60 lignes de `/me/playlists` ne bougent pas) ; S10/S11 : fondu de 140 ms, sans `transform` (barre collante) ; S12 : déjà instantané (`scrollTo({behavior:"instant"})` dans `lib/nav.js`), vérifié par le scénario Retour. |
 | T2a | done | #225 | `npm test` 779/779; `npm run build` 586 modules / 30 s. `test/motion/run.mjs` **152 checks / 0 failure** (O1–O6 × 1440×900 and 390×844 × full/reduced/eco, 0 page error); `test/menu/run.mjs` **242/242** with every open still costing 0 `/api` request. Measured (probe in the PR): the desktop `pop` runs **200 ms** in and **140 ms** out, `transform-origin` on the pointer's own corner (`0px 591.25px` = bottom-left for a menu pushed back up; the quality list above its badge reads `208px 337.34px` = bottom-right); the phone `sheet` **280 ms** in (O2's exit is 90, see that row) and the scrim walks its own `background-color` alpha (the sheet keeps its blur); the sub-menu `collapse` 200/140 ms with the chevron on `--dur-base var(--ease-standard)`; O4–O6 `pop` 200/140 ms from `placement`/`align`. Escape → menu out of the DOM **154 ms** (desktop pop, 140 ms animation + Svelte's one-frame dummy), **105 ms** (phone sheet + scrim), **160 ms** (sub-menu). Eco: 0 animation outside `[data-motion="status"]`; reduced: no `transform`, ≤ 140 ms; requests identical in the three levels (0 added by any open, 0 by any close). |
 | T2b | to do | — | — |
 | T2c | to do | — | — |

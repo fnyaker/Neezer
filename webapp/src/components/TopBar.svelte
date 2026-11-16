@@ -13,6 +13,7 @@
   import { startFlow } from "../lib/flow.js";
   import { toasts } from "../lib/stores.js";
   import { REMOTE } from "../lib/remote/mode.js";
+  import { DUR, fade } from "../lib/motion.js";
   import BackButton from "./BackButton.svelte";
   import Icon from "./Icon.svelte";
 
@@ -96,7 +97,15 @@
   <span class="back-slot"><BackButton /></span>
 
   {#if !$location.startsWith("/search")}
-    <button class="field search" on:click={goSearch} aria-label="Rechercher un titre, un artiste, un album, un podcast">
+    <!-- S10: the field comes and goes with the /search screen, on a 140 ms
+         fade both ways (opacity only — a transform on a sticky bar jitters
+         while the page scrolls under it). -->
+    <button
+      class="field search"
+      on:click={goSearch}
+      aria-label="Rechercher un titre, un artiste, un album, un podcast"
+      transition:fade={{ duration: DUR.fast, out: DUR.fast }}
+    >
       <Icon name="search" size={16} />
       <span class="hint">Titres, artistes, albums, podcasts…</span>
       <span class="kbd">⌘K</span>

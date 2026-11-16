@@ -2,7 +2,10 @@
   import { trackEntityRef } from "../lib/entity.js";
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { push } from "svelte-spa-router";
-  import { slide } from "svelte/transition";
+  // S3: this column used to `slide` (its axis-x slide animated the WIDTH of a
+  // grid column every frame). It is the motion plan's `panel` now — opacity and
+  // a 16 px lean from the side, on the tokens.
+  import { panel } from "../lib/motion.js";
   import {
     player,
     current,
@@ -16,6 +19,10 @@
   import ArtistLine from "./ArtistLine.svelte";
   import QueueList from "./QueueList.svelte";
 
+  // The shell keeps the third grid column (`.layout.np-open`) until this fires:
+  // an aside that is still leaving while its column is gone wraps to a new row.
+  export let onOutroEnd = () => {};
+
   let tab = "queue"; // queue | lyrics
 
   $: fav = $current && $favorites.has(trackKey($current));
@@ -27,7 +34,7 @@
   }
 </script>
 
-<aside class="np" transition:slide={{ axis: "x", duration: 200 }}>
+<aside class="np" transition:panel on:outroend={onOutroEnd}>
   <header class="np-head">
     <span class="label-mono">En lecture</span>
     <button class="close" on:click={() => nowPlayingOpen.set(false)} aria-label="Fermer"><Icon name="close" size={18} /></button>
