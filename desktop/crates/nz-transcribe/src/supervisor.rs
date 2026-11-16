@@ -558,6 +558,58 @@ impl Job {
     }
 }
 
+/// One local job the app asked for on the control channel.
+#[derive(Debug, Clone)]
+pub struct LocalJob {
+    /// The episode, a UUID string.
+    pub episode_id: String,
+    /// The archived audio file the app resolved.
+    pub audio: PathBuf,
+    /// `auto` (or absent) to let the engine decide.
+    pub language: Option<String>,
+}
+
+/// Apply the app's commands as they arrive.
+///
+/// The task exists because a command has to reach a job that is RUNNING: the
+/// engine child's wait loop polls [`Halt`] ten times a second, so `pause` stops
+/// the child where it is, and `stop` ends the chunk, gives the lease back and
+/// lets the worker exit. A `local` command is queued for the idle loop, because
+/// two transcriptions at once is exactly what rule 1 forbids.
+fn spawn_control(
+    commands: mpsc::Receiver<Command>,
+    halt: Arc<Halt>,
+    locals: mpsc::Sender<LocalJob>,
+) {
+    tokio::spawn(async move {
+        let mut commands = commands;
+        while let Some(command) = commands.recv().await {
+            match command {
+                Command::Pause => halt.pause(true),
+                Command::Resume => halt.pause(false),
+                Command::Stop => {
+                    halt.stop();
+                    return;
+                }
+                Command::Local {
+                    episode_id,
+                    audio,
+                    language,
+                } => {
+                    let job = LocalJob {
+                        episode_id,
+                        audio: PathBuf::from(audio),
+                        language,
+                    };
+                    if locals.send(job).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// What a local job leaves behind, so a restart resumes at its last chunk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Partial {
@@ -631,7 +683,12 @@ impl Supervisor {
     }
 
     /// The server loop: claim, transcribe, complete, until stopped.
-    pub async fn run_worker(&mut self, mut commands: Option<mpsc::Receiver<Command>>) -> Outcome {
+    pub async fn run_worker(&mut self, commands: Option<mpsc::Receiver<Command>>) -> Outcome {
+        let mut locals = commands.map(|commands| {
+            let (sender, receiver) = mpsc::channel(4);
+            spawn_control(commands, self.halt.clone(), sender);
+            receiver
+        });
         loop {
             if self.halt.stopping() {
                 return if self.halt.revoked() {
@@ -655,7 +712,7 @@ impl Supervisor {
                         self.idle_announced = true;
                         self.sink.emit(Event::Idle);
                     }
-                    if !self.idle_wait(&mut commands).await {
+                    if !self.idle_wait(&mut locals).await {
                         return Outcome::Idle;
                     }
                 }
@@ -668,7 +725,7 @@ impl Supervisor {
                     tracing::warn!("claim : {failure}");
                     self.sink
                         .emit(Event::error("", failure.code(), failure.to_string()));
-                    if !self.idle_wait(&mut commands).await {
+                    if !self.idle_wait(&mut locals).await {
                         return Outcome::Idle;
                     }
                 }
@@ -676,36 +733,28 @@ impl Supervisor {
         }
     }
 
-    /// Wait for the poll interval, applying commands meanwhile.
+    /// Wait for the poll interval, running a local job the app asked for.
     ///
-    /// Returns false when the worker must end: a stop, or a closed channel that
-    /// was the only reason to stay.
-    async fn idle_wait(&mut self, commands: &mut Option<mpsc::Receiver<Command>>) -> bool {
+    /// Returns false when the worker must end (a stop, which the control task
+    /// has already written into [`Halt`]). The pause and stop of a job that is
+    /// RUNNING never come through here: the control task writes the same
+    /// [`Halt`] the engine child's wait loop polls, so a `pause` reaches the
+    /// engine within one poll, in the middle of a chunk.
+    async fn idle_wait(&mut self, locals: &mut Option<mpsc::Receiver<LocalJob>>) -> bool {
         let deadline = Instant::now() + self.poll;
         loop {
-            if let Some(receiver) = commands.as_mut() {
+            if self.halt.stopping() {
+                return false;
+            }
+            if let Some(receiver) = locals.as_mut() {
                 match receiver.try_recv() {
-                    Ok(Command::Stop) => {
-                        self.halt.stop();
-                        return false;
-                    }
-                    Ok(Command::Pause) => self.halt.pause(true),
-                    Ok(Command::Resume) => self.halt.pause(false),
-                    Ok(Command::Local {
-                        episode_id,
-                        audio,
-                        language,
-                    }) => {
-                        self.run_local_job(&episode_id, Path::new(&audio), language.as_deref())
+                    Ok(job) => {
+                        self.run_local_job(&job.episode_id, &job.audio, job.language.as_deref())
                             .await;
                         return true;
                     }
                     Err(mpsc::error::TryRecvError::Empty) => {}
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        // The app is gone: keep working, there may be a queue.
-                        *commands = None;
-                        break;
-                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => *locals = None,
                 }
             }
             if Instant::now() >= deadline {
@@ -713,7 +762,6 @@ impl Supervisor {
             }
             tokio::time::sleep(Duration::from_millis(CONTROL_POLL_MS)).await;
         }
-        true
     }
 
     /// One claim from the server: download, transcribe chunk by chunk, complete.
@@ -1668,25 +1716,22 @@ pub fn local_main(args: Vec<OsString>) -> ExitCode {
                 Outcome::Idle => 1,
             };
         }
-        // The app's mode: one job per command, `idle` between them, exit on EOF.
-        let mut stdin = std::io::stdin().lock();
-        loop {
-            match control::read_command(&mut stdin) {
-                Ok(Some(Command::Local {
-                    episode_id,
-                    audio,
-                    language,
-                })) => {
-                    supervisor
-                        .run_local_job(&episode_id, Path::new(&audio), language.as_deref())
-                        .await;
-                }
-                Ok(Some(Command::Stop)) | Ok(None) => return 0,
-                Ok(Some(Command::Pause)) => supervisor.halt.pause(true),
-                Ok(Some(Command::Resume)) => supervisor.halt.pause(false),
-                Err(error) => tracing::warn!("{error}"),
+        // The app's mode: one job per `local` command, `pause`/`stop` applied
+        // to the job while it runs (the control task writes `Halt`), exit when
+        // stdin closes or the app says `stop`.
+        let (sender, receiver) = mpsc::channel(8);
+        spawn_control_reader(sender);
+        let (jobs_sender, mut jobs) = mpsc::channel(4);
+        spawn_control(receiver, supervisor.halt.clone(), jobs_sender);
+        while let Some(job) = jobs.recv().await {
+            supervisor
+                .run_local_job(&job.episode_id, &job.audio, job.language.as_deref())
+                .await;
+            if supervisor.halt.stopping() {
+                break;
             }
         }
+        0
     });
     ExitCode::from(code)
 }

@@ -911,38 +911,49 @@ async fn a_local_job_resumes_at_its_last_chunk() {
     std::fs::remove_dir_all(&directory).expect("clean up");
 }
 
-/// A `stop` on the control channel ends a job that is running, and says so.
+/// A `stop` on the control channel reaches a job that is RUNNING: the engine
+/// child is terminated where it is, the job gives its work up, and the app is
+/// told nothing was produced (a stop is not a failure).
 #[tokio::test]
 async fn the_control_channel_stops_a_running_job() {
     let directory = scratch("control");
     std::fs::write(directory.join("wait-for-go"), b"1").expect("marker");
     let audio = directory.join("episode.mp3");
     std::fs::write(&audio, b"600000\n").expect("audio");
-    let engine = Engine {
-        program: fake_engine(&directory),
-        model: directory.join("ggml-small.bin"),
-        cpu: true,
-    };
-    let sink = Arc::new(ReplaySink::default());
-    let mut supervisor = Supervisor::new(
-        engine,
-        Arc::new(FakePcm),
-        sink.clone(),
-        directory.join("work"),
-        directory.join("transcripts"),
-    );
-    let halt = supervisor.halt.clone();
-    let job = async { supervisor.run_local_job(EPISODE, &audio, None).await };
-    let stop = async {
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        halt.stop();
-    };
-    let (outcome, ()) = tokio::join!(job, stop);
+    // An enrolled worker with an empty server queue, so the local job is the
+    // only thing running.
+    let state = Arc::new(Mutex::new(State::new()));
+    state.lock().expect("state").status = "ready".to_owned();
+    let fake = Fake::start(state);
+    let mut run = harness(&fake, &directory, Retry::default(), Duration::from_secs(5));
+    run.supervisor.poll = Duration::from_millis(50);
+    let (sender, receiver) = tokio::sync::mpsc::channel(4);
+    sender
+        .send(Command::Local {
+            episode_id: EPISODE.to_owned(),
+            audio: audio.to_string_lossy().into_owned(),
+            language: None,
+        })
+        .await
+        .expect("send");
+    let stopper = sender.clone();
+    let started = Instant::now();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = stopper.send(Command::Stop).await;
+    });
+    let outcome = run.supervisor.run_worker(Some(receiver)).await;
     assert_eq!(outcome, Outcome::Idle);
     assert!(
-        !sink.tags().contains(&"error".to_owned()),
-        "a stop the person asked for is not a failure: {:?}",
-        sink.tags()
+        started.elapsed() < Duration::from_secs(5),
+        "the stop reached the running job ({:?})",
+        started.elapsed()
+    );
+    let tags = run.sink.tags();
+    assert!(!tags.contains(&"done".to_owned()), "{tags:?}");
+    assert!(
+        !tags.contains(&"error".to_owned()),
+        "a stop the person asked for is not a failure: {tags:?}"
     );
     // A stopped engine is terminated, not left whispering: its pid is gone.
     let pid = std::fs::read_to_string(directory.join("pid")).expect("pid");
@@ -1211,6 +1222,18 @@ async fn a_local_command_runs_a_job_between_two_claims() {
     let mut run = harness(&fake, &directory, Retry::default(), Duration::from_secs(5));
     run.supervisor.poll = Duration::from_millis(50);
     let (sender, receiver) = tokio::sync::mpsc::channel(4);
+    // `stop` ends a local job too, so the job is asked for first and the stop is
+    // sent once its `done` event is out (the app does the same when the person
+    // closes the screen).
+    let stopper = sender.clone();
+    let watched = run.sink.clone();
+    tokio::spawn(async move {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && !watched.tags().contains(&"done".to_owned()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _ = stopper.send(Command::Stop).await;
+    });
     sender
         .send(Command::Local {
             episode_id: EPISODE.to_owned(),
@@ -1219,7 +1242,6 @@ async fn a_local_command_runs_a_job_between_two_claims() {
         })
         .await
         .expect("send");
-    sender.send(Command::Stop).await.expect("send");
     let outcome = run.supervisor.run_worker(Some(receiver)).await;
     assert_eq!(outcome, Outcome::Idle);
     let tags = run.sink.tags();
