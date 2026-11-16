@@ -336,6 +336,25 @@ impl AppState {
         }
     }
 
+    /// Start the offline worker for this session (lot D13).
+    ///
+    /// One call, here, because the worker is what makes a download queued before
+    /// a restart pick itself up again: the queue lives in `nz-cache`, and the
+    /// thread that drains it has to exist before the person opens Réglages →
+    /// Téléchargements. `nice 10` and `Lane::Bulk` are the worker's own.
+    pub fn start_offline(&mut self) -> Option<crate::wiring::offline::Offline> {
+        let offline = crate::wiring::offline::attach(self);
+        if let Some(service) = &offline {
+            let snapshot = service.snapshot();
+            debug!(
+                pending = snapshot.progress.pending,
+                done = snapshot.progress.done,
+                "téléchargements hors ligne"
+            );
+        }
+        offline
+    }
+
     /// Start the engine once, on its own thread.
     pub fn start_audio(&mut self) {
         if self.audio.is_some() || !self.config.start_audio {
@@ -788,6 +807,7 @@ impl AppState {
                 self.session_cause = None;
                 self.nav.reset(Route::Home);
                 self.start_audio();
+                self.start_offline();
                 self.warm_owner();
                 self.sync_mpris();
             }
@@ -818,6 +838,7 @@ impl AppState {
                 self.auth = Auth::LoggedIn { me };
                 self.nav.reset(Route::Home);
                 self.start_audio();
+                self.start_offline();
                 self.warm_owner();
                 self.sync_mpris();
             }

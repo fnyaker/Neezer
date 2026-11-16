@@ -178,13 +178,31 @@ impl StreamOpener for NetOpener {
         })
     }
 
+    /// A complete local file for a track: the play cache first, then the
+    /// person's own DOWNLOAD (lot D13).
+    ///
+    /// A download is permanent and lives in its own directory, at the quality it
+    /// was fetched at — so it is found whatever the bar's quality says. That is
+    /// what makes a track chosen for offline play with the link cut: without
+    /// this line the engine asks the network for a file that is already on disk.
     fn local(&self, id: &str, quality: nz_audio::Quality) -> Option<PathBuf> {
         let track = nz_model::TrackId::new(id);
-        self.cache
+        if let Some(path) = self
+            .cache
             .play_cache()
             .lookup(&track, api_quality(quality))
             .ok()
             .flatten()
+        {
+            return Some(path);
+        }
+        let owner = self.api.owner()?;
+        self.cache
+            .downloads()
+            .local(&owner, &track)
+            .ok()
+            .flatten()
+            .map(|(path, _quality)| path)
     }
 }
 
