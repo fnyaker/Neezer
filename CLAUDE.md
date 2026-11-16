@@ -1,9 +1,9 @@
 # CLAUDE.md
 
 Neezer is a fork of [supysonic](https://github.com/spl0k/supysonic) (a Python Subsonic API
-server) wired into a **Subsonic ↔ Deezer proxy**, with its own Svelte web player at `/app` and a
-native Android app (`android/`). Tracks are fetched in FLAC, archived once, and transcoded to Opus
-on demand. AGPL-3.0, Python 3.10+. `AGENTS.md` is this same file.
+server) wired into a **Subsonic ↔ Deezer proxy**, with its own Svelte web player at `/app`, a
+native Android app (`android/`) and a planned GPUI desktop app (`desktop/`). Tracks are fetched
+in FLAC, archived once, and transcoded to Opus on demand. AGPL-3.0, Python 3.10+. `AGENTS.md` is this same file.
 
 This file is SHORT on purpose: it is the process and the rules every task follows. What each part
 of the code learned the hard way lives in `docs/agents/` and is read **only for the areas a task
@@ -116,6 +116,7 @@ green, merge without asking. No skipped or disabled test to get there.
 | `deezerpy/`, `neezer/deezer/` (provider, archive, prefetch, backfill, rules, cleanup, importer, podcasts, YouTube, unavailable tracks, recommendations/radio/releases), `neezer/webui/` routes, `neezer/api/media.py`, priorities and background jobs | [server.md](docs/agents/server.md) |
 | `neezer/providers/`, `sources.py`, `access.py`, accounts, groups, library import | [providers.md](docs/agents/providers.md) |
 | `android/` (WebView, native player, offline store, updater, Deezer login) | [android.md](docs/agents/android.md) |
+| `desktop/` (GPUI app for Omarchy, native audio, MPRIS, local Vulkan transcription; its lot plan) | [desktop.md](docs/agents/desktop.md) |
 | `webapp/src` screens, routing, back navigation, offline cache, service worker, code splitting, queue, search, sleep timer | [webapp.md](docs/agents/webapp.md) |
 | `Player.svelte`, crossfade, silence trim, direct/processed output, `webapp/appcore`, big-list cost | [playback.md](docs/agents/playback.md) |
 | server-side analysis (tempo, descriptors), genre studio, embeddings, genre tree | [analysis-genre.md](docs/agents/analysis-genre.md) |
