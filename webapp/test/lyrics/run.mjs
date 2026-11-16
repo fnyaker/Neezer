@@ -199,11 +199,20 @@ async function makePage(theme, sleeve, viewport) {
     else add();
   });
   const png = SLEEVES[sleeve];
-  // Anchored on the scheme and host: an unanchored host pattern would also
-  // match `evil.example/?next=dzcdn.net` (CodeQL, "Missing regular expression
-  // anchor").
-  await ctx.route(/^https?:\/\/(?:[^/]+\.)*(?:dzcdn\.net|api\.deezer\.com)(?::\d+)?(?:[/?#]|$)/, (r) => {
-    if (/images\/cover\//.test(r.request().url())) {
+  // A host PREDICATE, not a regex: an unanchored pattern may match anywhere in
+  // the URL, and a subdomain wildcard written as nested repetition gives CodeQL
+  // an exponential-backtracking case (both were reported on this bench).
+  const deezer = (url) => {
+    const host = url.hostname;
+    return (
+      host === "dzcdn.net" ||
+      host.endsWith(".dzcdn.net") ||
+      host === "api.deezer.com" ||
+      host.endsWith(".api.deezer.com")
+    );
+  };
+  await ctx.route(deezer, (r) => {
+    if (/^https?:\/\/[^/]+\/images\/cover\//.test(r.request().url())) {
       return r.fulfill({
         status: 200,
         body: png,
@@ -212,14 +221,14 @@ async function makePage(theme, sleeve, viewport) {
     }
     return r.abort();
   });
-  await ctx.route(/\/api\/stream\//, (r) =>
+  await ctx.route(/^https?:\/\/[^/]+\/api\/stream\//, (r) =>
     r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
-  await ctx.route(/\/api\/lyrics\//, (r) =>
+  await ctx.route(/^https?:\/\/[^/]+\/api\/lyrics\//, (r) =>
     r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ lyrics: { synced: SYNCED } }) })
   );
   const cover = `https://e-cdns-images.dzcdn.net/images/cover/${sleeve}/1000x1000-000000-80-0-0.jpg`;
-  await ctx.route(/\/api\/playlist\//, async (r) => {
+  await ctx.route(/^https?:\/\/[^/]+\/api\/playlist\//, async (r) => {
     const res = await r.fetch();
     const body = await res.json();
     for (const t of body.tracks || []) t.album = { ...(t.album || {}), cover };
