@@ -1000,7 +1000,9 @@ Waves that can run in parallel (disjoint files):
   and was never polled (a startup task printed, a later one did not). The app keeps the
   runtime in a GPUI `Global` (`NetRuntime`) and one event channel carries every worker's
   [`AppEvent`] to the shell; the shell drains it in a foreground task, so no worker touches
-  GPUI state.
+  GPUI state. That global also OWNS the threads that borrow the runtime: its `Drop` joins the
+  offline worker before the runtime goes, because a `Handle::block_on` on a shutting-down runtime
+  panics its thread (see D13's *Pitfalls*).
 - **The rule, the keyboard is the mouse**: every control dispatches the action the keymap
   binds (`cx.listener` → `window.dispatch_action`), and the action handler is the shell's one
   transport path (`PlayerState::apply`). The single-letter/space bindings live in
@@ -1360,6 +1362,25 @@ Waves that can run in parallel (disjoint files):
   cost must not be judged in a debug build: GPUI's layout and tab-stop bookkeeping are ~26× slower
   there (45 ms against 3.9 ms for the same page), which is why the budget is quoted in release and
   only loosely bounded in debug.
+  - **A thread that borrows the runtime is JOINED before the runtime goes — and a panic in a
+    worker thread is a bug, never something to catch.** `nz-bulk` drives every download with
+    `Handle::block_on`, and tokio PANICS (it does not return an error) when a timer is polled on a
+    runtime that is shutting down: `runtime::time::entry::TimerEntry::poll_elapsed`, « A Tokio 1.x
+    context was found, but it is being shutdown. » Master's CI carried exactly that
+    (`thread 'nz-bulk' panicked at tokio-1.54.1/src/runtime/time/entry.rs:534`, run 43964917017)
+    while the bench that produced it still reported `ok`: the runtime was dropped under a worker that
+    still had 200 tracks queued, and a `catch_unwind` around `block_on` turned the panic into « le
+    réseau est coupé » and into a passing test. The cause is a lifetime, not an error: the worker's
+    thread is now owned (`Worker`), `Offline::shutdown` joins it, and the `NetRuntime` global joins it
+    in `Drop` — which Rust runs BEFORE the `Arc<Runtime>` field drops. The stop is a
+    `tokio::sync::watch` raced against every `block_on` (`select!`), so a close abandons a request in
+    flight instead of waiting for the next chunk. Measured mid-body with 40 tracks queued
+    (`closing_the_app_mid_download_stops_the_worker_without_a_panic`): the close returns in
+    **220 µs**, leaves **1 row `active`** and its `.part`, the run has **0 failures** and the
+    process records **0 panics**; the 200-track share bench still measures 28.1 % drop with the cap
+    at 127 545 B/s, so nothing got cheaper by accident. The same order is owed by every other thread
+    that borrows the runtime: `wiring/engine.rs`'s loader is the next one, and it has no stop
+    protocol yet.
 
 ### D14a — Réglages (user sections) — delivered 2026-11-17
 

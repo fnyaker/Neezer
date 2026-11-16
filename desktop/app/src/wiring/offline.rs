@@ -49,6 +49,7 @@ use std::time::{Duration, Instant};
 
 use nz_api::{Api, ApiError, Lane, Quality, TrackId};
 use nz_cache::{Cache, DownloadProgress, DownloadSet, DownloadState, DownloadTrack};
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 // --- the person's settings (the SPA's own keys) -----------------------------
@@ -399,8 +400,13 @@ struct Shared {
     snapshot: Mutex<Snapshot>,
     labels: Mutex<HashMap<String, Labels>>,
     paused: AtomicBool,
-    /// Set by `Offline::shutdown` (a test's "the process ends here").
+    /// Set by `Offline::shutdown` (the app closing, a test's "the process ends
+    /// here"): the loop's fast check, between two chunks and at its top.
     stopped: AtomicBool,
+    /// The same stop, in a form an `await` can wait on: every call into the
+    /// network runtime is raced against it, so a stop abandons a request in
+    /// flight instead of waiting for the next chunk. `true` means "stop".
+    stop: watch::Sender<bool>,
     jobs: Mutex<VecDeque<Job>>,
     /// The condvar's own lock: the worker sleeps on it and every request wakes
     /// it, so a click never waits for the next poll.
@@ -455,6 +461,51 @@ impl Shared {
 #[derive(Clone)]
 pub struct Offline {
     shared: Arc<Shared>,
+    /// The thread itself, whose life is tied to the runtime it borrows: see
+    /// [`Worker`]. Kept here so the LAST clone to drop joins it.
+    worker: Arc<Worker>,
+}
+
+/// The worker's thread, owned so that the runtime it borrows cannot go first.
+///
+/// `nz-bulk` drives every request with `Handle::block_on` on the process's
+/// tokio runtime, and tokio **panics** — it does not return an error — when a
+/// timer is polled on a runtime that is shutting down
+/// (`runtime::time::entry::TimerEntry::poll_elapsed`: « A Tokio 1.x context was
+/// found, but it is being shutdown. »). Measured in CI (run 43964917017): the
+/// bench's runtime was dropped under a worker that still had 200 tracks queued,
+/// every test passed, and the thread died with that message.
+///
+/// So the worker is JOINED before the runtime it borrows is dropped, and the two
+/// owners do it: the app's `NetRuntime` global calls [`shutdown_process`] from
+/// its `Drop` (before its own `Arc<Runtime>` goes), and a test's last `Offline`
+/// clone joins here. Dropping that runtime while an `Offline` lives is the one
+/// thing nothing may do.
+struct Worker {
+    shared: Arc<Shared>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl Worker {
+    /// Stop the loop and wait for the thread: once this returns, nothing can
+    /// reach the network runtime from `nz-bulk` any more. Idempotent, and the
+    /// second caller waits for the first one's join (the mutex is held across
+    /// it) instead of returning while the thread still runs.
+    fn stop(&self) {
+        self.shared.stopped.store(true, Ordering::Release);
+        let _ = self.shared.stop.send(true);
+        self.shared.nudge();
+        let mut thread = Shared::lock(&self.thread);
+        if let Some(thread) = thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 static SERVICE: OnceLock<Offline> = OnceLock::new();
@@ -480,24 +531,32 @@ impl Offline {
             labels: Mutex::new(labels),
             paused: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
+            stop: watch::channel(false).0,
             jobs: Mutex::new(VecDeque::new()),
             gate: Mutex::new(()),
             wake: Condvar::new(),
             meter: Mutex::new(Meter::default()),
             version: AtomicU64::new(0),
         });
-        let worker = Arc::clone(&shared);
+        let worker = Arc::new(Worker {
+            shared: Arc::clone(&shared),
+            thread: Mutex::new(None),
+        });
+        let looped = Arc::clone(&shared);
         let spawned = std::thread::Builder::new()
             .name("nz-bulk".to_owned())
             .spawn(move || {
                 lower_priority();
-                run(worker);
+                run(looped);
             });
-        if let Err(error) = spawned {
-            Shared::lock(&shared.snapshot).state =
-                WorkerState::Blocked(format!("le worker hors ligne n'a pas démarré : {error}"));
+        match spawned {
+            Ok(thread) => *Shared::lock(&worker.thread) = Some(thread),
+            Err(error) => {
+                Shared::lock(&shared.snapshot).state =
+                    WorkerState::Blocked(format!("le worker hors ligne n'a pas démarré : {error}"));
+            }
         }
-        Offline { shared }
+        Offline { shared, worker }
     }
 
     /// The process's service, configured (or reconfigured) from the session.
@@ -716,9 +775,14 @@ impl Offline {
     /// End the worker: what a process ending does (and what a restart test
     /// needs). The row being written stays `active` in the store, which is
     /// exactly what the next start finds.
+    ///
+    /// It WAITS for the thread ([`Worker::stop`]). The app's network runtime is
+    /// borrowed by that thread with `Handle::block_on`, and tokio panics when a
+    /// timer is polled on a shutting-down runtime, so a caller that owns the
+    /// runtime must see this return before dropping it: `NetRuntime`'s `Drop`
+    /// does exactly that ([`shutdown_process`]).
     pub fn shutdown(&self) {
-        self.shared.stopped.store(true, Ordering::Release);
-        self.shared.nudge();
+        self.worker.stop();
     }
 
     fn stopped(&self) -> bool {
@@ -785,6 +849,19 @@ fn release_stale_cap(shared: &Shared) {
     }
 }
 
+/// Stop the process's worker, and wait for it.
+///
+/// This is what the app's `NetRuntime` global calls from its `Drop`: the worker
+/// borrows that very runtime, so it must be joined BEFORE its `Arc<Runtime>`
+/// field goes (tokio asserts on a timer polled on a shutdown runtime, and the
+/// field drops after the `Drop` body — the order Rust guarantees). Idempotent,
+/// and a no-op when no session ever started the worker.
+pub fn shutdown_process() {
+    if let Some(service) = SERVICE.get() {
+        service.shutdown();
+    }
+}
+
 /// The process's worker for this session, started on the first call.
 ///
 /// One call site per session (the downloads screen, the badge, and one line in
@@ -842,6 +919,9 @@ const PAUSE_POLL: Duration = Duration::from_millis(400);
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
 fn run(shared: Arc<Shared>) {
+    // The stop, in the form an `await` can be raced against: a close must not
+    // wait for the chunk in flight.
+    let mut stop = shared.stop.subscribe();
     loop {
         if shared.stopped.load(Ordering::Acquire) {
             return;
@@ -888,7 +968,7 @@ fn run(shared: Arc<Shared>) {
 
         match next_job(&store, &owner) {
             Ok(Some(job)) => {
-                step(&shared, &store, &api, &runtime, &owner, &job);
+                step(&shared, &store, &api, &runtime, &owner, &job, &mut stop);
             }
             Ok(None) => {
                 finish(&shared, &store, &owner);
@@ -1243,6 +1323,7 @@ fn step(
     runtime: &tokio::runtime::Handle,
     owner: &str,
     job: &nz_cache::DownloadJob,
+    stop: &mut watch::Receiver<bool>,
 ) {
     let title = Shared::lock(&shared.labels)
         .get(job.track.as_str())
@@ -1262,7 +1343,7 @@ fn step(
     });
 
     let started = Instant::now();
-    match fetch(shared, store, api, runtime, owner, job) {
+    match fetch(shared, store, api, runtime, owner, job, stop) {
         Ok(bytes) => {
             info!(
                 track = job.track.as_str(),
@@ -1336,6 +1417,7 @@ fn fetch(
     runtime: &tokio::runtime::Handle,
     owner: &str,
     job: &nz_cache::DownloadJob,
+    stop: &mut watch::Receiver<bool>,
 ) -> Result<u64, Outcome> {
     let _ = store
         .downloads()
@@ -1349,14 +1431,23 @@ fn fetch(
         File::create(&partial).map_err(|error| Outcome::Failed(format!("disque : {error}")))?;
     let mut out = BufWriter::with_capacity(64 * 1024, file);
 
-    let mut response =
-        match runtime.block_on(api.stream(Lane::Bulk, &job.track, job.quality, None, None)) {
-            Ok(response) => response,
-            Err(error) => {
-                let _ = std::fs::remove_file(&partial);
-                return Err(classify(error));
-            }
-        };
+    let mut response = match block_on(
+        runtime,
+        stop,
+        api.stream(Lane::Bulk, &job.track, job.quality, None, None),
+    ) {
+        Some(Ok(response)) => response,
+        Some(Err(error)) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(classify(error));
+        }
+        // The app closed while the request was in a lane: nothing was read, the
+        // row stays `active` for the next launch, and the empty `.part` goes.
+        None => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(Outcome::Interrupted);
+        }
+    };
     let total = response.content_length;
     shared.publish(|snapshot| {
         if let Some(running) = snapshot.running.as_mut() {
@@ -1371,7 +1462,7 @@ fn fetch(
             let _ = out.flush();
             return Err(Outcome::Interrupted);
         }
-        match block_on(runtime, response.chunk()) {
+        match block_on(runtime, stop, response.chunk()) {
             Some(Ok(Some(chunk))) => {
                 if let Err(error) = out.write_all(&chunk) {
                     let _ = std::fs::remove_file(&partial);
@@ -1393,10 +1484,12 @@ fn fetch(
                 let _ = std::fs::remove_file(&partial);
                 return Err(classify(error));
             }
+            // The app closed mid-body: keep the `.part`, write nothing, and let
+            // the row stay `active` — the next launch fetches it again rather
+            // than trusting a truncated file (`a_restart_mid_download_resumes_the_set`).
             None => {
                 let _ = out.flush();
-                let _ = std::fs::remove_file(&partial);
-                return Err(Outcome::Offline);
+                return Err(Outcome::Interrupted);
             }
         }
     }
@@ -1419,16 +1512,32 @@ fn fetch(
     Ok(bytes)
 }
 
-/// Run one future on `nz-net` from the worker thread.
+/// Run one future on the app's network runtime, from the worker thread, and give
+/// it up the moment the worker is told to stop.
 ///
-/// A runtime that has been shut down (a test process ending, the app quitting)
-/// answers "offline" instead of panicking inside `block_on`: a detached worker
-/// must never be able to abort a process that is going away.
+/// `None` means « the app is closing »: the future was dropped before it
+/// finished (a request waiting in a lane, a body in flight), and the caller turns
+/// that into [`Outcome::Interrupted`] rather than a verdict about the track.
+///
+/// There is deliberately NO `catch_unwind` here. This worker must never reach a
+/// runtime that is shutting down — tokio PANICS on
+/// `TimerEntry::poll_elapsed` — and [`Worker::stop`] joining this thread before
+/// the runtime goes is what guarantees it. A panic swallowed here would turn a
+/// real bug into « le réseau est coupé » and still print the message.
 fn block_on<T>(
     runtime: &tokio::runtime::Handle,
+    stop: &mut watch::Receiver<bool>,
     future: impl std::future::Future<Output = T>,
 ) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(future))).ok()
+    runtime.block_on(async {
+        tokio::select! {
+            biased;
+            // `Err` means the sender is gone: the service that could still ask
+            // us to stop went with it, so stop.
+            _ = stop.wait_for(|gone| *gone) => None,
+            value = future => Some(value),
+        }
+    })
 }
 
 /// What a request's failure means for the QUEUE: a dead link or a busy server is
@@ -1856,6 +1965,34 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         done()
+    }
+
+    /// Record every thread panic of THIS process, so a test can prove there was
+    /// none.
+    ///
+    /// A panicking worker prints its message and the suite still passes — that is
+    /// exactly how the `nz-bulk` shutdown panic reached master's CI log. A panic
+    /// hook is process-wide, so the test that installs one runs in a process of
+    /// its own ([`in_its_own_process`]); the default hook still runs, so the
+    /// message is not hidden from a person reading the log.
+    struct Panics(Arc<Mutex<Vec<String>>>);
+
+    impl Panics {
+        fn install() -> Panics {
+            let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+            let previous = std::panic::take_hook();
+            let recorded = Arc::clone(&seen);
+            std::panic::set_hook(Box::new(move |info| {
+                Shared::lock(&recorded).push(info.to_string());
+                previous(info);
+            }));
+            Panics(seen)
+        }
+
+        /// Everything recorded since the last call.
+        fn take(&self) -> Vec<String> {
+            std::mem::take(&mut *Shared::lock(&self.0))
+        }
     }
 
     fn choices(ids: &[&str]) -> Vec<Choice> {
@@ -2309,6 +2446,187 @@ mod tests {
         }
     }
 
+    /// **Closing the app during a download: the worker stops, nothing panics.**
+    ///
+    /// `NetRuntime` — the global that owns the app's network runtime — joins
+    /// `nz-bulk` in its `Drop`, BEFORE the runtime it holds goes. Tokio panics
+    /// when a timer is polled on a runtime that is shutting down
+    /// (`TimerEntry::poll_elapsed`: « A Tokio 1.x context was found, but it is
+    /// being shutdown. » — master's CI log, run 43964917017), and the suite still
+    /// passed because a `catch_unwind` swallowed it. This test drops EXACTLY what
+    /// the app drops, mid-body, and proves no thread panicked and that the worker
+    /// was gone before the runtime.
+    #[test]
+    fn closing_the_app_mid_download_stops_the_worker_without_a_panic() {
+        in_its_own_process("wiring::offline::tests::the_close_bench_in_its_own_process");
+    }
+
+    #[test]
+    #[ignore = "run by its parent, a process of its own (a panic hook is process-wide)"]
+    fn the_close_bench_in_its_own_process() {
+        let panics = Panics::install();
+        let scratch = Scratch::new("close");
+        let store = scratch.store();
+        let ids: Vec<String> = (0..40).map(|index| format!("c{index}")).collect();
+        let borrowed: Vec<&str> = ids.iter().map(String::as_str).collect();
+        // A link slow enough that a body is in flight when the window closes, and
+        // a Bulk cap that makes the worker SLEEP between its chunks: that sleep is
+        // the timer tokio asserted on.
+        let server = TestServer::start(Link::new(Some(400_000.0)), body_map(&borrowed, 128 * 1024));
+        let runtime = Arc::new(runtime());
+        let api = api_for(&server, &store, &scratch);
+        api.set_bulk_cap_from_stream(Some(8_000));
+        let service = Offline::ensure(api, store.clone(), runtime.handle().clone());
+        service.choose("playlist", "p1", "Voyage", choices(&borrowed));
+        assert!(
+            wait_for(Duration::from_secs(20), || {
+                service
+                    .snapshot()
+                    .running
+                    .as_ref()
+                    .is_some_and(|running| running.bytes > 0)
+            }),
+            "a body is being written: {:?}",
+            service.snapshot().running
+        );
+        let interrupted = service
+            .snapshot()
+            .running
+            .expect("a download in flight")
+            .track;
+
+        // The window closes: this is the app's own global, and its `Drop` is what
+        // a quit runs. The runtime the worker borrows goes after it.
+        let net = crate::NetRuntime(Arc::clone(&runtime));
+        let closing = Instant::now();
+        drop(net);
+        let closed = closing.elapsed();
+        drop(runtime);
+        // A worker that survived the close would panic right here.
+        std::thread::sleep(Duration::from_millis(500));
+
+        let panicked = panics.take();
+        println!(
+            "fermeture pendant un téléchargement : rendue en {closed:?}, {} panique(s)",
+            panicked.len()
+        );
+        assert!(
+            panicked.is_empty(),
+            "no thread may panic while the app closes: {panicked:?}"
+        );
+        assert!(
+            closed < Duration::from_millis(500),
+            "the close answered in {closed:?}, not behind the chunk in flight"
+        );
+        // The row is still `active` and its `.part` is on disk: the next launch
+        // resumes it (`a_restart_mid_download_resumes_the_set`), and an
+        // interruption is not a verdict about the track.
+        let jobs = store.downloads().pending("42", 100).expect("the queue");
+        let active: Vec<&str> = jobs
+            .iter()
+            .filter(|job| job.state == DownloadState::Active)
+            .map(|job| job.track.as_str())
+            .collect();
+        assert_eq!(
+            active,
+            vec![interrupted.as_str()],
+            "exactly the body in flight is interrupted"
+        );
+        assert!(
+            std::fs::read_dir(store.offline_dir())
+                .map(|entries| entries
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.path().extension().is_some_and(|ext| ext == "part")))
+                .unwrap_or(false),
+            "the interrupted body is kept as a .part"
+        );
+        assert_eq!(
+            service.snapshot().progress.failed,
+            0,
+            "an interruption is not a failure"
+        );
+    }
+
+    /// **A session change mid-download does NOT touch the runtime.**
+    ///
+    /// Signing out and in again swaps the `Api` (`Offline::configure`) and leaves
+    /// the thread and the runtime it borrows alone: only the app CLOSING joins it,
+    /// which is why a logout cannot panic `nz-bulk` — the shared panic is a
+    /// lifetime, not a session. The two people's queues also stay apart (the store
+    /// keys a row by owner), so the new session never fetches the previous
+    /// person's row.
+    #[test]
+    fn a_session_change_mid_download_keeps_the_worker_and_separates_the_queues() {
+        in_its_own_process("wiring::offline::tests::the_account_bench_in_its_own_process");
+    }
+
+    #[test]
+    #[ignore = "run by its parent, a process of its own (a panic hook is process-wide)"]
+    fn the_account_bench_in_its_own_process() {
+        let panics = Panics::install();
+        let scratch = Scratch::new("account");
+        let store = scratch.store();
+        let mine = ["mine1", "mine2"];
+        let server = TestServer::start(
+            Link::new(Some(50_000.0)),
+            body_map(&["mine1", "mine2", "theirs"], 64 * 1024),
+        );
+        let runtime = runtime();
+        let api = api_for(&server, &store, &scratch); // owner 42
+        let service = Offline::start(store.clone());
+        service.configure(api, runtime.handle().clone());
+        service.choose("playlist", "p1", "Ma liste", choices(&mine));
+        assert!(
+            wait_for(Duration::from_secs(20), || {
+                service.snapshot().running.is_some()
+            }),
+            "the first account's queue runs: {:?}",
+            service.snapshot().progress
+        );
+
+        // Somebody else signs in: `configure` swaps the client, nothing else.
+        let theirs = api_for(&server, &store, &scratch);
+        theirs.set_owner(Some("7".to_owned()));
+        service.configure(theirs, runtime.handle().clone());
+        service.choose_track(Choice::new("theirs", "Leur titre"));
+        assert!(
+            wait_for(Duration::from_secs(20), || service
+                .local("theirs")
+                .is_some()),
+            "the new session's download runs: {:?}",
+            service.snapshot().progress
+        );
+        // The previous person's queue is untouched, and their remaining track was
+        // not fetched with the new session.
+        let left = store.downloads().pending("42", 100).expect("the queue");
+        assert!(
+            left.iter()
+                .any(|job| job.track.as_str() == "mine2" && job.state == DownloadState::Pending),
+            "the previous account's queue is kept: {:?}",
+            left.iter()
+                .map(|job| (job.track.as_str(), job.state))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            store
+                .downloads()
+                .local("42", &TrackId::new("mine2"))
+                .expect("the store")
+                .is_none(),
+            "the new session does not download into the previous account's library"
+        );
+        println!(
+            "changement de compte : « theirs » téléchargé, {} ligne(s) gardées pour 42",
+            left.len()
+        );
+        service.shutdown();
+        drop(runtime);
+        assert!(
+            panics.take().is_empty(),
+            "a session change must not panic the worker"
+        );
+    }
+
     /// **The app starts the worker at restore/login** (D13's second seam, in
     /// `AppState`): a session that comes back starts the download thread, which
     /// is what makes a queue left by a previous run resume without anybody
@@ -2546,6 +2864,9 @@ mod tests {
             "the bulk lane made progress: {:?}",
             snapshot.progress
         );
+        // Close like the app does: the worker is joined before its runtime goes
+        // (`NetRuntime::drop`), which is the contract this bench used to break.
+        service.shutdown();
     }
 
     /// Read a `Lane::User` stream the way a player does — chunk by chunk, for
@@ -2659,6 +2980,8 @@ mod tests {
             service.snapshot().progress
         );
         assert_eq!(service.snapshot().progress.failed, 0);
+        // The worker borrows this runtime: it is joined first.
+        service.shutdown();
         drop(runtime);
     }
 
