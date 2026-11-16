@@ -1,0 +1,1 @@
+//! genre_explorer: widget owned by lot `D16` (`docs/agents/desktop.md`).

@@ -22,6 +22,9 @@ publish = false
 # --- UI (Omarchy's own toolkit; the published pair, see the note) -----------
 gpui-kit = { version = "0.7", default-features = false, features = ["assets"] }
 gpui-omarchy = "=0.2.1"
+# The GPUI snapshot gpui-kit 0.7.3 re-exports; named here so the test harness
+# (`test-support`) can be asked for directly without enabling a second backend.
+gpui = { package = "gpui-pre", version = "=0.3.9" }
 # --- audio ----------------------------------------------------------------
 symphonia = { version = "0.6.1", default-features = false, features = [
     "ogg",
@@ -38,6 +41,9 @@ rubato = "5"
 signalsmith-stretch = "0.1"
 # --- desktop integration ---------------------------------------------------
 mpris-server = "0.11.0"
+# The single-instance name (`fr.neezer.Desktop`) and the `Raise` call a second
+# launch sends. `mpris-server` already pulls zbus 6, so this is the same major.
+zbus = { version = "6.3", default-features = false, features = ["tokio", "service"] }
 # --- HTTP, storage, plumbing ----------------------------------------------
 reqwest = { version = "0.13.5", default-features = false, features = [
     "rustls",
