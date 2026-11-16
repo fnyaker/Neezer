@@ -538,7 +538,7 @@ settle(page) }`. Checks per scenario:
 | T4 | to do | — | — |
 | T5 | to do | — | — |
 | T6a | to do | — | — |
-| T6b | to do | — | — |
+| T6b | done | #223 | `node test/motion/run.mjs`: 152 checks / 0 failure (6 scenarios × 2 viewports × 3 levels); full: pill 200 ms [transform], panel/podcast/group-body/tab/edit-glyph 140 ms [opacity] (glyph + 4 px), leaf underline 200 ms [transform] + 90 ms [colour], chevron 200 ms [transform]; reduced: opacity only at 140 ms, **zero** transform (the pill is PLACED, the chevron POSED, M14); eco: only the guard's 0 ms remnant, nothing moves (M13); same /api + image request multiset in the three levels; LayoutCount over act+settle 1–117, all of it the content mount (12 cards = 43, 42 artist tiles = 21, the 57-row edit list = 117) — every animated property is opacity/transform; `npm test` 779/779; `test/ui/run.mjs` medians 0/0/0 + 132 ms playlist against 0/0/0 + 139 ms on a base build (5 runs each, 4× CPU). |
 | T6c | to do | — | — |
 | T6d | to do | — | — |
 | T6e | to do | — | — |
