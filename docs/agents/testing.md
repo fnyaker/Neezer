@@ -141,5 +141,22 @@ the code under it was broken:
   optional providers it did not mean to include. The YouTube extra is installed on some machines
   and in the image, not in the minimal CI job, so its presence silently changed a fallback rank
   (`tests.test_source_order`).
-- Tests that write files write them in their own temp directory: `tests/assets/folder` is scanned
-  by several modules, from several processes under `partest`.
+- **Tests that write files write them in their own temp directory**: `tests/assets/folder` is
+  scanned by several modules, from several processes under `partest`.
+- **A bench that writes in the temporary directory removes it, and proves it does.** On most
+  machines `/tmp` is a tmpfs — a leftover is RAM, not disk. On 2026-11-16 hundreds of `nsperf-*`
+  libraries from `tools/perf_api.py` (5 MB for a small seed, 2.3 GB at 20 000 tracks) filled a
+  shared tmpfs to 19 GB of 24 until the user quota answered EDQUOT for everyone: the tool deleted
+  its directory only when it reached the end of its own code, and every browser bench stops it
+  with SIGTERM. It now removes the library on every exit it can catch (`atexit` for a return, an
+  exception and `sys.exit`; handlers for SIGTERM, SIGINT and SIGHUP) and writes an `owner` file
+  naming its pid. SIGKILL cannot be caught, so each launch sweeps the `nsperf-*` directories whose
+  owner is gone — never one a living process holds (a serving bench keeps its SQLite database open:
+  **4 fds** measured on an idle one, and the 60 s grace on a directory with no owner file covers a
+  peer between its `mkdtemp` and its own owner file). Launchers therefore stop a bench with SIGTERM
+  and keep SIGKILL as the fallback (`stopServer` in `webapp/test/harness.mjs`, the desktop benches'
+  `Drop`), and a bench that spawns its own temporary file — `webapp/test/requests/run.mjs`'s WAV —
+  removes that too. Measured 2026-11-17: **20 of 20 SIGTERM launches left 0 directories, 20 of 20
+  SIGKILL launches left exactly one and the launch after each left 0**, and a bench kept alive while
+  another started kept its library and kept answering `200 /api/version`. `tests/test_perf_api_leaks.py`
+  (7 tests, 4.1 s) pins all of it, each of its three safety rules checked against its own mutation.
