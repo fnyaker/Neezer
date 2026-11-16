@@ -4,7 +4,10 @@
   // landing card (who invited you, what is playing, one tap to join), then the
   // live view.
   import { onDestroy, onMount } from "svelte";
-  import { fade } from "svelte/transition";
+  // The guest screen renders outside the router, so it has no page enter: its
+  // content branch fades once the peek answers, and the latency chip and the
+  // resume overlay come and go through the level's own `fade` (I1/I15).
+  import { fade, fadeIn } from "../lib/motion.js";
   import { createBackdrop } from "../lib/backdrop.js";
   import { cssUrl, duration as fmtDuration } from "../lib/format.js";
   import { ecoMode } from "../lib/stores.js";
@@ -153,9 +156,9 @@
     </header>
 
     {#if phase === "loading"}
-      <div class="center"><span class="spinner" aria-label="Chargement"></span></div>
+      <div class="center"><span class="spinner" aria-label="Chargement" data-motion="status"></span></div>
     {:else if phase === "missing" || phase === "ended"}
-      <div class="center msg">
+      <div class="center msg" in:fadeIn>
         <span class="big-ic"><Icon name="party" size={30} /></span>
         <h1>{phase === "ended" ? "La party est terminée" : "Cette party n'existe plus"}</h1>
         <p class="muted">
@@ -165,18 +168,18 @@
         </p>
       </div>
     {:else if phase === "unsupported"}
-      <div class="center msg">
+      <div class="center msg" in:fadeIn>
         <h1>Navigateur non pris en charge</h1>
         <p class="muted">Ouvrez ce lien dans un navigateur récent (Chrome, Firefox, Safari).</p>
       </div>
     {:else if phase === "left"}
-      <div class="center msg">
+      <div class="center msg" in:fadeIn>
         <span class="big-ic"><Icon name="party" size={30} /></span>
         <h1>Vous avez quitté la party</h1>
         <button class="primary" on:click={rejoin}><Icon name="party" size={18} /> Rejoindre à nouveau</button>
       </div>
     {:else}
-      <main class="stage" class:landing={phase === "landing"}>
+      <main class="stage" class:landing={phase === "landing"} in:fadeIn>
         <div class="art">
           {#if track && !artFailed}
             <img src={track.cover} alt="" on:error={() => (artFailed = true)} />
@@ -189,7 +192,7 @@
           {#if phase === "landing"}
             <p class="invite"><strong>{peek.host}</strong> vous invite à écouter{listeners ? ` avec ${listeners} ${listeners > 1 ? "autres personnes" : "autre personne"}` : ""}</p>
           {:else}
-            <p class="live"><span class="dot" class:paused={!st || (!st.playing && !st.buf)}></span>En direct avec {st ? st.host : ""}{listeners > 1 ? ` · ${listeners} à l'écoute` : ""}</p>
+            <p class="live"><span class="dot" class:paused={!st || (!st.playing && !st.buf)} data-motion="status"></span>En direct avec {st ? st.host : ""}{listeners > 1 ? ` · ${listeners} à l'écoute` : ""}</p>
           {/if}
           <h1 class="title">{track ? track.title : "Rien en lecture pour l'instant"}</h1>
           {#if track && track.artist}<p class="artist">{track.artist}</p>{/if}
@@ -211,7 +214,7 @@
           </div>
 
           <p class="status {status.tone}">
-            {#if status.tone === "wait"}<span class="mini-spin"></span>{/if}
+            {#if status.tone === "wait"}<span class="mini-spin" data-motion="status"></span>{/if}
             {status.text}
           </p>
 
@@ -230,7 +233,7 @@
           </div>
 
           {#if showLatency}
-            <div class="latency" transition:fade={{ duration: 120 }}>
+            <div class="latency" transition:fade>
               <p class="muted">
                 Cet appareil sonne en retard sur les autres (enceinte Bluetooth, barre de son) ? Avancez-le.
                 En avance ? Retardez-le. Réglez à l'oreille, pièce silencieuse, deux appareils côte à côte.
@@ -248,7 +251,7 @@
   </div>
 
   {#if $view && $view.suspended && phase === "live"}
-    <button class="resume" on:click={() => session && session.resume()} transition:fade={{ duration: 150 }}>
+    <button class="resume" on:click={() => session && session.resume()} transition:fade>
       <Icon name="play" size={28} />
       <span>Touchez pour reprendre le son</span>
     </button>
@@ -511,7 +514,8 @@
     height: 100%;
     border-radius: 3px;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transition: width 0.25s linear;
+    /* The party's playhead is fed live: it IS the motion, so it is not
+       animated (M6: a seek or a position never gets a transition). */
   }
   .times {
     display: flex;

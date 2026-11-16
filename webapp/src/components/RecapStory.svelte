@@ -162,6 +162,7 @@
   tabindex="0"
   role="region"
   aria-label={`Récap ${payload && payload.year ? payload.year : ""}`}
+  style={`--fill-ms:${AUTO_MS}ms`}
   on:keydown={onKey}
   on:focusin={onFocusIn}
   on:focusout={onFocusOut}
@@ -172,7 +173,15 @@
       <span class="bar" class:done={i < index}>
         {#if i === index}
           {#key barKey}
-            <span class="fill" class:run={auto} class:full={!auto}></span>
+            <!-- The countdown bar says a 7 s timer is running: it is a status
+                 indicator (M13), so eco keeps it moving and everything else
+                 stops. Its duration is the JS clock's, not a motion token. -->
+            <span
+              class="fill"
+              class:run={auto}
+              class:full={!auto}
+              data-motion={auto ? "status" : undefined}
+            ></span>
           {/key}
         {:else if i < index}
           <span class="fill full"></span>
@@ -238,30 +247,34 @@
   }
   .fill {
     display: block;
-    width: 0;
+    width: 100%;
     height: 100%;
     border-radius: inherit;
     background: var(--tx);
+    /* The bar grows by transform, never by width (M1): the same 7 s, no layout
+       on a phone that is already decoding a card. */
+    transform: scaleX(0);
+    transform-origin: 0 50%;
   }
   .fill.full,
   .fill.run {
     transition: none;
   }
   .fill.run {
-    animation: recap-fill 7s linear forwards;
+    animation: recap-fill var(--fill-ms) linear forwards;
   }
   .fill.full {
-    width: 100%;
+    transform: none;
   }
   .story.paused .fill.run {
     animation-play-state: paused;
   }
   @keyframes recap-fill {
     from {
-      width: 0;
+      transform: scaleX(0);
     }
     to {
-      width: 100%;
+      transform: scaleX(1);
     }
   }
 
@@ -276,6 +289,14 @@
     inset: 0;
     z-index: 2;
     visibility: hidden;
+    opacity: 0;
+    /* A story slide FADES IN over 200 ms (I15, M7): the bridge mounts the
+       active card and the next one and nothing else (webapp.md's sleeve
+       budget; `test/recap/run.mjs` requires exactly one `.active`), so the card
+       being left is removed in the same frame and there is no one to fade out.
+       Both cards are absolutely positioned, so neither costs a layout, and a
+       fast next/prev reverses from where it is. */
+    transition: opacity var(--dur-base) var(--ease-standard);
     /* The next card is mounted (and its art loading) but not seen and not
        focusable — `visibility` also takes its buttons out of the tab order.
        `pointer-events:none` is what lets a tap on the card's words fall through
@@ -285,6 +306,7 @@
   }
   .slide-wrap.active {
     visibility: visible;
+    opacity: 1;
   }
 
   /* The two real tap targets. They sit UNDER the card: the card itself is
@@ -359,7 +381,7 @@
   @media (prefers-reduced-motion: reduce) {
     .fill.run {
       animation: none;
-      width: 100%;
+      transform: none;
     }
   }
 </style>

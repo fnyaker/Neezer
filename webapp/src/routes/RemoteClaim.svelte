@@ -6,6 +6,10 @@
   import { api } from "../lib/api.js";
   import { rememberRemote, reloadHome, LEVEL_INFO } from "../lib/remote/mode.js";
   import Icon from "../components/Icon.svelte";
+  // Outside the router, so no page enter: the card fades once the shell shows
+  // it (I15), and its spinner keeps turning in eco because a frozen one reads
+  // as a hung claim (M13).
+  import { fadeIn } from "../lib/motion.js";
 
   export let token;
 
@@ -31,11 +35,11 @@
 </script>
 
 <div class="claim">
-  <div class="card">
+  <div class="card" in:fadeIn>
     <span class="badge" class:ok={phase === "ok"}><Icon name="remote" size={28} /></span>
     {#if phase === "claiming"}
       <h1>Connexion au lecteur…</h1>
-      <span class="spin" aria-hidden="true"></span>
+      <span class="spin" aria-hidden="true" data-motion="status"></span>
     {:else if phase === "ok"}
       <h1>Vous pilotez le lecteur de {info.owner}</h1>
       <p class="muted">
@@ -80,7 +84,7 @@
     color: var(--text);
     background: var(--bg-card);
     border: 1px solid var(--bg-hover);
-    transition: background 0.2s ease;
+    transition: background var(--dur-fast) var(--ease-standard);
   }
   .badge.ok {
     color: #06140f;

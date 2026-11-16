@@ -306,10 +306,13 @@
     backdrop-filter: var(--glass-filter-2);
     border: 1px solid rgba(255, 255, 255, 0.08);
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(var(--move-m));
+    /* The projector's own chrome, tokens only (M15): it arrives on the enter
+       curve and 8 px from below, and reduced motion drops both the distance
+       and the duration through the token overrides. */
     transition:
-      opacity 0.45s ease,
-      transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+      opacity var(--dur-base) var(--ease-enter),
+      transform var(--dur-base) var(--ease-enter);
     pointer-events: none;
   }
   .card.on {
@@ -359,7 +362,7 @@
     backdrop-filter: var(--glass-filter-2);
     border: 1px solid rgba(255, 255, 255, 0.08);
     opacity: 0;
-    transition: opacity 0.35s ease;
+    transition: opacity var(--dur-base) var(--ease-standard);
     pointer-events: none;
   }
   .bar.on {

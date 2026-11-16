@@ -2,6 +2,9 @@
   import { createEventDispatcher } from "svelte";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  // The heart is a glyph swap (M7): the old one goes at once, the new one
+  // fades and settles 4 px from where it lands (docs/agents/transitions.md, I15).
+  import { swap } from "../lib/motion.js";
 
   export let artist = null;
   export let liked = false;
@@ -52,7 +55,9 @@
     <span class="art">
       <Cover src={image} alt={name} kind="artist" round />
       <span class="heart" class:on={liked} aria-hidden="true">
-        <Icon name={liked ? "heartFilled" : "heart"} size={17} />
+        {#key liked}
+          <span class="glyphswap" in:swap><Icon name={liked ? "heartFilled" : "heart"} size={17} /></span>
+        {/key}
       </span>
       {#if similarOf}
         <span class="near" aria-hidden="true">Proche</span>
@@ -74,9 +79,10 @@
     color: var(--tx);
     content-visibility: auto;
     contain-intrinsic-size: auto 240px;
+    /* Hover and press are frequent things: 90 ms, tokens only (M6/M15). */
     transition:
-      background-color 0.12s ease,
-      transform 0.12s ease;
+      background-color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
   }
   .tile:not(.ph):hover {
     background: var(--s2);
@@ -103,6 +109,12 @@
     background: var(--s1);
     color: var(--tx);
     box-shadow: 0 0 0 1px var(--ln);
+  }
+  /* The entered glyph is the only thing the swap moves: the disc keeps its
+     30 px and its place, so a like never nudges the grid. */
+  .glyphswap {
+    display: grid;
+    place-items: center;
   }
   .heart.on {
     background: var(--ac);
