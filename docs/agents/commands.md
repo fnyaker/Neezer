@@ -81,6 +81,10 @@ cd webapp && node test/theme/run.mjs                 # the sleeve change is a 60
                                                      # DIST=<dir> serves a build made elsewhere so it never replaces neezer/webui/dist
 cd webapp && node test/glass/run.mjs                # the ONE glass ladder (3 tiers): contrast >= 4.5:1 on 57 surfaces, one
                                                      # backdrop-filter at a time, zero in eco/reduced transparency, cost per surface
+cd webapp && node test/lyrics/run.mjs               # the lyrics view in its two shapes: the wide player's separated column is NOT a
+                                                     # card (transparent, no frame) and its current AND past/future lines keep 4.5:1
+                                                     # on the painted backdrop, over a white and a black sleeve, in the three themes;
+                                                     # the narrow player's card tab and the phone's sheet keep their glass
 cd webapp && node test/vizstrip/run.mjs             # the visualizer strip's real height: 56 px desktop / 44 below / 40 mobile,
                                                      # canvas fills it, no overlap with the transport, the footer or the thumbs;
                                                      # and its picture on the three themes + reduced motion + no-WebGL2: alpha 0

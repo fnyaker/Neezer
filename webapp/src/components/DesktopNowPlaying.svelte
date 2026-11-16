@@ -373,7 +373,7 @@
     {#if roomy && CAN_BROWSE && !podcast}
       <aside class="lyrics-col" aria-label="Paroles">
         <header class="col-h"><span class="label-mono">Paroles</span></header>
-        <div class="lyrics-body"><Lyrics /></div>
+        <div class="lyrics-body"><Lyrics floating /></div>
       </aside>
     {/if}
     <section class="main" class:steer={CAN_KEEP && $flowLive} class:strip={stripViz}>
@@ -682,19 +682,25 @@
     --viz-strip-h: 44px;
   }
 
-  /* The reading columns (Sillon's raised card, same as the queue's). They only
-     exist when their media query holds; the queue keeps its own width so the
-     player never has to give up more than the room left over. */
+  /* The reading columns. `.about` is a raised card (Sillon's material, same
+     as the queue's); `.lyrics-col` is deliberately NOT one: in the wide
+     desktop player the words float straight on the player's blurred sleeve,
+     with no ground, frame or shadow of their own — the way Spotify, Deezer
+     and Apple Music's full-screen players show them. The text carries its own
+     theme-coloured shadow (Lyrics.svelte, "the separated column"), which is
+     what keeps it legible without painting a surface behind it. */
   .lyrics-col,
   .about {
     flex: none;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+  .about {
     background: var(--s1);
     border: 1px solid var(--ln);
     border-radius: 24px;
-    overflow: hidden;
   }
   .lyrics-col {
     width: clamp(250px, 21vw, 300px);
@@ -712,10 +718,22 @@
     padding: 16px 18px 8px;
     color: var(--dim);
   }
+  /* The floating column's label sits on the same ground as its words: aligned
+     to their left edge, and shadowed like them (a card's padding would leave
+     the label hanging in the air). */
+  .lyrics-col .col-h {
+    min-height: 44px;
+    padding: 12px 6px 4px;
+  }
+  .lyrics-col .col-h .label-mono {
+    text-shadow:
+      0 1px 2px color-mix(in srgb, var(--bg) 72%, transparent),
+      0 0 18px color-mix(in srgb, var(--bg) 55%, transparent);
+  }
   .lyrics-body {
     flex: 1;
     min-height: 0;
-    padding: 0 18px 18px;
+    padding: 0 6px 10px;
   }
   .about .side-body {
     flex: 1;

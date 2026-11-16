@@ -724,6 +724,24 @@ replaced by the same label header the other columns use. **The Flow's steering r
 ends its footer at 848–882 with the strip hidden, 1920×1080 keeps the strip at 56 px, and 1440×900
 without Flow keeps it too.
 
+**The separated lyrics column is NOT a card** (`DesktopNowPlaying.svelte` → `.lyrics-col`,
+`Lyrics.svelte` → `floating`). From 1200 px the words float straight on the player's blurred sleeve, the
+way Spotify, Deezer and Apple Music's full-screen players do: `background: rgba(0,0,0,0)`, no border, no
+radius, no shadow — asserted on the computed style by `test/lyrics/run.mjs`. What replaces the surface is
+a **text shadow painted in `--bg`** (the theme's own ground), two passes on every line and a stronger pair
+on the line being heard; it is local, so a bright sleeve cannot wash the letters out and a dark one
+cannot swallow them, and it costs no layer. The type is 17.3 px/600 for past and future lines, 21.4 px/800
+in `--ac-text` for the current one, 14 px apart; the list carries a 28 px mask fade at the top and the
+bottom instead of being cut by the column, and the one control (« Créer une carte ») wears the player's
+clear-glass pill rather than the old outlined card button. **Measured on the painted pixels** (raw
+backdrop, glyphs and shadow hidden; 3 themes × white and black sleeve, 1440×900): current line
+**10.91–17.19:1**, past/future **5.42–9.64:1**; the worst pair is Papier over a black sleeve at
+**5.42:1**, above AA. `levelFactor` (PR #205) is what keeps that white sleeve from washing out in the
+first place — it is the ground's brightness the text sits on. The integrated shapes are deliberately
+untouched: the narrow player's queue-card tab keeps its 64 % glass card and the phone's sheet its tier-3
+frost (`test/lyrics/run.mjs` checks both; before/after the phone shot differs on 0.008 % of its
+pixels, the 1024 px card on 0.018 % — JPEG and playback-clock noise, not the view).
+
 **The phone's lyrics are a view, not a hidden gesture** (`MobileNowPlaying.svelte`): the labelled « Paroles »
 door in the thumb row opens a full-height sheet whose own header names the track and the artist, with a 44 px
 close. One scroller only — the sheet is `overflow:hidden`, `Lyrics.svelte` keeps `overflow-y:auto` and follows
