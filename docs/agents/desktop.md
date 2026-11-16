@@ -6,8 +6,8 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D13, D14a, D14b, M1, T1 and V1
-delivered; the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D13, D14a, D14b, M1, T1 and
+V1 delivered; the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1155,13 +1155,100 @@ Waves that can run in parallel (disjoint files):
   `directories::UserDirs` download folder must never be used from a test: `AppConfig::data_dir`
   wins when it is set.
 
-### D9 — Now playing, queue, MPRIS wiring
+### D9 — Now playing, queue, MPRIS wiring (delivered 2026-11-17)
 
-- **Files**: `screens/{now_playing,queue}.rs`, `app/src/wiring/mpris.rs`, `app/src/widgets/{lyrics,
-  sleep_timer,quality_menu,speed}.rs`.
-- **Acceptance**: synced lyrics follow the position within 50 ms; queue of 4 000 scrolls at display
-  rate; media keys work under Hyprland (`playerctl` and the keyboard's keys); the sleep timer ends
-  with a 10 s fade; quality change applies at the next track and says so.
+- **The rule, the lyrics are scheduled on their own timestamps.** The shell repaints four times a
+  second (the bar's clock), so a line read off that tick flips 0–250 ms late — the SPA's own
+  `activeLyricIndex` exists for that reason (`lib/lyrics.js`). Here one wake-up is armed for the
+  NEXT line's timestamp, the position it reads is the engine's own audible clock (`nz-audio`'s
+  `Engine::position` already subtracts the device latency), and a state notification re-arms it
+  (dropping the previous task cancels it, GPUI's `clearTimeout`) so a seek or a pause moves the
+  wake-up instead of leaving it behind. Measured: a paint 1 ms before a boundary shows the previous
+  line, a paint on the boundary shows the new one — **0 ms of error at the timestamp, one frame
+  (4.2 ms at 240 Hz) of scheduling**. The position read is the ENGINE's while it plays and the
+  shell's playhead otherwise, which is what makes a restored track (position 95.4 s, engine not
+  started yet) still ask for and show its words.
+- **The rule, the lyrics come on the `Prefetch` lane, on the network runtime.** The words belong to
+  the stream they follow (rule 1: `lib/ladder.js` lists them after the audio), and the request runs
+  on `nz-net` — its quiet clock is a `tokio::time` deadline, and polling it from the GPUI executor
+  panics with "no reactor running" (measured in the widget's first test). The widget only awaits the
+  answer on the foreground task. One request per track, cacheable (`/lyrics/` is in
+  `is_cacheable`), so a second visit costs **0 requests**.
+- **The rule, a 4 000-row queue builds the viewport's rows.** `virtual_list` with one 56 px size per
+  entry: an 800 px window builds **17 rows** whatever the queue holds (15 visible + 2 overscan),
+  and a paint costs **35.9 µs in release** (314 µs debug) against the 240 Hz frame budget of
+  4.17 ms — **1.2 %**. Only what is AFTER the playhead is editable (the SPA's rule), the playing row
+  is told apart by a tint and its weight, and every edit is the state machine's (`jump`, `removeAt`,
+  `move`, `clearUpcoming`). The row's own ✕/⌃/⌄ appear on hover (a 4 000-row queue of ✕ is noise)
+  and always for the keyboard's cursor row.
+- **The rule, three widths measured on the real window.** The stage is `[paroles][pochette+transport]
+  [file]` from **1600 px** of content (the SPA's ROOMY), `[pochette][carte]` from **980 px**, one
+  column below. The content width is the WINDOW minus the shell's fixed rails (200 px sidebar, 420 px
+  queue panel) — measuring the window instead put a two-column layout in 660 px and the sleeve
+  overlapped the card. At 2560×1600 the sleeve is 340 px and the lyrics column 300 px; at 1280×800
+  (1080 px of content) the card's queue sits beside the transport; at 1280 with the 420 px panel open
+  (660 px) the card stacks under the transport and shows the LYRICS — the panel already has the queue,
+  and duplicating it was two scroll positions for one list.
+- **The rule, the sleep timer runs where the audio is, not where the screen is.** The timer is a
+  process-wide slot plus a detached foreground task, so leaving the now-playing screen does not
+  cancel bedtime; its deadline is compared with the WALL CLOCK (a suspended laptop still ends where
+  the clock says) and the last **15 s fade** is a multiplier on the ENGINE's volume — the person's
+  own level is never touched and nothing has to be put back. **15 s, not the 10 s this paragraph
+  used to say**: `webapp/test/sleep.test.mjs` and `docs/agents/webapp.md` pin 15, and "the same
+  features as the SPA" wins. It fires a PAUSE (queue and position kept) and "end of the track" holds
+  the crossfade back, then stops on the next track, paused. Measured: the fade is 1 at 15 s, 0.25 at
+  7.5 s and 0 at the deadline; a clock that jumped 10 minutes past a 30-minute timer fires on the
+  next tick; a spent timer pauses where it was, tested end to end.
+- **The rule, MPRIS publishes ONE track's metadata and a stopped transport.** A new track is
+  announced once (its length, artists, album and `mpris:trackid`), position ticks never re-announce
+  it, and an EMPTY queue says `Stopped` with the last metadata kept — `playerctl status` used to
+  read "Paused on the last track" for ever. Proven on a private `dbus-run-session`: the wiring's
+  `publish` puts the four `xesam` fields and `Playing` on the bus, `playerctl -p neezer play-pause`
+  (what Hyprland's binding runs) and a direct `PlayPause` call both arrive as
+  `AppEvent::Mpris(PlayPause)`, and an emptied queue reads `Stopped`.
+- **The rule, quality applies at the NEXT track and says so.** The badge opens the app's five rungs
+  (Auto/FLAC/320/128/64 — `PlaybackQuality` has no 256/192; a menu that offered them would save a
+  value the player cannot load), the choice is saved in `kv` (`playback.quality`, the SPA keeps it on
+  the device) and the toast says « au prochain titre »; `AppState::load` reads it when it opens the
+  next source. Podcast speed is per show (`channel_id`, else the album's Deezer id) and is applied by
+  a watcher on the current entry, so an episode started from another screen still gets its show's
+  rate; music is never touched (the engine re-checks `TrackMeta::podcast`).
+- **Measured on this machine** (release binary, `Xvfb :94 -dpi 96` + `GPUI_X11_SCALE_FACTOR=1`,
+  2560×1600 and 1280×800, a real server from `tools/perf_api.py --serve --archived` with a
+  4 000-row queue, a 234 s archived FLAC with 39 `.lrc` lines, and four screenshots attached to the
+  PR — 2560×1600 and 1280×800, each with and without the 420 px queue panel):
+  - RSS, `/proc/<pid>/status` VmRSS: **267 MB** at 2560×1600 on the empty now-playing screen,
+    **306 MB** with the 4 000-row queue, the lyrics and the sleeve (**+39 MB**); **206 MB** at
+    1280×800, **214 MB** with the queue (**+8 MB**), **212 MB** with the 420 px panel. The shell's
+    own 2560 baseline is the bulk of it (D7 measured 103 MB at 1280 on a build without D14a's
+    Réglages); the screens' own share is the queue, the lyrics and one decoded sleeve.
+  - **A sleeve per queue row costs +291 MB** (mechanical: each 1 000 px JPEG decoded for a 32 px
+    slot, twenty rows visible). Until the plan's decoded-image LRU (64 MB, `coverqueue.js`) lands with
+    D8a's cover widget, the queue draws one glyph per row like the player bar — that is why the
+    screenshots show glyphs in the queue and a real sleeve in the player.
+  - `cargo test --workspace`: **128 app tests** (the D9 ones: 6 lyrics, 6 sleep, 3 speed, 1 quality,
+    4 queue, 4 now-playing, 4 MPRIS wiring) and every crate green; `cargo fmt --check` and
+    `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo test --release` fails in
+    **D14a's** `screens/settings/ui.rs` (its hit points come from `debug_bounds`, recorded only with
+    `debug_assertions`; D9's own mouse tests are `#[cfg(debug_assertions)]` for the same reason).
+- **Pitfalls found by building**:
+  - **A click on a row's ✕ also played the row behind it**, and because the remove ran first the
+    jump landed on whatever slid into that index (`row_remove` then `jump(4)` → the NEXT track).
+    GPUI bubbles mouse events: the inner handler needs `cx.stop_propagation()`, not just priority.
+  - **`debug_bounds` returns `None` in release**: selectors are only recorded with
+    `debug_assertions`. A mouse or layout test that uses them must be gated, or `cargo test
+    --release` fails for a reason that is not the code's.
+  - **`flex_1` + `max_w` did not clamp the main column** in this GPUI snapshot (the column took the
+    whole row and pushed the queue card off-screen): a fixed `w(px(560)).max_w_full()` on the column,
+    centred by the row, is what the layout obeys.
+  - **The app opened a window in the person's session once**: `WAYLAND_DISPLAY`, `DISPLAY` and
+    `HYPRLAND_INSTANCE_SIGNATURE` are inherited from the shell, and GPUI prefers Wayland when
+    `WAYLAND_DISPLAY` is set. Every isolated run must `env -u WAYLAND_DISPLAY -u
+    HYPRLAND_INSTANCE_SIGNATURE -u XDG_SESSION_TYPE DISPLAY=:NN`.
+  - **This Hyprland (0.56, Aquamarine) has no headless backend**: `WLR_BACKENDS=headless` is ignored
+    and the DRM backend cannot take a seat the person's session owns. Xvfb is the isolated display
+    that works here, at `-dpi 96` plus `GPUI_X11_SCALE_FACTOR=1` (without the latter the app sees a
+    2560×1600 window as 1280×800 and the layout is measured at half the size).
 
 ### D10b — Visualiser UI (bars, oscilloscope)
 

@@ -7,8 +7,30 @@
 //! applied through `PlayerState::apply`, exactly like a click, so MPRIS can do
 //! nothing the app cannot do itself.
 //!
-//! D9 extends the published metadata; the start, the inbox and the status keep
-//! their shape here so no later lot touches `wiring/mod.rs`.
+//! D9 owns the publication, and three of its rules are worth stating here
+//! because they are what a client sees:
+//!
+//! - **A new track announces its FULL metadata once, then only its position
+//!   moves.** `payload` is the shell's author: `set_track` resets the position to
+//!   0 (a new track starts there, and MPRIS must not show the previous track's
+//!   progress for a quarter of a second), and the 4 Hz tick never re-announces
+//!   the track — `nz-mpris` turns a position into a signal only when it departed
+//!   from what a client extrapolated.
+//! - **An empty queue is `Stopped`, not "Paused on the last track".** The bar's
+//!   widget otherwise shows a play button over a track nobody is playing, and
+//!   `playerctl status` lies. The last metadata is kept (the spec expects it),
+//!   but the transport says stopped.
+//! - **The mapping table is the contract**: `Repeat` ↔ `LoopStatus`,
+//!   `playing` ↔ `PlaybackStatus`, and the three `publish`d setters are the only
+//!   place they are named, so a wrong icon cannot be produced by a second path.
+//!
+//! Measured on this machine (`playerctl` 2.4.1, a private `dbus-run-session`,
+//! the test at the bottom of this file): the wiring's `publish` puts
+//! `xesam:title` / `xesam:artist` / `xesam:album` / `mpris:length` and
+//! `PlaybackStatus = Playing` on the bus, `playerctl -p neezer play-pause` and a
+//! direct `PlayPause` call both arrive as `AppEvent::Mpris(PlayPause)` within
+//! 100 ms, and with the queue emptied the status reads `Stopped` while the
+//! metadata is still the last track's.
 
 use std::time::Duration;
 
@@ -62,6 +84,12 @@ pub fn publish(handle: &MprisHandle, now: &NowPlaying, last_track: &mut Option<S
     if !handle.is_serving() {
         return;
     }
+    if now.id.is_empty() {
+        // Nothing in the queue: keep the metadata (MPRIS expects a player to
+        // remember what it last played) and say the transport is stopped.
+        handle.set_status(PlaybackStatus::Stopped);
+        return;
+    }
     if last_track.as_deref() != Some(now.id.as_str()) {
         let mut metadata = Metadata::new(now.id.clone(), now.title.clone());
         if !now.artist.is_empty() {
@@ -98,7 +126,25 @@ pub const RETRY: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::process::Command;
+    use std::time::Instant;
+
+    use zbus::OwnedObjectPath;
+    use zbus::proxy::CacheProperties;
+    use zbus::{Connection, OwnedVariant};
+
     use super::*;
+    use crate::state::event_channel;
+    use crate::wiring::events::Receiver;
+
+    const SERVICE: &str = "org.mpris.MediaPlayer2.neezer";
+    const PLAYER_PATH: &str = "/org/mpris/MediaPlayer2";
+    const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
+    /// Set in the child `dbus-run-session` starts, so the real work happens on a
+    /// bus of our own and the developer's own player is never shadowed.
+    const PRIVATE_BUS_CHILD: &str = "NZ_MPRIS_WIRING_BUS_CHILD";
+    const NO_BUS_CHILD: &str = "NZ_MPRIS_WIRING_NO_BUS_CHILD";
 
     #[test]
     fn the_three_repeat_modes_map_onto_mpris_loop_statuses() {
@@ -112,5 +158,295 @@ mod tests {
         assert_eq!(map(Repeat::Off), LoopStatus::None);
         assert_eq!(map(Repeat::All), LoopStatus::Playlist);
         assert_eq!(map(Repeat::One), LoopStatus::Track);
+    }
+
+    fn now_playing(id: &str) -> NowPlaying {
+        NowPlaying {
+            id: id.to_owned(),
+            title: "Balancing the Dark".to_owned(),
+            artist: "Kaya Project".to_owned(),
+            album: "Songs from the Inside".to_owned(),
+            duration: 312.0,
+            playing: true,
+            position: 0.0,
+            volume: 0.8,
+            shuffle: false,
+            repeat: Repeat::All,
+        }
+    }
+
+    /// The shell's own publication, on a private bus: what the Omarchy bar reads
+    /// and what a media key does.
+    #[test]
+    fn the_wiring_publishes_what_the_bar_reads_and_takes_the_media_keys() {
+        if std::env::var_os(PRIVATE_BUS_CHILD).is_some() {
+            private_bus_body();
+            return;
+        }
+        let binary = std::env::current_exe().expect("the test binary's path");
+        let mut command = Command::new("dbus-run-session");
+        command
+            .arg("--")
+            .arg(&binary)
+            .args([
+                "--exact",
+                "wiring::mpris::tests::the_wiring_publishes_what_the_bar_reads_and_takes_the_media_keys",
+                "--nocapture",
+            ])
+            .env(PRIVATE_BUS_CHILD, "1")
+            .env_remove("DBUS_SESSION_BUS_ADDRESS");
+        run_child(command, Duration::from_secs(120));
+    }
+
+    /// `publish` on an inert handle (no session bus at all) is a no-op: the
+    /// player plays, the bar does not, and nothing panics or waits.
+    #[test]
+    fn without_a_bus_the_publication_is_a_no_op() {
+        if std::env::var_os(NO_BUS_CHILD).is_some() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let (tx, rx) = event_channel();
+            spawn(runtime.handle().clone(), tx);
+            let handle = next_handle(&runtime, &rx);
+            assert!(!handle.is_serving(), "there is no session bus here");
+            let mut last = None;
+            publish(&handle, &now_playing("3135556"), &mut last);
+            assert_eq!(
+                last, None,
+                "nothing was announced, so nothing is remembered"
+            );
+            // And an empty queue on a dead bus is the same no-op.
+            let mut empty = now_playing("");
+            empty.playing = false;
+            publish(&handle, &empty, &mut last);
+            return;
+        }
+        let binary = std::env::current_exe().expect("the test binary's path");
+        let mut command = Command::new(&binary);
+        command
+            .args([
+                "--exact",
+                "wiring::mpris::tests::without_a_bus_the_publication_is_a_no_op",
+                "--nocapture",
+            ])
+            .env(NO_BUS_CHILD, "1")
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent/neezer-wiring-test",
+            );
+        run_child(command, Duration::from_secs(60));
+    }
+
+    fn next_handle(runtime: &tokio::runtime::Runtime, events: &Receiver<AppEvent>) -> MprisHandle {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let next = runtime.block_on(async {
+                tokio::time::timeout(Duration::from_millis(50), events.next()).await
+            });
+            match next {
+                Ok(Some(AppEvent::MprisReady(handle))) => return handle,
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("the event channel closed before MPRIS was ready"),
+                Err(_) if Instant::now() < deadline => {}
+                Err(_) => panic!("MPRIS never announced itself"),
+            }
+        }
+    }
+
+    /// The child's body: a real bus, the real publication, a real client.
+    fn private_bus_body() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let (events_tx, events_rx) = event_channel();
+        spawn(runtime.handle().clone(), events_tx);
+        let handle = next_handle(&runtime, &events_rx);
+        assert!(handle.is_serving(), "the private bus is ours");
+
+        let mut last = None;
+        let mut now = now_playing("3135556");
+        publish(&handle, &now, &mut last);
+        assert_eq!(last.as_deref(), Some("3135556"));
+
+        let connection = runtime
+            .block_on(Connection::session())
+            .expect("the private bus");
+        let player: zbus::Proxy<'_> = runtime
+            .block_on(
+                zbus::proxy::Builder::new(&connection)
+                    .destination(SERVICE)
+                    .path(PLAYER_PATH)
+                    .interface(PLAYER_INTERFACE)
+                    // zbus caches properties lazily; a test that reads a value
+                    // right after a change would get the stale snapshot.
+                    .cache_properties(CacheProperties::No)
+                    .build(),
+            )
+            .expect("the player proxy");
+
+        // What the bar's widget shows: the track's own facts, then the status.
+        let metadata = wait_for(&runtime, || {
+            let value: Option<HashMap<String, OwnedVariant>> =
+                runtime.block_on(player.get_property("Metadata")).ok();
+            value
+        });
+        let metadata = metadata.expect("a Metadata property");
+        assert_eq!(
+            text(&metadata, "xesam:title").as_deref(),
+            Some("Balancing the Dark")
+        );
+        let artist = metadata.get("xesam:artist").expect("an artist");
+        let artists: Vec<String> = artist
+            .try_clone()
+            .ok()
+            .and_then(|value| value.try_into().ok())
+            .unwrap_or_default();
+        assert_eq!(artists, ["Kaya Project"]);
+        assert_eq!(
+            text(&metadata, "xesam:album").as_deref(),
+            Some("Songs from the Inside")
+        );
+        let track_id = metadata
+            .get("mpris:trackid")
+            .and_then(|value| value.try_clone().ok())
+            .and_then(|value| OwnedObjectPath::try_from(value).ok())
+            .map(|path| path.to_string());
+        assert_eq!(track_id.as_deref(), Some("/fr/neezer/track/3135556"));
+        let status = wait_for(&runtime, || {
+            let value: Option<String> =
+                runtime.block_on(player.get_property("PlaybackStatus")).ok();
+            value
+        });
+        assert_eq!(status.as_deref(), Some("Playing"));
+
+        // A media key: exactly what Hyprland's binding runs (`playerctl`), and
+        // the D-Bus method it calls underneath. Both must reach the shell.
+        if which("playerctl") {
+            let output = Command::new("playerctl")
+                .args(["-p", "neezer", "play-pause"])
+                .output()
+                .expect("playerctl runs");
+            assert!(
+                output.status.success(),
+                "playerctl play-pause: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        } else {
+            runtime
+                .block_on(player.call::<_, (), ()>("PlayPause", &()))
+                .expect("PlayPause");
+        }
+        assert_eq!(
+            wait_for_command(&runtime, &events_rx),
+            MprisCommand::PlayPause,
+            "the media key rejoins the shell as a transport command"
+        );
+
+        // Pause then an emptied queue: the status must say Stopped, and the
+        // metadata must survive (a client still shows the last track).
+        now.playing = false;
+        publish(&handle, &now, &mut last);
+        let status = wait_for(&runtime, || {
+            let value: Option<String> =
+                runtime.block_on(player.get_property("PlaybackStatus")).ok();
+            value
+        });
+        assert_eq!(status.as_deref(), Some("Paused"));
+        let mut empty = now.clone();
+        empty.id = String::new();
+        publish(&handle, &empty, &mut last);
+        let status = wait_for(&runtime, || {
+            let value: Option<String> =
+                runtime.block_on(player.get_property("PlaybackStatus")).ok();
+            value
+        });
+        assert_eq!(status.as_deref(), Some("Stopped"));
+        let metadata: HashMap<String, OwnedVariant> = runtime
+            .block_on(player.get_property("Metadata"))
+            .expect("metadata after the queue emptied");
+        assert_eq!(
+            text(&metadata, "xesam:title").as_deref(),
+            Some("Balancing the Dark"),
+            "the last track is remembered while stopped"
+        );
+    }
+
+    fn text(metadata: &HashMap<String, OwnedVariant>, key: &str) -> Option<String> {
+        metadata
+            .get(key)?
+            .try_clone()
+            .ok()?
+            .try_into()
+            .ok()
+            .map(|value: String| value)
+    }
+
+    /// Poll `read` until it answers, so the assertions wait on an event instead
+    /// of a fixed sleep. 5 s is a hang, not a duration.
+    fn wait_for<T>(
+        runtime: &tokio::runtime::Runtime,
+        mut read: impl FnMut() -> Option<T>,
+    ) -> Option<T> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(value) = read() {
+                return Some(value);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            runtime.block_on(async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            });
+        }
+    }
+
+    fn wait_for_command(
+        runtime: &tokio::runtime::Runtime,
+        events: &Receiver<AppEvent>,
+    ) -> MprisCommand {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let next = runtime.block_on(async {
+                tokio::time::timeout(Duration::from_millis(50), events.next()).await
+            });
+            match next {
+                Ok(Some(AppEvent::Mpris(command))) => return command,
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("the event channel closed"),
+                Err(_) if Instant::now() < deadline => {}
+                Err(_) => panic!("the media key never reached the shell"),
+            }
+        }
+    }
+
+    fn which(binary: &str) -> bool {
+        Command::new("sh")
+            .args(["-c", &format!("command -v {binary}")])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    fn run_child(mut command: Command, timeout: Duration) {
+        let label = format!("{command:?}");
+        let mut child = command.spawn().expect("the child test binary starts");
+        let deadline = Instant::now() + timeout;
+        loop {
+            match child.try_wait().expect("waiting for the child") {
+                Some(status) => {
+                    assert!(status.success(), "{label} failed: {status}");
+                    return;
+                }
+                None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                None => {
+                    let _ = child.kill();
+                    panic!("{label} did not finish in {timeout:?}");
+                }
+            }
+        }
     }
 }
