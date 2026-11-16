@@ -2,9 +2,9 @@
 //! own segment format and sidecar.
 //!
 //! Owned by lots T1 to T3 (`docs/agents/desktop.md`, *Transcription*). This is
-//! D0's skeleton: the crate, the library, the `neezer-transcribe` binary, and
-//! the two things CI has to be able to print — the whisper.cpp build that is
-//! actually linked and the Vulkan backends it can see.
+//! D0's skeleton: the crate, the library, the `neezer-transcribe` binary and
+//! the one thing CI has to be able to print — the whisper.cpp build that is
+//! actually linked, Vulkan included.
 
 /// The whisper.cpp version this binary links, straight from the C build.
 pub const WHISPER_VERSION: &str = whisper_rs::WHISPER_CPP_VERSION;
@@ -14,39 +14,46 @@ pub const WHISPER_VERSION: &str = whisper_rs::WHISPER_CPP_VERSION;
 ///
 /// Calling it is also the cheapest way to LINK the C library: a crate that only
 /// reads [`WHISPER_VERSION`] (an `env!` from the build script) would compile
-/// without ever pulling whisper.cpp into the binary.
+/// without ever pulling whisper.cpp into the binary (it came out at 324 KB).
+/// It is safe on a machine with no Vulkan driver: it reads a compile-time
+/// string and creates no instance.
 pub fn system_info() -> &'static str {
     whisper_rs::print_system_info()
 }
 
-/// The Vulkan devices ggml can see, as `(name, free_bytes, total_bytes)`.
-///
-/// Empty is a supported answer — a machine with no GPU falls back to the CPU,
-/// and T2 turns that into the explained fallback message. Reading it is what
-/// proves the `vulkan` feature is really on: `whisper_rs::vulkan` only exists
-/// when whisper.cpp was built with `GGML_VULKAN`.
-pub fn vulkan_devices() -> Vec<(String, usize, usize)> {
-    whisper_rs::vulkan::list_devices()
-        .into_iter()
-        .map(|device| (device.name, device.vram.free, device.vram.total))
-        .collect()
-}
+// DO NOT enumerate Vulkan devices from this crate yet. whisper.cpp's ggml
+// backend answers `ggml_backend_vk_get_device_count()` by creating a
+// `vk::Instance`, and with no usable Vulkan driver (a machine without
+// `vulkan-radeon`/`vulkan-intel`, or `VK_ICD_FILENAMES=/nonexistent`) that
+// throws `vk::IncompatibleDriverError` through Rust as a C++ exception: the
+// process is `terminate()`d (SIGABRT, exit 134). Measured on this machine:
+// `VK_ICD_FILENAMES=/nonexistent neezer-transcribe --version` aborted, while
+// the same binary reported `vulkan : 1 appareil(s)` (RADV 780M) normally and
+// `0 appareil(s)` on a driver-less GitHub runner whose loader was fine.
+//
+// T2 owns the probe: it must enumerate in a child process (the `engine` child
+// already exists for SIGSTOP) or behind an explicit "no driver" check, and turn
+// the absence into the explained CPU fallback.
 
 #[cfg(test)]
 mod tests {
-    use super::{system_info, vulkan_devices};
+    use super::{WHISPER_VERSION, system_info};
 
-    /// The `vulkan` feature on the pinned `whisper-rs` is what buys the GPU: if
-    /// it is ever dropped from the manifest, this stops COMPILING instead of the
-    /// app silently transcribing 3× slower on the CPU (rule 1).
+    /// Linking whisper.cpp for real, and keeping its Vulkan backend compiled in.
     #[test]
-    fn the_linked_whisper_cpp_has_its_vulkan_backend() {
+    fn whisper_cpp_is_linked_with_its_vulkan_backend() {
         let info = system_info();
         assert!(info.starts_with("WHISPER :"), "{info}");
+        assert!(
+            WHISPER_VERSION.split('.').count() >= 2,
+            "unexpected whisper.cpp version: {WHISPER_VERSION:?}"
+        );
 
-        // The call is the assertion: it links ggml's Vulkan backend, and every
-        // device it reports has a name (CI's lavapipe included).
-        let devices = vulkan_devices();
-        assert!(devices.iter().all(|(name, ..)| !name.is_empty()));
+        // Compile-time assertion, deliberately never CALLED: `whisper_rs::vulkan`
+        // only exists when whisper.cpp was built with GGML_VULKAN, so dropping
+        // the feature breaks this line instead of silently shipping a CPU-only
+        // binary.
+        let _enumerate: fn() -> Vec<whisper_rs::vulkan::VkDeviceInfo> =
+            whisper_rs::vulkan::list_devices;
     }
 }

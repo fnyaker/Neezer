@@ -15,25 +15,17 @@ USAGE:
     neezer-transcribe --help
 ";
 
-/// `--version`: what this binary is, which whisper.cpp it links, and whether
-/// ggml found the GPU (T2's full probe adds the fallback cause and the model).
+/// `--version`: what this binary is, which whisper.cpp it links and what that
+/// build was compiled with. No GPU is touched here on purpose (see the crate
+/// doc): a `--version` that aborts on a machine without a Vulkan driver would
+/// be the first thing a new user meets.
 fn version() -> String {
-    let devices = nz_transcribe::vulkan_devices();
-    let mut out = format!(
-        "neezer-transcribe {}\nwhisper.cpp {}\n{}",
+    format!(
+        "neezer-transcribe {}\nwhisper.cpp {} (backend vulkan compilé)\n{}",
         env!("CARGO_PKG_VERSION"),
         nz_transcribe::WHISPER_VERSION,
         nz_transcribe::system_info(),
-    );
-    out.push_str(&format!("\nvulkan : {} appareil(s)", devices.len()));
-    for (name, free, total) in devices {
-        out.push_str(&format!(
-            "\n  - {name} ({} Mo libres / {} Mo)",
-            free / 1_000_000,
-            total / 1_000_000
-        ));
-    }
-    out
+    )
 }
 
 fn main() -> ExitCode {
