@@ -6,8 +6,8 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D14a, D14b, M1, T1 and V1 delivered; the rest
-planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D14a, D14b, M1, T1 and V1 delivered;
+the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1075,21 +1075,102 @@ Waves that can run in parallel (disjoint files):
     `import neezer` (CI installs the server before the test job); `VULKAN_SDK=/tmp/vk` (headers
     + `lib/libvulkan.so`) is what builds whisper.cpp outside CI.
 
-### D8a — Browse: home, search, artist, album, credits
+### D8a — Browse: home, search, artist, album, credits (delivered 2026-11-16)
 
-- **Files**: `screens/{home,search,artist,album,credits}.rs` and new files under
-  `app/src/widgets/` it creates (`track_list.rs` — the shared windowed list — `cover.rs`,
-  `context_menu.rs`, `card.rs`). D8b uses the widgets once merged; until then it may only read them.
-- **Acceptance**: search answers at each keystroke from cache then network (debounce 150 ms), never
-  more than 1 request in flight per field; the artist page paints from cache in one frame when
-  cached; requests per screen equal to the SPA's (`webapp/test/requests/run.mjs` counts) or fewer;
-  scrolling a 4 000-row list at ≥ 230 fps on this machine (frame times logged with
-  `NZ_FRAME_LOG=1`, p95 < 4.2 ms); context menu by `Menu`/`Shift+F10` and right click.
+- **The rule, keys**: a screen does NOT take the shell's focus. D7's `RootView` keeps ONE anchor
+  and binds every action there; a screen that focused a handle of its own took the bindings away
+  with it as soon as it was replaced — measured: `g l`, then `Alt+←`, did nothing, because the
+  focused node belonged to the Home screen that no longer existed and GPUI then dispatches ABOVE
+  the view. Two consequences, both fixed: `RootView::sync_screen` re-anchors on EVERY screen change
+  (2 lines in `app.rs`), and the list keys are APP-level listeners (`track_list::own`/`deliver`)
+  routed to the screen that owns a list, which is also why they work with nothing focused. A
+  screen restates `.key_context("Neezer")` on its root so a test can drive it without the shell.
+- **The rule, cache then network**: `card::cached` reads the device's copy ONCE, at construction —
+  the SPA's `api.swr` first half. A screen that paints from it issues **0 requests before its first
+  frame** and exactly one after it (asserted on a stub server's counters). This is the one SQLite
+  read on the GPUI thread, and it costs 0.18–0.5 ms (D3's WAL measurement); the alternative, a
+  tokio hop, costs a skeleton frame on every revisit, which rule 3 forbids.
+- **The rule, one request per settled term**: a term is asked `DEBOUNCE_MS` (150 ms) after the last
+  keystroke and only ONE `/search` is in flight per field (`ask` queues the newer term behind the
+  answer) — typed "kaya" letter by letter sends **1 request** for `kaya`, then 1 for `kayas`, never
+  four; the YouTube fallback has its own 800 ms beat and the passage search 300 ms. The answers of
+  the last 16 terms are kept in memory, so a term typed back paints in one frame and still
+  revalidates.
+- **The rule, the shortlist**: the `Tout` tab lists the first 10 ranked titles and the whole page
+  scrolls; `Titres` gives the list its own height and its own scroll. One scroller per tab, never
+  two nested ones.
+- **The rule, rows are data**: a `TrackList` holds the `Track`s, the queue rows they make (built
+  ONCE when the answer arrives, never on the click) and a visible range; only that range is built
+  per frame (`virtual_list`). Measured on 4 000 rows: `set_rows` **2.77 ms** and **+13.9 MB** of
+  data model (debug), a click copying the queue into the player **2.59 ms** (debug), and the
+  row-building work of a frame while paging: **p50 109 µs, p95 501 µs, max 792 µs** over 82 frames
+  (`NZ_FRAME_LOG=1`), against the 240 Hz panel's 4.17 ms — the frame's cost is not the list.
+- **Measured, per screen** (stub server counters, `cargo test -p neezer-desktop`): home **6**
+  requests (`/releases`, `/me/artists`, `/discover/prefs`, `/recommend`, `/moods`, `/recap/years`)
+  plus the login; an artist page **2** (`/artist/<id>`, `/artist/<id>/discography`), **1 more** when
+  `Titres` opens, and none to the provider when the library does not hold the artist; an album
+  **1** (`/album/<id>`), plus `/album/<id>/on-deezer` only when `library`; a search 1 per settled
+  term + 1 fallback. RSS of the release app under Xvfb + lavapipe: **199 MB** at the login screen,
+  **226 MB** at home, **236 MB** at the search results, **237 MB** at an artist page (the software
+  Vulkan driver is most of the difference with D7's 103 MB on the real GPU; the numbers are
+  comparable to each other, not to D7's).
+- **The rule, a cover is bytes**: `nz-api` gained ONE method, `Api::bytes(lane, path)` — the only
+  file outside this lot's list, and the reason is in its doc comment: every route answered JSON or a
+  typed value, so a screen had no way to fetch a sleeve without building its own HTTP client, which
+  is what that crate exists to prevent. Sleeves are visible-first and bounded
+  (`Covers::want`, 8 in flight, `coverqueue.js`'s rule), kept by `nz-cache`, and a second visit
+  makes 0 requests for them.
+- **The rule, the menu**: one `Intent::Menu` from three gestures (right click on the row, the row's
+  `⋯`, `Menu`/`Maj+F10`), drawn inside the list's own box so the panel lands on its row without
+  measuring the window. While it is open it INTERCEPTS keystrokes (`Échap` closes, `↑`/`↓` move,
+  `Entrée` picks, anything else closes it): a keystroke interceptor, because `Échap` is the shell's
+  `CloseTop` and a screen-level handler would never see it. The items are only what D8a can carry
+  out; adding to a playlist and replacing a track open D8b's sheets and are NOT listed — a menu
+  entry that does nothing is a bug (rule 2).
+- **What it is now**: `screens/{home,search,artist,album,credits}.rs` and four widgets —
+  `track_list.rs` (the windowed list, `Intent`, `PlayRequest`, the app-level key routing, the frame
+  log), `cover.rs` (`Covers`, file lookup, placeholder tiles), `context_menu.rs` (`Menu`, the item
+  sets), `card.rs` (the browse kit: card, section head, chips, skeletons, `Phase`, `cached`, the
+  test stub server and its harness). `search.rs` also carries the `lib/searchrank.js` port
+  (`fold`, `match_score`, `recording_key`, `rank`, `top_result`), pinned to the JavaScript's own
+  output: `fold("Été")` is `ete`, `match_score` of the plain and the live "Bohemian Rhapsody" is
+  **1.0 and 0.648**, an identical video is dropped, and a video under `YOUTUBE_MIN` never leads.
+- **Pitfalls found by building**:
+  - **A column that overflows without scrolling clips its list away.** The search page put the
+    windowed list under the best-result card with no scroller; the rows were painted below the
+    window, `list.visible()` said `0..0`, and a click never reached a row. Found by the right-click
+    test, not by looking: `cargo test` said "no row answered", the screen looked fine.
+  - **`App::on_action` listeners run in the BUBBLE phase, after node handlers, and re-entering the
+    window from inside a dispatch fails SILENTLY** (`window.update` returns an error nobody reads).
+    Measured: the handler was found, the intent went nowhere. `deliver` therefore defers by one
+    effect flush.
+  - **`overflow_y_scroll`/`overflow_x_scroll` live on `StatefulInteractiveElement`**, so a
+    scroll container needs an `.id(…)` first — and `context_menu::clipped` aside, a plain `div`
+    has no such method at all.
+  - **A `VisualTestContext` right click needs a mouse MOVE first**: hitboxes are hover-tested
+    against the window's pointer, and `simulate_mouse_down` alone leaves it wherever it was.
+  - **`TestAppContext` has no `advance_clock`** (the `TestApp` façade does): a debounce test drives
+    `cx.cx.dispatcher.advance_clock(…)` and then `run_until_parked`.
+  - **The icon bundle is closed** (`main.rs`'s `ShellAssets`): an unregistered glyph renders
+    nothing. This lot draws no Heart/Radio/Download, so the actions that need one are text labels
+    and the menu's icons come from the registered set.
+  - **The contract, corrected**: `nz_model::Discography` has no `featured` group, although
+    `routes/Artist.svelte` reads `disco.featured` — the server never answers it, so the artist page
+    has no "Apparaît dans" shelf (the SPA's is always empty). Noted, not invented.
+  - A track's credits page cannot show the TRACK's title: `Route::Credits { kind, id }` carries the
+    id only, and `nav.rs` is frozen after D7. The SPA opens the sheet from a row and has the track.
+    The page says "Crédits du titre" and lists the roles; a title would need a route field.
+  - **Visual pass**: 1280×800 was looked at (login, home, search with results, artist, album, the
+    row menu, the credits page, and the 420 px queue panel), on an isolated Xvfb display — never the
+    user's session. The 2560×1600 shot was NOT taken: the app opens a 1280×800 window and this
+    machine has no window manager on the isolated display to resize it (D7 recorded the same limit;
+    D17 owns the full-size pass).
 
 ### D8b — Library and playlists
 
 - **Files**: `screens/{library,playlist,import}.rs`, `app/src/widgets/{folder_tree,playlist_picker,
-  sheets}.rs`.
+  sheets}.rs`. It uses D8a's widgets (`track_list::TrackList`/`element`/`own`, `card::*`, `cover::*`,
+  `context_menu::*`) and takes its list keys through `track_list::own`, as every browse screen does.
 - **Acceptance**: favourites 4 000 and the 4 000-row playlist open in < 100 ms from cache (measure);
   reorder by drag AND by `Alt+↑/↓` with an optimistic update and a rollback toast on failure;
   folders, members, share link, export, import from link with background progress (rule 2).

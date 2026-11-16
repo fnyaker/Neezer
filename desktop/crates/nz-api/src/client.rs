@@ -52,6 +52,26 @@ pub const START_HEADER: &str = "X-NS-Start";
 
 const USER_AGENT: &str = concat!("neezer-desktop/", env!("CARGO_PKG_VERSION"));
 
+/// What an answer is read as. The retry policy and the failure classification
+/// are identical for both — a sleeve the server cannot serve is refused the
+/// same way a JSON route is — so only the `Accept` header differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Want {
+    Json,
+    Bytes,
+}
+
+impl Want {
+    fn accept(self) -> &'static str {
+        match self {
+            // An archived sleeve keeps its own format (`jpg`, `png`, `webp`…),
+            // so nothing is claimed about it.
+            Want::Bytes => "image/*, */*",
+            Want::Json => "application/json",
+        }
+    }
+}
+
 /// A value that also says whether it came off the disk. `from_cache: true`
 /// paints at once; the caller may then revalidate (the SPA's `swr`).
 #[derive(Debug, Clone, PartialEq)]
@@ -333,10 +353,11 @@ impl Api {
         }
 
         match self
-            .fetch_text(lane, Method::GET, path, None, was_online)
+            .fetch_want(Want::Json, lane, Method::GET, path, None, was_online)
             .await
         {
             Ok(body) => {
+                let body = String::from_utf8_lossy(&body).into_owned();
                 if let Some(owner) = owner.as_deref() {
                     self.cache.put(owner, path, &body);
                 }
@@ -394,14 +415,30 @@ impl Api {
             None => None,
         };
         let answer = self
-            .fetch_text(lane, method, path, payload.as_deref(), false)
+            .fetch_want(Want::Json, lane, method, path, payload.as_deref(), false)
             .await?;
         if answer.is_empty() {
             return Ok(None);
         }
+        let answer = String::from_utf8_lossy(&answer);
         serde_json::from_str::<T>(&answer)
             .map(Some)
             .map_err(|err| ApiError::Decode(format!("{path}: {err}")))
+    }
+
+    /// A GET whose answer is BYTES: an archived sleeve (`/api/cover/<id>`).
+    ///
+    /// D8a added this and nothing else to the client. A cover is an image, and
+    /// every route here answers JSON or a typed value, so a screen had no way
+    /// to ask for one without building its own HTTP client — which is exactly
+    /// what this crate exists to prevent (rule 1's lanes, the session cookie
+    /// and rule 3's retry policy all live here). It is a plain GET on a lane:
+    /// the same three tries as `get`, the same `Offline`/`Provider` causes, and
+    /// no offline copy of its own — `nz-cache` keeps sleeves, not this cache.
+    pub async fn bytes(&self, lane: Lane, path: &str) -> Result<Vec<u8>, ApiError> {
+        let was_online = self.is_online();
+        self.fetch_want(Want::Bytes, lane, Method::GET, path, None, was_online)
+            .await
     }
 
     /// Open one audio stream (`GET /api/stream/<id>?q=&start=`).
@@ -489,18 +526,24 @@ impl Api {
         Ok(self.get(Lane::User, &path).await?.value)
     }
 
-    /// One attempt at a text answer, with the retry policy applied. `was_online`
+    /// One attempt at an answer, with the retry policy applied. `was_online`
     /// is the link's state when the FIRST attempt was decided, threaded through
     /// the retries: a request started while already dead fails fast instead of
     /// burning the whole backoff budget.
-    async fn fetch_text(
+    ///
+    /// The body comes back as BYTES and `want` only decides what is asked for:
+    /// a screen reads JSON, a sleeve is an image (`Api::bytes`). One retry
+    /// policy for both, because the rules of rule 3 are about the request, not
+    /// about what the answer is written in.
+    async fn fetch_want(
         &self,
+        want: Want,
         lane: Lane,
         method: Method,
         path: &str,
         body: Option<&[u8]>,
         was_online: bool,
-    ) -> Result<String, ApiError> {
+    ) -> Result<Vec<u8>, ApiError> {
         let attempts = if method == Method::GET {
             match lane {
                 // A GET started online gets the SPA's three tries on a
@@ -518,8 +561,8 @@ impl Api {
 
         let mut last = ApiError::Offline;
         for attempt in 0..attempts {
-            match self.attempt(lane, method.clone(), path, body).await {
-                Ok(text) => return Ok(text),
+            match self.attempt(want, lane, method.clone(), path, body).await {
+                Ok(bytes) => return Ok(bytes),
                 Err(err) => {
                     let retry_in = match &err {
                         ApiError::Busy { retry_after }
@@ -558,16 +601,17 @@ impl Api {
     /// Send one request (holding a lane slot) and classify what came back.
     async fn attempt(
         &self,
+        want: Want,
         lane: Lane,
         method: Method,
         path: &str,
         body: Option<&[u8]>,
-    ) -> Result<String, ApiError> {
+    ) -> Result<Vec<u8>, ApiError> {
         let guard = self.gates.acquire(lane).await;
         let mut request = self
             .http
             .request(method.clone(), self.url(path))
-            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::ACCEPT, want.accept())
             .timeout(ANSWER_TIMEOUT);
         if guard.lane().is_background() {
             request = request.header(BACKGROUND_HEADER, "1");
@@ -593,7 +637,7 @@ impl Api {
         self.note_reachable();
         let status = response.status().as_u16();
         let headers = response.headers().clone();
-        let text = response.text().await.map_err(|err| {
+        let bytes = response.bytes().await.map_err(|err| {
             if is_network_failure(&err) {
                 self.note_unreachable();
                 ApiError::Offline
@@ -605,12 +649,16 @@ impl Api {
                 }
             }
         })?;
+        let bytes = bytes.to_vec();
         drop(guard);
 
         if (200..300).contains(&status) {
-            return Ok(text);
+            return Ok(bytes);
         }
-        Err(self.classify(status, &headers, &text, lane))
+        // A refusal is written in JSON whatever was asked for; a body that is
+        // not text still yields the server's status and headers.
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        Err(self.classify(status, &headers, &body, lane))
     }
 
     /// The SPA's own failure classification, in the same order.
