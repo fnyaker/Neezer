@@ -1,0 +1,1 @@
+{"user":{"access":{"youtube":["search","stream","links"]},"admin":true,"id":"3de71948-a9d1-459d-8e1e-62e3180000bd","name":"bench","onboarding":"done","sources":[{"id":"deezer","lossless":true,"name":"Deezer","place":"off","quality":"FLAC","rank":null},{"id":"youtube","lossless":false,"name":"YouTube","place":"off","quality":"Opus 160k","rank":null}]}}
