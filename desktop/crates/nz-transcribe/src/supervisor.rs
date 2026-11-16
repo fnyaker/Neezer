@@ -1004,10 +1004,13 @@ impl Supervisor {
             job.done_ms = saved.done_ms.max(0);
             job.segments = saved.segments;
             job.language = saved.language.or(job.language);
+            // The episode's length is not known before it is read: a local run
+            // discovers it chunk by chunk (`duration_ms: 0` = unknown, the app
+            // shows an indeterminate bar; the server's claim carries it).
             self.sink.emit(Event::Progress {
                 episode_id: episode_id.to_owned(),
                 done_ms: job.done_ms,
-                duration_ms: job.done_ms,
+                duration_ms: 0,
             });
         }
         let workdir = self.job_dir(episode_id);
@@ -1077,7 +1080,7 @@ impl Supervisor {
             self.sink.emit(Event::Progress {
                 episode_id: job.episode_id.clone(),
                 done_ms: job.done_ms,
-                duration_ms: job.done_ms,
+                duration_ms: job.duration_ms.unwrap_or(0),
             });
             chunk_pct.store(0, Ordering::Release);
             // A chunk shorter than the one asked for is the end of the audio
