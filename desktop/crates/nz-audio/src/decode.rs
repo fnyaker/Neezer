@@ -36,7 +36,9 @@ use symphonia::core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptio
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Time;
 
+use crate::dsp::Settings;
 use crate::events::{EngineEvent, EventBus};
+use crate::stretch::StretchStage;
 use crate::voice::{VoiceConsumer, VoiceProducer, VoiceStatus, voice_ring};
 
 /// A voice that could not be prepared. The message is shown to the person
@@ -217,6 +219,10 @@ fn classify(error: SymphoniaError) -> String {
 /// Start the decode thread. Returns the voice's two ends; the caller installs
 /// the consumer in the mixer and keeps the join handle (dropping it only
 /// detaches, the status flags are the real stop signal).
+///
+/// `allow_speed` is the episode flag: only then does the output go through the
+/// time-stretch stage, and only then does it read the shared speed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn(
     prepared: Prepared,
     target_rate: u32,
@@ -225,6 +231,8 @@ pub(crate) fn spawn(
     position_s: f64,
     bus: Arc<EventBus>,
     id: String,
+    settings: Arc<Settings>,
+    allow_speed: bool,
 ) -> Result<(VoiceConsumer, JoinHandle<()>), DecodeError> {
     let stage = if prepared.source_rate == target_rate {
         None
@@ -240,12 +248,71 @@ pub(crate) fn spawn(
         .name(format!("nz-decode-{generation}"))
         .stack_size(512 * 1024)
         .spawn(move || {
-            run(prepared, stage, &mut producer, &status, &bus, &id);
+            run(
+                prepared,
+                stage,
+                &mut producer,
+                &status,
+                &bus,
+                &id,
+                settings,
+                allow_speed,
+                target_rate,
+            );
         })
         .map_err(|e| DecodeError::Io(format!("thread de décodage : {e}")))?;
     Ok((consumer, handle))
 }
 
+/// Where the decode thread's frames go: the stretch stage for an episode, the
+/// voice ring otherwise. One place, so the resampler does not have to know
+/// whether a speed is in the path.
+struct Sink<'a> {
+    stretch: Option<StretchStage>,
+    producer: &'a mut VoiceProducer,
+    status: &'a VoiceStatus,
+    settings: Arc<Settings>,
+    allow_speed: bool,
+}
+
+impl Sink<'_> {
+    fn feed(&mut self, frames: &[f32]) -> bool {
+        let Self {
+            stretch,
+            producer,
+            status,
+            settings,
+            allow_speed,
+        } = self;
+        match stretch.as_mut() {
+            Some(stage) => {
+                let speed = if *allow_speed { settings.speed() } else { 1.0 };
+                let mut push = |frames: &[f32]| push_all(producer, frames, status);
+                stage.push(frames, speed, &mut push)
+            }
+            None => push_all(producer, frames, status),
+        }
+    }
+
+    /// The container ended: the stretch stage still holds audio to flush.
+    fn finish(&mut self) -> bool {
+        let Self {
+            stretch,
+            producer,
+            status,
+            ..
+        } = self;
+        match stretch.as_mut() {
+            Some(stage) => {
+                let mut push = |frames: &[f32]| push_all(producer, frames, status);
+                stage.finish(&mut push)
+            }
+            None => true,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run(
     prepared: Prepared,
     mut stage: Option<ResamplerStage>,
@@ -253,6 +320,9 @@ fn run(
     status: &VoiceStatus,
     bus: &EventBus,
     id: &str,
+    settings: Arc<Settings>,
+    allow_speed: bool,
+    target_rate: u32,
 ) {
     let Prepared {
         mut reader,
@@ -264,8 +334,15 @@ fn run(
     } = prepared;
     let mut raw: Vec<f32> = Vec::new();
     let mut stereo: Vec<f32> = Vec::new();
+    let mut sink = Sink {
+        stretch: allow_speed.then(|| StretchStage::new(target_rate)),
+        producer,
+        status,
+        settings,
+        allow_speed,
+    };
     loop {
-        if status.is_stopped() || producer.is_stopped() {
+        if status.is_stopped() || sink.producer.is_stopped() {
             return;
         }
         let packet = match reader.next_packet() {
@@ -316,18 +393,21 @@ fn run(
         }
         to_stereo(&raw, skipped, frames, channels, &mut stereo);
         if let Some(stage) = stage.as_mut() {
-            if let Err(message) = stage.push(&stereo, producer, status) {
+            if let Err(message) = stage.push(&stereo, &mut sink) {
                 fail(bus, id, &message, status);
                 return;
             }
-        } else if !push_all(producer, &stereo, status) {
+        } else if !sink.feed(&stereo) {
             return;
         }
     }
     if let Some(stage) = stage.as_mut()
-        && let Err(message) = stage.finish(producer, status)
+        && let Err(message) = stage.finish(&mut sink)
     {
         fail(bus, id, &message, status);
+        return;
+    }
+    if !sink.finish() {
         return;
     }
     status.finish();
@@ -434,12 +514,7 @@ impl ResamplerStage {
     }
 
     /// Feed interleaved stereo; emits whatever the resampler produced.
-    fn push(
-        &mut self,
-        stereo: &[f32],
-        producer: &mut VoiceProducer,
-        status: &VoiceStatus,
-    ) -> Result<(), String> {
+    fn push(&mut self, stereo: &[f32], sink: &mut Sink) -> Result<(), String> {
         let chunk_frames = self.input.len() / 2;
         self.fed += stereo.len() / 2;
         let mut offset = 0;
@@ -451,7 +526,7 @@ impl ResamplerStage {
             offset += take;
             if self.filled == chunk_frames {
                 self.filled = 0;
-                self.emit(producer, status, None)?;
+                self.emit(sink, None)?;
             }
         }
         Ok(())
@@ -461,23 +536,18 @@ impl ResamplerStage {
     /// the ratio promises so a 1.000 s source stays 1.000 s. The tail of the
     /// filter's output is real audio, not padding: dropping it cut 246 frames
     /// off a second at 44.1 → 48 kHz.
-    fn finish(&mut self, producer: &mut VoiceProducer, status: &VoiceStatus) -> Result<(), String> {
+    fn finish(&mut self, sink: &mut Sink) -> Result<(), String> {
         if self.filled > 0 {
             let filled = self.filled;
             self.filled = 0;
-            self.emit(producer, status, Some(filled))?;
+            self.emit(sink, Some(filled))?;
         }
         Ok(())
     }
 
     /// One resampler call. `partial` is the number of real frames still in the
     /// buffer when the container ended.
-    fn emit(
-        &mut self,
-        producer: &mut VoiceProducer,
-        status: &VoiceStatus,
-        partial: Option<usize>,
-    ) -> Result<(), String> {
+    fn emit(&mut self, sink: &mut Sink, partial: Option<usize>) -> Result<(), String> {
         let chunk_frames = self.input.len() / 2;
         let out_frames = self.output.len() / 2;
         // `output_frames_max` is the worst case over every call; a given call
@@ -517,7 +587,7 @@ impl ResamplerStage {
             return Ok(());
         }
         let start = skip * 2;
-        if !push_all(producer, &self.output[start..start + frames * 2], status) {
+        if !sink.feed(&self.output[start..start + frames * 2]) {
             return Err("lecture interrompue".into());
         }
         Ok(())
@@ -545,10 +615,15 @@ mod tests {
         }
         let (mut producer, mut consumer, status) = voice_ring(target_rate, 4.0, 1, 0.0);
         let mut stage = ResamplerStage::new(source_rate, target_rate).expect("resampler");
-        stage
-            .push(&stereo, &mut producer, &status)
-            .expect("resample");
-        stage.finish(&mut producer, &status).expect("flush");
+        let mut sink = Sink {
+            stretch: None,
+            producer: &mut producer,
+            status: &status,
+            settings: Settings::new(),
+            allow_speed: false,
+        };
+        stage.push(&stereo, &mut sink).expect("resample");
+        stage.finish(&mut sink).expect("flush");
 
         let mut out = Vec::new();
         while let Some((left, _right)) = consumer.frame() {

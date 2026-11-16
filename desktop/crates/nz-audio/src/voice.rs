@@ -67,6 +67,29 @@ impl VoiceProducer {
     }
 }
 
+/// What the app knows about a track that the mixer and the decode thread need:
+/// the bounds the server measured (`trim`), the loudness its gain comes from,
+/// and whether an episode's speed applies. Set on the loader thread right after
+/// the voice is built, before it is installed, so the callback only ever reads
+/// a finished value.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct VoiceMeta {
+    /// Media seconds where the audio stops (a trim end), if it stops early.
+    pub end_s: Option<f64>,
+    /// Media seconds of the whole track, from the container or the app: where a
+    /// crossfade has to fit in front of when no trim was measured.
+    pub duration_s: Option<f64>,
+    /// The server's ReplayGain LOUDNESS for this track (`/api/gain/<id>`), not
+    /// the gain to apply (`dsp::gain_db` turns it into one).
+    pub loudness: Option<f32>,
+    /// May this voice be blended into its neighbour? False for an episode
+    /// (`Player.svelte`: an episode is not something to blend into what
+    /// follows it), and false by default so a test never gets a surprise fade.
+    pub allows_fade: bool,
+    /// Does the podcast speed apply? False for music, always.
+    pub allows_speed: bool,
+}
+
 /// The mixer side of a voice, plus what the event thread needs to name it.
 pub(crate) struct VoiceConsumer {
     ring: Consumer<f32>,
@@ -75,6 +98,7 @@ pub(crate) struct VoiceConsumer {
     pub(crate) generation: u64,
     /// Where in the track this voice starts, in seconds.
     pub(crate) start_s: f64,
+    meta: VoiceMeta,
 }
 
 impl VoiceConsumer {
@@ -101,6 +125,30 @@ impl VoiceConsumer {
     pub(crate) fn stop(&self) {
         self.status.stop();
     }
+
+    pub(crate) fn set_meta(&mut self, meta: VoiceMeta) {
+        self.meta = meta;
+    }
+
+    pub(crate) fn end_s(&self) -> Option<f64> {
+        self.meta.end_s
+    }
+
+    pub(crate) fn duration_s(&self) -> Option<f64> {
+        self.meta.duration_s
+    }
+
+    pub(crate) fn loudness(&self) -> Option<f32> {
+        self.meta.loudness
+    }
+
+    pub(crate) fn allows_fade(&self) -> bool {
+        self.meta.allows_fade
+    }
+
+    pub(crate) fn allows_speed(&self) -> bool {
+        self.meta.allows_speed
+    }
 }
 
 /// A voice's ring: `seconds` of stereo audio at `sample_rate`, never odd.
@@ -126,6 +174,7 @@ pub(crate) fn voice_ring(
             status: Arc::clone(&status),
             generation,
             start_s,
+            meta: VoiceMeta::default(),
         },
         status,
     )

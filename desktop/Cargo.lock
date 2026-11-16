@@ -4279,6 +4279,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nscore"
+version = "0.1.0"
+dependencies = [
+ "rhythm",
+]
+
+[[package]]
 name = "ntapi"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4446,6 +4453,7 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "hound",
+ "nscore",
  "rtrb",
  "rubato",
  "signalsmith-stretch",

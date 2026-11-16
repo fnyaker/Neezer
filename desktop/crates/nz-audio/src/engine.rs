@@ -22,12 +22,16 @@ use std::time::{Duration, Instant};
 
 use rtrb::{Producer, PushError};
 
+use crate::crossfade::FadeSettings;
 use crate::decode::{self, DecodeError};
+use crate::dsp::{Normalization, Settings};
 use crate::events::{EngineEvent, EventBus, VoiceInfo, VoiceInfoEntry};
 use crate::mixer::{MixerCmd, MixerShared};
 use crate::output::{self, OfflineSink, Output, OutputChoice, OutputInfo};
 use crate::source::{Lane, Quality, SourceError, StreamOpener, spool_path};
-use crate::voice::{VoiceConsumer, VoiceStatus};
+use crate::tap::{TAP_FRAMES, Tap, TapReader};
+use crate::trim::{self, Edges, Trim};
+use crate::voice::{VoiceConsumer, VoiceMeta, VoiceStatus};
 
 /// Everything the engine needs to start. `sample_rate` is a preference: the
 /// device's own rate wins when it cannot do this one, and the decode threads
@@ -151,6 +155,29 @@ struct State {
     current: Option<Slot>,
 }
 
+/// What the app knows about a track before it is played: the server's
+/// measurements and the kind of track it is.
+///
+/// Every field is optional because the app asks the server for them ahead of
+/// time (`lib/gaincache.js#primeGains`, `Player.svelte#primeEdgesAround`) and a
+/// track whose answer has not arrived yet simply plays un-normalised and
+/// untrimmed — never late, never as a verdict about the track (rule 3).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TrackMeta {
+    /// The server's ReplayGain LOUDNESS (`GET /api/gain/<id>`, or one entry of
+    /// `POST /api/gains`), NOT the gain to apply: `dsp::gain_db` turns it into
+    /// one with the level the person chose.
+    pub loudness: Option<f32>,
+    /// Where the audio really starts and stops (`GET /api/audio/edges/<id>?db=`).
+    pub edges: Option<Edges>,
+    /// The track's own length from the metadata, in seconds: it is what tells a
+    /// re-archive's bounds from this file's.
+    pub duration_s: Option<f64>,
+    /// An episode: no crossfade into or out of it, and the podcast speed
+    /// applies (`Player.svelte#edgesFor`, `speed.js`).
+    pub podcast: bool,
+}
+
 /// The engine, cheap to clone into the UI.
 #[derive(Clone)]
 pub struct Engine {
@@ -164,6 +191,13 @@ struct Inner {
     mixer: Mutex<Producer<MixerCmd>>,
     events: Arc<EventBus>,
     info: Arc<VoiceInfo>,
+    /// The DSP, the speed, the crossfade and the trim: written by the app from
+    /// any thread, read by the output callback and the decode threads.
+    settings: Arc<Settings>,
+    /// The analysis tap, taken once by the app's analysis thread.
+    tap: Mutex<Option<TapReader>>,
+    /// What the app told us about the tracks around the queue position.
+    meta: Mutex<Vec<(String, TrackMeta)>>,
     output: Mutex<Output>,
     out_info: Mutex<OutputInfo>,
     state: Mutex<State>,
@@ -194,6 +228,8 @@ impl Engine {
         let _ = std::fs::create_dir_all(&cfg.spool_dir);
         let events = EventBus::new();
         let notes = events.take_note_producer();
+        let settings = Settings::new();
+        let (tap, reader) = Tap::pair(TAP_FRAMES);
         let (output, shared, mixer, out_info) = output::start(
             &cfg.device,
             cfg.sample_rate,
@@ -201,6 +237,8 @@ impl Engine {
             cfg.period_frames,
             Arc::clone(&events),
             notes,
+            Arc::clone(&settings),
+            tap,
         );
         let info = Arc::new(VoiceInfo::default());
         let event_stop = Arc::new(AtomicBool::new(false));
@@ -217,6 +255,9 @@ impl Engine {
                 mixer: Mutex::new(mixer),
                 events,
                 info,
+                settings,
+                tap: Mutex::new(Some(reader)),
+                meta: Mutex::new(Vec::new()),
                 output: Mutex::new(output),
                 out_info: Mutex::new(out_info),
                 state: Mutex::new(State { current: None }),
@@ -236,8 +277,15 @@ impl Engine {
         let _ = std::fs::create_dir_all(&cfg.spool_dir);
         let events = EventBus::new();
         let notes = events.take_note_producer();
-        let (output, sink, shared, mixer) =
-            output::start_offline(cfg.sample_rate, cfg.volume, notes);
+        let settings = Settings::new();
+        let (tap, reader) = Tap::pair(TAP_FRAMES);
+        let (output, sink, shared, mixer) = output::start_offline(
+            cfg.sample_rate,
+            cfg.volume,
+            notes,
+            Arc::clone(&settings),
+            tap,
+        );
         let out_info = OutputInfo {
             device: "sortie de test".into(),
             sample_rate: cfg.sample_rate,
@@ -259,6 +307,9 @@ impl Engine {
                 mixer: Mutex::new(mixer),
                 events,
                 info,
+                settings,
+                tap: Mutex::new(Some(reader)),
+                meta: Mutex::new(Vec::new()),
                 output: Mutex::new(output),
                 out_info: Mutex::new(out_info),
                 state: Mutex::new(State { current: None }),
@@ -351,6 +402,101 @@ impl Engine {
         self.inner.shared.set_muted(muted);
     }
 
+    // -- D6: the web player's sound -------------------------------------------
+    //
+    // Every setter is a plain atomic store (rule 4: a click answers in the same
+    // frame); the callback picks the value up at the top of its next buffer.
+
+    /// Réglages → Lecture's crossfade block (`fade.enabled`, `fade.seconds`,
+    /// `fade.onSkip`, `fade.skipSeconds`). The app turns it off while an episode
+    /// plays: a podcast is never blended into what follows it.
+    pub fn set_fade(&self, fade: FadeSettings) {
+        self.inner.settings.set_fade(fade);
+    }
+
+    pub fn fade(&self) -> FadeSettings {
+        self.inner.settings.fade()
+    }
+
+    /// `off` / `low` / `medium` / `high` (`stores.js#normalization`).
+    pub fn set_normalization(&self, level: Normalization) {
+        self.inner.settings.set_normalization(level);
+    }
+
+    pub fn normalization(&self) -> Normalization {
+        self.inner.settings.normalization()
+    }
+
+    /// One of the ten bands of Réglages → Égaliseur, in dB (±16).
+    pub fn set_eq(&self, band: usize, db: f32) {
+        self.inner.settings.set_eq(band, db);
+    }
+
+    pub fn eq(&self, band: usize) -> f64 {
+        self.inner.settings.eq(band)
+    }
+
+    /// The bass lift, 0…+16 dB (its compressor follows it, `graph.js`).
+    pub fn set_bass(&self, db: f32) {
+        self.inner.settings.set_bass(db)
+    }
+
+    pub fn bass(&self) -> f64 {
+        self.inner.settings.bass()
+    }
+
+    /// The mono fold, for the ears only: the analysis tap stays stereo.
+    pub fn set_mono(&self, mono: bool) {
+        self.inner.settings.set_mono(mono);
+    }
+
+    pub fn mono(&self) -> bool {
+        self.inner.settings.mono()
+    }
+
+    /// −1 hard left … 0 centre … 1 hard right.
+    pub fn set_balance(&self, balance: f32) {
+        self.inner.settings.set_balance(balance);
+    }
+
+    pub fn balance(&self) -> f64 {
+        self.inner.settings.balance()
+    }
+
+    /// The podcast speed, 0.5–3×, pitch kept. It applies to an episode only
+    /// ([`TrackMeta::podcast`]); music always plays at 1× whatever this says.
+    pub fn set_speed(&self, speed: f32) {
+        self.inner.settings.set_speed(speed);
+    }
+
+    pub fn speed(&self) -> f32 {
+        self.inner.settings.speed()
+    }
+
+    /// What the app knows about a track: its loudness, its measured bounds, and
+    /// whether it is an episode. Called before `load`/`preload_next`, and again
+    /// when an answer arrives late — the track playing is then trimmed from
+    /// where its audio really ends (`Player.svelte#audioEndsAt` reads live too).
+    pub fn set_track_meta(&self, id: &str, meta: TrackMeta) {
+        self.inner.store_meta(id, meta);
+        if let Some((current, _)) = self.inner.now_playing()
+            && current == id
+        {
+            let end = trim::trim_for(meta.edges, None, meta.duration_s).end;
+            self.inner.send(MixerCmd::SetCurrentEnd(end));
+        }
+    }
+
+    pub fn track_meta(&self, id: &str) -> TrackMeta {
+        self.inner.meta_of(id)
+    }
+
+    /// The analysis tap: post-DSP stereo frames, dropped when the reader is
+    /// behind. One reader per engine — the app's analysis thread takes it once.
+    pub fn tap(&self) -> Option<TapReader> {
+        self.inner.tap.lock().expect("tap poisoned").take()
+    }
+
     /// Switch the output device without stopping the music: the mixer is handed
     /// to the new stream. `None` is the host's default.
     pub fn set_output_device(&self, device: Option<&str>) -> Result<(), EngineError> {
@@ -409,6 +555,33 @@ impl Inner {
             device: info.device,
             sample_rate: info.sample_rate,
         });
+    }
+
+    /// The app's last word on a track. Bounded like the voice table: a long
+    /// session must not grow it forever, and the entry for a track three hours
+    /// ago is not one any voice will be built from again.
+    fn store_meta(&self, id: &str, meta: TrackMeta) {
+        let mut entries = self.meta.lock().expect("track meta poisoned");
+        if let Some((_, slot)) = entries.iter_mut().find(|(key, _)| key == id) {
+            *slot = meta;
+            return;
+        }
+        entries.push((id.to_string(), meta));
+        if entries.len() > 512 {
+            let drop_to = entries.len() - 256;
+            entries.drain(..drop_to);
+        }
+    }
+
+    fn meta_of(&self, id: &str) -> TrackMeta {
+        self.meta
+            .lock()
+            .expect("track meta poisoned")
+            .iter()
+            .rev()
+            .find(|(key, _)| key == id)
+            .map(|(_, meta)| *meta)
+            .unwrap_or_default()
     }
 
     /// The track the mixer is actually playing: its generation, then the table
@@ -622,7 +795,24 @@ fn build_at(
     lane: Lane,
     wait: bool,
 ) -> Result<Built, EngineError> {
-    let target = start.filter(|seconds| *seconds > 0.001);
+    // The trim start is the audio's own beginning when the person is not
+    // seeking past it (`Player.svelte#loadTrack`: `e.start > 0.25 ? e.start : 0`).
+    let meta = inner.meta_of(id);
+    let trim = trim::Trim {
+        start: meta
+            .edges
+            .and_then(|edges| edges.accepted(meta.duration_s))
+            .map(Edges::start_offset)
+            .unwrap_or(0.0),
+        end: None,
+    };
+    let requested = start.unwrap_or(0.0).max(0.0);
+    let begin = if requested <= trim::MIN_TRIM_START_S {
+        requested.max(trim.start)
+    } else {
+        requested
+    };
+    let target = (begin > 0.001).then_some(begin);
     // 1. A finished local file: no request, and a seek is a file seek.
     if let Some(path) = local_path(inner, id, quality) {
         let file = std::fs::File::open(&path)
@@ -732,8 +922,12 @@ fn finish(
     position_s: f64,
 ) -> Result<Built, EngineError> {
     let duration_s = prepared.duration_s;
+    let meta = inner.meta_of(id);
+    // The bounds this voice may skip: a trim end only when the file plays past
+    // its audio, and never when the measured file is not this track's.
+    let trim: Trim = trim::trim_for(meta.edges, duration_s, meta.duration_s);
     let generation = inner.next_gen();
-    let (consumer, handle) = decode::spawn(
+    let (mut consumer, handle) = decode::spawn(
         prepared,
         inner.cfg.sample_rate,
         inner.cfg.ring_seconds,
@@ -741,7 +935,18 @@ fn finish(
         position_s,
         Arc::clone(&inner.events),
         id.to_string(),
+        Arc::clone(&inner.settings),
+        meta.podcast,
     )?;
+    consumer.set_meta(VoiceMeta {
+        end_s: trim.end,
+        // The track's own length first: a `?start=` slice is shorter than the
+        // track, and the trim's window is measured in the track's media time.
+        duration_s: meta.duration_s.or(duration_s),
+        loudness: meta.loudness,
+        allows_fade: !meta.podcast,
+        allows_speed: meta.podcast,
+    });
     let status = consumer.status();
     Ok(Built {
         consumer,
