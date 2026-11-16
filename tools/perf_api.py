@@ -14,9 +14,17 @@ so what is measured is this server's own work: queries, serialisation, gzip.
 For each route it prints the median wall time over a few runs, the SQL
 statement count (the number an N+1 moves by thousands), the response size and
 its gzipped size. Nothing here touches the network.
+
+The synthetic library goes in a throwaway ``nsperf-*`` directory under the
+system's temporary directory, and every way out of the process removes it —
+SIGTERM and SIGINT included, since that is how the browser benches stop their
+server. SIGKILL cannot be caught, so a launch first sweeps the directories a
+killed bench left behind: each one names its owning pid, and a bench still
+running keeps its library.
 """
 
 import argparse
+import atexit
 import collections
 import contextlib
 import datetime
@@ -25,6 +33,7 @@ import json
 import os
 import random
 import shutil
+import signal
 import statistics
 import sys
 import tempfile
@@ -38,6 +47,170 @@ import peewee  # noqa: E402
 from neezer.config import DefaultConfig  # noqa: E402
 from neezer.managers.user import UserManager  # noqa: E402
 from neezer.web import create_application  # noqa: E402
+
+# The synthetic library lives in a tmpfs on most machines — RAM, not disk. A
+# bench that leaves 2.3 GB behind costs the person their memory, so the
+# directory is removed on every exit that can be caught (``WorkDir``) and
+# swept on the next launch when it could not be (``sweep_orphans``).
+WORK_PREFIX = "nsperf-"
+OWNER_FILE = "owner"
+# A directory with no owner file is judged only once it is this old: a peer
+# between its `mkdtemp` and its own owner file looks unowned for an instant.
+OWNER_GRACE = 60.0
+
+
+def _pid_alive(pid):
+    """Whether ``pid`` is a living process — a zombie is not one.
+
+    A SIGKILLed bench whose launcher has not reaped it yet stays in ``/proc``
+    as a zombie, and ``os.kill(pid, 0)`` still succeeds on it; the state in
+    ``/proc/<pid>/stat`` is what tells the two apart, and it is the difference
+    between a leak nobody sweeps and a bench still serving. Without ``/proc``
+    (not Linux) only ``os.kill`` answers.
+    """
+    if os.path.isdir("/proc"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                state = handle.read().rsplit(b")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return False
+        except (IndexError, OSError):
+            state = None
+        if state is not None:
+            return state not in (b"Z", b"X")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _paths_in_use():
+    """Every path a living process sits in or holds open (``/proc`` only).
+
+    This is the second way to recognise a bench: the tools that predate the
+    owner file leave no pid behind, but their process still holds the SQLite
+    database, the archive and the cache open, and its current directory may be
+    the library itself.
+    """
+    paths = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return paths
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        base = os.path.join("/proc", entry)
+        for item in ("cwd", "fd"):
+            try:
+                names = [item] if item == "cwd" else os.listdir(os.path.join(base, item))
+            except OSError:
+                continue
+            for name in names:
+                try:
+                    paths.append(os.readlink(os.path.join(base, item, name)))
+                except OSError:
+                    continue
+    return paths
+
+
+def sweep_orphans(root=None):
+    """Delete the ``nsperf-*`` directories no living bench owns; return them.
+
+    ``WorkDir`` removes its library on SIGTERM, SIGINT, SIGHUP, a normal end
+    and an exception. SIGKILL cannot be caught, so a launch starts here: a
+    directory is an orphan when its owner file names a process that is gone,
+    or — for the directories older tools wrote, which have no owner file —
+    when it is past ``OWNER_GRACE`` and no living process holds anything
+    inside it. A bench still running is never touched, whichever version wrote
+    it, which is what lets several workers run benches side by side.
+    """
+    root = root or tempfile.gettempdir()
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    removed = []
+    in_use = None
+    for name in names:
+        if not name.startswith(WORK_PREFIX):
+            continue
+        work = os.path.join(root, name)
+        if os.path.islink(work) or not os.path.isdir(work):
+            continue
+        try:
+            with open(os.path.join(work, OWNER_FILE), encoding="utf-8") as handle:
+                pid = int(handle.read().split()[0])
+        except FileNotFoundError:
+            try:
+                age = time.time() - os.stat(work).st_mtime
+            except OSError:
+                continue
+            if age < OWNER_GRACE:
+                continue
+            if in_use is None:
+                in_use = _paths_in_use()
+            prefix = work + os.sep
+            if any(path == work or path.startswith(prefix) for path in in_use):
+                continue
+        except (IndexError, OSError, ValueError):
+            continue
+        else:
+            if pid == os.getpid() or _pid_alive(pid):
+                continue
+        shutil.rmtree(work, ignore_errors=True)
+        removed.append(work)
+    return removed
+
+
+class WorkDir:
+    """The throwaway library, removed on every way out of this process.
+
+    ``atexit`` covers the return, an exception and ``sys.exit``; the signal
+    handlers cover SIGTERM — what every bench sends its server first — SIGINT
+    and SIGHUP, which would otherwise end the process with its library still
+    on disk. SIGKILL cannot be caught: ``sweep_orphans`` collects it.
+    """
+
+    SIGNALS = tuple(
+        getattr(signal, name)
+        for name in ("SIGTERM", "SIGINT", "SIGHUP")
+        if hasattr(signal, name)
+    )
+
+    def __init__(self, path):
+        self.path = path
+        self.released = False
+
+    def install(self):
+        """Claim the directory for this pid, then arm every clean-up."""
+        with open(os.path.join(self.path, OWNER_FILE), "w", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()}\n")
+        atexit.register(self.release)
+        for sig in self.SIGNALS:
+            try:
+                signal.signal(sig, self._on_signal)
+            except (OSError, ValueError):  # not the main thread, or unsupported
+                pass
+        return self
+
+    def release(self):
+        # The flag is set FIRST: a second signal must not re-enter the removal
+        # the interpreter is already part-way through.
+        if self.released:
+            return
+        self.released = True
+        shutil.rmtree(self.path, ignore_errors=True)
+
+    def _on_signal(self, signum, _frame):
+        self.release()
+        # Die of the signal the launcher sent, as an unhandled one would: the
+        # parent waits for that exit and the shell reports it.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
 
 @contextlib.contextmanager
@@ -684,6 +857,13 @@ def make_archived(app, clusters=40):
 
 
 def main():
+    stale = sweep_orphans()
+    if stale:
+        print(
+            f"  swept {len(stale)} orphaned library(ies) left by a killed bench "
+            f"in {tempfile.gettempdir()}",
+            file=sys.stderr,
+        )
     ap = argparse.ArgumentParser()
     ap.add_argument("--tracks", type=int, default=8000)
     ap.add_argument("--playlists", type=int, default=60)
@@ -746,6 +926,9 @@ def main():
     args = ap.parse_args()
 
     work = tempfile.mkdtemp(prefix="nsperf-")
+    # Every exit this process can see removes the library (SIGTERM included);
+    # a SIGKILL leaves the owner file behind for the next launch's sweep.
+    guard = WorkDir(work).install()
     db = os.path.join(work, "db.sqlite")
     cache = os.path.join(work, "cache")
     archive = os.path.join(work, "archive")
@@ -1123,7 +1306,7 @@ def main():
             server.serve_forever()
         except KeyboardInterrupt:
             pass
-    shutil.rmtree(work, ignore_errors=True)
+    guard.release()
 
 
 if __name__ == "__main__":
