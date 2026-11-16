@@ -144,6 +144,15 @@ impl RootView {
                     let view = screens::build(&route, self.state.clone(), cx);
                     self.screen = Some((route, view));
                     self.shortcuts_open = false;
+                    // A screen that had put the focus on one of its own nodes
+                    // (the search field, a list's results) takes that focus with
+                    // it when it is replaced: measured with D8a, `g l` then
+                    // `Alt+←` did nothing, because the focused handle belonged to
+                    // the screen that no longer existed and GPUI then dispatches
+                    // above this view. The anchor goes back to the shell on every
+                    // screen change, so a key NEVER depends on which screen the
+                    // person came from.
+                    self.refocus = true;
                 }
             }
             None => self.screen = None,
