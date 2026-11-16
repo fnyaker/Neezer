@@ -79,7 +79,7 @@ cd webapp && node test/queue/run.mjs [--phone]       # the queue's editing in he
 cd webapp && node test/theme/run.mjs                 # the sleeve change is a 600 ms walk, not a cut: accent at 60 Hz, no
                                                      # uncovered ground on one or two skips, the podcast header tint, reduced-motion;
                                                      # DIST=<dir> serves a build made elsewhere so it never replaces neezer/webui/dist
-cd webapp && node test/glass/run.mjs                # the ONE glass ladder (3 tiers): contrast >= 4.5:1 on 45 surfaces, one
+cd webapp && node test/glass/run.mjs                # the ONE glass ladder (3 tiers): contrast >= 4.5:1 on 57 surfaces, one
                                                      # backdrop-filter at a time, zero in eco/reduced transparency, cost per surface
 cd webapp && node test/vizstrip/run.mjs             # the visualizer strip's real height: 56 px desktop / 44 below / 40 mobile,
                                                      # canvas fills it, no overlap with the transport, the footer or the thumbs;

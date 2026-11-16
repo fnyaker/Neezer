@@ -362,7 +362,7 @@
     align-items: center;
     padding: 14px var(--page-x, 24px);
     background: color-mix(in srgb, var(--bg) 86%, transparent);
-    backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+    backdrop-filter: var(--glass-filter-2);
     border-bottom: 1px solid var(--ln);
   }
   .brand {

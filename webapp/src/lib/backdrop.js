@@ -23,7 +23,7 @@
 // the wrong cover until the next track change.
 
 import { writable } from "svelte/store";
-import { dominantOfImage } from "./color.js";
+import { sampleOfImage } from "./color.js";
 import { logInfo } from "./log.js";
 
 // URLs are long and noisy; the tail is the part that identifies the art.
@@ -35,9 +35,10 @@ export function createBackdrop({
   timeoutMs = 7000, // an image request can hang forever with no error
   retries = 2,
 } = {}) {
-  // [{ id, src, url, glow }] — `src` is what gets painted (possibly
+  // [{ id, src, url, glow, bright }] — `src` is what gets painted (possibly
   // cache-busted), `url` the logical cover it stands for, `glow` its dominant
-  // colour (read from the image already decoded here, never a second request).
+  // colour and `bright` its LEVEL (lib/color.js#levelFactor): both read from
+  // the image already decoded here, one 24 px draw, never a second request.
   const { subscribe, set } = writable([]);
   let layers = []; // 0, 1 at rest, 2 while fading
   let pending = null; // the newest cover waiting for the fade to finish
@@ -72,17 +73,17 @@ export function createBackdrop({
     watchdog = null;
   }
 
-  function pushLayer(src, url, glow) {
+  function pushLayer(src, url, glow, bright = 1) {
     if (layers.length >= 2) {
       // The fade owns both slots; a third blurred image is what the contract
       // forbids. Remember the newest cover and paint it once the incoming one
       // is opaque — the base is never dropped, so no dark flash.
-      pending = { src, url, glow };
+      pending = { src, url, glow, bright };
       logInfo("bg", `queued ${tag(url)}`);
       return;
     }
     const id = ++seq;
-    layers = [...layers, { id, src, url, glow, at: now() }];
+    layers = [...layers, { id, src, url, glow, bright, at: now() }];
     set(layers);
     logInfo("bg", `painted ${tag(url)}`);
     arm();
@@ -101,7 +102,7 @@ export function createBackdrop({
     if (!pending) return;
     const next = pending;
     pending = null;
-    pushLayer(next.src, next.url, next.glow);
+    pushLayer(next.src, next.url, next.glow, next.bright);
   }
 
   function arm() {
@@ -148,7 +149,8 @@ export function createBackdrop({
       }
       if (destroyed || forUrl !== wanted) return;
       if (ok) {
-        pushLayer(src, forUrl, dominantOfImage(im));
+        const sample = sampleOfImage(im);
+        pushLayer(src, forUrl, sample?.color ?? null, sample?.factor ?? 1);
         return;
       }
       // The image CDN fails transiently; back off and try again. A blob: is

@@ -303,7 +303,7 @@
     padding: 12px 20px 12px 12px;
     border-radius: 16px;
     background: rgba(10, 8, 16, 0.5);
-    backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+    backdrop-filter: var(--glass-filter-2);
     border: 1px solid rgba(255, 255, 255, 0.08);
     opacity: 0;
     transform: translateY(10px);
@@ -356,7 +356,7 @@
     padding: 8px;
     border-radius: 999px;
     background: rgba(10, 8, 16, 0.55);
-    backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+    backdrop-filter: var(--glass-filter-2);
     border: 1px solid rgba(255, 255, 255, 0.08);
     opacity: 0;
     transition: opacity 0.35s ease;

@@ -315,7 +315,10 @@
 <div class="d" transition:fade={{ duration: 150 }}>
   {#if !$ecoMode}
     {#each $bg as layer (layer.id)}
-      <div class="bg" style={`background-image:${cssUrl(layer.src)}`}></div>
+      <div
+        class="bg"
+        style={`background-image:${cssUrl(layer.src)}; --bg-bright:${layer.bright ?? 1}`}
+      ></div>
     {/each}
   {/if}
   <div class="scrim"></div>
@@ -556,7 +559,10 @@
     inset: 0;
     background-size: cover;
     background-position: center;
-    filter: blur(64px) saturate(1.35);
+    /* The sleeve's own LEVEL, normalised (`lib/color.js#levelFactor`): a white
+       cover is pulled down, a black one lifted, so the backdrop behind the
+       glass sits in a band instead of washing out or going black. */
+    filter: blur(64px) saturate(1.35) brightness(var(--bg-bright, 1));
     transform: scale(1.25);
     animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
   }

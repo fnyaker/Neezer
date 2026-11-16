@@ -134,20 +134,24 @@ build a screen from those, never from a literal colour. Rules that cost somethin
 - **Everything above the ground wears ONE glass ladder** (`src/app.css`, *surfaces — the glass
   ladder*; `test/glass.test.mjs` reads the source, `test/glass/run.mjs` measures the pixels). Three
   tints and three blurs, and no component invents a value of its own:
-  **tier 1** `--glass-bg` = 72 % of the theme fill (see `--glass-fill` below: `--s1` + 4 % of the
-  accent), NO blur — cards/blocks (`.card`, so Réglages, Podcasts and `Card.svelte` all follow), the
+  **tier 1** `--glass-bg` = 64 % of the theme fill (see `--glass-fill` below: `--s1` + 4 % of the
+  accent over 3 % of white), NO blur — cards/blocks (`.card`, so Réglages, Podcasts and `Card.svelte` all follow), the
   sidebar, the player bar, the phone's tab bar
   (`.mobilenav`), the desktop queue column (`.np`), the mobile mini-player card;
-  **tier 2** `--glass-bg-2` = 86 % + `blur(var(--glass-blur-2))` (14 px) + `saturate(140 %)` —
+  **tier 2** `--glass-bg-2` = 78 % + `var(--glass-filter-2)` (`blur(14px) saturate(150 %)`) —
   popovers: the contextual menu, the quality list, the sleep/speed/transcript menus, the
   remote-control chips, the public playlist's sticky bar, the projector's chips (a notice takes the
   same fill with NO blur — it is a single card, and a filter would buy a render pass for nothing);
   the notices' strip itself has no fill, so the ground shows around the cards;
-  **tier 3** the same fill + `blur(var(--glass-blur-3))` (22 px) + `saturate(145 %)` — every `.sheet`
+  **tier 3** the same fill + `var(--glass-filter-3)` (`blur(22px) saturate(155 %)`) — every `.sheet`
   and `.dialog` (the app's eighteen modal components), over the 60 % veil their own scrim paints.
   A fourth step, `--glass-bg-strong` (93 %, still no blur), is the sticky TOP BAR and the notices'
   strip: the only surfaces a row scrolls BEHIND (at 82 % the library's leaf tabs ghosted under the
-  search field; 93 % hides them and still shows the ground). `--glass-border` (13 % of `--tx`) is the
+  search field; 93 % hides them and still shows the ground). **The thick step is the only tier that
+  keeps its opacity**: the phone player's queue and À propos panels sit on the sleeve itself, and at
+  88 % Encre's 11 px `--dim` there measured **4.43:1** — under AA (4.77:1 at 90 %). It takes the
+  fill's 3 % of white instead, so it reads ~9/255 lighter with no ghost and no contrast lost.
+  `--glass-border` (13 % of `--tx`) is the
   hairline, `--glass-shadow`/`-2` the depth (per theme: Papier's is ink at 10/16 %, the dark themes'
   is black at 42–58 %), `--glass-hover` the row hover (9 % of `--tx` over the fill, so a hover is a
   step of the same material instead of a solid colour).
@@ -158,21 +162,39 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   It is allowed on the two OVERLAY tiers only, and only one overlay is open at a time — measured
   `1` `backdrop-filter` + the ground's single image, never 2. The scrims under sheets used to run
   their own `blur(2px)`/`blur(6px)`, i.e. ten implementations of the same work *under* a blurred
-  sheet: they are flat veils now. **No `backdrop-filter` literal is left in `src/`** — the app had 19
-  declarations in 16 files with 7 distinct pixel values (2, 6, 8, 10, 14, 16, 18 px) and now has
-  `--glass-blur-2` and `--glass-blur-3` only (`MobileNowPlaying`'s 16/18 px moved onto tier 3).
+  sheet: they are flat veils now. **No `backdrop-filter` expression is left in `src/`** — the app
+  had 19 declarations in 16 files with 7 distinct pixel values (2, 6, 8, 10, 14, 16, 18 px) and now
+  has two tokens, `--glass-filter-2` and `--glass-filter-3`, each `blur + saturate` over its tier's
+  numbers (a component writes `var(--glass-filter-2)` and cannot assemble a third; the source test
+  asserts exactly that). Saturation went up 10 points (150/155 %) because the frost eats colour. A
+  constant `brightness()` on the glass was measured and **dropped**: it cannot know the picture, so it
+  darkens a bright page's neighbour and does nothing for a dark one. The IMAGE is normalised instead
+  — next bullet.
+- **The image behind the glass is normalised, never multiplied** (`lib/color.js#levelFactor`, applied
+  by `components/GlobalBackdrop.svelte` and `lib/backdrop.js` → `DesktopNowPlaying`/
+  `MobileNowPlaying`). Sleeves are all over the place: a white cover made the ground a pale wash, a
+  near-black one a hole. The rule is a **band**, not a constant: sRGB luma under **64** is lifted
+  toward it (×64/L up to ×1.5), above **120** pulled down (×120/L down to ×0.65), and everything
+  between is left exactly as it is — so a white sleeve lands at 166, a black one at 15, and a 20 %
+  grey keeps ×1: a ~10:1 span where the raw art was 25:1. The mood still varies, nothing blows out.
+  One 24 px canvas read per sleeve (or the palette's own `average`, already decoded for the ground),
+  cached, never a second request; the factor rides a CSS custom property (`--gb-bright` on the
+  ground, `--bg-bright` on the player's layers) and folds into the blur the layer already runs, so
+  it is no extra pass. `test/imagelevel.test.mjs` holds the band and its clamps.
   **ECO and REDUCED TRANSPARENCY collapse the ladder onto the theme's own surfaces**: `--glass-bg`,
   `-2`, `-strong` → `--s1`, `--glass-hover` → `--s2`, `--glass-blur-2/3` → `0px`, the shadows →
   `none`, plus a `backdrop-filter: none !important` kill switch for anything a component adds back
   (`html[data-eco="1"]`, and `@media (prefers-reduced-transparency: reduce)` for the OS setting,
   MDN). `prefers-reduced-motion` adds nothing to turn off: the ladder has no transition of its own.
-  Measured (`test/glass/run.mjs`, 3 themes × 1280×900 and 390×900, 45 surfaces, on the painted
-  pixels): **69 contrasts, worst 5.09:1** — the top bar's 11 px `⌘K` hint on the search field
-  (5.10–6.17 by theme), which measures the same in eco because it is the theme's own `--dim` on its
-  own field; the pairs the translucency actually moves are a card's 13 px `--dim` subtitle over the
-  sleeve ground at **5.44 / 5.27 / 5.79:1** (Encre / Papier / Pochette) and a sheet's 11 px count at
-  6.73 / 5.34 / 7.17:1. The composite behind a line of text matches
-  `alpha·surface + (1−alpha)·backdrop` to **3/255** on all 45 surfaces, so the tint really is the
+  Measured (`test/glass/run.mjs`, 3 themes × 1280×900 and 390×900, 57 surfaces, on the painted
+  pixels): **0 failures, worst 4.70:1** — a card's 13 px `--dim` subtitle over the sleeve ground on
+  Encre, i.e. the pair the white in the fill moves (Papier 5.25:1, Pochette 5.28:1). Everything else
+  is 4.73:1 or better: Papier's sheet, its 11 px `--dim` count over the 60 % veil, at **4.73:1**
+  (the thin pane took it there from 5.30), the phone player's À propos panel at **4.93:1** (11 px
+  `--dim` over a white-ish sleeve, 93 %), the desktop side card **5.33:1**, a menu **7.05:1** on
+  Encre. The top bar's 11 px `⌘K` hint (5.09–6.17 by theme) is unchanged, because it sits in the
+  theme's own opaque field. The composite behind a line of text matches
+  `alpha·surface + (1−alpha)·backdrop` to **4/255** on every surface, so the tint really is the
   token's. Cost at 4× CPU, headless (SwiftShader: the GPU work runs on the CPU; medians of 5, each
   state paired against the same open with the blur forced off): a contextual menu **48.7 ms vs
   48.4** (+0.3 ms), a desktop sheet **111.2 vs 103.1** (+8.1 ms), a phone sheet **83.5 vs 83.1**
@@ -181,7 +203,7 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   eco alike, i.e. the tint costs no frame (the old full-viewport `blur(2px)` scrim read ~1.18 M
   pixels a frame; a 440×700 sheet at 22 px reads ~0.48 M, so the pass got stronger and cheaper). States: `none` with nothing open,
   **exactly one** `backdrop-filter` (+ the ground's one image) while a menu or a sheet is open, and
-  **3 values in the whole app** (`none`, `blur(14px) saturate(1.4)`, `blur(22px) saturate(1.45)`).
+  **3 values in the whole app** (`none`, `blur(14px) saturate(1.5)`, `blur(22px) saturate(1.55)`).
   Before this change: every one of those surfaces measured `alpha 1`, and `src/` carried 19
   `backdrop-filter` declarations with 7 distinct radii.
 - **The LIGHT on the glass is painted; the lens is not** (`src/app.css`, *the liquid finish*;
@@ -199,9 +221,12 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   displacement map per surface, and re-samples the captured area every frame — the cost this ladder
   exists to bound. `test/glass.test.mjs` fails on a `<filter>`, a `filter: url(#…)` or a
   `backdrop-filter: … url(`.
-  `--glass-fill` is **4 % of the theme's accent mixed into `--s1`** (`--glass-tint-ac`), so Pochette's
-  glass takes the sleeve's colour and a custom accent tints the glass too — without becoming a
-  coloured pane (every composite is still held to ≥ 4.5:1).
+  `--glass-fill` is **4 % of the theme's accent mixed into `--s1`** (`--glass-tint-ac`) **over 3 % of
+  white** (`--glass-lift`), so Pochette's glass takes the sleeve's colour and a custom accent tints
+  the glass too — without becoming a coloured pane (every composite is still held to ≥ 4.5:1). The
+  white is the light INSIDE the body: clearing the tint alone only lightens a pane where the ground
+  behind it is lighter, and over Encre's scrimmed ground an 8-point cut alone is a max diff of
+  **3/255** (measured on the same pixels).
   Every tier paints it: `.card`/`.glass-1` and the desktop player's side card, `.menu`, `.sheet`,
   `.dialog`, the **top bar's lower rim** (a sticky bar's only visible edge), the **sidebar's right
   edge** (`--glass-beam-y`), the **player bar's top edge**, the phone's **thumb-row doors** and its
@@ -217,8 +242,9 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   valid) and the shadows `none`.
   A **sheet that sits on a photograph** takes the thick step: the phone player's full-bleed queue and
   lyrics panels are `.sheet.on-photo` → `--glass-bg-strong` (93 %), because the page's own scrim is
-  not under them — tier 3's 86 % measured **4.17:1** for the À propos panel's 11 px `--dim` labels
-  over a white-ish cover, 93 % gives **5.18:1** — and they cast no shadow (nothing to cast onto).
+  not under them — the overlays' 78 % would be well under AA for the À propos panel's 11 px `--dim`
+  labels over a white-ish cover, and even 88 % measured **4.43:1**: the thick step keeps them above
+  **4.8:1** on every theme — and they cast no shadow (nothing to cast onto).
   **The visualizer strip is never veiled**: `--ac-text` is its one flat colour (the animation agent's
   contract), so `.viz` carries NO `opacity`/`filter` in either player — at 0.9 the accent was
   measured `#a9cd33` for `#d2ff3c` on Encre and `#41413b` for `#14130f` on Papier, with **0 %** of the
@@ -231,7 +257,7 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   **+27.6 / +21.1 / +30.6 / +34.6 / +30.7 / +23.0 over 255** above the trough (card, menu, sheet, side
   card, phone door), with **+10 to +14 within the same 1 px row** (a uniform border cannot fake that)
   and **0/255 in eco**; the surfaces this lot adds measure the phone's doors **6.28:1**, the player's
-  queue sheet **5.70:1**, the À propos panel **5.18:1** and the desktop side card **6.44:1**; 1
+  queue sheet **5.84:1**, the À propos panel **4.77:1** and the desktop side card **5.69:1**; 1
   `backdrop-filter` + the ground's image with one overlay open, 3 values in the app, 0 in eco.
   Cost: the finish is background paint, not a pass — an interleaved A/B (four passes over the same
   menu opens at 4× CPU under SwiftShader) puts the beams, the shadow and the tint's arrival inside
@@ -898,12 +924,12 @@ transport off the screen: 360x640 measures 248 px square (269 without the strip,
 390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
 `env(safe-area-inset-*)` fallback until G1's tokens land. **The three sheets (queue, lyrics, the
 slid-up About panel) wear the glass ladder's tier 3** — `blur(var(--glass-blur-3))
-saturate(var(--glass-sat-3))`, measured `blur(22px) saturate(1.45)` at 390×844 — and lose the filter
+saturate(var(--glass-sat-3))`, measured `blur(22px) saturate(1.55)` at 390×844 — and lose the filter
 in eco through the shared `html[data-eco="1"]` collapse (measured `backdrop-filter: none`, `--s1`
 ground). No component px value of their own: the old ad-hoc 16/18 px are gone. At 1280 the mobile
 player is not mounted at all, so those sheets are not either. The queue and lyrics panels are
 `.sheet.on-photo` — the THICK fill (93 %), because they sit on the sleeve and not on the page's
-scrim (measured 4.17:1 at 86 %, 5.18:1 at 93 % for the 11 px `--dim` labels) — plus the material's
+scrim (measured 4.43:1 at 88 % for the 11 px `--dim` labels, ≥ 4.8:1 at the thick step) — plus the material's
 hairline under their header, and they cast no outer shadow (nothing to cast onto). The thumb row's
 doors are clear glass: 34 % of `--s1`, the specular hairline, and an INSET ring rather than a border,
 so the five 44 px targets still fit a 360 px phone (measured: the doors' `--dim` label at 6.28:1).

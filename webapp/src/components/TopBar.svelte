@@ -147,7 +147,9 @@
     /* The ladder's thick step: this bar is sticky, so list rows really do pass
        under it while the page scrolls, and the tint is what keeps them from
        ghosting through the labels (measured: 82 % left a faint copy of the
-       library's leaf tabs under the search field, 93 % does not).
+       library's leaf tabs under the search field, 93 % does not). This tier
+       keeps its 93 % and takes the fill's white: a thicker pane that reads
+       lighter, with no ghost.
        The liquid finish is the LOWER rim only: the bar's top edge sits on the
        window's top edge (the shell hands main's padding to the bar), where no
        light is visible, while its bottom edge is the one a row slides under. */

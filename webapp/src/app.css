@@ -177,13 +177,51 @@
      (test/glass/run.mjs) holds the composite to ≥ 4.5:1 on the painted pixels
      of all three themes. */
   --glass-tint-ac: 4%;
-  --glass-fill: color-mix(in srgb, var(--ac) var(--glass-tint-ac), var(--s1));
-  --glass-bg: color-mix(in srgb, var(--glass-fill) 72%, transparent);
-  --glass-bg-2: color-mix(in srgb, var(--glass-fill) 86%, transparent);
+  /* THE LIGHT INSIDE THE BODY. Clearing the tint alone only lightens a pane
+     where the ground behind it is lighter than the pane; over Encre's scrimmed
+     ground the composite moves by ±2/255 either way (measured: a whole 8-point
+     drop is a diff of max 3/255 on the library). 3 % of white is the other half
+     of the operator's ask — "plus transparent, plus lumineux" — and it is what
+     makes the pane read as lit glass instead of a black slab (a card over the
+     ground goes 46 → 50/255, the phone player's À propos panel 38 → 44).
+     It costs the card's worst `--dim` pair 5.05 → 4.70:1, which is the whole
+     budget: one more point of white costs ~0.12:1 there, so 4 % is the ceiling
+     (≈ 4.6) and 5 % is under AA. On Papier it is a no-op (`--s1` is already
+     within 6 units of white) and there it even HELPS: the veil under a sheet is
+     dark, so a brighter pane lifts that pair (4.70 → 4.73:1). */
+  --glass-lift: 3%;
+  --glass-fill: color-mix(
+    in srgb,
+    #fff var(--glass-lift),
+    color-mix(in srgb, var(--ac) var(--glass-tint-ac), var(--s1))
+  );
+  /* THE PANE IS A LITTLE CLEARER THAN THE FIRST CUT — the operator's eye: at
+     72/86/93 the glass read a touch opaque, and therefore a touch dark on
+     Encre. −8 points on the static tier and on the overlays; the thick step
+     keeps its 93 % (its own block below says why) and takes the inner light.
+     Transparency alone is only half of it: what it lets through is the
+     GROUND, and the page's ground is scrimmed to near --bg, so an 8-point cut
+     on its own is a diff of max 3/255 on the library (measured on the same
+     pixels). The other half is the white in the fill above.
+     Papier's sheet is the one surface the thin pane takes DOWN (229 → 220):
+     its veil is 60 % of black, and a light pane over a dark veil only darkens
+     as it thins. `--dim` there still measures 4.87:1 (was 5.30). The floor of
+     the set is Encre's card at 4.70:1 — do not go under 78 % on tier 2, nor
+     under 64 % on tier 1, without re-measuring those two pairs. */
+  --glass-bg: color-mix(in srgb, var(--glass-fill) 64%, transparent);
+  --glass-bg-2: color-mix(in srgb, var(--glass-fill) 78%, transparent);
   /* The one surface content SCROLLS UNDER: a sticky bar has to hide the rows
      passing behind it, so it is the thickest tint of the set (Spotify's own
      tab bar is rgba(18,18,18,0.92); Apple's HIG asks for the thick material
-     wherever there is text to keep legible). */
+     wherever there is text to keep legible). This tier is the one that CANNOT
+     be thinned. Measured (test/glass/run.mjs):
+     - at 82 % a faint copy of the library's leaf tabs showed under the search
+       field, so the bar cannot go under 88 %;
+     - the phone player's queue and À propos panels sit on the SLEEVE itself
+       (`.sheet.on-photo`), and at 88 % Encre's 11 px `--dim` "Titres
+       populaires" measured 4.43:1 — under AA (4.77:1 at 90 %).
+     So it keeps its opacity and takes the fill's white: the panels and the bar
+     read lighter by ~9/255 with no ghost and no contrast lost to `--dim`. */
   --glass-bg-strong: color-mix(in srgb, var(--glass-fill) 93%, transparent);
   --glass-hover: color-mix(in srgb, var(--tx) 9%, var(--glass-bg-2));
   --glass-border: color-mix(in srgb, var(--tx) 13%, transparent);
@@ -235,8 +273,22 @@
   --glass-blur-2: 14px;
   --glass-blur-3: 22px;
   --glass-sat-1: 140%;
-  --glass-sat-2: 140%;
-  --glass-sat-3: 145%;
+  --glass-sat-2: 150%;
+  --glass-sat-3: 155%;
+  /* A LITTLE MORE SATURATION: the blur flattens a sleeve's colour, and the
+     pane is at 78 %, so 10 points of saturate give back what the frost takes.
+     ONE token per tier, so a component writes `var(--glass-filter-2)` and
+     cannot invent a third expression: the app has exactly two, plus `none`.
+     THE BRIGHTNESS OF THE IMAGE IS NOT HERE. A constant multiplier either
+     washes a dark page out or does nothing for it; the image's level is
+     normalised per sleeve instead (`lib/color.js#levelFactor`, applied to the
+     cover ground and to the full-screen player's backdrop): a white cover is
+     pulled down, a black one lifted, and what sits between 64 and 120 of luma
+     keeps its own mood. A backdrop-filter cannot see the picture's level, so
+     a constant here would be the wrong tool — see "the image is normalised"
+     in docs/agents/webapp.md. */
+  --glass-filter-2: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+  --glass-filter-3: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
   --glass-blur: var(--glass-blur-1);
   --glass-sat: var(--glass-sat-1);
 }
@@ -753,22 +805,23 @@ main:has(> .notices) .gh {
    no component invents a value of its own (a sheet that wants a material reads
    these tokens; it does not pick its own blur):
 
-     tier 1  `--glass-bg`      72 % of the theme fill, NO blur.
+     tier 1  `--glass-bg`      64 % of the theme fill, NO blur.
              Static surfaces: cards, blocks, the sidebar, the player bar, the
              phone's tab bar. A grid of a hundred cards must not be a hundred
              render passes — a card never blurs its own backdrop.
-     tier 2  `--glass-bg-2`    86 % + blur(14px) saturate(140 %): floating
+     tier 2  `--glass-bg-2`    78 % + blur(14px) saturate(140 %): floating
              POPOVERS and ALERTS — the contextual menu, the quality list, the
              sleep and speed menus, the transcript menu, a notice.
-     tier 3  `--glass-bg-2`    86 % + blur(22px) saturate(145 %): SHEETS and
+     tier 3  `--glass-bg-2`    78 % + blur(22px) saturate(145 %): SHEETS and
              MODALS, over the veil their own scrim already paints (60 %).
              The same fill as tier 2 on purpose: the veil already darkens what
              is behind a sheet, so a third value would be a fourth invention.
      plus    `--glass-bg-strong` 93 %, still no blur: the sticky TOP BAR and
              the notices' strip, the only surfaces a row scrolls behind.
              Measured ghosting at 82 % was a faint duplicate of the leaf tabs
-             under the search field; at 93 % it is gone and the bar still
-             shows the ground.
+             under the search field; keep this tier at or above 88 % and the
+             bar still shows the ground. It is the one tier that keeps its
+             opacity (see its own block) and takes the fill's light instead.
 
    The app has exactly ONE blurred IMAGE: the cover ground
    (components/GlobalBackdrop.svelte), a fixed layer with one `filter: blur()`
@@ -780,11 +833,16 @@ main:has(> .notices) .gh {
 
    WHY THESE NUMBERS (measured: test/glass/run.mjs, on the painted pixels).
    The ground is already scrimmed to 86–91 % of --bg, so the worst a sleeve can
-   put behind a surface is a bright pane; a 72 % tint over it leaves `--dim` at
-   6.4:1 and `--tx` at 14:1 on Encre (Papier 6.5:1 and 16:1). A 20–30 % pane —
-   the glassmorphism default — measures 1.5–2.8:1 (The Crit's Liquid Glass
-   audit; NN/g's Glassmorphism guide), which is not a taste question. Menus and
-   sheets carry the densest text, so they are the most opaque. Blur cost is the
+   put behind a surface is a bright pane; a 64 % tint of the lit fill over it
+   leaves a card's 13 px `--dim` at 4.70:1 on Encre (Papier 5.25:1, Pochette
+   5.28:1). The floor of the whole bench is Papier's sheet at 4.73:1 — its 11 px
+   `--dim` count over the 60 % veil — and the thinnest text anywhere on the
+   glass is the phone player's 11 px `--dim` over a white-ish sleeve at the
+   thick step.
+   A 20–30 % pane — the glassmorphism default — measures 1.5–2.8:1 (The Crit's
+   Liquid Glass audit; NN/g's Glassmorphism guide), which is not a taste
+   question. Menus and sheets carry the densest text, so they are the most
+   opaque. Blur cost is the
    captured area times the radius and every filter function is a further pass
    (Will Chan), and a backdrop-filter over moving content is re-run on every
    frame (Dimensa measured 29 → 61 fps when one header's blur went): 14/22 px
@@ -831,7 +889,7 @@ main:has(> .notices) .gh {
   border: 1px solid var(--glass-border);
   --ln: var(--glass-border);
   box-shadow: var(--glass-shadow-2);
-  backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+  backdrop-filter: var(--glass-filter-2);
 }
 
 /* Tier 3 — sheets and modals. */
@@ -845,15 +903,17 @@ main:has(> .notices) .gh {
   border: 1px solid var(--glass-border);
   --ln: var(--glass-border);
   box-shadow: var(--glass-shadow-2);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
+  backdrop-filter: var(--glass-filter-3);
 }
 
 /* A SHEET THAT SITS ON A PHOTOGRAPH — the phone player's full-bleed queue and
    lyrics panels — takes the THICK step: the page's own scrim (86–91 % of --bg)
-   is not under it, only the sleeve, and tier 3's 86 % measured 4.17:1 for the
-   À propos panel's 11 px `--dim` labels over a white-ish cover. 93 % puts them
-   at 5.18:1 and still lets the sleeve show through the frost. Same material,
-   one step thicker, and still ONE definition. */
+   is not under it, only the sleeve, and the thinner steps are measured there
+   for the À propos panel's 11 px `--dim` labels. At the overlays' 78 % they
+   would be well under AA, and even 88 % measured 4.43:1 over a white-ish
+   cover. That is why the thick step is the one tier that keeps its opacity
+   (93 %) and takes the fill's white instead: it still lets the sleeve show
+   through the frost, and the labels stay at 4.8:1 or better on every theme. */
 .sheet.on-photo {
   background-color: var(--glass-bg-strong) !important;
 }
@@ -874,7 +934,7 @@ main:has(> .notices) .gh {
     var(--glass-bg-2);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow-2);
-  backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+  backdrop-filter: var(--glass-filter-2);
 }
 .glass-3 {
   background:
@@ -883,7 +943,7 @@ main:has(> .notices) .gh {
     var(--glass-bg-2);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow-2);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
+  backdrop-filter: var(--glass-filter-3);
 }
 
 /* THE QUEUE'S ONE ACCENT ACTION (`Enregistrer en playlist`) wears the finish
