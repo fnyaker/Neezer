@@ -526,8 +526,10 @@ the app keep" (`app/src/testmem.rs`).
   `drop_image`); the decoded copy lives in the App's asset cache, which also never evicts.
   A 1 000 px sleeve drawn in a 36 px row is therefore **4 MB of decoded heap and 4 MB of
   atlas for 1 296 useful pixels**, and a 4 000-row list that draws one per row would cost that
-  per distinct sleeve — D9 measured the shape of that (+291 MB) with glyph rows, and it is the
-  number this rule exists to keep off the queue. `nz-cache`'s `Covers::variant` writes a
+  per distinct sleeve — D9's +291 MB for "a sleeve per queue row" is that arithmetic (its queue
+  still draws glyph rows, so the number was a prediction, not a measurement: this section's own
+  sleeve deltas are the measured +1 to +2 MB of a browse page's few), and it is the number this
+  rule exists to keep off the queue. `nz-cache`'s `Covers::variant` writes a
   downscaled copy once (the bench's 1 753 091 B JPEG becomes **3 306 B at 128 px**, 4 480 B at
   384 px) and `cover::Class` decides the size: **`Class::Row` 128 px** for a screen whose
   sleeves are list rows, `Card` 384 px, `Page` 512 px. Decoded, 1 000² × 4 = 4 000 000 B
