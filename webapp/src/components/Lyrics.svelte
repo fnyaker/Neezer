@@ -192,6 +192,10 @@
   }
   .floating .synced {
     gap: 14px;
+    /* The fade is 28/30 px; this padding lets the FIRST and the LAST line sit
+       outside it instead of dissolving while it is the line being heard (a
+       track's opening line used to land in the top fade every time). */
+    padding: 34px 0;
   }
   .floating .synced li {
     color: var(--floating-dim);

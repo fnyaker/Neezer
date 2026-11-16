@@ -735,7 +735,7 @@ in `--ac-text` for the current one, 14 px apart; the list carries a 28 px mask f
 bottom instead of being cut by the column, and the one control (« Créer une carte ») wears the player's
 clear-glass pill rather than the old outlined card button. **Measured on the painted pixels** (raw
 backdrop, glyphs and shadow hidden; 3 themes × white and black sleeve, 1440×900): current line
-**10.90–17.19:1**, past/future **5.42–9.64:1**; the worst pair is Papier over a black sleeve at
+**10.91–17.19:1**, past/future **5.42–9.64:1**; the worst pair is Papier over a black sleeve at
 **5.42:1**, above AA. `levelFactor` (PR #205) is what keeps that white sleeve from washing out in the
 first place — it is the ground's brightness the text sits on. The integrated shapes are deliberately
 untouched: the narrow player's queue-card tab keeps its 64 % glass card and the phone's sheet its tier-3

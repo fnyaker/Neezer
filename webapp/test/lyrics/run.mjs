@@ -199,7 +199,10 @@ async function makePage(theme, sleeve, viewport) {
     else add();
   });
   const png = SLEEVES[sleeve];
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => {
+  // Anchored on the scheme and host: an unanchored host pattern would also
+  // match `evil.example/?next=dzcdn.net` (CodeQL, "Missing regular expression
+  // anchor").
+  await ctx.route(/^https?:\/\/(?:[^/]+\.)*(?:dzcdn\.net|api\.deezer\.com)(?::\d+)?(?:[/?#]|$)/, (r) => {
     if (/images\/cover\//.test(r.request().url())) {
       return r.fulfill({
         status: 200,
