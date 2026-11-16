@@ -571,10 +571,17 @@ settle(page) }`. Checks per scenario:
   in with the literal `0.35s ease` of row L13: that fade is 350 ms in reduced motion and is measured as if the
   shell had made it. Pick screens without sleeves (Réglages, Explorer) and let the source page's own entrances
   finish in `setup`.
+- **The bench waits for the shell's first-paint entrances before probing.** `run.mjs`'s `open()` used to
+  read the page three frames after it answered; S2's `.layout` fade is still running then, and the
+  foundation's "reduced motion starts no transition" hover probe measured it instead of the `.btn`. It now
+  waits (bounded) for `__motion.running()` to empty, which is what "a quiet page" always meant.
 - **The frozen import allowlist is a CEILING, not an equality.** `test/motion.test.mjs` fails when a file
   OUTSIDE its 19-name list imports `svelte/transition`/`svelte/animate`; a lot that moves one of those files
-  onto `lib/motion.js` simply stops matching, and the list is emptied in T7. (An equality would have turned
-  red on every lot of group A at once — it did, for T6b and T1.)
+  onto `lib/motion.js` simply stops matching, and the list is emptied in T7. (An equality turns red on every
+  lot of group A at once — it did, for T6b and T1.)
+- **A detail page for the Back scenario is a SHORT playlist.** A 4 000-track page keeps mounting rows and
+  their sleeves after any reasonable baseline, and a cover that arrives on the wrong side of the window makes
+  the request check compare two different pages.
 
 ## Prompt for a coding worker (one per lot)
 

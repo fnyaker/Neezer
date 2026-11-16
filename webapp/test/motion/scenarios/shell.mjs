@@ -43,7 +43,7 @@ async function ensure(page, path, ready) {
  *  its covers) was doing is over before the scenario's window opens. `still` is
  *  how long the network must stay silent, in ms (the first scenario also calls
  *  `drainWarm`). */
-async function baseline(page, still = 450) {
+async function baseline(page, still = 700) {
   await page
     .waitForFunction(() => [...document.querySelectorAll("main img")].every((img) => img.complete), null, {
       timeout: 10000,
@@ -129,12 +129,17 @@ async function settleOn(page, ready) {
   await page.waitForTimeout(120);
 }
 
-/** The id of a playlist the bench library has, for the Back scenario. */
+/** The id of a SHORT playlist the bench library has, for the Back scenario: a
+ *  4 000-track page keeps filling its rows (and their sleeves) after any
+ *  reasonable baseline, and a cover that arrives on the wrong side of the
+ *  window makes the request check compare two different pages. */
 async function aPlaylistId(page) {
   return page.evaluate(async () => {
     const answer = await fetch("/api/me/playlists").then((r) => r.json());
-    const list = Array.isArray(answer) ? answer : answer.playlists || [];
-    return list.length ? String(list[0].id) : null;
+    const list = (Array.isArray(answer) ? answer : answer.playlists || []).filter((p) => (p.nb_tracks || 0) > 0);
+    if (!list.length) return null;
+    list.sort((a, b) => (a.nb_tracks || 0) - (b.nb_tracks || 0));
+    return String(list[0].id);
   });
 }
 
