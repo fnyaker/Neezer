@@ -19,7 +19,8 @@
 //! `same_origin_guard` lets a request without both through, and those headers
 //! exist to stop BROWSERS on other origins. Never forge them.
 
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -36,6 +37,27 @@ use crate::lanes::{Gates, Lane, bulk_cap_from_stream};
 use crate::session::SessionJar;
 
 pub use nz_model::{Quality, StreamReady, TrackId};
+
+/// How long a download may go without a byte before its link is called dead
+/// (`Streams`: the stream's own 15 s watchdog, reused for every other file).
+pub const STALL_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// One file the API served, written where the caller asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadReport {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub content_type: Option<String>,
+}
+
+/// An IO failure, said in the words a screen can print.
+fn write_error(error: std::io::Error) -> ApiError {
+    ApiError::Http {
+        status: 0,
+        message: format!("écriture impossible : {error}"),
+        code: Some("io".to_owned()),
+    }
+}
 
 /// How long a connection may take to establish (`docs/agents/desktop.md`).
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
@@ -439,6 +461,134 @@ impl Api {
         let was_online = self.is_online();
         self.fetch_want(Want::Bytes, lane, Method::GET, path, None, was_online)
             .await
+    }
+
+    /// One file served by the API, written to disk as it arrives.
+    ///
+    /// `GET /api/export/<kind>/<id>?fmt=`, `GET /api/services/list/…` and the
+    /// share routes answer a FILE, not JSON: a playlist's ZIP is gigabytes and
+    /// rule 3 forbids holding it in memory (`Api::bytes` is for a sleeve). The
+    /// body is therefore appended to `<destination>.part` chunk by chunk and
+    /// only renamed once the whole file arrived, so a reader never sees half an
+    /// archive (the app's own download rule). `on_progress` is called after each
+    /// chunk with the bytes written and the length when the server sent one;
+    /// `cancel` is read before each chunk, and a cancelled transfer removes its
+    /// partial file. A body that stops arriving for [`STALL_TIMEOUT`] is a dead
+    /// link, not a verdict about the file: it fails fast with
+    /// [`ApiError::Offline`].
+    ///
+    /// The lane slot is held for the WHOLE body, unlike [`Api::stream`]: an
+    /// export is a download, it is never what the person just asked to hear, and
+    /// `Lane::Bulk` allows exactly one at a time.
+    pub async fn download_to<F>(
+        &self,
+        lane: Lane,
+        path: &str,
+        destination: &Path,
+        mut on_progress: F,
+        cancel: &AtomicBool,
+    ) -> Result<DownloadReport, ApiError>
+    where
+        F: FnMut(u64, Option<u64>) + Send,
+    {
+        let partial = destination.with_extension(format!(
+            "{}.part",
+            destination
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("part")
+        ));
+        if let Some(parent) = destination.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            return Err(write_error(error));
+        }
+        let guard = self.gates.acquire(lane).await;
+        let mut request = self
+            .http
+            .request(Method::GET, self.url(path))
+            // A compressed body would be written compressed under the file's
+            // name and the byte count would lie.
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .header(reqwest::header::ACCEPT, "*/*");
+        if guard.lane().is_background() {
+            request = request.header(BACKGROUND_HEADER, "1");
+        }
+        let response = request.send().await.map_err(|err| {
+            if is_network_failure(&err) {
+                self.note_unreachable();
+                ApiError::Offline
+            } else {
+                ApiError::Http {
+                    status: 0,
+                    message: err.to_string(),
+                    code: None,
+                }
+            }
+        })?;
+        self.note_reachable();
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        if !(200..300).contains(&status) {
+            let text = response.text().await.unwrap_or_default();
+            return Err(self.classify(status, &headers, &text, lane));
+        }
+        let content_type = header_text(&headers, reqwest::header::CONTENT_TYPE);
+        let length = header_text(&headers, reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.parse::<u64>().ok());
+
+        let mut response = response;
+        let mut file = match std::fs::File::create(&partial) {
+            Ok(file) => file,
+            Err(error) => return Err(write_error(error)),
+        };
+        let mut written = 0u64;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                drop(file);
+                let _ = std::fs::remove_file(&partial);
+                return Err(ApiError::Http {
+                    status: 0,
+                    message: "téléchargement annulé".to_owned(),
+                    code: Some("cancelled".to_owned()),
+                });
+            }
+            let next = tokio::time::timeout(STALL_TIMEOUT, response.chunk()).await;
+            let chunk = match next {
+                Ok(Ok(Some(chunk))) => chunk,
+                Ok(Ok(None)) => break,
+                // A body that stops, or a link that dies mid-transfer: the same
+                // sentence the stream's own watchdog uses.
+                Ok(Err(_)) | Err(_) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&partial);
+                    self.note_unreachable();
+                    return Err(ApiError::Offline);
+                }
+            };
+            let len = chunk.len() as u64;
+            if let Err(error) = file.write_all(&chunk) {
+                drop(file);
+                let _ = std::fs::remove_file(&partial);
+                return Err(write_error(error));
+            }
+            written += len;
+            on_progress(written, length);
+            if lane == Lane::Bulk {
+                self.gates.throttle(len).await;
+            }
+        }
+        drop(file);
+        if let Err(error) = std::fs::rename(&partial, destination) {
+            let _ = std::fs::remove_file(&partial);
+            return Err(write_error(error));
+        }
+        drop(guard);
+        Ok(DownloadReport {
+            path: destination.to_path_buf(),
+            bytes: written,
+            content_type,
+        })
     }
 
     /// Open one audio stream (`GET /api/stream/<id>?q=&start=`).
