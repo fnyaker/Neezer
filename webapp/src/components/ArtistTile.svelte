@@ -46,13 +46,18 @@
     border-radius: var(--r-card);
     text-align: center;
     color: var(--tx);
-    transition: background-color 0.14s ease;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
     content-visibility: auto;
     contain-intrinsic-size: auto 170px;
   }
   .tile:hover,
   .tile:focus-visible {
     background: var(--s2);
+  }
+  .tile:active {
+    transform: scale(0.98);
   }
   .pic {
     display: block;

@@ -6,6 +6,7 @@
   import { toasts } from "../lib/stores.js";
   import { onDestroy } from "svelte";
   import { SORTS, createProjector } from "../lib/tracklist.js";
+  import { animate, DUR, EASE_CSS } from "../lib/motion.js";
 
   export let tracks = [];
   export let context = null;
@@ -25,6 +26,22 @@
   const project = createProjector();
   onDestroy(() => project.free());
   $: shown = project(tracks, sort, dir, query);
+
+  // A COMMITTED change of the list (another sort, the reversed order, Enter in
+  // the field) fades the results block in once — never per keystroke: the list
+  // updating under the letters being typed IS the motion, animating it would add
+  // lag (M6, M7). One element, opacity only; eco does nothing, reduced keeps
+  // 140 ms.
+  let results;
+  let committed = `${sort}:${dir}`;
+  $: if (results && `${sort}:${dir}` !== committed) {
+    committed = `${sort}:${dir}`;
+    animate(results, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+  }
+
+  function commit() {
+    animate(results, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+  }
 
   async function downloadAll() {
     if (dlBusy) return;
@@ -51,7 +68,7 @@
 <div class="toolbar">
   <div class="searchbox">
     <Icon name="search" size={16} />
-    <input placeholder="Rechercher dans cette liste…" bind:value={query} />
+    <input placeholder="Rechercher dans cette liste…" bind:value={query} on:keydown={(e) => e.key === "Enter" && commit()} />
   </div>
   <div class="spacer"></div>
   <select class="sortsel" bind:value={sort} aria-label="Trier par">
@@ -70,7 +87,9 @@
 {#if query.trim() && !shown.length}
   <p class="muted empty">Aucun titre ne correspond à « {query} ».</p>
 {:else}
-  <TrackList tracks={shown} {context} {numbered} {showAlbum} {showCover} />
+  <div class="results" bind:this={results}>
+    <TrackList tracks={shown} {context} {numbered} {showAlbum} {showCover} />
+  </div>
 {/if}
 
 <style>

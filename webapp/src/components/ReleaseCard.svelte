@@ -97,12 +97,18 @@
     padding: 18px 18px 12px;
     color: var(--tx);
     text-decoration: none;
-    transition: background-color 0.14s ease, border-color 0.14s ease;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
   }
   .rc:hover,
   .rc:focus-visible {
     background: var(--s2);
     border-color: var(--dim);
+  }
+  .rc:active {
+    transform: scale(0.98);
   }
   .rc-head {
     display: flex;

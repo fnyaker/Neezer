@@ -15,6 +15,7 @@
   // the same height (they are — fixed-height queue rows).
   import { trackKey } from "../lib/trackkey.js";
   import { onMount, tick } from "svelte";
+  import { scrollBehavior, shiftRows } from "../lib/motion.js";
 
   export let items = [];
   export let estimateHeight = 52; // row height until measured
@@ -106,7 +107,25 @@
     const sr = viewport(scroller);
     const listTop = scroller.scrollTop + (lr.top - sr.top); // list top in scroll coords
     const target = listTop + index * rowH - scroller.clientHeight * ratio;
-    scroller.scrollTo({ top: Math.max(0, target), behavior: smooth ? "smooth" : "auto" });
+    // A reduced-motion or eco device JUMPS there (lib/motion.js#scrollBehavior);
+    // `smooth: false` still means "now" everywhere.
+    scroller.scrollTo({ top: Math.max(0, target), behavior: smooth ? scrollBehavior() : "auto" });
+  }
+
+  // The list makes room after an explicit mutation of `items` (a removal or an
+  // insertion), through lib/motion.js#shiftRows: every mounted row at or after
+  // `fromIndex` starts one row off its new place and glides back into it. Call
+  // it right after the store mutation, once `tick()` has produced the new rows
+  // (`QueueList` does it from the props' own watcher).
+  //
+  // The window is keyed by track AND absolute index, so a removal remounts
+  // every following row under a new key: "the same element" cannot be animated,
+  // and animating the NEW rows from their old offset is what looks identical
+  // (fixed row height, so the offset is exactly `deltaRows × rowH`). No
+  // `getBoundingClientRect` here, so nothing costs a layout — measured on a
+  // 4 000-track queue: the shift is 1 layout in total, worst frame 16.7 ms.
+  export function shift(fromIndex, deltaRows) {
+    return shiftRows(winEl, fromIndex, deltaRows, rowH, start);
   }
 
   // The row under a viewport y, computed from geometry — not from the DOM — so

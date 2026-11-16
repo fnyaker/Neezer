@@ -1,6 +1,6 @@
 <script>
   import { trackKey, trackRef } from "../lib/trackkey.js";
-  import { flip } from "svelte/animate";
+  import { flipSmall, motionLevel, DUR } from "../lib/motion.js";
   import { dragHandleZone, dragHandle } from "svelte-dnd-action";
   import { push } from "svelte-spa-router";
   import { player, currentId, playing, downloads } from "../lib/stores.js";
@@ -24,11 +24,15 @@
   export let onreorder = null; // (newTracks) => void
   export let onremove = null; // (index) => void
 
-  // Row-shift animation duration. FLIP measures EVERY row's position on each
-  // drag update / move — O(N) layout reads per event — so it's disabled past
-  // ~120 rows: big playlists reorder instantly instead of animating sluggishly.
-  const FLIP = 160;
-  $: flipMs = rows.length > 120 ? 0 : FLIP;
+  // Reordering motion. svelte-dnd-action moves the dragged rows itself (its own
+  // FLIP, driven by `flipDurationMs`); `animate:flipSmall` is what animates the
+  // tap-to-move buttons' single steps. Both cost two rect reads per row, so past
+  // 50 rows the list reorders instantly instead of animating — the plan's M4:
+  // FLIP over 8 000 rows measured a 1 s freeze. Nothing animates in eco or under
+  // reduced motion either (lib/motion.js reads the level; `$motionLevel` makes
+  // the switch live).
+  const FLIP_MAX = 50;
+  $: flipMs = $motionLevel === "full" && rows.length <= FLIP_MAX ? DUR.base : 0;
 
   // Wrap each track with a stable id for keyed iteration + dnd. The id sticks
   // to the track OBJECT (WeakMap), so a reorder/remove keeps every surviving
@@ -105,7 +109,7 @@
     <div
       class="row"
       class:active={isCurrent}
-      animate:flip={{ duration: flipMs }}
+      animate:flipSmall={{ duration: flipMs }}
       tabindex="-1"
       aria-haspopup="menu"
       on:contextmenu={(e) => menu(e, track)}
@@ -129,7 +133,7 @@
           {#if isCurrent && $playing && $playbackIdle}
             <span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>
           {:else if isCurrent && $playing}
-            <span class="rowspin" aria-hidden="true"></span>
+            <span class="rowspin" data-motion="status" aria-hidden="true"></span>
           {:else}
             {#if isCurrent}
               <span class="curplay" aria-hidden="true"><Icon name="play" size={13} /></span>
@@ -369,7 +373,8 @@
       transform: rotate(360deg);
     }
   }
-  /* equalizer animation on the playing row */
+  /* equalizer animation on the playing row (scaleY, not height: a layout per
+     frame became a compositor transform — M1) */
   .eq {
     display: flex;
     align-items: flex-end;
@@ -378,7 +383,10 @@
   }
   .eq i {
     width: 3px;
+    height: 100%;
     background: var(--ac-mark);
+    transform-origin: bottom;
+    transform: scaleY(0.3);
     animation: eq 0.9s ease-in-out infinite;
   }
   .eq i:nth-child(1) {
@@ -393,10 +401,10 @@
   @keyframes eq {
     0%,
     100% {
-      height: 30%;
+      transform: scaleY(0.3);
     }
     50% {
-      height: 100%;
+      transform: scaleY(1);
     }
   }
 
@@ -461,7 +469,7 @@
   @media (prefers-reduced-motion: reduce) {
     .eq i {
       animation: none;
-      height: 70%;
+      transform: scaleY(0.7);
     }
   }
   /* The floating clone svelte-dnd-action renders while dragging: lift it. */
