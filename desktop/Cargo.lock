@@ -4504,6 +4504,9 @@ dependencies = [
 [[package]]
 name = "nz-viz"
 version = "0.1.0"
+dependencies = [
+ "rhythm",
+]
 
 [[package]]
 name = "objc"
@@ -5868,6 +5871,10 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "rhythm"
+version = "0.1.0"
 
 [[package]]
 name = "ring"

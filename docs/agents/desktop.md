@@ -608,17 +608,55 @@ Waves that can run in parallel (disjoint files):
   position tick (count D-Bus messages over 10 s of playback: ≤ 2).
 - **Pitfalls**: run the server on its own `LocalSet` thread (see *Pitfalls*).
 
-### V1 — `nz-viz` (bars and oscilloscope, pure)
+### V1 — `nz-viz` (bars and oscilloscope, pure) — delivered 2026-11-16
 
-- **Files**: `desktop/crates/nz-viz/src/{lib,bars,scope,palette}.rs`.
-- **Contract**: `VizState::new(sr)`, `push_frames(&[f32] stereo)`, `bars(n, dt) -> &[f32]`
-  (levels then peaks, from `rhythm::viz_bars::Bars` fed by the analyser's bands, the same input the
-  web canvas fallback uses), `scope(cols, dt) -> (&[f32], &[f32])` (per channel `[lo, hi]` per
-  column, `rhythm::viz_scope::Scope`), palette from the cover (port `lib/coverpalette.js`) or the
-  Omarchy theme.
-- **Acceptance**: frame-for-frame equality with the web build on a fixture recording (reuse the
-  comparison style of `android/nscore/test/compare.mjs`); `bars(64)` + `scope(512)` < 0.3 ms per
-  frame on this machine.
+- **The rule**: the geometry is the page's OWN Rust, never a port. `rhythm::viz_bars::Bars` and
+  `rhythm::viz_scope::Scope` are the arithmetic `lib/viz/core.js` calls on the browser side, so
+  `nz-viz` only feeds them what the page feeds them, in the same order: the mono sum `(l+r)/2` into
+  `rhythm::Analyzer` at `LEVEL_SPECTRUM` (the depth `viz/modes.js#levelFor` picks for these two
+  scenes; SMART spends the tempo/grid ladder for nothing), one `Bars::update` + one `Scope::update`
+  per ANALYSIS frame (94 Hz at 48 kHz, dt = hop/sr), and a plain read at the display rate. Copying
+  the maths would let the desktop and the browser draw different pictures from the same track.
+- **The rule, frame layout**: the analyser's `LAYOUT` table is private; the only published form is
+  the `rhythm_layout()` string, and the page parses it precisely so neither side can hard-code an
+  offset. `nz-viz` parses the same string through the same entry point, once per process
+  (`OnceLock`), and asserts the parsed length against `frame_len()`.
+- **The rule, time**: `bars(n, dt)` / `scope(cols, dt)` are drawn at the display rate and carry the
+  time since the previous call, which is spent ONCE, on the newest analysis frame — `approach()`
+  composes, so a 240 Hz panel and a 60 Hz one agree to 2.7e-3 of a bar. Below the analysis cadence
+  (94 Hz) a paint can only draw the newest target for the whole interval: 1.2e-2 of a bar at 60 Hz,
+  bounded and drift-free, which is the price of a dropped frame, not a bug.
+- **The rule, scope precision**: a desktop takes the exact path. `ScopeCfg { search_ms: 40, exact,
+  fine }` — the page reserves `exact`/`fine` for its high/ultra tiers because a phone cannot afford
+  the per-column min/max, but a 512-column trace on a 1548 px lane drawn as one value per column is
+  visibly polygonal. The window stays 4096 samples (the page's low/medium `buffer`, 85 ms for a
+  42 ms timebase) and the palette is `lib/coverpalette.js#analyse` ported field for field, plus
+  `Palette::from_theme(accent, surface, light)` for the Omarchy strip's one flat colour.
+- **What it is now**: `desktop/crates/nz-viz` depends on `rhythm` (path) and nothing else;
+  `VizState` (`new`, `push_frames`, `bars`, `scope`, `scope_state`, `set_scope_config`, `idle`),
+  `BarsViz` (levels then peaks, contiguous, `MAX_BARS` cap), `ScopeViz` (the 4096-sample per-channel
+  tap, the `[lo, hi]` trace per column, the trigger lock), `palette` (`analyse`, `zone_colours`,
+  `from_theme`).
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-viz --release -- --nocapture`):
+  - **21 tests, 0 failed**; `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - against the SHIPPED `webapp/src/lib/audio/rhythm.wasm` in Node, over a fixture recording the two
+    builds generate bit for bit (a 220 Hz square + deterministic noise): **worst relative difference
+    1.2e-7** over 4 sampled frames × 8 bars (levels and peaks) × 8 scope columns × 2 channels — the
+    residue is libm's `exp` on the two backends, so the desktop draws the page's picture.
+  - `bars(64)` + `scope(512)` + the analysis that lands in the same paint: **0.054–0.072 ms mean,
+    0.08 ms p95** per paint at 240 Hz (budget 0.3 ms; debug, unoptimised, 3.96 ms).
+  - 60 Hz against 240 Hz painting: bars 1.2e-2, scope traces **identical** (0.0 — a column is a
+    function of the window and the trigger, and the window sequence is the same).
+- **Pitfalls found by building**: `cargo fmt --all --check` in `desktop/` also formats every local
+  PATH DEPENDENCY, and `webapp/rhythm`/`webapp/appcore`/`android/nscore` are hand-formatted on
+  purpose (rhythm's committed `.wasm` carries an FNV hash of its exact source bytes, so reformatting
+  them fails `webapp`'s tests): the job now runs `cargo fmt --check`, which still checks every
+  member. The analyser withholds its first `LOOKAHEAD` output frames, so the tap must not assume one
+  frame per push. `Bars`/`Scope` expose raw pointers only (three justified `unsafe` slice views), and
+  `Bars::input_ptr` is 256 floats wide while a frame carries 120 bands — clamping to `MAX_BANDS`, not
+  to the frame's count, is what keeps that copy sound. The palette's `colors`/`dominant`/`vivid` are
+  picked from a histogram sorted by presence with JS's stable tie order: a Rust sort that is not
+  stable colours a two-colour sleeve differently from the browser.
 
 ### D7 — App shell and wiring
 
