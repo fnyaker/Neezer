@@ -145,8 +145,13 @@ log_rotate = yes
 ; Programs used to convert from one format/bitrate to another. Defaults: none
 ; Opus transcoders for the Deezer proxy: a client requesting a bitrate gets Opus
 ; at that rate; requesting lossless gets the original archived FLAC.
-transcoder_flac_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -c:a libopus -b:a %outratek -vbr on -f ogg -
-transcoder_mp3_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -c:a libopus -b:a %outratek -vbr on -f ogg -
+; -ac 2 pins the OUTPUT to stereo, and that is load-bearing: libopus caps its rate
+; at 256 kbit/s PER CHANNEL and refuses the encode beyond it, so a mono source at
+; maxBitRate=320 fails outright where 320k on a stereo source is fine. A command
+; template carries one rate and no channel count; forcing stereo (a no-op on
+; stereo audio, a downmix for the rest) keeps every rate up to 512k valid.
+transcoder_flac_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -ac 2 -c:a libopus -b:a %outratek -vbr on -f ogg -
+transcoder_mp3_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -ac 2 -c:a libopus -b:a %outratek -vbr on -f ogg -
 transcoder_mp3_mp3 = lame --quiet --mp3input -b %outrate %srcpath -
 transcoder = ffmpeg -i %srcpath -ab %outratek -v 0 -f %outfmt -
 decoder_mp3 = mpg123 --quiet -w - %srcpath

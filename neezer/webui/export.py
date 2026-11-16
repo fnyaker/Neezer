@@ -34,11 +34,13 @@ from flask import current_app, jsonify, request, stream_with_context
 
 from ..db import Album, PodcastEpisode
 from . import (
+    _audio_channels,
     _db_album_tracks,
     _db_playlist_track_rows,
     _db_track,
     _episode,
     _need_provider,
+    _opus_args,
     _resolve_db_playlist,
     _tracks,
     _user_starred,
@@ -50,9 +52,29 @@ from .share import _FNAME_BAD, _ffmpeg_available, _media_file
 
 logger = logging.getLogger(__name__)
 
-# fmt -> (ffmpeg args or None for "copy the archived file", extension, label).
+
+def _opus_format(kbps):
+    """How to export as Opus ``kbps``: the arguments depend on the SOURCE.
+
+    libopus caps its rate at 256 kbit/s per channel and refuses the whole encode
+    beyond it, so "Opus 320" of a MONO track produced nothing and the title was
+    listed in the ZIP's ``_erreurs.txt`` while a stereo one went through.
+    ``_opus_args`` is the one rule the server applies everywhere else
+    (``/api/stream``, the seek slice, the live transcode); the channel count comes
+    from the finished file's header — ``_media_file`` archives before handing a
+    path over, so there is never a partial to read.
+    """
+
+    def args(path):
+        return [*_opus_args(kbps, _audio_channels(path)), "-f", "ogg"]
+
+    return args
+
+
+# fmt -> (ffmpeg args, extension, label), or None for "copy the archived file".
 # ``None`` means no re-encode at all: the archived FLAC is the master, so
-# exporting FLAC is a straight file copy into the ZIP.
+# exporting FLAC is a straight file copy into the ZIP. An Opus entry is a
+# callable, built per track: see ``_opus_format``.
 _EXPORT_FORMATS = {
     "flac": (None, "flac", "FLAC"),
     "mp3_320": (["-c:a", "libmp3lame", "-b:a", "320k", "-f", "mp3"], "mp3", "MP3 320"),
@@ -62,9 +84,9 @@ _EXPORT_FORMATS = {
         "m4a",
         "AAC 256",
     ),
-    "opus_320": (["-c:a", "libopus", "-b:a", "320k", "-f", "ogg"], "opus", "Opus 320"),
-    "opus_192": (["-c:a", "libopus", "-b:a", "192k", "-f", "ogg"], "opus", "Opus 192"),
-    "opus_128": (["-c:a", "libopus", "-b:a", "128k", "-f", "ogg"], "opus", "Opus 128"),
+    "opus_320": (_opus_format(320), "opus", "Opus 320"),
+    "opus_192": (_opus_format(192), "opus", "Opus 192"),
+    "opus_128": (_opus_format(128), "opus", "Opus 128"),
 }
 DEFAULT_FORMAT = "mp3_320"
 
@@ -119,7 +141,14 @@ class _Sink:
 
 
 def _transcode(path, args):
-    """ffmpeg: re-encode `path` to a pipe, carrying tags over."""
+    """ffmpeg: re-encode `path` to a pipe, carrying tags over.
+
+    ``args`` is the format's stored argument list — or a callable, for a format
+    whose command depends on the source (Opus: libopus's rate ceiling follows the
+    channel count, see ``_opus_format``).
+    """
+    if callable(args):
+        args = args(path)
     cmd = [
         "ffmpeg", "-v", "0", "-i", path,
         "-map", "0:a:0", "-map_metadata", "0", *args, "pipe:1",

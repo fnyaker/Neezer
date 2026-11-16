@@ -31,8 +31,13 @@ log_rotate = no
 ; ffmpeg (installed in the image) transcodes the archived FLAC to Opus on the
 ; fly. In your Subsonic client, request lossless for the original FLAC, or set a
 ; bitrate (e.g. 320 / 128 / 64) to get Opus at that rate.
-transcoder_flac_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -c:a libopus -b:a %outratek -vbr on -f ogg -
-transcoder_mp3_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -c:a libopus -b:a %outratek -vbr on -f ogg -
+; -ac 2 is required, not cosmetic: libopus caps its rate at 256 kbit/s PER CHANNEL
+; and refuses the encode beyond it, so a mono source at maxBitRate=320 fails where
+; the same 320k on a stereo source is fine. A command template carries one rate
+; and no channel count; forcing stereo keeps every rate up to 512k valid (a
+; no-op on stereo audio, a downmix for anything else).
+transcoder_flac_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -ac 2 -c:a libopus -b:a %outratek -vbr on -f ogg -
+transcoder_mp3_opus = ffmpeg -i %srcpath -v 0 -map 0:a:0 -ac 2 -c:a libopus -b:a %outratek -vbr on -f ogg -
 transcoder = ffmpeg -i %srcpath -ab %outratek -v 0 -f %outfmt -
 default_transcode_target = opus
 
