@@ -5,6 +5,7 @@
   // that is the other device.
   import { onDestroy } from "svelte";
   import { toasts } from "../lib/stores.js";
+  import { pop } from "../lib/motion.js";
   import {
     sleepTimer,
     SLEEP_CHOICES,
@@ -21,6 +22,9 @@
   export let align = "right";
   // "up" from a footer, "down" from a header.
   export let placement = "up";
+
+  // O5: the same pop as the quality list, from the corner nearest the moon.
+  $: origin = `${placement === "down" ? "top" : "bottom"} ${align}`;
 
   let open = false;
   let now = Date.now();
@@ -74,7 +78,7 @@
     {#if $sleepTimer}<span class="badge">{label}</span>{/if}
   </button>
   {#if open}
-    <div class="menu {placement} {align}" role="menu" on:click|stopPropagation>
+    <div class="menu {placement} {align}" role="menu" transition:pop={{ origin, placement }} on:click|stopPropagation>
       <div class="mh">Minuteur de sommeil</div>
       {#if $sleepTimer}
         <button role="menuitem" class="off" on:click={off}>

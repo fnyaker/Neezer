@@ -3,12 +3,16 @@
   // Only an episode has one: nobody wants a song at 1.5x.
   import { current, toasts } from "../lib/stores.js";
   import { partyHost } from "../lib/party/hostbridge.js";
+  import { pop } from "../lib/motion.js";
   import { SPEEDS, currentSpeed, setSpeed, speedLabel } from "../lib/speed.js";
   import Icon from "./Icon.svelte";
 
   export let align = "right";
   // Where the list hangs from: "up" from a footer, "down" from a header.
   export let placement = "up";
+
+  // O6: the speed chip's list pops like the quality and sleep ones.
+  $: origin = `${placement === "down" ? "top" : "bottom"} ${align}`;
 
   let open = false;
 
@@ -47,7 +51,7 @@
       <span>{speedLabel(locked ? 1 : $currentSpeed)}</span>
     </button>
     {#if open}
-      <ul class="menu {placement} {align}" role="listbox" on:click|stopPropagation>
+      <ul class="menu {placement} {align}" role="listbox" transition:pop={{ origin, placement }} on:click|stopPropagation>
         <li class="mh">Vitesse de lecture</li>
         {#each SPEEDS as r}
           <li>
