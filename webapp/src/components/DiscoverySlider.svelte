@@ -129,6 +129,8 @@
     color: var(--text-dim);
     border-radius: 8px;
     text-align: center;
+    /* The chosen step is colour, never movement (M6: a frequent thing). */
+    transition: color var(--dur-instant) var(--ease-standard);
   }
   .ticks button:first-child {
     text-align: left;
@@ -157,5 +159,13 @@
   }
   .compact {
     padding: 10px 14px 6px;
+  }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    .ticks button {
+      transition: none;
+    }
   }
 </style>

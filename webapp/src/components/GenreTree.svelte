@@ -11,6 +11,7 @@
   import { api } from "../lib/api.js";
   import { user, toasts } from "../lib/stores.js";
   import { setTree } from "../lib/genretree.js";
+  import { fadeIn } from "../lib/motion.js";
   import VirtualList from "./VirtualList.svelte";
   import Icon from "./Icon.svelte";
 
@@ -255,7 +256,7 @@
   }
 </script>
 
-<section class="card tree">
+<section class="card tree" in:fadeIn>
   <div class="head">
     <h2>Arbre des genres</h2>
     {#if admin && tree}
@@ -280,7 +281,7 @@
     <p class="muted">L'arbre est injoignable. <button class="btn" on:click={load}>Réessayer</button></p>
   {:else if tree}
     {#if adding === "create" && admin}
-      <form class="create" on:submit|preventDefault={create}>
+      <form class="create" in:fadeIn on:submit|preventDefault={create}>
         <input placeholder="Nom du genre" bind:value={newName} maxlength="48" />
         <select bind:value={newParent} aria-label="Sous quel genre">
           <option value="">Sans parent (racine)</option>
@@ -290,7 +291,7 @@
       </form>
     {/if}
 
-    <div class="bar">
+    <div class="bar" in:fadeIn>
       <input class="search" type="search" placeholder="Chercher un genre (avec ses sous-genres)" bind:value={query} />
       {#if !query}
         <button class="btn" on:click={expandAll}>Tout ouvrir</button>
@@ -298,7 +299,7 @@
       {/if}
     </div>
 
-    <div class="scroll">
+    <div class="scroll" in:fadeIn>
       <VirtualList items={rows} estimateHeight={44} key={(r) => r.key} let:item={row}>
         <div
           class="row"
@@ -338,7 +339,7 @@
     </div>
 
     {#if menu && admin}
-      <div class="picker menu" role="menu" aria-label="Actions sur {menu.name}">
+      <div class="picker menu" in:fadeIn role="menu" aria-label="Actions sur {menu.name}">
         <div class="picker-head">
           <strong>{menu.name}</strong>
           <button class="btn icon-btn" aria-label="Fermer" title="Fermer" on:click={() => (menu = null)}><Icon name="close" size={13} /></button>
@@ -356,7 +357,7 @@
     {/if}
 
     {#if picking && admin}
-      <div class="picker" role="dialog" aria-label="Ranger {picking.name}">
+      <div class="picker" in:fadeIn role="dialog" aria-label="Ranger {picking.name}">
         <div class="picker-head">
           <strong>Ranger « {picking.name} » sous</strong>
           <button class="btn icon-btn" aria-label="Fermer" title="Fermer" on:click={() => (picking = null)}><Icon name="close" size={13} /></button>
@@ -377,7 +378,7 @@
     {#if weightFor && admin}
       {@const wr = rows.find((r) => r.key === weightFor)}
       {#if wr}
-        <div class="picker">
+        <div class="picker" in:fadeIn>
           <strong>Lien « {wr.name} » → « {wr.parent} »</strong>
           <label class="slider">
             <span>Lié</span>
@@ -435,6 +436,8 @@
     box-sizing: border-box;
     padding-right: 8px;
     border-bottom: 1px solid color-mix(in srgb, var(--border, #2a2d33) 55%, transparent);
+    /* A drop target answers in colour (M6): no lift, no box-shadow. */
+    transition: background-color var(--dur-instant) var(--ease-standard);
   }
   .row.drop:hover {
     background: color-mix(in srgb, var(--accent, #8b5cf6) 18%, transparent);
@@ -460,7 +463,9 @@
     width: 6px;
     height: 6px;
     transform: rotate(-45deg);
-    transition: transform 0.12s;
+    /* The one motion of an expand: the chevron turns (I4). The node's rows are
+       the windowed list's rows, and those never animate (M4). */
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .caret.open::before {
     transform: rotate(45deg);
@@ -608,6 +613,14 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 8px;
+  }
+  /* M14: reduced motion keeps the meaning (open/closed, the target of a drop)
+     and drops the turn and the walk of a colour. */
+  @media (prefers-reduced-motion: reduce) {
+    .caret::before,
+    .row {
+      transition: none;
+    }
   }
   @media (max-width: 760px) {
     .row {

@@ -23,6 +23,7 @@
   import { discoveryLevel, loadDiscovery, setDiscovery, DEFAULT_LEVEL } from "../lib/discovery.js";
   import { STYLE_FALLBACK } from "../lib/sillon.js";
   import { styleFamilies, loadStyleRows } from "./StylePicker.svelte";
+  import { fadeIn } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   // A button the caller drives while the Flow starts: the label stays, the
@@ -116,7 +117,7 @@
           </button>
         {/if}
       </div>
-      {#if full}<p class="note">Six genres au maximum : retirez-en un pour en ajouter un autre.</p>{/if}
+      {#if full}<p class="note" in:fadeIn>Six genres au maximum : retirez-en un pour en ajouter un autre.</p>{/if}
     </section>
 
     <section class="block" aria-labelledby="flow-diversity-title">
@@ -220,6 +221,11 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* A genre is picked by colour, not by movement (M6/I5). */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .chip:disabled {
     opacity: 0.45;
@@ -260,9 +266,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     transition:
-      background-color 0.15s ease,
-      color 0.15s ease,
-      border-color 0.15s ease;
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .steps button:hover {
     border-color: var(--dim);
@@ -326,7 +332,8 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .steps button {
+    .steps button,
+    .chips .chip {
       transition: none;
     }
   }

@@ -25,6 +25,7 @@
   } from "../lib/flow.js";
   import { discoveryLevel } from "../lib/discovery.js";
   import { toasts } from "../lib/stores.js";
+  import { veil, pop } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
   import FlowPicker from "./FlowPicker.svelte";
 
@@ -181,7 +182,7 @@
 
 {#if panelOpen}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="veil" use:toBody on:click={(e) => e.target === e.currentTarget && closePanel()}>
+  <div class="veil" use:toBody transition:veil={{ for: "dialog" }} on:click={(e) => e.target === e.currentTarget && closePanel()}>
     <div
       class="panel"
       role="dialog"
@@ -189,6 +190,7 @@
       aria-labelledby="flow-panel-title"
       tabindex="-1"
       bind:this={panelEl}
+      transition:pop
     >
       <header>
         <div class="ttl">
@@ -235,7 +237,10 @@
     font-weight: 600;
     font-size: 0.84rem;
     white-space: nowrap;
-    transition: background 0.15s, color 0.15s, transform 0.1s;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
   }
   /* The door: a chip, not a gear — it says what the Flow aims at. */
   .open {

@@ -22,6 +22,7 @@
   import { measureTrack, measureParallelism, releaseMeasurer } from "../lib/genre/measure.js";
   import { train, release } from "../lib/genre/trainer.js";
   import { rankTags, searchTags, recentTags, noteRecent } from "../lib/genre/rank.js";
+  import { fadeIn } from "../lib/motion.js";
   import { MIN_EXAMPLES, prepare, canGroup, vectorKey, assess, suspects as findSuspects } from "../lib/genre/health.js";
   import Icon from "../components/Icon.svelte";
   import GenreLibrary from "../components/GenreLibrary.svelte";
@@ -129,6 +130,10 @@
   // modes stay behind "Réglages avancés" for whoever wants to force one.
   let mode = "auto";
   let advanced = false;
+  // The health panel's own fold: its body is a full confusion matrix, far over
+  // M10's height budget, so it opens instantly and FADES its content in rather
+  // than walking its height a frame at a time.
+  let detailOpen = false;
   // A network is only tried when there is enough to train it on (ten tracks a
   // genre: under that a 256-wide layer memorises), and only kept on a clear win
   // on held-out data — two points of balanced accuracy — over the linear head.
@@ -1096,7 +1101,7 @@
     {/if}
 
     {#if tab === "tag"}
-      <section class="card tagger">
+      <section class="card tagger" in:fadeIn>
         <div class="tag-head">
           <h2><Icon name="mic" size={18} /> Étiquetage</h2>
           <div class="stats">
@@ -1363,7 +1368,7 @@
     {/if}
 
     {#if tab === "model"}
-      <section class="card">
+      <section class="card" in:fadeIn>
         <h2><Icon name="activity" size={18} /> Entraînement</h2>
         <div class="ready">
           <div class="ready-head">
@@ -1392,6 +1397,8 @@
 
         <details class="advanced" bind:open={advanced}>
           <summary>Réglages avancés</summary>
+          {#if advanced}
+          <div in:fadeIn>
           <div class="modes">
             {#each MODES as m}
               <button class="mode" class:sel={mode === m.id} on:click={() => (mode = m.id)}>
@@ -1425,6 +1432,8 @@
             </span>
           </span>
         </label>
+          </div>
+          {/if}
         </details>
         <!-- Outside the label: a button inside one would be a second control it
              labels, and a click on it would tick the box. -->
@@ -1459,7 +1468,7 @@
         </div>
 
         {#if training}
-          <div class="progress"><i style={`width:${pct(progress)}%`}></i></div>
+          <div class="progress"><i style={`--p:${pct(progress) / 100}`}></i></div>
         {/if}
         {#if trainError}
           <div class="banner bad"><Icon name="alert" size={16} /><span>{trainError}</span></div>
@@ -1499,8 +1508,10 @@
               </div>
             {/if}
 
-            <details class="details">
+            <details class="details" bind:open={detailOpen}>
               <summary>Détails{h_more(head)}</summary>
+            {#if detailOpen}
+            <div in:fadeIn>
             <div class="scores">
               <div class="score">
                 <span class="k">Justesse équilibrée</span>
@@ -1664,6 +1675,8 @@
                 </div>
               {/if}
             </div>
+            </div>
+            {/if}
 
             </details>
 
@@ -1725,7 +1738,7 @@
           <div class="relabel">
             {#if relabel.running}
               <div class="progress">
-                <i style={`width:${pct(relabel.total ? relabel.scanned / relabel.total : 0)}%`}></i>
+                <i style={`--p:${pct(relabel.total ? relabel.scanned / relabel.total : 0) / 100}`}></i>
               </div>
               <span class="muted small">
                 Application à la bibliothèque… {relabel.scanned} / {relabel.total} titres
@@ -1749,7 +1762,7 @@
         {/if}
       </section>
 
-      <section class="card">
+      <section class="card" in:fadeIn>
         <h2><Icon name="share" size={18} /> Partager le modèle</h2>
         <p class="sub muted">
           Un fichier avec vos genres, vos étiquettes et le modèle actif. Sur un autre
@@ -1821,7 +1834,7 @@
           <div class="relabel">
             {#if shareJob.running}
               <div class="progress">
-                <i style={`width:${pct(shareJob.total ? shareJob.done / shareJob.total : 0)}%`}></i>
+                <i style={`--p:${pct(shareJob.total ? shareJob.done / shareJob.total : 0) / 100}`}></i>
               </div>
             {/if}
             <span class="muted small">
@@ -1932,6 +1945,11 @@
     display: flex;
     align-items: center;
     gap: 7px;
+    /* The active tab is an underline, so the colour IS the indicator: it walks
+       over the instant token instead of snapping (I3's border variant). */
+    transition:
+      color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .tab.sel {
     color: var(--text, #f2f3f5);
@@ -2000,7 +2018,7 @@
     background: var(--surface-2, #1b1d21);
     border-radius: 12px;
     padding: 8px 10px;
-    transition: opacity 0.15s;
+    transition: opacity var(--dur-instant) var(--ease-standard);
   }
   .row-actions {
     display: flex;
@@ -2167,7 +2185,9 @@
     background: var(--surface-2, #1b1d21);
     border-radius: 12px;
     opacity: 0.75;
-    transition: opacity 0.15s, box-shadow 0.15s;
+    /* A box-shadow is never eased (M1): the "on" state paints its ring at
+       once, the dimming walks. */
+    transition: opacity var(--dur-instant) var(--ease-standard);
   }
   .preview-bar.on {
     opacity: 1;
@@ -2269,7 +2289,9 @@
     place-items: center;
     background: rgba(8, 8, 10, 0.72);
     color: #fff;
-    transition: transform 0.16s, background 0.16s;
+    transition:
+      transform var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .art:hover .play-badge,
   .art:focus-visible .play-badge {
@@ -2321,6 +2343,10 @@
     color: inherit;
     cursor: pointer;
     opacity: 0.72;
+    transition:
+      opacity var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard);
   }
   .sortbar button:hover {
     opacity: 1;
@@ -2602,7 +2628,7 @@
     padding: 13px 15px;
     margin: 0 0 14px;
     cursor: pointer;
-    transition: border-color 0.15s ease;
+    transition: border-color var(--dur-instant) var(--ease-standard);
   }
   .option.on {
     border-color: color-mix(in srgb, var(--accent, #22d3ee) 55%, var(--border, #2a2d33));
@@ -2639,11 +2665,15 @@
     overflow: hidden;
     margin: 14px 0;
   }
+  /* Job progress fills by transform (I8/M1): width would be a layout a frame. */
   .progress i {
     display: block;
+    width: 100%;
     height: 100%;
     background: var(--accent, #22d3ee);
-    transition: width 0.25s;
+    transform-origin: left center;
+    transform: scaleX(var(--p, 0));
+    transition: transform var(--dur-base) linear;
   }
 
   .results {
@@ -2828,21 +2858,9 @@
     border-color: #14532d;
     color: #86efac;
   }
-  .progress.indet i {
-    width: 35%;
-    animation: ext-slide 1.1s ease-in-out infinite;
-  }
-  @keyframes ext-slide {
-    0% {
-      margin-left: 0;
-    }
-    50% {
-      margin-left: 65%;
-    }
-    100% {
-      margin-left: 0;
-    }
-  }
+  /* The indeterminate bar (an abandoned `ext-slide` keyframe pair lived here)
+     is GenreExtractor's own `.bar.indet`, which says `data-motion="status"` —
+     a job that is running must keep moving in eco (M13). */
 
   /* -- buttons ------------------------------------------------------------- */
   .icon-btn {
@@ -3042,7 +3060,10 @@
     color: var(--text);
     text-align: left;
     overflow: hidden;
-    transition: border-color 0.12s, background 0.12s, transform 0.08s;
+    transition:
+      border-color var(--dur-instant) var(--ease-standard),
+      background-color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
   }
   .pick:hover {
     border-color: var(--c);
@@ -3315,4 +3336,18 @@
   .r-bar b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text-dim, #9aa0a6); opacity: 0.7; }
   .r-bar.wide { flex: 1 1 120px; max-width: 220px; }
   .r-n { text-align: right; font-variant-numeric: tabular-nums; }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    .tab,
+    .sortbar button,
+    .tag-row,
+    .preview-bar,
+    .play-badge,
+    .option,
+    .pick {
+      transition: none;
+    }
+  }
 </style>

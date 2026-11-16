@@ -112,7 +112,9 @@
     color: var(--text-dim);
     white-space: nowrap;
     flex: 1 1 auto;
-    transition: background 0.15s, color 0.15s;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   @media (max-width: 480px) {
     .seg {
@@ -150,6 +152,11 @@
     font-size: 0.84rem;
     font-weight: 600;
     max-width: 100%;
+    /* A pick is colour (M6/I5), and the chip is a frequent control. */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .chip span {
     overflow: hidden;
@@ -168,5 +175,13 @@
   .none {
     font-size: 0.82rem;
     padding: 6px 2px;
+  }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    button {
+      transition: none;
+    }
   }
 </style>

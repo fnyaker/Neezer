@@ -7,6 +7,7 @@
   // (styleFamilies in StylePicker.svelte), so both screens say the same thing.
   import { onMount, createEventDispatcher } from "svelte";
   import { grooveBackground, STYLE_FALLBACK } from "../lib/sillon.js";
+  import { fadeIn } from "../lib/motion.js";
   import { styleFamilies, loadStyleRows } from "./StylePicker.svelte";
 
   const TILES = 8;
@@ -35,7 +36,7 @@
 </script>
 
 {#if tiles.length}
-  <section class="genres">
+  <section class="genres" in:fadeIn>
     <h2 class="section-title">Parcourir par style</h2>
     <div class="tiles">
       {#each tiles as g (g.name)}
@@ -88,6 +89,9 @@
     text-align: left;
     content-visibility: auto;
     contain-intrinsic-size: auto 124px;
+    /* A tile's hover is colour (M1/M6), never a lift a 4-column grid has to
+       re-layout for. */
+    transition: border-color var(--dur-instant) var(--ease-standard);
   }
   .art {
     position: absolute;
@@ -102,6 +106,7 @@
     width: 100%;
     padding: 10px 14px 12px;
     background: var(--s1);
+    transition: background-color var(--dur-instant) var(--ease-standard);
   }
   .name {
     font-family: var(--font-display);
@@ -134,6 +139,15 @@
     }
     .name {
       font-size: 19px;
+    }
+  }
+  /* app.css already neutralises .btn/.chip/.card/.pill under reduced motion:
+     a change of colour is feedback, not a fade, and the OS asked for stillness
+     (M14 — reduce, keep the meaning: the colour still changes, at once). */
+  @media (prefers-reduced-motion: reduce) {
+    .tile,
+    .cap {
+      transition: none;
     }
   }
 </style>

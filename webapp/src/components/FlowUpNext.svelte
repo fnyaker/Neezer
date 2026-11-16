@@ -3,11 +3,12 @@
   // title is not missing, it is chosen late on purpose (lib/flow.js).
   import { player } from "../lib/stores.js";
   import { flowLive, PICK_AHEAD } from "../lib/flow.js";
+  import { swap } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 </script>
 
 {#if $flowLive && $player.index === $player.queue.length - 1}
-  <p class="upnext">
+  <p class="upnext" in:swap>
     <Icon name="sparkles" size={16} />
     <span>Le titre suivant est choisi {PICK_AHEAD} s avant la fin, d'après ce que vous écoutez.</span>
   </p>
