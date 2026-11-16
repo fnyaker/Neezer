@@ -6,8 +6,8 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D13, D14a, D14b, M1, T1 and
-V1 delivered; the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D13, D14a, D14b, M1, P1, T1
+and V1 delivered; the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1748,18 +1748,89 @@ Waves that can run in parallel (disjoint files):
   0 underruns and UI p95 frame time unchanged within 10 % (measure both with and without the job);
   a local transcript shows in the panel and is searchable.
 
-### P1 — Arch packaging and release
+### P1 — Arch packaging and release (delivered 2026-11-16)
 
-- **Files**: `desktop/packaging/arch/{PKGBUILD,neezer-desktop.desktop,neezer-desktop.svg}`,
-  `.github/workflows/release.yaml` (a job that builds the package in `archlinux:latest` and
-  attaches `neezer-desktop-<ver>-x86_64.pkg.tar.zst` on `v*` tags).
-- **Contract**: `makedepends=(rust cargo cmake clang vulkan-headers shaderc)`, `depends=(pipewire
-  libxkbcommon wayland vulkan-icd-loader fontconfig freetype2 dbus)`, `optdepends=('vulkan-radeon:
-  transcription GPU AMD' 'vulkan-intel: transcription GPU Intel' 'nvidia-utils: transcription GPU
-  NVIDIA')`; `prepare()` `cargo fetch --locked --target host-tuple`; `build()` `cargo build --frozen
-  --release`; installs both binaries, the `.desktop` (`StartupWMClass=neezer-desktop`) and the icon.
-- **Acceptance**: `makepkg -si` on this machine installs it, it appears in the Omarchy launcher, and
-  `namcap` reports no error.
+- **The rule**: the app ships as ONE Arch package, `neezer-desktop`, built from the tree it lives in.
+  `desktop/` links `webapp/rhythm`, `webapp/appcore` and `android/nscore` by path, so there is no
+  source tarball to point `source=(...)` at: the PKGBUILD follows the Omarchy apps' convention
+  (`source=()`, `build()` builds the checkout) and the release job checks the `v*` tag out before
+  running `makepkg`, so the artefact always comes from the tagged tree. `prepare()` is the ArchWiki
+  Rust guideline verbatim (`cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"`),
+  `build()` is `cargo build --frozen --release` into `$srcdir/target` under
+  `RUSTUP_TOOLCHAIN=stable`, and the tag's version reaches `pkgver` through
+  `NEEZER_DESKTOP_VERSION` (`v1.3.1` → `1.3.1`): a tag can never ship a package named after the
+  workspace's 0.1.0.
+- **The rule, `!lto` is load-bearing**: makepkg's default `lto` option appends `-flto=auto` to
+  `CFLAGS`/`CXXFLAGS`/`LDFLAGS` (`/usr/share/makepkg/buildenv/lto.sh`), which turns whisper.cpp's
+  and aws-lc's static archives into GCC LTO bitcode; `rust-lld` cannot read it and drops every C
+  object, so the link fails on `undefined symbol: aws_lc_0_47_0_AES_set_encrypt_key` /
+  `whisper_full_n_segments_from_state` (measured twice, once per binary). `options=('!debug' '!lto')`
+  — the ArchWiki's "mixed Rust/C/C++ project" case; the Rust half keeps its own thin LTO.
+- **The rule, `depends` follow `ldd`, not the plan**: `neezer-desktop` links `libpipewire`,
+  `libasound`, `libxcb`, `libxkbcommon` and `libxkbcommon-x11`, and `neezer-transcribe` links
+  `libvulkan`; `dbus` is not needed at all (zbus speaks the D-Bus wire protocol), and `fontconfig`
+  is a **build** dependency only — `yeslogic-fontconfig-sys` asks pkg-config for `fontconfig.pc`
+  (freetype2 comes with it) but rustc's `--as-needed` drops `libfontconfig` from the linked binary,
+  so `ldd` is clean and it belongs in `makedepends`. `namcap`'s `E:` lines named exactly the two
+  MISSING runtime packages (`libxcb`, `libxkbcommon-x11`) and a third (`hicolor-icon-theme`, for the
+  icon hierarchy); `wayland` is dlopen'ed by `wayland-sys` (absent from `ldd`, called "may not be
+  needed" by namcap) and stays, with the reason in the PKGBUILD. `cargo` is not an Arch package name
+  either — `rust` provides it — so only `rust` is in `makedepends`: naming both makes `makepkg -si`
+  stop on "two providers available for cargo" on a machine that has neither yet.
+- **The rule, one artefact**: `!debug` in `options` (the Rust profile already strips), so the release
+  attaches exactly `neezer-desktop-<ver>-x86_64.pkg.tar.zst`.
+- **What it is now**: `desktop/packaging/arch/PKGBUILD` (both binaries, the `.desktop`, the icon, the
+  licence; `package()` installs `neezer-transcribe` beside `neezer-desktop`, which is how T2 finds
+  its child), `neezer-desktop.desktop` (`StartupWMClass=neezer-desktop`, the `app_id` of `main.rs`;
+  `Icon=neezer-desktop`, the web app's own mark, so the launcher entry is recognisable) and
+  `neezer-desktop.svg`. `.github/workflows/release.yaml` gains an `arch` job: `archlinux:latest`,
+  the declared `makedepends` + `depends` installed first (a typo in `depends` fails there),
+  `makepkg` as an ordinary user (it refuses root), `desktop-file-validate`, `namcap` on the package
+  AND the PKGBUILD with `E:` lines failing the job, the artefact uploaded and attached on `v*` only.
+  Like `android.yaml`, the job also runs on pull requests touching `desktop/packaging/**`, so this
+  YAML is proven before the first tag instead of by it.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, Omarchy/Arch, makepkg 7.1.0):
+  - `makepkg -f` from an empty `$srcdir`: **8 min 56 s** wall, 33 min 20 s CPU (`CARGO_BUILD_JOBS=4`);
+    the release build inside is 8 min 52 s.
+  - package **28 020 486 B (26.72 MiB)** compressed, **87.16 MiB** installed —
+    `neezer-desktop` 41 716 736 B, `neezer-transcribe` 49 642 888 B.
+  - `namcap` on the package: **0 error**, 8 warnings (two `ld-linux` "unused library" from its
+    known noise, four "implicitly satisfied" — glibc, libgcc, libstdc++, libpipewire — and the
+    `pipewire`/`wayland` "may not be needed" the two comments above explain). `namcap` on the
+    PKGBUILD: nothing. `desktop-file-validate`: clean, before and after installation.
+  - installed binary, first painted frame on an isolated **2560×1600 X server**:
+    **156, 122, 136 ms** (median 136; D7's criterion is 300 ms).
+  - RSS at the login screen: **175 244 kB** at 2560×1600, **175 340 kB** at 1280×800 — an Xvfb X11
+    run, and Mesa says `No DRI3 support detected`, so it is NOT comparable with D7's **103 MB** on
+    Wayland/Hyprland; P1 adds no screen and the packaged binary is D7's code.
+  - `pacman -U -dd` into a throwaway root installs exactly the five paths (two binaries, the
+    `.desktop`, the icon, the licence), and `neezer-transcribe --version` from that root reports the
+    RADV 780M device and `whisper.cpp 1.8.3 (backend vulkan compilé)`.
+  - the `arch` job in CI (`archlinux:latest`, cold container and cold crate cache): **11 min 08 s**
+    end to end, `namcap` gate green, the `files` job correctly skipped on a pull request.
+- **Pitfalls found by building**:
+  - makepkg runs `build()` with the distro's hardening `CFLAGS`/`CXXFLAGS`/`LDFLAGS`, and its `lto`
+    option is what broke the link (see the rule above); the failure looks like a C library problem
+    (`undefined symbol` reported by `rust-lld`), not a flag problem, and it hits BOTH binaries.
+  - A dependency the binary does not link can still be needed to BUILD it: the CI's Arch container
+    stopped at `yeslogic-fontconfig-sys` ("Package 'fontconfig' not found") while `ldd` on this
+    machine was clean, because this machine happens to have fontconfig installed. `fontconfig` is a
+    `makedepend`; a `depends` list checked only with `ldd` says nothing about the build.
+  - `makepkg` refuses to run as root, so a container job needs a `builder` user, a `chown` of the
+    mounted workspace and a `su -` login shell (so cargo finds its registry).
+  - `actions/checkout`'s node runtime works in `archlinux:latest` without installing node, but the
+    image has no `git` until `pacman -Syu` has run: install the build chain BEFORE checkout. Runtime
+    dependencies belong in that same list — it is what proves every `depends` name exists.
+  - `namcap` prints `<pkgname> E: …` and **exits 0 even with errors** (measured): a gate has to
+    grep for `(^| )E:` or it passes every finding.
+  - `makepkg`'s `-debug` subpackage would be a second artefact; `!debug` (plus the profile's
+    `strip = true`) keeps one, and the release glob names `[0-9]` after `neezer-desktop` so it can
+    never pick up a `-debug` package.
+  - The package still contains whisper.cpp's `__FILE__` paths under `$srcdir`
+    (`makepkg` warns `Le paquet contient une référence à $srcdir`): diagnostic strings only, from
+    GGML's logging macros. It is a known cosmetic reproducibility gap, not a defect of the
+    install.
+
 
 ### D17 — The whole journey, measured
 
