@@ -34,6 +34,13 @@ use crate::theme;
 use crate::toast;
 use crate::wiring::events::Receiver;
 
+/// The genre studio's own action: D7 froze `actions.rs` after the shell landed,
+/// and D16 may not add a variant there, so the verb lives next to the one screen
+/// that answers it (the keyboard table and the help overlay read it from here).
+#[derive(Clone, Copy, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = neezer, no_json)]
+pub struct GoGenres;
+
 pub struct RootView {
     state: Entity<AppState>,
     focus: FocusHandle,
@@ -409,6 +416,7 @@ impl Render for RootView {
             }))
             .on_action(cx.listener(|this, _: &GoPodcasts, _, cx| this.go(Route::Podcasts, cx)))
             .on_action(cx.listener(|this, _: &GoReleases, _, cx| this.go(Route::Releases, cx)))
+            .on_action(cx.listener(|this, _: &GoGenres, _, cx| this.go(Route::Genres, cx)))
             .on_action(cx.listener(|this, _: &GoNowPlaying, _, cx| this.go(Route::NowPlaying, cx)))
             .on_action(cx.listener(|this, _: &GoSettings, _, cx| {
                 this.go(
@@ -633,8 +641,9 @@ impl Render for RootView {
         );
         let header = header.child(header_right);
 
+        let genres_active = matches!(self.state.read(cx).current_route(), Some(Route::Genres));
         let active = self.state.read(cx).current_route().and_then(Route::section);
-        let sidebar = sidebar(active, cx).into_any_element();
+        let sidebar = sidebar(active, is_admin, genres_active, cx).into_any_element();
 
         let content = match &self.screen {
             Some((_route, view)) => {
@@ -696,7 +705,12 @@ impl Render for RootView {
     }
 }
 
-fn sidebar(active: Option<Section>, cx: &mut Context<RootView>) -> impl IntoElement + use<> {
+fn sidebar(
+    active: Option<Section>,
+    is_admin: bool,
+    genres_active: bool,
+    cx: &mut Context<RootView>,
+) -> impl IntoElement + use<> {
     let entries = [
         Section::Home,
         Section::Search,
@@ -719,7 +733,9 @@ fn sidebar(active: Option<Section>, cx: &mut Context<RootView>) -> impl IntoElem
         .border_color(theme::border(cx))
         .bg(theme::sidebar(cx));
     for section in entries {
-        let selected = active == Some(section);
+        // Genres is not one of `Section`'s entries (that enum predates D16), so
+        // its own row carries the active state and Releases steps back.
+        let selected = active == Some(section) && !(genres_active && section == Section::Releases);
         let icon_name = match section {
             Section::Home => IconName::House,
             Section::Search => IconName::Search,
@@ -765,6 +781,39 @@ fn sidebar(active: Option<Section>, cx: &mut Context<RootView>) -> impl IntoElem
                 .child(icon(icon_name).size(rems(1.125)))
                 .child(div().child(section.title())),
         );
+        if section == Section::Releases && is_admin {
+            column = column.child(
+                div()
+                    .id("nav-Genres")
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.625))
+                    .h(rems(2.))
+                    .px(rems(0.625))
+                    .border_l_1()
+                    .border_color(if genres_active {
+                        theme::accent(cx)
+                    } else {
+                        theme::sidebar(cx)
+                    })
+                    .bg(if genres_active {
+                        theme::selected(cx)
+                    } else {
+                        theme::sidebar(cx)
+                    })
+                    .text_color(if genres_active {
+                        theme::text(cx)
+                    } else {
+                        theme::secondary(cx)
+                    })
+                    .text_size(rems(0.8125))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::selected(cx)).text_color(theme::text(cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.go(Route::Genres, cx)))
+                    .child(icon(IconName::Tag).size(rems(1.125)))
+                    .child(div().child("Genres")),
+            );
+        }
     }
     column = column.child(div().flex_1());
     column.child(
