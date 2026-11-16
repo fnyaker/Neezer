@@ -10,6 +10,9 @@
   import EnergyPicker from "./EnergyPicker.svelte";
   import ResumeCard from "./ResumeCard.svelte";
   import DiscoverySlider from "./DiscoverySlider.svelte";
+  // I10: the discovery panel is the hero's one "suggestion" that can swap in —
+  // it enters (M7), and the Flow button's glyph is replaced in place (swap).
+  import { fadeIn, swap } from "../lib/motion.js";
 
   // The prototype's copy, kept word for word: it is the home's masthead, not a
   // clock. The date under it is the real one.
@@ -53,9 +56,13 @@
       <div class="go">
         <button class="flow" on:click={playFlow} disabled={flowLoading}>
           {#if flowLoading}
-            <Icon name="refresh" size={15} />
+            <span class="glyph spin" in:swap data-motion="status">
+              <Icon name="refresh" size={15} />
+            </span>
           {:else}
-            <Icon name="play" size={15} />
+            <span class="glyph" in:swap>
+              <Icon name="play" size={15} />
+            </span>
           {/if}
           Lancer le Flow
         </button>
@@ -73,7 +80,7 @@
     <ResumeCard />
   </div>
   {#if tuneOpen}
-    <div class="tune-panel">
+    <div class="tune-panel" in:fadeIn>
       <DiscoverySlider />
     </div>
   {/if}
@@ -150,6 +157,27 @@
     font-size: 15px;
     font-weight: 700;
     white-space: nowrap;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      opacity var(--dur-instant) var(--ease-standard);
+  }
+  /* The glyph is its own box so a `swap` can move it (a transform never
+     applies to an inline box), and the loading one spins on ITSELF: an
+     animation on a child would be the element the eco guard stops. */
+  .glyph {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 15px;
+    height: 15px;
+  }
+  .glyph.spin {
+    animation: hero-spin 0.9s linear infinite;
+  }
+  @keyframes hero-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .flow:hover:not(:disabled) {
     background: color-mix(in srgb, var(--onac) 88%, var(--ac));
@@ -176,6 +204,9 @@
     font-size: 12.5px;
     font-weight: 600;
     white-space: nowrap;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .tune:hover {
     background: color-mix(in srgb, var(--onac) 12%, transparent);

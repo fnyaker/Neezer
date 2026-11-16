@@ -2,11 +2,18 @@
   import { duration as fmtDuration } from "../lib/format.js";
   import { highlightParts } from "../lib/transcript.js";
   import Cover from "./Cover.svelte";
+  // I10/I6: the passages are a block that arrives after a search — it enters
+  // ONCE per visit, and `reveal` is what says so: Search re-answers the same
+  // term on every settled keystroke, and fading the list each time is exactly
+  // what M6 forbids.
+  import { fadeIn } from "../lib/motion.js";
 
   export let hits = [];
   export let query = "";
   export let showChannel = false;
   export let onPick = null;
+  /** Arm this block's entrance (Search arms it for the first answer of the visit). */
+  export let reveal = true;
 
   function pickup(hit) {
     if (onPick) onPick(hit);
@@ -27,7 +34,7 @@
   }
 </script>
 
-<div class="hits" use:spaceKeys>
+<div class="hits" use:spaceKeys in:fadeIn={reveal ? undefined : { duration: 0 }}>
   {#each hits as hit, i (hit.episode_id + ":" + hit.start + ":" + i)}
     {@const title = hit.episode?.title || hit.episode_title || "Épisode"}
     {@const channel = hit.channel_title || hit.episode?.channel_title || ""}
