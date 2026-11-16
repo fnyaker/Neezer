@@ -5,11 +5,27 @@
   // every layout and over the full-screen views too: the owner never has to go
   // looking for a way to take their player back. One tap cuts every link onto
   // this device (the sheet, one tap away on the chip itself, cuts one at a time).
-  import { fly } from "svelte/transition";
+  //
+  // Motion (F5/P23): `rise` from below like the remote banner, its `pulse` dot
+  // marked as a status indicator (M13: "someone is driving" must still say so in
+  // eco), and the same fade when opening the player moves the chip to the top —
+  // the class flips at once, the fade only hides the jump.
+  import { afterUpdate } from "svelte";
+  import { rise, animate, DUR, EASE_CSS, MOVE } from "../lib/motion.js";
   import { openRemoteSheet, toasts, immersiveOpen } from "../lib/stores.js";
   import { remoteHost, cutAll } from "../lib/remote/hoststate.js";
   import { LEVEL_INFO } from "../lib/remote/mode.js";
   import Icon from "./Icon.svelte";
+
+  let chipEl = null;
+  const anchor = { top: null };
+  afterUpdate(() => {
+    if (!chipEl) return;
+    if (anchor.top === $immersiveOpen) return;
+    const moved = anchor.top !== null;
+    anchor.top = $immersiveOpen;
+    if (moved) animate(chipEl, [{ opacity: 0 }, { opacity: 1 }], { duration: DUR.fast, easing: EASE_CSS.enter });
+  });
 
   let cutting = false;
 
@@ -42,9 +58,9 @@
 {#if shown}
   <!-- Over the full-screen views it moves to the top: at the bottom it would
        sit on the transport, exactly where the thumb is. -->
-  <div class="chip" class:top={$immersiveOpen} transition:fly={{ y: 12, duration: 180 }} role="status">
+  <div class="chip" class:top={$immersiveOpen} transition:rise={{ y: MOVE.m }} bind:this={chipEl} role="status">
     <button class="who" on:click={openRemoteSheet} title="Gérer le contrôle à distance">
-      <span class="dot" aria-hidden="true"></span>
+      <span class="dot" aria-hidden="true" data-motion="status"></span>
       <Icon name="remote" size={15} />
       <span class="txt">
         <span class="l1">Contrôlé par {who}</span>

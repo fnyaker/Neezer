@@ -6,20 +6,15 @@
   // A mutation that failed carries a "Réessayer" action (built by the action
   // helper that made the call), so the retry is one tap away instead of a
   // reopened sheet. `role="status"` + aria-live announce it politely.
-  import { onMount } from "svelte";
-  import { fly } from "svelte/transition";
+  //
+  // The motion is `lib/motion.js#rise` (F1): 8 px from the side it belongs to,
+  // 200 ms in and 140 ms out, and never anything at all in eco mode — the
+  // module's level decides, so this file has no matchMedia of its own. The
+  // stack reorders through `flipSmall`, which is allowed here because a screen
+  // never holds more than a handful of toasts (M4: ≤ 5).
+  import { rise, flipSmall, MOVE } from "../lib/motion.js";
   import { toasts, playlistPicker } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
-
-  let reduce = false;
-  onMount(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    reduce = mq.matches;
-    const onChange = () => (reduce = mq.matches);
-    mq.addEventListener?.("change", onChange);
-    return () => mq.removeEventListener?.("change", onChange);
-  });
 
   // A toast born over the playlist sheet goes to the TOP: at the bottom it
   // landed on "Terminé", the very button the person presses next (seen at
@@ -35,7 +30,10 @@
     for (const t of list) if (!(t.id in anchored)) anchored[t.id] = !!picker;
   }
 
-  const slide = () => (reduce ? { y: 0, duration: 0 } : { y: 16, duration: 180 });
+  // Where the toast comes from: the side it sits on (`anchorTop` is the top of
+  // the screen, so −8 px), and never a `duration: 0` branch of its own — the
+  // level in lib/motion.js already gives eco the instant path.
+  const slide = () => ({ y: anchorTop ? -MOVE.m : MOVE.m });
 
   function act(t) {
     toasts.dismiss(t.id);
@@ -49,22 +47,32 @@
 
 <div class="toasts" class:top={anchorTop} role="status" aria-live="polite">
   {#each $toasts as t (t.id)}
-    {#if t.action}
-      <div class="toast {t.kind} with-action" transition:fly={slide()}>
-        {#if t.kind === "error"}
-          <span class="lead" aria-hidden="true"><Icon name="alert" size={14} /></span>
-        {/if}
-        <span class="msg">{t.message}</span>
-        <button type="button" class="act" on:click={() => act(t)}>{t.action.label}</button>
-      </div>
-    {:else}
-      <button type="button" class="toast {t.kind}" transition:fly={slide()} on:click={() => toasts.dismiss(t.id)}>
-        {#if t.kind === "error"}
-          <span class="lead" aria-hidden="true"><Icon name="alert" size={14} /></span>
-        {/if}
-        <span class="msg">{t.message}</span>
-      </button>
-    {/if}
+    <!-- The slot carries BOTH directives, and that is load-bearing: Svelte's
+         local rule only plays an intro whose own block has already run, so a
+         `transition:` on one of the two pills below (inside their `{#if}`) would
+         never play at all — measured: `Element.prototype.animate` was never
+         called. On the each item's own root (this div, the only child of the
+         keyed block) the rise plays, and `flipSmall` still moves the slot when
+         the stack closes a gap. The pill inside is unchanged and unstyled
+         here. -->
+    <div class="tslot" transition:rise={slide()} animate:flipSmall>
+      {#if t.action}
+        <div class="toast {t.kind} with-action">
+          {#if t.kind === "error"}
+            <span class="lead" aria-hidden="true"><Icon name="alert" size={14} /></span>
+          {/if}
+          <span class="msg">{t.message}</span>
+          <button type="button" class="act" on:click={() => act(t)}>{t.action.label}</button>
+        </div>
+      {:else}
+        <button type="button" class="toast {t.kind}" on:click={() => toasts.dismiss(t.id)}>
+          {#if t.kind === "error"}
+            <span class="lead" aria-hidden="true"><Icon name="alert" size={14} /></span>
+          {/if}
+          <span class="msg">{t.message}</span>
+        </button>
+      {/if}
+    </div>
   {/each}
 </div>
 
@@ -87,6 +95,13 @@
   .toasts.top {
     top: calc(env(safe-area-inset-top, 0px) + 16px);
     bottom: auto;
+  }
+  /* The flip's box: no width, height, gap or margin of its own, so the stack
+     lays out exactly as the pills did. */
+  .tslot {
+    display: flex;
+    justify-content: center;
+    max-width: 100%;
   }
   .toast {
     pointer-events: auto;
