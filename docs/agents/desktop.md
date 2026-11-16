@@ -1043,8 +1043,11 @@ Waves that can run in parallel (disjoint files):
 - **The rule, fallback**: the ladder is observed, never guessed — device list → whisper context with
   `use_gpu(true)` → a one-second silent decode (the first GPU call compiles whisper.cpp's shaders),
   once per process; a failure at any rung falls back to the CPU with `gpu_init_failed`, or
-  `gpu_out_of_memory` when the model is bigger than the device's free VRAM. **Vulkan 45.0× real time
-  against CPU …× on the same 330 s** (`ggml-base`, warm, best of two passes).
+  `gpu_out_of_memory` when the model is bigger than the device's free VRAM. **Vulkan 72.2× real time
+  against CPU 13.1× on the same 330 s** (`ggml-base`, warm, best of two passes, measured here:
+  Vulkan 4.57 s, CPU 25.18 s and 13.3× on the CPU-seconds it spent). The same GPU run measured
+  **45.0×** while the machine was at load 25: a CPU starved of cores cannot feed the 780M, which is
+  why the CPU half is scored on its CPU-seconds and the GPU number is quoted with its load.
 - **The rule, VAD**: **`FullParams::enable_vad` is a NO-OP in whisper-rs 0.16.** `WhisperState::full`
   calls `whisper_full_with_state`, and whisper.cpp 1.8.3 only runs VAD in `whisper_full` /
   `whisper_full_parallel` (read in `whisper-rs-sys-0.15.0/whisper.cpp/src/whisper.cpp`: lines 7750
@@ -1063,6 +1066,13 @@ Waves that can run in parallel (disjoint files):
   at 44,1 kHz), M4A **5000**, Ogg Opus **5000**, FLAC **5000** — the criterion is ±50 ms. A window
   (`decode_range`) keeps an hour-long episode's memory to the window, which is how T3 gives the
   engine one 600 s chunk.
+- **The rule, a window is `ms × 16` samples, never `ms`:** `decode_range` passed milliseconds where
+  the collector counts 16 kHz samples, so a 600 s chunk decoded **13.6 s** of audio and every
+  transcript after the first was shifted in silence, with no error. T3 found it on a real file:
+  `(5000, 1000)` of a 3 s file returned **16 000 samples instead of 0**. The tests now pin both
+  halves — a window past the end is 0 samples, and a middle window is `samples[2000×16 .. 2500×16]`
+  of the whole decode and says 880 Hz where the file says 440 Hz before 2 s — on WAV, MP3, M4A, Ogg
+  Opus and FLAC.
 - **The contract T3 consumes**: `neezer-transcribe engine --pcm <raw f32le 16k mono> --model …
   --lang … --out …` writes `engine::Document`, i.e. whisper's own `-oj` keys
   (`result.language`, `transcription[].offsets/text`) plus `backend`, `device`, `reason`, `model`;
@@ -1079,10 +1089,11 @@ Waves that can run in parallel (disjoint files):
   SHA-256 written here (the workspace has no hashing dependency) and held to the FIPS 180-4 vectors
   including the million-`a` case.
 - **Measured** (this machine: 16 threads, Rust 1.99.1, RADV 780M; `cargo test -p nz-transcribe`):
-  **41 lib tests in 0.38 s**, the **7 acceptance tests in `tests/engine.rs` in 5.5 s** with
+  **43 lib tests in 0.4 s**, the **7 acceptance tests in `tests/engine.rs` in 5.5 s** with
   `ggml-base` (they skip with a printed reason without `NZ_WHISPER_MODEL`/`NZ_WHISPER_AUDIO`, and
   fail if the variable names a missing file, so a broken CI cache cannot pass), and the 2 golden
-  tests. `jfk.wav` gives the **same `transcription` array** on Vulkan and on the CPU.
+  tests. `jfk.wav` gives the **same `transcription` array** on Vulkan and on the CPU, and in CI on
+  `llvmpipe (LLVM 20.1.2, 256 bits)` too.
 - **CI**: the `test` job fetches `ggml-tiny.bin` and `jfk.wav` (at the `v1.8.3` tag this build
   vendors) into an `actions/cache` keyed by their SHA-256, verifies both with `sha256sum -c`, and
   runs the suite with `NZ_REQUIRE_VULKAN=1` so the Vulkan half is proven on `lavapipe` — the
