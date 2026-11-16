@@ -6,9 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): planned, nothing built.** This note is the plan the coding lots follow, in
-order. Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why, number)
-— a delivered lot is not a changelog.
+**Status (2026-11-16): D0 delivered (workspace, pins, CI); D1 onwards planned.** This note is the
+plan the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what
+was learned (rule, why, number) — a delivered lot is not a changelog.
 
 ## The need
 
@@ -78,6 +78,16 @@ Every choice below was checked against several sources and then **built together
   notify-rust). Harmless; do not try to unify them.
 - GPUI renders through wgpu/Vulkan on the SAME GPU whisper uses: transcription must yield to the UI
   too, not only to the audio (see *Transcription*).
+- **Any ggml Vulkan enumeration ABORTS the process when no driver is usable.** `whisper_rs::vulkan::
+  list_devices()` creates a `vk::Instance`; a machine without `vulkan-radeon`/`vulkan-intel`, or
+  `VK_ICD_FILENAMES=/nonexistent`, throws `vk::IncompatibleDriverError` across the FFI boundary and
+  the process is `terminate()`d (SIGABRT, exit 134 — measured). So no `--version`, no `probe`, no
+  startup path may enumerate: T2 keeps it in the `engine` child, where the crash costs one child and
+  becomes the `no_vulkan_device` cause.
+- **whisper-rs-sys's CMake build caches its generated Vulkan shaders** inside its `OUT_DIR`. After an
+  interrupted or concurrently rebuilt graph, the link fails on undefined
+  `mul_mat_vec_id_iq2_s_…_data` / `im2col_3d_f32_f16_bda_len` symbols although the backend is fine:
+  `cargo clean -p whisper-rs-sys` rebuilds them (and a stale CI cache can carry the same state).
 
 ## Architecture
 
@@ -390,45 +400,48 @@ Waves that can run in parallel (disjoint files):
 6. **D10b, D11, D12, D15a, D16** then **T4, D15b**.
 7. **D17**.
 
-### D0 — Workspace and CI
+### D0 — Workspace and CI (delivered 2026-11-16)
 
-- **Goal**: an empty but real workspace that builds, tests and lints in CI, with the system
-  dependencies GPUI, PipeWire and whisper-Vulkan need.
-- **Files**: `desktop/Cargo.toml`, `desktop/Cargo.lock`, `desktop/crates/*/Cargo.toml` +
-  `src/lib.rs` (each crate of the tree above, with one passing test each), `desktop/app/Cargo.toml`
-  + `src/main.rs` (opens an empty gpui-omarchy window titled "Neezer", quits on `Ctrl+Q`),
-  `desktop/crates/nz-transcribe/src/main.rs` (`--version`), `desktop/rustfmt.toml` (edition 2024),
-  `.github/workflows/desktop.yaml`, CLAUDE.md ("Seven workflows" → eight, add `desktop`),
-  [commands.md](commands.md) (desktop commands), this note.
-- **Pins** (workspace `[workspace.dependencies]`): `gpui-kit = { version = "0.7", default-features =
-  false, features = ["assets"] }`, `gpui-omarchy = "=0.2.1"`, `symphonia = { version = "0.6.1",
-  default-features = false, features = ["ogg","flac","mp3","isomp4","aac","opt-simd"] }`,
-  `symphonia-adapter-libopus = "0.3.0"`, `cpal = { version = "0.18.2", features = ["pipewire"] }`,
-  `rtrb = "0.4"`, `rubato = "5"`, `signalsmith-stretch = "0.1"`, `mpris-server = "0.11.0"`,
-  `reqwest = { version = "0.13.5", default-features = false, features = ["rustls","cookies","json",
-  "stream","http2","gzip"] }`, `tokio = { version = "1.54", features = ["rt-multi-thread","macros",
-  "sync","time","fs","process"] }`, `rusqlite = { version = "0.43", features = ["bundled"] }`,
-  `serde = { version = "1", features = ["derive"] }`, `serde_json = "1"`, `directories = "6"`,
-  `whisper-rs = "0.16.0"`, `hound = "3.5"`, `tracing = "0.1"`, `thiserror = "2"`. Keep
-  `[profile.release.package.gpui-pre-macros] debug-assertions = true` (gpui-omarchy's own manifest
-  carries it). Release profile: `lto = "thin"`, `codegen-units = 1`, `strip = true`.
-- **CI** (`desktop.yaml`): triggers on `desktop/**`, `webapp/rhythm/**`, `webapp/appcore/**`,
-  `android/nscore/**`, `neezer/webui/**`, `neezer/api/**`, `neezer/transcribe/**`,
-  `tools/perf_api.py`, the workflow itself. `ubuntu-24.04`; apt: `build-essential clang cmake
-  pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev
-  libvulkan-dev glslc mesa-vulkan-drivers libasound2-dev libpipewire-0.3-dev libdbus-1-dev
-  libfontconfig-dev libfreetype-dev libssl-dev` (verify the list against Zed's
-  `script/linux` and fix what the first run reports); Vulkan headers from
-  `KhronosGroup/Vulkan-Headers` tag `v1.4.333` into `$RUNNER_TEMP/vk/include`, `VULKAN_SDK` pointing
-  there with `lib/libvulkan.so` symlinked (the prototype's recipe); `Swatinem/rust-cache@v2` with
-  `workspaces: desktop`. Jobs: `fmt`, `clippy`, `test`, `build` (release, both binaries, upload as
-  artifact), `audit` (`cargo audit` or `cargo deny check advisories`).
-- **Acceptance**: the workflow green on the PR; `cargo test --workspace` ≥ 9 tests pass;
-  `neezer-desktop` opens and closes (CI runs it under `xvfb-run` / headless with
-  `--self-test-quit-after-first-frame` printing `first_frame_ms=<n>`); release binary sizes in the
-  PR; total CI time written down (target < 15 min warm).
-- **Pitfalls**: see *Pitfalls found by building*. `security.yaml` scans Rust too: read Trivy's and
-  Semgrep's logs.
+- **The rule**: `desktop/` is ONE workspace with ONE committed `Cargo.lock` (887 packages) and every
+  version in `[workspace.dependencies]`; a lot writes `foo = { workspace = true }`, never a version.
+  A crate proves its stack with a test that TOUCHES it, because a manifest alone links nothing that
+  matters: `HostId::PipeWire` fails to compile when cpal loses its feature, and `neezer-transcribe`
+  came out at **324 KB** with whisper.cpp left out of the binary until something called into it — it
+  is **39 MB** now that `system_info()` does.
+- **The rule, window side**: an app-level action is bound GLOBALLY (`KeyBinding::new("ctrl-q", Quit,
+  None)`) and handled by `App::on_action`. A `key_context("Neezer")` on the root view is NOT enough:
+  GPUI looks a keystroke up along the path of the FOCUSED node, and with nothing focused
+  `focus_node_id_in_rendered_frame(None)` returns the dispatch tree's root — above the view — so the
+  binding is never found and `Ctrl+Q` does nothing, silently. Screen bindings (D7) go on an element
+  that `track_focus`es and holds the focus.
+- **What it is now**: nine crates (`nz-model`, `nz-api`, `nz-cache`, `nz-player`, `nz-audio`,
+  `nz-viz`, `nz-mpris`, `nz-transcribe`, `app`), one passing test each and the pins of *Workspace*
+  above; `neezer-desktop` opens a themed window (`--self-test-quit-after-first-frame` prints
+  `first_frame_ms=<n>`) and `neezer-transcribe --version` prints the whisper.cpp build it links.
+  `.github/workflows/desktop.yaml` runs `fmt`, `clippy`, `test` (+ the real window under Xvfb),
+  `build` (release, both binaries, uploaded) and `audit`.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, RADV 780M, Hyprland; CI: `ubuntu-24.04`,
+  Xvfb + lavapipe):
+  - `cargo test --workspace`: **12 tests, 0 failed**; `cargo fmt --all --check` and
+    `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - first painted frame: **94, 96, 97, 97, 101 ms** in release (median 97), 386 ms in debug; CI's
+    debug build under Xvfb/lavapipe: **2 782 ms and 4 728 ms** on two runs — that number says the
+    window paints on a machine with no GPU, it is not a performance target (D7's 300 ms is a release
+    number).
+  - release binaries: `neezer-desktop` **25 545 128 B**, `neezer-transcribe` **39 844 208 B**.
+  - fresh release build 3 min 39 s here; CI **8 min 30 s cold, 6 min 3 s the run after, 2 min 13 s
+    with the Rust cache warm** (warm: fmt 24 s, audit 22 s, clippy 47 s, release 2 min, test 2 min 10 s).
+  - the window is real: `hyprctl clients` → class `neezer-desktop`, title `Neezer`, 1280×800; a
+    `wtype`-injected `Ctrl+Q` exits 0.
+- **What the scanners see of Rust**: Semgrep contributes nothing — its configured packs have no Rust
+  rules (346 rules ran: python, js, kotlin, yaml, json, dockerfile), so the Rust surface is
+  `cargo audit` on the committed lock plus Trivy's cargo scan (0 findings, 0 code-scanning alerts on
+  this lock).
+- **Pitfalls confirmed**: whisper.cpp's CMake `FindVulkan` is what reads `VULKAN_SDK` (Khronos
+  `Vulkan-Headers` v1.4.333 in `$RUNNER_TEMP` with `lib/libvulkan.so` symlinked) — with it the apt
+  list of *D0* above needed nothing added on `ubuntu-24.04`; `xvfb-run` also wants `xauth`; and
+  `cargo test` does NOT build the binaries the launch steps run (`./target/debug/neezer-desktop: not
+  found`, exit 127): one `cargo build --workspace` between the two.
 
 ### D1 — `nz-model` and contract fixtures
 

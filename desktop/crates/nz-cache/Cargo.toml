@@ -1,0 +1,17 @@
+# The local SQLite file: API cache, covers, play cache, downloads, settings,
+# queue snapshot. Owned by D3 (docs/agents/desktop.md, "Caches").
+
+[package]
+name = "nz-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusqlite = { workspace = true }
+directories = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

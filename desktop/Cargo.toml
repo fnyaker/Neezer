@@ -1,0 +1,81 @@
+# The desktop app's workspace: ONE `Cargo.lock` for the whole GPUI + PipeWire +
+# whisper-Vulkan stack, because those crates have to resolve together (two
+# copies of gpui/zbus/wgpu in one binary is not an option, see
+# docs/agents/desktop.md, "Pitfalls found by building").
+#
+# Every pin lives in `[workspace.dependencies]` so the crates cannot drift
+# apart; a lot that needs one adds `foo = { workspace = true }`.
+
+[workspace]
+resolver = "3"
+members = ["app", "crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/fnyaker/Neezer"
+publish = false
+
+[workspace.dependencies]
+# --- UI (Omarchy's own toolkit; the published pair, see the note) -----------
+gpui-kit = { version = "0.7", default-features = false, features = ["assets"] }
+gpui-omarchy = "=0.2.1"
+# --- audio ----------------------------------------------------------------
+symphonia = { version = "0.6.1", default-features = false, features = [
+    "ogg",
+    "flac",
+    "mp3",
+    "isomp4",
+    "aac",
+    "opt-simd",
+] }
+symphonia-adapter-libopus = "0.3.0"
+cpal = { version = "0.18.2", features = ["pipewire"] }
+rtrb = "0.4"
+rubato = "5"
+signalsmith-stretch = "0.1"
+# --- desktop integration ---------------------------------------------------
+mpris-server = "0.11.0"
+# --- HTTP, storage, plumbing ----------------------------------------------
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "rustls",
+    "cookies",
+    "json",
+    "stream",
+    "http2",
+    "gzip",
+] }
+tokio = { version = "1.54", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "fs",
+    "process",
+] }
+rusqlite = { version = "0.43", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+# --- local transcription ---------------------------------------------------
+whisper-rs = "0.16.0"
+hound = "3.5"
+# --- diagnostics -----------------------------------------------------------
+tracing = "0.1"
+thiserror = "2"
+
+# A desktop app is judged on how fast it starts and how small its package is:
+# thin LTO keeps the link time of a wgpu+whisper binary bearable, one codegen
+# unit buys the last few percent, and stripped symbols halve the on-disk size.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# gpui-omarchy's own manifest carries this; without it in OUR workspace the
+# release build of gpui-pre-macros loses its debug assertions and GPUI's macro
+# output stops matching the debug build.
+[profile.release.package.gpui-pre-macros]
+debug-assertions = true

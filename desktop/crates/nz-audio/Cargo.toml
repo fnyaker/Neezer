@@ -1,0 +1,28 @@
+# The audio engine: source, decode, mix (gapless/crossfade), DSP, output, tap.
+# Owned by D5 and D6 (docs/agents/desktop.md).
+#
+# The pinned stack is compiled here on purpose: this crate is what proves, on
+# every push, that cpal finds PipeWire and ALSA, that symphonia's Opus adapter
+# builds its bundled libopus, and that the lock-free ring the output callback
+# is written against works.
+
+[package]
+name = "nz-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpal = { workspace = true }
+symphonia = { workspace = true }
+symphonia-adapter-libopus = { workspace = true }
+rtrb = { workspace = true }
+rubato = { workspace = true }
+signalsmith-stretch = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }

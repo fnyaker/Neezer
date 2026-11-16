@@ -139,6 +139,19 @@ cd webapp && node test/podcast/run.mjs               # a show with chapters and 
                                                      # 0 per segment, 200 lines, a hit seek, 1 poll per 10 s, the 100-chapter sheet,
                                                      # 390/641/1440 and the admin mark/progress card
 
+# Desktop app (GPUI, desktop/): Omarchy Linux only, its own Cargo workspace
+cd desktop && cargo run -p neezer-desktop            # the window (debug); Ctrl+Q quits
+cd desktop && cargo build --release                  # -> target/release/{neezer-desktop,neezer-transcribe}
+cd desktop && cargo test --workspace                 # the workspace suite (what CI runs)
+cd desktop && cargo fmt --all --check
+cd desktop && cargo clippy --workspace --all-targets -- -D warnings
+cd desktop && xvfb-run -a ./target/debug/neezer-desktop --self-test-quit-after-first-frame
+                                                     # headless: prints first_frame_ms=<n> after the first painted
+                                                     # frame, then quits (what the desktop workflow runs)
+cd desktop && cargo run -p nz-transcribe -- --version   # the linked whisper.cpp build (Vulkan included)
+VULKAN_SDK=/path/to/vulkan-headers cargo build -p nz-transcribe   # whisper.cpp's CMake needs the Vulkan HEADERS,
+                                                     # not only the loader (Arch: vulkan-headers + shaderc)
+
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works
 neezer-cli deezer import <deezer-url|track|album|playlist <id>>
