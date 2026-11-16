@@ -9,7 +9,7 @@ des fonctions qui manquent encore.
 
 | Fichier | Rôle |
 |---|---|
-| [`agents/`](agents/) | Les 12 notes d'ingénierie, la référence à jour : règle, pourquoi, chiffre mesuré. |
+| [`agents/`](agents/) | Les 13 notes d'ingénierie, la référence à jour : règle, pourquoi, chiffre mesuré. |
 | [`detachement-deezer.md`](detachement-deezer.md) | Référence livrée : Deezer comme source de sons, plus comme compte à synchroniser (décisions et raisons). |
 | [`multi-provider.md`](multi-provider.md) | Référence livrée (sauf le registre de réglages §13) : plusieurs fournisseurs, une seule bibliothèque, doublons, qualité et accès. |
 | [`playlist-export.md`](playlist-export.md) | Référence de la fonction d'export (Spotify, YouTube Music, Deezer, fichier), à jour. |

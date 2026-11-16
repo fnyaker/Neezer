@@ -52,6 +52,7 @@ specialist reads its own notes, changes only its own files, measures, and return
 | `neezer/deezer/analysis.py`, `beats.py`, `measure.py`, `embedding.py`, `genre*.py` | `audio` (route/DB part: `api`) |
 | `webapp/src/lib/viz/**`, `webapp/rhythm/src/viz*.rs`, `webapp/test/render/**` | `animation` |
 | `android/**`, `webapp/src/lib/native*.js`, `webapp/src/lib/offline.js` native branch | `android` |
+| `desktop/**` (Rust/GPUI desktop app; one lot of [desktop.md](desktop.md) per writer) | primary agent or a coding worker per lot (no dedicated subagent yet) |
 | `tests/**`, `webapp/test/**`, a failing CI test job | `qa` |
 | `Dockerfile`, `docker/**`, `.github/workflows/**`, `docker-compose.yml`, `.dockerignore` | `devops` |
 | auth, sessions, CSRF, CSP, SSRF, uploads, shares, remote/party capabilities, secrets, dependencies | `security` first, then the owner |
