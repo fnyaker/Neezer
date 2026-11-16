@@ -12,7 +12,8 @@
 //! - A `--pcm` file is RAW little-endian `f32`, one channel, 16 kHz, no header
 //!   ([`write_pcm`]/[`read_pcm`]). Its duration is therefore a multiplication
 //!   ([`pcm_duration_ms`]), which is how the supervisor knows how far a chunk
-//!   got without parsing audio.
+//!   got without parsing audio. [`write_pcm_range`] is the supervisor's whole
+//!   side of that seam: it decodes one window of an episode and writes it.
 //! - Everything is mono: the model was trained on one channel, and the server's
 //!   `ffmpeg -ac 1` does the same average (`(l + r) / 2`), so a stereo episode
 //!   transcribes the way it does on the server. A multichannel file keeps its
@@ -85,21 +86,52 @@ pub fn decode_file(path: &Path) -> Result<Vec<f32>, Error> {
 /// the engine one 600 s chunk without holding a three-hour episode's samples.
 /// `duration_ms` is clamped to what the file has.
 pub fn decode_range(path: &Path, start_ms: i64, duration_ms: i64) -> Result<Vec<f32>, Error> {
-    let start = start_ms.max(0) as usize;
+    // BOTH bounds are milliseconds and both decoders count 16 kHz samples. The
+    // multiplication is the whole contract: passing milliseconds as samples read
+    // a 600 s chunk as 13.6 s and shifted every transcript, silently (found by
+    // T3 against a real file, measured: a 3 s file's `(5000, 1000)` window
+    // returned 16 000 samples instead of 0).
+    let skip = (start_ms.max(0) as usize).saturating_mul(FRAMES_PER_MS);
     let limit = if duration_ms < 0 {
         usize::MAX
     } else {
         (duration_ms as usize).saturating_mul(FRAMES_PER_MS)
     };
     if is_wav(path) {
-        decode_wav(path, start, limit)
+        decode_wav(path, skip, limit)
     } else {
         let file = File::open(path).map_err(|error| {
             tracing::warn!("audio {} : {error}", path.display());
             Error::NoAudio
         })?;
-        decode_stream(Box::new(file), start, limit)
+        decode_stream(Box::new(file), skip, limit)
     }
+}
+
+/// Decode `[start_ms, start_ms + length_ms)` of an audio file and write it as a
+/// raw `--pcm` file (little-endian `f32`, 16 kHz mono); return the duration that
+/// was written, in whole milliseconds.
+///
+/// This is the supervisor's one call (T3): it gives `neezer-transcribe engine`
+/// exactly the samples of one chunk and knows, from the returned duration,
+/// whether the file was as long as the chunk it asked for. The window is applied
+/// while decoding ([`decode_range`]), so a three-hour episode costs one chunk.
+pub fn write_pcm_range(
+    audio: &Path,
+    start_ms: u64,
+    length_ms: u64,
+    out: &Path,
+) -> Result<u64, Error> {
+    let samples = decode_range(
+        audio,
+        start_ms.min(i64::MAX as u64) as i64,
+        length_ms.min(i64::MAX as u64) as i64,
+    )?;
+    write_pcm(out, &samples).map_err(|error| {
+        tracing::warn!("pcm {} : {error}", out.display());
+        Error::NoAudio
+    })?;
+    Ok(samples_duration_ms(samples.len()))
 }
 
 /// Decode any container symphonia knows (Ogg Opus, FLAC, MP3, MP4/AAC) to
@@ -207,7 +239,8 @@ fn decode_stream(
     Ok(collector.finish())
 }
 
-/// A WAV file: hound rather than symphonia (see the module doc).
+/// A WAV file: hound rather than symphonia (see the module doc). `skip` and
+/// `limit` are 16 kHz output samples, like [`Collector`]'s window.
 fn decode_wav(path: &Path, skip: usize, limit: usize) -> Result<Vec<f32>, Error> {
     let mut reader = hound::WavReader::open(path).map_err(|error| {
         tracing::warn!("wav {} : {error}", path.display());
@@ -581,6 +614,131 @@ mod tests {
         assert_eq!(pcm_duration_ms(95), 1);
         assert_eq!(samples_duration_ms(16_000), 1000);
         assert_eq!(samples_duration_ms(15), 0);
+    }
+
+    /// A window in milliseconds must land on the samples it names: 2 000 ms into
+    /// a 3 s file is sample 32 000, not sample 2 000. This is the bug T3 found —
+    /// `decode_range` passed milliseconds as samples, so a 600 s chunk decoded
+    /// 13.6 s of audio and every transcript after the first was shifted, with no
+    /// error. Measured before the fix: `(5000, 1000)` on a 3 s file returned
+    /// 16 000 samples instead of 0.
+    #[test]
+    fn a_window_in_milliseconds_lands_on_the_right_samples() {
+        let dir = scratch("window");
+        let path = dir.join("window.wav");
+        // 3 s at 44,1 kHz stereo: 440 Hz for the first 2 s, 880 Hz after, so the
+        // window's CONTENT proves which part of the file it came from.
+        {
+            let spec = hound::WavSpec {
+                channels: 2,
+                sample_rate: 44_100,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&path, spec).expect("create wav");
+            let frames = 44_100 * 3;
+            for frame in 0..frames {
+                let frequency = if frame < 44_100 * 2 { 440.0 } else { 880.0 };
+                let value = (std::f64::consts::TAU * frequency * frame as f64 / 44_100.0).sin();
+                let sample = (value * 20_000.0) as i16;
+                writer.write_sample(sample).expect("left");
+                writer.write_sample(sample).expect("right");
+            }
+            writer.finalize().expect("finalize");
+        }
+
+        let full = super::decode_file(&path).expect("whole file");
+        assert_eq!(full.len(), 3 * 16_000);
+
+        // Past the end: nothing, not a shifted copy of the file.
+        assert!(
+            super::decode_range(&path, 5_000, 1_000)
+                .expect("past the end")
+                .is_empty()
+        );
+
+        // The middle: the same samples the whole decode has there, exactly.
+        let window = super::decode_range(&path, 2_000, 500).expect("window");
+        assert_eq!(window.len(), 500 * 16);
+        assert_eq!(window, full[2_000 * 16..2_500 * 16]);
+
+        // And the content says 880 Hz, where the file says 440 Hz before 2 s: a
+        // sine crosses zero twice per period, so half a second is 440 crossings
+        // at 440 Hz and 880 at 880 Hz (±2 for the phase at the window's edges).
+        let early = super::decode_range(&path, 0, 500).expect("early window");
+        assert_near(zero_crossings(&early), 440, "440 Hz over half a second");
+        assert_near(zero_crossings(&window), 880, "880 Hz over half a second");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// T3's whole side of the PCM seam: decode a window straight into a `--pcm`
+    /// file and report how long it is.
+    #[test]
+    fn a_pcm_range_is_written_and_measured() {
+        let dir = scratch("pcm-range");
+        let path = dir.join("range.wav");
+        {
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&path, spec).expect("create wav");
+            for frame in 0..16_000 * 2 {
+                let value = (std::f64::consts::TAU * 300.0 * frame as f64 / 16_000.0).sin();
+                writer
+                    .write_sample((value * 10_000.0) as i16)
+                    .expect("sample");
+            }
+            writer.finalize().expect("finalize");
+        }
+        let out = dir.join("chunk.pcm");
+        let written = super::write_pcm_range(&path, 500, 1_000, &out).expect("write the range");
+        assert_eq!(written, 1_000);
+        let samples = super::read_pcm(&out).expect("read back");
+        assert_eq!(samples.len(), 16_000);
+        assert_eq!(super::pcm_duration_ms(samples.len() as u64 * 4), written);
+        assert_eq!(
+            samples,
+            super::decode_range(&path, 500, 1_000).expect("same window")
+        );
+        // A window past the end writes nothing and says so.
+        let empty = dir.join("empty.pcm");
+        assert_eq!(
+            super::write_pcm_range(&path, 9_000, 1_000, &empty).expect("past the end"),
+            0
+        );
+        assert!(super::read_pcm(&empty).expect("empty").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A count with the tolerance a phase at a window edge can cost it.
+    fn assert_near(found: usize, expected: usize, what: &str) {
+        assert!(
+            found.abs_diff(expected) <= 2,
+            "{what} : {found} traversées au lieu de {expected}"
+        );
+    }
+
+    /// Zero crossings of a tone, which is its frequency × 2 × seconds at 16 kHz.
+    fn zero_crossings(samples: &[f32]) -> usize {
+        samples
+            .windows(2)
+            .filter(|pair| (pair[0] < 0.0) != (pair[1] < 0.0))
+            .count()
+    }
+
+    /// A scratch directory under the OS temp dir, unique per test.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nz-audio-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch directory");
+        dir
     }
 
     /// A `--pcm` file is exactly the samples it holds: same values, same order,

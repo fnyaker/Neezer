@@ -371,7 +371,8 @@ fn the_engine_child_transcribes_the_same_chunk_as_the_file_command() {
 }
 
 /// An MP3 and an M4A episode decode to the duration they have, in this process,
-/// without `ffmpeg` at runtime: `ffmpeg` only writes the fixtures.
+/// without `ffmpeg` at runtime: `ffmpeg` only writes the fixtures. The same file
+/// is then decoded by window, on every format the crate reads.
 #[test]
 fn an_mp3_and_an_m4a_decode_to_the_right_duration() {
     let dir = scratch("formats");
@@ -426,6 +427,17 @@ fn an_mp3_and_an_m4a_decode_to_the_right_duration() {
         // 16 kHz mono, and nothing padded at the head: the resampler's own delay
         // is dropped, so the first 50 ms carry the tone.
         assert!(samples.iter().take(800).any(|sample| sample.abs() > 0.01));
+        // A window in milliseconds picks the samples it names, and a window past
+        // the end is empty — the bug T3 found, on every format this crate reads.
+        let window = audio::decode_range(&path, 2_000, 500).expect("window");
+        assert_eq!(window.len(), 500 * 16, "{name}");
+        assert_eq!(window, samples[2_000 * 16..2_500 * 16], "{name}");
+        assert!(
+            audio::decode_range(&path, 9_000, 500)
+                .expect("past the end")
+                .is_empty(),
+            "{name}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
