@@ -134,8 +134,9 @@ build a screen from those, never from a literal colour. Rules that cost somethin
 - **Everything above the ground wears ONE glass ladder** (`src/app.css`, *surfaces — the glass
   ladder*; `test/glass.test.mjs` reads the source, `test/glass/run.mjs` measures the pixels). Three
   tints and three blurs, and no component invents a value of its own:
-  **tier 1** `--glass-bg` = 72 % of `--s1`, NO blur — cards/blocks (`.card`, so Réglages, Podcasts
-  and `Card.svelte` all follow), the sidebar, the player bar, the phone's tab bar
+  **tier 1** `--glass-bg` = 72 % of the theme fill (see `--glass-fill` below: `--s1` + 4 % of the
+  accent), NO blur — cards/blocks (`.card`, so Réglages, Podcasts and `Card.svelte` all follow), the
+  sidebar, the player bar, the phone's tab bar
   (`.mobilenav`), the desktop queue column (`.np`), the mobile mini-player card;
   **tier 2** `--glass-bg-2` = 86 % + `blur(var(--glass-blur-2))` (14 px) + `saturate(140 %)` —
   popovers: the contextual menu, the quality list, the sleep/speed/transcript menus, the
@@ -183,6 +184,65 @@ build a screen from those, never from a literal colour. Rules that cost somethin
   **3 values in the whole app** (`none`, `blur(14px) saturate(1.4)`, `blur(22px) saturate(1.45)`).
   Before this change: every one of those surfaces measured `alpha 1`, and `src/` carried 19
   `backdrop-filter` declarations with 7 distinct radii.
+- **The LIGHT on the glass is painted; the lens is not** (`src/app.css`, *the liquid finish*;
+  `test/glass.test.mjs` reads the source, `test/glass/run.mjs` measures the pixels). Apple's material
+  is a stack — a tinted frosted body, a **specular** highlight on the lit edge, a darker **rim**
+  opposite, a depth shadow, then the **lensing** (WWDC 2025 *Meet Liquid Glass*; Gui Rambo's Core
+  Animation teardown: the specular and the dark rim are two separate SDF layers, and the lens is a
+  displacement of the backdrop). The tint and the frost were already the ladder; the finish adds the
+  light with PIXELS, not a pass: two 1 px gradients carried by the surface's own `background`
+  (`--glass-beam-x`, brightest at 12 % of the width, gone by 62 %, a quieter catch at 86 %;
+  `--glass-rim-x` under it) and a **two-layer** shadow (`--glass-shadow`/`-2` = a contact line + one
+  ambient blur; a third 80 px pass was dropped: a viewport-sized blur over a full-bleed sheet is
+  rasterised for no pixel). **The lens is deliberately absent**: `backdrop-filter: url(#…)` is
+  Chromium-only (Safari drops the whole declaration, Firefox ignores the filter), needs a
+  displacement map per surface, and re-samples the captured area every frame — the cost this ladder
+  exists to bound. `test/glass.test.mjs` fails on a `<filter>`, a `filter: url(#…)` or a
+  `backdrop-filter: … url(`.
+  `--glass-fill` is **4 % of the theme's accent mixed into `--s1`** (`--glass-tint-ac`), so Pochette's
+  glass takes the sleeve's colour and a custom accent tints the glass too — without becoming a
+  coloured pane (every composite is still held to ≥ 4.5:1).
+  Every tier paints it: `.card`/`.glass-1` and the desktop player's side card, `.menu`, `.sheet`,
+  `.dialog`, the **top bar's lower rim** (a sticky bar's only visible edge), the **sidebar's right
+  edge** (`--glass-beam-y`), the **player bar's top edge**, the phone's **thumb-row doors** and its
+  swipe-up door (34 %/26 % clear glass on the frosted sleeve — no filter, and an INSET ring so the
+  five 44 px targets still fit a 360 px phone), the queue's accent action `.ql .qsave` (from app.css,
+  since `QueueList.svelte` is another agent's file) and the queue's hover (`--ql-hover`). `.field` is
+  a WELL instead (a dark line above, a light one below).
+  **The material arrives instead of appearing**: `@starting-style` makes a menu's/sheet's first style
+  a clear pane and `transition: background-color 160 ms` walks the tint in — no keyframes, no timer,
+  and gone under `prefers-reduced-motion`.
+  **Eco and reduced transparency turn the light off with the blur**: `--glass-hi`/`--glass-lo` become
+  `transparent` (not `none`: the four `background` declarations that compose the beams must stay
+  valid) and the shadows `none`.
+  A **sheet that sits on a photograph** takes the thick step: the phone player's full-bleed queue and
+  lyrics panels are `.sheet.on-photo` → `--glass-bg-strong` (93 %), because the page's own scrim is
+  not under them — tier 3's 86 % measured **4.17:1** for the À propos panel's 11 px `--dim` labels
+  over a white-ish cover, 93 % gives **5.18:1** — and they cast no shadow (nothing to cast onto).
+  **The visualizer strip is never veiled**: `--ac-text` is its one flat colour (the animation agent's
+  contract), so `.viz` carries NO `opacity`/`filter` in either player — at 0.9 the accent was
+  measured `#a9cd33` for `#d2ff3c` on Encre and `#41413b` for `#14130f` on Papier, with **0 %** of the
+  bars' pixels the accent and 7–12 % the blend.
+  Every card is a `role="button"` with **`aria-haspopup="menu"`** (it opens the shared context menu
+  on right-click, long press and Maj+F10; `stores.js#openMenu` returns the focus to it), and the
+  attribute adds no focusable and no second target — measured 36/36 cards, one target each, Escape
+  from a keyboard-opened menu lands back on the card with its focus ring.
+  Measured (`test/glass/run.mjs`, 3 themes × 1280×900 and 390×900, **57 surfaces**): the catch is
+  **+27.6 / +21.1 / +30.6 / +34.6 / +30.7 / +23.0 over 255** above the trough (card, menu, sheet, side
+  card, phone door), with **+10 to +14 within the same 1 px row** (a uniform border cannot fake that)
+  and **0/255 in eco**; the surfaces this lot adds measure the phone's doors **6.28:1**, the player's
+  queue sheet **5.70:1**, the À propos panel **5.18:1** and the desktop side card **6.44:1**; 1
+  `backdrop-filter` + the ground's image with one overlay open, 3 values in the app, 0 in eco.
+  Cost: the finish is background paint, not a pass — an interleaved A/B (four passes over the same
+  menu opens at 4× CPU under SwiftShader) puts the beams, the shadow and the tint's arrival inside
+  the noise of the bare material (medians **49.5–53.5 ms** against **50.0** for the whole open), and
+  the bench's own paired numbers stay where they were: the blur of a sheet **under 30 ms**, of a menu
+  **under 10 ms**; the card grid scrolls at **16.7 ms** a frame on the phone and 16.7–33.3 on the
+  desktop, long tasks **59–170 ms** over the run. The bench's two known
+  environment flaws are written down where they happen: the top bar's text sits in an opaque field
+  (its tint is not comparable, so only its contrast is asserted), and headless SwiftShader drops a
+  `backdrop-filter` layer for a few frames now and then (measured: three opens in a row out of
+  sixteen), so a sample that cannot be the material is re-taken.
 - **The sleeve-derived header gradient fades too** (`components/GradientHeader.svelte`, used by a
   show, an import job and the credits page): `--gh-c` is the second registered `<color>`, and the
   gradient is built from it with `color-mix` — 90 % of the sleeve at 0 %, 45 % of it mixed with black
@@ -538,6 +598,21 @@ shuffle it leaves `_orig` alone. `player.clearUpcoming()` also switches `autopla
 queue five seconds after it was cleared is the opposite of the request — and a new queue (`playQueue`,
 `shufflePlay`) switches it back on. Both are remote commands (`move`, `clear`, read level, validated server-side).
 
+**The contextual menu is ONE spec, on every list** (`lib/trackmenu.js`). The same labels and the
+same actions — lire ensuite, ajouter à la file, playlist, remplacer, genre, télécharger, partager,
+radio, favori, je n'aime pas, crédits, artiste, album — are built once and opened from a track row,
+the artist credit on it, a queue row, an episode, a shelf preview, a history event, a disliked
+title, the editable playlist, and album/playlist/artist/show cards. It reads only stores already in
+memory: opening it costs **0 `/api` request** (16 surfaces × 1280×900 and 390×844,
+`test/menu/run.mjs`, 32 measured opens). A queue row drops "Lire ensuite"/"Ajouter à la file" and
+gains "Retirer de la file" only while it is ahead of the playhead; the click re-resolves the title
+in the queue, so a playhead that moved under an open menu cannot remove the wrong row. Shift+F10
+and the Menu key open it on the focused row, Escape closes it and gives the focus back to the
+trigger (and `ImmersivePlayer` no longer closes the full-screen player on that same Escape),
+`aria-haspopup="menu"` sits on the trigger where ARIA allows it, a drag in progress never opens one,
+and a right-click inside a selected text keeps the browser's own Copy menu. The bench holds 242
+checks.
+
 **Sleep timer** (`lib/sleep.js`, `components/SleepButton.svelte`): minutes, or the end of the track. The deadline
 is a wall-clock comparison, never ticks counted (a phone on a bedside table is throttled or frozen and must still
 end where the clock says). The last 15 s fade through `sleepFade`, a multiplier the audio owner applies ON TOP of
@@ -822,11 +897,16 @@ line only exists when there is one, the strip and the Flow row give their height
 transport off the screen: 360x640 measures 248 px square (269 without the strip, 212 with the Flow row too),
 390x844 304 px (width-capped), body and mid overflow 0. Safe areas read `--safe-top` / `--safe-bottom` with an
 `env(safe-area-inset-*)` fallback until G1's tokens land. **The three sheets (queue, lyrics, the
-slid-up About panel) wear the glass ladder's tier 3** — `--glass-bg-2` and
-`blur(var(--glass-blur-3)) saturate(var(--glass-sat-3))`, measured `blur(22px) saturate(1.45)` at
-390×844 — and lose the filter in eco through the shared `html[data-eco="1"]` collapse (measured
-`backdrop-filter: none`, `--s1` ground). No component px value of their own: the old ad-hoc 16/18 px
-are gone. At 1280 the mobile player is not mounted at all, so those sheets are not either.
+slid-up About panel) wear the glass ladder's tier 3** — `blur(var(--glass-blur-3))
+saturate(var(--glass-sat-3))`, measured `blur(22px) saturate(1.45)` at 390×844 — and lose the filter
+in eco through the shared `html[data-eco="1"]` collapse (measured `backdrop-filter: none`, `--s1`
+ground). No component px value of their own: the old ad-hoc 16/18 px are gone. At 1280 the mobile
+player is not mounted at all, so those sheets are not either. The queue and lyrics panels are
+`.sheet.on-photo` — the THICK fill (93 %), because they sit on the sleeve and not on the page's
+scrim (measured 4.17:1 at 86 %, 5.18:1 at 93 % for the 11 px `--dim` labels) — plus the material's
+hairline under their header, and they cast no outer shadow (nothing to cast onto). The thumb row's
+doors are clear glass: 34 % of `--s1`, the specular hairline, and an INSET ring rather than a border,
+so the five 44 px targets still fit a 360 px phone (measured: the doors' `--dim` label at 6.28:1).
 
 **Explorer is ten parent styles, not a genre search** (`components/ExplorerStyles.svelte`,
 `GET /api/explorer/styles`, `POST|GET /api/explorer/discover`). The landing asks the server for the ten

@@ -15,7 +15,10 @@
   // while it is being dragged toward the end of a 4 000-track queue.
   import { trackRef } from "../lib/trackkey.js";
   import { onDestroy, tick } from "svelte";
+  import { push } from "svelte-spa-router";
   import { player, toasts, openPlaylistPicker, openQueueSave } from "../lib/stores.js";
+  import { buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { atLeast } from "../lib/remote/mode.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
   import Cover from "./Cover.svelte";
@@ -47,6 +50,18 @@
   function pick(i) {
     player.jump(i);
     if (onPick) onPick(i);
+  }
+
+  // A queue row's own menu: no "queue this again", and "remove" only where the
+  // queue itself allows it (what is still ahead of the playhead).
+  function menu(e, item, index) {
+    if (drag) return; // a drag owns the pointer
+    if (keepNativeMenu(e)) return;
+    openMenuAt(
+      e,
+      buildTrackMenu(item, push, { surface: "queue", index, currentIndex: idx }),
+      e.currentTarget
+    );
   }
 
   function clearAll() {
@@ -172,6 +187,7 @@
   {/if}
 
   <VirtualList {items} bind:this={vl} estimateHeight={56} let:item let:index>
+    <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
     <div
       class="qitem"
       class:now={index === idx}
@@ -181,6 +197,10 @@
       class:before={drag && drag.to === index && drag.to < drag.from}
       class:after={drag && drag.to === index && drag.to > drag.from}
       data-qi={index}
+      tabindex="-1"
+      aria-haspopup="menu"
+      on:contextmenu={(e) => menu(e, item, index)}
+      on:keydown={(e) => menuKey(e, (ev) => menu(ev, item, index))}
     >
       <button class="qrow" on:click={() => pick(index)}>
         <Cover src={item.album?.cover} alt="" size={40} kind={item.podcast ? "podcast" : "track"} fallbackId={trackRef(item)} />

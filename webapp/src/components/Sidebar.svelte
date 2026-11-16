@@ -404,9 +404,14 @@
 <style>
   /* Tier 1 of the glass ladder (app.css, "the glass ladder"): a translucent
      tint over the app's ground, no blur — the column borders the page, nothing
-     scrolls under it. */
+     scrolls under it. The light runs down its right edge (`--glass-beam-y`):
+     a column has no top edge on screen, only a side one. */
   .sidebar {
-    background: var(--glass-bg);
+    background-color: var(--glass-bg);
+    background-image: var(--glass-beam-y);
+    background-size: 1px 100%;
+    background-position: right top;
+    background-repeat: no-repeat;
     border-right: 1px solid var(--glass-border);
     padding: 20px 12px 12px;
     display: flex;

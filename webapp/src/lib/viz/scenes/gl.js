@@ -111,8 +111,15 @@ export function createGLScene(opts = {}) {
     // The player's backdrop is cream in the Papier theme, so the transparent
     // strip must draw ink there instead of light. It rides in uCtl.w, the one
     // unused component of the control slot (see pack below), so the block's
-    // layout does not change.
+    // layout does not change. It is the FALLBACK for a host that has not handed
+    // an accent: with one, the strip draws the theme's own readable accent
+    // (`solid`) and the theme is already inside it.
     light: !!opts.light,
+    // The theme's readable accent (--ac-text) as #rrggbb, measured by the host.
+    // The player's strip is printed flat in exactly this colour — one solid
+    // colour on every capsule, no palette walk, no warm tips, no pale core —
+    // and the full-screen row keeps its sleeve colours. See setSolid below.
+    solid: opts.solid || "",
     // Energy saving: the same world at a reduced grade — no bloom, no grain,
     // no lens fringe, no particle share, and the worlds' own glow/trail
     // parameters at zero. Nothing about the music changes; the finish does.
@@ -153,6 +160,25 @@ export function createGLScene(opts = {}) {
   // arithmetic — no wasm rebuild, no change to the block two sides must agree on.
   let zoneRef = null;
   let zoneOK = 0;
+  // The theme's accent, for the flat strip row: parsed ONCE per change (the
+  // host can repaint it live — a theme switch, or a custom accent written
+  // inline on <html>), never per frame, and handed to every world program as
+  // uSolid/uSolidOK. The host contract is "#rrggbb" (Visualizer.svelte reads
+  // --ac-text through a canvas so any CSS colour form arrives as sRGB bytes);
+  // anything else leaves the world on its palette.
+  const solidRGB = new Float32Array(4);
+  let solidOK = 0;
+  function setSolid(css) {
+    const m = /^#([0-9a-f]{6})$/i.exec((css || "").trim());
+    solidOK = m ? 1 : 0;
+    if (!m) return;
+    const n = parseInt(m[1], 16);
+    solidRGB[0] = ((n >> 16) & 255) / 255;
+    solidRGB[1] = ((n >> 8) & 255) / 255;
+    solidRGB[2] = (n & 255) / 255;
+    solidRGB[3] = 1;
+  }
+  setSolid(o.solid);
 
   // --- timing -------------------------------------------------------------------
   let lastDrawAt = 0;
@@ -333,6 +359,9 @@ export function createGLScene(opts = {}) {
       // The cover's zones (see `zoneRef`): one upload, two stages at most.
       h.f("uZoneOK", zoneOK);
       if (zoneOK && zoneRef) h.v4a("uZone[0]", zoneRef);
+      // The theme's accent, for the flat strip (see `solidOK`).
+      h.f("uSolidOK", solidOK);
+      if (solidOK) h.v4a("uSolid", solidRGB);
     };
     loadWorld(worldId)
       .then((def) => {
@@ -692,6 +721,9 @@ export function createGLScene(opts = {}) {
     saturation: 1.15,
     lift: 0,
     transparent: false,
+    // The flat strip: printed, not lit (renderer's FINAL pass). Only ever true
+    // for the player's strip when the host has handed the theme's accent.
+    flat: false,
     time: 0,
   };
 
@@ -772,8 +804,16 @@ export function createGLScene(opts = {}) {
     // full-screen row of bars is transparent over the page's backdrop, so the
     // pale theme is the strip's business only. Eco turns the whole post grade
     // off, whatever the world asked for.
-    const pale = o.light && o.layout === "strip";
-    look.bloom = mixLook(lp, lc, k, "bloom", 1) * (q.bloomK ?? 1) * (pale || o.eco ? 0 : 1);
+    //
+    // AND THE PLAYER'S STRIP HAS NO BLOOM ON ANY THEME. The engine's bloom was
+    // the halo around the capsules; over a transparent canvas the final pass
+    // turns its luminance into ALPHA, so a row of light bloomed into a
+    // translucent band the width of the canvas — the rectangle that sat behind
+    // the bars and was tinted by the sleeve. A strip that must leave the
+    // backdrop untouched outside its capsules cannot have one.
+    const stripRow = o.layout === "strip";
+    const pale = o.light && stripRow;
+    look.bloom = mixLook(lp, lc, k, "bloom", 1) * (q.bloomK ?? 1) * (pale || o.eco || stripRow ? 0 : 1);
     look.threshold = mixLook(lp, lc, k, "threshold", 0.9) * (pale ? 2.2 : 1);
     look.knee = mixLook(lp, lc, k, "knee", 0.6);
     look.saturation = mixLook(lp, lc, k, "saturation", 1.15);
@@ -782,16 +822,23 @@ export function createGLScene(opts = {}) {
     // a hair all the time, and a permanent red/cyan edge on every thin line
     // is the single cheapest-looking thing a render can do.
     const hitCA = Math.max(env(m.stamp.big, 0.5), env(m.stamp.drop, 1.5));
-    look.ca = o.eco
+    look.ca = o.eco || stripRow
       ? 0
       : (q.ca ?? 0) * (mixLook(lp, lc, k, "ca", 1) * (0.007 * hitCA * (o.reducedMotion ? 0 : 1)));
-    look.grain = o.eco ? 0 : (q.grain ?? 0) * mixLook(lp, lc, k, "grain", 1);
-    look.lift = flash * 0.35;
+    // The grain is inside the coverage, so it cannot veil the backdrop — but it
+    // would still break a row of one exact colour into noise. A flat picture
+    // has no film grain.
+    look.grain = o.eco || stripRow ? 0 : (q.grain ?? 0) * mixLook(lp, lc, k, "grain", 1);
+    look.lift = stripRow ? 0 : flash * 0.35;
     // A world may declare itself TRANSPARENT: it writes its own coverage and
     // the page's backdrop is the field behind it (the spectrum's row of beads).
     // A dissolve carries alpha with its colour, so an opaque world arriving
     // over a transparent one stays opaque until it is alone on screen.
-    look.transparent = o.layout === "strip" || lc.transparent === true || lp.transparent === true;
+    look.transparent = stripRow || lc.transparent === true || lp.transparent === true;
+    // ...and with the theme's accent in hand the strip is PRINTED: the world
+    // writes sRGB, the final pass writes it out ungraded (see FINAL_FS), so the
+    // pixels are the app's own accent rather than AgX's idea of it.
+    look.flat = stripRow && !!solidOK;
     look.time = clockSeconds;
     renderer.present(prev ? prev.target : null, cur.target, dissolve, seed, look);
   }
@@ -836,6 +883,12 @@ export function createGLScene(opts = {}) {
     if (next.flash) o.flash = next.flash;
     if (next.fps != null) o.fps = next.fps;
     if (next.light != null) o.light = !!next.light;
+    // The theme's accent can change while the strip is on screen (a theme
+    // switch, a custom accent): re-parsed here, once, never per frame.
+    if (next.solid != null && next.solid !== o.solid) {
+      o.solid = next.solid;
+      setSolid(o.solid);
+    }
     if (next.orientation) o.orientation = next.orientation;
     if (next.colour) o.colour = next.colour;
     // Eco is a change of GRADE, not of scene: the worlds' light parameters are

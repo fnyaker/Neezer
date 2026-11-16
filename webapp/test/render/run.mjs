@@ -193,6 +193,13 @@ async function main() {
     });
     save("strip.png", res.sheet);
     if (res.errors?.length) console.log(res.errors.join("\n"));
+    const a = res.alpha;
+    const hex = a?.colour
+      ? "#" + a.colour.split(",").map((v) => (+v).toString(16).padStart(2, "0")).join("")
+      : "—";
+    console.log(
+      `strip ${sw}x${sh}: ${a ? `${(a.nonZero * 100).toFixed(1)} % du canvas porte de l'alpha, bords ${(a.edge * 100).toFixed(1)} %, couleur ${hex}` : "no alpha readout"}  ${res.costMs.toFixed(2)} ms/image (SwiftShader)`
+    );
     console.log(`strip: ${join(out, "strip.png")}`);
     await browser.close();
     await server.close();

@@ -3,8 +3,8 @@
   // "Tes artistes" row and the library's artist grid. The whole tile is the
   // target (a 44 px minimum is the platforms' rule; this is 96+).
   import { push } from "svelte-spa-router";
-  import { openMenu } from "../lib/stores.js";
   import { buildEntityMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { entityRef } from "../lib/entity.js";
   import Avatar from "./Avatar.svelte";
 
@@ -17,11 +17,19 @@
     if (ref) push("/artist/" + ref);
   }
   function menu(e) {
-    openMenu(e, buildEntityMenu("artist", artist, push));
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildEntityMenu("artist", artist, push), e.currentTarget);
   }
 </script>
 
-<button class="tile" on:click={open} on:contextmenu={menu} title={artist.name}>
+<button
+  class="tile"
+  on:click={open}
+  on:contextmenu={menu}
+  on:keydown={(e) => menuKey(e, menu)}
+  aria-haspopup="menu"
+  title={artist.name}
+>
   <span class="pic"><Avatar src={artist.picture} name={artist.name} size="100%" /></span>
   <span class="name">{artist.name}</span>
   {#if detail}<span class="detail">{detail}</span>{/if}

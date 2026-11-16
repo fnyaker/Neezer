@@ -6,10 +6,21 @@
   // quality, no per-row menu — 40 px of sleeve, the names, the duration.
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
+  import { push } from "svelte-spa-router";
+  import { buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu } from "../lib/trackmenu.js";
   import { artistLine, duration as fmtDuration } from "../lib/format.js";
 
   export let shelf; // { key, title, subtitle, tracks, releases }
   export let limit = 6;
+
+  // A preview row is still a title: right-click / long press gives it the same
+  // menu as any other list, without turning the six-line preview into a
+  // tracklist (no per-row buttons, no tab stop — the card stays one link).
+  function menu(e, track) {
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(track, push), e.currentTarget);
+  }
 
   $: shown = shelf.tracks.slice(0, limit);
   $: trackCount = shelf.tracks.length;
@@ -53,7 +64,12 @@
 
   <ol class="rc-list">
     {#each shown as t (t.deezer_id || t.title)}
-      <li class="rc-row">
+      <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
+      <li
+        class="rc-row"
+        tabindex="-1"
+        on:contextmenu={(e) => menu(e, t)}
+      >
         <span class="rc-art">
           <Cover src={t.release?.cover || null} alt="" kind="album" />
         </span>

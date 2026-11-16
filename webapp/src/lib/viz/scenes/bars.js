@@ -31,11 +31,19 @@
 // layer (the backdrop's), and this scene adds neither a background, nor a
 // border, nor a blur of its own.
 //
-// AND ITS COLOURS ARE THE COVER'S. `pal.colourAt(t)` walks the sleeve's own
-// vertical zones when the palette's source is the cover (see palette.js), so
-// the bass end is coloured by the left of the artwork and the treble by its
-// right; with no artwork — or another palette source — the row keeps the
-// palette's low -> high walk, which is what the parity oracle pins.
+// AND ITS COLOURS ARE THE COVER'S — FULL SCREEN. `pal.colourAt(t)` walks the
+// sleeve's own vertical zones when the palette's source is the cover (see
+// palette.js), so the bass end is coloured by the left of the artwork and the
+// treble by its right; with no artwork — or another palette source — the row
+// keeps the palette's low -> high walk, which is what the parity oracle pins.
+//
+// IN THE PLAYER'S STRIP THERE IS ONE COLOUR, AND IT IS THE THEME'S. The host
+// measures --ac-text (the lemon on Encre, the ink on Papier, --tx on Pochette,
+// or a custom accent's readable ink) and passes it as `opts.solid`; the row is
+// then ONE flat fill per capsule with no hue walk, no inner fill, no axis core
+// and no peak ghost. The music moves the shape; the colour is the app's, and it
+// changes with the theme without rebuilding the scene. A host that cannot
+// measure one leaves `solid` empty and keeps the sleeve walk below.
 //
 // ECO. `opts.eco` draws the same row in one flat fill per bead: no inner
 // gradient, no axis core, no peak ghost, no breath. Same heights, same colours,
@@ -55,6 +63,9 @@ export function createBarsScene(opts = {}) {
   // the row keeps its contrast. Full screen is a dark room on every theme (the
   // projector's own page), so only the strip takes the ink path.
   let light = !!opts.light;
+  // The theme's readable accent (#rrggbb), for the player's strip: one solid
+  // colour for every capsule. Empty when the host could not measure one.
+  let solid = typeof opts.solid === "string" ? opts.solid : "";
   // Energy saving: the row, flat. See the header.
   let eco = !!opts.eco;
   const core = opts.core || vizCore();
@@ -98,6 +109,9 @@ export function createBarsScene(opts = {}) {
     if (!bars || !w || !h) return;
     const full = layout === "full";
     const ink = !full && light;
+    // The strip's theme accent: ONE colour, one flat shape per capsule (see
+    // the header). The full-screen row keeps the sleeve.
+    const flat = !full && !!solid;
     // Nothing behind the row: the canvas is cleared, never washed (see the
     // header). This is what lets the artwork's own blurred backdrop show
     // through on every layout.
@@ -127,6 +141,15 @@ export function createBarsScene(opts = {}) {
       const minHalf = halfW * (1 + 0.46 * (0.5 + 0.5 * breath) * rest);
       const half = Math.max(minHalf, v * reach);
       const x = i * bw + (bw - halfW * 2) / 2;
+      // THE STRIP: the app's accent, one flat shape, and nothing else. No
+      // palette lookup, no second fill, no axis core, no peak — the cheapest
+      // row there is, and the one the person asked for.
+      if (flat) {
+        g.fillStyle = solid;
+        roundRect(g, x, axis - half, halfW * 2, half * 2, halfW);
+        g.fill();
+        continue;
+      }
       // The band's colour: the sleeve's zone under this position when the
       // palette is walking the cover, else the palette's own low -> high walk
       // (so the low end and the top end stay visibly different registers).
@@ -181,6 +204,7 @@ export function createBarsScene(opts = {}) {
     if (next.reducedMotion != null) reduced = !!next.reducedMotion;
     if (next.light != null) light = !!next.light;
     if (next.eco != null) eco = !!next.eco;
+    if (typeof next.solid === "string") solid = next.solid;
   }
 
   function dispose() {

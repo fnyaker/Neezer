@@ -3,9 +3,14 @@
 // app, and no component carries a blur value of its own.
 //
 // The ladder (src/app.css, "surfaces — the glass ladder"):
-//   tier 1  --glass-bg   72 % of --s1, NO blur          cards, bars, notices
-//   tier 2  --glass-bg-2 82 % + blur(var(--glass-blur-2)) popovers
-//   tier 3  --glass-bg-2 82 % + blur(var(--glass-blur-3)) sheets, modals
+//   tier 1  --glass-bg   72 % of the theme fill, NO blur    cards, bars
+//   tier 2  --glass-bg-2 86 % + blur(var(--glass-blur-2))   popovers
+//   tier 3  --glass-bg-2 86 % + blur(var(--glass-blur-3))   sheets, modals
+//
+// Every tier also carries the LIGHT ("the liquid finish"): two 1 px background
+// gradients — a specular catch on the lit edge and a dark rim below — plus a
+// two-layer shadow, and a fill mixed with 4 % of the theme's accent. Painted,
+// never filtered: the tests below hold that, and hold the lens out.
 //
 // A `backdrop-filter` is therefore one of: `none`, or the tier-2/tier-3
 // expression written with the tokens. A literal (`blur(2px)`, `blur(6px)`,
@@ -140,4 +145,147 @@ test("les surfaces consomment les paliers, jamais un --s1 littéral pour un fond
   // eighteen sheets, not eighteen copies.
   assert.match(APP_CSS, /\.menu\s*\{[\s\S]*?backdrop-filter:\s*blur\(var\(--glass-blur-2\)\)/);
   assert.match(APP_CSS, /\.sheet,[\s\S]*?\{[\s\S]*?backdrop-filter:\s*blur\(var\(--glass-blur-3\)\)/);
+});
+
+// ── the liquid finish ────────────────────────────────────────────────────────
+// The LIGHT on top of the tint: a 1 px specular gradient on the lit edge, a
+// 1 px dark rim below, one extra shadow step for thickness, and a fill tinted
+// by the theme's accent. Measured on pixels by test/glass/run.mjs (the beam has
+// to exist, be brighter at its 12 % than at its 62 %, and vanish in eco).
+// The LENS (a displacement map) is deliberately absent: see the block in
+// app.css, and the assertion at the end of this file which keeps it out.
+
+const themeBlock = (name) => {
+  const at = APP_CSS.indexOf(`[data-theme="${name}"] {`);
+  assert.ok(at > 0, `le thème ${name} manque`);
+  return APP_CSS.slice(at, APP_CSS.indexOf("}", at));
+};
+
+test("la finition liquide : un liseré spéculaire et un bord sombre par thème", () => {
+  for (const theme of ["encre", "papier", "pochette"]) {
+    const block = themeBlock(theme);
+    assert.match(block, /--glass-hi:\s*[^;]+;/, `${theme} n'a pas de lumière`);
+    assert.match(block, /--glass-lo:\s*[^;]+;/, `${theme} n'a pas de bord`);
+  }
+  // The two gradients, and the vertical one a column needs (it has no top edge
+  // on screen, only a side one).
+  assert.match(APP_CSS, /--glass-beam-x:\s*linear-gradient\(/);
+  assert.match(APP_CSS, /--glass-beam-y:\s*linear-gradient\(/);
+  assert.match(APP_CSS, /--glass-rim-x:\s*linear-gradient\(/);
+  // The tint follows the theme's accent (Pochette's sleeve included), and it
+  // stays a TINT: above 8 % the fill stops being translucent glass and starts
+  // being a coloured pane, which is the contrast failure this ladder forbids.
+  const ac = APP_CSS.match(/--glass-tint-ac:\s*([\d.]+)%/);
+  assert.ok(ac, "--glass-tint-ac manque");
+  assert.ok(Number(ac[1]) > 0 && Number(ac[1]) <= 8, `teinte d'accent ${ac[1]} % hors de [0, 8]`);
+  assert.match(APP_CSS, /--glass-fill:\s*color-mix\(in srgb, var\(--ac\) var\(--glass-tint-ac\), var\(--s1\)\)/);
+  for (const n of ["", "-2", "-strong"]) {
+    assert.match(
+      APP_CSS,
+      new RegExp(`--glass-bg${n}:\\s*color-mix\\(in srgb, var\\(--glass-fill\\)`),
+      `--glass-bg${n} ne lit pas la teinte du thème`
+    );
+  }
+});
+
+test("chaque palier peint la lumière, en une seule déclaration de fond", () => {
+  // `.card`/`.glass-1` = tier 1 without blur; `.menu` = tier 2; `.sheet` = tier 3.
+  const tiers = [
+    [/\.card\s*\{[\s\S]*?\}/, ".card"],
+    [/\.glass-1\s*\{[\s\S]*?\}/, ".glass-1"],
+    [/\.menu\s*\{[\s\S]*?\}/, ".menu"],
+    [/\.sheet,[\s\S]*?\{[\s\S]*?\}/, ".sheet"],
+    [/\.glass-3\s*\{[\s\S]*?\}/, ".glass-3"],
+  ];
+  for (const [re, name] of tiers) {
+    const m = APP_CSS.match(re);
+    assert.ok(m, `${name} introuvable`);
+    assert.match(m[0], /--glass-beam-x/, `${name} n'a pas de liseré`);
+    assert.match(m[0], /--glass-rim-x/, `${name} n'a pas de bord bas`);
+  }
+  // The shadow steps carry a contact layer as well as an ambient one: a single
+  // wide blur is a smudge, two are a thickness (measured look, Papier's 6 %).
+  for (const theme of ["encre", "papier", "pochette"]) {
+    const block = themeBlock(theme);
+    const shadow = block.match(/--glass-shadow-2:\s*([^;]+);/);
+    assert.ok(shadow, `${theme} n'a pas de --glass-shadow-2`);
+    assert.ok((shadow[1].match(/,/g) || []).length >= 2, `${theme} : --glass-shadow-2 n'a pas deux couches`);
+  }
+});
+
+test("une feuille posée sur une pochette prend le palier épais", () => {
+  // The phone player's queue and lyrics panels are full-bleed over the sleeve,
+  // not over the page's scrim: tier 3's 86 % measured 4.17:1 there, so the ONE
+  // definition in app.css gives that case the thick step (93 %).
+  assert.match(APP_CSS, /\.sheet\.on-photo\s*\{[^}]*--glass-bg-strong/, "la variante « sur une pochette » manque");
+  const player = files.find((f) => f.rel === "components/MobileNowPlaying.svelte");
+  assert.ok(player, "MobileNowPlaying.svelte introuvable");
+  assert.match(player.text, /class="sheet on-photo"/, "la file d'attente ne prend pas le palier épais");
+  assert.match(player.text, /class="sheet on-photo lyrics-view"/, "les paroles ne prennent pas le palier épais");
+});
+
+test("le strip du visualiseur n'a aucun voile : il doit porter --ac-text exactement", () => {
+  // The animation agent's contract: the bar strip is ONE flat colour, exactly
+  // --ac-text. An `opacity` on the box that holds it composites that colour with
+  // the sleeve behind (measured #a9cd33 for #d2ff3c on Encre at 0.9; 0 % of the
+  // bars' pixels were the accent, 7–10 % were the blend). Nothing may veil it.
+  for (const rel of ["components/DesktopNowPlaying.svelte", "components/MobileNowPlaying.svelte"]) {
+    const file = files.find((f) => f.rel === rel);
+    assert.ok(file, `${rel} introuvable`);
+    const at = file.text.indexOf("\n  .viz {");
+    assert.ok(at > 0, `${rel} : le bloc .viz manque`);
+    const block = file.text.slice(at, file.text.indexOf("}", at));
+    const decls = block
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^(opacity|filter):/.test(l));
+    assert.deepEqual(decls, [], `${rel} : .viz porte un voile (${decls.join(", ")})`);
+  }
+});
+
+test("éco : la lumière s'éteint avec le flou, aucun liseré ne survit", () => {
+  // `transparent` rather than `none`: the four `background` declarations that
+  // compose the beams must stay valid rules.
+  const eco = APP_CSS.slice(APP_CSS.indexOf('html[data-eco="1"] {'));
+  const block = eco.slice(0, eco.indexOf("}"));
+  assert.match(block, /--glass-hi:\s*transparent/, "le liseré survit en éco");
+  assert.match(block, /--glass-lo:\s*transparent/, "le bord sombre survit en éco");
+  const media = APP_CSS.slice(APP_CSS.indexOf("@media (prefers-reduced-transparency: reduce)"));
+  assert.match(media, /--glass-hi:\s*transparent/, "le liseré survit en transparence réduite");
+  assert.match(media, /--glass-lo:\s*transparent/, "le bord survit en transparence réduite");
+  // No tier redefines a beam inside those blocks: one source of light.
+  for (const tail of [block, media.slice(0, media.indexOf("backdrop-filter"))]) {
+    assert.doesNotMatch(tail, /--glass-beam/, "un bloc d'accessibilité redéfinit un liseré");
+  }
+});
+
+test("le verre arrive au lieu d'apparaître — et pas sous `prefers-reduced-motion`", () => {
+  // `@starting-style` is the arrival (a clear pane that walks to its tint in
+  // 160 ms), not a keyframe animation: nothing re-runs on a re-render, no timer.
+  const at = APP_CSS.indexOf("@starting-style {");
+  assert.ok(at > 0, "@starting-style manque : le matériau apparaît d'un coup");
+  const guard = APP_CSS.lastIndexOf("@media (prefers-reduced-motion: no-preference)", at);
+  assert.ok(guard > 0, "l'arrivée du verre n'est pas derrière prefers-reduced-motion");
+  assert.match(APP_CSS.slice(at, at + 400), /background-color:\s*transparent/);
+  assert.match(APP_CSS.slice(guard, at), /transition:[^;]*background-color\s+160ms/);
+});
+
+test("la lentille reste dehors : aucun déplacement de fond dans l'app", () => {
+  // `backdrop-filter: url(#…)` is Chromium-only (Safari drops the whole
+  // declaration, Firefox ignores the filter) and re-samples the captured area
+  // every frame — the one cost the ladder exists to bound. A displacement map
+  // would also have to be a per-surface asset, i.e. a second definition of the
+  // material. The light is painted; the lens is not imitated.
+  // Declarations only: the comment blocks above quote the technique on purpose.
+  const decls = (text) =>
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^(backdrop-)?filter:\s/.test(l));
+  for (const { rel, text } of files) {
+    for (const decl of decls(text)) {
+      assert.ok(!decl.includes("url("), `${rel} pointe un filtre SVG : ${decl}`);
+    }
+    assert.doesNotMatch(text, /<filter\b/, `${rel} déclare un filtre SVG`);
+  }
 });

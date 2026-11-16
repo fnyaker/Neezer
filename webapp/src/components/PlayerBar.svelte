@@ -231,8 +231,13 @@
     padding: 0 20px;
     /* Tier 1: the shell reserves the bar's height (--player-h) in the page's
        bottom padding, so nothing scrolls under it — only the ground shows
-       through. */
-    background: var(--glass-bg);
+       through. Its lit edge is the top one (the liquid finish, app.css): the
+       light catches the rim the page's content ends on. */
+    background-color: var(--glass-bg);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
     border-top: 1px solid var(--glass-border);
     z-index: 50;
   }

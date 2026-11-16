@@ -7,7 +7,6 @@
     currentId,
     playing,
     favorites,
-    openMenu,
     downloads,
     unavailableIds,
     openReplace,
@@ -15,6 +14,7 @@
   } from "../lib/stores.js";
   import { CAN_KEEP } from "../lib/remote/mode.js";
   import { toggleFavorite, buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { duration as fmtDuration } from "../lib/format.js";
   import { playbackIdle } from "../lib/playback.js";
   import Icon from "./Icon.svelte";
@@ -66,12 +66,11 @@
   }
 
   function menu(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    const box = e.currentTarget?.getBoundingClientRect?.();
-    const at = box && !e.clientX && !e.clientY ? { x: box.right, y: box.bottom + 4 } : { x: e.clientX, y: e.clientY };
-    const coords = { clientX: at.x, clientY: at.y, preventDefault() {}, stopPropagation() {} };
-    openMenu(coords, buildTrackMenu(track, push));
+    // A gesture that has already moved the row owns it: a long press during a
+    // swipe must not open a menu on top of it.
+    if (dragging || dx > 0) return;
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(track, push), e.currentTarget);
   }
 
   // -- swipe right: "lire ensuite" -------------------------------------------
@@ -216,14 +215,20 @@
     <span class="act-in"><Icon name="next" size={20} /></span>
   </div>
 
+  <!-- A row is one context: right-click or long-press anywhere on it opens its
+       menu, and Shift+F10 does the same when one of its controls has the focus. -->
+  <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
   <div
     class="row track"
     class:active={isCurrent}
     class:noalb={!(showAlbum && track.album)}
     class:over={index === null && showCover}
     style={dx ? `transform:translate3d(${dx}px,0,0)` : ""}
+    tabindex="-1"
+    aria-haspopup="menu"
     on:dblclick={play}
     on:contextmenu={menu}
+    on:keydown={(e) => menuKey(e, menu)}
   >
     <button class="play" on:click={play} aria-label="Lire">
       {#if isPlaying && $playbackIdle}
@@ -302,7 +307,7 @@
     <span class="dur muted">{fmtDuration(track.duration)}</span>
     <!-- The row menu takes the duration's place on hover (Spotify's move): the
          row keeps ONE action column and the prototype's 56 px time column. -->
-    <button class="more" on:click|stopPropagation={menu} aria-label="Plus d'options"><Icon name="more" size={18} /></button>
+    <button class="more" on:click|stopPropagation={menu} aria-label="Plus d'options" aria-haspopup="menu"><Icon name="more" size={18} /></button>
   </div>
 </div>
 

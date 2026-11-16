@@ -121,10 +121,11 @@
     max-height: min(78vh, 680px);
     display: flex;
     flex-direction: column;
-    background: var(--bg-card);
-    border: 1px solid var(--bg-hover);
+    /* The ladder's tier 3 owns the material (fill, hairline, light, blur and
+       depth) — this sheet only lays itself out. It used to paint its own
+       `--bg-card` fill, border and a 70 px shadow: three definitions of what
+       app.css already defines for every sheet. */
     border-radius: 16px;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
     overflow: hidden;
   }
   header {

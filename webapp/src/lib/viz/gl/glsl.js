@@ -150,6 +150,15 @@ uniform float uCoverOK;   // 1 once the artwork has been uploaded
 // uses its pal() walk exactly as before.
 uniform vec4 uZone[7];
 uniform float uZoneOK;
+// THE THEME'S ACCENT, for a row that is printed rather than lit (the player's
+// strip, worlds/spectrum.js): the app's readable accent (--ac-text — the lemon
+// on Encre, the ink on Papier, --tx on Pochette, or the custom accent's ink
+// variant) in DISPLAY sRGB. The engine's final pass prints that layout flat
+// (scenes/gl.js#look.flat), so this is a picture colour, not light: it is not
+// converted to linear, not graded, not bloomed. uSolidOK is 0 when the host has
+// not measured one, and then the world keeps its palette.
+uniform vec4 uSolid;
+uniform float uSolidOK;
 uniform float uHeadroom;  // 1, or 1/4 on a device with no float targets
 `;
 

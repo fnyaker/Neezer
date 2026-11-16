@@ -2,6 +2,8 @@
   import { entityRef, trackEntityRef } from "../lib/entity.js";
   import { push } from "svelte-spa-router";
   import { credits } from "../lib/format.js";
+  import { buildEntityMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
 
   export let track = null;
   // Some callers already hold a credit list (a queue row, a search hit) and
@@ -49,6 +51,15 @@
     if (navigate) navigate(path);
     else push(path);
   }
+
+  // The name is a target in its own right: right-clicking it asks about the
+  // ARTIST, not about the row that carries it — so this menu wins over the
+  // row's (openMenuAt stops the event).
+  function menu(e, artist) {
+    if (!linked || !entityRef(artist)) return;
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildEntityMenu("artist", artist, push), e.currentTarget);
+  }
 </script>
 
 <!--
@@ -58,7 +69,7 @@
   is also why the loop is one unbroken line: a newline between two inline
   elements renders as a stray space.
 -->
-{#each parts as p, i (i)}{#if p.sep}<span class="sep" class:quiet={p.quiet}>{p.sep}</span>{:else}<button class="one" class:plain={!linked || !entityRef(p.artist)} tabindex={linked && entityRef(p.artist) ? 0 : -1} on:click={(e) => go(p.artist, e)}>{p.artist.name}</button>{/if}{/each}
+{#each parts as p, i (i)}{#if p.sep}<span class="sep" class:quiet={p.quiet}>{p.sep}</span>{:else}<button class="one" class:plain={!linked || !entityRef(p.artist)} tabindex={linked && entityRef(p.artist) ? 0 : -1} aria-haspopup={linked && entityRef(p.artist) ? "menu" : undefined} on:click={(e) => go(p.artist, e)} on:contextmenu={(e) => menu(e, p.artist)} on:keydown={(e) => menuKey(e, (ev) => menu(ev, p.artist))}>{p.artist.name}</button>{/if}{/each}
 
 <style>
   /* Inherit everything: the wrapper decides how the credit line looks, this
