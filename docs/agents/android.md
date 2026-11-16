@@ -243,6 +243,37 @@ on them, and `start()` sets `playWhenReady` before preparing. Measured in `test/
 `AUDIOFOCUS_LOSS_TRANSIENT` still pauses. `onElPause` also ignores a pause while a load is in flight.
 An old APK without `pc`/`tc` falls back to `c` (the old behaviour); the fix needs bridge 11.
 
+**Bridge 12: the analysis leaves the playback thread, and the output is measured**
+(`NativeAnalysis.kt`, `NativeAudio.kt`, `nativeplayer.js`). Three things kept the "the sound cuts for a
+few milliseconds" report alive through two fixes that only touched commands:
+
+- **The analyser ran between two AudioTrack writes.** `NsProcessor.queueInput` (ExoPlayer's playback
+  thread) called `NativeAnalysis.feed`, which did a per-sample Kotlin de-interleave, the Rust FFT push,
+  and every 40 ms a JSON + base64 batch (~13 KB) — all inside the sink's slack. It now only **copies**
+  the PCM and posts it to an `ns-analysis` thread this class owns; the handle work is ordered there
+  with the frames. The hand-off is bounded (`MAX_PENDING` 8, a pool of buffers): a backlog drops
+  analysis frames, never a frame of sound. Same reason the web path uses an AudioWorklet.
+- **The sink buffer was Media3's default.** 4× the platform minimum, clamped to 250..750 ms, which
+  lands on the **250 ms floor** on most phones — the margin a normal-priority playback thread has to
+  survive the WebView, a GC or a decoder burst. `NativeSink` asks for **500 ms..1 s** (the range Media3
+  itself moved to, "a fixed 500 ms buffer, less device dependent"). The only cost is audio already
+  written when a pause or a seek flushes the sink, which is silent.
+- **The rebuffer threshold was 5 s.** `setBufferDurationsMs(..., 1 s, 500 ms)`: a slow start is not a
+  failure, but a source feeding at about realtime used to reach 5 s of buffer, play it down over the
+  next 5 s, then wait 5 s again — the reported "every five seconds, a few milliseconds of play/pause".
+  Half a second turns a refill into a blink. The 30 min / 32 MB source targets are untouched: they are
+  for seeking, not for this.
+
+**And the output now says what it did** (bridge 12). Every state carries `un` (AudioTrack underruns
+the sink reported — the audio thread starved), `br` (rebuffers after a READY state — the source
+starved) and `bb`/`bs` (the AudioTrack buffer Media3 really created, ms and Hz);
+`nativeplayer.js` logs a change into the client journal ("sortie de l'application : N
+sous-alimentation(s), M reprise(s) de buffer, AudioTrack 500 ms"). This is the measurement that was
+missing: the two need opposite fixes, and no APK before 12 could tell them apart. `NativeSinkTest`
+holds the buffer numbers on the JVM (default floor 48 000 B = 250 ms at 48 kHz stereo, NativeSink
+96 000 B = 500 ms, capped at 192 000 B = 1 s); `nativeplayer.test.mjs` holds the counters and the old
+APK's silence about them.
+
 **Mono and balance in the native player** (`PanAudio.kt`, `PanProcessor`, after `NsProcessor` in the
 same `DefaultAudioSink`; bridge 11). 16-bit stereo in, **same format out** (no AudioTrack reopen, no
 gap, no click): mono is `0.5·(L+R)`, balance follows the W3C StereoPannerNode law exactly like

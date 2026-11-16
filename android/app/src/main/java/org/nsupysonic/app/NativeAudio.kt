@@ -24,6 +24,8 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider
+import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import org.json.JSONObject
 import java.io.EOFException
@@ -357,7 +359,34 @@ class NativeAudio(
     private inner class Slot(val id: Int) : Player.Listener {
         val proc = NsProcessor(id, analysis) { fx }
         val pan = PanProcessor({ panMono }, { panBalance })
-        val player: ExoPlayer = ExoPlayer.Builder(context, Renderers(context, proc, pan))
+        val player: ExoPlayer = ExoPlayer.Builder(
+            context,
+            Renderers(
+                context, proc, pan,
+                // The sink's listener runs on the PLAYBACK thread: count and
+                // report on the main looper, where every player lives.
+                onUnderrun = {
+                    main.post {
+                        if (!released) {
+                            underruns++
+                            send(null)
+                        }
+                    }
+                },
+                onSink = { config ->
+                    val ch = proc.channels.coerceAtLeast(1)
+                    val ms = config.bufferSize.toLong() * 1000L /
+                        (config.sampleRate.toLong() * 2L * ch)
+                    main.post {
+                        if (!released) {
+                            sinkBufferMs = ms
+                            sinkSampleRate = config.sampleRate
+                            send(null)
+                        }
+                    }
+                },
+            ),
+        )
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(DataSource.Factory {
                     ServerDataSource(prefs, cookieFor, localFile) { u -> main.post { onSourceRead(u) } }
@@ -366,9 +395,20 @@ class NativeAudio(
             // A whole track in memory rather than ExoPlayer's 50 s: a stream with
             // no length can only be sought once it has been read to its end, and
             // the server only keeps its copy of a stream somebody read whole.
+            //
+            // The two SHORT numbers are what a listener hears. `bufferForPlayback`
+            // is how much is needed to START (a slow start is not a failure, but
+            // 2.5 s of silence before every track was), and
+            // `bufferForPlaybackAfterRebuffer` is how much is needed to RESUME.
+            // It used to be 5 s: a source feeding at about realtime (a live Opus
+            // transcode, a marginal link) reached 5 s of buffer, played it down
+            // over the next 5 s, waited for 5 s again — the exact "every five
+            // seconds, a few milliseconds of play/pause" report. Half a second
+            // turns a refill into a blink instead of a stall. The 30 min / 32 MB
+            // targets above are untouched: they are for seeking, not for this.
             .setLoadControl(
                 DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(BUFFER_MS, BUFFER_MS, 2_500, 5_000)
+                    .setBufferDurationsMs(BUFFER_MS, BUFFER_MS, 1_000, 500)
                     .setTargetBufferBytes(BUFFER_BYTES)
                     .setPrioritizeTimeOverSizeThresholds(false)
                     .build()
@@ -384,6 +424,14 @@ class NativeAudio(
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         private var lastCmd = 0L
+        // What the output really did, for the journal: AudioTrack underruns
+        // (the sink starving), rebuffers (the source starving) and the AudioTrack
+        // buffer Media3 actually gave us. Nothing here changes playback.
+        private var underruns = 0
+        private var rebuffers = 0
+        private var sinkBufferMs = 0L
+        private var sinkSampleRate = 0
+        private var everReady = false
         // The page's number of the last command THIS field has applied. lastCmd
         // only says what ARRIVED: ExoPlayer reports BUFFERING from inside
         // prepare(), and that state, read before playWhenReady was set, told the
@@ -475,6 +523,7 @@ class NativeAudio(
                     retryCount = 0
                     main.removeCallbacks(trimCheck)
                     complete = false
+                    everReady = false
                     setUrl(url)
                     pendingSeek = false
                     player.stop()
@@ -506,6 +555,7 @@ class NativeAudio(
                     retryCount = 0
                     main.removeCallbacks(trimCheck)
                     complete = false
+                    everReady = false
                     setUrl("")
                     pendingSeek = false
                     player.stop()
@@ -854,6 +904,7 @@ class NativeAudio(
             cancelChase()
             setUrl(n.url)
             complete = false
+            everReady = false
             pendingSeek = false
             vol = n.vol
             player.volume = vol
@@ -904,6 +955,7 @@ class NativeAudio(
             cancelChase()
             setUrl(back.url)
             complete = false
+            everReady = false
             pendingSeek = false
             vol = back.vol
             player.volume = vol
@@ -961,6 +1013,14 @@ class NativeAudio(
                 .put("sc", true)
                 // The activity is stopped: the transitions are this player's (bridge 8).
                 .put("bg", !foreground)
+            // What the output really did (bridge 12). `un` is an AudioTrack
+            // underrun the sink reported (the audio thread starved), `br` a
+            // rebuffer after the source had been ready, `bb` the AudioTrack
+            // buffer Media3 actually gave us (ms). Read by nativeplayer.js into
+            // the client journal — the one thing that tells these apart.
+            if (underruns > 0) o.put("un", underruns)
+            if (rebuffers > 0) o.put("br", rebuffers)
+            if (sinkBufferMs > 0) o.put("bb", sinkBufferMs).put("bs", sinkSampleRate)
             // Every state says it, so a page that missed the first (frozen) still learns it.
             if (curKey.isNotEmpty()) o.put("k", curKey).put("u", url)
             // A title skipped here (it could not be played): told once, with the
@@ -1035,10 +1095,15 @@ class NativeAudio(
             if (state == Player.STATE_READY) {
                 retryCount = 0
                 stalledSent = false
+                everReady = true
                 // This title plays: a run of skipped ones is over (NativeRouting.fault).
                 faultSkips = 0
                 checkTrim()
             }
+            // A REBUFFER, not the first fill of a fresh source: the player had
+            // been ready and now has to wait for the source again. Counted so
+            // the journal can tell "the sink starved" from "the network did".
+            if (state == Player.STATE_BUFFERING && hasItem && everReady && player.playWhenReady) rebuffers++
             if (state == Player.STATE_READY && pendingSeek) {
                 pendingSeek = false
                 send("seeked")
@@ -1101,14 +1166,65 @@ class NativeAudio(
         context: Context,
         private val proc: NsProcessor,
         private val pan: PanProcessor,
+        private val onUnderrun: () -> Unit,
+        private val onSink: (AudioSink.AudioTrackConfig) -> Unit,
     ) : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
             context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean
-        ): AudioSink? = DefaultAudioSink.Builder(context)
-            .setEnableFloatOutput(enableFloatOutput)
-            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .setAudioProcessors(arrayOf<AudioProcessor>(proc, pan))
-            .build()
+        ): AudioSink {
+            // Media3 1.4.1 sizes the AudioTrack from 4x the platform minimum,
+            // constrained to 250..750 ms: on most phones that lands on the 250 ms
+            // floor. That is the margin a normal-priority playback thread has to
+            // survive a WebView, a decoder burst or a GC, and it is why an
+            // otherwise healthy player cut for a few milliseconds. 500 ms to 1 s
+            // is the range Media3 itself moved to later ("a fixed 500 ms buffer,
+            // less device dependent"); the cost is only how much audio is already
+            // written when a pause or a seek flushes the sink, which is silent.
+            val sink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf<AudioProcessor>(proc, pan))
+                .setAudioTrackBufferSizeProvider(NativeSink.provider())
+                .build()
+            return MeteredSink(sink, onUnderrun, onSink)
+        }
+    }
+
+    /**
+     * The sink, with its two useful facts counted. `onUnderrun` fires on the
+     * playback thread when the AudioTrack had nothing to play (the audio thread
+     * was not fed in time); `onTrack` carries the AudioTrack Media3 really
+     * created, including the buffer size — the number that says whether the fix
+     * is in force on this device.
+     */
+    private class MeteredSink(
+        sink: AudioSink,
+        private val onUnderrun: () -> Unit,
+        private val onTrack: (AudioSink.AudioTrackConfig) -> Unit,
+    ) : ForwardingAudioSink(sink) {
+        override fun setListener(listener: AudioSink.Listener) {
+            super.setListener(object : AudioSink.Listener {
+                override fun onPositionDiscontinuity() = listener.onPositionDiscontinuity()
+                override fun onPositionAdvancing(positionUs: Long) = listener.onPositionAdvancing(positionUs)
+                override fun onUnderrun(bufferSize: Int, bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) {
+                    onUnderrun()
+                    listener.onUnderrun(bufferSize, bufferSizeMs, elapsedSinceLastFeedMs)
+                }
+                override fun onSkipSilenceEnabledChanged(enabled: Boolean) =
+                    listener.onSkipSilenceEnabledChanged(enabled)
+                override fun onOffloadBufferEmptying() = listener.onOffloadBufferEmptying()
+                override fun onOffloadBufferFull() = listener.onOffloadBufferFull()
+                override fun onAudioSinkError(error: Exception) = listener.onAudioSinkError(error)
+                override fun onAudioCapabilitiesChanged() = listener.onAudioCapabilitiesChanged()
+                override fun onAudioTrackInitialized(config: AudioSink.AudioTrackConfig) {
+                    onTrack(config)
+                    listener.onAudioTrackInitialized(config)
+                }
+                override fun onAudioTrackReleased(config: AudioSink.AudioTrackConfig) =
+                    listener.onAudioTrackReleased(config)
+                override fun onSilenceSkipped() = listener.onSilenceSkipped()
+            })
+        }
     }
 
     companion object {
@@ -1138,6 +1254,24 @@ class NativeAudio(
         // "Previous" restarts the track past this, goes back before it.
         private const val PREV_RESTART_MS = 3_000L
     }
+}
+
+/**
+ * The AudioTrack buffer the app's players ask Media3 for (NativeAudio.Renderers).
+ * 4x the platform minimum, constrained to 500 ms..1 s: the default (250..750 ms)
+ * sits on its 250 ms floor on most phones, which a normal-priority playback
+ * thread under the WebView's load cannot survive. A JVM test holds the numbers
+ * (NativeSinkTest) — the number itself is the fix.
+ */
+@OptIn(UnstableApi::class)
+internal object NativeSink {
+    const val MIN_US = 500_000
+    const val MAX_US = 1_000_000
+    fun provider(): DefaultAudioTrackBufferSizeProvider =
+        DefaultAudioTrackBufferSizeProvider.Builder()
+            .setMinPcmBufferDurationUs(MIN_US)
+            .setMaxPcmBufferDurationUs(MAX_US)
+            .build()
 }
 
 /**
