@@ -110,7 +110,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed \
             base-devel git namcap desktop-file-utils \
-            rust cmake clang shaderc vulkan-headers \
+            rust cmake clang shaderc vulkan-headers fontconfig \
             pipewire alsa-lib libxcb libxkbcommon libxkbcommon-x11 \
             wayland vulkan-icd-loader
       - name: Checkout

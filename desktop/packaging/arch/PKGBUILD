@@ -22,14 +22,15 @@ license=('AGPL-3.0-or-later')
 # `namcap` (a missing soname is a binary that does not start):
 #   neezer-desktop     libpipewire (cpal), libasound (cpal's ALSA fallback),
 #                      libxcb + libxkbcommon + libxkbcommon-x11 (GPUI's X11
-#                      backend), libvulkan (wgpu), libwayland-client — this one
-#                      is dlopen'ed by `wayland-sys`, so it does not appear in
-#                      `ldd` and namcap calls it unneeded: keep it, the native
-#                      Wayland surface is the one Hyprland gives the window.
-#   neezer-transcribe  libvulkan (whisper.cpp's Vulkan backend)
-# fontconfig, freetype2 and dbus were on the plan's list but are not linked:
-# GPUI's text stack reads the font configuration in pure Rust, and zbus talks
-# the D-Bus wire protocol itself. They are not runtime dependencies.
+#                      backend). Its Vulkan loader is linked STATICALLY (no
+#                      libvulkan in `ldd`), and libwayland-client is dlopen'ed
+#                      by `wayland-sys`, so it is absent from `ldd` and namcap
+#                      calls it unneeded: keep it, the native Wayland surface is
+#                      the one Hyprland gives the window.
+#   neezer-transcribe  libvulkan (whisper.cpp links the loader directly)
+# `dbus` was on the plan's list but is not needed: zbus talks the D-Bus wire
+# protocol itself. `fontconfig` is a BUILD dependency, not a runtime one (see
+# `makedepends`).
 depends=(
   'pipewire'
   'alsa-lib'
@@ -53,11 +54,17 @@ optdepends=(
 # whisper.cpp's CMake build needs the Vulkan HEADERS and `glslc`, not only the
 # loader (docs/agents/desktop.md, "Pitfalls found by building").
 #
+# `fontconfig` is a BUILD dependency only: `yeslogic-fontconfig-sys` asks
+# pkg-config for `fontconfig.pc` (and freetype2 comes with it), while the
+# linked binary keeps no `libfontconfig` — rustc's `--as-needed` drops it, so
+# `ldd` is clean and it does not belong in `depends`. The CI's Arch container is
+# what found this: a machine with fontconfig installed builds without knowing.
+#
 # `cargo` is not a package name on Arch: `rust` provides it (ArchWiki Rust
 # package guidelines). Naming both makes `makepkg -si` stop on "two providers
 # available for cargo" on a machine that has neither yet, so only `rust` is
 # listed.
-makedepends=('rust' 'cmake' 'clang' 'vulkan-headers' 'shaderc')
+makedepends=('rust' 'cmake' 'clang' 'vulkan-headers' 'shaderc' 'fontconfig')
 # The release profile already strips (`strip = true` in the workspace's
 # Cargo.toml), so there is no debug info for makepkg to split: asking for no
 # `-debug` subpackage keeps one artefact per release, with the name the release

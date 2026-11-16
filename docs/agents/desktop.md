@@ -1747,14 +1747,15 @@ Waves that can run in parallel (disjoint files):
   — the ArchWiki's "mixed Rust/C/C++ project" case; the Rust half keeps its own thin LTO.
 - **The rule, `depends` follow `ldd`, not the plan**: `neezer-desktop` links `libpipewire`,
   `libasound`, `libxcb`, `libxkbcommon` and `libxkbcommon-x11`, and `neezer-transcribe` links
-  `libvulkan` — but NOT `fontconfig`, `freetype2` or `dbus` (GPUI reads the font configuration in
-  pure Rust, zbus speaks the D-Bus wire protocol), which the plan listed. `namcap`'s `E:` lines
-  named exactly the two MISSING packages (`libxcb`, `libxkbcommon-x11`) and a third
-  (`hicolor-icon-theme`, for the icon hierarchy); `wayland` is dlopen'ed by `wayland-sys` (absent
-  from `ldd`, called "may not be needed" by namcap) and stays, with the reason in the PKGBUILD.
-  `cargo` is not an Arch package name either — `rust` provides it — so only `rust` is in
-  `makedepends`: naming both makes `makepkg -si` stop on "two providers available for cargo" on a
-  machine that has neither yet.
+  `libvulkan`; `dbus` is not needed at all (zbus speaks the D-Bus wire protocol), and `fontconfig`
+  is a **build** dependency only — `yeslogic-fontconfig-sys` asks pkg-config for `fontconfig.pc`
+  (freetype2 comes with it) but rustc's `--as-needed` drops `libfontconfig` from the linked binary,
+  so `ldd` is clean and it belongs in `makedepends`. `namcap`'s `E:` lines named exactly the two
+  MISSING runtime packages (`libxcb`, `libxkbcommon-x11`) and a third (`hicolor-icon-theme`, for the
+  icon hierarchy); `wayland` is dlopen'ed by `wayland-sys` (absent from `ldd`, called "may not be
+  needed" by namcap) and stays, with the reason in the PKGBUILD. `cargo` is not an Arch package name
+  either — `rust` provides it — so only `rust` is in `makedepends`: naming both makes `makepkg -si`
+  stop on "two providers available for cargo" on a machine that has neither yet.
 - **The rule, one artefact**: `!debug` in `options` (the Rust profile already strips), so the release
   attaches exactly `neezer-desktop-<ver>-x86_64.pkg.tar.zst`.
 - **What it is now**: `desktop/packaging/arch/PKGBUILD` (both binaries, the `.desktop`, the icon, the
@@ -1788,6 +1789,10 @@ Waves that can run in parallel (disjoint files):
   - makepkg runs `build()` with the distro's hardening `CFLAGS`/`CXXFLAGS`/`LDFLAGS`, and its `lto`
     option is what broke the link (see the rule above); the failure looks like a C library problem
     (`undefined symbol` reported by `rust-lld`), not a flag problem, and it hits BOTH binaries.
+  - A dependency the binary does not link can still be needed to BUILD it: the CI's Arch container
+    stopped at `yeslogic-fontconfig-sys` ("Package 'fontconfig' not found") while `ldd` on this
+    machine was clean, because this machine happens to have fontconfig installed. `fontconfig` is a
+    `makedepend`; a `depends` list checked only with `ldd` says nothing about the build.
   - `makepkg` refuses to run as root, so a container job needs a `builder` user, a `chown` of the
     mounted workspace and a `su -` login shell (so cargo finds its registry).
   - `actions/checkout`'s node runtime works in `archlinux:latest` without installing node, but the
