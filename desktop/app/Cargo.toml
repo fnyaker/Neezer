@@ -26,10 +26,18 @@ nz-player = { path = "../crates/nz-player" }
 nz-audio = { path = "../crates/nz-audio" }
 nz-mpris = { path = "../crates/nz-mpris" }
 nz-viz = { path = "../crates/nz-viz" }
+# The genre studio's measurement and training cores, linked natively: the page
+# compiles the same crates to WebAssembly (webapp/measure, webapp/trainer), so
+# the numbers and the head are the web app's own arithmetic, not a port (D16).
+measure = { path = "../../webapp/measure" }
+trainer = { path = "../../webapp/trainer" }
+symphonia = { workspace = true }
+symphonia-adapter-libopus = { workspace = true }
+rubato = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
 directories = { workspace = true }
 tracing = { workspace = true }
 zbus = { workspace = true }
