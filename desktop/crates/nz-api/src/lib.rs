@@ -48,8 +48,8 @@ pub mod session;
 
 pub use cache_trait::{NoCache, ResponseCache, is_cacheable};
 pub use client::{
-    ANSWER_TIMEOUT, Api, ApiBuilder, BACKGROUND_HEADER, CONNECT_TIMEOUT, Fresh, NO_RETRY_HEADER,
-    Quality, START_HEADER, StreamReady, StreamResponse, TrackId,
+    ANSWER_TIMEOUT, Api, ApiBuilder, BACKGROUND_HEADER, CONNECT_TIMEOUT, DownloadReport, Fresh,
+    NO_RETRY_HEADER, Quality, STALL_TIMEOUT, START_HEADER, StreamReady, StreamResponse, TrackId,
 };
 pub use endpoints::library::DownloadQueued;
 pub use endpoints::playlists::ImportJob;
