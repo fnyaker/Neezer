@@ -230,6 +230,15 @@ jobs:
       - name: Regenerate the API fixtures from this commit's server
         run: python desktop/tools/dump_fixtures.py --out "$RUNNER_TEMP/fixtures"
         working-directory: ${{ github.workspace }}
+      # T1's golden corpus is written by the Python functions
+      # (`neezer/transcribe/engine.py`, `sidecar.py`), never by the Rust port.
+      # `cargo test --workspace` already catches a RUST drift (it compares
+      # against the committed files); this step is the other direction, and the
+      # only one that catches a change in Python: a space added to
+      # `clean_text`, a rounded offset moved by a millisecond.
+      - name: The transcription corpus still matches its Python writers
+        run: python desktop/tools/transcribe_golden.py --check
+        working-directory: ${{ github.workspace }}
       - name: Test nz-model against the freshly regenerated fixtures
         run: cargo test -p nz-model --locked
         env:
