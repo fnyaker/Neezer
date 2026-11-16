@@ -2218,10 +2218,10 @@ mod ui {
         // library, the queue or an image per row adds it to EVERY tour, so the
         // minimum still catches it.
         let delta = deltas.iter().copied().min().unwrap_or(u64::MAX);
-        // Measured: 21 840 B per tour, the same byte count on 30 consecutive
-        // runs (and on a loaded machine), 261 560 B for the first tour through
-        // caches the warm-up had not built yet. The 21 840 B is nearly all
-        // retention the page does not own: 2 184 B per `Screen` GPUI keeps
+        // Measured: 20 560 B per tour, the same byte count on 30 consecutive
+        // runs (and on a loaded machine), 260 280 B for the first tour through
+        // caches the warm-up had not built yet. The 20 560 B is nearly all
+        // retention the page does not own: ~2 KiB per `Screen` GPUI keeps
         // alive for its pending drain task (a separate probe read 520 B per
         // `Screen::new` + drop with no window). The budget below is three
         // times the measured weight and 32 times tighter than the RSS one it
@@ -2231,7 +2231,7 @@ mod ui {
         assert!(
             delta < BUDGET_BYTES,
             "one tour of the ten user sections must stay under {BUDGET_BYTES} B \
-             (measured 21 840 B), it retains {delta} B"
+             (measured 20 560 B), it retains {delta} B"
         );
         // Every queued row is still there: the page did not disturb the queue.
         cx.update(|_, cx| assert_eq!(state.read(cx).player.len(), 4_000));

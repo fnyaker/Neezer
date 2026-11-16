@@ -1351,13 +1351,13 @@ Waves that can run in parallel (disjoint files):
   - **mouse**: the Apparence tab, the Mono switch and the « Normale » chip are
     hit-tested at 1280×800 and move the same state a key would (the route changes
     with `replace`, `values.mono` flips, the level is saved).
-  - **Memory**: **21 840 B** retained per tour of the ten user sections with a
+  - **Memory**: **20 560 B** retained per tour of the ten user sections with a
     **4 000-row queue** in place (bytes allocated minus bytes freed on the test's
     own thread, `app/src/testmem.rs`'s counting allocator; the same byte count on
-    **30 runs out of 30** under an 8-process load, 261 560 B for the first tour
+    **30 runs out of 30** under an 8-process load, 260 280 B for the first tour
     through caches the warm-up had not built yet, budget **64 KiB**). The page
     holds no per-row data, so the worst case stays the queue the shell owns. Of
-    those 21 840 B, 2 184 B per `Screen` is retention the page does not own: the
+    those 20 560 B, ~2 KiB per `Screen` is retention the page does not own: the
     `drain` task GPUI keeps for the screen's reply channel outlives it because
     `events::Sender` sets no `closed` flag when dropped (a separate probe read
     520 B per `Screen::new` + drop with no window). Small, linear per section
@@ -1369,13 +1369,13 @@ Waves that can run in parallel (disjoint files):
     budget on the scheduler and on glibc's arenas, not on the page. Bytes counted
     on one thread cannot move with a neighbour, so the budget got **32×** tighter
     and still fails on a real leak (a deliberate 4 MiB `mem::forget` in a section
-    read **8 410 448 B** and failed at once).
+    read **8.4 MB** and failed at once).
   - **requests**: the table above is asserted by a test; a revisit asks nothing.
 - **Pitfalls found by building**:
   - **A memory guard that reads `VmRSS` guards the test scheduler, not the
     screen.** One process runs every test of the crate in parallel threads, and
     RSS also moves with glibc's arenas and with any neighbour's big buffer: the
-    same ten sections that keep 21 840 B read +228 KB alone, +2 604 KB and
+    same ten sections that keep 20 560 B read +228 KB alone, +2 604 KB and
     +8 404 KB in CI (PR #236), +480 944 KB beside one test that allocates
     480 MB. Measure **bytes retained by the measured thread**: a
     `#[global_allocator]` that adds `layout.size()` to a const-init
