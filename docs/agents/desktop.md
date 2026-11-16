@@ -606,7 +606,9 @@ Waves that can run in parallel (disjoint files):
   `PropertiesChanged`). `set_position_s` writes it with `Player::set_position` (documented silent)
   and emits `Seeked` only when the reported position departed from what a client extrapolates, past
   a 1.5 s tolerance: at the app's 4 Hz a tick may be 0.9 s late for free, while any gesture is
-  announced. A new track and a pause freeze the base, so neither looks like a seek.
+  announced. A new track and a pause freeze the base, so neither looks like a seek — and a new
+  track also writes `Position` 0 before its first tick, or the bar shows the previous track's
+  progress for a quarter second.
 - **The rule, identity side**: `mpris:trackid` is derived, not passed in. A Deezer number is its own
   path element (`/fr/neezer/track/3135556`); anything else (the UUIDs of uploads, YouTube rows and
   episodes) is sanitised to `[A-Za-z0-9_]` **and** gets an FNV-1a fingerprint, because sanitising

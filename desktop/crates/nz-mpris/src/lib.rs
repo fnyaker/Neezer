@@ -533,6 +533,9 @@ async fn apply(player: &Player, current: &RefCell<Current>, update: Update) {
                 state.position_s = 0.0;
                 state.at = Instant::now();
             }
+            // A client that reads Position before the first tick of the new
+            // track must see 0, not where the previous one stopped.
+            player.set_position(Time::ZERO);
             let published = mpris_metadata(&metadata, trackid);
             if let Err(error) = player.set_metadata(published).await {
                 debug!(%error, "MPRIS metadata not published");
@@ -554,6 +557,9 @@ async fn apply(player: &Player, current: &RefCell<Current>, update: Update) {
                 }
                 state.status = status;
                 state.at = now;
+            }
+            if status == PlaybackStatus::Stopped {
+                player.set_position(Time::ZERO);
             }
             if let Err(error) = player.set_playback_status(status).await {
                 debug!(%error, "MPRIS playback status not published");
@@ -1261,6 +1267,32 @@ mod tests {
                     .is_err(),
                 "a paused position does not move"
             );
+
+            // A new track is at 0 on the bus before its first tick: the bar's
+            // progress bar must not show the previous track's position.
+            mpris.set_track(Metadata::new("9101112", "Wandering Eye").artist("Fat Freddy's Drop"));
+            let mut started_at_zero = false;
+            for _ in 0..100 {
+                let all: HashMap<String, zbus::OwnedVariant> = properties
+                    .call("GetAll", &(PLAYER_INTERFACE,))
+                    .await
+                    .expect("GetAll");
+                let title = metadata_dict(&all).and_then(|dict| dict_text(dict, "xesam:title"));
+                if title.as_deref() == Some("Wandering Eye") {
+                    assert_eq!(
+                        player
+                            .get_property::<i64>("Position")
+                            .await
+                            .expect("Position"),
+                        0,
+                        "a new track starts at 0, not at the previous position"
+                    );
+                    started_at_zero = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(started_at_zero, "the second track reached the bus");
         });
     }
 
