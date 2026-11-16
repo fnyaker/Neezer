@@ -8,7 +8,8 @@
   // for (including people who do not know it), what to do if it goes wrong,
   // and the room — a projector's audience accepted nothing.
   import { createEventDispatcher, onMount, tick } from "svelte";
-  import { fade, scale } from "svelte/transition";
+  import { dialog, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import Icon from "./Icon.svelte";
 
   export let reduced = false;
@@ -16,18 +17,6 @@
   const dispatch = createEventDispatcher();
   let agreed = false;
   let box;
-
-  // Mounted on <body>: the settings page scrolls under a sticky preview, and
-  // a fixed overlay inside anything with a transform is fixed to THAT, not to
-  // the screen.
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
 
   function onKey(e) {
     if (e.key === "Escape") dispatch("cancel");
@@ -44,14 +33,14 @@
 <svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-<div class="overlay" use:toBody transition:fade={{ duration: 150 }} on:click|self={() => dispatch("cancel")}>
+<div class="overlay" use:toBody transition:veil={{ for: "dialog" }} on:click|self={() => dispatch("cancel")}>
   <div
     class="sheet"
     role="alertdialog"
     aria-modal="true"
     aria-labelledby="fw-title"
     aria-describedby="fw-body"
-    transition:scale={{ duration: 160, start: 0.97 }}
+    transition:dialog
   >
     <header>
       <span class="badge"><Icon name="zap" size={20} /></span>

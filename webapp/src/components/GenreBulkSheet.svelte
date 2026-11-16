@@ -11,12 +11,22 @@
   //
   // Admin-only, like every write in the studio.
   import { trackRef } from "../lib/trackkey.js";
-  import { fade, scale } from "svelte/transition";
+  import { sheet, veil } from "../lib/motion.js";
+  import { onMount } from "svelte";
   import { api } from "../lib/api.js";
   import { genreBulkSheet, closeGenreBulk, toasts } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
   import Cover from "./Cover.svelte";
   import VirtualList from "./VirtualList.svelte";
+
+  // Svelte's local-intro rule (docs/agents/transitions.md): a block that is
+  // TRUE on its very first run plays no intro. App mounts this component only
+  // once the store is set, so `{#if scope}` would be true on that first run and
+  // the sheet would appear with no `veil`/`sheet` at all (measured: the pane
+  // mounts with `transform: none`, no Animation on the timeline). Flip a flag
+  // on mount: the block then CHANGES, and the first open enters like the rest.
+  let ready = false;
+  onMount(() => (ready = true));
 
   const KIND = { album: "l'album", playlist: "la playlist", artist: "l'artiste" };
 
@@ -137,10 +147,10 @@
 
 <svelte:window on:keydown={onKey} />
 
-{#if scope}
+{#if scope && ready}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeGenreBulk}>
-    <div class="sheet" transition:scale={{ duration: 160, start: 0.97 }}>
+  <div class="overlay" transition:veil={{ for: "sheet" }} on:click|self={closeGenreBulk}>
+    <div class="sheet" transition:sheet>
       <header>
         <div class="thumb">
           <Cover src={scope.cover} alt={scope.title} size={48} kind={scope.kind === "artist" ? "artist" : "album"} />

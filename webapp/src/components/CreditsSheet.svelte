@@ -2,8 +2,8 @@
   // "Crédits du titre", from any track's menu: who wrote, composed, produced
   // it, over the current screen. The same answer as the full-screen player's
   // panel (one request, kept on the device, painted from the copy first).
-  import { fade, scale } from "svelte/transition";
   import { onDestroy, onMount } from "svelte";
+  import { sheet, veil } from "../lib/motion.js";
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { api } from "../lib/api.js";
   import { creditsSheet, closeCredits } from "../lib/stores.js";
@@ -63,14 +63,14 @@
 
 {#if track}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeCredits}>
+  <div class="overlay" transition:veil={{ for: "sheet" }} on:click|self={closeCredits}>
     <div
       class="sheet"
       role="dialog"
       aria-modal="true"
       aria-label="Crédits du titre"
       tabindex="-1"
-      transition:scale={{ duration: 160, start: 0.97 }}
+      transition:sheet
       use:modalFocus
     >
       <header>

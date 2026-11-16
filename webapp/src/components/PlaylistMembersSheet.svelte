@@ -4,7 +4,8 @@
   // ONE members GET then says so — never a merge, never a replay. No account
   // directory: an invite is one exact name.
   import { onMount, tick } from "svelte";
-  import { fade, scale } from "svelte/transition";
+  import { sheet as sheetIn, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
   import { api } from "../lib/api.js";
   import { conflictOf, memberError, resyncOnce, roleLabel } from "../lib/actions.js";
   import { online } from "../lib/net.js";
@@ -194,15 +195,8 @@
     }
   }
 
-  // A fixed overlay inside a transformed ancestor is fixed to it: portal it.
-  function toBody(node) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.parentNode?.removeChild(node);
-      },
-    };
-  }
+  // A fixed overlay inside a transformed ancestor is fixed to it: it leaves
+  // the page's subtree (lib/portal.js#toBody, M9).
 </script>
 
 <svelte:window on:keydown={onKey} />
@@ -246,7 +240,7 @@
 
 {#if id}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" use:toBody transition:fade={{ duration: 150 }} on:click|self={close}>
+  <div class="overlay" use:toBody transition:veil={{ for: "sheet" }} on:click|self={close}>
     <div
       class="sheet"
       role="dialog"
@@ -254,7 +248,7 @@
       aria-labelledby="members-title"
       tabindex="-1"
       bind:this={sheet}
-      transition:scale={{ duration: 160, start: 0.97 }}
+      transition:sheetIn
     >
       <header>
         <div class="ttl">

@@ -18,7 +18,7 @@
   // people labelling it would train it against itself. The whole component is
   // inert for anyone else.
   import { trackKey, trackRef } from "../lib/trackkey.js";
-  import { fade, scale } from "svelte/transition";
+  import { sheet, veil } from "../lib/motion.js";
   import { onDestroy, tick } from "svelte";
   import { api } from "../lib/api.js";
   import { genreTagSheet, closeGenreTag, toasts } from "../lib/stores.js";
@@ -161,8 +161,8 @@
 
 {#if track}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeGenreTag}>
-    <div class="sheet" transition:scale={{ duration: 160, start: 0.97 }}>
+  <div class="overlay" transition:veil={{ for: "sheet" }} on:click|self={closeGenreTag}>
+    <div class="sheet" transition:sheet>
       <header>
         <div class="thumb">
           <Cover src={track.album?.cover} alt={track.title} size={48} kind="track" fallbackId={trackRef(track)} />

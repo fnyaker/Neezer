@@ -6,7 +6,7 @@
   // XSPF for desktop players). The ZIP is a normal browser download; the
   // service export is a job on the server, followed here.
   import { onDestroy } from "svelte";
-  import { fade, scale } from "svelte/transition";
+  import { sheet, veil } from "../lib/motion.js";
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
   import { exportSheet, closeExport, toasts } from "../lib/stores.js";
@@ -254,14 +254,14 @@
 
 {#if target}
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="overlay" transition:fade={{ duration: 150 }} on:click|self={closeExport}>
+  <div class="overlay" transition:veil={{ for: "sheet" }} on:click|self={closeExport}>
     <div
       class="sheet"
       role="dialog"
       aria-modal="true"
       aria-label="Exporter"
       tabindex="-1"
-      transition:scale={{ duration: 160, start: 0.97 }}
+      transition:sheet
       use:modalFocus
     >
       <header>
@@ -386,7 +386,7 @@
               {/if}
             </div>
             {#if job.running}
-              <div class="bar" role="progressbar" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100"><span style="width:{job.stage === "create" ? 100 : pct}%"></span></div>
+              <div class="bar" role="progressbar" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100"><span style="transform:scaleX({(job.stage === "create" ? 100 : pct) / 100})"></span></div>
               <p class="muted small">{job.matched} trouvé{job.matched > 1 ? "s" : ""} pour l'instant. Vous pouvez fermer : l'export continue sur le serveur.</p>
             {:else}
               <p class:err={job.error} class="result">
@@ -629,6 +629,11 @@
     font-size: 0.85rem;
     color: var(--text-dim);
     white-space: nowrap;
+    /* I3: this tablist marks its active tab by a surface, not by a moving
+       indicator, so the colour walk IS the tab motion (M6: --dur-instant). */
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      color var(--dur-instant) var(--ease-standard);
   }
   .seg button.sel {
     background: var(--bg-hover);
@@ -736,7 +741,12 @@
     display: block;
     height: 100%;
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    transition: width 0.4s ease;
+    /* I8 (M1): a job's progress is a `scaleX`, never a `width` walk — one
+       paint per step instead of a layout. --dur-base linear, and eco's guard
+       leaves it static. */
+    width: 100%;
+    transform-origin: left center;
+    transition: transform var(--dur-base) linear;
   }
   .small {
     font-size: 0.78rem;
