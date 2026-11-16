@@ -900,8 +900,24 @@ mod tests {
     /// The worst realistic list, as D8a's acceptance names it: 4 000 rows in the
     /// list AND the queue rows they make, built once when the data arrives. A
     /// click on a row then copies the queue, so the press does not build it.
+    ///
+    /// Run in a CHILD process: this test holds ~14 MB, and another test in this
+    /// binary asserts on the RSS delta of the settings screens — two threads
+    /// measuring one process's memory cannot both be right. Measured again on CI:
+    /// the settings test read 8.4 MB against its 2 MB budget while this one was
+    /// allocating in a sibling thread.
     #[test]
     fn four_thousand_rows_are_one_list_and_one_click_is_one_copy() {
+        if let Some(printed) = crate::widgets::card::stub::in_child(
+            "widgets::track_list::tests::four_thousand_rows_are_one_list_and_one_click_is_one_copy",
+        ) {
+            println!("{printed}");
+            assert!(
+                printed.contains("list_4000:"),
+                "the child printed its numbers:\n{printed}"
+            );
+            return;
+        }
         let before = rss_kb();
         let mut list = TrackList::new();
         let rows: Vec<nz_model::Track> = (0..4_000).map(track).collect();

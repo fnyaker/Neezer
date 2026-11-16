@@ -594,6 +594,33 @@ pub mod stub {
         }
     }
 
+    /// Run one test in a CHILD process, and give back what it printed.
+    ///
+    /// Some tests hold megabytes on purpose (a 4 000-row list is ~12 MB) and
+    /// another test in this binary asserts on the RSS delta of a screen: two
+    /// threads measuring one process's memory cannot both be right — measured on
+    /// CI, the settings test read 8.4 MB against its 2 MB budget while a list was
+    /// being built in a sibling thread. `NZ_TEST_CHILD` marks the child, which
+    /// runs the body itself.
+    pub fn in_child(test_path: &str) -> Option<String> {
+        if std::env::var_os("NZ_TEST_CHILD").is_some() {
+            return None;
+        }
+        let exe = std::env::current_exe().expect("the test binary");
+        let output = std::process::Command::new(exe)
+            .args(["--exact", test_path, "--nocapture", "--test-threads=1"])
+            .env("NZ_TEST_CHILD", "1")
+            .output()
+            .expect("a child test process");
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "the child test failed:\n{printed}");
+        Some(printed)
+    }
+
     /// A logged-in app pointed at `stub`, and the runtime the test must drive.
     ///
     /// The runtime is CURRENT-THREAD and the test thread pumps it: a real tokio

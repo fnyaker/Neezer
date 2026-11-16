@@ -896,6 +896,18 @@ mod tests {
     /// windowing that rule 4 and D8a's frame budget rest on.
     #[gpui::test]
     async fn four_thousand_rows_build_a_screenful(cx: &mut gpui::TestAppContext) {
+        // ~12 MB of row data and 82 frames: in a child process, so a sibling
+        // test that measures this process's RSS delta sees only its own work.
+        if let Some(printed) = stub::in_child(
+            "screens::album::tests::four_thousand_rows_build_a_screenful",
+        ) {
+            println!("{printed}");
+            assert!(
+                printed.contains("list_paint_us") || printed.contains("test result: ok"),
+                "the child ran:\n{printed}"
+            );
+            return;
+        }
         let body = album_body(4_000, false);
         let stub = stub::Stub::start(&[
             ("/api/login", ME),
