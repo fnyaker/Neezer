@@ -3349,7 +3349,7 @@ impl Screen {
             div()
                 .flex()
                 .flex_col()
-                .flex_1()
+                .size_full()
                 .min_h_0()
                 .child(self.episode_list(cx))
                 .into_any_element()
@@ -3357,7 +3357,7 @@ impl Screen {
             if content_width >= PANEL_MIN_CONTENT {
                 div()
                     .flex()
-                    .flex_1()
+                    .size_full()
                     .min_h_0()
                     .min_w_0()
                     .child(
@@ -3382,7 +3382,7 @@ impl Screen {
                 div()
                     .flex()
                     .flex_col()
-                    .flex_1()
+                    .size_full()
                     .min_h_0()
                     .child(
                         div()
@@ -3415,22 +3415,22 @@ impl Screen {
             div()
                 .flex()
                 .flex_col()
-                .flex_1()
+                .size_full()
                 .min_h_0()
                 .child(self.episode_list(cx))
                 .into_any_element()
         };
         self.panel = panel;
 
-        // The head scrolls and never takes more than half the window: with the
-        // admin's transcription card open a 1280x800 window left the episode list
-        // 40 px of height, which is the list being unusable, not a compact page.
+        // The head scrolls and never takes more than 45 % of the page: with the
+        // admin's transcription card open, a 1280x800 window left the episode list
+        // 38 px of height — the list unusable, which is not a compact page.
         let head = div()
             .id("show-head")
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .max_h(relative(0.55))
+            .max_h(relative(0.45))
             .min_h_0()
             .overflow_y_scroll()
             .child(header)
@@ -3443,7 +3443,7 @@ impl Screen {
             .size_full()
             .min_h_0()
             .child(head)
-            .child(body);
+            .child(div().flex_1().min_h_0().child(body));
         if let Some(error) = self.more_failed.clone() {
             column = column.child(
                 div()
