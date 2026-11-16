@@ -1,6 +1,9 @@
 # The visualiser's geometry: bars and the oscilloscope, computed from the same
-# analyser the web app uses. Owned by V1 (docs/agents/desktop.md). D0 leaves it
-# empty: V1 adds the `rhythm` path dependency when it builds the geometry.
+# analyser the web app uses. Owned by V1 (docs/agents/desktop.md).
+#
+# The only dependency is the web app's own `rhythm` (path, read-only): its
+# `viz_bars::Bars` and `viz_scope::Scope` ARE the arithmetic the page runs, so
+# the desktop cannot drift from what the browser draws. Nothing here does I/O.
 
 [package]
 name = "nz-viz"
@@ -12,3 +15,4 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+rhythm = { path = "../../../webapp/rhythm" }

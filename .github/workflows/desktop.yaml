@@ -83,7 +83,12 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - name: Check formatting
-        run: cargo fmt --all --check
+        # The desktop workspace ONLY. `--all` also formats every local
+        # path-dependency, and `webapp/rhythm`, `webapp/appcore` and
+        # `android/nscore` are hand-formatted on purpose (rhythm's layout is
+        # read as a picture; its committed `.wasm` carries a hash of the exact
+        # source bytes). `cargo fmt --check` still checks every member.
+        run: cargo fmt --check
 
   clippy:
     name: cargo clippy
