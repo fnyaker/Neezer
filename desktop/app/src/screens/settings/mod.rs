@@ -68,6 +68,13 @@ pub const FADE_DEFAULT_S: f32 = 6.;
 pub const SKIP_FADE_MAX_S: f32 = 5.;
 /// `crossfade.rs#DEFAULT_SKIP_SECONDS`.
 pub const SKIP_FADE_DEFAULT_S: f32 = 1.5;
+/// The silence threshold's range and default, in dBFS: the web player's own
+/// slider (`AudioEffects.svelte`, −70…−25) and `stores.js#trimThresholdDb`.
+/// The server bounds what it measures at −90…−20 (`edges.py`), so a value from
+/// an older build is clamped rather than refused.
+pub const TRIM_DB_MIN: f32 = -70.;
+pub const TRIM_DB_MAX: f32 = -25.;
+pub const TRIM_DB_DEFAULT: f64 = -45.;
 
 /// The `kv` keys of the device settings. They are the SPA's `localStorage`
 /// entries, one row each: the same value means the same thing to a person who
@@ -90,6 +97,11 @@ pub mod keys {
     pub const FADE_SKIP_SECONDS: &str = "audio.fade.skip_seconds";
     /// The output device's own name; absent is the host's default.
     pub const DEVICE: &str = "audio.output.device";
+    /// `stores.js#trimSilence`: cut each track at the first and last sample of
+    /// its actual audio. ON by default, like the web player.
+    pub const TRIM: &str = "audio.trim";
+    /// `stores.js#trimThresholdDb`: what counts as silence, in dBFS.
+    pub const TRIM_DB: &str = "audio.trim.db";
     /// `ui.reduce_motion` (D7 reads it; Apparence writes it).
     pub const REDUCE_MOTION: &str = "ui.reduce_motion";
     /// The person's own equaliser presets (`stores.js#fxPresets`).
@@ -221,6 +233,10 @@ pub struct Values {
     pub fade_skip_seconds: f32,
     /// The chosen output device; `None` is the host's default.
     pub device: Option<String>,
+    /// Cut each track at the first and last sample of its music.
+    pub trim: bool,
+    /// What counts as silence for the trim, in dBFS.
+    pub trim_db: f64,
     pub presets: Vec<Preset>,
 }
 
@@ -237,6 +253,8 @@ impl Default for Values {
             fade_on_skip: false,
             fade_skip_seconds: SKIP_FADE_DEFAULT_S,
             device: None,
+            trim: true,
+            trim_db: TRIM_DB_DEFAULT,
             presets: Vec::new(),
         }
     }
@@ -281,6 +299,12 @@ impl Values {
         }
         if let Some(device) = kv.get::<String>(keys::DEVICE) {
             values.device = (!device.is_empty()).then_some(device);
+        }
+        if let Some(on) = kv.get::<bool>(keys::TRIM) {
+            values.trim = on;
+        }
+        if let Some(db) = kv.get::<f64>(keys::TRIM_DB) {
+            values.trim_db = db.clamp(f64::from(TRIM_DB_MIN), f64::from(TRIM_DB_MAX));
         }
         if let Some(presets) = kv.get::<Vec<Preset>>(keys::PRESETS) {
             values.presets = presets
@@ -386,7 +410,8 @@ pub struct Data {
     pub dislikes: Load<nz_model::TrackList>,
     pub version: Load<nz_model::Version>,
     pub storage: Load<nz_model::Storage>,
-    /// The PipeWire sinks `pw-dump` listed (Réglages → Lecture).
+    /// The machine's outputs, from `nz_audio::output_devices` (Réglages →
+    /// Lecture).
     pub sinks: Load<Vec<String>>,
 }
 
@@ -432,6 +457,8 @@ pub enum Knob {
     Balance,
     Fade,
     SkipFade,
+    /// The silence threshold of the trim, in dBFS.
+    TrimThreshold,
 }
 
 /// The Réglages view: one entity for every section, built by the route table.
@@ -588,6 +615,17 @@ impl Screen {
                     .max(SKIP_FADE_MAX_S)
                     .step(0.25)
                     .default_value(skip)
+            }),
+        ));
+        let trim_db = values.trim_db as f32;
+        knobs.push((
+            Knob::TrimThreshold,
+            cx.new(move |_| {
+                SliderState::new()
+                    .min(TRIM_DB_MIN)
+                    .max(TRIM_DB_MAX)
+                    .step(1.)
+                    .default_value(trim_db)
             }),
         ));
 
@@ -768,6 +806,15 @@ impl Screen {
                     &f64::from(self.values.fade_skip_seconds),
                     cx,
                 );
+            }
+            Knob::TrimThreshold => {
+                // A threshold is part of the measurement: `AppState::set_trim`
+                // throws the answers measured at the old one away and asks for
+                // the playing track's bounds again, so the tail follows at once.
+                self.values.trim_db = f64::from(value.clamp(TRIM_DB_MIN, TRIM_DB_MAX));
+                let (trim, db) = (self.values.trim, self.values.trim_db);
+                self.state.update(cx, |state, _| state.set_trim(trim, db));
+                self.save(keys::TRIM_DB, &self.values.trim_db, cx);
             }
         }
         cx.notify();
@@ -984,10 +1031,10 @@ impl Screen {
         }
     }
 
-    /// Ask the machine for its PipeWire sinks, off the UI thread: `pw-dump` is
-    /// a subprocess and the settings page must paint before it answers. Only
-    /// asked when an engine exists — a machine with no output has no sinks to
-    /// choose, and the card says so.
+    /// Ask the machine for its outputs, off the UI thread: `cpal`'s
+    /// enumeration takes a PipeWire registry round trip and the settings page
+    /// must paint before it answers. Only asked when an engine exists — a
+    /// machine with no output has no sinks to choose, and the card says so.
     pub fn load_sinks(&mut self, cx: &mut Context<Self>) {
         if !self.data.sinks.is_idle() || self.audio(cx).is_none() {
             return;
@@ -1834,9 +1881,20 @@ mod ui {
         cx.run_until_parked();
     }
 
+    /// How many panes a section's body draws. It mirrors the strips the section
+    /// files build (`playback.rs` and `sources.rs` call `screen.panes(&[…])`);
+    /// a section that grows one must say so here, or the walk below stops
+    /// covering it.
+    fn panes_of(section: SettingsSection) -> usize {
+        match section {
+            SettingsSection::Playback | SettingsSection::Sources => 3,
+            _ => 1,
+        }
+    }
+
     /// Every section a person can open, at the three sizes: the body never
     /// leaves the window sideways and never grows past it vertically (it
-    /// scrolls instead), and the root is exactly the window.
+    /// scrolls instead), and the root is exactly the window. Each PANE too.
     #[gpui::test]
     async fn every_section_lays_out_inside_the_three_windows(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
@@ -1902,8 +1960,107 @@ mod ui {
                     f32::from(body.origin.x) >= 0.,
                     "{section:?} starts off-screen at {width}"
                 );
+                // Every PANE of a section that has several, not only the first:
+                // Lecture et son is three (Son, Égaliseur, Transitions) and
+                // Sources three, and the rule is that each one fits the window
+                // without a wheel — a card added to a pane is what makes that
+                // false, so the test walks them.
+                let panes = panes_of(*section);
+                for pane in 1..panes {
+                    cx.update(|_, cx| {
+                        host.update(cx, |host, cx| {
+                            host.screen.update(cx, |screen, cx| {
+                                screen.pane = pane;
+                                cx.notify();
+                            });
+                        });
+                    });
+                    cx.run_until_parked();
+                    let body = cx
+                        .debug_bounds("settings-body")
+                        .unwrap_or_else(|| panic!("{section:?} pane {pane} has no body"));
+                    assert!(
+                        f32::from(body.size.width) <= width,
+                        "{section:?} pane {pane} overflows sideways at {width}: {} px",
+                        body.size.width
+                    );
+                    assert!(
+                        f32::from(body.size.height) <= f32::from(viewport.height),
+                        "{section:?} pane {pane} grows past the window at {width}: {} px of {}",
+                        body.size.height,
+                        viewport.height
+                    );
+                    // The card this follow-up added is really in the tree, with
+                    // geometry, at every size — what a screenshot would show.
+                    if *section == SettingsSection::Playback && pane == 2 {
+                        let trim = cx.debug_bounds("settings-trim").unwrap_or_else(|| {
+                            panic!("the silence-trim card is not painted at {width}")
+                        });
+                        assert!(
+                            f32::from(trim.size.width) <= f32::from(body.size.width),
+                            "the trim card is wider than the pane at {width}: {} px",
+                            trim.size.width
+                        );
+                        assert!(
+                            f32::from(trim.size.height) > 1.,
+                            "the trim card has no height at {width}"
+                        );
+                    }
+                }
             }
         }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **The silence trim is a control that acts**, not a switch painted on a
+    /// card: one real click on it, at 1280×800, moves the state the engine reads
+    /// and remembers the value on the device. The row is reached through the
+    /// Transitions pane, so the test also proves the pane is reachable by mouse.
+    #[gpui::test]
+    async fn the_mouse_turns_the_silence_trim_off(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_omarchy::init(cx);
+            crate::keymap::install(cx);
+        });
+        let dir = temp_dir("trim-mouse");
+        let state = signed_in(cx, false, &dir);
+        let host_state = state.clone();
+        let (_host, cx) = cx.add_window_view(move |_window, cx| Host {
+            screen: cx.new(|cx| Screen::new(SettingsSection::Playback, host_state.clone(), cx)),
+            focus: cx.focus_handle(),
+            anchored: false,
+        });
+        at_laptop(cx);
+
+        // The third pane, the way a person gets there: its chip.
+        let chip = cx
+            .debug_bounds("pane-2")
+            .expect("the Transitions chip is on the page");
+        click(cx, centre(chip));
+        let switch = cx
+            .debug_bounds("trim-on")
+            .expect("the trim switch is painted in the Transitions pane");
+        assert!(
+            state.read_with(cx, |state, _| state.trim().0),
+            "on by default"
+        );
+        click(cx, centre(switch));
+
+        assert!(
+            !state.read_with(cx, |state, _| state.trim().0),
+            "one click turned the trim off"
+        );
+        // And it is remembered for the next launch, in the SPA's own key.
+        let cache = state.read_with(cx, |state, _| state.cache.clone());
+        assert_eq!(
+            cache.and_then(|cache| cache.kv().get::<bool>("audio.trim")),
+            Some(false),
+            "the choice is on the device"
+        );
+        // Clicking again restores it: the switch is not one-way.
+        let switch = cx.debug_bounds("trim-on").expect("still painted");
+        click(cx, centre(switch));
+        assert!(state.read_with(cx, |state, _| state.trim().0));
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -63,17 +63,24 @@ fn sound(screen: &mut Screen, _window: &mut Window, cx: &mut Context<Screen>) ->
 
     // Where the sound goes --------------------------------------------------
     //
-    // The list of sinks is `pw-dump`'s own answer (`media.class ==
-    // "Audio/Sink"`, one `node.description` each): that is exactly the string
-    // cpal opens by (`nz-audio`'s `probe` matches `DeviceDescription::name`),
-    // and it is why a chosen sink survives a restart. Reading it is one
-    // subprocess on a background thread the first time this section opens
-    // (measured, `docs/agents/desktop.md`, D14a); the engine itself publishes
-    // no enumeration yet.
+    // The list of sinks is `nz-audio::output_devices()`: the machine's own
+    // enumeration, PipeWire's host first and ALSA after (`probe`'s order), one
+    // `DeviceDescription::name` each — exactly the string the engine opens by,
+    // which is why a chosen sink survives a restart. One read per visit, on a
+    // blocking thread (`load_sinks`), and the engine's own device is added to
+    // the row even when the enumeration cannot run.
     let info = audio.as_ref().map(|audio| audio.engine.output_info());
     let current = info
         .as_ref()
-        .map(|info| info.device.clone())
+        .map(|info| {
+            // The host reports its own alias for "whatever the system chose"
+            // (`default_output`): the line says what that means, not the alias.
+            if nz_audio::is_default_output_alias(&info.device) {
+                "Sortie du système".to_owned()
+            } else {
+                info.device.clone()
+            }
+        })
         .unwrap_or_else(|| "Aucune sortie audio".to_owned());
     let mut output = card("settings-output", cx)
         .child(card_title("Sortie audio", cx))
@@ -142,7 +149,7 @@ fn sound(screen: &mut Screen, _window: &mut Window, cx: &mut Context<Screen>) ->
             .child(value_line("Sortie en cours", &current, cx));
         if matches!(screen.data.sinks, super::Load::Failed(_)) {
             output = output.child(hint(
-                "La liste des sorties n'a pas pu être lue (pw-dump) : seule la sortie en                  cours est proposée.",
+                "La liste des sorties n'a pas pu être lue : seule la sortie en cours est proposée.",
                 cx,
             ));
         }
@@ -387,15 +394,16 @@ fn engine_cause(error: EngineError) -> String {
     format!("Sortie audio : {error}")
 }
 
-/// The outputs the person can pick from: the PipeWire sinks `pw-dump` lists,
+/// The outputs the person can pick from: what the machine publishes right now,
 /// plus the one playing now and the one remembered, so neither can vanish from
-/// the row when the list cannot be read (a machine without PipeWire, a
-/// sandbox without `pw-dump`).
+/// the row when the enumeration cannot run (a machine without PipeWire, a
+/// sandbox with no sound server).
 fn sinks_of(screen: &Screen, cx: &Context<Screen>) -> Vec<String> {
     let mut list: Vec<String> = screen.data.sinks.ready().cloned().unwrap_or_default();
     if let Some(info) = screen.audio(cx).map(|audio| audio.engine.output_info())
         && !info.device.is_empty()
         && !info.device.eq_ignore_ascii_case("silence")
+        && !nz_audio::is_default_output_alias(&info.device)
         && !list.iter().any(|name| name == &info.device)
     {
         list.push(info.device.clone());
@@ -408,45 +416,17 @@ fn sinks_of(screen: &Screen, cx: &Context<Screen>) -> Vec<String> {
     list
 }
 
-/// The sinks PipeWire publishes right now, as the engine names them: one
-/// `node.description` per `Audio/Sink` (`pw-dump`'s own objects). Sorted, so a
-/// node's creation order never moves a chip under the pointer, and empty when
-/// the tool is missing — the caller then falls back to the device in use.
+/// The outputs the machine publishes right now, as the engine names them.
+///
+/// One in-process enumeration in `nz-audio` (`output_devices`: PipeWire's host
+/// first, then ALSA, each device's `description().name()` — exactly the string
+/// `probe` matches, which is why a chosen sink survives a restart and an ALSA
+/// chip lands on ALSA). It replaced reading `pw-dump` here: same names, no
+/// subprocess, no JSON, and a headset plugged in since the engine started is
+/// seen because the host is built fresh. Sorted for the same reason: a node's
+/// creation order never moves a chip under the pointer.
 pub fn sinks_now() -> Vec<String> {
-    let Ok(output) = std::process::Command::new("pw-dump").output() else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    parse_sinks(&output.stdout)
-}
-
-/// The parsing half, kept separate so a captured `pw-dump` body is a test.
-pub fn parse_sinks(json: &[u8]) -> Vec<String> {
-    let Ok(nodes) = serde_json::from_slice::<Vec<serde_json::Value>>(json) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = Vec::new();
-    for node in nodes {
-        let Some(props) = node.get("info").and_then(|info| info.get("props")) else {
-            continue;
-        };
-        if props.get("media.class").and_then(|class| class.as_str()) != Some("Audio/Sink") {
-            continue;
-        }
-        let name = props
-            .get("node.description")
-            .or_else(|| props.get("node.name"))
-            .and_then(|name| name.as_str())
-            .unwrap_or_default();
-        if name.is_empty() || names.iter().any(|existing| existing == name) {
-            continue;
-        }
-        names.push(name.to_owned());
-    }
-    names.sort();
-    names
+    nz_audio::output_devices()
 }
 
 /// One sink (or the default) as a chip. It says it is the default one, or the
@@ -809,12 +789,75 @@ fn transitions(screen: &mut Screen, window: &mut Window, cx: &mut Context<Screen
             )),
     );
 
+    // The silence trim ------------------------------------------------------
+    //
+    // The engine cuts a track where its audio starts and stops, from bounds the
+    // SERVER measures once per file and threshold (`neezer/webui/edges.py`).
+    // The app asks for them ahead of the play (the playing track at user
+    // priority, the next one at prefetch priority) and hands them to the engine
+    // before a voice is built, which is why a track is trimmed from the play
+    // after the one that archived it — the card says so, as the SPA's does.
+    let trim_on = values.trim;
+    let trim_card = card("settings-trim", cx)
+        .debug_selector(|| "settings-trim".to_owned())
+        .child(card_title("Tronquer les silences", cx))
+        .child(hint(
+            "Démarre et termine chaque titre là où le son commence et s'arrête vraiment. \
+             Le serveur mesure le fichier une fois, après son archivage : un titre est donc \
+             ajusté à partir de la lecture suivante. Jamais un épisode de podcast.",
+            cx,
+        ))
+        .child(
+            switch("settings-trim-on", "Tronquer les silences", trim_on, cx)
+                .debug_selector(|| "trim-on".to_owned())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let on = !this.values.trim;
+                    this.values.trim = on;
+                    let db = this.values.trim_db;
+                    this.state.update(cx, |state, _| state.set_trim(on, db));
+                    this.save(super::keys::TRIM, &on, cx);
+                })),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(rems(0.5))
+                .child(
+                    div()
+                        .w(rems(3.))
+                        .text_size(rems(0.75))
+                        .text_color(theme::secondary(cx))
+                        .child("Seuil"),
+                )
+                .child(knob_row(
+                    "settings-trim-db",
+                    screen,
+                    Knob::TrimThreshold,
+                    trim_label(values.trim_db),
+                    !trim_on,
+                    window,
+                    cx,
+                )),
+        )
+        .child(hint(
+            "Ce qui compte comme silence. Plus bas, seuls les vrais blancs numériques sont \
+             coupés ; plus haut, un souffle de salle l'est aussi.",
+            cx,
+        ));
+
     div()
         .flex()
         .flex_col()
         .gap(rems(1.))
         .child(fade)
+        .child(trim_card)
         .into_any_element()
+}
+
+/// The threshold as a person reads it: « −45 dB ».
+fn trim_label(db: f64) -> String {
+    format!("{db:.0} dB")
 }
 
 fn fade_label(seconds: f32) -> String {
@@ -973,43 +1016,33 @@ mod tests {
         assert_eq!(balance_label(0.42), "42 % à droite");
     }
 
+    /// The sink row is the machine's list, and the engine's own device is in it:
+    /// that is what makes the chip beside « Sortie par défaut » selectable and
+    /// what tells a person which one is playing. The enumeration itself
+    /// (`nz_audio::output_devices`) has its own test in `nz-audio`; this one
+    /// asserts the app asks IT and nothing else — no subprocess, no `pw-dump`.
     #[test]
-    fn the_sink_list_is_pw_dumps_own_objects() {
-        // A captured `pw-dump` body (two sinks, a source, a stream): only the
-        // `Audio/Sink` nodes are offered, named by `node.description`, which is
-        // exactly the string `nz-audio`'s `probe` matches — a chosen sink
-        // therefore survives a restart.
-        let body = br#"[
-          {"type":"PipeWire:Interface:Node","info":{"props":{
-            "media.class":"Audio/Sink",
-            "node.name":"alsa_output.pci-0000_66_00.6.analog-stereo",
-            "node.description":"Ryzen HD Audio Controller Analog Stereo"}}},
-          {"type":"PipeWire:Interface:Node","info":{"props":{
-            "media.class":"Audio/Sink","node.name":"easyeffects_sink",
-            "node.description":"Easy Effects Sink"}}},
-          {"type":"PipeWire:Interface:Node","info":{"props":{
-            "media.class":"Audio/Source","node.name":"alsa_input.pci-0000_66_00.6.analog-stereo",
-            "node.description":"Ryzen HD Audio Controller Analog Stereo"}}},
-          {"type":"PipeWire:Interface:Node","info":{"props":{
-            "media.class":"Stream/Output/Audio","node.name":"neezer-desktop"}}},
-          {"type":"PipeWire:Interface:Client","info":{"props":{}}}
-        ]"#;
-        let sinks = parse_sinks(body);
-        assert_eq!(
-            sinks,
-            vec![
-                "Easy Effects Sink".to_owned(),
-                "Ryzen HD Audio Controller Analog Stereo".to_owned(),
-            ],
-            "sorted, so a node's creation order never moves a chip"
-        );
-        // A machine without pw-dump, or with a body that is not JSON, offers
-        // nothing: the card then falls back to the device in use.
-        assert!(parse_sinks(b"pas du json").is_empty());
-        assert!(parse_sinks(b"[]").is_empty());
-        // A sink with no description falls back to its node name.
-        let bare = br#"[{"info":{"props":{"media.class":"Audio/Sink","node.name":"sink.raw"}}}]"#;
-        assert_eq!(parse_sinks(bare), vec!["sink.raw".to_owned()]);
+    fn the_sink_list_is_the_engines_own_enumeration() {
+        assert_eq!(sinks_now(), nz_audio::output_devices());
+        // Sorted within each host, no duplicate across hosts: a name the card
+        // shows twice would be two chips for one sink.
+        let names = sinks_now();
+        let mut sorted = names.clone();
+        sorted.dedup();
+        assert_eq!(names.len(), sorted.len(), "{names:?}");
+    }
+
+    /// The trim's threshold reads like the SPA's slider does, and its range is
+    /// the card's own (the server clamps to −90…−20 behind it).
+    #[test]
+    fn the_trim_threshold_reads_in_dbfs() {
+        assert_eq!(trim_label(-45.), "-45 dB");
+        assert_eq!(trim_label(-70.), "-70 dB");
+        // The card's slider stays inside what the server measures (`edges.py`
+        // clamps to −90…−20), so no answer is ever asked at a threshold the
+        // server would silently replace.
+        const { assert!(super::super::TRIM_DB_MIN > -90.) };
+        const { assert!(super::super::TRIM_DB_MAX < -20.) };
     }
 
     #[test]
@@ -1026,5 +1059,9 @@ mod tests {
         // first enable needs no extra gesture.
         assert_eq!(values.fade_seconds, FADE_DEFAULT_S);
         assert_eq!(values.fade_skip_seconds, SKIP_FADE_DEFAULT_S);
+        // The trim is ON by default, like the web player (`stores.js`), at the
+        // SPA's own threshold: a master's beat of digital silence is not music.
+        assert!(values.trim);
+        assert_eq!(values.trim_db, super::super::TRIM_DB_DEFAULT);
     }
 }

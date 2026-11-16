@@ -936,13 +936,10 @@ impl Screen {
                         if let Some(settings) = self.transcribe.as_mut() {
                             restore_transcribe(settings, key, previous);
                         }
-                        let message = match (&error, key) {
-                            (
-                                ApiError::Http {
-                                    code: Some(code), ..
-                                },
-                                "enabled",
-                            ) if code == "unavailable" || code == "disabled" => {
+                        let message = match (error.code(), key) {
+                            (Some(code), "enabled")
+                                if code == "unavailable" || code == "disabled" =>
+                            {
                                 let reason = transcribe_reason(
                                     self.transcribe
                                         .as_ref()

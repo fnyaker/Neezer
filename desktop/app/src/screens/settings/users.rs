@@ -187,12 +187,7 @@ fn invite_link(server: &str, token: &str) -> String {
 
 /// `lib/adminusers.js#REFUSALS`: the server's codes, in the SPA's words.
 fn guard_fr(error: &ApiError) -> String {
-    let code = match error {
-        ApiError::Http {
-            code: Some(code), ..
-        } => Some(code.as_str()),
-        _ => None,
-    };
+    let code = error.code();
     if let Some(code) = code {
         let sentence = match code {
             "last_admin" => "Impossible : c'est le dernier administrateur actif.",
@@ -225,9 +220,7 @@ fn guard_fr(error: &ApiError) -> String {
             "Votre compte n'a plus les droits d'administration.".to_owned()
         }
         ApiError::Http { status: 404, .. } => "Cet élément n'existe plus.".to_owned(),
-        ApiError::Http { status: 409, .. } => {
-            "Cette action est impossible dans l'état actuel.".to_owned()
-        }
+        ApiError::Conflict { .. } => "Cette action est impossible dans l'état actuel.".to_owned(),
         ApiError::Http { status: 429, .. } => {
             "Trop de tentatives. Réessayez dans quelques minutes.".to_owned()
         }
@@ -2239,10 +2232,12 @@ mod tests {
 
     #[test]
     fn a_refusal_is_the_spas_sentence() {
-        let error = ApiError::Http {
-            status: 409,
-            message: "refused".into(),
+        // A last-admin refusal is a 409 WITH a code: `nz-api` hands it over as a
+        // `Conflict`, and the sentence comes from the code, not from the status.
+        let error = ApiError::Conflict {
+            message: "Impossible : c'est le dernier administrateur actif.".into(),
             code: Some("last_admin".into()),
+            scope: None,
         };
         assert_eq!(
             guard_fr(&error),

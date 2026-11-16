@@ -15,13 +15,14 @@
 //! drains that channel in a foreground task (`crate::app`), so no worker ever
 //! touches GPUI state.
 
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, SharedString};
-use nz_api::{Api, ApiError, SessionJar};
-use nz_audio::{EngineEvent, TrackMeta};
+use nz_api::{Api, ApiError, Lane, SessionJar};
+use nz_audio::{Edges, EngineEvent, TrackMeta};
 use nz_cache::{Cache, QueueSnapshot};
 use nz_model::{ListenContext, ListenPayload, Me, Quality as ModelQuality, Track};
 use nz_mpris::{MprisCommand, MprisHandle};
@@ -32,6 +33,7 @@ use nz_player::{
 use tracing::{debug, warn};
 
 use crate::nav::{Nav, Route, SettingsSection};
+use crate::screens::settings::keys as settings_keys;
 use crate::toast::{Retry, ToastKind, Toasts};
 use crate::wiring::engine::{self, Audio, PlaybackQuality};
 use crate::wiring::events::{self, Sender};
@@ -155,6 +157,54 @@ pub enum AppEvent {
     Quit,
     /// The single-instance name was claimed, refused, or the bus was missing.
     Instance(crate::wiring::instance::Claim),
+    /// The server's answer for one track's measured bounds.
+    ///
+    /// `Ok(None)` is the server saying "not archived, or not measured" — a fact
+    /// to remember for this session. `Err` is a failure to reach it, which is
+    /// never a verdict about the track: nothing is remembered, and the next play
+    /// asks once more (rule 3).
+    Edges {
+        id: String,
+        answer: Result<Option<Edges>, ApiError>,
+    },
+}
+
+/// How many tracks' measured bounds one session keeps. The server measures a
+/// file once and caches the answer, so a re-ask is cheap, but a 4 000-track
+/// queue must not grow the app's memory for tracks nobody plays: the oldest
+/// answers go first, as in `Player.svelte`'s `edges.js`.
+const EDGES_MAX: usize = 512;
+
+/// The bounds this session knows, and the threshold they were measured at.
+///
+/// A threshold is part of the measurement (`neezer/webui/edges.py`), so changing
+/// it invalidates every answer: the cache is emptied rather than keyed twice.
+#[derive(Clone, Debug, Default)]
+struct EdgesCache {
+    seen: HashMap<String, Option<Edges>>,
+    order: VecDeque<String>,
+}
+
+impl EdgesCache {
+    fn get(&self, id: &str) -> Option<Option<Edges>> {
+        self.seen.get(id).copied()
+    }
+
+    fn has(&self, id: &str) -> bool {
+        self.seen.contains_key(id)
+    }
+
+    fn remember(&mut self, id: &str, edges: Option<Edges>) {
+        if !self.seen.contains_key(id) {
+            self.order.push_back(id.to_owned());
+            while self.order.len() > EDGES_MAX {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.seen.remove(&oldest);
+                }
+            }
+        }
+        self.seen.insert(id.to_owned(), edges);
+    }
 }
 
 /// How long a persisted queue may sit before another write is allowed: a
@@ -192,6 +242,15 @@ pub struct AppState {
     pub zoom: f32,
     pub pending_load: Option<PendingLoad>,
     pub pending_preload: Option<Option<Entry>>,
+    /// The next track whose voice is waiting for its measured bounds: its head
+    /// is trimmed when the voice is BUILT, so the answer has to be in hand first.
+    preload_wait: Option<Entry>,
+    /// Where this session's tracks really start and stop, asked once each.
+    edges: EdgesCache,
+    /// « Tronquer les silences » and the threshold it is measured at (Réglages →
+    /// Lecture writes both, through [`AppState::set_trim`]).
+    trim: bool,
+    trim_db: f64,
     pub runtime: tokio::runtime::Handle,
     pub events: Sender<AppEvent>,
     /// Holds the `fr.neezer.Desktop` D-Bus name. Dropping it releases it.
@@ -243,6 +302,19 @@ impl AppState {
             .as_ref()
             .and_then(|cache| cache.kv().get::<bool>("ui.reduce_motion"))
             .unwrap_or(false);
+        // Silence trimming is ON by default, exactly like the web player
+        // (`stores.js#trimSilence`): a master's beat of digital silence is not
+        // something to play. The threshold is the SPA's (-45 dBFS), bounded like
+        // the server bounds it (`edges.py` MIN/MAX_THRESHOLD).
+        let trim = cache
+            .as_ref()
+            .and_then(|cache| cache.kv().get::<bool>(settings_keys::TRIM))
+            .unwrap_or(true);
+        let trim_db = cache
+            .as_ref()
+            .and_then(|cache| cache.kv().get::<f64>(settings_keys::TRIM_DB))
+            .unwrap_or(crate::screens::settings::TRIM_DB_DEFAULT)
+            .clamp(-90., -20.);
 
         let mut state = Self {
             config,
@@ -270,6 +342,10 @@ impl AppState {
             zoom: 1.0,
             pending_load: None,
             pending_preload: None,
+            preload_wait: None,
+            edges: EdgesCache::default(),
+            trim,
+            trim_db,
             runtime,
             events,
             instance,
@@ -491,16 +567,11 @@ impl AppState {
             None => return,
         };
         // The metadata goes in BEFORE the voice is built: the first track of a
-        // session is normalised like the next one (`nz-audio`, D6).
-        audio.engine.set_track_meta(
-            &reference,
-            TrackMeta {
-                loudness: entry.gain.map(|gain| gain as f32),
-                edges: None,
-                duration_s: Some(entry.duration as f64),
-                podcast: entry.is_podcast(),
-            },
-        );
+        // session is normalised like the next one, and a track whose bounds a
+        // previous play taught us starts where its music does (`nz-audio`, D6).
+        audio
+            .engine
+            .set_track_meta(&reference, self.meta_for(&entry));
         let quality = self.quality.audio();
         audio
             .engine
@@ -514,22 +585,145 @@ impl AppState {
         if entry.duration > 0 {
             self.player.set_duration(entry.duration as f64);
         }
+        // The playing track's own bounds, asked at user priority (rule 1: the
+        // wait on this track's answer must never be behind the next one's). Its
+        // head is already past by the time an answer arrives, so what this
+        // changes is the END — live — and the next play of the same track.
+        if self.trim && !self.edges.has(&reference) {
+            self.ask_edges(reference, Lane::User);
+        }
         self.update_bulk_cap();
     }
 
     fn preload(&mut self, next: Option<Entry>) {
+        // Whatever was waiting before is no longer the next track: this call is
+        // the app's last word on what comes after the playing row.
+        self.preload_wait = None;
         let Some(audio) = self.audio.clone() else {
             self.pending_preload = Some(next);
             return;
         };
-        match next.and_then(|entry| entry.reference().map(str::to_owned)) {
-            Some(reference) => audio.engine.preload_next(&reference, self.quality.audio()),
-            None => {
-                // Nothing after the playing row: the second voice starts empty.
-                // `nz-audio` has no explicit "clear" (a preload is replaced by
-                // the next one), so a silent id is not invented here.
-            }
+        let Some(entry) = next else {
+            // Nothing after the playing row: the second voice starts empty.
+            // `nz-audio` has no explicit "clear" (a preload is replaced by the
+            // next one), so a silent id is not invented here.
+            return;
+        };
+        let Some(reference) = entry.reference().map(str::to_owned) else {
+            return;
+        };
+        // The bounds must be in hand BEFORE the voice exists: the head trim is a
+        // decision taken when the voice is built, and a voice built at 0 plays
+        // the silence the trim was for. A prefetch is the only thing that waits
+        // for this answer, and it has the whole current track to do it in — it
+        // would have yielded to the User lane anyway.
+        if self.trim && !self.edges.has(&reference) {
+            self.preload_wait = Some(entry);
+            self.ask_edges(reference, Lane::Prefetch);
+            return;
         }
+        audio
+            .engine
+            .set_track_meta(&reference, self.meta_for(&entry));
+        audio.engine.preload_next(&reference, self.quality.audio());
+    }
+
+    /// What the engine must know about a queue row before its voice is built.
+    fn meta_for(&self, entry: &Entry) -> TrackMeta {
+        TrackMeta {
+            loudness: entry.gain.map(|gain| gain as f32),
+            edges: self.edges_for(entry),
+            duration_s: Some(entry.duration as f64),
+            podcast: entry.is_podcast(),
+        }
+    }
+
+    /// The bounds of this row, when trimming is on and they are known.
+    fn edges_for(&self, entry: &Entry) -> Option<Edges> {
+        if !self.trim {
+            return None;
+        }
+        entry
+            .reference()
+            .and_then(|id| self.edges.get(id).flatten())
+    }
+
+    /// Ask the server where this track's audio starts and stops.
+    ///
+    /// Fire-and-forget on `nz-net`, once per track and threshold: the answer
+    /// comes back as [`AppEvent::Edges`], and a failure is logged and forgotten
+    /// (nothing is remembered, so the next play asks once more — a dead link is
+    /// never a verdict about a track, rule 3).
+    fn ask_edges(&self, id: String, lane: Lane) {
+        let Some(api) = self.api.clone() else {
+            return;
+        };
+        let db = self.trim_db;
+        let events = self.events.clone();
+        self.runtime.spawn(async move {
+            let answer = match api.audio_edges_on(lane, &id, db).await {
+                Ok(answer) if answer.ready => {
+                    answer.start.zip(answer.end).zip(answer.duration).map(
+                        |((start, end), duration)| Edges {
+                            start,
+                            end,
+                            duration,
+                        },
+                    )
+                }
+                // `ready: false`: not on disk, or not measured yet. No trimming
+                // for this one, and the session remembers that.
+                Ok(_) => None,
+                Err(error) => {
+                    debug!(%error, track = %id, "bornes de silence non mesurées");
+                    events.send(AppEvent::Edges {
+                        id,
+                        answer: Err(error),
+                    });
+                    return;
+                }
+            };
+            events.send(AppEvent::Edges {
+                id,
+                answer: Ok(answer),
+            });
+        });
+    }
+
+    /// The trim switch and its threshold, as Réglages → Lecture sets them.
+    ///
+    /// The sound changes NOW, not at the next launch: turning trimming off drops
+    /// the bounds of what is playing (the voice's stop is lifted), turning it on
+    /// asks for them, and a new threshold throws away answers measured at the old
+    /// one because a threshold is part of the measurement.
+    pub fn set_trim(&mut self, enabled: bool, db: f64) {
+        let db = db.clamp(-90., -20.);
+        let db_changed = (db - self.trim_db).abs() > 0.001;
+        self.trim = enabled;
+        self.trim_db = db;
+        if db_changed || !enabled {
+            self.edges = EdgesCache::default();
+        }
+        let Some(entry) = self.player.current().cloned() else {
+            return;
+        };
+        let Some(reference) = entry.reference().map(str::to_owned) else {
+            return;
+        };
+        if let Some(audio) = self.audio.clone() {
+            audio
+                .engine
+                .set_track_meta(&reference, self.meta_for(&entry));
+        }
+        if enabled && !self.edges.has(&reference) {
+            self.ask_edges(reference, Lane::User);
+        }
+    }
+
+    /// Is silence trimming on, and at what threshold? For Réglages' own view of
+    /// the setting (the switch reflects the stored value, not a default).
+    pub fn trim(&self) -> (bool, f64) {
+        (self.trim, self.trim_db)
     }
 
     fn report_listen(
@@ -604,6 +798,10 @@ impl AppState {
         self.player = PlayerState::new();
         self.pending_load = None;
         self.pending_preload = None;
+        self.preload_wait = None;
+        // Another person's session keeps nothing of this one: the measured
+        // bounds are re-asked on the next play instead of being trusted.
+        self.edges = EdgesCache::default();
         self.mpris_track = None;
         if let Some(handle) = &self.mpris {
             handle.set_status(nz_mpris::PlaybackStatus::Stopped);
@@ -739,6 +937,24 @@ impl AppState {
                 self.audio_error = None;
                 self.viz = VizService::start(&audio.engine, audio.sample_rate);
                 self.audio = Some(*audio);
+                // The saved sound, applied when the ENGINE arrives — not when
+                // the person opens Réglages (D14a's seam): a session that never
+                // opens the page must sound like the settings say, and a cold
+                // start must not run on the engine's defaults until someone
+                // looks. `Values::load` is the same read the page makes, so the
+                // two cannot disagree.
+                let values = crate::screens::settings::Values::load(self.cache.as_ref());
+                values.apply_to(self.audio.as_ref());
+                if let Some(device) = values.device.as_deref()
+                    && let Some(audio) = self.audio.as_ref()
+                    && let Err(error) = audio.engine.set_output_device(Some(device))
+                {
+                    // A machine with no switchable output says so once, quietly:
+                    // the device may still be the only one, and a toast on every
+                    // launch would be noise. A real device that fails to open
+                    // reports itself through `EngineEvent::Error`.
+                    debug!(%error, device, "sortie enregistrée indisponible");
+                }
                 if let Some(preload) = self.pending_preload.take() {
                     self.preload(preload);
                 }
@@ -780,6 +996,33 @@ impl AppState {
             }
             AppEvent::Restored(result) => self.on_restored(result, cx),
             AppEvent::LoggedIn(result) => self.on_logged_in(result, cx),
+            AppEvent::Edges { id, answer } => {
+                if let Ok(edges) = &answer
+                    && self.trim
+                {
+                    self.edges.remember(&id, *edges);
+                }
+                // The next track's voice was waiting for exactly this answer, an
+                // answer that failed included: a measurement that never arrived
+                // must not hold a track back (rule 3). Building it now means the
+                // head trim is applied, which is the whole reason to wait.
+                let waiting = self
+                    .preload_wait
+                    .take_if(|entry| entry.reference() == Some(id.as_str()));
+                if let Some(entry) = waiting {
+                    self.preload(Some(entry));
+                }
+                // The playing track's end follows its bounds immediately
+                // (`Player.svelte#audioEndsAt` reads the cache live too); its
+                // head is already past.
+                if let Some(entry) = self.player.current().cloned()
+                    && entry.reference() == Some(id.as_str())
+                    && let Some(audio) = self.audio.clone()
+                {
+                    audio.engine.set_track_meta(&id, self.meta_for(&entry));
+                }
+                cx.notify();
+            }
             AppEvent::Raise => {
                 self.raise_requested = true;
                 cx.notify();
@@ -1465,6 +1708,454 @@ mod tests {
             "the two worst-case lists cost {} KB of RSS",
             after - before
         );
+    }
+
+    /// `ffmpeg` writes a FLAC whose first `head` seconds are digital silence,
+    /// then a tone, then `tail` seconds of silence: the same fixture
+    /// `nz-audio`'s trim tests use. The desktop CI installs ffmpeg for the audio
+    /// crate's own real-audio tests, so this is the same tool.
+    fn silence_tone_silence(path: &Path, head: f64, seconds: f64, tail: f64) {
+        let expression = format!(
+            "if(lt(t\\,{head})\\,0\\,if(lt(t\\,{})\\,0.25*cos(2*PI*440*t)\\,0))",
+            head + seconds
+        );
+        let source = format!(
+            "aevalsrc={expression}:s=48000:d={}:c=stereo",
+            head + seconds + tail
+        );
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+            .arg("-i")
+            .arg(&source)
+            .args(["-c:a", "flac"])
+            .arg(path)
+            .status()
+            .expect("ffmpeg is installed (the desktop CI installs it)");
+        assert!(status.success(), "ffmpeg failed for {source}");
+    }
+
+    /// A `StreamOpener` over files on disk: the engine reads them directly (the
+    /// play cache's answer), so a test needs no server for the audio itself.
+    struct Files(std::collections::HashMap<String, PathBuf>);
+
+    impl nz_audio::StreamOpener for Files {
+        fn open(
+            &self,
+            id: &str,
+            _quality: nz_audio::Quality,
+            _start: Option<f64>,
+            _from_byte: Option<u64>,
+            _lane: nz_audio::Lane,
+        ) -> Result<Box<dyn nz_audio::ByteStream>, nz_audio::SourceError> {
+            Err(nz_audio::SourceError::Message(format!(
+                "{id} est un fichier local"
+            )))
+        }
+
+        fn ready(
+            &self,
+            _id: &str,
+            _quality: nz_audio::Quality,
+        ) -> Result<nz_audio::StreamReady, nz_audio::SourceError> {
+            Ok(nz_audio::StreamReady::default())
+        }
+
+        fn local(&self, id: &str, _quality: nz_audio::Quality) -> Option<PathBuf> {
+            self.0.get(id).cloned()
+        }
+    }
+
+    /// **The trim, end to end**: the app asks the server where a track's audio
+    /// starts and stops, hands the answer to the engine BEFORE the voice is
+    /// built, and the file really plays from its music's first sample to its
+    /// last — proven on a real audio file.
+    ///
+    /// The chain: a two-row queue (the tapped track, then the next one) →
+    /// `AppState::load` asks the playing track's bounds at USER priority while
+    /// `AppState::preload` asks the next one's at PREFETCH priority →
+    /// `AppEvent::Edges` lands → the next track's `TrackMeta::edges` is set →
+    /// the voice is built at 0.5 s, not at 0.
+    ///
+    /// Measured on this machine (Rust 1.99.1): the two requests leave in that
+    /// order, one ask each, both at `db=-45`; the engine's meta for the next
+    /// track holds `{0.5, 2.5, 5.5}`; the rendered window peaks at **0.2500**
+    /// (the tone, from the first buffer) and the clock starts at **0.500 s**,
+    /// never at 0. Turning the switch off afterwards drops that meta at once.
+    #[gpui::test]
+    async fn the_servers_bounds_reach_the_engine_before_the_next_voice(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::widgets::card::stub;
+        use gpui_kit::AppContext as _;
+        use nz_player::QueueArgs;
+
+        let dir = temp_dir("trim-chain");
+        let plain = dir.join("plain.flac");
+        let trimmed = dir.join("trimmed.flac");
+        // A plain second of tone, and the fixture: 0.5 s of silence, 2 s of tone,
+        // 3 s of silence.
+        silence_tone_silence(&plain, 0.0, 1.0, 0.0);
+        silence_tone_silence(&trimmed, 0.5, 2.0, 3.0);
+
+        // What the server answers for the trimmed track (`edges.py`'s payload).
+        let answer = r#"{"ready":true,"start":0.5,"end":2.5,"duration":5.5,"threshold":-45.0}"#;
+        let server = stub::Stub::start(&[
+            ("/api/login", r#"{"user":{"id":"u1","name":"bench"}}"#),
+            ("/api/me", r#"{"user":{"id":"u1","name":"bench"}}"#),
+            (
+                "/api/audio/edges/plain",
+                r#"{"ready":false,"duration":1.0}"#,
+            ),
+            ("/api/audio/edges/trimmed", answer),
+        ]);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (tx, rx) = event_channel();
+        let config = AppConfig {
+            server: Some(server.base()),
+            start_audio: false,
+            start_mpris: false,
+            ..AppConfig::for_test(&dir)
+        };
+        let state = {
+            let handle = runtime.handle().clone();
+            cx.update(move |cx| cx.new(move |_| AppState::new(config, handle, tx, None)))
+        };
+        // The shell's own drain, so an `AppEvent::Edges` is handled exactly as
+        // the app handles it.
+        {
+            let state = state.clone();
+            cx.update(move |cx| {
+                cx.spawn(async move |cx| {
+                    while let Some(event) = rx.next().await {
+                        state.update(cx, |state, cx| state.on_event(event, cx));
+                    }
+                })
+                .detach();
+            });
+        }
+
+        // The engine, over the two files, with the sink the test drives.
+        let cfg = nz_audio::EngineConfig {
+            sample_rate: 48_000,
+            spool_dir: dir.join("spool"),
+            ..Default::default()
+        };
+        let files = Files(std::collections::HashMap::from([
+            ("plain".to_owned(), plain.clone()),
+            ("trimmed".to_owned(), trimmed.clone()),
+        ]));
+        let (engine, mut sink) = nz_audio::Engine::new_offline(cfg, std::sync::Arc::new(files));
+        let engine_for_state = engine.clone();
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.audio = Some(Audio {
+                    engine: engine_for_state,
+                    sample_rate: 48_000.,
+                });
+            });
+        });
+
+        // The tapped track, then the next one: the state machine's own effects.
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.command(
+                    Command::PlayQueue {
+                        args: QueueArgs {
+                            tracks: vec![
+                                Entry {
+                                    id: "plain".into(),
+                                    title: "Plain".into(),
+                                    duration: 1,
+                                    ..Entry::default()
+                                },
+                                Entry {
+                                    id: "trimmed".into(),
+                                    title: "Trimmed".into(),
+                                    duration: 6,
+                                    ..Entry::default()
+                                },
+                            ],
+                            start: 0,
+                            context: None,
+                        },
+                    },
+                    cx,
+                );
+            });
+        });
+
+        // Pump the network, the UI and the sink until the engine holds the next
+        // track's bounds.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut buffer = vec![0.0f32; 960];
+        loop {
+            runtime.block_on(async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            });
+            cx.run_until_parked();
+            sink.render(&mut buffer);
+            if engine.track_meta("trimmed").edges.is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the bounds never reached the engine (edges asked: {:?})",
+                server
+                    .hits()
+                    .iter()
+                    .map(|hit| hit.path.clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // The wire contract: the playing track first (user priority), the next
+        // one second, both at the configured threshold, one ask each.
+        let hits: Vec<String> = server
+            .hits()
+            .iter()
+            .filter(|hit| hit.path.starts_with("/api/audio/edges/"))
+            .map(|hit| format!("{}?{}", hit.path, hit.query))
+            .collect();
+        println!("bornes demandées : {hits:?}");
+        assert_eq!(
+            hits,
+            vec![
+                "/api/audio/edges/plain?db=-45".to_owned(),
+                "/api/audio/edges/trimmed?db=-45".to_owned(),
+            ],
+            "the playing track first, then the next one — one ask each"
+        );
+
+        let meta = engine.track_meta("trimmed");
+        assert_eq!(
+            meta.edges,
+            Some(Edges {
+                start: 0.5,
+                end: 2.5,
+                duration: 5.5
+            }),
+            "the answer became the voice's bounds before the voice existed"
+        );
+
+        // And the sound: the voice starts where the music does. (The engine's own
+        // half is `nz-audio`'s
+        // `a_measured_head_and_tail_of_silence_are_both_skipped`; this plays the
+        // very meta the app built.)
+        let events = engine.events();
+        engine.load("trimmed", nz_audio::Quality::Flac, None);
+        // The mixer consumes its commands only while it renders, so the sink is
+        // pumped here too: a paused device would leave the install command
+        // queued and the voice would never be built.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while !started {
+            while let Ok(event) = events.try_recv() {
+                started |= matches!(event, EngineEvent::Started { id, .. } if id == "trimmed");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the trimmed voice was never built"
+            );
+            sink.render(&mut buffer);
+        }
+        // 0.200 s of audio from wherever the voice starts, counted by the
+        // engine's own clock rather than by the wall clock. The decode thread
+        // fills its ring in the background, so the sink is pumped until the
+        // clock has covered the window (a buffer rendered before the first
+        // decoded frame is silence, and correctly does not advance it).
+        engine.play();
+        let start_position = engine.position();
+        let mut peak = 0.0f32;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut played = start_position;
+        while played - start_position < 0.2 {
+            sink.render(&mut buffer);
+            peak = buffer
+                .iter()
+                .fold(peak, |peak, sample| peak.max(sample.abs()));
+            played = engine.position();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the trimmed voice stopped advancing at {played:.3} s"
+            );
+        }
+        engine.pause();
+        println!("départ {start_position:.3} s, crête {peak:.4}, position {played:.3} s");
+        assert!(
+            (0.49..0.75).contains(&start_position),
+            "the voice starts at the audio's own beginning (0.5 s in), got {start_position:.3} s"
+        );
+        assert!(
+            peak > 0.2,
+            "the music is there from the first buffer — no 0.5 s of head silence (crest {peak:.4})"
+        );
+        assert!(
+            played - start_position < 0.35,
+            "the clock covered the window in one go, got {:.3} s",
+            played - start_position
+        );
+
+        // The switch takes effect on what is playing. Press next first, so the
+        // state machine's own current row is the trimmed track — the app never
+        // guesses what the engine plays, it follows the queue.
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.command(
+                    Command::Next {
+                        args: Default::default(),
+                    },
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            state.read_with(cx, |state, _| state
+                .player
+                .current()
+                .and_then(Entry::reference)
+                .map(str::to_owned)),
+            Some("trimmed".to_owned()),
+            "the queue advanced to the trimmed track"
+        );
+        cx.update(|cx| {
+            state.update(cx, |state, _| state.set_trim(false, -45.0));
+        });
+        assert_eq!(
+            engine.track_meta("trimmed").edges,
+            None,
+            "off means the playing track's measured bounds go too"
+        );
+        server.stop();
+    }
+
+    /// **The saved sound is applied when the engine arrives**, not when Réglages
+    /// is opened: the equaliser, the normalisation level, the bass lift, mono,
+    /// the balance and the crossfade all reach the engine at
+    /// `AppEvent::AudioReady`, so a session that never opens the page sounds like
+    /// the settings say. Before this, the engine ran on its defaults until a
+    /// person visited Réglages → Lecture.
+    ///
+    /// The saved OUTPUT device is attempted too; on a machine whose output is the
+    /// silence pump (CI, a box with no card) that is an honest `Err`, and the
+    /// engine says so through `EngineEvent::Error` for a real device that fails.
+    ///
+    /// Measured: the engine starts flat (`eq(0) = 0`, normalisation `Off`) and
+    /// reads **6.0 dB on the 31 Hz band, 9.0 dB of bass, `Medium`, mono, −0.30**
+    /// after the one event.
+    #[gpui::test]
+    async fn the_saved_sound_is_applied_when_the_engine_arrives(cx: &mut gpui::TestAppContext) {
+        use gpui_kit::AppContext as _;
+
+        let dir = temp_dir("audio-ready");
+        // What Réglages wrote in an earlier session.
+        {
+            let cache =
+                Cache::open_with_cache_dir(dir.join("data"), dir.join("cache")).expect("cache");
+            let kv = cache.kv();
+            kv.set("audio.eq", &[6., 5., 4., 2., 0., 0., 0., 0., 0., 0.])
+                .expect("eq");
+            kv.set("audio.normalization", &"medium".to_owned())
+                .expect("norm");
+            kv.set("audio.bass", &9.0_f32).expect("bass");
+            kv.set("audio.mono", &true).expect("mono");
+            kv.set("audio.balance", &-0.3_f64).expect("balance");
+            kv.set("audio.fade.enabled", &true).expect("fade");
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (tx, _rx) = event_channel();
+        let config = AppConfig {
+            server: Some(net::DEFAULT_SERVER.to_owned()),
+            start_audio: false,
+            start_mpris: false,
+            ..AppConfig::for_test(&dir)
+        };
+        let state = {
+            let handle = runtime.handle().clone();
+            cx.update(move |cx| cx.new(move |_| AppState::new(config, handle, tx, None)))
+        };
+
+        let cfg = nz_audio::EngineConfig {
+            sample_rate: 48_000,
+            spool_dir: dir.join("spool"),
+            ..Default::default()
+        };
+        let (engine, _sink) = nz_audio::Engine::new_offline(
+            cfg,
+            std::sync::Arc::new(Files(std::collections::HashMap::new())),
+        );
+        assert!(engine.eq(0).abs() < 0.01, "the engine starts flat");
+        assert_eq!(engine.normalization(), nz_audio::Normalization::Off);
+
+        // The one event a cold start produces.
+        let audio = Audio {
+            engine: engine.clone(),
+            sample_rate: 48_000.,
+        };
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.on_event(AppEvent::AudioReady(Ok(Box::new(audio))), cx);
+            });
+        });
+
+        assert!(
+            (engine.eq(0) - 6.0).abs() < 0.01,
+            "the saved 31 Hz band reached the engine, got {}",
+            engine.eq(0)
+        );
+        assert!((engine.bass() - 9.0).abs() < 0.01, "bass {}", engine.bass());
+        assert_eq!(engine.normalization(), nz_audio::Normalization::Medium);
+        assert!(engine.mono());
+        assert!(
+            (engine.balance() + 0.3).abs() < 0.01,
+            "balance {}",
+            engine.balance()
+        );
+        assert!(engine.fade().enabled, "the saved crossfade is on");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The trim setting's own value: on by default like the web player, written
+    /// by Réglages → Lecture, bounded like the server bounds it — a value from a
+    /// build that allowed a lower threshold is clamped, never refused.
+    #[test]
+    fn the_trim_setting_is_stored_and_bounded() {
+        let dir = temp_dir("trim-off");
+        let (tx, _rx) = event_channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut state = AppState::new(
+            AppConfig {
+                server: Some(net::DEFAULT_SERVER.to_owned()),
+                start_audio: false,
+                start_mpris: false,
+                ..AppConfig::for_test(&dir)
+            },
+            runtime.handle().clone(),
+            tx,
+            None,
+        );
+        assert!(state.trim().0, "trimming is on by default, like the SPA");
+        assert_eq!(state.trim().1, -45.0);
+        state.set_trim(false, -45.0);
+        assert!(!state.trim().0);
+        state.set_trim(true, -30.0);
+        assert_eq!(state.trim(), (true, -30.0));
+        state.set_trim(true, -120.0);
+        assert_eq!(
+            state.trim().1,
+            -90.0,
+            "the server's own floor (`edges.py` MIN_THRESHOLD)"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

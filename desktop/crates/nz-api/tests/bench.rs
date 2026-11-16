@@ -284,8 +284,13 @@ async fn a_not_ready_and_a_conflict_are_told_apart_by_the_real_server() {
         .await
         .expect_err("a stale version is refused");
     match &conflict {
-        ApiError::Conflict { message, scope } => {
+        ApiError::Conflict {
+            message,
+            code,
+            scope,
+        } => {
             assert_eq!(message, "conflict", "the server's own label");
+            assert_eq!(code, &None, "this refusal carries no machine code");
             assert_eq!(
                 scope.as_deref(),
                 Some("content"),

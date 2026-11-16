@@ -867,6 +867,10 @@ impl Api {
                             .and_then(|v| v.as_str())
                             .map(str::to_owned)
                             .unwrap_or_else(|| format!("HTTP {status}")),
+                        code: parsed
+                            .get("code")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
                         scope: parsed
                             .get("scope")
                             .and_then(|v| v.as_str())

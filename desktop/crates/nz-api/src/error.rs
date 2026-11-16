@@ -69,6 +69,10 @@ pub enum ApiError {
     Conflict {
         /// The server's own label (`{"error": "conflict"}`).
         message: String,
+        /// The server's machine code for this refusal (`{"code": …}`), what a
+        /// screen prints its own sentence for: `last_admin`, `unavailable`,
+        /// `cannot`, `already_running`…
+        code: Option<String>,
         /// What the server says the conflict is about, when it says.
         scope: Option<String>,
     },
@@ -104,6 +108,18 @@ impl ApiError {
             self,
             ApiError::Offline | ApiError::NotReady { .. } | ApiError::Busy { .. }
         ) || matches!(self, ApiError::Http { status, .. } if *status >= 500)
+    }
+
+    /// The server's own machine code for a refusal, when it sent one: from the
+    /// `{"code": …}` body of a `409` as well as of any other status. A screen
+    /// prints a better sentence per code (`last_admin`, `unavailable`, …), and
+    /// this is that lookup's key — one place, so a `Conflict` and an `Http`
+    /// carrying the same code are not read two ways.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            ApiError::Http { code, .. } | ApiError::Conflict { code, .. } => code.as_deref(),
+            _ => None,
+        }
     }
 
     /// The wait the server asked for, in seconds, when it asked for one.
@@ -246,6 +262,7 @@ mod tests {
     fn a_conflict_is_not_a_not_ready_and_says_which_half_moved() {
         let conflict = ApiError::Conflict {
             message: "conflict".into(),
+            code: None,
             scope: Some("content".into()),
         };
         assert!(
@@ -260,6 +277,7 @@ mod tests {
         assert_eq!(
             ApiError::Conflict {
                 message: "track is available".into(),
+                code: None,
                 scope: None,
             }
             .cause_fr(),
@@ -271,5 +289,24 @@ mod tests {
             ApiError::NotReady { retry_after: 0 },
             "a caller matching one must not catch the other"
         );
+        // The server's machine code survives the classification: Réglages →
+        // Utilisateurs and Serveur print their own sentence per code, and those
+        // refusals are 409s.
+        let coded = ApiError::Conflict {
+            message: "Impossible : c'est le dernier administrateur actif.".into(),
+            code: Some("last_admin".into()),
+            scope: None,
+        };
+        assert_eq!(coded.code(), Some("last_admin"));
+        assert_eq!(
+            ApiError::Http {
+                status: 403,
+                message: "forbidden".into(),
+                code: Some("forbidden".into()),
+            }
+            .code(),
+            Some("forbidden")
+        );
+        assert_eq!(ApiError::Offline.code(), None);
     }
 }
