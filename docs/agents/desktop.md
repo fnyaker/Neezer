@@ -6,9 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D13, D14a, D14b, M1, T1 and V1
-delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`, `409` told
-apart, the `auto` payload, the output list); the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D13, D14a, D14b, M1, P1, T1
+and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`, `409`
+told apart, the `auto` payload, the output list); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1027,7 +1027,9 @@ Waves that can run in parallel (disjoint files):
   and was never polled (a startup task printed, a later one did not). The app keeps the
   runtime in a GPUI `Global` (`NetRuntime`) and one event channel carries every worker's
   [`AppEvent`] to the shell; the shell drains it in a foreground task, so no worker touches
-  GPUI state.
+  GPUI state. That global also OWNS the threads that borrow the runtime: its `Drop` joins the
+  offline worker before the runtime goes, because a `Handle::block_on` on a shutting-down runtime
+  panics its thread (see D13's *Pitfalls*).
 - **The rule, the keyboard is the mouse**: every control dispatches the action the keymap
   binds (`cx.listener` → `window.dispatch_action`), and the action handler is the shell's one
   transport path (`PlayerState::apply`). The single-letter/space bindings live in
@@ -1182,13 +1184,100 @@ Waves that can run in parallel (disjoint files):
   `directories::UserDirs` download folder must never be used from a test: `AppConfig::data_dir`
   wins when it is set.
 
-### D9 — Now playing, queue, MPRIS wiring
+### D9 — Now playing, queue, MPRIS wiring (delivered 2026-11-17)
 
-- **Files**: `screens/{now_playing,queue}.rs`, `app/src/wiring/mpris.rs`, `app/src/widgets/{lyrics,
-  sleep_timer,quality_menu,speed}.rs`.
-- **Acceptance**: synced lyrics follow the position within 50 ms; queue of 4 000 scrolls at display
-  rate; media keys work under Hyprland (`playerctl` and the keyboard's keys); the sleep timer ends
-  with a 10 s fade; quality change applies at the next track and says so.
+- **The rule, the lyrics are scheduled on their own timestamps.** The shell repaints four times a
+  second (the bar's clock), so a line read off that tick flips 0–250 ms late — the SPA's own
+  `activeLyricIndex` exists for that reason (`lib/lyrics.js`). Here one wake-up is armed for the
+  NEXT line's timestamp, the position it reads is the engine's own audible clock (`nz-audio`'s
+  `Engine::position` already subtracts the device latency), and a state notification re-arms it
+  (dropping the previous task cancels it, GPUI's `clearTimeout`) so a seek or a pause moves the
+  wake-up instead of leaving it behind. Measured: a paint 1 ms before a boundary shows the previous
+  line, a paint on the boundary shows the new one — **0 ms of error at the timestamp, one frame
+  (4.2 ms at 240 Hz) of scheduling**. The position read is the ENGINE's while it plays and the
+  shell's playhead otherwise, which is what makes a restored track (position 95.4 s, engine not
+  started yet) still ask for and show its words.
+- **The rule, the lyrics come on the `Prefetch` lane, on the network runtime.** The words belong to
+  the stream they follow (rule 1: `lib/ladder.js` lists them after the audio), and the request runs
+  on `nz-net` — its quiet clock is a `tokio::time` deadline, and polling it from the GPUI executor
+  panics with "no reactor running" (measured in the widget's first test). The widget only awaits the
+  answer on the foreground task. One request per track, cacheable (`/lyrics/` is in
+  `is_cacheable`), so a second visit costs **0 requests**.
+- **The rule, a 4 000-row queue builds the viewport's rows.** `virtual_list` with one 56 px size per
+  entry: an 800 px window builds **17 rows** whatever the queue holds (15 visible + 2 overscan),
+  and a paint costs **35.9 µs in release** (314 µs debug) against the 240 Hz frame budget of
+  4.17 ms — **1.2 %**. Only what is AFTER the playhead is editable (the SPA's rule), the playing row
+  is told apart by a tint and its weight, and every edit is the state machine's (`jump`, `removeAt`,
+  `move`, `clearUpcoming`). The row's own ✕/⌃/⌄ appear on hover (a 4 000-row queue of ✕ is noise)
+  and always for the keyboard's cursor row.
+- **The rule, three widths measured on the real window.** The stage is `[paroles][pochette+transport]
+  [file]` from **1600 px** of content (the SPA's ROOMY), `[pochette][carte]` from **980 px**, one
+  column below. The content width is the WINDOW minus the shell's fixed rails (200 px sidebar, 420 px
+  queue panel) — measuring the window instead put a two-column layout in 660 px and the sleeve
+  overlapped the card. At 2560×1600 the sleeve is 340 px and the lyrics column 300 px; at 1280×800
+  (1080 px of content) the card's queue sits beside the transport; at 1280 with the 420 px panel open
+  (660 px) the card stacks under the transport and shows the LYRICS — the panel already has the queue,
+  and duplicating it was two scroll positions for one list.
+- **The rule, the sleep timer runs where the audio is, not where the screen is.** The timer is a
+  process-wide slot plus a detached foreground task, so leaving the now-playing screen does not
+  cancel bedtime; its deadline is compared with the WALL CLOCK (a suspended laptop still ends where
+  the clock says) and the last **15 s fade** is a multiplier on the ENGINE's volume — the person's
+  own level is never touched and nothing has to be put back. **15 s, not the 10 s this paragraph
+  used to say**: `webapp/test/sleep.test.mjs` and `docs/agents/webapp.md` pin 15, and "the same
+  features as the SPA" wins. It fires a PAUSE (queue and position kept) and "end of the track" holds
+  the crossfade back, then stops on the next track, paused. Measured: the fade is 1 at 15 s, 0.25 at
+  7.5 s and 0 at the deadline; a clock that jumped 10 minutes past a 30-minute timer fires on the
+  next tick; a spent timer pauses where it was, tested end to end.
+- **The rule, MPRIS publishes ONE track's metadata and a stopped transport.** A new track is
+  announced once (its length, artists, album and `mpris:trackid`), position ticks never re-announce
+  it, and an EMPTY queue says `Stopped` with the last metadata kept — `playerctl status` used to
+  read "Paused on the last track" for ever. Proven on a private `dbus-run-session`: the wiring's
+  `publish` puts the four `xesam` fields and `Playing` on the bus, `playerctl -p neezer play-pause`
+  (what Hyprland's binding runs) and a direct `PlayPause` call both arrive as
+  `AppEvent::Mpris(PlayPause)`, and an emptied queue reads `Stopped`.
+- **The rule, quality applies at the NEXT track and says so.** The badge opens the app's five rungs
+  (Auto/FLAC/320/128/64 — `PlaybackQuality` has no 256/192; a menu that offered them would save a
+  value the player cannot load), the choice is saved in `kv` (`playback.quality`, the SPA keeps it on
+  the device) and the toast says « au prochain titre »; `AppState::load` reads it when it opens the
+  next source. Podcast speed is per show (`channel_id`, else the album's Deezer id) and is applied by
+  a watcher on the current entry, so an episode started from another screen still gets its show's
+  rate; music is never touched (the engine re-checks `TrackMeta::podcast`).
+- **Measured on this machine** (release binary, `Xvfb :94 -dpi 96` + `GPUI_X11_SCALE_FACTOR=1`,
+  2560×1600 and 1280×800, a real server from `tools/perf_api.py --serve --archived` with a
+  4 000-row queue, a 234 s archived FLAC with 39 `.lrc` lines, and four screenshots (2560×1600 and
+  1280×800, each with and without the 420 px queue panel) kept with the session):
+  - RSS, `/proc/<pid>/status` VmRSS: **267 MB** at 2560×1600 on the empty now-playing screen,
+    **306 MB** with the 4 000-row queue, the lyrics and the sleeve (**+39 MB**); **206 MB** at
+    1280×800, **214 MB** with the queue (**+8 MB**), **212 MB** with the 420 px panel. The shell's
+    own 2560 baseline is the bulk of it (D7 measured 103 MB at 1280 on a build without D14a's
+    Réglages); the screens' own share is the queue, the lyrics and one decoded sleeve.
+  - **A sleeve per queue row costs +291 MB** (mechanical: each 1 000 px JPEG decoded for a 32 px
+    slot, twenty rows visible). Until the plan's decoded-image LRU (64 MB, `coverqueue.js`) lands with
+    D8a's cover widget, the queue draws one glyph per row like the player bar — that is why the
+    screenshots show glyphs in the queue and a real sleeve in the player.
+  - `cargo test --workspace`: **128 app tests** (the D9 ones: 6 lyrics, 6 sleep, 3 speed, 1 quality,
+    4 queue, 4 now-playing, 4 MPRIS wiring) and every crate green; `cargo fmt --check` and
+    `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo test --release` fails in
+    **D14a's** `screens/settings/ui.rs` (its hit points come from `debug_bounds`, recorded only with
+    `debug_assertions`; D9's own mouse tests are `#[cfg(debug_assertions)]` for the same reason).
+- **Pitfalls found by building**:
+  - **A click on a row's ✕ also played the row behind it**, and because the remove ran first the
+    jump landed on whatever slid into that index (`row_remove` then `jump(4)` → the NEXT track).
+    GPUI bubbles mouse events: the inner handler needs `cx.stop_propagation()`, not just priority.
+  - **`debug_bounds` returns `None` in release**: selectors are only recorded with
+    `debug_assertions`. A mouse or layout test that uses them must be gated, or `cargo test
+    --release` fails for a reason that is not the code's.
+  - **`flex_1` + `max_w` did not clamp the main column** in this GPUI snapshot (the column took the
+    whole row and pushed the queue card off-screen): a fixed `w(px(560)).max_w_full()` on the column,
+    centred by the row, is what the layout obeys.
+  - **The app opened a window in the person's session once**: `WAYLAND_DISPLAY`, `DISPLAY` and
+    `HYPRLAND_INSTANCE_SIGNATURE` are inherited from the shell, and GPUI prefers Wayland when
+    `WAYLAND_DISPLAY` is set. Every isolated run must `env -u WAYLAND_DISPLAY -u
+    HYPRLAND_INSTANCE_SIGNATURE -u XDG_SESSION_TYPE DISPLAY=:NN`.
+  - **This Hyprland (0.56, Aquamarine) has no headless backend**: `WLR_BACKENDS=headless` is ignored
+    and the DRM backend cannot take a seat the person's session owns. Xvfb is the isolated display
+    that works here, at `-dpi 96` plus `GPUI_X11_SCALE_FACTOR=1` (without the latter the app sees a
+    2560×1600 window as 1280×800 and the layout is measured at half the size).
 
 ### D10b — Visualiser UI (bars, oscilloscope)
 
@@ -1300,6 +1389,25 @@ Waves that can run in parallel (disjoint files):
   cost must not be judged in a debug build: GPUI's layout and tab-stop bookkeeping are ~26× slower
   there (45 ms against 3.9 ms for the same page), which is why the budget is quoted in release and
   only loosely bounded in debug.
+  - **A thread that borrows the runtime is JOINED before the runtime goes — and a panic in a
+    worker thread is a bug, never something to catch.** `nz-bulk` drives every download with
+    `Handle::block_on`, and tokio PANICS (it does not return an error) when a timer is polled on a
+    runtime that is shutting down: `runtime::time::entry::TimerEntry::poll_elapsed`, « A Tokio 1.x
+    context was found, but it is being shutdown. » Master's CI carried exactly that
+    (`thread 'nz-bulk' panicked at tokio-1.54.1/src/runtime/time/entry.rs:534`, run 43964917017)
+    while the bench that produced it still reported `ok`: the runtime was dropped under a worker that
+    still had 200 tracks queued, and a `catch_unwind` around `block_on` turned the panic into « le
+    réseau est coupé » and into a passing test. The cause is a lifetime, not an error: the worker's
+    thread is now owned (`Worker`), `Offline::shutdown` joins it, and the `NetRuntime` global joins it
+    in `Drop` — which Rust runs BEFORE the `Arc<Runtime>` field drops. The stop is a
+    `tokio::sync::watch` raced against every `block_on` (`select!`), so a close abandons a request in
+    flight instead of waiting for the next chunk. Measured mid-body with 40 tracks queued
+    (`closing_the_app_mid_download_stops_the_worker_without_a_panic`): the close returns in
+    **220 µs**, leaves **1 row `active`** and its `.part`, the run has **0 failures** and the
+    process records **0 panics**; the 200-track share bench still measures 28.1 % drop with the cap
+    at 127 545 B/s, so nothing got cheaper by accident. The same order is owed by every other thread
+    that borrows the runtime: `wiring/engine.rs`'s loader is the next one, and it has no stop
+    protocol yet.
 
 ### D14a — Réglages (user sections) — delivered 2026-11-17
 
@@ -1676,6 +1784,18 @@ Waves that can run in parallel (disjoint files):
   schedule's attempt count (**3 claims, not a storm**). Against the REAL server
   (`NZ_PERF_API=1`, `perf_api.py --podcasts`, `bench` enrolling a `client` worker):
   **6 chunks, 12 lines, the row `ready` with `source: client`, `worker: banc-t3`, in 0.9 s**.
+- **The rule, arm a verdict on the event, never on the clock**: a fixture that cancels after
+  one 300 ms beat, or sends a `stop` after a 500 ms sleep, can land before the engine exists on a
+  loaded runner. The job is then released without ever spawning, and the test reads a `pid` nobody
+  wrote — the `a_cancel_stops_within_one_heartbeat` failure of PR #237 ("the engine wrote its pid:
+  No such file or directory"), reproduced at **iteration 1** under 8 spinners on one core. Both
+  tests now wait for the fake engine's `pid` (it writes it before it blocks), arm the cancel or send
+  the stop on that event, and assert the cancel→idle time: **62-420 ms measured** over 65 passes
+  (25 of them pinned to one core), **50/50 passes each, 10 of them pinned to one core** under that
+  load. The same event
+  replaced the pause test's 600 ms sleep. The `pid` itself appears in **3 ms** idle and **0.6 s**
+  under that load (the child runs `nice 19`, so it is scheduled last), which is what justifies the
+  fixtures' 10 s fail-fast guard — 16x the worst measurement, and it never becomes a pass.
 - **Pitfalls found by building**: a pause needs `process_group(0)` on the child **and**
   `kill(-pgid, SIGSTOP)` — the `libc` crate is not available to this lot, so the four signal numbers
   and `kill`/`nice`/`localtime_r` are declared locally (the app is Linux-only); a stopped process
@@ -1700,18 +1820,89 @@ Waves that can run in parallel (disjoint files):
   0 underruns and UI p95 frame time unchanged within 10 % (measure both with and without the job);
   a local transcript shows in the panel and is searchable.
 
-### P1 — Arch packaging and release
+### P1 — Arch packaging and release (delivered 2026-11-16)
 
-- **Files**: `desktop/packaging/arch/{PKGBUILD,neezer-desktop.desktop,neezer-desktop.svg}`,
-  `.github/workflows/release.yaml` (a job that builds the package in `archlinux:latest` and
-  attaches `neezer-desktop-<ver>-x86_64.pkg.tar.zst` on `v*` tags).
-- **Contract**: `makedepends=(rust cargo cmake clang vulkan-headers shaderc)`, `depends=(pipewire
-  libxkbcommon wayland vulkan-icd-loader fontconfig freetype2 dbus)`, `optdepends=('vulkan-radeon:
-  transcription GPU AMD' 'vulkan-intel: transcription GPU Intel' 'nvidia-utils: transcription GPU
-  NVIDIA')`; `prepare()` `cargo fetch --locked --target host-tuple`; `build()` `cargo build --frozen
-  --release`; installs both binaries, the `.desktop` (`StartupWMClass=neezer-desktop`) and the icon.
-- **Acceptance**: `makepkg -si` on this machine installs it, it appears in the Omarchy launcher, and
-  `namcap` reports no error.
+- **The rule**: the app ships as ONE Arch package, `neezer-desktop`, built from the tree it lives in.
+  `desktop/` links `webapp/rhythm`, `webapp/appcore` and `android/nscore` by path, so there is no
+  source tarball to point `source=(...)` at: the PKGBUILD follows the Omarchy apps' convention
+  (`source=()`, `build()` builds the checkout) and the release job checks the `v*` tag out before
+  running `makepkg`, so the artefact always comes from the tagged tree. `prepare()` is the ArchWiki
+  Rust guideline verbatim (`cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"`),
+  `build()` is `cargo build --frozen --release` into `$srcdir/target` under
+  `RUSTUP_TOOLCHAIN=stable`, and the tag's version reaches `pkgver` through
+  `NEEZER_DESKTOP_VERSION` (`v1.3.1` → `1.3.1`): a tag can never ship a package named after the
+  workspace's 0.1.0.
+- **The rule, `!lto` is load-bearing**: makepkg's default `lto` option appends `-flto=auto` to
+  `CFLAGS`/`CXXFLAGS`/`LDFLAGS` (`/usr/share/makepkg/buildenv/lto.sh`), which turns whisper.cpp's
+  and aws-lc's static archives into GCC LTO bitcode; `rust-lld` cannot read it and drops every C
+  object, so the link fails on `undefined symbol: aws_lc_0_47_0_AES_set_encrypt_key` /
+  `whisper_full_n_segments_from_state` (measured twice, once per binary). `options=('!debug' '!lto')`
+  — the ArchWiki's "mixed Rust/C/C++ project" case; the Rust half keeps its own thin LTO.
+- **The rule, `depends` follow `ldd`, not the plan**: `neezer-desktop` links `libpipewire`,
+  `libasound`, `libxcb`, `libxkbcommon` and `libxkbcommon-x11`, and `neezer-transcribe` links
+  `libvulkan`; `dbus` is not needed at all (zbus speaks the D-Bus wire protocol), and `fontconfig`
+  is a **build** dependency only — `yeslogic-fontconfig-sys` asks pkg-config for `fontconfig.pc`
+  (freetype2 comes with it) but rustc's `--as-needed` drops `libfontconfig` from the linked binary,
+  so `ldd` is clean and it belongs in `makedepends`. `namcap`'s `E:` lines named exactly the two
+  MISSING runtime packages (`libxcb`, `libxkbcommon-x11`) and a third (`hicolor-icon-theme`, for the
+  icon hierarchy); `wayland` is dlopen'ed by `wayland-sys` (absent from `ldd`, called "may not be
+  needed" by namcap) and stays, with the reason in the PKGBUILD. `cargo` is not an Arch package name
+  either — `rust` provides it — so only `rust` is in `makedepends`: naming both makes `makepkg -si`
+  stop on "two providers available for cargo" on a machine that has neither yet.
+- **The rule, one artefact**: `!debug` in `options` (the Rust profile already strips), so the release
+  attaches exactly `neezer-desktop-<ver>-x86_64.pkg.tar.zst`.
+- **What it is now**: `desktop/packaging/arch/PKGBUILD` (both binaries, the `.desktop`, the icon, the
+  licence; `package()` installs `neezer-transcribe` beside `neezer-desktop`, which is how T2 finds
+  its child), `neezer-desktop.desktop` (`StartupWMClass=neezer-desktop`, the `app_id` of `main.rs`;
+  `Icon=neezer-desktop`, the web app's own mark, so the launcher entry is recognisable) and
+  `neezer-desktop.svg`. `.github/workflows/release.yaml` gains an `arch` job: `archlinux:latest`,
+  the declared `makedepends` + `depends` installed first (a typo in `depends` fails there),
+  `makepkg` as an ordinary user (it refuses root), `desktop-file-validate`, `namcap` on the package
+  AND the PKGBUILD with `E:` lines failing the job, the artefact uploaded and attached on `v*` only.
+  Like `android.yaml`, the job also runs on pull requests touching `desktop/packaging/**`, so this
+  YAML is proven before the first tag instead of by it.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, Omarchy/Arch, makepkg 7.1.0):
+  - `makepkg -f` from an empty `$srcdir`: **8 min 56 s** wall, 33 min 20 s CPU (`CARGO_BUILD_JOBS=4`);
+    the release build inside is 8 min 52 s.
+  - package **28 020 486 B (26.72 MiB)** compressed, **87.16 MiB** installed —
+    `neezer-desktop` 41 716 736 B, `neezer-transcribe` 49 642 888 B.
+  - `namcap` on the package: **0 error**, 8 warnings (two `ld-linux` "unused library" from its
+    known noise, four "implicitly satisfied" — glibc, libgcc, libstdc++, libpipewire — and the
+    `pipewire`/`wayland` "may not be needed" the two comments above explain). `namcap` on the
+    PKGBUILD: nothing. `desktop-file-validate`: clean, before and after installation.
+  - installed binary, first painted frame on an isolated **2560×1600 X server**:
+    **156, 122, 136 ms** (median 136; D7's criterion is 300 ms).
+  - RSS at the login screen: **175 244 kB** at 2560×1600, **175 340 kB** at 1280×800 — an Xvfb X11
+    run, and Mesa says `No DRI3 support detected`, so it is NOT comparable with D7's **103 MB** on
+    Wayland/Hyprland; P1 adds no screen and the packaged binary is D7's code.
+  - `pacman -U -dd` into a throwaway root installs exactly the five paths (two binaries, the
+    `.desktop`, the icon, the licence), and `neezer-transcribe --version` from that root reports the
+    RADV 780M device and `whisper.cpp 1.8.3 (backend vulkan compilé)`.
+  - the `arch` job in CI (`archlinux:latest`, cold container and cold crate cache): **11 min 08 s**
+    end to end, `namcap` gate green, the `files` job correctly skipped on a pull request.
+- **Pitfalls found by building**:
+  - makepkg runs `build()` with the distro's hardening `CFLAGS`/`CXXFLAGS`/`LDFLAGS`, and its `lto`
+    option is what broke the link (see the rule above); the failure looks like a C library problem
+    (`undefined symbol` reported by `rust-lld`), not a flag problem, and it hits BOTH binaries.
+  - A dependency the binary does not link can still be needed to BUILD it: the CI's Arch container
+    stopped at `yeslogic-fontconfig-sys` ("Package 'fontconfig' not found") while `ldd` on this
+    machine was clean, because this machine happens to have fontconfig installed. `fontconfig` is a
+    `makedepend`; a `depends` list checked only with `ldd` says nothing about the build.
+  - `makepkg` refuses to run as root, so a container job needs a `builder` user, a `chown` of the
+    mounted workspace and a `su -` login shell (so cargo finds its registry).
+  - `actions/checkout`'s node runtime works in `archlinux:latest` without installing node, but the
+    image has no `git` until `pacman -Syu` has run: install the build chain BEFORE checkout. Runtime
+    dependencies belong in that same list — it is what proves every `depends` name exists.
+  - `namcap` prints `<pkgname> E: …` and **exits 0 even with errors** (measured): a gate has to
+    grep for `(^| )E:` or it passes every finding.
+  - `makepkg`'s `-debug` subpackage would be a second artefact; `!debug` (plus the profile's
+    `strip = true`) keeps one, and the release glob names `[0-9]` after `neezer-desktop` so it can
+    never pick up a `-debug` package.
+  - The package still contains whisper.cpp's `__FILE__` paths under `$srcdir`
+    (`makepkg` warns `Le paquet contient une référence à $srcdir`): diagnostic strings only, from
+    GGML's logging macros. It is a known cosmetic reproducibility gap, not a defect of the
+    install.
+
 
 ### D17 — The whole journey, measured
 

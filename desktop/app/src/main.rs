@@ -116,6 +116,20 @@ struct NetRuntime(Arc<tokio::runtime::Runtime>);
 
 impl gpui_kit::Global for NetRuntime {}
 
+impl Drop for NetRuntime {
+    /// The download worker is joined HERE, before the `Arc<Runtime>` field above
+    /// is dropped (Rust drops the fields after this body runs).
+    ///
+    /// `nz-bulk` borrows this runtime with `Handle::block_on`, and tokio panics —
+    /// « A Tokio 1.x context was found, but it is being shutdown. » — when a
+    /// timer is polled on a runtime that is shutting down. Closing the window
+    /// during a download used to do exactly that: the runtime shut down under a
+    /// worker that still had a track in flight (measured in CI, run 43964917017).
+    fn drop(&mut self) {
+        crate::wiring::offline::shutdown_process();
+    }
+}
+
 // The icon catalogue the app draws. `gpui_kit::assets::Assets` is the DEFAULT
 // bundle only — registering it makes every other Lucide glyph render nothing at
 // all, silently (the transport lost its previous/next/volume icons, and the
