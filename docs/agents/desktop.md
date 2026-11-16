@@ -1203,7 +1203,7 @@ Waves that can run in parallel (disjoint files):
   never receives `pause` (`job.heartbeat` only answers it for `server` workers), so the answer must
   not clear the app's decision.
 - **The rule, no decoder and no progress here**: a chunk's PCM comes from `PcmSource`, whose
-  production implementation is T2's `audio::decode_range` + `write_pcm` (a window, not the whole
+  production implementation is T2's `audio::write_pcm_range` (a window, not the whole
   episode: 38 MB of PCM for a ten-minute chunk). The supervisor never decodes audio and never
   invents a percentage: `chunk_pct` is whisper.cpp's own `progress = N %` or 0.
 - **What it is now**: `worker.rs` (token on disk, `0600`-checked and never printable — `Debug` says
@@ -1214,7 +1214,7 @@ Waves that can run in parallel (disjoint files):
   `worker`/`local` subcommands. A local transcript lands in
   `$XDG_DATA_HOME/neezer/transcripts/<episode_id>.transcript.json` + `.srt` (T1's `sidecar::write`).
 - **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-transcribe`): **13 tests against a fake
-  server in 19 s** (the 15 s pause is most of it) and the crate's **65 lib tests in 0.4 s**. The full
+  server in 19 s** (the 15 s pause is most of it) and the crate's **67 lib tests in 0.5 s**. The full
   claim → audio → chunks → complete is **6 requests** (claim, audio, 3 chunks, complete) for a
   3-chunk episode, 12 lines stored; a `429 Retry-After` + a `500` are retried to exactly the
   schedule's attempt count (**3 claims, not a storm**). Against the REAL server
