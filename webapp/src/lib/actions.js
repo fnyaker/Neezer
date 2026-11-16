@@ -4,7 +4,7 @@
 import { migrateKey, trackKey, trackRef } from "./trackkey.js";
 import { get, writable } from "svelte/store";
 
-import { REMOTE, CAN_KEEP, CAN_BROWSE } from "./remote/mode.js";
+import { CAN_KEEP } from "./remote/mode.js";
 import { api } from "./api.js";
 import { onOwnerChange } from "./account.js";
 import {
@@ -14,38 +14,25 @@ import {
   player,
   playlists,
   toasts,
-  isAdmin,
   syncing,
   downloadQuality,
   lastPlaylist,
-  openPlaylistPicker,
-  openShare,
-  openReplace,
-  openGenreTag,
-  openCredits,
   playlistFolders,
   openFolders,
   notices,
-  openMoveToFolder,
 } from "./stores.js";
 import { downloadTrack, removeTrack, isDownloaded } from "./offline.js";
-import { addMarkerAt } from "./markers.js";
-import { credits } from "./format.js";
-import { entityRef, trackEntityRef } from "./entity.js";
+import { trackEntityRef } from "./entity.js";
 import { reconcileList } from "./reconcile.js";
 import { cacheAge } from "./apicache.js";
 import { online } from "./net.js";
 import { containerIds, idsOf, orderContainer, orderFolders } from "./playlistfolders.js";
+import { createTrackMenus } from "./trackmenu.js";
 
-// Quality choices offered in the "download as…" submenu.
-export const DL_QUALITIES = [
-  { id: "FLAC", label: "FLAC" },
-  { id: "OPUS_320", label: "Opus 320" },
-  { id: "OPUS_256", label: "Opus 256" },
-  { id: "OPUS_192", label: "Opus 192" },
-  { id: "OPUS_128", label: "Opus 128" },
-  { id: "OPUS_64", label: "Opus 64" },
-];
+// The contextual menus' spec lives in lib/trackmenu.js (one place, every
+// surface); these two re-exports keep the existing importers — routes that
+// build a favourite's metadata, and anything that named the download qualities.
+export { DL_QUALITIES, entityMeta } from "./trackmenu.js";
 
 // Run a manual Deezer sync end-to-end: kick off the background job, poll until
 // it finishes, then refresh the playlist/favorite caches the UI reads. Shared by
@@ -1010,237 +997,26 @@ export async function playEntity(kind, id, context = null) {
   }
 }
 
-// What the server needs to name an entity it has never imported.
-export function entityMeta(kind, item) {
-  if (kind === "album")
-    return {
-      title: item.title || item.name,
-      artist: item.artist?.name,
-      artist_id: item.artist?.deezer_id,
-    };
-  if (kind === "artist") return { title: item.name || item.title };
-  return { title: item.title || item.name };
-}
+// The menu's ITEMS live in lib/trackmenu.js; this file binds them to the
+// operations that own the API and the optimistic stores, and re-exports the
+// builders so every existing import ("../lib/actions.js") keeps working.
+const MENUS = createTrackMenus({
+  toggleFavorite,
+  toggleDislike,
+  startTrackRadio,
+  addTrackToPlaylist,
+  downloadTrackTo,
+  undownloadTrack,
+  playEntity,
+  downloadEntity,
+  toggleEntityFavorite,
+  movePlaylistTo,
+  subscribeToPodcast,
+});
 
-// Context menu for an album/artist/playlist card.
-export function buildEntityMenu(kind, item, nav) {
-  const route = "/" + kind + "/";
-  const routeId = entityRef(item);
-  const items = [
-    { label: "Lire", icon: "play", action: () => playEntity(kind, routeId) },
-    { label: "Ouvrir", icon: "open", action: () => nav(route + routeId) },
-  ];
-  if (kind === "playlist" && CAN_KEEP) {
-    const mine = (get(playlists) || []).find((p) => String(p.id) === String(item.id));
-    if (mine) {
-      items.push({
-        label: "Déplacer vers un dossier…",
-        icon: "folderMove",
-        action: () => openMoveToFolder({ playlist: mine }),
-      });
-      if (mine.folder_id)
-        items.push({
-          label: "Retirer du dossier",
-          icon: "folderMinus",
-          action: () => movePlaylistTo(mine.id, null),
-        });
-    }
-  }
-  if ((kind === "album" || kind === "playlist") && !REMOTE)
-    items.push({
-      label: "Télécharger",
-      icon: "download",
-      action: () => downloadEntity(kind, routeId),
-    });
-  // A favourite is local to the user's own account; on a remote control, only a
-  // link that may change what is kept can make one.
-  if (CAN_KEEP) {
-    const meta = entityMeta(kind, item);
-    if ((kind === "album" || kind === "playlist") && item.deezer_id)
-      items.push({
-        label: "Ajouter aux favoris",
-        icon: "heart",
-        action: () => toggleEntityFavorite(kind, routeId, true, meta),
-      });
-    if (kind === "artist" && routeId)
-      items.push({
-        label: "Suivre",
-        icon: "heart",
-        action: () => toggleEntityFavorite("artist", routeId, true, meta),
-      });
-  }
-  return items;
-}
-
-// A podcast episode is shaped like a track (so the queue/player play it), but
-// its id is a UUID and its "artist"/"album" are the channel — so the normal
-// track menu's favorite / radio / playlist / go-to-artist actions all hit
-// endpoints that reject a UUID (400) or 404. Give episodes their own minimal,
-// working menu instead.
-function buildEpisodeMenu(ep, nav) {
-  const dl = isDownloaded(trackKey(ep));
-  const items = [
-    { label: "Lire ensuite", icon: "next", action: () => player.playNext([ep]) },
-    { label: "Ajouter à la file", icon: "queue", action: () => player.addToQueue([ep]) },
-  ];
-  // Playing this very episode: offer a one-tap marker at the current position.
-  const s = get(player);
-  if (trackKey(s.queue[s.index]) === trackKey(ep)) {
-    items.push({
-      label: "Marquer cette position",
-      icon: "bookmarkPlus",
-      action: () => addMarkerAt(ep, get(player).currentTime),
-    });
-  }
-  items.push(
-    { label: "Partager…", icon: "share", action: () => openShare(ep) },
-    "divider",
-    dl
-      ? {
-          label: "Retirer le téléchargement",
-          icon: "downloaded",
-          action: () => undownloadTrack(ep),
-        }
-      : { label: "Télécharger", icon: "download", action: () => downloadTrackTo(ep) }
-  );
-  if (ep.channel_id)
-    items.push("divider", {
-      label: "Ouvrir le podcast",
-      icon: "mic",
-      action: () => nav("/podcast/" + ep.channel_id),
-    });
-  return items;
-}
-
-// Build the context-menu item list for a track. `nav` is svelte-spa-router push.
-export function buildTrackMenu(track, nav) {
-  if (track.podcast) return buildEpisodeMenu(track, nav);
-  const fav = get(favorites).has(trackKey(track));
-  // The owner's identity, narrowed on a remote control to what its link lends.
-  const admin = get(isAdmin) && CAN_KEEP;
-  const items = [
-    { label: "Lire ensuite", icon: "next", action: () => player.playNext([track]) },
-    { label: "Ajouter à la file", icon: "queue", action: () => player.addToQueue([track]) },
-  ];
-  // Adding to a playlist is every account's business now: a playlist shared
-  // with an editor is a legitimate target, so these entries follow CAN_KEEP
-  // instead of the admin flag. The one-tap shortcut only shows when the store
-  // says that playlist is writable — a viewer's list is not a target.
-  // `trackRef` names the track the way the server resolves it: the row UUID, or
-  // the Deezer id of a catalogue result the playlist will make a row for.
-  if (CAN_KEEP) {
-    const last = get(lastPlaylist);
-    const entry =
-      last && last.id
-        ? (get(playlists) || []).find((p) => String(p.id) === String(last.id))
-        : null;
-    if (entry && entry.editable)
-      items.push({
-        label: `Ajouter à « ${last.title} »`,
-        icon: "plus",
-        action: () => addTrackToPlaylist(last.id, trackRef(track), last.title),
-      });
-    // Opens the searchable playlist picker (scrolling a giant submenu to find
-    // the right playlist was the old, painful way).
-    items.push({
-      label: "Ajouter à une playlist…",
-      icon: "music",
-      action: () => openPlaylistPicker(track),
-    });
-  }
-  if (admin) {
-    // Swap this track for another one everywhere it appears. Always offered —
-    // a track can also be simply *wrong* (bad master, wrong version), not only
-    // dead — but it leads the list when we already know it's unplayable.
-    items.push({
-      label: "Remplacer le titre…",
-      icon: "refresh",
-      action: () => openReplace(track),
-    });
-    // Tagging from wherever the track is. The studio is where you tag a library
-    // in one sitting; this is for the other moment — you are looking at a list,
-    // you see a genre that is wrong, and fixing it should not mean finding the
-    // track again somewhere else. The sheet opens OVER the current screen, so
-    // nothing is lost by using it.
-    items.push({
-      label: "Étiqueter le genre…",
-      icon: "tag",
-      action: () => openGenreTag(track),
-    });
-  }
-  // Offline download — device-local, so available to everyone. A plain
-  // "Télécharger" at the default quality, plus a submenu to pick another. Not on
-  // a remote control: this device is not the one playing.
-  const dl = !REMOTE && isDownloaded(trackKey(track));
-  if (!REMOTE) items.push(
-    "divider",
-    dl
-      ? {
-          label: "Retirer le téléchargement",
-          icon: "downloaded",
-          action: () => undownloadTrack(track),
-        }
-      : { label: "Télécharger", icon: "download", action: () => downloadTrackTo(track) }
-  );
-  if (!dl && !REMOTE)
-    items.push({
-      label: "Télécharger en…",
-      icon: "download",
-      sub: DL_QUALITIES.map((q) => ({
-        label: q.label,
-        icon: "download",
-        action: () => downloadTrackTo(track, q.id),
-      })),
-    });
-
-  items.push("divider");
-  if (CAN_KEEP) items.push({ label: "Partager…", icon: "share", action: () => openShare(track) });
-  items.push({ label: "Lancer la radio", icon: "radio", action: () => startTrackRadio(track) });
-  if (CAN_KEEP)
-    items.push({
-      label: fav ? "Retirer des favoris" : "Ajouter aux favoris",
-      icon: fav ? "heartFilled" : "heart",
-      action: () => toggleFavorite(track),
-    });
-  if (CAN_KEEP) {
-    const no = get(disliked).has(trackKey(track));
-    items.push({
-      label: no ? "Retirer de « Je n'aime pas »" : "Je n'aime pas",
-      icon: no ? "thumbsDownFilled" : "thumbsDown",
-      action: () => toggleDislike(track),
-    });
-  }
-  items.push("divider");
-  // Who wrote, composed and produced it — over the current screen.
-  if (CAN_BROWSE) items.push({ label: "Voir les crédits", icon: "users", action: () => openCredits(track) });
-  // One entry per credited artist. A single credit stays a plain item (the
-  // common case shouldn't grow a submenu for nothing); a feat. track opens a
-  // submenu so the guest is reachable too.
-  const people = credits(track).filter((a) => entityRef(a));
-  if (people.length === 1)
-    items.push({
-      label: "Aller à l'artiste",
-      icon: "user",
-      action: () => nav("/artist/" + trackEntityRef(track, "artist", people[0])),
-    });
-  else if (people.length > 1)
-    items.push({
-      label: "Aller à l'artiste",
-      icon: "user",
-      sub: people.map((a) => ({
-        label: a.name,
-        icon: "user",
-        action: () => nav("/artist/" + trackEntityRef(track, "artist", a)),
-      })),
-    });
-  if (entityRef(track.album))
-    items.push({
-      label: "Aller à l'album",
-      icon: "disc",
-      action: () => nav("/album/" + trackEntityRef(track, "album", track.album)),
-    });
-  return items;
-}
+export const buildTrackMenu = (track, nav, options = {}) => MENUS.track(track, nav, options);
+export const buildEntityMenu = (kind, item, nav) => MENUS.entity(kind, item, nav);
+export const buildPodcastMenu = (item, nav, options = {}) => MENUS.podcast(item, nav, options);
 
 onOwnerChange(() => {
   cancelPlaylistRefresh();

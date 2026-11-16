@@ -12,8 +12,9 @@
   import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
   import { entityRef, trackEntityRef } from "../lib/entity.js";
-  import { player, recent, openMenu, toasts } from "../lib/stores.js";
+  import { player, recent, toasts } from "../lib/stores.js";
   import { buildEntityMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import Card from "../components/Card.svelte";
   import Cover from "../components/Cover.svelte";
   import Avatar from "../components/Avatar.svelte";
@@ -215,7 +216,15 @@
   $: allFailed = empty && failures >= 3;
 
   function artistMenu(e, artist) {
-    openMenu(e, buildEntityMenu("artist", artist, push));
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildEntityMenu("artist", artist, push), e.currentTarget);
+  }
+
+  // The recent shortcuts are albums, so they carry the album's own menu.
+  function albumMenu(e, item) {
+    const album = item.track?.album || { id: item.ref, title: item.title, cover: item.cover };
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildEntityMenu("album", album, push), e.currentTarget);
   }
 </script>
 
@@ -268,7 +277,9 @@
             class="artist"
             href={"#/artist/" + entityRef(a)}
             title={a.name}
+            aria-haspopup="menu"
             on:contextmenu={(e) => artistMenu(e, a)}
+            on:keydown={(e) => menuKey(e, (ev) => artistMenu(ev, a))}
           >
             <Avatar name={a.name} src={a.picture} size={104} />
             <span class="artist-name">{a.name}</span>
@@ -306,7 +317,14 @@
       </div>
       <div class="shortcuts">
         {#each recentAlbums as a (a.ref)}
-          <button class="shortcut" on:click={() => push("/album/" + a.ref)} title={a.title}>
+          <button
+            class="shortcut"
+            on:click={() => push("/album/" + a.ref)}
+            title={a.title}
+            aria-haspopup="menu"
+            on:contextmenu={(e) => albumMenu(e, a)}
+            on:keydown={(e) => menuKey(e, (ev) => albumMenu(ev, a))}
+          >
             <span class="sc-cover"><Cover src={a.cover} alt={a.title} kind="album" /></span>
             <span class="sc-txt">
               <span class="sc-title">{a.title}</span>

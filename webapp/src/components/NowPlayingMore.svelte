@@ -259,6 +259,10 @@
     border-radius: 999px;
     color: var(--onbtn);
     background: var(--btn);
+    /* An accent control on the material wears its hairline (app.css). */
+    box-shadow:
+      inset 0 1px 0 var(--glass-hi),
+      inset 0 -1px 0 color-mix(in srgb, var(--glass-lo) 60%, transparent);
   }
   .ghost {
     display: grid;
@@ -266,8 +270,16 @@
     width: 36px;
     height: 36px;
     border-radius: 999px;
-    background: var(--s2);
+    background-color: color-mix(in srgb, var(--s1) 46%, transparent);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 9%, transparent);
     color: var(--tx);
+  }
+  .ghost:hover {
+    background-color: var(--glass-hover);
   }
   .status,
   .empty {
@@ -288,10 +300,17 @@
     border-radius: 14px;
     text-align: left;
     color: inherit;
-    background: var(--s2);
+    /* The artist card is a card: tier 1's fill, never a blurred backdrop (this
+       panel already sits on one), with the light on its top edge. */
+    background-color: var(--glass-bg);
+    background-image: var(--glass-beam-x), var(--glass-rim-x);
+    background-size: 100% 1px, 100% 1px;
+    background-position: top left, bottom left;
+    background-repeat: no-repeat, no-repeat;
+    border: 1px solid var(--glass-border);
   }
   .artist:hover {
-    background: color-mix(in srgb, var(--s2) 70%, var(--ln));
+    background-color: var(--glass-hover);
   }
   .pic {
     width: 64px;

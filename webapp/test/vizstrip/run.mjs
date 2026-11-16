@@ -11,7 +11,7 @@
 // the transport and the footer, the footer stays on the stage's padding, and
 // nothing overflows. 641 × 900 is the narrow side-panel layout: the strip is
 // not drawn there, and must stay that way.
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
@@ -39,9 +39,10 @@ const WAV = (() => {
   return Buffer.concat([h, Buffer.alloc(n, 128)]);
 })();
 
+const browserArgs = ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"];
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM || (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
-  args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
+  args: browserArgs,
 });
 
 const measure = () => {
@@ -105,6 +106,303 @@ function assertFrame(label, m, want) {
   check(m.docOverflow === 0, `${label} : aucun débordement de page`, `${m.docOverflow}`);
 }
 
+// --- the strip's picture: no background, one colour --------------------------
+//
+// What the person asked for, measured where it is true: on the CANVAS for the
+// colour and the coverage (one solid theme accent on every capsule, alpha 0
+// everywhere else — including the top and bottom rows, which the centred
+// capsules cannot reach), and on the COMPOSITED strip for "the backdrop is
+// exactly what shows outside the bars" and the contrast the eye actually gets.
+
+const THEME_ACCENT = { encre: "#d2ff3c", papier: "#14130f", pochette: "#f4f1f5" };
+
+function hex(rgb) {
+  return "#" + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
+}
+
+/** The visible strip host's rectangle, in CSS px. */
+function stripRect(page) {
+  return page.evaluate(() => {
+    const host = document.querySelector(".d .viz, .m .viz");
+    if (!host || getComputedStyle(host).display === "none") return null;
+    const r = host.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+}
+
+/** Two screenshots of the same strip: as painted, and with the host hidden. */
+async function shotPair(page, rect) {
+  const clip = {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.w),
+    height: Math.round(rect.h),
+  };
+  const shown = await page.screenshot({ clip });
+  await page.evaluate(() => {
+    const host = document.querySelector(".d .viz, .m .viz");
+    if (host) host.style.visibility = "hidden";
+  });
+  await page.waitForTimeout(140);
+  const hidden = await page.screenshot({ clip });
+  await page.evaluate(() => {
+    const host = document.querySelector(".d .viz, .m .viz");
+    if (host) host.style.visibility = "";
+  });
+  await page.waitForTimeout(140);
+  return { shown, hidden };
+}
+
+/** Diff + capsule colour + contrast, computed in the page (no image library). */
+function compareShots(page, shown, hidden) {
+  return page.evaluate(
+    async ({ a, b }) => {
+      const dec = async (b64) => {
+        const img = new Image();
+        await new Promise((res, rej) => {
+          img.onload = res;
+          img.onerror = rej;
+          img.src = "data:image/png;base64," + b64;
+        });
+        const c = document.createElement("canvas");
+        c.width = img.width;
+        c.height = img.height;
+        const g = c.getContext("2d", { willReadFrequently: true });
+        g.drawImage(img, 0, 0);
+        return { w: c.width, h: c.height, d: g.getImageData(0, 0, c.width, c.height).data };
+      };
+      const A = await dec(a);
+      const B = await dec(b);
+      const w = A.w;
+      const h = A.h;
+      const lin = (v) => {
+        v /= 255;
+        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+      };
+      const lum = ([r, g, bb]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(bb);
+      const contrast = (x, y) => {
+        const la = lum(x);
+        const lb = lum(y);
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+      };
+      let changed = 0;
+      let edgeChanged = 0;
+      let edgeN = 0;
+      let edgeMax = 0;
+      const cap = [0, 0, 0];
+      let capN = 0;
+      const back = [0, 0, 0];
+      let backN = 0;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const dr = Math.abs(A.d[i] - B.d[i]);
+          const dg = Math.abs(A.d[i + 1] - B.d[i + 1]);
+          const db = Math.abs(A.d[i + 2] - B.d[i + 2]);
+          const d = Math.max(dr, dg, db);
+          const edge = y < 2 || y >= h - 2;
+          if (edge) {
+            edgeN++;
+            if (d > 2) edgeChanged++;
+            if (d > edgeMax) edgeMax = d;
+          }
+          if (d > 2) changed++;
+          // The capsules' own pixels: well away from the anti-aliased edge, so
+          // the blend with the backdrop (the host is at 90% opacity) does not
+          // smear the colour being read.
+          if (d > 40) {
+            cap[0] += A.d[i];
+            cap[1] += A.d[i + 1];
+            cap[2] += A.d[i + 2];
+            back[0] += B.d[i];
+            back[1] += B.d[i + 1];
+            back[2] += B.d[i + 2];
+            capN++;
+            backN++;
+          }
+        }
+      }
+      const capMean = cap.map((v) => v / Math.max(1, capN));
+      const backMean = back.map((v) => v / Math.max(1, backN));
+      return {
+        w,
+        h,
+        changed: changed / (w * h),
+        edgeChanged: edgeN ? edgeChanged / edgeN : 0,
+        edgeMax,
+        capsule: capMean,
+        backdrop: backMean,
+        capsuleN: capN,
+        contrast: capN ? contrast(capMean, backMean) : 0,
+      };
+    },
+    { a: shown.toString("base64"), b: hidden.toString("base64") }
+  );
+}
+
+/**
+ * The canvas' own pixels: alpha coverage outside the capsules, and the exact
+ * colour of their interior. WebGL is read after the scene's own frame (the
+ * default framebuffer is cleared when the compositor takes it), a 2D canvas
+ * with getImageData.
+ */
+function canvasStats(page) {
+  return page.evaluate(async () => {
+    const host = document.querySelector(".d .viz, .m .viz");
+    const canv = host && [...host.querySelectorAll("canvas")].find((c) => getComputedStyle(c).display !== "none");
+    if (!canv) return null;
+    const fold = (px, w, h, rgba) => {
+      let nz = 0;
+      let edgeNz = 0;
+      let edgeN = 0;
+      const colours = new Map();
+      let lo = [255, 255, 255];
+      let hi = [0, 0, 0];
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const a = px[i + 3];
+          if (a > 0) nz++;
+          if (y < 2 || y >= h - 2) {
+            edgeN++;
+            if (a > 0) edgeNz++;
+          }
+          // Full coverage only: one or two code values under it is the
+          // canvas' un-premultiply rounding, not another colour (measured: the
+          // row read a 4-5/255 spread with the threshold at 250, which is the
+          // anti-aliased rim).
+          if (a >= 254) {
+            const k = `${px[i]},${px[i + 1]},${px[i + 2]}`;
+            colours.set(k, (colours.get(k) || 0) + 1);
+            for (let c = 0; c < 3; c++) {
+              if (px[i + c] < lo[c]) lo[c] = px[i + c];
+              if (px[i + c] > hi[c]) hi[c] = px[i + c];
+            }
+          }
+        }
+      }
+      const top = [...colours.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+      let mode = null;
+      let best = 0;
+      for (const [k, n] of colours) if (n > best) { best = n; mode = k; }
+      // The row's geometry, on the line through its axis: the beads are the
+      // runs of coverage, so their count and their widths are measured, not
+      // assumed.
+      const row = h >> 1;
+      const widths = [];
+      let start = -1;
+      for (let x = 0; x < w; x++) {
+        const a = px[(row * w + x) * 4 + 3];
+        if (a > 0 && start < 0) start = x;
+        else if (a === 0 && start >= 0) {
+          widths.push(x - start);
+          start = -1;
+        }
+      }
+      if (start >= 0) widths.push(w - start);
+      widths.sort((a, b) => a - b);
+      return {
+        w, h, rgba,
+        nonZero: nz / (w * h),
+        edge: edgeN ? edgeNz / edgeN : 0,
+        colours: colours.size,
+        spread: Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]),
+        top,
+        mode: mode ? mode.split(",").map(Number) : null,
+        covered: best / (w * h),
+        beads: widths.length,
+        beadW: widths.length ? [widths[0], widths[widths.length >> 1], widths[widths.length - 1]] : null,
+      };
+    };
+    const gl = canv.getContext("webgl2", { alpha: true, premultipliedAlpha: true });
+    if (gl) {
+      // The default framebuffer is cleared once the compositor takes it, and
+      // the host's frame cap may skip a rAF: read in the frame the scene drew
+      // (and retry a few frames rather than reading an empty buffer as "no
+      // background"). 20 frames is a third of a second.
+      return await new Promise((res) => {
+        let tries = 0;
+        const tick = () => {
+          const w = canv.width;
+          const h = canv.height;
+          const px = new Uint8Array(w * h * 4);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          const stats = fold(px, w, h, true);
+          if (stats.nonZero > 0 || ++tries > 20) res(stats);
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    }
+    const g = canv.getContext("2d");
+    const d = g.getImageData(0, 0, canv.width, canv.height).data;
+    return fold(d, canv.width, canv.height, false);
+  });
+}
+
+/**
+ * The whole strip claim for the theme on screen: canvas alpha 0 outside the
+ * capsules, one exact colour inside, the backdrop untouched between them, and
+ * the contrast the eye gets. `accent` is the colour --ac-text resolves to.
+ */
+async function assertStripColour(page, label, accent) {
+  const rect = await stripRect(page);
+  check(!!rect, `${label} : la bande est dessinée`, "");
+  if (!rect) return null;
+  const cs = await canvasStats(page);
+  check(!!cs, `${label} : le canvas est lisible`, "");
+  if (!cs) return null;
+  const edge = (cs.edge * 100).toFixed(1);
+  check(cs.nonZero < 0.6, `${label} : le canvas est transparent hors capsules (${(cs.nonZero * 100).toFixed(1)} % couverts)`, "");
+  check(cs.edge === 0, `${label} : aucune alpha sur les rangées du haut et du bas (${edge} %)`, "");
+  check(
+    cs.spread <= 3,
+    `${label} : une seule couleur sur les capsules (écart ${cs.spread}/255, ${cs.colours} valeurs de bord)`,
+    cs.top.map(([k]) => k).join(" ")
+  );
+  check(
+    !!cs.mode && hex(cs.mode) === accent,
+    `${label} : la couleur est l'accent du thème ${accent} (${cs.mode ? hex(cs.mode) : "—"})`,
+    ""
+  );
+  check(
+    cs.beads >= 18 && cs.beads <= 40 && !!cs.beadW,
+    `${label} : ${cs.beads} capsules sur l'axe, ${cs.beadW?.[0]}-${cs.beadW?.[2]} px de large (médiane ${cs.beadW?.[1]})`,
+    ""
+  );
+  const { shown, hidden } = await shotPair(page, rect);
+  if (SHOTS) {
+    const slug = label.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    writeFileSync(`${SHOTS}/strip-${slug}.png`, shown);
+    writeFileSync(`${SHOTS}/strip-${slug}-backdrop.png`, hidden);
+  }
+  const cmp = await compareShots(page, shown, hidden);
+  check(cmp.edgeMax <= 1, `${label} : le fond est identique au backdrop hors capsules (écart max ${cmp.edgeMax}/255)`, "");
+  check(cmp.changed < 0.6, `${label} : rien d'autre que les barres n'est peint (${(cmp.changed * 100).toFixed(1)} %)`, "");
+  check(
+    cmp.contrast >= 3,
+    `${label} : contraste ${cmp.contrast.toFixed(2)}:1 sur le scrim (barres ${hex(cmp.capsule)} sur ${hex(cmp.backdrop)})`,
+    ""
+  );
+  say(
+    `${label} : ${cs.w}x${cs.h}, alpha hors capsules ${(cs.nonZero * 100).toFixed(1)} % (bords ${edge} %), ` +
+      `couleur ${cs.mode ? hex(cs.mode) : "—"} (écart ${cs.spread}/255, ${cs.colours} valeurs), ` +
+      `${cs.beads} capsules de ${cs.beadW?.[0]}-${cs.beadW?.[2]} px, ` +
+      `contraste ${cmp.contrast.toFixed(2)}:1, fond identique ${(100 - cmp.changed * 100).toFixed(1)} %`
+  );
+  return { cs, cmp };
+}
+
+/** Put the app on a theme (the attribute lib/theme.js paints from). */
+async function setTheme(page, name) {
+  await page.evaluate((t) => {
+    document.documentElement.dataset.theme = t;
+  }, name);
+  await page.waitForTimeout(700);
+}
+
+
 async function open(page, { playlist = ids.big, flow = false } = {}) {
   page.on("pageerror", (e) => say("pageerror: " + e.message));
   await page.goto(base + "/app/");
@@ -133,9 +431,9 @@ async function open(page, { playlist = ids.big, flow = false } = {}) {
 // One ordinary player: the height query, the budget, the narrow layout.
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => r.abort());
+  await ctx.route((u) => u.hostname === "api.deezer.com" || u.hostname === "dzcdn.net" || u.hostname.endsWith(".dzcdn.net"), (r) => r.abort());
   await ctx.route(
-    /\/api\/stream\//,
+    (u) => u.pathname.startsWith("/api/stream/"),
     (r) => r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
   const page = await ctx.newPage();
@@ -181,15 +479,110 @@ async function open(page, { playlist = ids.big, flow = false } = {}) {
     ""
   );
   if (SHOTS) await page.locator(".d").screenshot({ path: `${SHOTS}/vizstrip-641x900.png` });
+
+  // THE PICTURE: zero background, one solid colour from the theme. Measured on
+  // the canvas (coverage + exact colour) and on the composited strip (backdrop
+  // identity + contrast with the eye's own pixels), on all three themes.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.waitForTimeout(450);
+  for (const theme of ["encre", "papier", "pochette"]) {
+    await setTheme(page, theme);
+    await assertStripColour(page, `${theme} 1280x900`, THEME_ACCENT[theme]);
+    if (SHOTS) await page.locator(".d").screenshot({ path: `${SHOTS}/player-${theme}-1280x900.png` });
+  }
+
+  // A CUSTOM ACCENT is written INLINE on <html> by lib/theme.js, so the strip
+  // has to watch the style attribute as well as data-theme: switching it must
+  // repaint the live scene, not wait for a reload.
+  await setTheme(page, "encre");
+  await page.evaluate(() => document.documentElement.style.setProperty("--ac-text", "#00e5ff"));
+  await page.waitForTimeout(500);
+  const custom = await canvasStats(page);
+  check(
+    !!custom && !!custom.mode && hex(custom.mode) === "#00e5ff" && custom.spread <= 3,
+    "accent personnalisé : la bande suit l'inline --ac-text sans rechargement",
+    custom?.mode ? `${hex(custom.mode)} (écart ${custom.spread})` : "—"
+  );
+  await page.evaluate(() => document.documentElement.style.removeProperty("--ac-text"));
+  await page.waitForTimeout(300);
+
+  // ECO. The app's rule is "no canvas anywhere", so in eco the strip is not
+  // drawn at all — the strongest transparency there is. (The scene's own eco
+  // grade, for the paths that can still draw one, is photographed by
+  // `node test/render/run.mjs --strip --eco`.)
+  await page.locator('button[aria-label="Mode éco (aucune animation)"]').first().click();
+  await page.waitForTimeout(500);
+  const ecoGone = await page.evaluate(() => !document.querySelector(".d .viz"));
+  check(ecoGone, "éco : la bande n'est plus dessinée du tout", "");
+  await page.locator('button[aria-label="Mode éco (aucune animation)"]').first().click();
+  await page.waitForTimeout(500);
+  const ecoBack = await page.evaluate(() => !!document.querySelector(".d .viz"));
+  check(ecoBack, "éco désactivé : la bande revient", "");
   await ctx.close();
+}
+
+// The OS setting: prefers-reduced-motion still draws the same row, in the same
+// one colour, with the same transparent background (the breath holds still).
+{
+  const ctx = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    reducedMotion: "reduce",
+  });
+  await ctx.route((u) => u.hostname === "api.deezer.com" || u.hostname === "dzcdn.net" || u.hostname.endsWith(".dzcdn.net"), (r) => r.abort());
+  await ctx.route(
+    (u) => u.pathname.startsWith("/api/stream/"),
+    (r) => r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
+  );
+  const page = await ctx.newPage();
+  await open(page);
+  await assertStripColour(page, "reduced-motion 1280x900", THEME_ACCENT.encre);
+  await setTheme(page, "papier");
+  await assertStripColour(page, "reduced-motion papier", THEME_ACCENT.papier);
+  await ctx.close();
+}
+
+// NO WEBGL2: the strip is the canvas fallback. Its old veil was the host's own
+// post pass — a bloom canvas blended over the page and a grain div over the
+// whole strip — so beyond the pixels, that pass must not exist for this layout.
+{
+  const noGl = await chromium.launch({
+    executablePath: process.env.CHROMIUM || (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
+    args: [...browserArgs, "--disable-webgl", "--disable-webgl2"],
+  });
+  const ctx = await noGl.newContext({ viewport: { width: 1280, height: 900 } });
+  await ctx.route((u) => u.hostname === "api.deezer.com" || u.hostname === "dzcdn.net" || u.hostname.endsWith(".dzcdn.net"), (r) => r.abort());
+  await ctx.route(
+    (u) => u.pathname.startsWith("/api/stream/"),
+    (r) => r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
+  );
+  const page = await ctx.newPage();
+  await open(page);
+  const is2d = await page.evaluate(() => {
+    const host = document.querySelector(".d .viz");
+    const c = host && [...host.querySelectorAll("canvas")].find((x) => getComputedStyle(x).display !== "none");
+    return !!c && !c.getContext("webgl2");
+  });
+  check(is2d, "sans WebGL2 : la bande est le canvas de secours", "");
+  await assertStripColour(page, "sans WebGL2 encre", THEME_ACCENT.encre);
+  const post = await page.evaluate(() => {
+    const host = document.querySelector(".d .viz");
+    const bloom = host ? [...host.querySelectorAll("canvas")].filter((c) => c.classList.contains("bloom")) : [];
+    return { grain: !!host?.querySelector(".grain"), bloom: bloom.length, off: bloom.every((c) => c.classList.contains("off")) };
+  });
+  check(!post.grain, "sans WebGL2 : aucun grain au-dessus de la bande", JSON.stringify(post));
+  check(post.off, "sans WebGL2 : le bloom du host est éteint", JSON.stringify(post));
+  await setTheme(page, "papier");
+  await assertStripColour(page, "sans WebGL2 papier", THEME_ACCENT.papier);
+  await ctx.close();
+  await noGl.close();
 }
 
 // The Flow's steering row takes the band first: the taller strip waits longer.
 {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => r.abort());
+  await ctx.route((u) => u.hostname === "api.deezer.com" || u.hostname === "dzcdn.net" || u.hostname.endsWith(".dzcdn.net"), (r) => r.abort());
   await ctx.route(
-    /\/api\/stream\//,
+    (u) => u.pathname.startsWith("/api/stream/"),
     (r) => r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
   const page = await ctx.newPage();
@@ -236,9 +629,9 @@ async function open(page, { playlist = ids.big, flow = false } = {}) {
 // its place between the transport and the thumb row.
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => r.abort());
+  await ctx.route((u) => u.hostname === "api.deezer.com" || u.hostname === "dzcdn.net" || u.hostname.endsWith(".dzcdn.net"), (r) => r.abort());
   await ctx.route(
-    /\/api\/stream\//,
+    (u) => u.pathname.startsWith("/api/stream/"),
     (r) => r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
   const page = await ctx.newPage();
@@ -263,6 +656,10 @@ async function open(page, { playlist = ids.big, flow = false } = {}) {
     `barre bas ${m.viz?.bottom}, pied haut ${m.footer?.top}`
   );
   check(m.docOverflow === 0, "390x844 : aucun débordement", `${m.docOverflow}`);
+  await assertStripColour(page, "encre 390x844", THEME_ACCENT.encre);
+  await setTheme(page, "papier");
+  await assertStripColour(page, "papier 390x844", THEME_ACCENT.papier);
+  await setTheme(page, "encre");
   if (SHOTS) await page.locator(".m").screenshot({ path: `${SHOTS}/vizstrip-390x844.png` });
   await ctx.close();
 }

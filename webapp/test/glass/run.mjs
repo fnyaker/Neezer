@@ -5,6 +5,7 @@
 //   npm run build && node test/glass/run.mjs
 //   SHOTS=/tmp/glass node test/glass/run.mjs          # PNGs of every case
 //   THROTTLE=1 N=3 node test/glass/run.mjs            # desktop speed, 3 rounds
+//   THEMES=encre VIEWPORTS=phone node test/glass/run.mjs   # one leg, while debugging
 //
 // THE APP HAS ONE BLURRED LAYER: the cover-derived ground (GlobalBackdrop), a
 // single fixed image with one `filter: blur()`. Above it, `app.css` owns a
@@ -28,6 +29,13 @@
 //    a time (0 when nothing is open), no blurred CARD ever, the scrims flat
 //    (they used to carry their own `blur(2px)`/`blur(6px)`), and at most ONE
 //    blurred image layer in the DOM (the ground);
+//  - the LIGHT ("the liquid finish"): on the first painted row of a card, a
+//    menu, a sheet, the player's side card and the phone's thumb door, the
+//    catch at 12 % of the width is brighter than the trough at 62 % (a uniform
+//    border cannot fake a gradient), and in eco the difference is 0;
+//  - the phone's full-screen player: its thumb-row doors (alpha 0.34, their
+//    text still held to 4.5:1), the queue sheet they open and the À propos
+//    panel the swipe-up door reveals;
 //  - eco (`viz.eco`, so <html> really carries data-eco="1") paints NO blurred
 //    image, no filter, and puts every surface back on --s1/--s2 (alpha 1);
 //  - `prefers-reduced-transparency: reduce` does the same for the surfaces;
@@ -44,13 +52,15 @@ import { resolve } from "node:path";
 import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
-const { base, stop } = await startServer();
+const { base, ids, stop } = await startServer();
 const { check, state } = checker();
 const SHOTS = process.env.SHOTS;
 const THROTTLE = +(process.env.THROTTLE || 4);
 const N = +(process.env.N || 5);
 
-const THEMES = ["encre", "papier", "pochette"];
+// THEMES / VIEWPORTS narrow a debugging run (the full sweep is the default).
+const THEMES = (process.env.THEMES || "encre,papier,pochette").split(",");
+const VIEWPORTS = (process.env.VIEWPORTS || "desk,phone").split(",");
 const PHONE = { width: 390, height: 900 };
 const DESK = { width: 1280, height: 900 };
 
@@ -66,12 +76,33 @@ const SURFACES = {
   menu: { sel: '.menu[role="menu"]', texts: [".lbl", ".item.empty"] },
   quality: { sel: ".qm .menu", texts: [".lab", ".hint"] },
   sheet: { sel: '.sheet[role="dialog"]', texts: ["h2", "p", "label", ".title", ".msg", "span"] },
+  // The phone's full-screen player: the thumb row's doors are CLEAR glass on
+  // the frosted sleeve (34 % of --s1), so their band is lower than a card's —
+  // their legibility is held by the contrast check, not by the alpha.
+  mobilefb: { sel: ".footer .fb.file", texts: [".fl", ".n"] },
+  // …and the sheets they open (tier 3 over the player's own backdrop).
+  playerqueue: { sel: ".m .sheet", texts: [".sheet-h span", ".qcount", ".qt", ".qa"] },
+  playerabout: { sel: ".m .under", texts: [".under-t span", ".lyrics-k", "h3", "h4", ".aname"] },
+  // The desktop player's right-hand card: tier 1 over the blurred sleeve. The
+  // tab pills are NOT sampled: their own accent fill is a child layer, and a
+  // compositor that drops it (seen in software rendering) makes the sample
+  // describe the card instead of the pill — the pair itself is --onac on --ac.
+  deskside: { sel: ".side", texts: [".label-mono", ".fact .v"] },
 };
+// A surface's own alpha: the ladder's tiers are 0.72 and 0.86. The two CLEAR
+// doors (the phone's thumb row, the swipe-up hint) are 0.26–0.34 on purpose:
+// they are controls on a scrimmed sleeve, not a surface carrying body text —
+// their text contrast is what is asserted.
+const ALPHA_FLOOR = { mobilefb: 0.25, playerabout: 0.55 };
+// A notice only exists while something is wrong (the bench stubs Deezer as
+// unreachable to get one): if the shell decides not to paint it, there is no
+// pixel to hold to a ratio — the bench says so instead of inventing the card.
+const OPTIONAL = new Set(["notice"]);
 // The ones that must be translucent on each viewport: the phone shell has no
 // sidebar, and the quality badge lives in the full-screen player there.
 const REQUIRED = {
-  desk: ["sidebar", "topbar", "player", "card", "notice", "menu", "quality", "sheet"],
-  phone: ["mobiletab", "topbar", "player", "card", "notice", "menu", "sheet"],
+  desk: ["sidebar", "topbar", "player", "card", "notice", "menu", "quality", "sheet", "deskside"],
+  phone: ["mobiletab", "topbar", "player", "card", "notice", "menu", "sheet", "mobilefb", "playerqueue", "playerabout"],
 };
 
 const med = (xs) => {
@@ -165,6 +196,23 @@ const PAGE_HELPERS = () => {
     else el.setAttribute("style", before);
   };
 
+  // Two frames with the SAME box: an entrance animation (a sheet rising, a
+  // panel sliding) moves the element between the rect and the screenshot, and
+  // the crop then lands on the next line of type. The bench measures what is
+  // painted, so it waits for the paint to stop moving — the animation itself is
+  // another bench's subject.
+  window.__stable = async (el) => {
+    let last = null;
+    for (let i = 0; i < 15; i++) {
+      const r = el.getBoundingClientRect();
+      const now = [r.x, r.y, r.width, r.height].join();
+      if (now === last) return true;
+      last = now;
+      await new Promise((done) => requestAnimationFrame(() => done()));
+    }
+    return false;
+  };
+
   window.__pixels = async (b64) => {
     const img = new Image();
     img.src = "data:image/png;base64," + b64;
@@ -179,6 +227,23 @@ const PAGE_HELPERS = () => {
     for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]);
     return out;
   };
+
+  // The same, with the picture's size: the light probe reads a BAND of rows,
+  // and a screenshot's pixels are `deviceScaleFactor` times the CSS clip.
+  window.__pixelsInfo = async (b64) => {
+    const img = new Image();
+    img.src = "data:image/png;base64," + b64;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    const px = [];
+    for (let i = 0; i < d.length; i += 4) px.push([d[i], d[i + 1], d[i + 2]]);
+    return { w: c.width, h: c.height, px };
+  };
 };
 
 async function pixels(page, rect) {
@@ -187,14 +252,23 @@ async function pixels(page, rect) {
 }
 
 // ── one surface, measured on the painted pixels ──────────────────────────────
-async function measure(page, key) {
+async function measure(page, key, depth = 0) {
   const { sel, texts } = SURFACES[key];
   const info = await page.evaluate(
-    ({ sel, texts }) => {
+    async ({ sel, texts }) => {
+      // The crop below is taken in PAGE coordinates and the boxes are read in
+      // the VIEWPORT's: at any other scroll offset the picture is of another
+      // place (a page scrolled by 100 px showed a card where the menu was). So
+      // every measure starts at the top of the page.
+      window.scrollTo(0, 0);
+      const main = document.querySelector("main");
+      if (main) main.scrollTop = 0;
       const root = document.querySelector(sel);
       if (!root) return null;
+      const r0 = root.getBoundingClientRect();
+      if (r0.width < 8 || r0.height < 8) return null;
+      await window.__stable(root);
       const r = root.getBoundingClientRect();
-      if (r.width < 8 || r.height < 8) return null;
       const cs = getComputedStyle(root);
       const bg = window.__parse(cs.backgroundColor);
       const el = window.__textEl(root, texts);
@@ -207,12 +281,22 @@ async function measure(page, key) {
       if (el) {
         const tcs = getComputedStyle(el);
         const col = window.__parse(tcs.color);
+        // A line of type inside an OPAQUE box of its own (the top bar's search
+        // field, a chip with a solid fill) is not painted on the surface's
+        // tint: the composite check below cannot apply to it, and pretending
+        // otherwise measures the box, not the material.
+        let onOpaque = false;
+        for (let n = el; n && n !== root; n = n.parentElement) {
+          const c = window.__parse(getComputedStyle(n).backgroundColor);
+          if (c && c[3] === 1) onOpaque = true;
+        }
         out.text = {
           rect: window.__rect(el),
           color: col ? [col[0], col[1], col[2]] : null,
           size: parseFloat(tcs.fontSize),
           weight: parseInt(tcs.fontWeight, 10) || 400,
           sample: (el.textContent || "").trim().slice(0, 42),
+          onOpaque,
         };
       }
       return out;
@@ -225,6 +309,26 @@ async function measure(page, key) {
   const prev = await page.evaluate(({ sel, texts }) =>
     window.__hideText(window.__textEl(document.querySelector(sel), texts)), { sel, texts });
   const behind = await pixels(page, info.text.rect);
+  // The glyphs must REALLY be hidden when the picture is taken. A phone's
+  // context menu can be re-created by a second `openMenu` right after it opens
+  // (touch and mouse both dispatch), and the new sheet starts its arrival over:
+  // the sample then shows the page behind it and the type itself. That is a
+  // frame of another material, not this one — measure again.
+  const hidden = await page.evaluate(({ sel, texts }) => {
+    const root = document.querySelector(sel);
+    const el = root && window.__textEl(root, texts);
+    if (!el) return false;
+    return getComputedStyle(el).webkitTextFillColor.replace(/\s/g, "") === "rgba(0,0,0,0)";
+  }, { sel, texts });
+  if (!hidden) {
+    console.log(`note ${key} : calque recréé pendant la mesure, on remesure`);
+    await page.evaluate(({ sel }) => {
+      const root = document.querySelector(sel);
+      if (root) root.style.visibility = "";
+    }, { sel });
+    // Two attempts are enough: a third re-creation would be a product fault.
+    return depth < 2 ? measure(page, key, depth + 1) : null;
+  }
   // B: the same box with the surface out of the way — what it is a tint OF.
   await page.evaluate(({ sel }) => (document.querySelector(sel).style.visibility = "hidden"), { sel });
   const ground = await pixels(page, info.text.rect);
@@ -237,6 +341,22 @@ async function measure(page, key) {
   info.behind = worst(behind, info.text.color);
   info.ground = mean(ground);
   info.composite = mean(behind);
+  if (info.surface && info.alpha !== null && !info.text.onOpaque) {
+    // A frame in which the surface is not painted at all is a sample of
+    // something else: the software compositor (headless SwiftShader) drops a
+    // `backdrop-filter` layer for a few frames now and then — measured on the
+    // phone's bottom sheet, three opens in a row out of twelve, with the
+    // element's own computed fill and box unchanged. Such a frame cannot carry
+    // the tint's token, so measure again; three attempts, and a surface that
+    // is never painted reports its own numbers.
+    const expect = [0, 1, 2].map((i) => info.alpha * info.surface[i] + (1 - info.alpha) * info.ground[i]);
+    if (dist(info.composite, expect) > 4) {
+      console.log(`note ${key} : image sans le calque (${hex(info.composite)} pour ${hex(expect)}), on remesure`);
+      // The software compositor drops this layer in runs of three opens
+      // (measured, 16 opens); six attempts cover a run.
+      return depth < 6 ? measure(page, key, depth + 1) : info;
+    }
+  }
   return info;
 }
 
@@ -247,6 +367,53 @@ function worst(px, textColor) {
   const scored = px.map((p) => ({ p, c: contrast(textColor, p) })).sort((a, b) => a.c - b.c);
   const at = scored[Math.min(scored.length - 1, Math.floor(scored.length * 0.02))] || { p: null, c: 0 };
   return { min: at.c, at: at.p };
+}
+
+// ── the light: a specular gradient on the lit edge ───────────────────────────
+// The finish's first pixel row INSIDE the border is background only (padding,
+// never a glyph), so three bands along it compare the light with itself: the
+// catch at 12 % must be brighter than the trough at 62 % — a uniform border
+// cannot fake that — and nothing may survive in eco.
+async function light(page, sel) {
+  const box = await page.evaluate(async (sel) => {
+    window.scrollTo(0, 0);
+    const main = document.querySelector("main");
+    if (main) main.scrollTop = 0;
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    await window.__stable(el);
+    const r = el.getBoundingClientRect();
+    if (r.width < 76 || r.height < 30 || r.top < 0 || r.bottom > innerHeight) return null;
+    const cs = getComputedStyle(el);
+    const radius = Math.max(parseFloat(cs.borderTopLeftRadius) || 0, parseFloat(cs.borderTopRightRadius) || 0);
+    const border = parseFloat(cs.borderTopWidth) || 0;
+    return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), radius, border };
+  }, sel);
+  if (!box) return null;
+  const pad = Math.min(Math.round(box.radius) + 2, Math.floor(box.width / 8));
+  const rect = { x: box.x + pad, y: box.y, width: box.width - 2 * pad, height: 2 };
+  const buf = await page.screenshot({ clip: rect, animations: "disabled" });
+  const { w, h, px } = await page.evaluate((b64) => window.__pixelsInfo(b64), buf.toString("base64"));
+  // The beam is the FIRST row of the painted background: under a 1 px border
+  // when the surface has one, at row 0 when its ring is an inset shadow.
+  const dpr = Math.round(h / 2);
+  const row0 = box.border > 0 ? dpr : 0;
+  const half = Math.max(5, Math.min(14, Math.round(w / 8)));
+  const band = (frac) => {
+    const c = Math.round(frac * w);
+    let n = 0;
+    let s = 0;
+    for (let x = Math.max(0, c - half); x < Math.min(w, c + half); x++) {
+      for (let r = row0; r < Math.min(h, row0 + dpr); r++) {
+        const p = px[r * w + x];
+        if (!p) continue;
+        s += (p[0] + p[1] + p[2]) / 3;
+        n++;
+      }
+    }
+    return n ? s / n : NaN;
+  };
+  return { left: band(0.12), mid: band(0.62), right: band(0.88) };
 }
 
 // ── the app ─────────────────────────────────────────────────────────────────
@@ -279,8 +446,18 @@ async function boot(page, theme, { eco = false } = {}) {
     },
     { theme, eco }
   );
-  await page.reload();
+  // 60 s: the shell restores the queue from the device on boot, and a
+  // 4 000-title queue (the phone leg plays one) makes a reload slower than
+  // Playwright's 30 s default on a loaded machine.
+  await page.reload({ timeout: 60000 });
   await page.waitForSelector(".topbar", WAIT);
+  // The eco attribute is written by the shell once `viz.eco` (and the rest of
+  // the boot) has been read: wait for the attribute itself, not for a clock.
+  if (eco) {
+    await page
+      .waitForFunction(() => document.documentElement.dataset.eco === "1", null, { timeout: 15000 })
+      .catch(() => console.log("note : data-eco non posé après 15 s"));
+  }
   await page.waitForTimeout(350);
   await page.evaluate(() => {
     const m = document.querySelector("main");
@@ -329,6 +506,21 @@ async function shoot(page, name) {
   if (SHOTS) await page.screenshot({ path: resolve(SHOTS, name + ".png") });
 }
 
+// The finish's own numbers: a catch exists, it has a direction, and it is gone
+// in eco. `/255` because these are raw picture values, not contrast ratios.
+function lightCheck(tag, label, l, { eco = false } = {}) {
+  if (!l) {
+    check(false, `${tag} · ${label} : lumière mesurable`, "surface absente ou hors écran");
+    return;
+  }
+  if (eco) {
+    check(l.left - l.mid <= 0.6, `${tag} · éco ${label} : aucun liseré`, `${(l.left - l.mid).toFixed(1)}/255`);
+    return;
+  }
+  check(l.left - l.mid >= 2, `${tag} · ${label} : liseré spéculaire`, `+${(l.left - l.mid).toFixed(1)}/255`);
+  check(l.left - l.right >= 1, `${tag} · ${label} : dégradé de réfraction`, `+${(l.left - l.right).toFixed(1)}/255`);
+}
+
 // ── the run ─────────────────────────────────────────────────────────────────
 const rows = [];
 const costs = {};
@@ -336,7 +528,7 @@ const costs = {};
 for (const [label, size, phone] of [
   ["desk", DESK, false],
   ["phone", PHONE, true],
-]) {
+].filter(([l]) => VIEWPORTS.includes(l))) {
   const ctx = await context(size, phone);
   await ctx.addInitScript(PAGE_HELPERS);
   const page = await ctx.newPage();
@@ -349,6 +541,15 @@ for (const [label, size, phone] of [
     const take = async (key) => {
       const m = await measure(page, key);
       if (m) found[key] = m;
+      else if (REQUIRED[phone ? "phone" : "desk"].includes(key)) {
+        const why = await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return "absent";
+          const r = el.getBoundingClientRect();
+          return `${Math.round(r.width)}×${Math.round(r.height)} @${Math.round(r.x)},${Math.round(r.y)}`;
+        }, SURFACES[key].sel);
+        console.log(`debug ${tag} · ${key} non mesurée : ${why}`);
+      }
       return m;
     };
 
@@ -370,14 +571,18 @@ for (const [label, size, phone] of [
     await take("topbar");
     await take("card");
     await take("notice");
+    lightCheck(tag, "carte", await light(page, ".card"));
     await shoot(page, `glass-${label}-${theme}-screen`);
 
     // The contextual menu, opened on a card (right click, as a person does).
     const card = page.locator(".card").first();
     await card.click({ button: "right" });
     await page.waitForSelector('.menu[role="menu"]', WAIT);
-    await page.waitForTimeout(180);
+    // Past the tier's tint arrival (160 ms): the bench measures the material at
+    // rest, and __stable() has already waited for the box to stop moving.
+    await page.waitForTimeout(260);
     await take("menu");
+    lightCheck(tag, "menu", await light(page, '.menu[role="menu"]'));
     await shoot(page, `glass-${label}-${theme}-menu`);
     const menuAudit = await audit(page);
     check(menuAudit.offenders.length === 0, `${tag} · menu : aucun blur hors overlay`, `${menuAudit.offenders.join(" | ")}`);
@@ -409,8 +614,9 @@ for (const [label, size, phone] of [
 
     await page.locator('.row.track button.add[aria-label="Ajouter à une playlist"]').first().click();
     await page.waitForSelector('.sheet[role="dialog"]', WAIT);
-    await page.waitForTimeout(220);
+    await page.waitForTimeout(300);
     await take("sheet");
+    lightCheck(tag, "feuille", await light(page, '.sheet[role="dialog"]'));
     const sheetAudit = await audit(page);
     check(sheetAudit.allowed.length === 1, `${tag} · feuille : 1 passe de blur`, `${sheetAudit.allowed.length} — ${sheetAudit.allowed.join(" | ")}`);
     check(/blur\(22px\)/.test(sheetAudit.allowed[0] || ""), `${tag} · feuille : palier 3 (22 px)`, sheetAudit.allowed[0] || "aucun");
@@ -438,6 +644,59 @@ for (const [label, size, phone] of [
       console.log(`note ${tag} · feuille « crédits » non ouverte (le banc continue)`);
     }
 
+    // ── the full-screen player: the surfaces the person actually lives in ───
+    if (phone) {
+      // The thumb row's doors, the queue sheet they open, and the About panel
+      // the swipe-up door reveals. These are the screens of the liquid finish.
+      // A 4 000-title playlist fills the queue, so its header shows the accent
+      // action ("Enregistrer en playlist") too.
+      await page.goto(base + "/app/#/playlist/" + ids.big);
+      await page.waitForSelector("button.btn-primary", WAIT);
+      await page.locator("button.btn-primary", { hasText: "Lire" }).first().click();
+      await page.waitForTimeout(500);
+      await page.locator("footer.player .now").first().click();
+      await page.waitForSelector(".m .footer .fb.file", WAIT);
+      await page.waitForTimeout(500);
+      await take("mobilefb");
+      lightCheck(tag, "porte du pouce", await light(page, ".footer .fb.file"));
+      await shoot(page, `glass-${label}-${theme}-playerfull`);
+      await page.locator(".m .footer .fb.file").click();
+      await page.waitForSelector(".m .sheet .ql", WAIT);
+      await page.waitForTimeout(320);
+      await take("playerqueue");
+      await shoot(page, `glass-${label}-${theme}-playerqueue`);
+      await page.locator('.m .sheet button[aria-label="Fermer la file d\'attente"]').click();
+      await page.waitForTimeout(220);
+      const peek = page.locator(".m .peek");
+      if (await peek.count()) {
+        await peek.first().click();
+        await page.waitForSelector(".m .under", WAIT);
+        await page.waitForTimeout(800);
+        await take("playerabout");
+        await shoot(page, `glass-${label}-${theme}-playerabout`);
+        await page.locator('.m .under-t button[aria-label="Fermer"]').first().click();
+        await page.waitForTimeout(280);
+      }
+      await page.locator('.m button[aria-label="Réduire"]').first().click();
+      await page.waitForTimeout(300);
+    } else {
+      // The desktop player's narrow side card (tier 1 over the blurred sleeve).
+      await page.locator('button[aria-label="Plein écran"]').first().click();
+      await page.waitForSelector(".side", WAIT);
+      await page.waitForTimeout(500);
+      // The facts grid lives under the À propos tab: open it as a person does.
+      const aboutTab = page.locator(".side .tabs button", { hasText: "À propos" });
+      if (await aboutTab.count()) {
+        await aboutTab.first().click();
+        await page.waitForTimeout(350);
+      }
+      await take("deskside");
+      lightCheck(tag, "panneau latéral", await light(page, ".side"));
+      await shoot(page, `glass-${label}-${theme}-deskside`);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+    }
+
     // The ladder's audit, in the state where the most is open: a closed menu
     // must blur nothing, and one open overlay must be one pass.
     const blur = scrim || (await audit(page));
@@ -451,12 +710,16 @@ for (const [label, size, phone] of [
 
     for (const key of REQUIRED[phone ? "phone" : "desk"]) {
       const m = found[key];
+      if (!m && OPTIONAL.has(key)) {
+        console.log(`note ${tag} · ${key} absente : le shell n'a pas peint d'avertissement`);
+        continue;
+      }
       if (!m) {
         check(false, `${tag} · ${key} mesurée`, "surface absente du DOM");
         continue;
-      }
-      check(m.alpha !== null && m.alpha > 0 && m.alpha < 1, `${tag} · ${key} translucide`, `alpha ${m.alpha}`);
-      check(m.alpha === null || (m.alpha >= 0.55 && m.alpha <= 0.95), `${tag} · ${key} teinte lisible`, `alpha ${m.alpha}`);
+      }      check(m.alpha !== null && m.alpha > 0 && m.alpha < 1, `${tag} · ${key} translucide`, `alpha ${m.alpha}`);
+      const floor = ALPHA_FLOOR[key] ?? 0.55;
+      check(m.alpha === null || (m.alpha >= floor && m.alpha <= 0.95), `${tag} · ${key} teinte lisible`, `alpha ${m.alpha}`);
       if (!m.text || !m.behind) {
         check(false, `${tag} · ${key} porte du texte mesurable`);
         continue;
@@ -466,17 +729,31 @@ for (const [label, size, phone] of [
       const okc = m.behind.min >= min;
       check(okc, `${tag} · ${key} contraste ${min}:1`, `${m.behind.min.toFixed(2)}:1 — «${m.text.sample}» ${m.text.size}px sur ${hex(m.behind.at)}`);
       if (!okc) {
-        // Keep what failed: the crop is the evidence, not a re-run.
+        // Keep what failed: the crop is the evidence, not a re-run. The surface
+        // may have closed by the time the checks run (a menu), so a missing
+        // root skips the crop instead of throwing.
         const which = { sel: SURFACES[key].sel, texts: SURFACES[key].texts };
-        const prev = await page.evaluate((w) => window.__hideText(window.__textEl(document.querySelector(w.sel), w.texts)), which);
-        await page.screenshot({ path: `/tmp/glass-fail-${tag.replace(/ /g, "-")}-${key}.png`, clip: m.text.rect });
-        await page.evaluate((w) => window.__restore(window.__textEl(document.querySelector(w.sel), w.texts), w.prev), { ...which, prev });
+        const prev = await page.evaluate((w) => {
+          const root = document.querySelector(w.sel);
+          const el = root && window.__textEl(root, w.texts);
+          return el ? window.__hideText(el) : null;
+        }, which);
+        await page.screenshot({ path: `/tmp/glass-fail-${tag.replace(/ /g, "-")}-${key}.png`, clip: m.text.rect }).catch(() => {});
+        await page.evaluate((w) => {
+          const root = document.querySelector(w.sel);
+          if (!root) return;
+          const el = window.__textEl(root, w.texts);
+          if (el) window.__restore(el, w.prev);
+        }, { ...which, prev });
       }
       // The tint is exactly the token's: a·S + (1−a)·B, B measured from the
-      // same box with the surface removed.
-      if (m.surface && m.composite && m.ground) {
+      // same box with the surface removed. Only where the line of type sits on
+      // the surface itself — see `onOpaque` above.
+      if (m.surface && m.composite && m.ground && !m.text.onOpaque) {
         const expect = [0, 1, 2].map((i) => m.alpha * m.surface[i] + (1 - m.alpha) * m.ground[i]);
         check(dist(m.composite, expect) <= 4, `${tag} · ${key} teinte = tokens`, `mesuré ${hex(m.composite)} pour ${hex(expect)}`);
+      } else if (m.text.onOpaque) {
+        console.log(`note ${tag} · ${key} : texte sur une boîte opaque, teinte non comparable`);
       }
     }
 
@@ -485,6 +762,7 @@ for (const [label, size, phone] of [
     await page.goto(base + "/app/#/library/albums");
     await page.waitForSelector(".card", WAIT);
     await page.waitForTimeout(350);
+    lightCheck(tag, "carte", await light(page, ".card"), { eco: true });
     const ecoBlur = await audit(page);
     check(ecoBlur.eco === "1", `${tag} · éco pose data-eco="1"`, `${ecoBlur.eco}`);
     check(ecoBlur.blurred.length === 0, `${tag} · éco : aucune image floutée`, `${ecoBlur.blurred.length} — ${ecoBlur.blurred.join(" | ")}`);

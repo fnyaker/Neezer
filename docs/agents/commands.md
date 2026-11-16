@@ -69,7 +69,9 @@ cd webapp && node test/remote/run.mjs [--phone] [--shots <dir>]   # remote contr
 cd webapp && node test/render/run.mjs --world piano --genre frenchcore --bpm 200   # render bench: contact sheet in test/render/out/
 cd webapp && node test/render/run.mjs --size 480x270   # the whole catalogue, one sheet per world, for a visual audit
 cd webapp && node test/render/run.mjs --check        # every world, held to the picture contracts (headless Chromium, no GPU needed)
-cd webapp && node test/render/run.mjs --strip        # the players' 40 px bar strip, photographed over the blurred cover
+cd webapp && node test/render/run.mjs --strip        # the players' bar strip, photographed over the blurred cover; prints the
+                                                     # share of the canvas carrying alpha, its top/bottom rows, the exact colour
+                                                     # and the SwiftShader cost (--eco / --light for the other grades)
 cd webapp && node test/ui/run.mjs                    # the lists' main-thread cost in Chromium on a 8000-track library (needs npm run build):
                                                      # open the favourites, type into them, sort, open a 4000-track playlist
 cd webapp && node test/queue/run.mjs [--phone]       # the queue's editing in headless Chromium on a 4000-track queue: drag a row (mouse, or real touch
@@ -80,7 +82,10 @@ cd webapp && node test/theme/run.mjs                 # the sleeve change is a 60
 cd webapp && node test/glass/run.mjs                # the ONE glass ladder (3 tiers): contrast >= 4.5:1 on 45 surfaces, one
                                                      # backdrop-filter at a time, zero in eco/reduced transparency, cost per surface
 cd webapp && node test/vizstrip/run.mjs             # the visualizer strip's real height: 56 px desktop / 44 below / 40 mobile,
-                                                     # canvas fills it, no overlap with the transport, the footer or the thumbs
+                                                     # canvas fills it, no overlap with the transport, the footer or the thumbs;
+                                                     # and its picture on the three themes + reduced motion + no-WebGL2: alpha 0
+                                                     # outside the capsules, one theme accent inside, backdrop identical, >= 3:1
+                                                     # contrast, a live custom accent, and no canvas at all in eco
 cd webapp && node test/backdrop/run.mjs              # the app's ground behind all seven routes: ONE blurred sleeve, 0 backdrop-filter,
                                                      # under the content, a 640 ms fade on a skip, one cover load, eco (no image,
                                                      # data-eco), contrast over a white sleeve; SHOTS=<dir> for PNGs, DIST=<dir> as above
@@ -119,6 +124,8 @@ cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen pl
                                                      # (the four browser tests above start tools/perf_api.py --serve; PYTHON=<venv python>, SHOTS=<dir> keeps pictures)
 cd webapp && node test/failure/run.mjs               # an API 500/offline says its cause and offers Réessayer (one click = one request),
                                                      # menus ⋯ work from the keyboard, rows are 44 px on touch / 40 px with a mouse
+cd webapp && node test/menu/run.mjs                  # the contextual menu on every surface: right-click / Shift+F10, items per surface,
+                                                     # Escape + focus back, 0 request per open (16 surfaces, 1280×900 and 390×844)
 cd webapp && node test/recap/run.mjs                 # the recap stories: 2 requests cold / 1 warm / 0 per card, 9 cards maximum,
                                                      # share poster 1080x1350 + real PNG download, 390/360/641/1440 px, auto-advance,
                                                      # all states and privacy; needs a build (DIST=/tmp/... for one outside dist)

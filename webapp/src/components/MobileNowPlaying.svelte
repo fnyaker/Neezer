@@ -1154,7 +1154,7 @@
   {/if}
 
   {#if showQueue}
-    <div class="sheet" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="File d'attente">
+    <div class="sheet on-photo" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="File d'attente">
       <div class="sheet-h">
         <span>File d'attente</span>
         <button class="ic" on:click={() => (showQueue = false)} aria-label="Fermer la file d'attente"><Icon name="chevronDown" size={22} /></button>
@@ -1170,7 +1170,7 @@
     <!-- A real view, not a drawer behind a gesture: its own header names the
          track and the artist, the close is a 44 px button, and the only
          scroller is the lyrics list inside it. -->
-    <div class="sheet lyrics-view" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="Paroles">
+    <div class="sheet on-photo lyrics-view" transition:fade={{ duration: 120 }} role="dialog" aria-modal="true" aria-label="Paroles">
       <div class="sheet-h lyrics-h">
         <div class="lyrics-meta">
           <span class="lyrics-k">Paroles</span>
@@ -1663,7 +1663,9 @@
     height: 40px;
     flex: none;
     margin: 0 22px;
-    opacity: 0.9;
+    /* NO opacity and NO filter: the strip's flat colour must be EXACTLY
+       `--ac-text`, and a veil here would composite it with the sleeve behind
+       (measured `#a9cd33` for `#d2ff3c` on Encre at 0.9). */
   }
   /* The bars live in the space between the transport and the thumb row, not
      against the controls: the auto margins centre the fixed 40 px band in the
@@ -1716,10 +1718,24 @@
     border-radius: 12px;
     color: var(--dim);
     flex: none;
+    /* A pane of glass on the frosted sleeve (tier 1's fill, no blur of its
+       own): the specular hairline on its top edge is what makes a 44 px door
+       read as a control over a photograph instead of a floating glyph. 34 %
+       keeps `--dim` legible over the darkest and the brightest scrim. The ring
+       is an INSET shadow, not a border: a border would widen the five targets
+       the thumb row has to fit on a 360 px phone. */
+    background-color: color-mix(in srgb, var(--s1) 34%, transparent);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--tx) 8%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, var(--glass-lo) 60%, transparent);
   }
   .fb:hover {
     color: var(--tx);
-    background: var(--s2);
+    background-color: var(--glass-hover);
   }
   .fb:focus-visible {
     outline: 2px solid var(--ac-text);
@@ -1727,7 +1743,7 @@
   }
   .fb:active {
     color: var(--tx);
-    background: var(--s2);
+    background-color: color-mix(in srgb, var(--tx) 14%, transparent);
   }
   .fb.file {
     font-size: 13px;
@@ -1755,7 +1771,13 @@
     position: absolute;
     inset: 0;
     z-index: 3;
-    background: var(--glass-bg-2);
+    /* `on-photo` (app.css): the THICK step, because this panel is full-bleed
+       over the SLEEVE (a photograph) and not over the page's own 86–91 %
+       scrim. Measured over a white-ish cover: 86 % left the À propos panel's
+       11 px `--dim` labels at 4.17:1, below the 4.5 the app holds; 93 % puts
+       them at 5.18:1 and still shows the sleeve through the frost. No outer
+       shadow: a full-bleed panel has nothing to cast onto. */
+    box-shadow: none;
     backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
     display: flex;
     flex-direction: column;
@@ -1769,6 +1791,7 @@
     font-size: 1.15rem;
     font-weight: 700;
     color: var(--tx);
+    border-bottom: 1px solid var(--glass-border);
   }
   .queue {
     margin: 0;
@@ -1776,7 +1799,10 @@
     overflow-y: auto;
     flex: 1;
     min-height: 0;
-    --ql-hover: var(--s2);
+    /* A hover is a step of the same material, not a solid block on the glass
+       (QueueList says this itself: --ql-hover is the row under the pointer). */
+    --ql-hover: var(--glass-hover);
+    --ql-ghost: var(--glass-bg-2);
     --ql-bg: transparent;
     color: var(--tx);
   }
@@ -1830,7 +1856,8 @@
     max-width: 100%;
   }
 
-  /* The swipe-up panel's door: a quiet hint, still a 44 px target. */
+  /* The swipe-up panel's door: a quiet hint, still a 44 px target — and a
+     capsule of glass, so the gesture is visible instead of guessed. */
   .peek {
     display: flex;
     align-items: center;
@@ -1846,9 +1873,16 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--dim);
+    background-color: color-mix(in srgb, var(--s1) 26%, transparent);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 7%, transparent);
   }
   .peek:hover {
     color: var(--tx);
+    background-color: var(--glass-hover);
   }
   .peek:focus-visible {
     outline: 2px solid var(--ac-text);
@@ -1860,7 +1894,15 @@
     z-index: 4;
     display: flex;
     flex-direction: column;
-    background: var(--glass-bg-2);
+    /* The thick step, for the same reason as the queue sheet above (a
+       photograph behind, no page scrim). The panel rises from the bottom, so
+       its shadow must go UP: that is the one direction the ladder's own depth
+       token cannot express. */
+    background-color: var(--glass-bg-strong);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
     backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
     border-radius: 18px 18px 0 0;
     box-shadow: 0 -14px 44px color-mix(in srgb, var(--bg) 70%, transparent);

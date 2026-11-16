@@ -44,7 +44,16 @@ uniform sampler2D uSrc;
 uniform vec2 uTexel;
 uniform vec2 uThresh; // x threshold, y knee
 vec3 tap(vec2 o) {
-  vec3 c = texture(uSrc, vUv + uTexel * o).rgb;
+  vec4 t = texture(uSrc, vUv + uTexel * o);
+  // A TRANSPARENT world stores a STRAIGHT colour and a COVERAGE, and only the
+  // coverage is light. Weighting the tap by it is what keeps the bloom round
+  // around what was drawn: the spectrum writes its band colour across the
+  // whole canvas with an alpha of zero outside its capsules (the contract the
+  // final pass expects), so sampling .rgb alone bloomed a full-frame field of
+  // colour — and the final pass then turned that bloom into alpha, which is
+  // the veil that used to sit behind the player's row. Opaque worlds write
+  // alpha 1 and are unchanged.
+  vec3 c = t.rgb * t.a;
   // A NaN or an Inf that reached this far would be smeared over the whole
   // bloom chain and the frame would go black in blocks. Comparisons against
   // NaN are false, so this catches both.
@@ -161,8 +170,9 @@ export const FINAL_FS = `${HEAD}${LUMA}
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
 uniform vec4 uPost;  // x exposure, y bloom strength, z chromatic fringe, w grain
-uniform vec4 uPost2; // x time (s), y transparent output, z exposure lift, w saturation
+uniform vec4 uPost2; // x time (s), y transparent output (1) or flat strip (2), z exposure lift, w saturation
 uniform vec2 uCanvas;
+uniform float uHead; // 1 with float targets, HEADROOM without: undoes emit()'s scale
 
 // AgX, after Benjamin Wrensch's minimal fit (mean error^2 3.7e-6 against the
 // reference LUT), with a "punchy" look: a touch more contrast and saturation
@@ -205,6 +215,17 @@ float h12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx 
 void main() {
   vec2 uv = vUv;
   vec4 s = texture(uScene, uv);
+  if (uPost2.y > 1.5) {
+    // THE FLAT ROW (the player's strip): the world wrote the theme's accent in
+    // DISPLAY sRGB and this pass must not grade it. AgX would walk the accent
+    // away from the theme, the grain would break "one solid colour", the
+    // impact lift would pulse it, and the bloom would put a halo where the
+    // person asked for none. The alpha is the row's own coverage, so the page's
+    // backdrop is exactly what shows everywhere outside the capsules.
+    vec3 flatC = clamp(s.rgb * uHead, 0.0, 1.0);
+    fragColor = vec4(flatC * s.a, s.a);
+    return;
+  }
   vec3 col = s.rgb;
   if (uPost.z > 0.0) {
     // Radial and proportional to the distance from the centre, like a lens:

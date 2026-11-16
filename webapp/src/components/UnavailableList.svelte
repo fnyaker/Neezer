@@ -12,10 +12,12 @@
   //   two at a time: a 300-row list is not 300 Deezer searches on open.
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onDestroy, onMount } from "svelte";
+  import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
   import { CAN_KEEP, CAN_ADMIN } from "../lib/remote/mode.js";
   import { openReplace, toasts, clearUnavailable, unavailableChanged, isAdmin } from "../lib/stores.js";
-  import { invalidatePlaylists, loadFavorites } from "../lib/actions.js";
+  import { invalidatePlaylists, loadFavorites, buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { previewing, togglePreview, applyReplacement, pollJob } from "../lib/replace.js";
   import { artistLine, duration as fmtDuration } from "../lib/format.js";
   import Cover from "./Cover.svelte";
@@ -128,6 +130,13 @@
     let changed = false;
     for (const id of ids) changed = selected.delete(id) || changed;
     if (changed) selected = selected;
+  }
+
+  // These are dead titles, not dead links: the same menu as any row (replace,
+  // download, credits…) stays one right-click away.
+  function menu(e, track) {
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(track, push), e.currentTarget);
   }
 
   // -- selection -----------------------------------------------------------------
@@ -301,7 +310,15 @@
   {#each tracks as t, i (idOf(t))}
     {@const id = idOf(t)}
     {@const s = (suggVersion, sugg.get(id))}
-    <li class="row" class:checked={selected.has(id)} class:busy={pending.has(id)}>
+    <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
+    <li
+      class="row"
+      class:checked={selected.has(id)}
+      class:busy={pending.has(id)}
+      tabindex="-1"
+      on:contextmenu={(e) => menu(e, t)}
+      on:keydown={(e) => menuKey(e, (ev) => menu(ev, t))}
+    >
       {#if CAN_KEEP}
         <button
           class="box"

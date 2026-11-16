@@ -4,8 +4,8 @@
   // button — the "Top result" card Spotify and YouTube Music both open their
   // results on. Which result earns the place is lib/searchrank.js's call.
   import { push } from "svelte-spa-router";
-  import { openMenu } from "../lib/stores.js";
-  import { playEntity, buildEntityMenu, subscribeToPodcast } from "../lib/actions.js";
+  import { playEntity, buildEntityMenu, buildPodcastMenu, subscribeToPodcast } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { entityRef } from "../lib/entity.js";
   import { isLocalId } from "../lib/format.js";
   import Cover from "./Cover.svelte";
@@ -37,7 +37,10 @@
     else open();
   }
   function menu(e) {
-    if (kind === "artist") openMenu(e, buildEntityMenu("artist", item, push));
+    if (keepNativeMenu(e)) return;
+    const items =
+      kind === "artist" ? buildEntityMenu("artist", item, push) : buildPodcastMenu(item, push);
+    openMenuAt(e, items, e.currentTarget);
   }
 </script>
 
@@ -46,9 +49,13 @@
   role="button"
   tabindex="0"
   title={title}
+  aria-haspopup="menu"
   on:click={open}
   on:contextmenu={menu}
-  on:keydown={(e) => e.key === "Enter" && open()}
+  on:keydown={(e) => {
+    if (menuKey(e, menu)) return;
+    if (e.key === "Enter") open();
+  }}
 >
   <div class="art" class:round={kind === "artist"}>
     <Cover src={image} alt={title} {kind} round={kind === "artist"} fallbackId={isLocalId(item.id) ? item.id : null} />

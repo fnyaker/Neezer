@@ -602,7 +602,10 @@ export function createRenderer(canvas, { onLost, onRestored } = {}) {
     for (let i = 0, w = 1; i < mips.length; i++, w *= BLOOM_FALLOFF) wsum += w;
     const bk = mips.length ? (look.bloom * BLOOM_GAIN) / wsum : 0;
     fin.v4("uPost", look.exposure * head, bk, look.ca, look.grain);
-    fin.v4("uPost2", look.time, look.transparent ? 1 : 0, look.lift, look.saturation);
+    // y: 0 opaque, 1 transparent (graded light over the page), 2 the flat strip
+    // (the theme's accent, printed — see FINAL_FS).
+    fin.v4("uPost2", look.time, look.transparent ? (look.flat ? 2 : 1) : 0, look.lift, look.saturation);
+    fin.f("uHead", head);
     fin.v2("uCanvas", cw, ch);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);

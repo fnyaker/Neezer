@@ -32,6 +32,7 @@ import { WORLD_META, GROUPS, worldFor } from "../src/lib/viz/worlds/catalogue.js
 import { worldIds, loadWorld, hasWorld, instrumentIds } from "../src/lib/viz/worlds/index.js";
 import { SKINS, ALIASES, skinId, skinFor, skinCount } from "../src/lib/viz/skins.js";
 import { worldFragment, particleVertex, particleFragment, WORLD_UNIFORMS } from "../src/lib/viz/gl/glsl.js";
+import { FINAL_FS, PREFILTER_FS } from "../src/lib/viz/gl/postfx.js";
 
 // The scenes' arithmetic is Rust (lib/viz/core.js); in the app the core loads
 // with the scene, here it is instantiated once from the shipped binary.
@@ -920,6 +921,28 @@ const EXTRA = (() => {
   return [...block[1].matchAll(/\("([^"]+)",\s*"([a-z]+)"\)/g)].map((m) => [m[1], m[2]]);
 })();
 
+test("a transparent row's bloom is weighted by coverage, and the strip is printed flat", () => {
+  // The band that sat behind the player's row came from these two lines being
+  // absent, measured on the real player: the spectrum writes a STRAIGHT colour
+  // across the whole canvas with an alpha of zero outside its capsules, the
+  // bloom sampled `.rgb` (so it bloomed a full-frame field of colour), and the
+  // final pass turned that bloom's luminance into ALPHA — 100% of the canvas
+  // had a non-zero alpha on Encre, tinted by the sleeve. Papier, where the
+  // bloom was already off, read 0. Nothing here can be seen without a GPU, so
+  // what is pinned is the two rules the pixels depend on.
+  assert.match(PREFILTER_FS, /vec3\s+c\s*=\s*t\.rgb\s*\*\s*t\.a/, "the bloom no longer weights by coverage");
+  // The flat branch of the final pass: the strip's own value, its own coverage,
+  // and an early return BEFORE the AgX grade and the grain.
+  const flat = FINAL_FS.slice(FINAL_FS.indexOf("uPost2.y > 1.5"));
+  assert.ok(flat.length > 0, "the final pass has no flat-strip branch");
+  assert.match(flat, /fragColor = vec4\(flatC \* s\.a, s\.a\)/, "the flat strip is not premultiplied coverage");
+  assert.ok(
+    flat.indexOf("return") < flat.indexOf("agx("),
+    "the flat strip still runs through the tone map"
+  );
+  assert.match(FINAL_FS, /uniform float uHead/, "the flat strip cannot undo the 8-bit headroom");
+});
+
 test("every family the classifier can name has its own skin, by id and by label", () => {
   for (const f of FAMILY_LIST) {
     assert.equal(skinId(f.id), f.id, `family "${f.id}" has no row of its own`);
@@ -1095,7 +1118,7 @@ const hslOf = (s) => {
 // (it is about where things are drawn). `beads` is one entry per fill call, so
 // the strip's three layers per band arrive in the order the scene drew them.
 function colourRecorder(w, h) {
-  const out = { beads: [], clears: 0, fills: 0, full: 0 };
+  const out = { beads: [], styles: [], clears: 0, fills: 0, full: 0 };
   let last = "";
   const g = {
     canvas: { width: w, height: h },
@@ -1118,6 +1141,7 @@ function colourRecorder(w, h) {
     quadraticCurveTo() {},
     fill() {
       out.fills++;
+      out.styles.push(last);
       const c = hslOf(last);
       if (c) out.beads.push(c);
     },
@@ -1260,8 +1284,8 @@ test("the canvas bars take their colours from the sleeve, band by band", () => {
   const preset = tierPreset("high");
   const W = 520;
   const H = 56;
-  const run = ({ zones = true, eco = false, light = false } = {}) => {
-    const scene = makeScene("bars", { layout: "strip", light, eco });
+  const run = ({ zones = true, eco = false, light = false, solid = "" } = {}) => {
+    const scene = makeScene("bars", { layout: "strip", light, eco, solid });
     scene.resize(W, H, preset);
     const pal = createPalette("cover");
     if (zones) {
@@ -1325,6 +1349,80 @@ test("the canvas bars take their colours from the sleeve, band by band", () => {
   assert.ok(ecoHues.size >= 4, "eco's row lost the sleeve's colours");
 });
 
+test("the player's strip is ONE flat colour, and it is the theme's accent", () => {
+  // What the person asked for: the strip is a caption in the app's own readable
+  // accent — not the sleeve's salmon-to-red walk, not a warm tip, not a pale
+  // core, not a level-to-level brightness. One shape per capsule, one colour,
+  // opacity 1; the music moves the height and the width only.
+  const preset = tierPreset("high");
+  const W = 520;
+  const H = 56;
+  const ACCENT = "#d2ff3c";
+  const scene = makeScene("bars", { layout: "strip", solid: ACCENT });
+  scene.resize(W, H, preset);
+  const pal = createPalette("cover");
+  pal.setCover([250, 140, 40]);
+  pal.setZones(blueGreenOrange);
+  const rec = colourRecorder(W, H);
+  const dt = 1 / 60;
+  let frame;
+  for (let i = 0; i < 30; i++) {
+    frame = makeFrame(i * dt);
+    pal.update(frame, dt);
+    scene.update(frame, dt);
+  }
+  scene.draw(rec.g, W, H, pal.out);
+  assert.equal(rec.clears, 1, "the strip must clear, never wash");
+  assert.equal(rec.full, 0, "the strip drew a field behind the row");
+  assert.equal(rec.fills, scene.bars, `${rec.fills} fills for ${scene.bars} beads: not one shape per bead`);
+  assert.deepEqual(new Set(rec.styles), new Set([ACCENT]), "the row is not one colour");
+
+  // THE THEME CHANGES WITHOUT A REBUILD: the host pushes a new accent into the
+  // live scene (setOptions), so a theme switch or a custom accent repaints the
+  // row on the next frame instead of resetting every envelope.
+  const CYAN = "#00e5ff";
+  scene.setOptions({ solid: CYAN });
+  const rec2 = colourRecorder(W, H);
+  scene.draw(rec2.g, W, H, pal.out);
+  assert.equal(rec2.styles.length, scene.bars, "the live accent change lost a shape");
+  assert.deepEqual(new Set(rec2.styles), new Set([CYAN]), "the live accent did not reach the row");
+
+  // ECO IS THE SAME COLOUR AND THE SAME ROW, with nothing on top: the flat
+  // accent is the cheapest picture, not a different one.
+  const ecoScene = makeScene("bars", { layout: "strip", solid: CYAN, eco: true, reducedMotion: true });
+  ecoScene.resize(W, H, preset);
+  const recEco = colourRecorder(W, H);
+  for (let i = 0; i < 30; i++) {
+    frame = makeFrame(i * dt);
+    pal.update(frame, dt);
+    ecoScene.update(frame, dt);
+  }
+  ecoScene.draw(recEco.g, W, H, pal.out);
+  assert.equal(recEco.full, 0, "eco drew a field");
+  assert.equal(recEco.fills, ecoScene.bars, "eco's flat row is not one shape per bead");
+  assert.deepEqual(new Set(recEco.styles), new Set([CYAN]), "eco changed the theme's colour");
+
+  // FULL SCREEN IS NOT THE STRIP: the same scene, given the same accent, keeps
+  // the sleeve's colours — the accent is the player's strip only.
+  const fullScene = makeScene("bars", { layout: "full", solid: ACCENT });
+  fullScene.resize(640, 360, preset);
+  const recFull = colourRecorder(640, 360);
+  for (let i = 0; i < 30; i++) {
+    frame = makeFrame(i * dt);
+    pal.update(frame, dt);
+    fullScene.update(frame, dt);
+  }
+  fullScene.draw(recFull.g, 640, 360, pal.out);
+  assert.ok(recFull.fills > fullScene.bars, "the full-screen row lost its layers");
+  assert.ok(
+    recFull.styles.some((s) => /^hsl/.test(s)),
+    "the full-screen row stopped using the sleeve's palette"
+  );
+  scene.dispose();
+  ecoScene.dispose();
+  fullScene.dispose();
+});
+
 test("the GL engine gives the worlds the sleeve's zones, and the row is transparent", async () => {
   // The GL half has no GPU here, so what is pinned is what the ENGINE hands the
   // world: the zone uniforms (28 floats), the transparency flag, the eco grade,
@@ -1333,7 +1431,7 @@ test("the GL engine gives the worlds the sleeve's zones, and the row is transpar
   const frame = makeFrame(0);
   let simT = 0;
 
-  async function run({ zones = true, eco = false } = {}) {
+  async function run({ zones = true, eco = false, layout = "full", solid = "" } = {}) {
     const seen = { look: null, uniforms: {} };
     const h = {
       f: (n, v) => (seen.uniforms[n] = v),
@@ -1369,7 +1467,8 @@ test("the GL engine gives the worlds the sleeve's zones, and the row is transpar
       now: () => simT,
       fps: 60,
       flash: "soft",
-      layout: "full",
+      layout,
+      solid,
       eco,
       core: vizCoreFromBytes(readFileSync(new URL("../src/lib/audio/rhythm.wasm", import.meta.url))),
     });
@@ -1414,4 +1513,37 @@ test("the GL engine gives the worlds the sleeve's zones, and the row is transpar
   // The spectrum's params are width, curve, trail, pitch — in eco the trail is
   // the first thing a flat picture gives up.
   assert.equal(eco.uniforms.uP0?.[2], 0, `eco left the afterglow at ${eco.uniforms.uP0?.[2]}`);
+
+  // THE PLAYER'S STRIP IS PRINTED, NOT LIT. With the theme's accent in hand
+  // (the host's --ac-text, read live) the engine turns the whole post grade off
+  // for this layout: the bloom is what used to become alpha and veil the
+  // backdrop, and the grain/fringe/lift are finish a flat caption does not
+  // have. The world is told the accent and prints it.
+  const strip = await run({ zones: true, layout: "strip", solid: "#d2ff3c" });
+  assert.equal(strip.look.transparent, true, "the strip is not transparent");
+  assert.equal(strip.look.flat, true, "the accent did not switch the row to a flat print");
+  assert.equal(strip.look.bloom, 0, "the strip kept a bloom (it becomes alpha over the canvas)");
+  assert.equal(strip.look.grain, 0, "the strip kept the grain");
+  assert.equal(strip.look.ca, 0, "the strip kept the fringe");
+  assert.equal(strip.look.lift, 0, "the strip brightens on an impact");
+  assert.equal(strip.uniforms.uSolidOK, 1, "the accent never reached the world");
+  const solid = strip.uniforms.uSolid || [];
+  const want = [210 / 255, 255 / 255, 60 / 255, 1];
+  assert.equal(solid.length, 4, "uSolid is not one vec4");
+  for (let i = 0; i < 3; i++) {
+    assert.ok(Math.abs(solid[i] - want[i]) < 1e-6, `uSolid[${i}] = ${solid[i]}, not ${want[i]}`);
+  }
+
+  // ...and that is the STRIP's business only: the full-screen row, handed the
+  // same accent, keeps its sleeve colours and its bloom.
+  const wide = await run({ zones: true, layout: "full", solid: "#d2ff3c" });
+  assert.equal(wide.look.flat, false, "the full-screen row was printed flat");
+  assert.ok(wide.look.bloom > 0, "the full-screen row lost its bloom");
+
+  // Eco on the strip keeps exactly the same flats (it only removes finish that
+  // is already removed here).
+  const stripEco = await run({ zones: true, layout: "strip", solid: "#d2ff3c", eco: true });
+  assert.equal(stripEco.look.flat, true, "eco lost the flat print");
+  assert.equal(stripEco.look.transparent, true);
+  assert.equal(stripEco.look.bloom, 0);
 });

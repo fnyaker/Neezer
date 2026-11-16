@@ -1,6 +1,7 @@
 <script>
   import { push } from "svelte-spa-router";
-  import { subscribeToPodcast } from "../lib/actions.js";
+  import { subscribeToPodcast, buildPodcastMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
 
@@ -19,6 +20,11 @@
       busy = false;
     }
   }
+
+  function menu(e) {
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildPodcastMenu(item, push), e.currentTarget);
+  }
 </script>
 
 <div
@@ -26,8 +32,13 @@
   role="button"
   tabindex="0"
   title={item.title}
+  aria-haspopup="menu"
   on:click={add}
-  on:keydown={(e) => e.key === "Enter" && add()}
+  on:contextmenu={menu}
+  on:keydown={(e) => {
+    if (menuKey(e, menu)) return;
+    if (e.key === "Enter") add();
+  }}
 >
   <div class="cv">
     <Cover src={item.cover} alt={item.title} kind="podcast" />

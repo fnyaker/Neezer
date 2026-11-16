@@ -49,6 +49,7 @@
   role="button"
   tabindex="0"
   title={title}
+  aria-haspopup="menu"
 >
   <div class="cv">
     <Cover src={image} alt={title} {kind} round={kind === "artist"} fallbackId={isLocalId(item.id) ? item.id : null} />
@@ -70,9 +71,16 @@
     padding: 12px;
     border-radius: var(--r-card);
     /* Tier 1 of the glass ladder: a tint, never a blurred backdrop — a grid of
-       cards must not be a grid of render passes. */
+       cards must not be a grid of render passes. The two 1 px layers are the
+       liquid finish (app.css, "the liquid finish"): the specular gradient on
+       the lit edge and the dark rim under it. The COLOUR is its own layer
+       (`background-color` on hover, so a hover never drops the light). */
     border: 1px solid var(--glass-border);
-    background: var(--glass-bg);
+    background-color: var(--glass-bg);
+    background-image: var(--glass-beam-x), var(--glass-rim-x);
+    background-size: 100% 1px, 100% 1px;
+    background-position: top left, bottom left;
+    background-repeat: no-repeat, no-repeat;
     box-shadow: var(--glass-shadow);
     color: var(--tx);
     transition:
@@ -91,7 +99,7 @@
   }
   .card:hover,
   .card:focus-visible {
-    background: var(--glass-hover);
+    background-color: var(--glass-hover);
     border-color: var(--glass-border);
   }
   .cv {

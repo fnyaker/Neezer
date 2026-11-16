@@ -629,9 +629,21 @@ export function closeExport() {
 export const contextMenu = writable(null);
 
 export function openMenu(event, items) {
-  event.preventDefault();
-  event.stopPropagation();
-  contextMenu.set({ x: event.clientX, y: event.clientY, items });
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  // The menu hands the focus back to what opened it when it closes (Escape,
+  // Tab), and ContextMenu remembers `document.activeElement` at the moment the
+  // store flips — so a pointer-opened menu focuses its trigger on the way in.
+  // A right-click does not focus what it lands on; a keyboard call already has.
+  // Callers that hand over a coordinate shim (the players' ⋯ buttons) have no
+  // currentTarget: the button they were clicked from is the active element.
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  const node =
+    event?.currentTarget || (active && active !== document.body ? active : null);
+  if (node && typeof node.focus === "function" && node.isConnected && !node.contains(document.activeElement)) {
+    node.focus({ preventScroll: true });
+  }
+  contextMenu.set({ x: Number(event?.clientX) || 0, y: Number(event?.clientY) || 0, items });
 }
 export function closeMenu() {
   contextMenu.set(null);

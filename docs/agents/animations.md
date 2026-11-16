@@ -4,7 +4,9 @@ Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.m
 
 **Animations** (`webapp/src/lib/viz/`): a mode registry (`off`, `bars`, `pulse`, `scope`, `aurora`,
 `smart` — `modes.js`), a palette whose SOURCE the user picks (cover art / the spectrum itself / fixed
-schemes), and quality tiers that `auto`-resolve from the device. Two kinds of scene come out of
+schemes) — except the player's strip, which is ONE colour read from the app's own theme accent, and
+changes live with the theme — and quality tiers that `auto`-resolve from the device. Two kinds of
+scene come out of
 `lib/viz/index.js`, and the host has to know which: **`gl`** — EVERY mode is the WebGL2 engine
 (`scenes/gl.js`) with a policy for which WORLD it shows (`pulse`, `aurora`, `bars` and `scope` are
 one fixed world each — `pulse`, `aurora`, `spectrum` and the `scope` instrument — and `smart` lets
@@ -366,8 +368,10 @@ the reader named outright, and both were structural.
   (its one blurred cover layer; the projector's page) is what it sits on. `scenes/gl.js` takes the
   transparent grade from the WORLD's own `look.transparent`, so a world that writes coverage asks for
   it, and a dissolve carries alpha with colour — an opaque world arriving over the row stays opaque
-  until it is alone. The engine's bloom is the only halo: the world paints no spill, no frosted plate
-  and no border, and the visualizer adds no blur, filter or image layer of its own anywhere.
+  until it is alone. The engine's bloom is the only halo full screen: the world paints no spill, no
+  frosted plate and no border, and the visualizer adds no blur, filter or image layer of its own
+  anywhere. The PLAYER'S STRIP has neither a bloom nor a post pass, and one colour from the theme
+  (see *THE STRIP IS THE THEME'S* below).
 - **Its colours are the artwork's, band by band.** The row is as wide as the sleeve, so it is coloured
   by the sleeve. `lib/coverpalette.js` — the app's ONE decoder, shared with the blurred backdrop —
   decodes the cover once (64 px, bounded cache); its 3×3 `cells` are read COLUMN BY COLUMN, taking the
@@ -382,22 +386,76 @@ the reader named outright, and both were structural.
   block's own palette uses. There is deliberately **no tempo drift on a zoned row**: the drift exists
   so a one-colour palette does not sit still, and rotating the sleeve's colours away from the sleeve
   behind them drew a violet row on a blue cover (measured: 53° of drift over one arrangement).
-- **The fallback is untouched.** No artwork, or a palette source that is not the cover (Néon, Braise,
-  Glace, Monochrome, Spectre), and the row draws its old low→high walk — which is exactly what the
-  parity oracle (`test/reference/bars.js`) pins against the Rust levelling, picture by picture.
+- **The fallback is the full-screen row's — and the strip's only when the host cannot measure an
+  accent.** No artwork, or a palette source that is not the cover (Néon, Braise, Glace, Monochrome,
+  Spectre), and the row draws its old low→high walk — which is exactly what the parity oracle
+  (`test/reference/bars.js`) pins against the Rust levelling, picture by picture. The player's strip
+  draws the theme's accent instead (see *THE STRIP IS THE THEME'S*); a host that hands no accent
+  gets this walk there too.
 
-Measured on this machine, and the numbers the rules are worth: the canvas row at **520×56** costs
-**0.205 ms a frame** (0.195 before the zone walk: the lookup is +0.010 ms), **0.383 ms** at
+Measured on this machine, and the numbers the rules are worth: the canvas row's SLEEVE walk (the
+full-screen row, or a strip whose host hands no accent) at **520×56** costs **0.205 ms a frame**
+(0.195 before the zone walk: the lookup is +0.010 ms), **0.383 ms** at
 **1280×56** with 72 beads, and **0.151 ms** at the phone's 390×40; **eco takes those to 0.051,
 0.098 and 0.046 ms** — a 4× saving on the fallback, where the old code ignored the flag (0.415 /
 0.149). The zone code adds **2.0 kB minified / 0.93 kB gzipped** to the palette module (main bundle)
 and 216 / 114 B to util.js; the GL side adds **28 floats per bound program per picture** and no wasm
-change. `--check` on the spectrum over the RAW canvas (640×360, no backdrop): **mean 0.167, clip 0 %,
-detail 0.069, cover 0 %, tempo ×1.53** — the transparent row puts **0 %** of its light behind the
+change. `--check` on the spectrum over the RAW canvas (640×360, no backdrop): **mean 0.162, clip 0 %,
+detail 0.071, cover 0 %, tempo ×1.54** — the transparent row puts **0 %** of its light behind the
 artwork on the phone, against 13-23 % for the worlds that paint a field (the two rows sit in the free
 bands by construction). The whole check sweep is green on 49 of 50 worlds; `wobble` reads **30 %** of
 its light behind the cover, which it does identically at `HEAD` (measured in a clean worktree:
 mean 0.208, cover 30 % — a pre-existing contract failure of that world, not of the bars).
+
+**THE STRIP IS THE THEME'S, AND IT HAS NO BACKGROUND (the 2026-11 third pass).** The person named
+both halves of what was left: a rectangle of background behind the row, and a salmon→red walk across
+it taken from the sleeve. Both were structural, and the pixel probe said which:
+
+- **The bloom was the rectangle.** The spectrum writes a STRAIGHT colour across its whole canvas —
+  the contract a transparent world has, one colour and one coverage — with alpha 0 outside its
+  capsules. The engine's bloom sampled `.rgb` only, so it bloomed a full-frame field of colour, and
+  `FINAL_FS` turned that bloom's luminance into ALPHA in the transparent branch. Measured on the real
+  player at 520×56: **100 % of the strip canvas carried a non-zero alpha on Encre** (edge rows
+  520/520 pixels, corners alpha 3-7/255, tinted by the sleeve), against **9.8 % on Papier** — only
+  its capsules, every edge row 0 — whose bloom was already off; that A/B is what proved the cause.
+  The prefilter now weights each tap by the world's
+  coverage (`PREFILTER_FS`: `t.rgb * t.a`), so no bloom can ever smear colour a world wrote where it
+  draws nothing, and the STRIP turns the bloom off outright (`gl.js#look`). After: **9.0 % of the
+  canvas carries alpha** (the capsules), the top and bottom rows are exactly 0, and the composited
+  strip is byte-identical to its backdrop on **91 %** of its area.
+- **The canvas fallback had two veils.** `post.js`'s bloom is a second canvas blended `screen` over
+  the page, and its grain is a div over the whole host. With WebGL2 disabled, the composited strip
+  differed from its backdrop on **96.5 % of its pixels on Encre and 100 % on Papier** (mean 25-28
+  code values); with the bloom hidden 34.8 %, with the grain hidden 88.6 %, with both hidden
+  **11.5 %** (the capsules) and every edge row identical. `Visualizer.svelte` now leaves `posting`
+  false for `layout === "strip"` (as eco already did), so the strip is a cleared canvas with no
+  layer over it.
+- **One colour, from the theme, live.** `Visualizer.svelte` resolves `--ac-text` through a 1 × 1
+  canvas — so any CSS form, `var()`, `color-mix()` or a custom accent written inline on `<html>`,
+  arrives as sRGB bytes — and hands it to the live scene as `solid`; a MutationObserver on
+  `data-theme` AND `style` repaints it without a rebuild. On the GPU it rides `uSolid`/`uSolidOK`,
+  per-program uniforms like the zones (no block change, no wasm), and the final pass PRINTS this
+  layout (`uPost2.y = 2`): no AgX (it would walk the accent off the theme), no grain, no impact
+  lift, no bloom. The canvas twin draws ONE flat fill per capsule; the full-screen row keeps the
+  sleeve's seven zones. The music moves only the SHAPE.
+  Measured on the canvas at full coverage (alpha ≥ 254), per theme: **#d2ff3c / #14130f / #f4f1f5 —
+  the theme's `--ac-text` exactly, a 0-1/255 spread** (the two-value spread is the canvas'
+  un-premultiply rounding on the last anti-aliased rim); 33 capsules at a 15.8 px pitch on the
+  520 px strip, 22 on the phone's 346, 8-11 px wide. The composited contrast against each theme's
+  own scrim — the person's pixels, host opacity included, against the backdrop of the same frame:
+  **9.6:1 (Encre), 8.9:1 (Papier), 10.1:1 (Pochette)**, 8.7/8.9:1 on the phone, and
+  10.03/9.31:1 on the 2D fallback. Reduced motion: the same picture and the same values (the
+  breath holds). Eco: no canvas in the player at all (`effectiveMode` is "off"), and the scene's eco
+  grade is the same flat row.
+- **Cost.** The canvas row at 520×56 went from **0.219 to 0.051 ms a frame** (Papier 0.189 →
+  0.036; eco 0.064/0.060 → 0.033/0.032): one fill per bead, no `colourAt` lookup, no second and
+  third fill, measured best of three over 300 draws on a real 2D canvas. The GL strip's frame
+  cadence is unchanged: **60 fps, median 16.7 ms, p95 16.7-16.8**, no frame over 20 ms, at
+  1280×900 (520×56) and 390×844 (346×40), on the GL path and with WebGL2 disabled. The main chunk
+  grows **717 B (224 B gzipped)** for the accent reader and its observer (the reader is one 1×1
+  canvas and one `getImageData` per theme change), the `gl` chunk **2.3 kB (1.0 kB gzipped)** for
+  the flat grade and the coverage-weighted prefilter, and the `spectrum` chunk **874 B** of shader;
+  no dependency and no wasm.
 
 **Eco is a GRADE of the scene, not a scene.** The app already means "no animation at all" by eco mode
 (`effectiveMode` returns `off`, no canvas anywhere), and that is the cheapest picture there is. The
@@ -405,18 +463,21 @@ scenes still carry the grade for the paths that can draw one (a preview, a proje
 not caught up): `eco` zeroes the worlds' `glow`/`trail` parameters, turns the engine's bloom, film
 grain and lens fringe off, drops the render scale to 0.55 (the strip keeps its full resolution — its
 beads are a few pixels wide) and makes the canvas row ONE flat fill per bead, with no inner gradient,
-no axis core and no peak ghost. Nothing about the music changes; the finish does.
+no axis core and no peak ghost. The strip is that already, so eco changes nothing in its picture.
+Nothing about the music changes; the finish does.
 
-**Papier's strip is ink, not light.** The player's scrim is the theme's `--bg`, so on Papier the strip
-sits on cream, not near-black; a lemon bar there is 1.02:1 and disappears. `Visualizer.svelte` reads
-`data-theme` and passes a `light` flag; `gl.js` puts it in `uCtl.w` (the one unused component of the
-control slot, so the block layout is unchanged) and the strip draws the band's hue at an ink value
-with a pale axis core. Measured on the real player over the cream scrim: the ink body is **3.5:1**
-and the treble **4.8:1**, against **10.7:1** for the light row on Encre. The `light` strip also turns
-the bloom off and raises the threshold (`look.bloom = 0`, `threshold × 2.2`), because a bloom of ink
-is a smudge and the sheet itself must not enter the bright pass. This is the STRIP's business only: a
-full-screen row is transparent over the page's backdrop and stays the light one, because the screen it
-is on (the projector, the settings preview) is a dark field on every theme.
+**Papier's strip is the theme's ink, and now it is simply the theme.** The player's scrim is the
+theme's `--bg`, so on Papier the strip sits on cream, not near-black; a lemon bar there is 1.02:1 and
+disappears. The accent read from the theme is already the readable ink on Papier (`--ac-text` is
+#14130f; on Pochette it is `--tx`), so the strip needs no theme branch at all — measured on the real
+player: **8.9:1** against the cream scrim, 9.6:1 on Encre and 10.1:1 on Pochette. `Visualizer`
+still reads `data-theme` and passes a `light` flag; `gl.js` keeps it in `uCtl.w` (the one unused
+component of the control slot, so the block layout is unchanged) as the FALLBACK for a host that
+cannot measure an accent: then the strip draws the band's hue at an ink value with a pale axis core
+(measured before the accent existed: 3.5:1 body, 4.8:1 treble, against 10.7:1 for the light row on
+Encre). This is the STRIP's business only: a full-screen row is transparent over the page's backdrop
+and stays the light one, because the screen it is on (the projector, the settings preview) is a dark
+field on every theme.
 
 **The strip no longer draws an afterglow, and that is also a saving.** The peak ghost was a dark
 patch around short bars over a light backdrop and read as a 2005 sticker; the full row keeps its
@@ -553,7 +614,13 @@ at a time. `webapp/test/post.test.mjs` pins it.
   canvas row takes its colour per bead from `colourAt` and keeps the old low→high walk with no
   artwork, eco draws ONE flat fill per bead with no field behind it, and the GL engine hands the world
   the seven `uZone` vec4s, `uZoneOK = 0` with no palette, the transparent grade for the spectrum and
-  the eco zeroes (bloom, grain, fringe, the `trail` param).
+  the eco zeroes (bloom, grain, fringe, the `trail` param). The strip's third round pinned the other
+  half: with `solid` the canvas row is ONE fill per bead in exactly that colour (and follows a
+  `setOptions({ solid })` live), the strip keeps the sleeve walk only when no accent is handed; the GL
+  engine reports `bloom: 0`, `grain: 0`, `ca: 0`, `lift: 0`, `flat: true` for the strip (and still a
+  bloom full screen), hands the world `uSolidOK = 1` and the accent's sRGB bytes, and the two shader
+  rules the band depended on are asserted at the source (`PREFILTER_FS` weights by coverage,
+  `FINAL_FS` returns the flat colour before AgX).
 
 **No constant that should be musical** (`lib/viz/musical.js`) is still the layer every driver reads:
 `m.overBeats(n)` is a lifetime, `m.perBeat(n)` a rate, `m.ease(v, target, beats, dt)` a smoothing,

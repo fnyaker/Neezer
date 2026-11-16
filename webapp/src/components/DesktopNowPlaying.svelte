@@ -867,15 +867,23 @@
     height: 38px;
     padding: 0 16px;
     border-radius: 999px;
-    border: 1px solid var(--ln);
-    background: none;
+    /* The same glass door as the phone's thumb row: a faint tint, the light on
+       the top edge, and no filter of its own (a row of pills must not be a row
+       of backdrop passes). The ring is inset so the pills' geometry — and the
+       44 px targets — stay exactly as measured. */
+    background-color: color-mix(in srgb, var(--s1) 30%, transparent);
+    background-image: var(--glass-beam-x);
+    background-size: 100% 1px;
+    background-position: top left;
+    background-repeat: no-repeat;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tx) 10%, transparent);
     color: var(--tx);
     font-size: 14px;
     font-weight: 600;
     white-space: nowrap;
   }
   .pills .pill:hover {
-    background: var(--s2);
+    background-color: var(--glass-hover);
   }
 
   .seek {
@@ -1002,7 +1010,10 @@
     width: 100%;
     height: var(--viz-strip-h, 44px);
     flex: none;
-    opacity: 0.9;
+    /* NO opacity and NO filter on this box: the strip is a single flat colour
+       that must be EXACTLY `--ac-text` (the animation agent's contract), and any
+       veil here composites it with the sleeve behind (measured `#a9cd33` for
+       `#d2ff3c` on Encre at 0.9). The bars' own transparency is the scene's. */
   }
   /* Taller bars where the column can pay for them: 56 px from 880 px of window
      height without a Flow, and only from 1060 with one, whose steering row
@@ -1069,15 +1080,23 @@
     gap: 6px;
   }
 
-  /* right: the raised card (Sillon §7) */
+  /* right: the raised card (Sillon §7). Tier 1 of the ladder — a tint over the
+     blurred sleeve, no filter of its own — with the liquid finish: the light on
+     its top edge, its dark rim below, and one shadow with thickness. */
   .side {
     width: clamp(300px, 34vw, 360px);
     flex: none;
     display: flex;
     flex-direction: column;
-    background: var(--s1);
-    border: 1px solid var(--ln);
+    background-color: var(--glass-bg);
+    background-image: var(--glass-beam-x), var(--glass-rim-x);
+    background-size: 100% 1px, 100% 1px;
+    background-position: top left, bottom left;
+    background-repeat: no-repeat, no-repeat;
+    border: 1px solid var(--glass-border);
     border-radius: 24px;
+    box-shadow: var(--glass-shadow);
+    --ln: var(--glass-border);
     overflow: hidden;
   }
   .tabs {
@@ -1100,6 +1119,11 @@
   .tabs button.active {
     background: var(--ac);
     color: var(--onac);
+    /* An accent control on glass wears the same top hairline as the material
+       around it (app.css, "the liquid finish"), or it reads as a sticker. */
+    box-shadow:
+      inset 0 1px 0 var(--glass-hi),
+      inset 0 -1px 0 color-mix(in srgb, var(--glass-lo) 60%, transparent);
   }
   @media (pointer: coarse) {
     .tabs button {
@@ -1120,6 +1144,9 @@
     margin: 0;
     padding: 0;
     color: var(--tx);
+    /* A hover is a step of the same material (QueueList's own contract). */
+    --ql-hover: var(--glass-hover);
+    --ql-ghost: var(--glass-bg-2);
   }
 
   /* À propos: what the track IS, in six labelled cells (three across, two

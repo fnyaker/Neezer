@@ -3,8 +3,11 @@
   // with "Retirer" (Deezer's "Manage my dislikes"). Read once when the card
   // opens; a removal is optimistic and puts the row back if the server says no.
   import { onMount } from "svelte";
+  import { push } from "svelte-spa-router";
   import { api } from "../lib/api.js";
   import { disliked, toasts } from "../lib/stores.js";
+  import { buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { artistLine } from "../lib/format.js";
   import Cover from "./Cover.svelte";
@@ -37,6 +40,11 @@
     }
   }
 
+  function menu(e, track) {
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(track, push), e.currentTarget);
+  }
+
   onMount(load);
 </script>
 
@@ -62,7 +70,12 @@
   {:else}
     <ul class="list">
       {#each tracks.slice(0, shown) as t (trackKey(t))}
-        <li>
+        <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
+        <li
+          tabindex="-1"
+          on:contextmenu={(e) => menu(e, t)}
+          on:keydown={(e) => menuKey(e, (ev) => menu(ev, t))}
+        >
           <span class="cov"><Cover src={t.album?.cover} alt={t.title} kind="album" /></span>
           <span class="txt">
             <span class="t">{t.title}</span>

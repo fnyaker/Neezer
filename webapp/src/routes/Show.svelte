@@ -5,11 +5,12 @@
   import { api } from "../lib/api.js";
   import { online } from "../lib/net.js";
   import { get } from "svelte/store";
-  import { player, currentId, playing, isAdmin, toasts, seekTo, openMenu, openExport, immersiveOpen } from "../lib/stores.js";
+  import { player, currentId, playing, isAdmin, toasts, seekTo, openExport, immersiveOpen } from "../lib/stores.js";
   import { podcastProgress, setResumePoint } from "../lib/podcastProgress.js";
   import { episodeMarkers, loadShowMarkers, removeMarker } from "../lib/markers.js";
   import { chaptersByEpisode, loadChapters, chapterAt, chapterCountLabel } from "../lib/chapters.js";
   import { buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { downloadTrack } from "../lib/offline.js";
   import { isMobile } from "../lib/viewport.js";
   import { duration as fmtDuration } from "../lib/format.js";
@@ -547,10 +548,8 @@
   }
 
   function episodeMenu(e, ep) {
-    e.preventDefault();
-    e.stopPropagation();
-    const coords = { clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} };
-    openMenu(coords, buildTrackMenu(ep, push));
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(ep, push), e.currentTarget);
   }
 
   // Download every episode to the device, one at a time. Sequential on purpose:
@@ -927,7 +926,13 @@
           {@const cAt = $currentId === key ? chapterAt(cList, cPos) : null}
           {@const tr = ep.transcript === undefined ? undefined : ep.transcript || null}
           {@const trPct = Math.round((Number(tr?.progress) || 0) * 100)}
-          <li class:active>
+          <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
+          <li
+            class:active
+            tabindex="-1"
+            on:contextmenu={(e) => episodeMenu(e, ep)}
+            on:keydown={(e) => menuKey(e, (ev) => episodeMenu(ev, ep))}
+          >
             <button class="pl" on:click={() => toggle(i, ep)} aria-label="Lire l'épisode">
               <Icon name={active && $playing ? "pause" : "play"} size={18} />
             </button>
@@ -936,7 +941,7 @@
                 <span class="etitle" class:on={active}>{ep.title}</span>
                 <span class="side-r">
                   <span class="when muted">{fmtDate(ep.published)}</span>
-                  <button class="emenu" on:click={(e) => episodeMenu(e, ep)} aria-label="Options de l'épisode">
+                  <button class="emenu" on:click={(e) => episodeMenu(e, ep)} aria-label="Options de l'épisode" aria-haspopup="menu">
                     <Icon name="moreVertical" size={17} />
                   </button>
                 </span>

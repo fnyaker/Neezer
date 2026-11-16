@@ -3,8 +3,9 @@
   import { flip } from "svelte/animate";
   import { dragHandleZone, dragHandle } from "svelte-dnd-action";
   import { push } from "svelte-spa-router";
-  import { player, currentId, playing, openMenu, downloads } from "../lib/stores.js";
+  import { player, currentId, playing, downloads } from "../lib/stores.js";
   import { buildTrackMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { duration as fmtDuration } from "../lib/format.js";
   import { playbackIdle } from "../lib/playback.js";
   import Icon from "./Icon.svelte";
@@ -80,11 +81,13 @@
     else player.playQueue(rows.map((r) => r.track), i, context);
   }
 
-  async function menu(e, track) {
-    e.preventDefault();
-    e.stopPropagation();
-    const coords = { clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} };
-    openMenu(coords, buildTrackMenu(track, push));
+  function menu(e, track) {
+    // svelte-dnd-action keeps the carried row under the pointer while it is
+    // dragged; a long press or a right-click then belongs to the gesture, not
+    // to a menu. (The dragged copy is the element the library creates.)
+    if (document.getElementById("dnd-action-dragged-el")) return;
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(track, push), e.currentTarget);
   }
 </script>
 
@@ -98,8 +101,16 @@
   {#each rows as row, i (row.id)}
     {@const track = row.track}
     {@const isCurrent = $currentId === trackKey(track)}
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div class="row" class:active={isCurrent} animate:flip={{ duration: flipMs }} on:contextmenu={(e) => menu(e, track)}>
+    <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
+    <div
+      class="row"
+      class:active={isCurrent}
+      animate:flip={{ duration: flipMs }}
+      tabindex="-1"
+      aria-haspopup="menu"
+      on:contextmenu={(e) => menu(e, track)}
+      on:keydown={(e) => menuKey(e, (ev) => menu(ev, track))}
+    >
       <span class="grip" use:dragHandle aria-label="Déplacer le titre" title="Glisser pour réordonner">
         <Icon name="grip" size={editing ? 22 : 18} />
       </span>
@@ -150,7 +161,7 @@
       <button class="remove" on:click|stopPropagation={() => onremove?.(i)} aria-label="Retirer de la playlist" title="Retirer">
         <Icon name="minusCircle" size={editing ? 24 : 20} />
       </button>
-      <button class="more" on:click|stopPropagation={(e) => menu(e, track)} aria-label="Plus d'options"><Icon name="more" size={18} /></button>
+      <button class="more" on:click|stopPropagation={(e) => menu(e, track)} aria-label="Plus d'options" aria-haspopup="menu"><Icon name="more" size={18} /></button>
     </div>
   {/each}
 </div>

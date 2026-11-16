@@ -135,6 +135,40 @@
   // from; a change of theme is pushed into the live scene, not a rebuild.
   let light = false;
   let themeObserver = null;
+  // The theme's readable accent (--ac-text) — the strip's one solid colour,
+  // and the same colour the app uses for accent text: the lemon on Encre, the
+  // ink on Papier, --tx on Pochette, or a custom accent's ink variant written
+  // inline on <html>. Resolved through the browser's OWN colour parser (a 1x1
+  // canvas), because the token can be a var(), a color-mix() or a modern colour
+  // space, and the GL path needs sRGB bytes. Read at mount and when <html>
+  // changes theme or rewrites its tokens — never per frame.
+  let accentCtx = null;
+  let solid = readAccent();
+  function readAccent() {
+    if (typeof document === "undefined") return "";
+    const cs = getComputedStyle(document.documentElement);
+    const css = (cs.getPropertyValue("--ac-text") || "").trim() || (cs.getPropertyValue("--tx") || "").trim();
+    if (!css) return "";
+    try {
+      if (!accentCtx) {
+        const c = document.createElement("canvas");
+        c.width = c.height = 1;
+        accentCtx = c.getContext("2d", { willReadFrequently: true });
+      }
+      if (!accentCtx) return "";
+      // An invalid assignment leaves the previous value: the sentinel is how an
+      // unparseable token is recognised rather than silently painted black.
+      accentCtx.fillStyle = "#010203";
+      accentCtx.fillStyle = css;
+      if (accentCtx.fillStyle === "#010203") return "";
+      accentCtx.clearRect(0, 0, 1, 1);
+      accentCtx.fillRect(0, 0, 1, 1);
+      const [r, g, b] = accentCtx.getImageData(0, 0, 1, 1).data;
+      return "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+    } catch {
+      return "";
+    }
+  }
   let pal = createPalette(palette);
   let tier = resolveTier(quality);
   let preset = withPostGain(tierPreset(tier), tier);
@@ -190,6 +224,7 @@
       flash,
       fps,
       light,
+      solid,
       eco,
     };
   }
@@ -295,7 +330,13 @@
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     // Eco: no post pass at all — no bloom, no fringe, no grain. The scene's own
     // drawing is the picture, and the canvas stays transparent over the page.
-    posting = eco ? false : post.resize(canvas, bloomCanvas, pw, ph, tier);
+    //
+    // THE STRIP HAS NO POST PASS EITHER, on any theme. Its bloom is a second
+    // canvas blend over the page (mix-blend-mode: screen) and its grain is a div
+    // covering the whole host: over a transparent row both veil the backdrop
+    // outside the capsules — the band that used to sit behind the bars — and
+    // the strip is a flat picture, not light.
+    posting = eco || layout === "strip" ? false : post.resize(canvas, bloomCanvas, pw, ph, tier);
     ensureGrain();
     // A scene keeps trails by washing over the previous frame, so a resize —
     // which clears the backing store — has to start from a clean state.
@@ -351,7 +392,7 @@
     if (!g) return;
     const t0 = performance.now();
     scene.draw(g, cssW, cssH, pal.out, geometry.out);
-    if (!eco) post.run();
+    if (posting) post.run();
     governor?.sample(performance.now() - t0, fps > 0 ? 1000 / fps : 16.7);
   }
 
@@ -412,12 +453,22 @@
 
   onMount(() => {
     readLight();
+    const accent0 = readAccent();
+    if (accent0) solid = accent0;
     themeObserver = new MutationObserver(() => {
       const was = light;
+      const hadAccent = solid;
       readLight();
-      if (was !== light) scene?.setOptions?.(sceneOptions());
+      // The custom accent is written INLINE on <html> (lib/theme.js), so the
+      // same observer watches the style attribute as the theme.
+      const accent = readAccent();
+      if (accent) solid = accent;
+      if (was !== light || solid !== hadAccent) scene?.setOptions?.(sceneOptions());
     });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "style"],
+    });
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
     reduced = mq.matches;
     const onMq = () => {
@@ -519,6 +570,7 @@
       flash,
       fps,
       light,
+      solid,
       eco,
     };
   }

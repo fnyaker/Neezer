@@ -147,8 +147,15 @@
     /* The ladder's thick step: this bar is sticky, so list rows really do pass
        under it while the page scrolls, and the tint is what keeps them from
        ghosting through the labels (measured: 82 % left a faint copy of the
-       library's leaf tabs under the search field, 93 % does not). */
-    background: var(--glass-bg-strong);
+       library's leaf tabs under the search field, 93 % does not).
+       The liquid finish is the LOWER rim only: the bar's top edge sits on the
+       window's top edge (the shell hands main's padding to the bar), where no
+       light is visible, while its bottom edge is the one a row slides under. */
+    background-color: var(--glass-bg-strong);
+    background-image: var(--glass-rim-x);
+    background-size: 100% 1px;
+    background-position: bottom left;
+    background-repeat: no-repeat;
     border-bottom: 1px solid var(--glass-border);
   }
   .back-slot {

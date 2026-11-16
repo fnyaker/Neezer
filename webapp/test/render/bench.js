@@ -76,8 +76,54 @@ function sample(canvas) {
   return { lum, rgb, mw, mh };
 }
 
-function metrics(s, holeBox, W, H) {
-  const { lum, mw, mh } = s;
+// The strip's transparency contract, read off the RAW canvas — before the bench
+// composites it over a backdrop, where alpha is gone. `nonZero` is the share of
+// the canvas carrying any alpha at all (the capsules and nothing else: a row of
+// bars is well under half of a 390x40 band), `edge` the share of the top and
+// bottom two rows that does (the capsules are centred and cannot reach them),
+// and `colour` the most common fully-covered pixel — the row's actual colour.
+function alphaStats(canvas) {
+  const c = document.createElement("canvas");
+  c.width = canvas.width;
+  c.height = canvas.height;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(canvas, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  const w = c.width;
+  const h = c.height;
+  let nz = 0;
+  let edge = 0;
+  let edgeN = 0;
+  const hist = new Map();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = d[i + 3];
+      if (a > 0) nz++;
+      if (y < 2 || y >= h - 2) {
+        edgeN++;
+        if (a > 0) edge++;
+      }
+      if (a > 250) {
+        const k = `${d[i]},${d[i + 1]},${d[i + 2]}`;
+        hist.set(k, (hist.get(k) || 0) + 1);
+      }
+    }
+  }
+  let colour = null;
+  let best = 0;
+  for (const [k, n] of hist) if (n > best) { best = n; colour = k; }
+  return {
+    w,
+    h,
+    nonZero: nz / (w * h),
+    edge: edgeN ? edge / edgeN : 0,
+    colour,
+    covered: best / (w * h),
+  };
+}
+
+function metrics(s, holeBox, W, H) {  const { lum, mw, mh } = s;
   let sum = 0;
   let clip = 0;
   let grad = 0;
@@ -335,6 +381,9 @@ async function run(opts) {
     // Which sleeve fixture to draw: the neutral one, or the striped one whose
     // left, middle and right are unalike (the zoned palette's own test).
     coverKind = "default",
+    // The theme's readable accent (--ac-text), which the player's strip is now
+    // printed in. The bench stands in for the host: Encre's lemon, Papier's ink.
+    solid = layout === "strip" ? (light ? "#14130f" : "#d2ff3c") : "",
   } = opts;
   coverNow = COVERS[coverKind] || fakeCover;
   backdropCache = null;
@@ -369,6 +418,7 @@ async function run(opts) {
     flash: "full",
     layout,
     light,
+    solid,
     eco: !!eco,
   });
   scene.attach(renderer);
@@ -497,6 +547,8 @@ async function run(opts) {
     label(sg, `${world} · ${fr.name}`, x, y);
   });
 
+  const alpha = layout === "strip" ? alphaStats(canvas) : null;
+
   console.error = origError;
   try {
     renderer.dispose();
@@ -523,6 +575,8 @@ async function run(opts) {
     // saturation/lightness policy: the sleeve's left, middle and right.
     anchors: pal.out.hasZones ? fixture?.zones || null : null,
     hdr: true,
+    // The strip's own coverage and colour (see alphaStats); null full screen.
+    alpha,
   };
 }
 
@@ -542,7 +596,9 @@ async function bars2d(opts = {}) {
   document.body.appendChild(canvas);
   const g = canvas.getContext("2d", { alpha: true });
   const preset = tierPreset("high");
-  const scene = createBarsScene({ layout: "strip", light, eco, preset });
+  // The accent the player's strip is printed in (the host measures --ac-text).
+  const solid = opts.solid ?? (light ? "#14130f" : "#d2ff3c");
+  const scene = createBarsScene({ layout: "strip", light, eco, preset, solid });
   scene.resize(w, h, preset);
   const bars = scene.bars;
   const pal = createPalette("cover");

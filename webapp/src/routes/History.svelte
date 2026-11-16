@@ -13,8 +13,10 @@
   // mounted, however many pages were loaded. Day headers are 44 px and event
   // rows 72 px, so the virtual offsets are exact without measuring the DOM.
   import { onMount, tick } from "svelte";
+  import { push } from "svelte-spa-router";
   import { api, failureCause, isDeezerDenied, isDeezerUnreachable } from "../lib/api.js";
-  import { playThenRadio } from "../lib/actions.js";
+  import { playThenRadio, buildTrackMenu, buildEntityMenu } from "../lib/actions.js";
+  import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { artistLine, duration as fmtDuration } from "../lib/format.js";
   import Cover from "../components/Cover.svelte";
   import Icon from "../components/Icon.svelte";
@@ -304,6 +306,14 @@
   function play(ev) {
     if (ev && ev.track) playThenRadio(ev.track);
   }
+  function trackMenu(e, track) {
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildTrackMenu(track, push), e.currentTarget);
+  }
+  function artistMenu(e, artist) {
+    if (keepNativeMenu(e)) return;
+    openMenuAt(e, buildEntityMenu("artist", artist, push), e.currentTarget);
+  }
 </script>
 
 <div class="history fade-in" bind:this={pageEl}>
@@ -337,7 +347,14 @@
               <h3 class="label-mono">Artistes les plus écoutés</h3>
               <div class="artists">
                 {#each summary.top_artists as a (a.id)}
-                  <a class="artist" href={`#/artist/${a.id}`} title={`Ouvrir ${a.name}`}>
+                  <a
+                    class="artist"
+                    href={`#/artist/${a.id}`}
+                    title={`Ouvrir ${a.name}`}
+                    aria-haspopup="menu"
+                    on:contextmenu={(e) => artistMenu(e, a)}
+                    on:keydown={(e) => menuKey(e, (ev) => artistMenu(ev, a))}
+                  >
                     <Cover src={a.cover} alt={a.name} kind="artist" round size={44} />
                     <span class="artist-name">{a.name}</span>
                     <span class="artist-count">{plural(a.count, "écoute", "écoutes")}</span>
@@ -352,7 +369,14 @@
               <ol class="tracks">
                 {#each summary.top_tracks as item (item.track.id)}
                   <li>
-                    <button class="top-track" on:click={() => play({ track: item.track })} title={`Lire ${item.track.title}`}>
+                    <button
+                      class="top-track"
+                      on:click={() => play({ track: item.track })}
+                      title={`Lire ${item.track.title}`}
+                      aria-haspopup="menu"
+                      on:contextmenu={(e) => trackMenu(e, item.track)}
+                      on:keydown={(e) => menuKey(e, (ev) => trackMenu(ev, item.track))}
+                    >
                       <Cover src={item.track.album?.cover} alt="" kind="track" size={36} fallbackId={item.track.id} />
                       <span class="top-track-text">
                         <span class="top-track-title">{item.track.title}</span>
@@ -430,7 +454,14 @@
               </span>
             </div>
           {:else}
-            <div class="ev">
+            <!-- svelte-ignore a11y-no-static-element-interactions a11y-no-noninteractive-element-interactions -->
+            <div
+              class="ev"
+              tabindex="-1"
+              aria-haspopup="menu"
+              on:contextmenu={(e) => trackMenu(e, row.ev.track)}
+              on:keydown={(e) => menuKey(e, (ev) => trackMenu(ev, row.ev.track))}
+            >
               <button class="ev-cover" on:click={() => play(row.ev)} aria-label={`Lire ${row.ev.track.title}`} title="Lire ce titre">
                 <Cover src={row.ev.track.album?.cover} alt="" kind="track" size={48} fallbackId={row.ev.track.id} />
                 <span class="ev-play" aria-hidden="true"><Icon name="play" size={13} /></span>

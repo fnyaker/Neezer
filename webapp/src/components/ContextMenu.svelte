@@ -247,10 +247,16 @@
     margin: 5px 8px;
   }
   /* Submenu expands inline (accordion) so it works the same with a mouse or a
-     finger — the old side-positioned, hover-only flyout was unusable on touch. */
+     finger — the old side-positioned, hover-only flyout was unusable on touch.
+     It is a step INTO the same material (4 % of the ink over the menu's fill),
+     not a second surface: no border, no filter, no second tint to keep in
+     step with the ladder. */
   .submenu {
     max-height: 40vh;
     overflow-y: auto;
+    margin: 2px 2px 4px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--tx) 4%, transparent);
   }
   .item.sub {
     padding-left: 34px;
