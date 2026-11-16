@@ -6,9 +6,9 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, D2, D4, D5, D6, M1 and V1 delivered; the rest planned.** This note
-is the plan the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by
-what was learned (rule, why, number) — a delivered lot is not a changelog.
+**Status (2026-11-16): D0, D1, D2, D3, D4, D5, D6, M1, T1 and V1 delivered; the rest planned.**
+This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
+plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
 ## The need
 
@@ -194,6 +194,11 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pending_progress(owner TEXT NOT NULL, episode TEXT NOT NULL,
   body TEXT NOT NULL, PRIMARY KEY(owner, episode));
 ```
+
+v1 landed with three additions this plan could not express, each explained in *D3*: a
+`download_members(owner, kind, ident, track)` table (a track in several sets, downloaded once),
+`covers.pinned` (a download's art survives the cover LRU), and the indexes the LRU scans need
+(`covers_used_at`, `play_cache_used_at`, `api_cache_fetched_at`, `downloads_state`).
 
 - **API cache**: the paths `lib/apicache.js#isCacheable` accepts (same prefixes, same `LIVE_PATHS`
   exclusions), the response TEXT, keyed by user id so two accounts never see each other's copy.
@@ -568,21 +573,76 @@ Waves that can run in parallel (disjoint files):
     status: the difference is the lane. A User-lane 503 is an ordinary `Http { 503 }` the GET may
     retry; a background one becomes `Busy { retry_after }` and is repeated once only.
 
-### D3 — `nz-cache`
+### D3 — `nz-cache` (delivered 2026-11-16)
 
-- **Goal**: the SQLite file, its migrations, and the stores of *Caches*.
-- **Files**: `desktop/crates/nz-cache/src/{lib,schema,api_cache,covers,play_cache,downloads,kv,
-  queue}.rs`, `src/migrations/v1.sql`.
-- **API**: `Cache::open(dir) -> Result<Cache>`; `impl nz_api::ResponseCache for Cache`; `covers()`,
-  `play_cache()` (`reserve(track, q) -> PathBuf`, `complete(track, q, bytes)`, `lookup(track, q)`,
-  `evict_to(cap_bytes)`), `downloads()` (`add_set`, `remove_set`, `pending(limit)`, `mark(track,
-  state, error)`, `local(track) -> Option<(PathBuf, Quality)>`), `kv()` (typed get/set), `queue()`
-  (save/load the player snapshot, ≤ 4 000 entries).
-- **Acceptance**: migrations idempotent (open twice, run v1 twice); opening a v0 empty file and a
-  v1 file both work; `evict_to` keeps the most recently used and never touches `downloads`; saving a
-  4 000-entry queue < 30 ms and one statement batch (count it); concurrent read while a write runs
-  (WAL) does not block.
-- **Pitfalls**: SQLite access happens on `nz-net`/`nz-bulk`, never the main thread.
+- **The rule**: ONE SQLite file in the data directory (`desktop.sqlite`), WAL, `synchronous =
+  NORMAL`, a 5 s `busy_timeout`, versioned by `PRAGMA user_version`; a migration only ever ADDS
+  (`CREATE … IF NOT EXISTS`), so replaying v1 is a no-op — which is both the criterion and the
+  boot-time repair path. A file written by a NEWER build is REFUSED with its version: an older app
+  replaying its v1 over it is how a column disappears. A 0-byte file, a v1 file and an existing
+  store all open, and opening an existing store costs **0.5 ms** — invisible in the first-frame
+  budget.
+- **The rule, WAL**: a reader on a second connection answers in **0.18 ms** (debug; 0.25 ms
+  release) while a writer holds `BEGIN IMMEDIATE`. That is the whole reason the journal is WAL, so
+  the test holds the write lock open and reads underneath it; in rollback mode the reader waits out
+  the writer. It is what lets `nz-bulk` mark a download while `nz-net` opens a playlist, and the
+  only SQLite access rule that matters: this crate is called from those threads, never the GPUI
+  one.
+- **The rule, one statement**: the saved queue is ONE upsert — 4 000 entries (7 fields each,
+  843 KB of JSON) in **8.8 ms release, 60 ms debug, 1 statement**. The SPA cuts at 1 000 because
+  `localStorage` writes synchronously on its main thread; here the write happens on `nz-net`, so
+  the cap is the queue's worst realistic case and 30 ms is a release number (like D7's 300 ms). A
+  longer queue is kept as a WINDOW of the full cap, starting a quarter of it before the playhead
+  (clamped to the queue's end), never truncated at the tail: what comes next is what the person
+  is doing.
+- **The rule, eviction**: LRU by `used_at` in two phases — reservations older than 1 h always,
+  then complete entries until the cap holds. A reservation being written RIGHT NOW is never taken
+  (rule 1: the fetch beats the cache), and its bytes are not counted until `complete` publishes
+  it: `bytes` is the file's own length, read back from disk, never the caller's count. Covers and
+  audio have their own directory and table, so no cap on either can reach a download; a
+  downloaded album's art is additionally `pinned`, which is `lib/offline.js`'s own rule (a sleeve
+  prepared for a flight must not be evicted by the 300 MB cover cap).
+- **The rule, downloads**: a set and its tracks are ONE transaction; a track in three sets is
+  downloaded ONCE (`downloads` keyed by `(owner, track)`) and removing a set takes back only what
+  no other set wants. That needs a membership table the plan's DDL did not have
+  (`download_members`): the set row alone cannot say which tracks it brought in, and deleting them
+  with the set would empty another playlist's download. Files are published complete
+  (`<digest>.part` → rename), a missing file downgrades its row to `failed` with that cause
+  instead of being handed to the decoder, and an `active` row is still work after a restart.
+- **The rule, names**: no path comes from the server. A file is `<FNV-1a-64(track, quality)>`, with
+  `.FLAC`/`.OPUS_320`/… for audio and a sniffed `.jpg|png|gif|webp|img` for a cover (a `file://`
+  URI handed to MPRIS is read by other programs). FNV-1a because `std`'s `DefaultHasher` may
+  change between releases and a cache whose file names move re-downloads everything on an upgrade;
+  4 000 tracks put a collision at ~4e-13.
+- **The rule, the API cache is the page's**: the same prefixes, the same `LIVE_PATHS` exclusions,
+  the same 400 newest entries, bodies kept as the wire's TEXT and keyed by owner. The filter sits
+  on BOTH sides (`get` refuses a non-cacheable path as well as `put`), so a caller cannot
+  resurrect a stale `/playlist/<id>/version`. `Cache` implements `nz_api::ResponseCache` (the
+  trait lives in the client so `nz-api` never depends on SQLite), and a test asserts that the two
+  ports of `isCacheable` — the client's and the store's — answer the same for 32 paths: the
+  client decides what to ASK for, the store what to KEEP, and a disagreement is a screen empty
+  offline or a stale admin one served from disk.
+- **What it is now**: `Cache::open(dir)` (resolving the XDG cache directory) and
+  `open_with_cache_dir` (the tests never write into the real `$XDG_CACHE_HOME`), `covers()`,
+  `play_cache()`, `downloads()`, `kv()`, `queue()`, `pending_progress()` and `statements()`. Every
+  read and write goes through one counted helper, which is what makes "one statement" an
+  assertion instead of a claim. `reserve` returns `Result<PathBuf>` where the plan wrote
+  `-> PathBuf`: a full disk is a cause a screen can print, not a panic. `pending_progress()` is the
+  offline podcast position queue the schema already promised (last write wins per episode, sent
+  then forgotten one at a time).
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-cache`): **49 tests + 2 doc tests,
+  0 failed**, 0.10 s debug and 0.04 s release; `cargo fmt --check` and `cargo clippy --workspace
+  --all-targets -- -D warnings` clean.
+- **Pitfalls found by building**: serde's imperfect derive adds `E: Default` to a generic struct
+  with a `#[serde(default)]` field of type `Vec<E>`, refusing `QueueSnapshot<E>` for any entry
+  type — `#[serde(bound(…))]` is the fix. Eviction cannot be one threshold: `SUM(bytes)` excludes
+  the in-flight `.part`, so a store under its cap returned early and never dropped an abandoned
+  reservation (the test caught it, as did a second one: an eviction loop must not equate "no bytes
+  to free" with "nothing to clean"). The connection mutex is not re-entrant — holding a
+  `cache.lock()` guard and then calling a store method deadlocks instead of panicking, which cost
+  one 60 s test run. `PRAGMA journal_mode=WAL` must run OUTSIDE the migration transaction while
+  `user_version` is set INSIDE it. rusqlite reports "no row" as an error: a `query_optional`
+  helper is what keeps every lookup one readable line.
 
 ### D4 — `nz-player` (delivered 2026-11-16)
 

@@ -4467,7 +4467,11 @@ name = "nz-cache"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "nz-api",
+ "nz-model",
  "rusqlite",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]
