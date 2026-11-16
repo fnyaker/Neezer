@@ -73,7 +73,26 @@ pub fn body(screen: &mut Screen, window: &mut Window, cx: &mut Context<Screen>) 
 
 fn services(screen: &mut Screen, window: &mut Window, cx: &mut Context<Screen>) -> AnyElement {
     let mut card = card("settings-services", cx)
-        .child(card_title("Services de streaming", cx))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(rems(0.5))
+                .child(card_title("Services de streaming", cx))
+                .child(div().flex_1())
+                // Spotify is linked in the browser and YouTube from pasted
+                // headers: the person comes back to this window, so the card
+                // offers the one gesture that shows the result.
+                .child(
+                    button(
+                        "settings-services-refresh",
+                        "Rafraîchir",
+                        ButtonVariant::Secondary,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.load_services(cx))),
+                ),
+        )
         .child(hint(
             "Pour envoyer une playlist vers vos propres comptes : chaque titre y est recherché \
              (code ISRC d'abord, puis titre et artiste) et ceux qui manquent vous sont listés. \

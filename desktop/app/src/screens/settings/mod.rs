@@ -415,6 +415,12 @@ pub enum Reply {
     AccountsSaved(Result<MyAccounts, String>),
     AccessSaved(Result<Access, String>),
     ServicesSaved(Result<Services, String>),
+    /// The discovery notch could not be saved: the level the server still holds
+    /// comes back with the cause, instead of a notch it never accepted.
+    DiscoveryFailed {
+        previous: f32,
+        cause: String,
+    },
 }
 
 /// Which knob a slider drives. One variant per number the settings own, so the
@@ -663,6 +669,11 @@ impl Screen {
             Reply::Dislikes(result) => self.data.dislikes = into_load(result),
             Reply::Version(result) => self.data.version = into_load(result),
             Reply::Sinks(sinks) => self.data.sinks = Load::Ready(sinks),
+            Reply::DiscoveryFailed { previous, cause } => {
+                self.discover_level = previous;
+                self.save(discovery::LEVEL_KEY, &f64::from(previous), cx);
+                self.fail(cause, cx);
+            }
             Reply::Storage(result) => self.data.storage = into_load(result),
             Reply::SourcesSaved(result) => {
                 self.saving = None;

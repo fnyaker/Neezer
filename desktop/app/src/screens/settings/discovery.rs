@@ -39,7 +39,11 @@ pub const STEPS: [(&str, f32); 4] = [
 /// the two agree on the four names, and a server that renamed them is drawn
 /// with its names.
 pub fn step_of(level: f32, steps: &[DiscoverStep]) -> String {
-    let level = level.clamp(0., 1.);
+    let level = if level.is_finite() {
+        level.clamp(0., 1.)
+    } else {
+        0.
+    };
     let mut current = String::new();
     if steps.is_empty() {
         for (name, from) in STEPS {
@@ -522,14 +526,16 @@ impl Screen {
                         let prefs = api.discover_prefs().await.map_err(cause);
                         reply.send(super::Reply::Prefs(prefs));
                     }
-                    Err(error) => reply.send(super::Reply::Prefs(Err(cause(error)))),
+                    // A refusal is a cause the person must see, and the notch
+                    // goes back to what the server actually holds.
+                    Err(error) => reply.send(super::Reply::DiscoveryFailed {
+                        previous: before,
+                        cause: error.cause_fr().to_owned(),
+                    }),
                 }
             });
         }
-        // A refusal is a cause the person must see, not a silent snap back.
-        if before != level {
-            cx.notify();
-        }
+        cx.notify();
     }
 
     fn reload_dislikes(&mut self, cx: &mut Context<Self>) {
