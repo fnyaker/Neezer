@@ -67,6 +67,21 @@ pub fn cache_dir() -> std::path::PathBuf {
     xdg_dir("XDG_CACHE_HOME", ".cache").join("neezer")
 }
 
+/// An I/O failure kind in French: these sentences reach the person (rule 5),
+/// and `std::io::ErrorKind`'s own wording is English.
+pub(crate) fn kind_fr(kind: std::io::ErrorKind) -> &'static str {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::NotFound => "fichier absent",
+        ErrorKind::PermissionDenied => "droits insuffisants",
+        ErrorKind::AlreadyExists => "déjà présent",
+        ErrorKind::InvalidData => "contenu illisible",
+        ErrorKind::UnexpectedEof => "fichier tronqué",
+        ErrorKind::StorageFull => "disque plein",
+        _ => "lecture impossible",
+    }
+}
+
 /// One XDG directory: the environment's value when it is absolute, its `HOME`
 /// fallback otherwise.
 fn xdg_dir(variable: &str, fallback: &str) -> std::path::PathBuf {
@@ -118,9 +133,9 @@ impl Token {
     pub fn from_file(path: &Path) -> Result<Token, Failure> {
         let raw = std::fs::read_to_string(path).map_err(|error| {
             Failure::Config(format!(
-                "jeton illisible dans {} ({})",
+                "jeton de transcription illisible dans {} ({})",
                 path.display(),
-                error.kind()
+                kind_fr(error.kind())
             ))
         })?;
         #[cfg(unix)]

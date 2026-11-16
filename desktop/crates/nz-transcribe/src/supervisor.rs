@@ -598,6 +598,9 @@ pub struct Supervisor {
     pub language: Option<String>,
     /// Whether the engine's backend was already announced for this job.
     pub announced: bool,
+    /// Whether the empty queue was already announced, so a five-second poll does
+    /// not write `{"event":"idle"}` twelve times a minute into the app's pipe.
+    pub idle_announced: bool,
 }
 
 impl Supervisor {
@@ -623,6 +626,7 @@ impl Supervisor {
             engine_version: crate::WHISPER_VERSION.to_owned(),
             language: None,
             announced: false,
+            idle_announced: false,
         }
     }
 
@@ -641,12 +645,16 @@ impl Supervisor {
             };
             match client.claim().await {
                 Ok(Some(claim)) => {
+                    self.idle_announced = false;
                     if self.run_claim(claim).await == Outcome::Fatal {
                         return Outcome::Fatal;
                     }
                 }
                 Ok(None) => {
-                    self.sink.emit(Event::Idle);
+                    if !self.idle_announced {
+                        self.idle_announced = true;
+                        self.sink.emit(Event::Idle);
+                    }
                     if !self.idle_wait(&mut commands).await {
                         return Outcome::Idle;
                     }
@@ -739,7 +747,10 @@ impl Supervisor {
             self.sink.emit(Event::error(
                 &episode_id,
                 "no_space",
-                format!("dossier temporaire impossible ({})", error.kind()),
+                format!(
+                    "dossier temporaire impossible ({})",
+                    crate::worker::kind_fr(error.kind())
+                ),
             ));
             return Outcome::Idle;
         }
@@ -999,7 +1010,10 @@ impl Supervisor {
             self.sink.emit(Event::error(
                 episode_id,
                 "no_space",
-                format!("dossier temporaire impossible ({})", error.kind()),
+                format!(
+                    "dossier temporaire impossible ({})",
+                    crate::worker::kind_fr(error.kind())
+                ),
             ));
             return Outcome::Idle;
         }
@@ -1213,7 +1227,10 @@ impl Supervisor {
         if let Some(parent) = path.parent()
             && let Err(error) = fs::create_dir_all(parent)
         {
-            tracing::warn!("progression non enregistrée ({})", error.kind());
+            tracing::warn!(
+                "progression non enregistrée ({})",
+                crate::worker::kind_fr(error.kind())
+            );
             return;
         }
         let temporary = path.with_extension("json.part");
@@ -1222,10 +1239,16 @@ impl Supervisor {
         match written {
             Ok(()) => {
                 if let Err(error) = fs::rename(&temporary, path) {
-                    tracing::warn!("progression non enregistrée ({})", error.kind());
+                    tracing::warn!(
+                        "progression non enregistrée ({})",
+                        crate::worker::kind_fr(error.kind())
+                    );
                 }
             }
-            Err(error) => tracing::warn!("progression non enregistrée ({})", error.kind()),
+            Err(error) => tracing::warn!(
+                "progression non enregistrée ({})",
+                crate::worker::kind_fr(error.kind())
+            ),
         }
     }
 
