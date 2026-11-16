@@ -122,6 +122,7 @@ green, merge without asking. No skipped or disabled test to get there.
 | server-side analysis (tempo, descriptors), genre studio, embeddings, genre tree | [analysis-genre.md](docs/agents/analysis-genre.md) |
 | `webapp/rhythm` (live analysis: kick, tempo, beat, pattern, style), `lib/audio/latency.js` | [rhythm.md](docs/agents/rhythm.md) |
 | `webapp/src/lib/viz/` (worlds, skins, shaders, scope, projector, eco mode) | [animations.md](docs/agents/animations.md) |
+| UI transitions: any enter/exit/move in `webapp/src`, `lib/motion.js`, motion tokens, the eco/reduced guard | [transitions.md](docs/agents/transitions.md) |
 | listen party, remote control | [party-remote.md](docs/agents/party-remote.md) |
 | a task that spans several areas, or you delegate to a subagent | [orchestration.md](docs/agents/orchestration.md) |
 
