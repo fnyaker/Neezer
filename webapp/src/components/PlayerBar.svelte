@@ -12,6 +12,7 @@
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { push } from "svelte-spa-router";
   import { onMount } from "svelte";
+  import { fadeIn, swap } from "../lib/motion.js";
   import {
     player,
     current,
@@ -109,12 +110,19 @@
     <button class="now" on:click={openFull} disabled={!$current} aria-label="Ouvrir le lecteur plein écran">
       {#if $current}
         <Cover src={$current.album?.cover} alt={$current.title} size={mobile ? 44 : 56} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} eager />
-        <span class="info">
-          <span class="t">{$current.title}</span>
-          <!-- While the player is working toward playback, the subtitle line says
-               WHAT is happening (Chargement…, Nouvel essai…) instead of the artist,
-               so silence under a "playing" icon is never unexplained. -->
-          <span class="a" class:status={$playbackLabel}>{$playbackLabel || artistLine($current)}</span>
+        <!-- P15: the bar leaves its empty state with a fade (its own intro, so
+             only the FIRST play animates, not every track). P12: inside it, the
+             title/artist block swaps on the track's STRING key (P7's rule). -->
+        <span class="info" in:fadeIn>
+          {#key trackKey($current)}
+            <span class="txt" in:swap>
+              <span class="t">{$current.title}</span>
+              <!-- While the player is working toward playback, the subtitle line says
+                   WHAT is happening (Chargement…, Nouvel essai…) instead of the artist,
+                   so silence under a "playing" icon is never unexplained. -->
+              <span class="a" class:status={$playbackLabel}>{$playbackLabel || artistLine($current)}</span>
+            </span>
+          {/key}
         </span>
       {:else}
         <span class="ph">Rien en lecture</span>
@@ -123,7 +131,9 @@
 
     {#if $current && canKeep}
       <button class="fav desk" class:on={fav} on:click={() => toggleFavorite($current)} aria-label="Favori" title="Favori">
-        <Icon name={fav ? "heartFilled" : "heart"} size={18} />
+        {#key fav}
+          <span class="glyph" in:swap={{ y: 0, scale: 0.85 }}><Icon name={fav ? "heartFilled" : "heart"} size={18} /></span>
+        {/key}
       </button>
       <button class="sm add" on:click={() => openPlaylistPicker($current)} aria-label="Ajouter à une playlist" title="Ajouter à une playlist">
         <Icon name="plus" size={18} />
@@ -138,8 +148,12 @@
         <button class="sm shuf" class:on={$player.shuffle} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={18} /></button>
       {/if}
       <button class="prev" on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={22} /></button>
-      <button class="pp" class:busy={$playbackBusy} on:click={() => player.toggle()} aria-label="Lecture/Pause">
-        <Icon name={$player.playing ? "pause" : "play"} size={18} />
+      <button class="pp" class:busy={$playbackBusy} data-motion={$playbackBusy ? "status" : undefined} on:click={() => player.toggle()} aria-label="Lecture/Pause">
+        <!-- P13: the glyph swaps (opacity + scale 0.85 → 1) on the state the
+             press already flipped; the press repaints in the same frame (M2). -->
+        {#key $player.playing}
+          <span class="glyph" in:swap={{ y: 0, scale: 0.85 }}><Icon name={$player.playing ? "pause" : "play"} size={18} /></span>
+        {/key}
       </button>
       <button class="next" on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={22} /></button>
       {#if canQueue}
@@ -268,6 +282,14 @@
     flex-direction: column;
     gap: 2px;
   }
+  /* The swap's own box (P12): the two lines stay the flex items, so their
+     ellipsis rules keep working while the block fades in. */
+  .now .txt {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .t,
   .a {
     white-space: nowrap;
@@ -291,6 +313,12 @@
     color: var(--dim);
     padding-left: 4px;
   }
+  /* A swapped glyph (P13/P14): its own centred box, so the swap's scale stays
+     inside the button and the hit target never moves. */
+  .glyph {
+    display: grid;
+    place-items: center;
+  }
   .fav {
     flex: none;
     display: grid;
@@ -299,6 +327,8 @@
     height: 36px;
     border-radius: 50%;
     color: var(--dim);
+    /* P14: a frequent thing barely moves — colour only, at the instant token. */
+    transition: color var(--dur-instant);
   }
   .fav:hover {
     color: var(--tx);
@@ -342,6 +372,8 @@
   }
   .transport .sm {
     color: var(--dim);
+    /* P14: shuffle/repeat light up in colour, never in a jump (M6). */
+    transition: color var(--dur-instant);
   }
   .transport .sm:hover {
     color: var(--tx);
@@ -632,6 +664,9 @@
     .now .info {
       gap: 1px;
     }
+    .now .txt {
+      gap: 1px;
+    }
     .t {
       font-size: 14px;
       line-height: 1.2;
@@ -696,6 +731,11 @@
       height: 100%;
       width: var(--p, 0%);
       background: var(--ac-mark);
+      /* The position, not an animation (M6/P16): the line follows the playback
+         clock, so nothing here may transition — not even in eco, where the
+         guard would have had to freeze the very information this line carries.
+         `player.mjs` asserts this on the computed style. */
+      transition: none;
     }
     /* The two targets keep 44 px of finger room: the card is 64 high and the
        play button sits in its middle. */

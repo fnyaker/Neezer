@@ -25,9 +25,12 @@
   //     whole backdrop, and `data-eco="1"` (App.svelte) tells the translucent
   //     surfaces to drop their own blur.
   //   - ONE LAYER AT A TIME. The full-screen player has its own blurred ground
-  //     (DesktopNowPlaying / MobileNowPlaying); while it is open this one is
-  //     removed from the DOM, so the compositor never holds two full-viewport
-  //     blurred layers or two copies of the same art.
+  //     (DesktopNowPlaying / MobileNowPlaying); once it has finished entering
+  //     this one is removed from the DOM, so the compositor never holds two
+  //     full-viewport blurred layers or two copies of the same art. It is
+  //     `immersiveShown` (the player's `introend` … `outrostart`), not
+  //     `immersiveOpen`: hiding on the flag blanked the page's ground under the
+  //     player that was still sliding up (transitions.md M12/P3).
   //   - A TRACK WITH NO ART FALLS BACK TO THE THEME'S GROUND (faded out, not
   //     left showing the previous sleeve); a sleeve that FAILS to load keeps
   //     the previous ground, because a flaky CDN must not blank the page.
@@ -37,7 +40,7 @@
   // it asked for the credits four times a second once (docs/agents/webapp.md).
   import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
-  import { current, currentId, offlineCovers, ecoMode, immersiveOpen } from "../lib/stores.js";
+  import { current, currentId, offlineCovers, ecoMode, immersiveShown } from "../lib/stores.js";
   import { paletteFor } from "../lib/coverpalette.js";
   import { backdropCover } from "../lib/globalbackdrop.js";
   import { cssUrl } from "../lib/format.js";
@@ -250,7 +253,7 @@
   the bench's title probe now reads 228/255 against an ink of 241); a
   `position` or a `z-index` would do the same.
 -->
-<div class="gb" class:hidden={$immersiveOpen} aria-hidden="true" style={`--gb-in:${IN_MS}ms;--gb-out:${OUT_MS}ms`}>
+<div class="gb" class:hidden={$immersiveShown} aria-hidden="true" style={`--gb-in:${IN_MS}ms;--gb-out:${OUT_MS}ms`}>
   {#if !$ecoMode && src}
     <!-- ONE image element, one blur. The sleeve's own colour is a pseudo-element
          of the same group, so it fades in and out with the art and the layer

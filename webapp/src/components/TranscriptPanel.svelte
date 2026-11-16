@@ -24,6 +24,7 @@
     transcribeSettings,
   } from "../lib/transcript.js";
   import { firstFor, forget, readAt, readPage, writePage } from "../lib/transcriptcache.js";
+  import { fadeIn, pop, scrollBehavior } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   export let episode = null;
@@ -429,11 +430,9 @@
     const view = parent.getBoundingClientRect();
     const row = node.getBoundingClientRect();
     const top = Math.max(0, parent.scrollTop + row.top - view.top - parent.clientHeight * ratio);
-    const reduce =
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    parent.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+    // P18/P20: the ONE owner of "smooth" is motion.js — reduced motion and eco
+    // jump at once, and this file keeps no matchMedia of its own.
+    parent.scrollTo({ top, behavior: scrollBehavior() });
   }
 
   function scrollToRow(index, ratio) {
@@ -937,7 +936,7 @@
       <h3>En attente de transcription…</h3>
       <p>La file avance ; le serveur continue si vous fermez cet écran.</p>
       <span class="bar indeterminate" role="progressbar" aria-label="Progression de la transcription">
-        <span></span>
+        <span data-motion="status"></span>
       </span>
       {#if admin}
         <div class="state-actions">
@@ -1048,8 +1047,10 @@
   {:else if loading && !hasText}
     <div class="state-card" aria-busy="true">
       <p class="status" role="status">Chargement de la transcription…</p>
-      <span class="skeleton-line"></span>
-      <span class="skeleton-line short"></span>
+      <!-- P20: the job's own pulse is a status indicator — a frozen shimmer
+           reads as a hang (M13), so eco keeps it. -->
+      <span class="skeleton-line" data-motion="status"></span>
+      <span class="skeleton-line short" data-motion="status"></span>
     </div>
   {/if}
 
@@ -1101,7 +1102,7 @@
             <Icon name="more" size={18} />
           </button>
           {#if menuOpen}
-            <div class="menu" role="menu">
+            <div class="menu" role="menu" transition:pop={{ origin: "top right", placement: "down" }}>
               <button type="button" role="menuitem" on:click={() => { menu = "relaunch"; menuOpen = false; }}>
                 Changer la langue et relancer…
               </button>
@@ -1174,7 +1175,7 @@
       {#if searchLoading && !searchHits.length}
         <p class="status-line" role="status">Recherche dans l'épisode…</p>
       {:else if searchHits.length}
-        <div class="hits">
+        <div class="hits" in:fadeIn>
           {#each searchHits as hit, i (i)}
             <button type="button" class="hit" on:click={() => pickHit(hit, i)}>
               <span class="sr">Lire à {fmtDuration(hit.start)}.</span>
@@ -1227,6 +1228,7 @@
         role="group"
         aria-label="Transcription de l'épisode"
         use:listEvents
+        in:fadeIn
       >
         {#each segments as segment, i (i)}
           {@const mark = chapterMarks.get(i)}
@@ -1406,7 +1408,9 @@
     height: 100%;
     border-radius: 999px;
     background: var(--ac-mark);
-    transition: width 0.4s ease;
+    /* The job's progress is a continuous measurement, so its own duration is a
+       token and its curve stays linear (I8/M15: no literal). */
+    transition: width var(--dur-base) linear;
   }
   .bar.indeterminate > span {
     width: 35%;
