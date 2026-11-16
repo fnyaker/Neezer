@@ -1243,16 +1243,55 @@ Waves that can run in parallel (disjoint files):
   mixing units moves every line by 90 %.
 
 
-### T3 — Worker protocol and supervisor
+### T3 — Worker protocol and supervisor (delivered 2026-11-16)
 
-- **Files**: `src/{worker,protocol,supervisor,control}.rs`, the `worker` and `local` subcommands.
-- **Contract**: *Transcription* (protocol, JSON lines, SIGSTOP of the engine group, resume of a
-  local job at its last chunk, backoff like `worker.py#Client._backoff`, no token in any log).
-- **Acceptance**: against `perf_api.py --podcasts` (runner external, a client worker enrolled by the
-  test as `bench`): claim → audio → chunks → complete, the server's transcript row `ready` with the
-  segments; `cancel` from the server stops within one heartbeat; a `SIGSTOP`ped engine keeps its
-  lease (heartbeats continue, assert ≥ 3 during a 15 s pause); 429/5xx back off without a storm
-  (count requests).
+- **The rule**: the heartbeat is its own task, so a pause is never a lost job. The engine is a child
+  in its own process group and a pause is `SIGSTOP` of that group; the lease keeps renewing while
+  the engine is stopped. Measured: **3 heartbeats during a 15 s pause**, the engine's
+  `/proc/<pid>/stat` state `T`, and a `cancel` from the server ended the job in **< 0.4 s** with a
+  300 ms beat (5 s in production). A pause therefore yields the CPU *and* keeps the job.
+- **The rule, the protocol is a port, not an invention**: `protocol.rs` follows
+  `docker/transcribe/worker.py` value for value — the backoff schedule (1, 2, 4, 8, 16, 30 s, capped,
+  a `Retry-After` raises it up to 120 s), `429`/`5xx` retried and nothing else, `fail` truncated at
+  24/240 **characters**, 800 kB of segment text per chunk, a 1 GiB and 20-request audio download that
+  resumes with `Range`. Two additions a claim needs before a byte of it is used: the id must be a
+  UUID, the lease a single token, and `audio_url` must be **this** episode's own route, never another
+  host (the client is handed a URL by the server; following it would be an SSRF).
+- **The rule, two pause bits**: the app's pause (rule 1: buffer low-water, a `User` request, a slow
+  frame) and the server's are separate flags. Measured the hard way: one bit, written by the
+  heartbeat's `pause: false`, resumed a `SIGSTOP`ped engine **within one beat** — a `client` worker
+  never receives `pause` (`job.heartbeat` only answers it for `server` workers), so the answer must
+  not clear the app's decision.
+- **The rule, no decoder and no progress here**: a chunk's PCM comes from `PcmSource`, whose
+  production implementation is T2's `audio::write_pcm_range` (a window, not the whole
+  episode: 38 MB of PCM for a ten-minute chunk). The supervisor never decodes audio and never
+  invents a percentage: `chunk_pct` is whisper.cpp's own `progress = N %` or 0.
+- **What it is now**: `worker.rs` (token on disk, `0600`-checked and never printable — `Debug` says
+  `<jeton>`; the typed client of the seven routes), `protocol.rs` (payloads, backoff, `fit_segments`,
+  `is_episode_id`), `control.rs` (the nine words as serde-tagged `Command`/`Event`, one flushed JSON
+  line per event), `supervisor.rs` (`Halt`, `PcmSource`/`AudioPcm`, `EngineChild` with its signals,
+  the claim loop, the local job, the `<episode>.partial.json` resume file), and the
+  `worker`/`local` subcommands. A local transcript lands in
+  `$XDG_DATA_HOME/neezer/transcripts/<episode_id>.transcript.json` + `.srt` (T1's `sidecar::write`).
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-transcribe`): **13 tests against a fake
+  server in 19 s** (the 15 s pause is most of it) and the crate's **67 lib tests in 0.5 s**. The full
+  claim → audio → chunks → complete is **6 requests** (claim, audio, 3 chunks, complete) for a
+  3-chunk episode, 12 lines stored; a `429 Retry-After` + a `500` are retried to exactly the
+  schedule's attempt count (**3 claims, not a storm**). Against the REAL server
+  (`NZ_PERF_API=1`, `perf_api.py --podcasts`, `bench` enrolling a `client` worker):
+  **6 chunks, 12 lines, the row `ready` with `source: client`, `worker: banc-t3`, in 0.9 s**.
+- **Pitfalls found by building**: a pause needs `process_group(0)` on the child **and**
+  `kill(-pgid, SIGSTOP)` — the `libc` crate is not available to this lot, so the four signal numbers
+  and `kill`/`nice`/`localtime_r` are declared locally (the app is Linux-only); a stopped process
+  ignores `SIGTERM` until it is continued, so `terminate` is CONT → TERM → KILL; `nice 19` goes
+  through `pre_exec`; the idle loop polls the control channel every 25 ms instead of `select!`ing,
+  because a `local` command has to run a whole job between two claims. **A `SIGSTOP` is not
+  synchronous with `kill`**: a test that reads `/proc/<pid>/stat` right after it sees `R` and calls
+  a working pause broken — read it in a loop for a second (measured: the state flips within 10 ms).
+  And the seam's first caller is what finds the seam's bugs: `audio::decode_range` took `start_ms`
+  as a **sample** count, so a chunk at 600 s decoded from ~13.6 s and every line after the first
+  chunk would have been silently misplaced. The window test that catches it is a file that is loud
+  for half a second then silent (a window at 600 ms must be silence).
 
 ### T4 — Transcription in the app
 

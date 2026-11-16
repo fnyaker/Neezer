@@ -25,6 +25,19 @@
 //!     absolute offsets. This is what the benches and the acceptance tests run.
 //! ```
 //!
+//! T3 adds the two the app runs:
+//!
+//! ```text
+//! neezer-transcribe worker --url <http(s)://hôte[:port]> --model <ggml.bin>
+//!                          [--token-file <fichier>] [--lang auto|xx] [--once] [--cpu]
+//!     The enrolled `client` worker: claim, heartbeat, chunk, complete, and the
+//!     JSON-lines control channel the app speaks on stdin/stdout.
+//!
+//! neezer-transcribe local --model <ggml.bin> [--episode <uuid> --audio <fichier>]
+//!     One episode on this PC, no server; without `--audio`, one job per
+//!     `{"cmd":"local",…}` line on stdin.
+//! ```
+//!
 //! `--version` and `--help` never touch a GPU on purpose (see `lib.rs`): a
 //! `--version` that aborts on a machine without a Vulkan driver would be the
 //! first thing a new person meets.
@@ -36,6 +49,7 @@ use nz_transcribe::audio;
 use nz_transcribe::engine::{self, Document, EngineConfig, VULKAN_DEVICES_FLAG};
 use nz_transcribe::models;
 use nz_transcribe::segments::{CHUNK_SECONDS, OVERLAP_MS};
+use nz_transcribe::supervisor;
 
 const USAGE: &str = "\
 neezer-transcribe — transcription locale des épisodes, sur le GPU via Vulkan.
@@ -50,6 +64,8 @@ USAGE:
     neezer-transcribe file <audio> --out <x.json> [--model <modèle>]
                           [--lang auto] [--vad <modèle>] [--no-vad] [--cpu]
                           [--threads N] [--device N]
+    neezer-transcribe worker --url <URL> --model <ggml.bin> [options]
+    neezer-transcribe local --model <ggml.bin> [--episode <uuid> --audio <fichier>]
 ";
 
 /// A failure to report to the person: the message, and whether it is a usage
@@ -203,6 +219,14 @@ fn main() -> ExitCode {
         Some("--version" | "-V") | None => {
             println!("{}", version());
             Ok(())
+        }
+        // T3's two subcommands: the supervisor owns its own arguments (it has
+        // more than a screenful of them) and its own exit codes.
+        Some("worker") => {
+            return supervisor::worker_main(args[1..].iter().map(Into::into).collect());
+        }
+        Some("local") => {
+            return supervisor::local_main(args[1..].iter().map(Into::into).collect());
         }
         Some(VULKAN_DEVICES_FLAG) => vulkan_devices(),
         Some("probe") => probe(&args[1..]),
