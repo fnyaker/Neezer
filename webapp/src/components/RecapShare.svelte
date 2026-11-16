@@ -18,6 +18,11 @@
   import { grooveFor } from "../lib/sillon.js";
   import { mosaicCovers, posterLines, shareText } from "../lib/recap.js";
   import Icon from "./Icon.svelte";
+  // The share sheet is an overlay like every other (M8): its veil fades its own
+  // background alpha, its pane a `sheet`; and being `position:fixed` inside a
+  // page it is portalled to `<body>` (M9). Both spinner marks are status.
+  import { fadeIn, sheet, veil } from "../lib/motion.js";
+  import { toBody } from "../lib/portal.js";
 
   export let payload;
 
@@ -555,7 +560,7 @@
 <svelte:window on:keydown={onKey} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="rs-backdrop" on:click={onBackdrop}>
+<div class="rs-backdrop" use:toBody on:click={onBackdrop} transition:veil={{ for: "sheet" }}>
   <div
     class="rs-sheet"
     bind:this={sheetEl}
@@ -563,6 +568,7 @@
     aria-modal="true"
     aria-labelledby={titleId}
     tabindex="-1"
+    transition:sheet
     on:click|stopPropagation
   >
     <header class="rs-head">
@@ -579,24 +585,24 @@
       <div class="rs-preview" role="img" aria-label={previewLabel}>
         <canvas bind:this={canvasEl} width={CARD_W} height={CARD_H} aria-hidden="true"></canvas>
         {#if preparing}
-          <span class="rs-spin" aria-hidden="true"></span>
+          <span class="rs-spin" aria-hidden="true" data-motion="status"></span>
         {/if}
       </div>
 
       <div class="rs-side">
         <p class="rs-text">{shownText}</p>
         {#if nativeBlocked}
-          <p class="rs-note" role="status">
+          <p class="rs-note" role="status" in:fadeIn>
             Partage et enregistrement indisponibles dans l'application. Ouvrez le serveur dans un navigateur.
           </p>
         {/if}
         {#if renderError}
-          <p class="rs-error" role="alert">{renderError}</p>
+          <p class="rs-error" role="alert" in:fadeIn>{renderError}</p>
         {/if}
         <div class="rs-actions">
           <button class="rs-primary" on:click={share} disabled={busy || !!renderError}>
             {#if busy}
-              <span class="rs-spin small" aria-hidden="true"></span> Préparation…
+              <span class="rs-spin small" aria-hidden="true" data-motion="status"></span> Préparation…
             {:else}
               <Icon name="share" size={17} /> Partager l'image
             {/if}
@@ -633,14 +639,7 @@
     border: 1px solid var(--ln);
     border-radius: 24px;
     box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
-    animation: rs-in 0.18s ease;
     touch-action: auto;
-  }
-  @keyframes rs-in {
-    from {
-      opacity: 0;
-      transform: translateY(10px) scale(0.99);
-    }
   }
   .rs-head {
     flex: none;

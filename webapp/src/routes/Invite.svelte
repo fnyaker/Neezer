@@ -25,6 +25,9 @@
     tokenShapeOk,
     usernameMessage,
   } from "../lib/invite.js";
+  // Outside the router, like the login: the page fades in once the shell shows
+  // it, and every inline error line arrives with a fade (I15, I7).
+  import { fadeIn } from "../lib/motion.js";
 
   export let token = "";
   export let savedAccount = null;
@@ -288,7 +291,7 @@
   <meta name="robots" content="noindex" />
 </svelte:head>
 
-<div class="page">
+<div class="page" in:fadeIn>
   <div class="halo" aria-hidden="true"></div>
   <main class="card" aria-labelledby="invite-title">
     <div class="brand">
@@ -335,7 +338,7 @@
         déconnectera de celui-ci.
       </p>
       {#if leaveError}
-        <p class="alert" role="alert">{leaveError}</p>
+        <p class="alert" role="alert" in:fadeIn>{leaveError}</p>
       {/if}
       <div class="actions">
         <button class="primary wide" type="button" on:click={openApp}>
@@ -374,7 +377,7 @@
             {MIN_USERNAME} à {MAX_USERNAME} caractères : a–z, 0–9, point, tiret, tiret bas.
           </p>
           {#if nameError}
-            <p class="err" id="invite-name-err" role="alert">
+            <p class="err" id="invite-name-err" role="alert" in:fadeIn>
               <Icon name="alert" size={14} /><span>{nameError}</span>
             </p>
           {/if}
@@ -433,7 +436,7 @@
             bien l'affaire.
           </p>
           {#if passError}
-            <p class="err" id="invite-pass-err" role="alert">
+            <p class="err" id="invite-pass-err" role="alert" in:fadeIn>
               <Icon name="alert" size={14} /><span>{passError}</span>
             </p>
           {/if}
@@ -456,14 +459,14 @@
             aria-invalid={confirmError ? "true" : "false"}
           />
           {#if confirmError}
-            <p class="err" id="invite-confirm-err" role="alert">
+            <p class="err" id="invite-confirm-err" role="alert" in:fadeIn>
               <Icon name="alert" size={14} /><span>{confirmError}</span>
             </p>
           {/if}
         </div>
 
         {#if formError}
-          <div class="alert" role="alert" tabindex="-1" bind:this={alertEl}>
+          <div class="alert" role="alert" tabindex="-1" bind:this={alertEl} in:fadeIn>
             <Icon name="alert" size={16} />
             <span>{formError}</span>
             {#if pendingRetry}

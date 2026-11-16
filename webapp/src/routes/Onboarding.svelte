@@ -9,6 +9,10 @@
   import LoadFailed from "../components/LoadFailed.svelte";
   import OnboardingArtistCard from "../components/OnboardingArtistCard.svelte";
   import OnboardingAccount from "../components/OnboardingAccount.svelte";
+  // The step changes like a page: it rises when going on, only fades when
+  // coming back (docs/agents/transitions.md, I15 + M7). `rise` at y 0 IS that
+  // fade — the level's own reduced variant already drops the transform.
+  import { fadeIn, rise } from "../lib/motion.js";
   import {
     PAGE_FIRST,
     PAGE_NEXT,
@@ -42,6 +46,9 @@
   const BUILD_TRIES = 15;
 
   let accounts = false;
+  // Which way the visible pane travels: forward to the accounts step rises,
+  // the back button only fades (M7: the pane replaces itself in place).
+  let stepBack = false;
   let loading = true;
   let record = null;
   let loadError = null;
@@ -700,6 +707,7 @@
         finishToHome();
         return;
       }
+      stepBack = false;
       push("/onboarding/accounts");
     } catch (e) {
       const body = (e && e.body) || {};
@@ -722,8 +730,10 @@
       const result = await api.onboardingArtistsDone({ skip: true });
       const reached = (result && result.step) || "done";
       user.update((current) => (current ? { ...current, onboarding: reached === "account" ? "account" : "done" } : current));
-      if (reached === "account") push("/onboarding/accounts");
-      else finishToHome();
+      if (reached === "account") {
+        stepBack = false;
+        push("/onboarding/accounts");
+      } else finishToHome();
     } catch (e) {
       const body = (e && e.body) || {};
       announce(body.error || "Le serveur n'a pas pu terminer cette étape. Réessayez.");
@@ -775,6 +785,7 @@
 
   function gotoArtists() {
     actionError = null;
+    stepBack = true;
     push("/onboarding/artists");
   }
 </script>
@@ -807,19 +818,19 @@
     >
       {finishLabel}
     </button>
-    <span class="rail" aria-hidden="true"><span style={`width:${railWidth}%`}></span></span>
+    <span class="rail" aria-hidden="true"><span style={`transform:scaleX(${railWidth / 100})`}></span></span>
   </header>
 
   {#if finishStatus}
     {#key statusSeq}
-      <p class="status" id="ob-status" role="status" aria-live="polite">{finishStatus}</p>
+      <p class="status" id="ob-status" role="status" aria-live="polite" in:fadeIn>{finishStatus}</p>
     {/key}
   {:else}
     <span class="sr" id="ob-status"></span>
   {/if}
 
   {#if !$online}
-    <p class="banner" role="status">
+    <p class="banner" role="status" in:fadeIn>
       <Icon name="cloudOff" size={16} />
       <span>
         {accounts
@@ -843,7 +854,7 @@
       </div>
     </main>
   {:else if loadError}
-    <main class="pane">
+    <main class="pane" in:fadeIn>
       <div class="failure">
         <span class="failure-icon"><Icon name="cloudOff" size={24} /></span>
         <h1>Impossible de charger cette étape.</h1>
@@ -860,14 +871,14 @@
       </div>
     </main>
   {:else if accounts}
-    <main class="pane">
+    <main class="pane" in:rise={{ y: stepBack ? 0 : 8 }}>
       <OnboardingAccount
         options={record ? record.account || null : null}
         onActivity={(busy) => (accountBusy = busy)}
       />
     </main>
   {:else}
-    <main class="pane">
+    <main class="pane" in:rise={{ y: stepBack ? 0 : 8 }}>
       <div class="flow">
         <header class="head">
           <div class="titles">
@@ -914,7 +925,7 @@
         {/if}
 
         {#if actionError}
-          <p class="alert" role="alert">
+          <p class="alert" role="alert" in:fadeIn>
             <Icon name="alert" size={16} />
             <span>{actionError.message}</span>
             {#if actionError.retry}
@@ -923,7 +934,7 @@
           </p>
         {/if}
         {#if similarNotice}
-          <p class="note">{similarNotice}</p>
+          <p class="note" in:fadeIn>{similarNotice}</p>
         {/if}
 
         {#if searching && !searchItems}
@@ -933,7 +944,7 @@
             {/each}
           </div>
         {:else if searchError}
-          <div class="failure inline">
+          <div class="failure inline" in:fadeIn>
             <span class="failure-icon"><Icon name="alert" size={22} /></span>
             <h2>La recherche n'a pas abouti.</h2>
             <div class="failedslot">
@@ -951,14 +962,14 @@
             </div>
           </div>
         {:else if query && !searchItems.length}
-          <div class="failure inline">
+          <div class="failure inline" in:fadeIn>
             <p class="empty-title">Aucun artiste ne porte ce nom.</p>
             <div class="actions">
               <button class="ghost" type="button" on:click={clearSearch}>Effacer la recherche</button>
             </div>
           </div>
         {:else if !items.length && listError}
-          <div class="failure inline">
+          <div class="failure inline" in:fadeIn>
             <span class="failure-icon"><Icon name="cloudOff" size={22} /></span>
             <h2>Impossible de charger les artistes.</h2>
             <div class="failedslot">
@@ -975,7 +986,7 @@
             </div>
           </div>
         {:else if !items.length && unavailable}
-          <div class="failure inline">
+          <div class="failure inline" in:fadeIn>
             <span class="failure-icon"><Icon name="cloudOff" size={22} /></span>
             <h2>Aucun artiste n'est disponible pour l'instant.</h2>
             <p class="cause">{feedCause(feed && feed.error)}</p>
@@ -1011,6 +1022,7 @@
             aria-label="Artistes suggérés"
             aria-busy={searching}
             bind:this={gridEl}
+            in:fadeIn
           >
             {#each visible as artist, i (idOf(artist))}
               <OnboardingArtistCard
@@ -1141,8 +1153,12 @@
   .rail span {
     display: block;
     height: 100%;
+    width: 100%;
     background: var(--ac-text);
-    transition: width 0.2s ease;
+    transform-origin: 0 50%;
+    /* The step's progress: a transform, never a width (M1) — the same 200 ms
+       in-place move as every other indicator. */
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .status {
     margin: 0;

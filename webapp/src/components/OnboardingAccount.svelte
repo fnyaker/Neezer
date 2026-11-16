@@ -4,6 +4,9 @@
   import { user } from "../lib/stores.js";
   import Icon from "./Icon.svelte";
   import LoadFailed from "./LoadFailed.svelte";
+  // The option cards replace the skeleton with a fade (I1), each error line
+  // arrives with one (I7), and the export bar grows by transform (I8).
+  import { fadeIn } from "../lib/motion.js";
   import {
     accountSummary,
     dropStore,
@@ -324,13 +327,13 @@
   </header>
 
   {#if notice}
-    <p class="notice" role="status">
+    <p class="notice" role="status" in:fadeIn>
       <Icon name="check" size={16} /><span>{notice}</span>
     </p>
   {/if}
 
   {#if loadError}
-    <div class="failed">
+    <div class="failed" in:fadeIn>
       <LoadFailed
         notFound="Impossible de lire les options de compte. Réessayez dans un instant."
         on:retry={loadOptions}
@@ -357,7 +360,7 @@
         <span>Un import est déjà en cours. Attendez qu'il finisse pour en lancer un autre.</span>
       </p>
     {/if}
-    <div class="cards">
+    <div class="cards" in:fadeIn>
       <article class="card" class:done={skipped.includes("deezer")}>
         {#if skipped.includes("deezer")}
           <div class="skipped">
@@ -426,7 +429,7 @@
             </button>
           {/if}
           {#if failureFor("deezer")}
-            <p class="err" role="alert"><Icon name="alert" size={14} /><span>{failureFor("deezer")}</span></p>
+            <p class="err" role="alert" in:fadeIn><Icon name="alert" size={14} /><span>{failureFor("deezer")}</span></p>
           {/if}
           <div class="cardfoot">
             <button class="ghost small" type="button" on:click={() => skip("deezer")}>Ignorer</button>
@@ -502,7 +505,7 @@
             </button>
           {/if}
           {#if failureFor("youtube")}
-            <p class="err" role="alert"><Icon name="alert" size={14} /><span>{failureFor("youtube")}</span></p>
+            <p class="err" role="alert" in:fadeIn><Icon name="alert" size={14} /><span>{failureFor("youtube")}</span></p>
           {/if}
           <div class="cardfoot">
             <button class="ghost small" type="button" on:click={() => skip("youtube")}>Ignorer</button>
@@ -539,7 +542,7 @@
             </p>
             {#if progress.busy}
               {#if progress.percent == null}
-                <div class="bar indet" aria-hidden="true"><span></span></div>
+                <div class="bar indet" aria-hidden="true"><span data-motion="status"></span></div>
               {:else}
                 <div
                   class="bar"
@@ -549,7 +552,7 @@
                   aria-valuemax="100"
                   aria-valuenow={progress.percent}
                 >
-                  <span style={`width:${progress.percent}%`}></span>
+                  <span style={`transform:scaleX(${Math.max(0, Math.min(100, progress.percent)) / 100})`}></span>
                 </div>
               {/if}
               <p class="hint">L'import continue sur le serveur si vous quittez cette page.</p>
@@ -620,7 +623,7 @@
             </button>
           {/if}
           {#if failureFor("playlist")}
-            <p class="err" role="alert"><Icon name="alert" size={14} /><span>{failureFor("playlist")}</span></p>
+            <p class="err" role="alert" in:fadeIn><Icon name="alert" size={14} /><span>{failureFor("playlist")}</span></p>
           {/if}
           <div class="cardfoot">
             <button class="ghost small" type="button" on:click={() => skip("playlist")}>Ignorer</button>
@@ -888,8 +891,13 @@
   }
   .bar span {
     display: block;
+    width: 100%;
     height: 100%;
     background: var(--ac-text);
+    /* A job's progress moves by transform (I8/M1): no layout on a phone that
+       is downloading at the same time. */
+    transform-origin: 0 50%;
+    transition: transform var(--dur-base) linear;
   }
   .bar.indet span {
     width: 36%;

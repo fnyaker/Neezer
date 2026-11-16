@@ -41,6 +41,9 @@
   import RecapShare from "../components/RecapShare.svelte";
   import Icon from "../components/Icon.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
+  // A branch of the screen fades in when its data arrives (I1); the deck dims
+  // while a year is loading over 140 ms, from the tokens (M15).
+  import { fadeIn } from "../lib/motion.js";
 
   export let params = {};
 
@@ -333,7 +336,7 @@
       <p class="sr" role="status">Chargement de ton récap…</p>
     </div>
   {:else if invalid}
-    <div class="recap-grid">
+    <div class="recap-grid" in:fadeIn>
       {#if chips.length}
         <div class="chips" bind:this={chipsEl} role="group" aria-label="Choisir une année">
           {#each chips as chip (chip.year)}
@@ -356,7 +359,7 @@
       </div>
     </div>
   {:else if offline}
-    <div class="recap-grid">
+    <div class="recap-grid" in:fadeIn>
       <div class="deck panel">
         <span class="panel-icon"><Icon name="cloudOff" size={26} /></span>
         <h2 class="panel-title">Ton récap a besoin du serveur</h2>
@@ -366,7 +369,7 @@
       </div>
     </div>
   {:else if error}
-    <div class="recap-grid">
+    <div class="recap-grid" in:fadeIn>
       <div class="panel card">
         <LoadFailed
           error={error}
@@ -380,7 +383,7 @@
       </div>
     </div>
   {:else if noYears}
-    <div class="recap-grid">
+    <div class="recap-grid" in:fadeIn>
       <div class="deck panel">
         <span class="panel-icon"><Icon name="music" size={26} /></span>
         <h2 class="panel-title">Ton récap apparaîtra quand tu auras écouté quelques titres.</h2>
@@ -390,7 +393,7 @@
       </div>
     </div>
   {:else if isEmpty}
-    <div class="recap-grid">
+    <div class="recap-grid" in:fadeIn>
       {#if chips.length}
         <div class="chips" bind:this={chipsEl} role="group" aria-label="Choisir une année">
           {#each chips as chip (chip.year)}
@@ -418,7 +421,7 @@
       </div>
     </div>
   {:else if payload}
-    <div class="recap-grid">
+    <div class="recap-grid" in:fadeIn>
       <div class="chips" bind:this={chipsEl} role="group" aria-label="Choisir une année">
         {#each chips as chip (chip.year)}
           <button
@@ -547,7 +550,7 @@
        mosaic becomes a 2×2 block on a tall deck), not to the window's. */
     container-type: size;
     container-name: deck;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--dur-fast) var(--ease-standard);
   }
   .deck.busy {
     opacity: 0.66;

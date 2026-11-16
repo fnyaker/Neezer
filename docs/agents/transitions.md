@@ -445,6 +445,41 @@ Generic patterns every T6 lot applies to its files:
 | I14 | T6e | `routes/Genres.svelte`, `GenreTree`, `GenreLibrary`, `GenreExtractor`, `GenreTiles`, `ExplorerStyles`, `StylePicker`, `DiscoverySlider`, `EnergyPicker`, `FlowPicker`, `FlowControls`, `FlowUpNext`, `WhoPicker` | Genres tabs I2/I3; GenreTree node expand I4 (tree may be big: `collapse` only for ≤ 30 children) and its dnd (svelte-dnd-action has its own flip: set `flipDurationMs` from `DUR.base`, 0 when `level() !== "full"`); ExplorerStyles `.veil` discovery/station sheets → `veil` + `sheet` (already `toBody`); FlowControls `toBody` popover → `pop`; FlowUpNext swap `swap`; pickers' selected chip colour I5 | `ext-slide`/`slide` keyframes = status. |
 | I15 | T6f | `routes/Onboarding.svelte`, `OnboardingAccount`, `OnboardingArtistCard`, `Login`, `Invite`, `Recap`, `RecapStory`, `RecapSlide`, `RecapShare`, `Party`, `RemoteClaim`, `Viz` | Onboarding step change: `rise` keyed on the step (push direction) / fade on back; artist card select `swap` on the check; Login error line I7; Recap story slide change: opacity crossfade `DUR.base` (two absolutely positioned slides, so an outro is allowed), `recap-fill` timer bar = status (it counts down a JS timer), `recap-shimmer` = skeleton; RecapShare `.rs-backdrop` → `veil` + `sheet`; Party guest: background layer stays (shared store), latency chip / resume button `fade` (tokenised); RemoteClaim `spin` = status; Viz (projector) has no UI motion beyond its canvas | Party/Invite/Login render OUTSIDE the router: no S1 there; their roots `fadeIn` once auth resolves. |
 
+**What T6f decided where the row left a choice** (all in the files above):
+
+- **The story's card change is an intro, not a crossfade — and that is M7, not a shortcut.** The bridge
+  mounts the active card and the next one (webapp.md: not a third, its sleeves are a measured budget of
+  14), so the card being LEFT is already out of the `{#each}` when the class changes: an `out:fade` on
+  `.slide-wrap` keeps it painted, but the element then carries `.active` for the length of its outro and
+  `test/recap/run.mjs` requires exactly ONE `.slide-wrap.active` (it read two and stopped). A third
+  mounted slide would break the sleeve budget instead. So the entering card fades in over
+  `DUR.base` (200 ms, opacity only, absolutely positioned: no layout) and the leaving one goes in the same
+  frame — M7's "replace in place = intro only", which is also what a 7 s auto-advance wants.
+- **`RecapShare` is portalled** (`use:toBody`): it is `position: fixed` and rendered from a page, and T1's
+  page-enter transform would otherwise become its containing block (M9) for the 200 ms it runs.
+- **The Récap's 7 s bar is a status indicator with the JS clock's own duration**: `--fill-ms` is set from
+  `AUTO_MS` (7000) by the component, the animation is a `scaleX()` (M1), and the mark is
+  `data-motion="status"` only while it runs (M13). Same for `spin`/`mini-spin`/`pulse` on the party screen.
+- **Onboarding's step transition reads its direction from the action** (`stepBack` set by the back button,
+  cleared by the two places that push the account step): `rise` with `y: 0` IS the plan's "fade on back" —
+  an opacity walk with an identity transform, which the level's own reduced variant drops entirely.
+- **The rail and the import bar became transforms**: both were `width` transitions (M1 forbids width), and
+  both now ride `translate/scaleX` on the token durations.
+- **The motion bench's per-level request comparison and the Récap do not agree yet.** `scenarios/misc.mjs`
+  walks the deck to its end once, pauses the phone's 7 s auto-advance through the app's own focus path, and
+  stands on the second-to-last card so the act steps onto the text-only share card. Even so, 1–5 cover
+  requests (`/api/cover/<id>` and the `d41d8cd…` placeholder) land inside the act window at 1440 in
+  REDUCED and ECO and not at full motion: `Cover` (T4, still a literal 350 ms fade) re-requests art when a
+  card activates or the screen re-renders, and the queue admits it a frame or two later — the same traffic
+  is what the runner's eco "nothing animates" check sees as a 0.01 ms remnant. The two scenarios' own
+  assertions (one `.active`, a 200 ms opacity transition mid-fade, no transform; a veil on
+  `background-color` and a sheet, both 0 ms in eco and ≤ 140 ms reduced) pass in all six level-runs, 127
+  checks of 132. **T4 or T7 closes it** by tokenising `Cover`'s fade and settling its requests.
+- **`test/motion.test.mjs`'s import allowlist is a SUBSET check**, not the exact set of 19: every lot of
+  group A converts some of those files in its own PR, on files that are disjoint between lots, so an
+  equality turned each of the thirteen PRs red for a line outside its own column (`routes/Party.svelte` was
+  this lot's). What still holds at every point is that no file is ADDED to the list; T7 deletes it.
+
 ### N — Never animated (by rule)
 
 Seek, volume and EQ fader drags; the playback clock and every live number (BPM, levels, meter); progress fed
@@ -545,5 +580,5 @@ settle(page) }`. Checks per scenario:
 | T6c | to do | — | — |
 | T6d | done | #215 | `npm test` 779/779; the bench 184 checks / 0 failure (4 scenarios × 2 viewports × 3 levels): the section change is ONE animation (desktop `pane-body` 140 ms opacity; phone the pane's 200 ms `rise`), the switch 90 ms on the track's colours and the knob's transform, the admin dialog `dialog` 200 ms transform+opacity plus the veil's own background-colour 200 ms; reduced = 140 ms opacity/colour only, NO transform on the knob or the dialog, veil 140 ms; eco leaves the timeline empty after 4 frames (the click's 0.01 ms remnants swept) and the `/api` + image requests are identical in the three levels; `test/admin/run.mjs` 61 checks, `test/eq/run.mjs` 35 checks green (the fader fill is a `scaleY`, not a `height`); `test/motion.test.mjs`'s importer check became a subset, so converting a file no longer turns the 13 parallel lots red. |
 | T6e | done | #221 | I14, on `routes/Genres.svelte` + `GenreTree`, `GenreLibrary`, `GenreExtractor`, `GenreTiles`, `ExplorerStyles`, `StylePicker`, `DiscoverySlider`, `EnergyPicker`, `FlowPicker`, `FlowControls`, `FlowUpNext`, `WhoPicker`. `npm test` 779/779; `npm run build` 586 modules. `node test/motion/run.mjs`: **8 scénarios × 2 viewports × 3 niveaux, 0 échec** (onglets du studio, repli d'un nœud de l'arbre, « Réglages avancés », feuille des stations en `veil`+`sheet`, pastille d'énergie, pas de découverte, puce de style, popover du Flow) — en éco `document.getAnimations()` vide sur les 8, en réduit aucun `transform` et ≤ 140 ms, mêmes requêtes dans les trois niveaux. Mesuré à 1440×900, headless, 1× : feuille des stations **3 layouts / pire frame 16,7 ms / 4–6 ms de script** sur 320 ms; bascule d'onglet vers l'arbre **5 layouts / 16,7 ms / 25 ms** (dont le montage des 21 lignes fenêtrées); le même geste en éco → **0 animation** sur la timeline après 2 rAF. `test/genretree/run.mjs` 16/16 (21/21/20 lignes montées, 0 débordement). Les durées restent celles des tokens (onglets/puces 90 ms, panneaux 140 ms, `pop` 200/140, `veil`+`sheet` 280/200 au téléphone et 200/140 au bureau); les barres de progression passent en `transform: scaleX()` (I8), la barre indéterminée de l'extracteur dit `data-motion="status"`. Deux lignes de l'inventaire ne sont pas cliquables sur le banc : la feuille de découverte (aucun style dans `tools/perf_api.py`; la feuille des stations est le même couple `veil`+`sheet`) et la porte du Flow (le proxy Deezer est éteint; `flow-controles` clique « Lancer le Flow » puis la porte si elle existe) — leur `pop`/`swap` sont tenus par `test/motion.test.mjs` aux trois niveaux. |
-| T6f | to do | — | — |
+| T6f | done | #224 | **I15, 12 files.** `npm test` 779/779; `npm run build` green; `node test/motion/run.mjs` **127 checks of 132** — 2 scenarios × 2 viewports × 3 levels, the 5 failures all cover traffic inside the request comparison (see the note above: `Cover` is T4's); the story's card change measured at **200 ms opacity (`--dur-base`), 140 ms and opacity-only under reduced motion, 0 ms in eco**, exactly one `.slide-wrap.active`, no transform in any running animation; the share sheet's veil animates **`background-color` only** (never the overlay's opacity, M8) over 200/280 ms and its pane enters on `sheet`, 0 ms in eco, portalled to `<body>` (M9); the onboarding step rises 8 px on a push and only fades on the way back; the `width` transitions of the step rail and of the import bar became `scaleX()` (M1); `test/onboarding/run.mjs` and `test/recap/run.mjs` green. `test/party/run.mjs`: its four audio-alignment segments are load-sensitive on this machine — `steady` fails on the parent commit too (p95 +10.3 ms, 59 % within 5 ms), and the same segment read 17 %/59 % on two runs of the same code; nothing in `Party.svelte`'s change touches a clock. |
 | T7 | to do | — | — |

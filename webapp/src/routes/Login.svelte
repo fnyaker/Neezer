@@ -3,6 +3,10 @@
   import { user } from "../lib/stores.js";
   import { api } from "../lib/api.js";
   import Icon from "../components/Icon.svelte";
+  // The login renders outside the router, so it has no page enter of its own:
+  // its root fades once the shell resolves "nobody is signed in" (I15), and the
+  // error line arrives with a fade instead of appearing (I7).
+  import { fadeIn } from "../lib/motion.js";
 
   let username = "";
   let password = "";
@@ -46,7 +50,7 @@
   <title>Connexion · Neezer</title>
 </svelte:head>
 
-<div class="page">
+<div class="page" in:fadeIn>
   <div class="halo" aria-hidden="true"></div>
   <main class="card" aria-labelledby="login-title">
     <div class="brand">
@@ -84,7 +88,7 @@
       </div>
 
       {#if error}
-        <p class="err" role="alert" tabindex="-1" bind:this={alertEl}><Icon name="alert" size={14} /><span>{error}</span></p>
+        <p class="err" role="alert" tabindex="-1" bind:this={alertEl} in:fadeIn><Icon name="alert" size={14} /><span>{error}</span></p>
       {/if}
 
       <button class="primary wide" type="submit" disabled={busy}>
