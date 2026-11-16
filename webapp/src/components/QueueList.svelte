@@ -13,7 +13,7 @@
   // follows the finger is a separate floating copy, and the pointer is followed
   // on the window rather than on the grip — the row may scroll out of the DOM
   // while it is being dragged toward the end of a 4 000-track queue.
-  import { trackRef } from "../lib/trackkey.js";
+  import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onDestroy, tick } from "svelte";
   import { push } from "svelte-spa-router";
   import { player, toasts, openPlaylistPicker, openQueueSave } from "../lib/stores.js";
@@ -21,6 +21,7 @@
   import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { atLeast } from "../lib/remote/mode.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
+  import { animate, fadeIn, DUR, EASE_CSS } from "../lib/motion.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
   import VirtualList from "./VirtualList.svelte";
@@ -40,8 +41,15 @@
   let drag = null; // { from, to, y, left, width, item }
   let raf = 0;
   let lastY = 0;
+  // The row an explicit edit just inserted: its key, so ITS intro plays and
+  // no other row's does (M4 — a row mounted by scrolling must not animate).
+  let fresh = null;
 
   $: upcoming = Math.max(0, items.length - idx - 1);
+
+  // VirtualList's own key (identity + absolute position: a queue may hold the
+  // same title twice), repeated here to name a row that was just inserted.
+  const rowKey = (item, index) => (trackKey(item) ?? "") + ":" + index;
 
   export function scrollToIndex(...args) {
     return vl?.scrollToIndex(...args);
@@ -67,6 +75,70 @@
   function clearAll() {
     player.clearUpcoming();
     toasts.push("File vidée");
+    showRest();
+  }
+
+  // What is left of the queue (the playing row) fades in after a clear: the
+  // removed rows are gone at once — a row never plays an outro on its way out
+  // (M4/M7) — and nothing waits for the animation (M2: `clearUpcoming` above
+  // already ran). One element, opacity only; eco does nothing, reduced keeps a
+  // 140 ms fade.
+  async function showRest() {
+    await tick();
+    animate(root?.querySelector(".vlist"), [{ opacity: 0 }, { opacity: 1 }], {
+      duration: DUR.fast,
+      easing: EASE_CSS.enter,
+    });
+  }
+
+  // -- the list makes room (L2–L4) -------------------------------------------
+  // One watcher for every EXPLICIT edit, wherever it was started: the ✕ here,
+  // « Retirer de la file » in a row's menu, « Lire ensuite » from a track's
+  // menu, a swipe. It compares the queue by IDENTITY and, when exactly one row
+  // appeared or left, has the mounted rows after it start one row off and glide
+  // back into place (lib/motion.js#shiftRows, through VirtualList#shift): no
+  // `getBoundingClientRect` at all, so a 4 000-track queue pays one layout.
+  // A queue REPLACED wholesale (playQueue) is a different list, not an edit:
+  // its length jumps by more than one and nothing moves.
+  let known = null;
+  $: if (items !== known) {
+    const previous = known;
+    known = items;
+    if (previous && previous.length) edit(previous, items);
+  }
+
+  /** The first index where two queues hold different tracks. For a one-row
+   *  insertion or removal that is exactly where it happened. */
+  function firstDiff(a, b) {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
+    return n;
+  }
+
+  async function edit(previous, next) {
+    const delta = next.length - previous.length;
+    if (delta !== 1 && delta !== -1) return;
+    const at = firstDiff(previous, next);
+    if (delta === 1) {
+      // This one row is new: its intro plays (fadeIn, 140 ms), and only its.
+      fresh = rowKey(next[at], at);
+      await tick();
+      if (vl) vl.shift(at, 1);
+      fresh = null;
+    } else {
+      await tick();
+      if (vl) vl.shift(at, -1);
+    }
+  }
+
+  // Where a dragged row makes the rows around it move: what is between where it
+  // came from and where it would land slides one row out of the way, so the
+  // list MAKES ROOM under the finger instead of drawing a line and jumping on
+  // drop. Pure CSS on the mounted rows (transform, --dur-base, standard curve).
+  function rowShift(index) {
+    if (!drag || drag.to === drag.from) return 0;
+    if (drag.to > drag.from) return index > drag.from && index <= drag.to ? -1 : 0;
+    return index >= drag.to && index < drag.from ? 1 : 0;
   }
 
   function buzz(ms) {
@@ -194,6 +266,8 @@
       class:past={index < idx}
       class:edit={editable && index > idx}
       class:dragging={drag && drag.from === index}
+      class:up={rowShift(index) < 0}
+      class:down={rowShift(index) > 0}
       class:before={drag && drag.to === index && drag.to < drag.from}
       class:after={drag && drag.to === index && drag.to > drag.from}
       data-qi={index}
@@ -201,6 +275,7 @@
       aria-haspopup="menu"
       on:contextmenu={(e) => menu(e, item, index)}
       on:keydown={(e) => menuKey(e, (ev) => menu(ev, item, index))}
+      in:fadeIn={{ duration: fresh === rowKey(item, index) ? undefined : 0 }}
     >
       <button class="qrow" on:click={() => pick(index)}>
         <Cover src={item.album?.cover} alt="" size={40} kind={item.podcast ? "podcast" : "track"} fallbackId={trackRef(item)} />
@@ -325,7 +400,20 @@
     align-items: center;
     box-sizing: border-box;
     height: 56px;
+    /* The row's own height, read by the make-room transform below, so the two
+       cannot drift apart. */
+    --q-row-h: 56px;
     border-radius: 10px;
+    /* A drag makes the rows between from and to slide one row out of the way:
+       transform only (M1), the in-place curve (M5). Nothing else on a queue row
+       ever moves. */
+    transition: transform var(--dur-base) var(--ease-standard);
+  }
+  .qitem.up {
+    transform: translateY(calc(var(--q-row-h) * -1));
+  }
+  .qitem.down {
+    transform: translateY(var(--q-row-h));
   }
   .qitem:hover {
     background: var(--ql-hover, var(--s2));
@@ -344,7 +432,7 @@
     opacity: 0.5;
   }
   .qitem.dragging {
-    opacity: 0.3;
+    opacity: 0.35;
   }
   /* Where the row will land: a line on the side it arrives from. */
   .qitem.before::before,
@@ -472,5 +560,12 @@
     border: 1px solid var(--ln);
     box-shadow: 0 14px 40px color-mix(in srgb, var(--bg) 70%, transparent);
     pointer-events: none;
+  }
+  /* M14: reduced motion removes displacement, and the make-room glide IS
+     displacement. Eco is the guard's business (app.css). */
+  @media (prefers-reduced-motion: reduce) {
+    .qitem {
+      transition: none;
+    }
   }
 </style>

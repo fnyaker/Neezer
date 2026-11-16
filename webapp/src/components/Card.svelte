@@ -84,8 +84,9 @@
     box-shadow: var(--glass-shadow);
     color: var(--tx);
     transition:
-      background-color 0.14s ease,
-      border-color 0.14s ease;
+      background-color var(--dur-instant) var(--ease-standard),
+      border-color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
     width: 100%;
     cursor: pointer;
     /* Skip rendering off-screen cards, but with `auto` on the placeholder size:
@@ -101,6 +102,11 @@
   .card:focus-visible {
     background-color: var(--glass-hover);
     border-color: var(--glass-border);
+  }
+  /* A press is a 2 % shrink, not a lift: the tile answers under the finger and
+     the grid never reflows (transform, 90 ms). */
+  .card:active {
+    transform: scale(0.98);
   }
   .cv {
     position: relative;
@@ -120,8 +126,8 @@
     opacity: 0;
     transform: translateY(8px);
     transition:
-      opacity 0.14s ease,
-      transform 0.14s ease;
+      opacity var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
   }
   .card:hover .play,
   .card:focus-within .play {

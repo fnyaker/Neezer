@@ -380,12 +380,14 @@
     height: 100%;
     object-fit: cover;
   }
-  /* the full-size art fades in over the low-res placeholder */
+  /* the full-size art fades in over the low-res placeholder (200 ms, the
+     decode-and-paint step: art already on the device is marked loaded before it
+     paints, so this fade only ever covers a real arrival) */
   img:not(.low) {
     position: relative;
     z-index: 1;
     opacity: 0;
-    transition: opacity 0.35s ease;
+    transition: opacity var(--dur-base) var(--ease-enter);
   }
   img.loaded {
     opacity: 1;

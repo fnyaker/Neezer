@@ -17,6 +17,7 @@
   import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { duration as fmtDuration } from "../lib/format.js";
   import { playbackIdle } from "../lib/playback.js";
+  import { swap } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
   import { iconOf, offMain, sourceTitle } from "../lib/sources.js";
   import Cover from "./Cover.svelte";
@@ -235,8 +236,10 @@
         <span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>
       {:else if isPlaying}
         <!-- current row but audio isn't flowing yet (loading/buffering): a spinner
-             tells the truth instead of an equalizer dancing over silence. -->
-        <span class="rowspin" aria-hidden="true"></span>
+             tells the truth instead of an equalizer dancing over silence. A
+             STATUS indicator: it has to keep turning in eco mode, or the row
+             reads as a hang (M13). -->
+        <span class="rowspin" data-motion="status" aria-hidden="true"></span>
       {:else if isCurrent}
         <!-- The playing row wears the accent and a triangle where a number
              would be (DESIGN §6), so "current" is a shape, not only a colour. -->
@@ -266,7 +269,7 @@
           {#if track.source === "youtube"}
             <span class="ytbadge" title={YT_TITLE}>YT</span>
           {:else if offMain(track.source)}<span class="local" title={sourceTitle(track.source)}><Icon name={iconOf(track.source)} size={13} /></span>{:else if track.local}<span class="local" title={sourceTitle("local")}><Icon name="cloudOff" size={13} /></span>{/if}
-          {#if downloaded}<span class="dlbadge" title="Disponible hors-ligne"><Icon name="downloaded" size={13} /></span>{/if}
+          {#if downloaded}<span class="dlbadge" title="Disponible hors-ligne" in:swap><Icon name="downloaded" size={13} /></span>{/if}
           {track.title}
           {#if track.explicit}<span class="explicit">E</span>{/if}
         </div>
@@ -330,8 +333,16 @@
      second. */
   .swipe .track,
   .swipe .action {
-    transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
-      width 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: transform var(--dur-base) var(--ease-enter),
+      width var(--dur-base) var(--ease-enter);
+  }
+  /* The row's own colours are a press/hover step, not a movement (M6): 90 ms,
+     the in-place curve. Declared on the same selector as the swipe's transform
+     because `transition` is one property — a shorter rule would replace it. */
+  .swipe .track {
+    transition:
+      transform var(--dur-base) var(--ease-enter),
+      background-color var(--dur-instant) var(--ease-standard);
   }
   .swipe.dragging .track,
   .swipe.dragging .action {
@@ -367,7 +378,7 @@
     display: flex;
     align-items: center;
     padding-left: 18px;
-    transition: transform 0.14s ease;
+    transition: transform var(--dur-fast) var(--ease-standard);
   }
   .action.committed .act-in {
     transform: scale(1.12);
@@ -404,6 +415,20 @@
   }
   .track.active .t {
     color: var(--ac-text);
+  }
+  /* A colour step — hover, the active row's title, a badge fading in or out —
+     is 90 ms and never moves (L7, M6). The row ROOT keeps no transition of its
+     own: its transform belongs to the swipe. */
+  .t,
+  .a,
+  .alb,
+  .dur,
+  .add,
+  .fav,
+  .more {
+    transition:
+      color var(--dur-instant) var(--ease-standard),
+      opacity var(--dur-instant) var(--ease-standard);
   }
   .play {
     width: 40px;
@@ -655,7 +680,11 @@
       transform: rotate(360deg);
     }
   }
-  /* equalizer animation on the playing row */
+  /* equalizer animation on the playing row. It SCALES, it does not resize:
+     `height` was a layout per frame for as long as a list showed a playing row
+     (measured: the idle page laid out 18–22 times per 250 ms); `scaleY` from
+     the bottom is the same picture on the compositor (M1), and eco/reduced stop
+     it as before. */
   .eq {
     display: flex;
     align-items: flex-end;
@@ -664,7 +693,10 @@
   }
   .eq i {
     width: 3px;
+    height: 100%;
     background: var(--ac-mark);
+    transform-origin: bottom;
+    transform: scaleY(0.3);
     animation: eq 0.9s ease-in-out infinite;
   }
   .eq i:nth-child(1) {
@@ -679,10 +711,10 @@
   @keyframes eq {
     0%,
     100% {
-      height: 30%;
+      transform: scaleY(0.3);
     }
     50% {
-      height: 100%;
+      transform: scaleY(1);
     }
   }
   /* A finger has no hover: the row's own controls are simply there. */
@@ -695,7 +727,7 @@
   @media (prefers-reduced-motion: reduce) {
     .eq i {
       animation: none;
-      height: 70%;
+      transform: scaleY(0.7);
     }
     .swipe .track,
     .swipe .action,

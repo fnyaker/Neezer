@@ -45,6 +45,7 @@
     <button
       class="add"
       class:spin={busy}
+      data-motion={busy ? "status" : undefined}
       on:click|stopPropagation={add}
       disabled={busy}
       aria-label="S'abonner"
@@ -65,12 +66,17 @@
     padding: 12px;
     border-radius: var(--radius);
     background: var(--bg-card);
-    transition: background 0.12s ease;
+    transition:
+      background-color var(--dur-instant) var(--ease-standard),
+      transform var(--dur-instant) var(--ease-standard);
     width: 100%;
     cursor: pointer;
   }
   .card:hover {
     background: var(--bg-hover);
+  }
+  .card:active {
+    transform: scale(0.98);
   }
   .cv {
     position: relative;
