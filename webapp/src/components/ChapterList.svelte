@@ -101,7 +101,7 @@
     border-radius: 10px;
     color: var(--tx);
     text-align: left;
-    transition: background 0.14s ease;
+    transition: background-color var(--dur-instant) var(--ease-standard);
   }
   .chapter-btn:hover {
     background: color-mix(in srgb, var(--tx) 6%, transparent);
@@ -191,8 +191,11 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
+    /* F7: the shimmer is decorative, so reduced motion paints a flat --s2
+       block instead of a travelling gradient (eco's guard already stops it). */
     .sk {
       animation: none;
+      background: var(--s2);
     }
     .chapter-btn {
       transition: none;

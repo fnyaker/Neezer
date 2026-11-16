@@ -9,6 +9,7 @@
   import { duration as fmtDuration } from "../lib/format.js";
   import Icon from "../components/Icon.svelte";
   import Cover from "../components/Cover.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let token = "";
 
@@ -179,10 +180,10 @@
 
   {#if phase === "loading"}
     <div class="center">
-      <span class="spinner" aria-label="Chargement"></span>
+      <span class="spinner" data-motion="status" aria-label="Chargement"></span>
     </div>
   {:else if phase === "missing"}
-    <div class="center msg">
+    <div class="center msg" in:fadeIn>
       <span class="mark"><Icon name="disc" size={34} /></span>
       <h1>Ce lien n'est plus valide.</h1>
       <p class="muted">
@@ -190,14 +191,14 @@
       </p>
     </div>
   {:else if phase === "failed"}
-    <div class="center msg">
+    <div class="center msg" in:fadeIn>
       <span class="mark"><Icon name="cloudOff" size={34} /></span>
       <h1>Chargement impossible.</h1>
       <p class="muted">Le serveur ne répond pas pour l'instant.</p>
       <button class="btn btn-primary" on:click={retry}>Réessayer</button>
     </div>
   {:else}
-    <main class="body">
+    <main class="body" in:fadeIn>
       <section class="hero">
         <div class="cover">
           <Cover src={data.playlist.cover} kind="playlist" eager />
@@ -539,7 +540,7 @@
     background: rgba(0, 0, 0, 0.45);
     color: #fff;
     opacity: 0;
-    transition: opacity 0.12s ease;
+    transition: opacity var(--dur-instant) var(--ease-standard);
   }
   .row:hover .glyph,
   .current .glyph {
@@ -607,10 +608,16 @@
     background: var(--s1);
     border-top: 1px solid var(--ln);
     transform: translateY(102%);
-    transition: transform 0.22s ease;
+    transition: transform var(--dur-base) var(--ease-standard);
   }
   .bar.on {
     transform: none;
+  }
+  /* M14: reduced motion keeps the bar's arrival as a cut, not a slide. */
+  @media (prefers-reduced-motion: reduce) {
+    .bar {
+      transition: none;
+    }
   }
   .now {
     min-width: 0;

@@ -21,6 +21,7 @@
   import TrackList from "../components/TrackList.svelte";
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   export let shelf = "artists";
   // A route prop (App.svelte): "artists" or "discovery". Anything else is a
@@ -122,7 +123,7 @@
     </div>
   {/if}
 {:else}
-  <div class="fade-in">
+  <div in:fadeIn>
     <header class="banner">
       <div
         class="art"

@@ -10,6 +10,7 @@
   import Skeleton from "../components/Skeleton.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import Icon from "../components/Icon.svelte";
+  import { fadeIn } from "../lib/motion.js";
 
   // Inside the library's "Podcasts" chip: the library already says where you are.
   export let embedded = false;
@@ -88,7 +89,7 @@
   }
 </script>
 
-<div class="fade-in">
+<div>
   {#if !embedded}
     <div class="head">
       <h1><Icon name="mic" size={26} /> Podcasts</h1>
@@ -111,13 +112,13 @@
         <LoadFailed error={searchError} inline on:retry={() => runSearch(searchedFor || q.trim())} />
       {:else if searchResults.length}
         <h2>Résultats</h2>
-        <div class="grid">
+        <div class="grid" in:fadeIn>
           {#each searchResults as p (p.deezer_id)}
             <PodcastCard item={p} />
           {/each}
         </div>
       {:else}
-        <p class="muted empty">Aucun podcast pour « {q} ».</p>
+        <p class="muted empty" in:fadeIn>Aucun podcast pour « {q} ».</p>
       {/if}
     {/if}
   {/if}
@@ -128,11 +129,11 @@
   {:else if channels === null}
     <LoadFailed error={loadError} on:retry={load} />
   {:else if !channels.length}
-    <p class="muted empty">
+    <p class="muted empty" in:fadeIn>
       Aucun abonnement pour l'instant.{#if $isAdmin}{" "}Cherchez un podcast ci-dessus pour vous abonner.{/if}
     </p>
   {:else}
-    <div class="grid" class:hidden={$isAdmin && q.trim()}>
+    <div class="grid" class:hidden={$isAdmin && q.trim()} in:fadeIn>
       {#each channels as c (c.id)}
         <div
           class="card"
@@ -201,7 +202,7 @@
     border-radius: var(--radius);
     background: var(--bg-card);
     cursor: pointer;
-    transition: background 0.12s ease;
+    transition: background-color var(--dur-instant) var(--ease-standard);
   }
   .card:hover {
     background: var(--bg-hover);
