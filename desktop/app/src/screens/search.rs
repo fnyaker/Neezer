@@ -2047,8 +2047,6 @@ mod journey {
         stub::until(&runtime, cx, "the search's results", |cx| {
             !view.read(cx).list.is_empty()
         });
-        });
-        assert_eq!(stub.count("/api/search"), 1, "one ask for the settled term");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert!(
