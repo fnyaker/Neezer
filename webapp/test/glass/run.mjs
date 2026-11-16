@@ -47,7 +47,8 @@
 //   before: 8/8 surfaces opaque (alpha 1), 8 backdrop-filter scrims reachable
 //           from a track menu, 0 blurred image layer with nothing playing;
 //   after:  8/8 surfaces at alpha 0.72–0.86, 0 backdrop-filter anywhere,
-//           1 blurred image layer; see the numbers printed per case.
+//           1 blurred image layer; see the numbers printed per case. (The
+//           ladder has since gone to 0.64 / 0.78 / 0.93 — see app.css.)
 import { resolve } from "node:path";
 import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
 
@@ -89,11 +90,12 @@ const SURFACES = {
   // describe the card instead of the pill — the pair itself is --onac on --ac.
   deskside: { sel: ".side", texts: [".label-mono", ".fact .v"] },
 };
-// A surface's own alpha: the ladder's tiers are 0.72 and 0.86. The two CLEAR
+// A surface's own alpha: the ladder's tiers are 0.64, 0.78 and 0.93. The two CLEAR
 // doors (the phone's thumb row, the swipe-up hint) are 0.26–0.34 on purpose:
 // they are controls on a scrimmed sleeve, not a surface carrying body text —
 // their text contrast is what is asserted.
 const ALPHA_FLOOR = { mobilefb: 0.25, playerabout: 0.55 };
+
 // A notice only exists while something is wrong (the bench stubs Deezer as
 // unreachable to get one): if the shell decides not to paint it, there is no
 // pixel to hold to a ratio — the bench says so instead of inventing the card.

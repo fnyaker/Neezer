@@ -74,7 +74,7 @@
     background: rgba(18, 16, 24, 0.92);
     border: 1px solid rgba(43, 212, 164, 0.35);
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(43, 212, 164, 0.06);
-    backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat-2));
+    backdrop-filter: var(--glass-filter-2);
     max-width: calc(100vw - 24px);
     color: #fff;
   }

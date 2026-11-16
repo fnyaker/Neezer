@@ -921,7 +921,10 @@
 >
   {#if !$ecoMode}
     {#each $bg as layer (layer.id)}
-      <div class="bg" style={`background-image:${cssUrl(layer.src)}`}></div>
+      <div
+        class="bg"
+        style={`background-image:${cssUrl(layer.src)}; --bg-bright:${layer.bright ?? 1}`}
+      ></div>
     {/each}
   {/if}
   <div class="scrim"></div>
@@ -1214,7 +1217,10 @@
     inset: 0;
     background-size: cover;
     background-position: center;
-    filter: blur(60px) saturate(1.25);
+    /* The sleeve's own LEVEL, normalised (`lib/color.js#levelFactor`): a white
+       cover is pulled down, a black one lifted, so the backdrop behind the
+       glass sits in a band instead of washing out or going black. */
+    filter: blur(60px) saturate(1.25) brightness(var(--bg-bright, 1));
     transform: scale(1.3);
     animation: bg-in 600ms cubic-bezier(0.4, 0, 0.2, 1) both;
   }
@@ -1773,12 +1779,13 @@
     z-index: 3;
     /* `on-photo` (app.css): the THICK step, because this panel is full-bleed
        over the SLEEVE (a photograph) and not over the page's own 86–91 %
-       scrim. Measured over a white-ish cover: 86 % left the À propos panel's
-       11 px `--dim` labels at 4.17:1, below the 4.5 the app holds; 93 % puts
-       them at 5.18:1 and still shows the sleeve through the frost. No outer
-       shadow: a full-bleed panel has nothing to cast onto. */
+       scrim. Measured over a white-ish cover: at 88 % the À propos panel's
+       11 px `--dim` labels read 4.43:1, below the 4.5 the app holds; the
+       thick step keeps 93 % and is lit from inside, so they stay above 4.8:1
+       and the sleeve still shows through the frost. No outer shadow: a
+       full-bleed panel has nothing to cast onto. */
     box-shadow: none;
-    backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
+    backdrop-filter: var(--glass-filter-3);
     display: flex;
     flex-direction: column;
   }
@@ -1903,7 +1910,7 @@
     background-size: 100% 1px;
     background-position: top left;
     background-repeat: no-repeat;
-    backdrop-filter: blur(var(--glass-blur-3)) saturate(var(--glass-sat-3));
+    backdrop-filter: var(--glass-filter-3);
     border-radius: 18px 18px 0 0;
     box-shadow: 0 -14px 44px color-mix(in srgb, var(--bg) 70%, transparent);
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);

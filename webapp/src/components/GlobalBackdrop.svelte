@@ -41,7 +41,7 @@
   import { paletteFor } from "../lib/coverpalette.js";
   import { backdropCover } from "../lib/globalbackdrop.js";
   import { cssUrl } from "../lib/format.js";
-  import { rgb } from "../lib/color.js";
+  import { rgb, levelFactor } from "../lib/color.js";
   import { api } from "../lib/api.js";
   import { trackRef } from "../lib/trackkey.js";
 
@@ -53,6 +53,7 @@
 
   let src = null; // the art actually painted
   let tint = null; // its dominant colour, or null when the palette could not be read
+  let bright = 1; // its LEVEL, normalised: a white sleeve comes down, a black one up
   let fading = false; // the art group is at opacity 0 (fading out)
   let painted = false; // has this layer ever painted a sleeve?
   let wanted = null; // the URL being loaded, so a second call is a no-op
@@ -76,9 +77,10 @@
     fading = false;
   }
 
-  function paint(url, colour) {
+  function paint(url, colour, factor) {
     src = url;
     tint = colour;
+    bright = factor || 1;
     painted = !!url;
   }
 
@@ -95,18 +97,18 @@
     }
     if (reduceMotion()) {
       stopFade();
-      paint(null, null);
+      paint(null, null, 1);
       wanted = null;
       return;
     }
-    target = [null, null];
+    target = [null, null, 1];
     if (fading) return;
     fading = true;
     timer = setTimeout(() => {
       timer = null;
       const next = target;
       target = null;
-      if (next) paint(next[0], next[1]);
+      if (next) paint(next[0], next[1], next[2]);
       wanted = null;
       fading = false;
     }, OUT_MS);
@@ -115,20 +117,20 @@
   // The one place the fade's state machine lives. A target that arrives during
   // the fade-out REPLACES the pending one (the timer paints the newest); one
   // that arrives during the fade-in starts a fresh fade-out from where it is.
-  function reveal(url, colour) {
+  function reveal(url, colour, factor) {
     if (!painted || reducedMotion()) {
       stopFade();
-      paint(url, colour);
+      paint(url, colour, factor);
       return;
     }
-    target = [url, colour];
+    target = [url, colour, factor];
     if (fading) return;
     fading = true;
     timer = setTimeout(() => {
       timer = null;
       const next = target;
       target = null;
-      if (next) paint(next[0], next[1]);
+      if (next) paint(next[0], next[1], next[2]);
       fading = false; // the CSS transition fades the new art back in
     }, OUT_MS);
   }
@@ -144,12 +146,12 @@
   // it is an HTTP-cache hit, not a new load.
   async function resolveArt(track, direct) {
     const palette = await paletteFor(direct);
-    if (palette) return { url: direct, tint: palette.dominant };
+    if (palette) return { url: direct, tint: palette.dominant, bright: levelFactor(palette.average) };
     const ref = trackRef(track);
     const proxy = ref ? api.coverUrl(ref) : null;
     if (!proxy || proxy === direct) return null;
     const copy = await paletteFor(proxy);
-    return copy ? { url: proxy, tint: copy.dominant } : null;
+    return copy ? { url: proxy, tint: copy.dominant, bright: levelFactor(copy.average) } : null;
   }
 
   async function point() {
@@ -178,7 +180,7 @@
       return;
     }
     failed = false;
-    reveal(art.url, art.tint);
+    reveal(art.url, art.tint, art.bright);
   }
 
   onMount(() => {
@@ -258,7 +260,7 @@
       class:fading
       style={`--gb-tint:${tint ? rgb(tint, 0.32) : "transparent"}`}
     >
-      <div class="gb-img" style={`background-image:${cssUrl(src)}`}></div>
+      <div class="gb-img" style={`background-image:${cssUrl(src)}; --gb-bright:${bright}`}></div>
     </div>
   {/if}
   {#if !$ecoMode}
@@ -320,7 +322,11 @@
        changes when a sleeve does, so it is rasterised once and composited —
        not re-run on scroll, not re-run per frame. Scale pushes the blur's
        transparent halo (the edge of the element) outside the viewport. */
-    filter: blur(44px) saturate(1.3);
+    /* The blur and the tint are the ground; `--gb-bright` is the sleeve's
+       LEVEL (lib/color.js#levelFactor): a white cover is pulled down so the
+       page never becomes a wash, a black one lifted so it is not a hole, and
+       art between the two bands is left alone. One pass, no extra filter. */
+    filter: blur(44px) saturate(1.3) brightness(var(--gb-bright, 1));
     transform: scale(1.14);
     transform-origin: center;
   }

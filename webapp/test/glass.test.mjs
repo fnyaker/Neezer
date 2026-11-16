@@ -3,13 +3,15 @@
 // app, and no component carries a blur value of its own.
 //
 // The ladder (src/app.css, "surfaces — the glass ladder"):
-//   tier 1  --glass-bg   72 % of the theme fill, NO blur    cards, bars
-//   tier 2  --glass-bg-2 86 % + blur(var(--glass-blur-2))   popovers
-//   tier 3  --glass-bg-2 86 % + blur(var(--glass-blur-3))   sheets, modals
+//   tier 1  --glass-bg   64 % of the theme fill, NO blur    cards, bars
+//   tier 2  --glass-bg-2 78 % + blur(var(--glass-blur-2))   popovers
+//   tier 3  --glass-bg-2 78 % + blur(var(--glass-blur-3))   sheets, modals
+//   thick   --glass-bg-strong 93 %, no blur                 top bar, notices
 //
 // Every tier also carries the LIGHT ("the liquid finish"): two 1 px background
 // gradients — a specular catch on the lit edge and a dark rim below — plus a
-// two-layer shadow, and a fill mixed with 4 % of the theme's accent. Painted,
+// two-layer shadow, and a fill mixed with 4 % of the theme's accent over 3 % of
+// white (the body is lit from inside). Painted,
 // never filtered: the tests below hold that, and hold the lens out.
 //
 // A `backdrop-filter` is therefore one of: `none`, or the tier-2/tier-3
@@ -48,9 +50,10 @@ const files = walk(SRC).map((path) => ({
   text: readFileSync(path, "utf8"),
 }));
 
-// `backdrop-filter: none` or the ladder's own expression, nothing else.
-const ALLOWED =
-  /^backdrop-filter:\s*(none|blur\(var\(--glass-blur-[23]\)\)\s*saturate\(var\(--glass-sat-[23]\)\));?$/;
+// `backdrop-filter: none` or a tier's own filter token, nothing else: blur,
+// saturation and the brightness of the image behind the pane live in ONE place
+// (app.css), so no component can assemble a fourth expression.
+const ALLOWED = /^backdrop-filter:\s*(none|var\(--glass-filter-[23]\));?$/;
 
 function declarations(text) {
   return text
@@ -71,19 +74,52 @@ test("aucun backdrop-filter littéral : chaque déclaration est un palier ou `no
   assert.deepEqual(offenders, [], `déclarations hors paliers :\n  ${offenders.join("\n  ")}`);
 });
 
-test("les seules valeurs de blur du projet sont les trois paliers", () => {
-  // Every blur() that reaches the compositor comes from a tier token; the two
-  // literals left are MobileNowPlaying's, listed by name rather than invented.
-  const literals = new Set();
-  const tokens = new Set();
-  for (const { text } of files) {
-    for (const m of text.matchAll(/backdrop-filter:\s*blur\((var\(--glass-blur-[123]\)|\d+(?:\.\d+)?px)\)/g)) {
-      if (m[1].startsWith("var(")) tokens.add(m[1]);
-      else literals.add(m[1]);
+test("les deux filtres du verre sont écrits une fois, avec les jetons du palier", () => {
+  // The filter itself (blur + the extra saturation) is defined for the two
+  // overlay tiers and nowhere else; a component reads it.
+  for (const n of ["2", "3"]) {
+    const at = APP_CSS.indexOf(`--glass-filter-${n}:`);
+    assert.ok(at > 0, `--glass-filter-${n} manque`);
+    const value = APP_CSS.slice(at, APP_CSS.indexOf(";", at)).replace(/\s+/g, " ");
+    assert.match(value, new RegExp(`blur\\(var\\(--glass-blur-${n}\\)\\)`), `filtre ${n} sans son flou`);
+    assert.match(value, new RegExp(`saturate\\(var\\(--glass-sat-${n}\\)\\)`), `filtre ${n} sans sa saturation`);
+  }
+  // A CONSTANT brightness on the glass is the wrong tool (it cannot know the
+  // picture): the image is normalised per sleeve instead.
+  assert.doesNotMatch(APP_CSS, /--glass-bright/, "le verre porte un éclat constant");
+  for (const { rel, text } of files) {
+    if (!/\.(svelte|css)$/.test(rel)) continue;
+    assert.doesNotMatch(text, /backdrop-filter:[^;]*brightness\(/, `${rel} éclaircit son backdrop d'un facteur fixe`);
+  }
+  // And no component carries a filter expression of its own. Declarations
+  // only: the comment blocks above quote the technique on purpose.
+  for (const { rel, text } of files) {
+    for (const decl of declarations(text)) {
+      const v = decl.replace(/^backdrop-filter:\s*/, "").replace(/;$/, "");
+      assert.ok(/^(none|var\(--glass-filter-[23]\))$/.test(v), `${rel} écrit son propre filtre : ${v}`);
     }
   }
-  assert.deepEqual([...literals].sort(), [], "un composant a réintroduit un flou littéral");
-  assert.deepEqual([...tokens].sort(), ["var(--glass-blur-2)", "var(--glass-blur-3)"], "un palier inconnu est utilisé");
+});
+
+test("l'image derrière le verre est normalisée, pas multipliée par une constante", () => {
+  // The cover ground and the full-screen player's backdrop both carry the
+  // sleeve's normalised level; the rule itself is `levelFactor`, held by
+  // test/imagelevel.test.mjs on the numbers.
+  const ground = files.find((f) => f.rel === "components/GlobalBackdrop.svelte");
+  assert.ok(ground, "GlobalBackdrop.svelte introuvable");
+  assert.match(ground.text, /levelFactor\(palette\.average\)/, "le fond de page ne normalise pas la pochette");
+  assert.match(ground.text, /--gb-bright:/, "le fond de page ne porte pas son niveau");
+  assert.match(ground.text, /brightness\(var\(--gb-bright/, "le fond de page n'applique pas son niveau");
+  for (const rel of ["components/DesktopNowPlaying.svelte", "components/MobileNowPlaying.svelte"]) {
+    const file = files.find((f) => f.rel === rel);
+    assert.ok(file, `${rel} introuvable`);
+    assert.match(file.text, /--bg-bright:/, `${rel} ne porte pas le niveau de la pochette`);
+    assert.match(file.text, /brightness\(var\(--bg-bright/, `${rel} n'applique pas le niveau`);
+  }
+  // `walk()` only collects .svelte/.css: the player's store is read directly.
+  const player = readFileSync(new URL("../src/lib/backdrop.js", import.meta.url), "utf8");
+  assert.match(player, /sampleOfImage\(im\)/, "la couche du lecteur n'échantillonne pas son image");
+  assert.match(player, /sample\?\.factor/, "la couche du lecteur ne porte pas son niveau");
 });
 
 test("app.css définit les trois paliers, et eux seuls", () => {
@@ -93,6 +129,9 @@ test("app.css définit les trois paliers, et eux seuls", () => {
   for (const n of ["1", "2", "3"]) {
     assert.match(APP_CSS, new RegExp(`--glass-blur-${n}:`), `le palier ${n} n'a pas de blur`);
     assert.match(APP_CSS, new RegExp(`--glass-sat-${n}:`), `le palier ${n} n'a pas de saturation`);
+  }
+  for (const n of ["2", "3"]) {
+    assert.match(APP_CSS, new RegExp(`--glass-filter-${n}:`), `le palier ${n} n'a pas de filtre`);
   }
   // Three tiers, not a gradient of twelve values: one blur per tier, and tier 1
   // is 0 (a static card never blurs its own backdrop).
@@ -143,8 +182,8 @@ test("les surfaces consomment les paliers, jamais un --s1 littéral pour un fond
   }
   // Menus and sheets take their material from app.css: one rule for the
   // eighteen sheets, not eighteen copies.
-  assert.match(APP_CSS, /\.menu\s*\{[\s\S]*?backdrop-filter:\s*blur\(var\(--glass-blur-2\)\)/);
-  assert.match(APP_CSS, /\.sheet,[\s\S]*?\{[\s\S]*?backdrop-filter:\s*blur\(var\(--glass-blur-3\)\)/);
+  assert.match(APP_CSS, /\.menu\s*\{[\s\S]*?backdrop-filter:\s*var\(--glass-filter-2\)/);
+  assert.match(APP_CSS, /\.sheet,[\s\S]*?\{[\s\S]*?backdrop-filter:\s*var\(--glass-filter-3\)/);
 });
 
 // ── the liquid finish ────────────────────────────────────────────────────────
@@ -161,8 +200,7 @@ const themeBlock = (name) => {
   return APP_CSS.slice(at, APP_CSS.indexOf("}", at));
 };
 
-test("la finition liquide : un liseré spéculaire et un bord sombre par thème", () => {
-  for (const theme of ["encre", "papier", "pochette"]) {
+test("la finition liquide : un liseré spéculaire et un bord sombre par thème", () => {  for (const theme of ["encre", "papier", "pochette"]) {
     const block = themeBlock(theme);
     assert.match(block, /--glass-hi:\s*[^;]+;/, `${theme} n'a pas de lumière`);
     assert.match(block, /--glass-lo:\s*[^;]+;/, `${theme} n'a pas de bord`);
@@ -178,7 +216,16 @@ test("la finition liquide : un liseré spéculaire et un bord sombre par thème"
   const ac = APP_CSS.match(/--glass-tint-ac:\s*([\d.]+)%/);
   assert.ok(ac, "--glass-tint-ac manque");
   assert.ok(Number(ac[1]) > 0 && Number(ac[1]) <= 8, `teinte d'accent ${ac[1]} % hors de [0, 8]`);
-  assert.match(APP_CSS, /--glass-fill:\s*color-mix\(in srgb, var\(--ac\) var\(--glass-tint-ac\), var\(--s1\)\)/);
+  // The body is lit from inside (3 % of white) AND tinted by the theme: both
+  // halves are in the fill, and the white stays small — at 4 % the card's worst
+  // `--dim` pair measured 4.55:1, i.e. AA by a hair.
+  const lift = APP_CSS.match(/--glass-lift:\s*([\d.]+)%/);
+  assert.ok(lift, "--glass-lift manque");
+  assert.ok(Number(lift[1]) > 0 && Number(lift[1]) <= 3, `lumière ${lift[1]} % hors de [0, 3]`);
+  assert.match(
+    APP_CSS,
+    /--glass-fill:\s*color-mix\(\s*in srgb,\s*#fff var\(--glass-lift\),\s*color-mix\(in srgb, var\(--ac\) var\(--glass-tint-ac\), var\(--s1\)\)\s*\)/
+  );
   for (const n of ["", "-2", "-strong"]) {
     assert.match(
       APP_CSS,
@@ -215,8 +262,9 @@ test("chaque palier peint la lumière, en une seule déclaration de fond", () =>
 
 test("une feuille posée sur une pochette prend le palier épais", () => {
   // The phone player's queue and lyrics panels are full-bleed over the sleeve,
-  // not over the page's scrim: tier 3's 86 % measured 4.17:1 there, so the ONE
-  // definition in app.css gives that case the thick step (93 %).
+  // not over the page's scrim: 78 % there would be well under AA, and 88 %
+  // read 4.43:1, so the ONE definition in app.css gives that case the thick
+  // step (93 %, which keeps its opacity and takes the fill's light).
   assert.match(APP_CSS, /\.sheet\.on-photo\s*\{[^}]*--glass-bg-strong/, "la variante « sur une pochette » manque");
   const player = files.find((f) => f.rel === "components/MobileNowPlaying.svelte");
   assert.ok(player, "MobileNowPlaying.svelte introuvable");

@@ -17,11 +17,40 @@ function remember(url, value) {
   cache.set(url, value);
 }
 
+// A PICTURE'S LEVEL IS NORMALISED, NOT ITS COLOUR. The image behind the glass
+// comes from album art, and sleeves are all over the place: a white cover made
+// the ground (and everything seen through it) a pale wash, a near-black one a
+// hole. The rule is a band, not a constant — the mood must still read as the
+// sleeve's — so what sits between LOW and HIGH is left exactly as it is, a
+// brighter picture is pulled down toward HIGH, a darker one lifted toward LOW,
+// and both ends clamp before the art stops being itself.
+//
+// Measured on sRGB luma (0.2126 R + 0.7152 G + 0.0722 B, 0..255):
+//   230 → 150 (×0.65, the floor), 180 → 120 (×0.67), 100 → 100 (untouched),
+//   40 → 60 (×1.5, the cap), 10 → 15 (×1.5).  A 20 % grey keeps ×1, a white
+//   sleeve lands at 150 and a black one at 15: a 10:1 span where the raw art
+//   was 25:1, so the ambiance still varies while nothing blows out.
+export const LEVEL_LOW = 64;
+export const LEVEL_HIGH = 120;
+export const LEVEL_MIN = 0.65;
+export const LEVEL_MAX = 1.5;
+
+export function levelFactor(rgb) {
+  if (!rgb || rgb.length < 3) return 1;
+  const l = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  if (!(l > 0)) return LEVEL_MAX;
+  if (l < LEVEL_LOW) return Math.min(LEVEL_MAX, Math.max(1, LEVEL_LOW / l));
+  if (l > LEVEL_HIGH) return Math.min(1, Math.max(LEVEL_MIN, LEVEL_HIGH / l));
+  return 1;
+}
+
 // The colour of an image ALREADY loaded in the page: drawn once into a 24 px
 // canvas and scored for the most saturated, mid-bright pixel (a basically
-// grayscale sleeve gets its average instead). `null` when the canvas cannot
-// read it at all — a cross-origin image without CORS, or no DOM.
-export function dominantOfImage(img) {
+// grayscale sleeve gets its average instead), plus that average's own level as
+// `factor` — one draw, two answers, because the backdrop needs both. `null`
+// when the canvas cannot read it at all — a cross-origin image without CORS, or
+// no DOM.
+export function sampleOfImage(img) {
   if (typeof document === "undefined" || !img) return null;
   try {
     const size = 24;
@@ -58,11 +87,20 @@ export function dominantOfImage(img) {
         best = [cr, cg, cb];
       }
     }
+    if (!n) return { color: FALLBACK, factor: 1 };
+    const average = [r / n, g / n, b / n].map(Math.round);
     // If the image is basically grayscale, use the average instead.
-    return bestScore > 0.15 && n ? best : n ? [r / n, g / n, b / n].map(Math.round) : FALLBACK;
+    return {
+      color: bestScore > 0.15 ? best : average,
+      factor: levelFactor(average),
+    };
   } catch {
     return null;
   }
+}
+
+export function dominantOfImage(img) {
+  return sampleOfImage(img)?.color ?? null;
 }
 
 export function dominantColor(url) {
