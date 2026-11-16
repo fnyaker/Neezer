@@ -557,7 +557,11 @@ pub fn mute_current_artist(state: &Entity<AppState>, cx: &mut App) {
         return;
     };
     runtime.spawn(async move {
-        let _ = api.mute_artist(&provider, &id).await;
+        if let Err(error) = api.mute_artist(&provider, &id).await {
+            // The artist was the person's gesture: a refusal is worth a line,
+            // not a toast that would fight the confirmation one.
+            tracing::debug!(%error, "l'artiste n'a pas pu être écarté");
+        }
     });
     state.update(cx, |state, cx| {
         state
@@ -587,7 +591,9 @@ fn pump(state: &mut AppState, cx: &mut Context<AppState>) {
         });
         return;
     }
-    let context = context.expect("a station has a context");
+    let Some(context) = context else {
+        return;
+    };
     let flow = context.kind == "flow";
     // A Flow queue whose id nobody holds (restored from an older build) is not
     // ours to choose for: adopting it would overwrite the person's session.
@@ -1115,7 +1121,9 @@ pub fn set_energy(state: &Entity<AppState>, energy: Option<f64>, cx: &mut App) {
         true
     });
     runtime.spawn(async move {
-        let _ = api.set_flow_energy(energy).await;
+        if let Err(error) = api.set_flow_energy(energy).await {
+            tracing::debug!(%error, "l'énergie du Flow n'a pas été enregistrée sur le serveur");
+        }
     });
     if changed {
         retune(state, cx);

@@ -703,7 +703,6 @@ fn day_row<V: Render>(
     seconds: u64,
     cx: &mut Context<V>,
 ) -> AnyElement {
-    let _ = seconds;
     let mut meta = div()
         .flex()
         .items_center()

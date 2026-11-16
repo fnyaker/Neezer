@@ -1078,11 +1078,10 @@ fn release_tile<V: Render>(
         .p(rems(0.5))
         .cursor_pointer()
         .hover(|style| style.bg(theme::chrome(cx)))
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |_, _, _, cx| {
             if !id.is_empty() {
                 open(Route::Album { id: id.clone() }, cx);
             }
-            let _ = this;
         }))
         .child(
             div()
