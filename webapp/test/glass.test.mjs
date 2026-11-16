@@ -308,14 +308,23 @@ test("éco : la lumière s'éteint avec le flou, aucun liseré ne survit", () =>
 });
 
 test("le verre arrive au lieu d'apparaître — et pas sous `prefers-reduced-motion`", () => {
-  // `@starting-style` is the arrival (a clear pane that walks to its tint in
-  // 160 ms), not a keyframe animation: nothing re-runs on a re-render, no timer.
+  // `@starting-style` is the arrival (a clear pane that walks to its tint), not
+  // a keyframe animation: nothing re-runs on a re-render, no timer. The walk is
+  // the MOTION tokens now (T0, docs/agents/transitions.md): it was a literal
+  // `160ms ease-out`, and the same two tokens the transitions use carry it —
+  // one table of durations in the app, and eco's guard reaches it too.
   const at = APP_CSS.indexOf("@starting-style {");
   assert.ok(at > 0, "@starting-style manque : le matériau apparaît d'un coup");
   const guard = APP_CSS.lastIndexOf("@media (prefers-reduced-motion: no-preference)", at);
   assert.ok(guard > 0, "l'arrivée du verre n'est pas derrière prefers-reduced-motion");
   assert.match(APP_CSS.slice(at, at + 400), /background-color:\s*transparent/);
-  assert.match(APP_CSS.slice(guard, at), /transition:[^;]*background-color\s+160ms/);
+  assert.match(
+    APP_CSS.slice(guard, at),
+    /transition:[^;]*background-color\s+var\(--dur-base\)\s+var\(--ease-enter\)/,
+  );
+  // …and those tokens really are a duration and a curve, not a comment.
+  assert.match(APP_CSS, /--dur-base:\s*\d+ms;/);
+  assert.match(APP_CSS, /--ease-enter:\s*cubic-bezier\(/);
 });
 
 test("la lentille reste dehors : aucun déplacement de fond dans l'app", () => {
