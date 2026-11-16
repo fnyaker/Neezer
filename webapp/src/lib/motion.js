@@ -447,8 +447,8 @@ export function createMotion({ eco = null, reduceMq = null } = {}) {
         };
       }
       return run(direction, {
-        enter: params.duration ?? DUR.base,
-        exit: params.out ?? DUR.fast,
+        enter: params.duration,
+        exit: params.out,
         css: (t, u) => `opacity: ${t}; transform: scale(${1 - u * (1 - SCALE.screen)})`,
         reduced: (t) => `opacity: ${t}`,
       });
