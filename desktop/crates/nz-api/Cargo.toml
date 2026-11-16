@@ -17,3 +17,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+directories = { workspace = true }
+nz-model = { path = "../nz-model" }
+
+[dev-dependencies]
+# `test-util` gives the lane tests a virtual clock (`start_paused`), so the
+# 250 ms / 1 s quiet periods are measured exactly instead of slept through.
+tokio = { workspace = true, features = ["test-util"] }
+nz-model = { path = "../nz-model" }

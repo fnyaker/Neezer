@@ -4430,6 +4430,8 @@ dependencies = [
 name = "nz-api"
 version = "0.1.0"
 dependencies = [
+ "directories",
+ "nz-model",
  "reqwest",
  "serde",
  "serde_json",

@@ -6,7 +6,7 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-16): D0, D1, D4, D5, M1 and V1 delivered; the rest planned.** This note is the plan
+**Status (2026-11-16): D0, D1, D2, D4, D5, M1 and V1 delivered; the rest planned.** This note is the plan
 the coding lots follow, in order. Each lot, when it lands, replaces its plan paragraph by what was
 learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -493,45 +493,80 @@ Waves that can run in parallel (disjoint files):
   TYPES, never values. `perf_api.py` needs its project venv (`pip install -e .`); the bench itself is
   a throwaway SQLite in a temp directory and never touches a real install.
 
-### D2 — `nz-api`
+### D2 — `nz-api` (delivered 2026-11-16)
 
-- **Goal**: the only HTTP client: session, lanes, errors, every endpoint as a typed function.
-- **Files**: `desktop/crates/nz-api/src/{lib,client,lanes,error,session,cache_trait,endpoints/*}.rs`,
-  `tests/` against `perf_api.py --serve` (a `#[ignore]`-free integration test that starts it, like
-  D1's script; CI has Python).
-- **API**:
-  ```rust
-  pub enum Lane { User, Prefetch, Bulk }
-  pub struct Api { /* base url, reqwest client with cookie jar, gates, cache: Arc<dyn ResponseCache> */ }
-  pub struct Fresh<T> { pub value: T, pub from_cache: bool }
-  pub enum ApiError { Offline, Unauthorized, RemoteEnded { restored: Option<serde_json::Value> },
-      Provider { status: u16, code: String, message: String, retry_in: u32 },
-      NotReady { retry_after: u32 }, Busy { retry_after: u32 },
-      Http { status: u16, message: String, code: Option<String> }, Decode(String) }
-  pub trait ResponseCache: Send + Sync {          // implemented by nz-cache (D3)
-      fn get(&self, owner: &str, path: &str) -> Option<String>;
-      fn put(&self, owner: &str, path: &str, body: &str);
-      fn delete(&self, owner: &str, path: &str);
-  }
-  impl Api {
-      pub async fn get<T: DeserializeOwned>(&self, lane: Lane, path: &str) -> Result<Fresh<T>, ApiError>;
-      pub async fn send<B: Serialize, T: DeserializeOwned>(&self, lane: Lane, method: Method, path: &str, body: Option<&B>) -> Result<Option<T>, ApiError>;
-      pub async fn stream(&self, lane: Lane, id: &TrackId, q: Quality, start: Option<f64>, from_byte: Option<u64>) -> Result<StreamResponse, ApiError>;
-      pub async fn ready(&self, id: &TrackId, q: Quality) -> Result<StreamReady, ApiError>;
-      pub fn set_bulk_cap(&self, bytes_per_s: Option<u64>);
-      pub fn online(&self) -> watch::Receiver<bool>;
-  }
-  ```
-  plus one function per SPA `api.*` method in `endpoints/` (same names in snake_case: `login`,
-  `me`, `search`, `artist`, `album`, `playlist`, `report_listen`, `save_podcast_progress`, …).
-- **Acceptance** (tests, counted not timed): with 8 Bulk requests queued and one User request
-  issued, the User request is sent first (assert order on a local test server); with a Prefetch
-  queued while a User request is in flight, the Prefetch's start is after the User's end + 250 ms;
-  a background `503 Retry-After: 2` is retried exactly once after ≥ 2 s; a GET while offline
-  returns the cache with 0 network attempts; a POST is never retried; `X-NS-Error` gives
-  `Provider` after exactly 1 attempt; login + me + 401 round trip against perf_api.
-- **Pitfalls**: never set `Origin`/`Sec-Fetch-Site`; `Accept-Encoding: identity` on streams (a
-  gzip-encoded body has no usable byte offsets); the cookie jar is per server URL.
+- **The rule**: rule 1 is enforced in ONE place, by SLOTS and a QUIET CLOCK, not by sleeps sprinkled
+  at the call sites. A request declares a lane; `Gates::acquire` admits it or parks it, and the
+  guard releases the slot when the answer is read. Three waits, each measured rather than assumed:
+  User never waits (cap 6 in flight), Prefetch starts 250 ms after the last User request ENDED,
+  Bulk 1 s after it — and a Bulk body is additionally paced by a token bucket at 25 % of the
+  playing stream's throughput, floor 64 kB/s. A background request the server refuses
+  (`503` + `Retry-After`) repeats ONCE, after exactly that delay; a foreground GET gets the SPA's
+  three tries and `min(400·2ⁿ, 6000) ms + jitter`; a mutation gets none, ever.
+- **Why the quiet clock starts at construction**, not at "no traffic ever": the acceptance test is
+  "eight Bulk queued, one User issued → the User goes first", and that must be a fact, not a race.
+  An app that only downloads (no tap yet) pays 1 s once, at start; a prefetched next track waits
+  250 ms it would have spent decoding the current one anyway.
+- **Why the cache is keyed by owner AND path**: two accounts share one disk. `is_cacheable` is
+  `lib/apicache.js` ported path for path (10 prefixes, the live-path exclusions, the one
+  `track/…/credits` regex), because a desktop that caches a different set either paints a stale
+  admin screen or an empty playlist on a dead link. **One deliberate difference from the SPA**: a
+  cache hit while the link is known dead does NOT revalidate in the background (the SPA's
+  `refreshInBackground`) — that is one doomed request per screen open; recovery is the app's single
+  reachability probe, which is also what makes "0 network attempts" countable (measured below).
+- **What it is now**: `crates/nz-api` with `client` (`Api`, `ApiBuilder`, `Fresh`, `StreamResponse`),
+  `lanes` (`Lane`, `Gates`, constants, `bulk_cap_from_stream`), `error` (`ApiError`, `cause_fr`,
+  `backoff`), `session` (`SessionJar`: a `CookieStore` mirrored to
+  `$XDG_STATE_HOME/neezer/session.json`, mode 0600, one entry per server origin, `Debug` that prints
+  a count and never a value) and `cache_trait` (`ResponseCache`, `NoCache`, `is_cacheable`).
+  `endpoints/` holds **248 typed functions** in thirteen modules (`auth`, `accounts`, `discovery`,
+  `entities`, `library`, `playlists`, `podcasts`, `player`, `settings`, `admin`, `onboarding`,
+  `remote`, `media`): of the SPA's 251 `api.*` names, every one but three — `upload` and
+  `genreExtractorUpload` (multipart, see the pitfalls) and `streamReady`, which is `Api::ready`
+  because that is the signature this lot pins. Same routes, same bodies, same query encoding
+  (`encodeURIComponent`, byte for byte: an accent in a style name must land on the same route).
+  `StreamResponse::chunk()` hands out `Vec<u8>` per chunk: reqwest 0.13 does not re-export
+  `bytes`, and a lot may not add a version the workspace does not pin — the memcpy is the price.
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p nz-api`, **31 tests, 0 failed**, 0.07 s
+  for the 21 unit tests, `tests/lanes.rs` **9 tests in 3.1 s**, `tests/bench.rs` **1 test in 5.5 s**
+  including the server's startup):
+  - **order**: with eight Bulk requests queued and one User request issued, the server's first
+    arrival is the User one (`/api/user` index 0 of 9), the tap answered in **< 400 ms** (asserted),
+    every background request carried `X-NS-Background: 1`, and no two Bulk requests overlapped.
+  - **250 ms**: a Prefetch queued during a 200 ms User request arrives **≥ 250 ms after the answer
+    was written** and **< 600 ms** (both asserted on the server's own timestamps).
+  - **Retry-After**: a background `503 Retry-After: 2` produced **exactly 2 arrivals, 2.0 s apart**
+    (asserted `≥ 2 s`, total `< 5 s`); a `POST` answered 503 was sent **once**; a `503` +
+    `X-NS-Error: deezer-unreachable` was attempted **once** and surfaced `Provider { retry_in: 12 }`.
+  - **cache**: a cacheable GET while the client knew the link was dead answered `from_cache: true`
+    with **0 requests** reaching the server; the same request started *online* and refused (dead
+    port) returns `Offline` in **< 400 ms** — one attempt, no backoff.
+  - **real server**: `login` → `me` → `my_playlists` (**2** playlists, the seed) → `/version` →
+    `stream/<id>/ready` (`ready: false`, nothing archived) → a second cookie-less client `401` →
+    `logout` → `me` `401`. That whole round trip is 5.5 s, the bench's own boot included.
+- **Pitfalls found by building**:
+  - **`reqwest::Method` cannot be used in a `match` pattern** (`Method::GET` is a const of a type
+    without structural equality): the retry policy compares with `==`, not `match (lane, method)`.
+  - **`Notify::notified()` is lazy.** A future created but not polled has registered nothing, so a
+    release landing between the state check and the await is lost and the waiter stalls until its
+    deadline (or for ever on the User lane). The gates `pin!` + `enable()` it BEFORE reading the
+    state; that is also why the 250 ms/1 s tests are exact instead of flaky.
+  - **`tokio`'s `start_paused` needs the `test-util` feature**, and the workspace's tokio does not
+    enable it. A lot may not edit `[workspace.dependencies]` (D0 owns it), so the feature comes from
+    `nz-api`'s own `[dev-dependencies]`: the quiet periods are measured on a virtual clock, not
+    slept through.
+  - **A lane slot covers the request, not the body.** The stream releases it once headers arrive;
+    a body is bounded by the player's read-ahead cap and, for Bulk, by the bucket — holding a slot
+    for a 60 s FLAC would starve the six User slots for no reason.
+  - **The `test` job's `cargo test` runs before its Python install.** The bench test starts
+    `perf_api.py` itself, so the workflow's "Set up Python" + `pip install -e .` steps moved ABOVE
+    "Test the workspace" (the file is outside this lot; T3 needs the same for its worker protocol).
+  - **The two multipart routes are absent on purpose**: `POST /api/upload` and the genre extractor's
+    model upload need `reqwest`'s `multipart` feature, which is not in `[workspace.dependencies]`.
+    They land with the lots that own their screens (D14b, D16), together with that pin.
+  - `Service Unavailable` from `_admit_by_priority` and the stream's `{"queued": true}` are the same
+    status: the difference is the lane. A User-lane 503 is an ordinary `Http { 503 }` the GET may
+    retry; a background one becomes `Busy { retry_after }` and is repeated once only.
 
 ### D3 — `nz-cache`
 
