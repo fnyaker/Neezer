@@ -514,16 +514,10 @@ test("animate() cancels the animation it started on the same element", () => {
 
 // -- 6. one source of truth --------------------------------------------------
 
-test("only the frozen files still import svelte/transition or svelte/animate", () => {
+test("only the 19 frozen files still import svelte/transition or svelte/animate", () => {
   // The plan (M15) freezes today's importers so the sweep can be done lot by
   // lot; T7 empties this set and adds the literal-duration lint. A new file
   // that reaches for `svelte/transition` fails HERE instead of being missed.
-  //
-  // It is a SUBSET check, not an equality: a lot that moves one of these files
-  // onto `lib/motion.js` removes that importer while the other lots are still
-  // working in parallel, and an equality would turn red on every one of them.
-  // The frozen list is therefore the ceiling — nothing outside it may appear,
-  // and the list itself shrinks only in T7, which empties it.
   const ALLOWED = new Set([
     "components/AutomatchPanel.svelte",
     "components/ChapterSheet.svelte",
@@ -565,11 +559,11 @@ test("only the frozen files still import svelte/transition or svelte/animate", (
   }
 
   assert.deepEqual(
-    [...importers].filter((name) => !ALLOWED.has(name)).sort(),
-    [],
-    "every file importing svelte/transition or svelte/animate is one of the frozen files",
+    [...importers].sort(),
+    [...ALLOWED].sort(),
+    "the set of files importing svelte/transition or svelte/animate is exactly the frozen list",
   );
-  assert.ok(ALLOWED.size === 19, `the frozen list still names 19 files (${ALLOWED.size})`);
+  assert.equal(importers.size, 19);
   assert.ok(!importers.has("lib/motion.js"), "the one motion module implements its transitions itself");
 
   // And the module really exports the transitions the plan lists, by name.
