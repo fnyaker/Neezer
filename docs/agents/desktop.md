@@ -1351,15 +1351,43 @@ Waves that can run in parallel (disjoint files):
   - **mouse**: the Apparence tab, the Mono switch and the « Normale » chip are
     hit-tested at 1280×800 and move the same state a key would (the route changes
     with `replace`, `values.mono` flips, the level is saved).
-  - **RSS**: **+228 KB** for the ten user sections on the second pass with a
-    **4 000-row queue** in place (`VmRSS` 57 936 → 58 164 KB; two runs 228 / 236 KB),
-    the window's and the first pass's cost excluded — the page holds no per-row data, so
-    the worst case stays the queue the shell owns. The first pass through the sections
-    reads 1 016 KB alone and 5 960 KB beside the rest of the suite: that is the glyph
-    cache being filled with strings nobody had shaped yet, which is why the test warms
-    up once and measures the structures, never the font cache.
+  - **Memory**: **21 840 B** retained per tour of the ten user sections with a
+    **4 000-row queue** in place (bytes allocated minus bytes freed on the test's
+    own thread, `app/src/testmem.rs`'s counting allocator; the same byte count on
+    **30 runs out of 30** under an 8-process load, 261 560 B for the first tour
+    through caches the warm-up had not built yet, budget **64 KiB**). The page
+    holds no per-row data, so the worst case stays the queue the shell owns. Of
+    those 21 840 B, 2 184 B per `Screen` is retention the page does not own: the
+    `drain` task GPUI keeps for the screen's reply channel outlives it because
+    `events::Sender` sets no `closed` flag when dropped (a separate probe read
+    520 B per `Screen::new` + drop with no window). Small, linear per section
+    switch, and NOT this lot's file — reported, not fixed here.
+  - **Why not RSS anymore**: `VmRSS` is the process's, and the suite runs its
+    121 tests in parallel threads of one process: the same page read **+8 404 KB**
+    and **+2 604 KB** in CI under load (PR #236, two red runs), and a neighbour's
+    480 MB buffer turned one local run into **+480 944 KB**. A budget there is a
+    budget on the scheduler and on glibc's arenas, not on the page. Bytes counted
+    on one thread cannot move with a neighbour, so the budget got **32×** tighter
+    and still fails on a real leak (a deliberate 4 MiB `mem::forget` in a section
+    read **8 410 448 B** and failed at once).
   - **requests**: the table above is asserted by a test; a revisit asks nothing.
 - **Pitfalls found by building**:
+  - **A memory guard that reads `VmRSS` guards the test scheduler, not the
+    screen.** One process runs every test of the crate in parallel threads, and
+    RSS also moves with glibc's arenas and with any neighbour's big buffer: the
+    same ten sections that keep 21 840 B read +228 KB alone, +2 604 KB and
+    +8 404 KB in CI (PR #236), +480 944 KB beside one test that allocates
+    480 MB. Measure **bytes retained by the measured thread**: a
+    `#[global_allocator]` that adds `layout.size()` to a const-init
+    `thread_local!` on alloc and to another on dealloc (`app/src/testmem.rs`, a
+    `#[cfg(test)]` module and a `#[cfg(test)]` `#[global_allocator]`, so the
+    shipped binary links the system allocator and its size and first frame are
+    unchanged — 45 979 912 B and the same `.text` before and after), then
+    `allocated - freed` between two readings, the minimum of five tours. Two
+    const-init `Cell`s mean the allocator itself never allocates, so it cannot
+    recurse, and a neighbour thread's bytes are invisible. Assert the **minimum**
+    of several tours (a page that keeps something per row adds it to every tour,
+    so the minimum still fails) and write the measured number next to the budget.
   - **`.id()` returns `Stateful<Div>`**, not `Div`, and edition 2024 refuses `use<>`
     on a generic `impl IntoElement` return: the shared builders return
     `Stateful<Div>` (or `AnyElement` when generic).
