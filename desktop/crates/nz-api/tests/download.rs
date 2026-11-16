@@ -141,9 +141,40 @@ impl Bench {
 
 impl Drop for Bench {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        stop(&mut self.child);
     }
+}
+
+/// Stop the bench the way it expects: SIGTERM first, SIGKILL only as a last
+/// resort.
+///
+/// `tools/perf_api.py` removes its throwaway library (5 MB for a small seed,
+/// 2.3 GB for the 20 000-track one) when it is asked to stop, and `/tmp` is a
+/// tmpfs on most machines: `Child::kill()` is SIGKILL, which cannot be caught
+/// and left that library to the next launch's sweep. Measured 2026-11-17:
+/// 20 of 20 SIGTERM stops left no directory at all.
+fn stop(child: &mut Child) {
+    const SIGTERM: i32 = 15;
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    // SAFETY: `kill` is handed the pid of a child this struct owns and the
+    // platform's own SIGTERM number, and nothing else.
+    unsafe {
+        kill(child.id() as i32, SIGTERM);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn temporary(name: &str) -> PathBuf {

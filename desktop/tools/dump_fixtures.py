@@ -111,7 +111,17 @@ class Bench:
         return self
 
     def _timeout(self):
-        if self.process is not None:
+        """A start that hangs: SIGTERM first (it removes its library on it, and
+        /tmp is RAM), and insist only after a wait."""
+        if self.process is None or self.process.poll() is not None:
+            return
+        self.process.terminate()
+        insist = threading.Timer(30, self._kill_if_running)
+        insist.daemon = True
+        insist.start()
+
+    def _kill_if_running(self):
+        if self.process is not None and self.process.poll() is None:
             self.process.kill()
 
     def stop(self):
@@ -122,7 +132,7 @@ class Bench:
                     file=sys.stderr,
                 )
             return
-        self.process.terminate()
+        self.process.terminate()  # SIGTERM: perf_api.py removes its library on it
         try:
             self.process.wait(timeout=20)
         except subprocess.TimeoutExpired:
