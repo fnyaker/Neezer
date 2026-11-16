@@ -2039,8 +2039,11 @@ mod journey {
         cx.simulate_input("kaya");
         cx.cx.dispatcher.advance_clock(Duration::from_millis(200));
         cx.cx.run_until_parked();
-        stub::until(&runtime, cx, "the search's answer", |_| {
-            stub.count("/api/search") == 1
+        // The ROWS, not the request: a count on the stub says the question left,
+        // and `Entrée`/`Menu` below act on the answer
+        // (`docs/agents/desktop.md`, D12 *Pitfalls*).
+        stub::until(&runtime, cx, "the search's results", |cx| {
+            view.read(cx).list.len() > 0
         });
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
