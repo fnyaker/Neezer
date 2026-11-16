@@ -1327,9 +1327,12 @@ Waves that can run in parallel (disjoint files):
   - the screen was LOOKED AT: Xvfb :96 captures of the WINDOW (never the root: Xvfb keeps the pixels
     of a destroyed window, and two app instances overlapped on the first attempts) at **2 560 ×
     1 600** — the bar row, the oscilloscope, and the settings sheet over it — and at **1 280 × 800**
-    (the row with the title card and the control bar), kept in
-    [`screenshots/d10b/`](screenshots/d10b/). The 420 px panel was opened on the run (the layout
-    assertion covers the three widths); its capture did not survive the harness.
+    (the row with the title card and the control bar) — kept as
+    [barres 2 560](../desktop/d10b/barres-2560x1600.png),
+    [barres 1 280](../desktop/d10b/barres-1280x800.png),
+    [oscilloscope 2 560](../desktop/d10b/oscilloscope-2560x1600.png) and
+    [la feuille](../desktop/d10b/reglages-2560x1600.png). The 420 px panel was opened on the run
+    (the layout assertion covers the three widths); its capture did not survive the harness.
 - **The environment limit, said plainly**: this machine's Xvfb has no DRI3, so Mesa cannot present a
   Vulkan surface ("No DRI3 support detected - required for presentation") and GPUI paints through a
   software path. **The 240 Hz / ≥ 230 fps criterion cannot be demonstrated here** — the fps above is
