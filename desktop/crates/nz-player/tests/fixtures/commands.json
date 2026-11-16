@@ -1,0 +1,488 @@
+{
+  "source": "webapp/src/lib/remote/commands.js#commandFor (+ controller.js#watchSeek for seek)",
+  "how": "node --import ./register.mjs gen.mjs; register.mjs registers a module hook that stubs ONLY webapp/src/lib/remote/settings.js (it imports svelte/store and the whole app), so commands.js and trackkey.js run unmodified. base commit ebfa7c6; commands.js blob 59c5fc2bf951c3bed17ce117196ed0261453ca73, trackkey.js blob 0a5bec7be9b120751f9c7b9ba88870a804802a33.",
+  "slim_track": {
+    "title": "Balancing the Dark",
+    "duration": 312,
+    "explicit": false,
+    "local": false,
+    "podcast": false,
+    "gain": -7.25,
+    "unavailable": false,
+    "archived": true,
+    "published": "2026-02-03",
+    "cover": "/api/cover/3135556",
+    "display_artist": "Kaya Project",
+    "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+    "artist": {
+      "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+      "deezer_id": "1188741",
+      "name": "Kaya Project"
+    },
+    "artists": [
+      {
+        "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+        "deezer_id": "1188741",
+        "name": "Kaya Project",
+        "role": "Main"
+      },
+      {
+        "id": "1c2d3e4f-5061-5273-8495-b6c7d8e9f001",
+        "deezer_id": "1188742",
+        "name": "Suzanne Sterling",
+        "role": "Featured"
+      }
+    ],
+    "album": {
+      "id": "2d3e4f50-6172-5384-95a6-c7d8e9f00112",
+      "deezer_id": "302127",
+      "title": "Songs from the Inside",
+      "cover": "/api/cover/302127"
+    }
+  },
+  "preview_track": {
+    "title": "Ashfall",
+    "duration": 245,
+    "id": "21408a08-d175-53a4-a02d-733a7bc83812",
+    "deezer_id": "3000001",
+    "artist": {
+      "name": "Nova"
+    }
+  },
+  "cases": [
+    {
+      "name": "play",
+      "json": {
+        "op": "play",
+        "args": {}
+      }
+    },
+    {
+      "name": "pause",
+      "json": {
+        "op": "pause",
+        "args": {}
+      }
+    },
+    {
+      "name": "toggle",
+      "json": {
+        "op": "toggle",
+        "args": {}
+      }
+    },
+    {
+      "name": "next",
+      "json": {
+        "op": "next",
+        "args": {}
+      }
+    },
+    {
+      "name": "prev",
+      "json": {
+        "op": "prev",
+        "args": {}
+      }
+    },
+    {
+      "name": "jump",
+      "json": {
+        "op": "jump",
+        "args": {
+          "i": 2,
+          "id": "5e6f7a8b-9c0d-5e1f-a2b3-c4d5e6f70819"
+        }
+      }
+    },
+    {
+      "name": "remove_at",
+      "json": {
+        "op": "remove",
+        "args": {
+          "i": 1,
+          "id": "21408a08-d175-53a4-a02d-733a7bc83812"
+        }
+      }
+    },
+    {
+      "name": "move",
+      "json": {
+        "op": "move",
+        "args": {
+          "i": 0,
+          "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+          "to": 3
+        }
+      }
+    },
+    {
+      "name": "clear_upcoming",
+      "json": {
+        "op": "clear",
+        "args": {}
+      }
+    },
+    {
+      "name": "set_volume",
+      "json": {
+        "op": "volume",
+        "args": {
+          "v": 0.42
+        }
+      }
+    },
+    {
+      "name": "toggle_mute",
+      "json": {
+        "op": "mute",
+        "args": {}
+      }
+    },
+    {
+      "name": "toggle_shuffle",
+      "json": {
+        "op": "shuffle",
+        "args": {}
+      }
+    },
+    {
+      "name": "cycle_repeat",
+      "json": {
+        "op": "repeat",
+        "args": {}
+      }
+    },
+    {
+      "name": "play_queue",
+      "json": {
+        "op": "play_queue",
+        "args": {
+          "tracks": [
+            {
+              "title": "Balancing the Dark",
+              "duration": 312,
+              "explicit": false,
+              "local": false,
+              "podcast": false,
+              "gain": -7.25,
+              "unavailable": false,
+              "archived": true,
+              "published": "2026-02-03",
+              "cover": "/api/cover/3135556",
+              "display_artist": "Kaya Project",
+              "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+              "artist": {
+                "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                "deezer_id": "1188741",
+                "name": "Kaya Project"
+              },
+              "artists": [
+                {
+                  "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                  "deezer_id": "1188741",
+                  "name": "Kaya Project",
+                  "role": "Main"
+                },
+                {
+                  "id": "1c2d3e4f-5061-5273-8495-b6c7d8e9f001",
+                  "deezer_id": "1188742",
+                  "name": "Suzanne Sterling",
+                  "role": "Featured"
+                }
+              ],
+              "album": {
+                "id": "2d3e4f50-6172-5384-95a6-c7d8e9f00112",
+                "deezer_id": "302127",
+                "title": "Songs from the Inside",
+                "cover": "/api/cover/302127"
+              }
+            },
+            {
+              "title": "Ashfall",
+              "duration": 245,
+              "id": "21408a08-d175-53a4-a02d-733a7bc83812",
+              "deezer_id": "3000001",
+              "artist": {
+                "name": "Nova"
+              }
+            },
+            {
+              "title": "Third",
+              "duration": 200,
+              "id": "5e6f7a8b-9c0d-5e1f-a2b3-c4d5e6f70819"
+            },
+            {
+              "title": "Fourth",
+              "duration": 210,
+              "id": "6f7a8b9c-0d1e-5f20-b3c4-d5e6f7081920"
+            }
+          ],
+          "start": 1,
+          "context": {
+            "kind": "flow",
+            "id": "0123456789abcdef"
+          }
+        }
+      }
+    },
+    {
+      "name": "play_queue_no_context",
+      "json": {
+        "op": "play_queue",
+        "args": {
+          "tracks": [
+            {
+              "title": "Balancing the Dark",
+              "duration": 312,
+              "explicit": false,
+              "local": false,
+              "podcast": false,
+              "gain": -7.25,
+              "unavailable": false,
+              "archived": true,
+              "published": "2026-02-03",
+              "cover": "/api/cover/3135556",
+              "display_artist": "Kaya Project",
+              "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+              "artist": {
+                "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                "deezer_id": "1188741",
+                "name": "Kaya Project"
+              },
+              "artists": [
+                {
+                  "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                  "deezer_id": "1188741",
+                  "name": "Kaya Project",
+                  "role": "Main"
+                },
+                {
+                  "id": "1c2d3e4f-5061-5273-8495-b6c7d8e9f001",
+                  "deezer_id": "1188742",
+                  "name": "Suzanne Sterling",
+                  "role": "Featured"
+                }
+              ],
+              "album": {
+                "id": "2d3e4f50-6172-5384-95a6-c7d8e9f00112",
+                "deezer_id": "302127",
+                "title": "Songs from the Inside",
+                "cover": "/api/cover/302127"
+              }
+            },
+            {
+              "title": "Ashfall",
+              "duration": 245,
+              "id": "21408a08-d175-53a4-a02d-733a7bc83812",
+              "deezer_id": "3000001",
+              "artist": {
+                "name": "Nova"
+              }
+            },
+            {
+              "title": "Third",
+              "duration": 200,
+              "id": "5e6f7a8b-9c0d-5e1f-a2b3-c4d5e6f70819"
+            },
+            {
+              "title": "Fourth",
+              "duration": 210,
+              "id": "6f7a8b9c-0d1e-5f20-b3c4-d5e6f7081920"
+            }
+          ],
+          "start": 0,
+          "context": null
+        }
+      }
+    },
+    {
+      "name": "shuffle_play",
+      "json": {
+        "op": "shuffle_play",
+        "args": {
+          "tracks": [
+            {
+              "title": "Balancing the Dark",
+              "duration": 312,
+              "explicit": false,
+              "local": false,
+              "podcast": false,
+              "gain": -7.25,
+              "unavailable": false,
+              "archived": true,
+              "published": "2026-02-03",
+              "cover": "/api/cover/3135556",
+              "display_artist": "Kaya Project",
+              "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+              "artist": {
+                "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                "deezer_id": "1188741",
+                "name": "Kaya Project"
+              },
+              "artists": [
+                {
+                  "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                  "deezer_id": "1188741",
+                  "name": "Kaya Project",
+                  "role": "Main"
+                },
+                {
+                  "id": "1c2d3e4f-5061-5273-8495-b6c7d8e9f001",
+                  "deezer_id": "1188742",
+                  "name": "Suzanne Sterling",
+                  "role": "Featured"
+                }
+              ],
+              "album": {
+                "id": "2d3e4f50-6172-5384-95a6-c7d8e9f00112",
+                "deezer_id": "302127",
+                "title": "Songs from the Inside",
+                "cover": "/api/cover/302127"
+              }
+            },
+            {
+              "title": "Ashfall",
+              "duration": 245,
+              "id": "21408a08-d175-53a4-a02d-733a7bc83812",
+              "deezer_id": "3000001",
+              "artist": {
+                "name": "Nova"
+              }
+            },
+            {
+              "title": "Third",
+              "duration": 200,
+              "id": "5e6f7a8b-9c0d-5e1f-a2b3-c4d5e6f70819"
+            },
+            {
+              "title": "Fourth",
+              "duration": 210,
+              "id": "6f7a8b9c-0d1e-5f20-b3c4-d5e6f7081920"
+            }
+          ],
+          "context": {
+            "kind": "flow",
+            "id": "0123456789abcdef"
+          }
+        }
+      }
+    },
+    {
+      "name": "add_to_queue",
+      "json": {
+        "op": "add",
+        "args": {
+          "tracks": [
+            {
+              "title": "Balancing the Dark",
+              "duration": 312,
+              "explicit": false,
+              "local": false,
+              "podcast": false,
+              "gain": -7.25,
+              "unavailable": false,
+              "archived": true,
+              "published": "2026-02-03",
+              "cover": "/api/cover/3135556",
+              "display_artist": "Kaya Project",
+              "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+              "artist": {
+                "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                "deezer_id": "1188741",
+                "name": "Kaya Project"
+              },
+              "artists": [
+                {
+                  "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                  "deezer_id": "1188741",
+                  "name": "Kaya Project",
+                  "role": "Main"
+                },
+                {
+                  "id": "1c2d3e4f-5061-5273-8495-b6c7d8e9f001",
+                  "deezer_id": "1188742",
+                  "name": "Suzanne Sterling",
+                  "role": "Featured"
+                }
+              ],
+              "album": {
+                "id": "2d3e4f50-6172-5384-95a6-c7d8e9f00112",
+                "deezer_id": "302127",
+                "title": "Songs from the Inside",
+                "cover": "/api/cover/302127"
+              }
+            },
+            {
+              "title": "Ashfall",
+              "duration": 245,
+              "id": "21408a08-d175-53a4-a02d-733a7bc83812",
+              "deezer_id": "3000001",
+              "artist": {
+                "name": "Nova"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "play_next",
+      "json": {
+        "op": "play_next",
+        "args": {
+          "tracks": [
+            {
+              "title": "Balancing the Dark",
+              "duration": 312,
+              "explicit": false,
+              "local": false,
+              "podcast": false,
+              "gain": -7.25,
+              "unavailable": false,
+              "archived": true,
+              "published": "2026-02-03",
+              "cover": "/api/cover/3135556",
+              "display_artist": "Kaya Project",
+              "id": "3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+              "artist": {
+                "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                "deezer_id": "1188741",
+                "name": "Kaya Project"
+              },
+              "artists": [
+                {
+                  "id": "0b1c2d3e-4f50-5172-8394-a5b6c7d8e9f0",
+                  "deezer_id": "1188741",
+                  "name": "Kaya Project",
+                  "role": "Main"
+                },
+                {
+                  "id": "1c2d3e4f-5061-5273-8495-b6c7d8e9f001",
+                  "deezer_id": "1188742",
+                  "name": "Suzanne Sterling",
+                  "role": "Featured"
+                }
+              ],
+              "album": {
+                "id": "2d3e4f50-6172-5384-95a6-c7d8e9f00112",
+                "deezer_id": "302127",
+                "title": "Songs from the Inside",
+                "cover": "/api/cover/302127"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "seek",
+      "json": {
+        "op": "seek",
+        "args": {
+          "t": 12.5
+        }
+      }
+    }
+  ]
+}
