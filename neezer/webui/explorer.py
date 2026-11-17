@@ -247,7 +247,7 @@ def _error_name(exc, provider):
     try:
         if probe is not None and not probe():
             return "provider"
-    except Exception:
+    except Exception:  # nosec B110 - a probe that cannot answer is not a provider verdict; the caller says "failed"
         pass
     return "failed"
 

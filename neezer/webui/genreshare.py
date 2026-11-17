@@ -217,6 +217,26 @@ def parse(data):
     return {"genres": list(genres.values()), "tags": tags, "head": head or None, "embedding": emb}
 
 
+#: Everything ``parse`` may refuse a file for. The routes answer one of these
+#: verbatim; anything else collapses to a generic sentence, because the
+#: exception's own text would carry it straight into the response.
+_PARSE_REFUSALS = (
+    "ce fichier n'est pas un modèle de genres Neezer",
+    "version de fichier inconnue (mettez le serveur à jour)",
+    "liste d'étiquettes illisible",
+    "trop d'étiquettes dans ce fichier",
+    "modèle illisible",
+)
+
+
+def _parse_error(exc) -> str:
+    text = str(exc)
+    for message in _PARSE_REFUSALS:
+        if text == message:
+            return message
+    return "fichier illisible"
+
+
 def _head_summary(head, emb):
     """What the head is and whether THIS server can read it. The weights are
     checked for real at import (genre.store_head stores, re-reads, refuses);
@@ -325,7 +345,7 @@ def genre_share_preview():
     try:
         f = parse(request.get_json(silent=True))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _parse_error(exc)}), 400
     rows = _deezer_rows(f["tags"])
     counts = {"total": len(f["tags"]), "local": 0, "deezer": 0, "unknown": 0, "kept": 0, "already": 0}
     wanted = {}
@@ -457,7 +477,7 @@ def _run_import(app, entries, genres, inline=False):
             if not inline:
                 try:
                     close_connection()
-                except Exception:
+                except Exception:  # nosec B110 - a finished import's connection close, the worker ends anyway
                     pass
 
 
@@ -486,7 +506,7 @@ def genre_share_import():
     try:
         f = parse(data.get("file"))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": _parse_error(exc)}), 400
     use_head, add_tags = bool(data.get("head")), bool(data.get("tags"))
     if not (use_head or add_tags):
         return jsonify({"error": "rien à importer"}), 400

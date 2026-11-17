@@ -32,7 +32,7 @@ import json
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed binary, argument list, no shell
 
 from flask import current_app, jsonify, request, send_file
 
@@ -118,7 +118,7 @@ def _detect(path, threshold):
         "-af", f"silencedetect=noise={threshold}dB:d={MIN_SILENCE}",
         "-f", "null", "-",
     ]
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - fixed argument list and shell=False; the path comes from the row
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
