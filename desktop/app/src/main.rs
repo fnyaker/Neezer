@@ -618,6 +618,16 @@ fn main() -> ExitCode {
                         // the acceptance measures.
                         window.on_next_frame(move |_, cx| {
                             println!("first_frame_ms={}", started.elapsed().as_millis());
+                            // The flag PROMISES "print, then quit": a subsystem
+                            // whose shutdown does not join (the audio engine on
+                            // a runner with no sound card, measured on CI: the
+                            // line was printed and the process stayed alive)
+                            // must not hang the job. The watchdog is this
+                            // flag's own, never a shipped path.
+                            std::thread::spawn(|| {
+                                std::thread::sleep(std::time::Duration::from_secs(10));
+                                std::process::exit(0);
+                            });
                             cx.quit();
                         });
                     }
