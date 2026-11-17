@@ -8,7 +8,8 @@ player's ([playback.md](playback.md)); remote control and the listen party are
 
 **Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D16, M1,
 P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`,
-`409` told apart, the `auto` payload, the output list); the rest planned.**
+`409` told apart, the `auto` payload, the output list) and the contract follow-up (Lyrics,
+GenreScore, `radio_next`, the podcast archive answer, the onboarding route); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -682,10 +683,24 @@ Waves that can run in parallel (disjoint files):
   (its local half lists only rows whose file is on disk), `/api/flow`, `/api/radio/*`,
   `/api/moods/<id>` and `/api/recommend` answer empty lists there — their envelopes are proven, and
   their item types arrive with the screens that read them (D8a, D12). `perf_api.py --archived`, which
-  needs numpy (not a dependency), is what would fill them.
-- **Measured** (this machine, debug build, `cargo test -p nz-model`): **31 tests, 0 failed**; the 102
-  fixtures deserialize in **23.3 ms**, stripping their optional keys in **185 ms**, and the whole
-  run is **1.56 s** against the lot's 2 s budget. `cargo fmt --all --check` and
+  needs numpy (not a dependency), is what would fill them — the two seeds below fill the two that
+  were WRONG rather than merely empty.
+- **The rule, a payload that is never EMPTY is never proven**: four fields were wrong because the
+  bench always answered `null`/`[]` for them, and a type mismatch on an empty list parses. Two seeds
+  close it now — `--seed-lyrics` (an archived track with a real `.lrc`, and a second with plain text)
+  and `--seed-genre-scores` (three hand labels plus four v2-width embeddings, so the prototypes rank
+  without a trained head) — and the fixtures they feed corrected:
+  - `Lyrics` declared the words as a bare STRING; the server answers an OBJECT
+    (`{"text", "synced": [{"time", "text"}], "source"}`) — `LyricsBody` now takes both.
+  - `GenreScore` declared `{name, score, tag}`; the server sends the TUPLE
+    `[label, score, head, proto]` (`genre.py#rank_scores`), `head`/`proto` possibly `null`.
+  - `GenreTrack.tag` declared a `String`; `_tag_json` sends the tag OBJECT, so `GenreTag` is a type.
+  - `GenreConstruction.missing` declared `Vec<String>`; each entry is `{"id", "bpm"}`.
+  The fixture test's `shrink` had to learn the same lesson: it truncates a list of ROWS to one row,
+  but a fixed-arity array is a VALUE (a score tuple), and a 1-tuple is a different question.
+- **Measured** (this machine, debug build, `cargo test -p nz-model`): **32 tests, 0 failed** (28 rules
+  + the fixture walks); the **105** fixtures deserialize in **23.3 ms** at the lot, stripping their
+  optional keys in **185 ms**, and the whole run is **1.56 s** against the lot's 2 s budget. `cargo fmt --all --check` and
   `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - **What it is now**: `nz-model` holds 15 modules (`ids`, `track`, `album`, `artist`, `playlist`,
   `library`, `search`, `podcast`, `transcript`, `player`, `discovery`, `settings`, `remote`, `party`,
@@ -771,6 +786,16 @@ Waves that can run in parallel (disjoint files):
   - `Service Unavailable` from `_admit_by_priority` and the stream's `{"queued": true}` are the same
     status: the difference is the lane. A User-lane 503 is an ordinary `Http { 503 }` the GET may
     retry; a background one becomes `Busy { retry_after }` and is repeated once only.
+  - **A request body is a contract too, and an empty answer hides it.** `Api::radio_next` posted
+    `{"seed": "3000123"}` where `radio_next` requires an OBJECT (`{"kind", "id", "artist"?}`,
+    `400 invalid seed` otherwise) — the SPA builds that object in `lib/queryradio.js#radioSeed`, and
+    the screen that needed a radio refill went through `Api::send`. `Api::radio_next` takes a
+    `RadioSeed` now. And `Api::set_podcast_auto_archive` used `send_none`, throwing away a body:
+    `podcast_auto_archive` answers `{**_channel(c), "queued": n}`, which is what lets a screen say
+    « N épisodes en file » without re-reading the show. It returns `PodcastAutoArchive { queued,
+    show }` (`serde(flatten)` keeps the channel payload). Both pinned in `tests/bench.rs`: the typed
+    radio seed answers 200 where the bare string is `400 invalid seed`, and the archive switch
+    answers 200 with the show's `title`/`episode_count` beside `queued`.
   - **A `409` is not one failure.** The first version read every `409` as `NotReady` ("nothing on
     disk yet"), which made a playlist's stale `version` arrive as "pas encore prêt" and be retried;
     `neezer/webui` uses the status for both. The header is the whole difference — `_not_archived`
@@ -1376,6 +1401,12 @@ Waves that can run in parallel (disjoint files):
 
 ### D9 — Now playing, queue, MPRIS wiring (delivered 2026-11-17)
 
+- **The rule, the words are the MODEL's**: `widgets/lyrics.rs` used to parse `/api/lyrics/<id>`'s
+  JSON itself, because `nz_model::Lyrics` declared the words as a bare string while the server sends
+  the object (`neezer/deezer/lyrics.py`). The fix is in `nz-model` (`LyricsBody`), the widget calls
+  `Api::lyrics_on(Lane::Prefetch, …)` and keeps only the two screen rules the server does not own:
+  the lines are sorted before they drive the timer, and an empty document is « aucune parole », not
+  an empty panel.
 - **The rule, the lyrics are scheduled on their own timestamps.** The shell repaints four times a
   second (the bar's clock), so a line read off that tick flips 0–250 ms late — the SPA's own
   `activeLyricIndex` exists for that reason (`lib/lyrics.js`). Here one wake-up is armed for the
@@ -1596,6 +1627,12 @@ Waves that can run in parallel (disjoint files):
   the rows are windowed at the SPA's exact geometry (44 px a day header, 72 px an event, so the
   virtual offsets need no measurement). A row plays and turns into its radio
   (`lib/actions.js#playThenRadio`), which is also what feeds the Flow service.
+- **The rule, a new account lands on Bienvenue**: `state.rs#landing_route` sends a signed-in person
+  to `Route::Onboarding` while `user.onboarding` is `"artists"` or `"account"` — the SPA's own
+  `onboardingRequired = !REMOTE && stepFor($user.onboarding) !== "done"` — and to Home otherwise. A
+  remote-control loan never onboards, and an account whose field is absent (an older server) lands on
+  Home rather than on a step it cannot finish. Before this line the screen existed and NOTHING led
+  to it: no key, no click, no login.
 - **The rule, Bienvenue**: a like is optimistic AND one request; offline it waits in a queue that is
   flushed in order, and « Continuer » refuses while any of it is unsent (a finished onboarding that
   lost the choices is worse than one that waited). The tiles are real `Toggle`s — `Entrée` and
@@ -2122,10 +2159,14 @@ Waves that can run in parallel (disjoint files):
     un Xvfb isolé : la page est centrée, bornée à 100 rem, les rails de la coque restent en place,
     les cinq onglets peignent, la taille des cibles et les textes français tiennent ; aucun emoji.
 - **Pièges trouvés en construisant** :
-  - **Le contrat `GenreScore` de `nz-model` est faux** : le serveur envoie `scores` comme
+  - **Le contrat `GenreScore` de `nz-model` était faux** : le serveur envoie `scores` comme
     `[[label, score, head, proto]]` (`genre.py#_scores_json`), pas un objet `{name, score, tag}`.
-    L'écran lit ces tableaux en JSON (`genre_tag_sheet::read_scores`) et n'utilise PAS le type ;
-    le corriger dans `nz-model` est un lot de contrat, pas une édition de D16.
+    Le lot de contrat l'a corrigé (`GenreScore` est un tuple sur le fil, `GenreTrack.tag` un OBJET
+    `_tag_json`) et l'écran a perdu ses deux analyseurs : `Candidate.scores` est
+    `Vec<nz_model::GenreScore>`, la feuille d'étiquette reçoit `nz_model::GenreTrack` typé et
+    `genre_tag_sheet::scores_of` ne fait plus que projeter vers la rangée de la page. La fixture
+    `genre-track` porte maintenant un vrai classement (le banc n'avait aucune étiquette, d'où le
+    `[]` qui avait laissé passer le type faux).
   - **`nz-api` n'a ni `/genre/share/export`, ni `/explorer/styles`, ni `/explorer/discover`** : ils
     se lisent avec `Api::get`/`Api::send` (publics, avec la lane) — aucune route inventée. Le seul
     multipart, `POST /genre/extractor`, vit dans `genre_extractor::upload` avec la feature

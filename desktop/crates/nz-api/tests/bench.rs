@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nz_api::{Api, ApiError, Lane, Method, Quality, SessionJar, TrackId};
+use nz_api::{Api, ApiError, Lane, Method, Quality, RadioSeed, SessionJar, TrackId};
 
 /// The repository root (`desktop/crates/nz-api` → up three).
 fn repo_root() -> PathBuf {
@@ -84,6 +84,7 @@ impl Bench {
                 "--big-playlist",
                 "4",
                 "--seed-provider-account",
+                "--podcasts",
                 "--serve",
                 "--port",
                 "0",
@@ -148,6 +149,13 @@ impl Bench {
     }
 
     /// A playlist of the seed, for the version-conflict proof.
+    fn a_show(&self) -> String {
+        self.ids["podcast"]["show"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the bench printed no show: {}", self.ids))
+            .to_owned()
+    }
+
     fn a_playlist(&self) -> String {
         self.ids["small"]
             .as_str()
@@ -422,4 +430,105 @@ async fn the_accounts_auto_payload_is_the_shape_the_server_reads() {
         }
         other => panic!("expected the server's 400, got {other:?}"),
     }
+}
+
+/// **`POST /api/radio/next` reads an OBJECT seed, not a bare string.**
+///
+/// `neezer/webui#radio_next` does `seed = data.get("seed") or {}` and refuses
+/// anything that is not a dict (`400 invalid seed`), then branches on
+/// `seed.kind` (`"track"`/`"artist"`); `lib/queryradio.js#radioSeed` builds that
+/// object. `nz-api` sent `{"seed": "3000123"}` and its owner could not use the
+/// typed call — every radio refill in the app went through `Api::send`.
+///
+/// Measured here: the typed call with a real track seed answers **200** (an
+/// empty list is a fine answer on a bench with nothing archived), and the old
+/// bare string is **400 `invalid seed`**, in one request each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_radio_seed_is_the_object_the_route_reads() {
+    let bench = Bench::start();
+    let api = client(&bench);
+    api.login("bench", "Bench1").await.expect("a real login");
+
+    let seed = RadioSeed {
+        kind: "track".to_owned(),
+        id: bench.first_track().to_string(),
+        artist: None,
+    };
+    let answer = api
+        .radio_next(&seed, Some(4), &[], &[], &[])
+        .await
+        .expect("the object seed is what the route reads");
+    assert!(
+        answer.tracks.len() <= 4,
+        "the batch size is honoured: {} tracks",
+        answer.tracks.len()
+    );
+
+    // The shape this function used to send, refused with the server's own words.
+    let legacy = api
+        .send::<serde_json::Value, serde_json::Value>(
+            Lane::User,
+            Method::POST,
+            "/radio/next",
+            Some(&serde_json::json!({ "seed": bench.first_track().to_string(), "n": 4 })),
+        )
+        .await
+        .expect_err("a bare string is what the route refuses");
+    match legacy {
+        ApiError::Http {
+            status, message, ..
+        } => {
+            assert_eq!(status, 400);
+            assert_eq!(message, "invalid seed");
+        }
+        other => panic!("expected the server's 400, got {other:?}"),
+    }
+}
+
+/// **`POST /api/podcast/<id>/auto_archive` answers the show PLUS `queued`.**
+///
+/// `podcast_auto_archive` returns `{**_channel(c), "queued": n}` (`n` from
+/// `backfill.archive_show`, which queues the episodes already listed), and the
+/// SPA says « N épisodes en file » with it. `nz-api` dropped the body
+/// (`send_none`), so a screen could only re-read the whole show to count what it
+/// had just queued.
+///
+/// Measured against `perf_api.py --podcasts`: switching it on answers **200**
+/// with the show's own payload (`title`, `episode_count: 8`) AND `queued: 0` —
+/// the bench's eight episodes already have a file, so `archive_show` queues
+/// none; the COUNT is what a screen prints and what `send_none` used to throw
+/// away. The answer is a body, not an empty 204.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_auto_archive_answer_carries_how_many_episodes_it_queued() {
+    let bench = Bench::start();
+    let api = client(&bench);
+    api.login("bench", "Bench1").await.expect("a real login");
+
+    let on = api
+        .set_podcast_auto_archive(&bench.a_show(), true)
+        .await
+        .expect("the switch answers the show");
+    let title = on
+        .show
+        .get("title")
+        .and_then(|title| title.as_str())
+        .unwrap_or_default();
+    assert!(!title.is_empty(), "the show's own payload is kept: {on:?}");
+    assert_eq!(
+        on.show
+            .get("episode_count")
+            .and_then(|count| count.as_u64()),
+        Some(8),
+        "the whole channel payload is kept beside the count: {on:?}"
+    );
+    assert_eq!(
+        on.queued, 0,
+        "every bench episode is already on disk, so the switch queues none"
+    );
+
+    let off = api
+        .set_podcast_auto_archive(&bench.a_show(), false)
+        .await
+        .expect("switching it off answers too");
+    assert_eq!(off.queued, 0, "nothing is queued when the switch is off");
 }

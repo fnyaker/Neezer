@@ -6,6 +6,7 @@
 //! person just clicked the row.
 
 use reqwest::Method;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::{Api, encode};
@@ -17,6 +18,38 @@ use nz_model::{
     ReplaceCandidates, TrackAnalysis, TrackCredits, TrackList, TrackProbe, Unavailable,
     YoutubeSearch,
 };
+
+/// The seed of a radio, as `POST /api/radio/next` reads it (`neezer/webui`
+/// `radio_next`: `seed.kind` decides the branch, `seed.id` names the row, and
+/// `seed.artist` lets a catalogue title the library does not hold yet radio on
+/// its artist). The SPA builds the same object in `lib/queryradio.js#radioSeed`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioSeed {
+    /// `"track"` or `"artist"`.
+    pub kind: String,
+    pub id: String,
+    /// The artist's ref, when this is a catalogue track with no library row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+}
+
+impl RadioSeed {
+    pub fn track(id: impl Into<String>) -> Self {
+        Self {
+            kind: "track".to_owned(),
+            id: id.into(),
+            artist: None,
+        }
+    }
+
+    pub fn artist(id: impl Into<String>) -> Self {
+        Self {
+            kind: "artist".to_owned(),
+            id: id.into(),
+            artist: None,
+        }
+    }
+}
 
 impl Api {
     /// `GET /api/artist/<id>` — the page: header, top titles, albums, neighbours.
@@ -59,7 +92,14 @@ impl Api {
 
     /// `GET /api/lyrics/<id>` — `null` when the provider has none; not an error.
     pub async fn lyrics(&self, id: &str) -> Result<Lyrics, ApiError> {
-        self.get_value(&format!("/lyrics/{}", encode(id))).await
+        self.lyrics_on(Lane::User, id).await
+    }
+
+    /// The same route on an explicit lane: the words belong to the track that is
+    /// already playing, so the panel asks for them at `Prefetch` priority — they
+    /// never compete with the stream they belong to (`lib/ladder.js`'s order).
+    pub async fn lyrics_on(&self, lane: Lane, id: &str) -> Result<Lyrics, ApiError> {
+        self.fetch(lane, &format!("/lyrics/{}", encode(id))).await
     }
 
     /// `GET /api/gain/<id>` — ReplayGain in dB, `null` while unmeasured.
@@ -162,15 +202,24 @@ impl Api {
     /// `POST /api/radio/next` — more of a radio already playing. The seed stays
     /// the ORIGINAL one: a radio seeded on its own last title drifts a
     /// neighbour of a neighbour at a time.
+    ///
+    /// The body is the SPA's own (`lib/api.js#radioNext`): the seed is an
+    /// OBJECT, `{kind, id}` (plus `artist` for a catalogue title the library
+    /// does not hold yet), and `n` asks for a batch size. This function used to
+    /// send the seed as a bare string, which the route refuses with
+    /// `400 invalid seed`; a screen could not tell, because the fixture it was
+    /// proven against answered an empty list either way.
     pub async fn radio_next(
         &self,
-        seed: &str,
+        seed: &RadioSeed,
+        n: Option<u32>,
         recent: &[String],
         skipped: &[String],
         exclude: &[String],
     ) -> Result<TrackList, ApiError> {
         let body = serde_json::json!({
             "seed": seed,
+            "n": n,
             "recent": recent,
             "skipped": skipped,
             "exclude": exclude,

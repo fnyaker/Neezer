@@ -160,8 +160,11 @@ struct Candidate {
     confidence: Option<f64>,
     #[serde(default)]
     uncertainty: Option<f64>,
+    /// The server's ranking for this track: `[[label, score, head, proto]]`,
+    /// typed by `nz_model::GenreScore` (it used to be raw `Value`s, parsed here
+    /// because the model declared an object where the server sends a tuple).
     #[serde(default)]
-    scores: Vec<Value>,
+    scores: Vec<nz_model::GenreScore>,
 }
 
 impl Candidate {
@@ -180,7 +183,7 @@ impl Candidate {
     }
 
     fn scores(&self) -> Vec<genre_label::ScoreRow> {
-        genre_tag_sheet::read_scores(Some(&Value::Array(self.scores.clone())))
+        genre_tag_sheet::scores_of(&self.scores)
     }
 }
 
@@ -269,7 +272,7 @@ enum Msg {
     Candidates(Box<Result<GenreCandidates, ApiError>>),
     Labelled(Box<Result<Value, ApiError>>),
     Label(Box<Result<Value, ApiError>>, Box<Last>, bool),
-    Sheet(Box<Result<Value, ApiError>>),
+    Sheet(Box<Result<nz_model::GenreTrack, ApiError>>),
     SheetCleared(Box<Result<Value, ApiError>>),
     BulkPreview(Box<Result<Value, ApiError>>),
     BulkApply(Box<Result<Value, ApiError>>),
@@ -994,10 +997,10 @@ impl Screen {
         self.sheet = Sheet::open(candidate.id.clone(), candidate.title.clone());
         let tx = self.events.clone();
         let runtime = self.runtime(cx);
-        let path = self.sheet.path();
+        let id = self.sheet.track.clone();
         runtime.spawn(async move {
-            let reply = api.get::<Value>(Lane::User, &path).await;
-            tx.send(Msg::Sheet(Box::new(reply.map(|fresh| fresh.value))));
+            let reply = api.genre_track(&id).await;
+            tx.send(Msg::Sheet(Box::new(reply)));
         });
     }
 
@@ -1795,10 +1798,10 @@ impl Screen {
                 self.sheet = Sheet::open(row.id.clone(), row.title.clone());
                 let tx = self.events.clone();
                 let runtime = self.runtime(cx);
-                let path = self.sheet.path();
+                let id = self.sheet.track.clone();
                 runtime.spawn(async move {
-                    let reply = api.get::<Value>(Lane::User, &path).await;
-                    tx.send(Msg::Sheet(Box::new(reply.map(|fresh| fresh.value))));
+                    let reply = api.genre_track(&id).await;
+                    tx.send(Msg::Sheet(Box::new(reply)));
                 });
                 cx.notify();
             }
@@ -5202,7 +5205,12 @@ mod journey {
                 duration: 312,
                 scores: scores
                     .iter()
-                    .map(|row| serde_json::json!([row.0, row.1, row.2, row.3]))
+                    .map(|row| nz_model::GenreScore {
+                        label: row.0.clone(),
+                        score: row.1,
+                        head: row.2,
+                        proto: row.3,
+                    })
                     .collect(),
                 ..Candidate::default()
             };
@@ -5211,7 +5219,12 @@ mod journey {
                 + candidate.title.capacity()
                 + candidate.artist.capacity()
                 + candidate.album.capacity()
-                + candidate.scores.capacity() * std::mem::size_of::<Value>();
+                + candidate.scores.capacity() * std::mem::size_of::<nz_model::GenreScore>()
+                + candidate
+                    .scores
+                    .iter()
+                    .map(|row| row.label.capacity())
+                    .sum::<usize>();
             candidates.push(candidate);
         }
         println!(

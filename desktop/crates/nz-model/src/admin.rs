@@ -439,15 +439,42 @@ pub struct GenrePool {
     pub scanned: u32,
 }
 
-/// One score of `/api/genre/track/<id>`: the vocabulary ranked for that track.
+/// One score of `/api/genre/track/<id>` and of the studio's candidates: the
+/// vocabulary ranked for one track.
+///
+/// The server sends a TUPLE, not an object — `[label, score, head, proto]`
+/// (`neezer/deezer/genre.py#rank_scores`, served by `genre.py#_scores_json`) —
+/// and this type declared fields, which no fixture caught because the bench had
+/// nothing labelled and the list was always `[]`. `score` (0..1) only ORDERS the
+/// vocabulary; `head` is the trained head's calibrated probability and `proto`
+/// the nearest prototype's share, each `null` when that opinion does not exist.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "GenreScoreWire", into = "GenreScoreWire")]
 pub struct GenreScore {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
+    pub label: String,
     pub score: f64,
-    #[serde(default)]
-    pub tag: Option<String>,
+    pub head: Option<f64>,
+    pub proto: Option<f64>,
+}
+
+/// The wire shape: one JSON array of four, which is what the route sends.
+type GenreScoreWire = (String, f64, Option<f64>, Option<f64>);
+
+impl From<GenreScoreWire> for GenreScore {
+    fn from((label, score, head, proto): GenreScoreWire) -> Self {
+        Self {
+            label,
+            score,
+            head,
+            proto,
+        }
+    }
+}
+
+impl From<GenreScore> for GenreScoreWire {
+    fn from(score: GenreScore) -> Self {
+        (score.label, score.score, score.head, score.proto)
+    }
 }
 
 /// `/api/genre/track/<id>` — one track's tag and the vocabulary ranked for it.
@@ -455,10 +482,25 @@ pub struct GenreScore {
 pub struct GenreTrack {
     #[serde(default)]
     pub track: String,
+    /// The tag the track wears, as the server sends it (`_tag_json`: an OBJECT,
+    /// not its name — this field declared a `String` until a fixture carried one).
     #[serde(default)]
-    pub tag: Option<String>,
+    pub tag: Option<GenreTag>,
     #[serde(default)]
     pub scores: Vec<GenreScore>,
+}
+
+/// One genre tag, as `_tag_json` writes it: what a chip draws.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GenreTag {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub archetype: Option<String>,
 }
 
 /// `/api/genre/model` — whether a trained head is in place.
@@ -514,8 +556,19 @@ pub struct GenreConstruction {
     pub labelled: u32,
     #[serde(default)]
     pub measured: u32,
+    /// The labels with no measurement yet: `{"id", "bpm"}` each (this declared a
+    /// list of plain ids until a bench with hand labels was captured).
     #[serde(default)]
-    pub missing: Vec<String>,
+    pub missing: Vec<GenreConstructionMissing>,
+}
+
+/// One label waiting for its measurement (`/genre/construction`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GenreConstructionMissing {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub bpm: Option<f64>,
 }
 
 /// `/api/genre/references` — the genres a reference lookup can be asked about.
@@ -627,6 +680,35 @@ mod tests {
         .expect("embed status");
         assert_eq!(embed.job.total, 300);
         assert_eq!(embed.workers, 4);
+    }
+
+    /// A ranked genre is a TUPLE on the wire, and the type had fields: the bench
+    /// answered `[]` (nothing labelled), so the fixture never said otherwise.
+    /// This pins the server's own list, `neezer/deezer/genre.py#rank_scores`:
+    /// `[label, score, head, proto]`, `head`/`proto` possibly null.
+    #[test]
+    fn a_genre_score_is_the_servers_tuple_not_an_object() {
+        let answer: GenreTrack = serde_json::from_str(
+            r#"{"track":"3f7c1d2e-9a4b-5c6d-8e0f-1a2b3c4d5e6f",
+                "tag":null,
+                "scores":[["Hardtek",0.62,0.7,0.4],["Ambient",0.21,null,0.21],
+                          ["Techno",0.17,0.12,null]]}"#,
+        )
+        .expect("the route's answer");
+        assert_eq!(answer.scores.len(), 3);
+        assert_eq!(answer.scores[0].label, "Hardtek");
+        assert_eq!(answer.scores[0].score, 0.62);
+        assert_eq!(answer.scores[0].head, Some(0.7));
+        assert_eq!(answer.scores[1].head, None, "the head does not know it");
+        assert_eq!(answer.scores[2].proto, None, "no prototype for it");
+
+        // And it goes back out as the same array: a PUT carries what a GET read.
+        let wire = serde_json::to_value(&answer.scores[0]).expect("serialise");
+        assert_eq!(wire, serde_json::json!(["Hardtek", 0.62, 0.7, 0.4]));
+
+        // The object shape the type used to declare is NOT the server's, and
+        // must fail loudly rather than parse into a silently empty ranking.
+        assert!(serde_json::from_str::<GenreScore>(r#"{"name":"Hardtek","score":0.6}"#).is_err());
     }
 
     #[test]

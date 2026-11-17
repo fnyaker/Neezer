@@ -63,18 +63,25 @@ impl Sheet {
         format!("/genre/track/{}", crate::widgets::card::encode(&self.track))
     }
 
-    /// The server's answer: the current tag and the ranking. `scores` is the
-    /// page's array shape, which `nz_model::GenreScore` does NOT model (its
-    /// fields are a struct; the server sends `[[name, score, head, proto]]`),
-    /// so the sheet reads it as JSON — see the PR's contract note.
-    pub fn answered(&mut self, body: &serde_json::Value) {
+    /// The server's answer, typed: `nz_model::GenreTrack` carries the tag as an
+    /// OBJECT (`_tag_json`) and the ranking as the server's own
+    /// `[[label, score, head, proto]]` tuples, so the sheet keeps no parser of
+    /// its own — it had one because the model declared a string and a struct.
+    pub fn answered(&mut self, answer: &nz_model::GenreTrack) {
         self.loading = false;
         self.error = None;
-        self.current = body
-            .get("tag")
-            .and_then(|tag| tag.as_object().map(tag_of))
+        self.current = answer
+            .tag
+            .as_ref()
+            .map(|tag| Tag {
+                id: tag.id,
+                name: tag.name.clone(),
+                color: tag.color.clone(),
+                archetype: tag.archetype.clone(),
+                family: None,
+            })
             .filter(|tag| !tag.name.is_empty());
-        self.scores = read_scores(body.get("scores"));
+        self.scores = scores_of(&answer.scores);
     }
 
     pub fn failed(&mut self, cause: impl Into<SharedString>) {
@@ -91,45 +98,13 @@ impl Sheet {
     }
 }
 
-fn tag_of(value: &serde_json::Map<String, serde_json::Value>) -> Tag {
-    Tag {
-        id: value.get("id").and_then(|id| id.as_i64()).unwrap_or(0),
-        name: value
-            .get("name")
-            .and_then(|name| name.as_str())
-            .unwrap_or_default()
-            .to_owned(),
-        color: value
-            .get("color")
-            .and_then(|color| color.as_str())
-            .map(str::to_owned),
-        archetype: value
-            .get("archetype")
-            .and_then(|archetype| archetype.as_str())
-            .map(str::to_owned),
-        family: None,
-    }
-}
-
-/// `[[label, score, head, proto]]` → rows, dropping anything that is not one.
-pub fn read_scores(
-    value: Option<&serde_json::Value>,
-) -> Vec<(String, f64, Option<f64>, Option<f64>)> {
-    let Some(list) = value.and_then(|value| value.as_array()) else {
-        return Vec::new();
-    };
-    list.iter()
-        .filter_map(|row| {
-            let row = row.as_array()?;
-            let name = row.first()?.as_str()?.to_owned();
-            // A row without a numeric score is not a ranking (the server always
-            // sends one): `["bad"]` is dropped, not read as a genre named bad.
-            let score = row.get(1)?.as_f64()?;
-            let head = row.get(2).and_then(|value| value.as_f64());
-            let proto = row.get(3).and_then(|value| value.as_f64());
-            Some((name, score, head, proto))
-        })
+/// The server's ranking as the page's row type: one tuple per genre, best
+/// first, capped like the SPA (`genre_label::SCORES_MAX`).
+pub fn scores_of(scores: &[nz_model::GenreScore]) -> Vec<genre_label::ScoreRow> {
+    scores
+        .iter()
         .take(genre_label::SCORES_MAX)
+        .map(|row| (row.label.clone(), row.score, row.head, row.proto))
         .collect()
 }
 
@@ -322,32 +297,45 @@ pub fn view<V: Render>(
 mod tests {
     use super::*;
 
+    /// The route's answer as `nz_model::GenreTrack` decodes it: the tag is an
+    /// OBJECT (`_tag_json`) and each score is the server's
+    /// `[label, score, head, proto]` tuple, `head`/`proto` possibly `null`.
     #[test]
-    fn the_servers_score_arrays_become_rows() {
-        let body = serde_json::json!({
-            "track": "u",
-            "tag": {"id": 4, "name": "Hardtek", "color": "#ff0000", "archetype": "hard"},
-            "scores": [["Hardtek", 0.62, 0.7, 0.4], ["Ambient", 0.1], ["bad"]],
-        });
+    fn the_servers_answer_becomes_the_sheets_rows() {
+        let answer: nz_model::GenreTrack = serde_json::from_str(
+            r##"{"track":"u",
+                "tag":{"id":4,"name":"Hardtek","color":"#ff0000","archetype":"hard"},
+                "scores":[["Hardtek",0.62,0.7,0.4],["Ambient",0.1,null,0.1]]}"##,
+        )
+        .expect("the route's body");
         let mut sheet = Sheet::open("u", "Titre");
-        sheet.answered(&body);
+        sheet.answered(&answer);
         assert_eq!(
             sheet.current.as_ref().map(|tag| tag.name.as_str()),
             Some("Hardtek")
         );
-        assert_eq!(sheet.scores.len(), 2, "a row without a name is dropped");
+        assert_eq!(
+            sheet.current.as_ref().and_then(|tag| tag.color.as_deref()),
+            Some("#ff0000"),
+            "the chip keeps the tag's colour"
+        );
         assert_eq!(
             sheet.scores[0],
             ("Hardtek".to_owned(), 0.62, Some(0.7), Some(0.4))
         );
-        assert_eq!(sheet.scores[1], ("Ambient".to_owned(), 0.1, None, None));
+        assert_eq!(
+            sheet.scores[1],
+            ("Ambient".to_owned(), 0.1, None, Some(0.1))
+        );
         assert!(!sheet.loading);
     }
 
     #[test]
     fn a_track_without_a_tag_says_so() {
         let mut sheet = Sheet::open("u", "Titre");
-        sheet.answered(&serde_json::json!({"track": "u", "tag": null, "scores": []}));
+        let answer: nz_model::GenreTrack =
+            serde_json::from_str(r#"{"track":"u","tag":null,"scores":[]}"#).expect("body");
+        sheet.answered(&answer);
         assert!(sheet.current.is_none());
         assert!(sheet.scores.is_empty());
     }

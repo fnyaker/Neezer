@@ -35,9 +35,9 @@ use gpui_kit::{
     WeakEntity, div, px, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon, toggle, toggle_group};
-use nz_api::{Api, ApiError, Lane, Method};
+use nz_api::{ApiError, RadioSeed};
 use nz_cache::Cache;
-use nz_model::{FlowStyle, Track, TrackList};
+use nz_model::{FlowStyle, Track};
 use nz_player::{Command, Context as PlayContext};
 use serde::{Deserialize, Serialize};
 
@@ -777,24 +777,31 @@ fn ask(state: &mut AppState, cx: &mut Context<AppState>, job: Job) {
                     .genre_radio_next(style, &recent, &skipped, &exclude)
                     .await
                     .map(|list| list.tracks),
-                Seed::Artist(id) => {
-                    let body = radio_body(
-                        serde_json::json!({ "kind": "artist", "id": id }),
+                // The seed is an OBJECT (`{"kind", "id"}`), which is what the
+                // route reads and what `Api::radio_next` now takes: this used
+                // to hand-build the body through `Api::send`, because the typed
+                // function sent a bare string and the server answered
+                // `400 invalid seed`.
+                Seed::Artist(id) => api
+                    .radio_next(
+                        &RadioSeed::artist(id.as_str()),
+                        Some(RADIO_BATCH),
                         &recent,
                         &skipped,
                         &exclude,
-                    );
-                    radio_request(&api, &body).await
-                }
-                Seed::Track(id) => {
-                    let body = radio_body(
-                        serde_json::json!({ "kind": "track", "id": id }),
+                    )
+                    .await
+                    .map(|list| list.tracks),
+                Seed::Track(id) => api
+                    .radio_next(
+                        &RadioSeed::track(id.as_str()),
+                        Some(RADIO_BATCH),
                         &recent,
                         &skipped,
                         &exclude,
-                    );
-                    radio_request(&api, &body).await
-                }
+                    )
+                    .await
+                    .map(|list| list.tracks),
             };
             tx.send(Reply::Tracks {
                 job: Job::RadioMore,
@@ -864,38 +871,6 @@ fn flow_body(
         "exclude": exclude,
         "n": n,
     })
-}
-
-/// `Player.svelte#nextBatch`'s radio body. `n` is bounded by the server (40);
-/// [`RADIO_BATCH`] explains why eight.
-fn radio_body(
-    seed: serde_json::Value,
-    recent: &[String],
-    skipped: &[String],
-    exclude: &[String],
-) -> serde_json::Value {
-    serde_json::json!({
-        "seed": seed,
-        "recent": recent,
-        "skipped": skipped,
-        "exclude": exclude,
-        "n": RADIO_BATCH,
-    })
-}
-
-/// `POST /api/radio/next` with the body the server reads.
-///
-/// `nz-api`'s `Api::radio_next` takes the seed as a STRING and so sends
-/// `{"seed": "3000123"}`, while the route requires an object and answers
-/// `400 invalid seed`: the typed function cannot be used until `nz-api`'s owner
-/// fixes it (recorded in `docs/agents/desktop.md`). The SPA's own body goes
-/// through the client's generic `send`, which keeps the lane, the session and
-/// the retry policy where they belong.
-async fn radio_request(api: &Api, body: &serde_json::Value) -> Result<Vec<Track>, ApiError> {
-    let answer = api
-        .send::<_, TrackList>(Lane::User, Method::POST, "/radio/next", Some(body))
-        .await?;
-    Ok(answer.map(|list| list.tracks).unwrap_or_default())
 }
 
 /// The last [`EXCLUDE_MAX`] refs of the queue, oldest first
@@ -2055,18 +2030,22 @@ mod tests {
         assert_eq!(body["n"], 1);
     }
 
+    /// The seed the radio refill sends is the OBJECT the server reads
+    /// (`neezer/webui#radio_next`: `seed.kind` then `seed.id`), never the bare
+    /// string `nz-api` used to send, which the route refused with
+    /// `400 invalid seed`. Pinned on the serialised body, since that is what
+    /// crosses the wire.
     #[test]
-    fn the_radio_body_names_its_seed() {
-        let body = radio_body(
-            serde_json::json!({ "kind": "track", "id": "3000" }),
-            &["a".into()],
-            &[],
-            &["b".into()],
+    fn the_radio_seed_is_the_object_the_server_reads() {
+        let track = serde_json::to_value(RadioSeed::track("3000")).expect("json");
+        assert_eq!(track["kind"], "track");
+        assert_eq!(track["id"], "3000");
+        assert!(
+            track.get("artist").is_none(),
+            "an absent artist is not sent: the server reads `seed.artist` only when it has one"
         );
-        assert_eq!(body["seed"]["kind"], "track");
-        assert_eq!(body["seed"]["id"], "3000");
-        assert_eq!(body["recent"][0], "a");
-        assert_eq!(body["exclude"][0], "b");
-        assert_eq!(body["n"], RADIO_BATCH);
+        let artist = serde_json::to_value(RadioSeed::artist("42")).expect("json");
+        assert_eq!(artist["kind"], "artist");
+        assert_eq!(artist["id"], "42");
     }
 }

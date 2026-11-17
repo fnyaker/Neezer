@@ -158,11 +158,68 @@ pub struct Gains {
     pub gains: BTreeMap<String, Option<f64>>,
 }
 
-/// `/api/lyrics/<id>`: `{"lyrics": text | null}`.
+/// `/api/lyrics/<id>`: `{"lyrics": <object> | null}`.
+///
+/// The object is the server's canonical shape, the one LRCLIB fills
+/// (`neezer/deezer/lyrics.py`): `{"text", "synced": [{"time", "text"}],
+/// "source"}`. The fixture this type was first proven against answered `null`
+/// (the bench had nothing archived), so the string shape it declared was never
+/// the server's — a plain STRING is still accepted, because an older server and
+/// a hand-written fixture may answer one (rule 7).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Lyrics {
     #[serde(default)]
-    pub lyrics: Option<String>,
+    pub lyrics: Option<LyricsBody>,
+}
+
+/// The words: the server's object, or the bare text an older answer carried.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LyricsBody {
+    /// A bare string: the words, with no timing at all.
+    Plain(String),
+    /// The canonical document.
+    Doc(LyricsDoc),
+}
+
+impl LyricsBody {
+    /// The words as plain text, whether or not they carry timings.
+    pub fn text(&self) -> &str {
+        match self {
+            LyricsBody::Plain(text) => text,
+            LyricsBody::Doc(doc) => &doc.text,
+        }
+    }
+
+    /// The timed lines, empty for a plain answer.
+    pub fn synced(&self) -> &[LyricLine] {
+        match self {
+            LyricsBody::Plain(_) => &[],
+            LyricsBody::Doc(doc) => &doc.synced,
+        }
+    }
+}
+
+/// One synced line: `{"time": <milliseconds>, "text": "…"}`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LyricLine {
+    #[serde(default)]
+    pub time: i64,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// The lyrics document itself: `text`, its timed lines, and where they came
+/// from (`"archive"`, or the provider the sidecar was filled from).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LyricsDoc {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub synced: Vec<LyricLine>,
+    /// Never read by a screen; it says where the words came from.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// `/api/audio/edges/<id>?db=` — where the audio really starts and stops.

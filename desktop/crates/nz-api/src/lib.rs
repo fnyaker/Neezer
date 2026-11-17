@@ -51,8 +51,10 @@ pub use client::{
     ANSWER_TIMEOUT, Api, ApiBuilder, BACKGROUND_HEADER, CONNECT_TIMEOUT, DownloadReport, Fresh,
     NO_RETRY_HEADER, Quality, STALL_TIMEOUT, START_HEADER, StreamReady, StreamResponse, TrackId,
 };
+pub use endpoints::entities::RadioSeed;
 pub use endpoints::library::DownloadQueued;
 pub use endpoints::playlists::ImportJob;
+pub use endpoints::podcasts::PodcastAutoArchive;
 pub use endpoints::remote::RemoteCreated;
 pub use error::ApiError;
 pub use lanes::{Lane, bulk_cap_from_stream};

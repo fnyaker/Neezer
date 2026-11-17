@@ -18,11 +18,13 @@
 //!   between; a seek, a pause or a track change re-arms it. The position read
 //!   is the engine's own audible clock (`nz-audio`'s `Engine::position`
 //!   already subtracts the device latency), so the words follow what is heard.
-//! - **The payload's two shapes are accepted.** `/api/lyrics/<id>` answers
-//!   `{"lyrics": {"text", "synced": [{"time", "text"}], "source"}}` for an
-//!   archived track and for a cold one; an older/other server may answer a
-//!   plain string, which is shown as unsynced text rather than as a decode
-//!   error (rule 7, upgrading an existing server just works).
+//! - **The payload is the MODEL's, not a second parser here.** `/api/lyrics/<id>`
+//!   answers `{"lyrics": {"text", "synced": [{"time", "text"}], "source"}}` for
+//!   an archived track and for a cold one, which `nz_model::Lyrics` types (and
+//!   proves against the server's own fixture). This widget used to parse the
+//!   JSON itself because that type declared the words as a bare string; the
+//!   only shape rule left here is that an older server's plain string is shown
+//!   as unsynced text rather than as a decode error (rule 7).
 //!
 //! Measured on this machine (release, `cargo test -p neezer-desktop --release`):
 //! the active line is `active_index` of the audible position to the
@@ -40,93 +42,67 @@ use gpui_kit::{
 };
 use gpui_omarchy::{ButtonVariant, button, virtual_list};
 use nz_api::Lane;
-use serde::Deserialize;
 
 use crate::state::AppState;
 use crate::theme;
 
-/// One synced line: `{"time": <ms>, "text": "…"}` (`deezer/lyrics.py`).
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-pub struct LyricLine {
-    /// Milliseconds from the track's start.
-    #[serde(default)]
-    pub time: i64,
-    #[serde(default)]
-    pub text: String,
-}
-
-/// What the server's lyrics object holds. `source` is ignored: it says where
-/// the words came from (archive, LRCLIB), never what to draw.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct LyricDoc {
-    pub text: String,
-    pub synced: Vec<LyricLine>,
-}
-
-impl LyricDoc {
-    /// A doc built from the synced list alone: what `text` is derived from.
-    pub fn from_synced(synced: Vec<LyricLine>) -> Self {
-        let text = synced
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        Self { text, synced }
-    }
-}
-
-#[derive(Deserialize)]
-struct RawDoc {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    synced: Vec<LyricLine>,
-}
-
-/// Read `/api/lyrics/<id>`'s body: `null`, a plain string, or the object.
+/// What the panel shows for one track: the model's document, with the rules
+/// the SPA applies before drawing it (sorted lines, nothing to show is `None`).
 ///
-/// A body that is not JSON at all is a cause the panel can print, never a
-/// panic: the server is a remote thing.
-pub fn parse_body(body: &str) -> Result<Option<LyricDoc>, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|error| format!("réponse illisible : {error}"))?;
-    Ok(doc_from_value(&value))
-}
-
-/// The same, from a body already parsed (what `Api::get` hands back).
-pub fn doc_from_value(value: &serde_json::Value) -> Option<LyricDoc> {
-    let lyrics = value.get("lyrics")?;
-    match lyrics {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(text) if !text.trim().is_empty() => Some(LyricDoc {
-            text: text.clone(),
-            synced: Vec::new(),
-        }),
-        serde_json::Value::Object(_) => {
-            let raw: RawDoc = serde_json::from_value(lyrics.clone()).ok()?;
-            let mut synced: Vec<LyricLine> = raw
+/// `nz_model::LyricsDoc` is the server's own shape; this is that document after
+/// the two corrections a screen must make — a hand-edited sidecar can arrive out
+/// of order, and an empty document is "no lyrics", not an empty panel.
+pub fn doc_from(answer: &nz_model::Lyrics) -> Option<nz_model::LyricsDoc> {
+    let body = answer.lyrics.as_ref()?;
+    match body {
+        nz_model::LyricsBody::Plain(text) => {
+            let text = text.trim();
+            (!text.is_empty()).then(|| nz_model::LyricsDoc {
+                text: text.to_owned(),
+                synced: Vec::new(),
+                source: None,
+            })
+        }
+        nz_model::LyricsBody::Doc(doc) => {
+            let mut synced: Vec<nz_model::LyricLine> = doc
                 .synced
-                .into_iter()
+                .iter()
                 .filter(|line| line.time >= 0)
+                .cloned()
                 .collect();
             // The server sorts; a hand-edited sidecar may not. A line that
             // arrives out of order would make the active index jump backwards.
             synced.sort_by_key(|line| line.time);
-            if synced.is_empty() && raw.text.trim().is_empty() {
+            if synced.is_empty() && doc.text.trim().is_empty() {
                 None
             } else {
-                Some(LyricDoc {
-                    text: raw.text,
+                Some(nz_model::LyricsDoc {
+                    text: doc.text.clone(),
                     synced,
+                    source: doc.source.clone(),
                 })
             }
         }
-        _ => None,
+    }
+}
+
+/// The document built from its timed lines alone: what `text` is derived from
+/// when a test (or a sidecar with no plain text) only has the lines.
+pub fn doc_from_synced(synced: Vec<nz_model::LyricLine>) -> nz_model::LyricsDoc {
+    let text = synced
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    nz_model::LyricsDoc {
+        text,
+        synced,
+        source: None,
     }
 }
 
 /// Index of the line being sung at `heard_ms`, or −1 before the first one.
-pub fn active_index(lines: &[LyricLine], heard_ms: i64) -> i64 {
+pub fn active_index(lines: &[nz_model::LyricLine], heard_ms: i64) -> i64 {
     if lines.is_empty() {
         return -1;
     }
@@ -137,7 +113,7 @@ pub fn active_index(lines: &[LyricLine], heard_ms: i64) -> i64 {
 }
 
 /// The timestamp of the next line after `heard_ms`, when there is one.
-pub fn next_boundary_ms(lines: &[LyricLine], heard_ms: i64) -> Option<i64> {
+pub fn next_boundary_ms(lines: &[nz_model::LyricLine], heard_ms: i64) -> Option<i64> {
     let after = lines.partition_point(|line| line.time <= heard_ms);
     lines.get(after).map(|line| line.time)
 }
@@ -148,7 +124,7 @@ pub fn next_boundary_ms(lines: &[LyricLine], heard_ms: i64) -> Option<i64> {
 enum Status {
     Idle,
     Loading,
-    Ready(Option<LyricDoc>),
+    Ready(Option<nz_model::LyricsDoc>),
     Failed(SharedString),
 }
 
@@ -269,7 +245,7 @@ impl LyricsView {
         self.advance(heard, playing, cx);
     }
 
-    fn lines(&self) -> Option<&[LyricLine]> {
+    fn lines(&self) -> Option<&[nz_model::LyricLine]> {
         match &self.status {
             Status::Ready(Some(doc)) if !doc.synced.is_empty() => Some(&doc.synced),
             _ => None,
@@ -284,7 +260,7 @@ impl LyricsView {
             );
             return;
         };
-        let path = format!("/lyrics/{reference}");
+        let reference_for_request = reference.clone();
         // `Prefetch` and not `User`: the words come after the stream they
         // belong to, and a background request yields to a tap (rule 1). The
         // route is cacheable, so a second visit costs no request at all.
@@ -293,11 +269,11 @@ impl LyricsView {
         // a `tokio::time` deadline, and polling it from the GPUI executor would
         // panic with "no reactor running". The foreground task only waits for
         // the answer and touches the widget.
-        let request =
-            runtime.spawn(async move { api.get::<serde_json::Value>(Lane::Prefetch, &path).await });
+        let request = runtime
+            .spawn(async move { api.lyrics_on(Lane::Prefetch, &reference_for_request).await });
         cx.spawn(async move |weak, cx| {
-            let answer: Result<Option<LyricDoc>, String> = match request.await {
-                Ok(Ok(fresh)) => Ok(doc_from_value(&fresh.value)),
+            let answer: Result<Option<nz_model::LyricsDoc>, String> = match request.await {
+                Ok(Ok(lyrics)) => Ok(doc_from(&lyrics)),
                 Ok(Err(error)) => Err(error.cause_fr().to_owned()),
                 Err(join) => Err(format!("la requête a échoué : {join}")),
             };
@@ -317,7 +293,7 @@ impl LyricsView {
         .detach();
     }
 
-    fn set_doc(&mut self, doc: Option<LyricDoc>) {
+    fn set_doc(&mut self, doc: Option<nz_model::LyricsDoc>) {
         match &doc {
             Some(doc) if !doc.synced.is_empty() => {
                 self.sizes = Rc::new(
@@ -358,7 +334,7 @@ impl LyricsView {
             self.active = -1;
             return;
         }
-        let Some(lines) = self.lines().map(<[LyricLine]>::to_vec) else {
+        let Some(lines) = self.lines().map(<[nz_model::LyricLine]>::to_vec) else {
             self.active = -1;
             return;
         };
@@ -553,10 +529,10 @@ mod tests {
 
     use super::*;
 
-    fn lines(times: &[i64]) -> Vec<LyricLine> {
+    fn lines(times: &[i64]) -> Vec<nz_model::LyricLine> {
         times
             .iter()
-            .map(|time| LyricLine {
+            .map(|time| nz_model::LyricLine {
                 time: *time,
                 text: format!("ligne {time}"),
             })
@@ -599,31 +575,44 @@ mod tests {
         assert_eq!(1_000 - 999, 1);
     }
 
+    /// The server's OWN body (the shape `neezer/dezer/lyrics.py` writes, and
+    /// what `crates/nz-model/tests/fixtures/lyrics-synced.json` captures): the
+    /// object, its lines sorted before they drive the timer, and no panel at all
+    /// when the server says `null`.
     #[test]
-    fn both_bodies_the_server_answers_are_read() {
-        // The archived/cold object.
-        let object = r#"{"lyrics":{"text":"un\ndeux","synced":[{"time":15000,"text":"deux"},
-                        {"time":0,"text":"un"}],"source":"archive"}}"#;
-        let doc = parse_body(object).expect("json").expect("a document");
+    fn the_servers_lyrics_body_becomes_the_panels_document() {
+        let answer: nz_model::Lyrics = serde_json::from_str(
+            r#"{"lyrics":{"text":"un\ndeux","synced":[{"time":15000,"text":"deux"},
+                        {"time":0,"text":"un"}],"source":"archive"}}"#,
+        )
+        .expect("the route's body");
+        let doc = doc_from(&answer).expect("a document");
         assert_eq!(doc.synced.len(), 2);
         assert_eq!(doc.synced[0].time, 0, "sorted, whatever the sidecar said");
         assert_eq!(doc.synced[0].text, "un");
         assert_eq!(doc.text, "un\ndeux");
+        assert!(
+            doc.synced
+                .windows(2)
+                .all(|pair| pair[0].time <= pair[1].time),
+            "the panel draws them in order, so the active index never jumps back"
+        );
 
-        // An older server's plain string is text, not a decode failure.
-        let plain = r#"{"lyrics":"des paroles sans temps"}"#;
-        let doc = parse_body(plain).expect("json").expect("a document");
+        // An older server's plain string is text, not a decode failure (rule 7).
+        let plain: nz_model::Lyrics =
+            serde_json::from_str(r#"{"lyrics":"des paroles sans temps"}"#).expect("plain body");
+        let doc = doc_from(&plain).expect("a document");
         assert!(doc.synced.is_empty());
         assert_eq!(doc.text, "des paroles sans temps");
 
         // Nothing to show is `null`, which is not an error.
-        assert_eq!(parse_body(r#"{"lyrics":null}"#), Ok(None));
-        assert!(parse_body("pas du json").is_err());
+        let none: nz_model::Lyrics = serde_json::from_str(r#"{"lyrics":null}"#).expect("null body");
+        assert_eq!(doc_from(&none), None);
     }
 
     #[test]
     fn a_document_built_from_its_lines_keeps_the_same_text() {
-        let doc = LyricDoc::from_synced(lines(&[0, 500]));
+        let doc = doc_from_synced(lines(&[0, 500]));
         assert_eq!(doc.text, "ligne 0\nligne 500");
     }
 
@@ -736,7 +725,8 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             });
             cx.run_until_parked();
-            if cx.update(|cx| lyrics.read(cx).lines().map(<[LyricLine]>::len)) == Some(3) {
+            if cx.update(|cx| lyrics.read(cx).lines().map(<[nz_model::LyricLine]>::len)) == Some(3)
+            {
                 break;
             }
             assert!(
