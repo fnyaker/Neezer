@@ -52,8 +52,10 @@ never committed; Rust 1.99.1):
 
 - `/dev/kvm` is `crw-rw-rw-`: `qemu-system-x86_64 -accel kvm -display none` runs as the user (ran
   until `timeout` killed it, no `failed to initialize kvm`). No Android SDK was installed; it now
-  lives in `~/.local/share/android-sdk` (cmdline-tools, platform-tools, NDK 30.0.16248370, emulator,
-  `system-images;android-35;default;x86_64`) — on disk, never `/tmp` (a 24 GB tmpfs in RAM).
+  lives in `~/.local/share/android-sdk` (5.2 GB: cmdline-tools, platform-tools, NDK 30.0.16248370,
+  emulator, platforms/build-tools 35, `system-images;android-35;default;x86_64`) — on disk, never
+  `/tmp` (a 24 GB tmpfs in RAM). `cargo-ndk 4.1.2` is installed in `~/.cargo/bin`, and the
+  `aarch64-linux-android` / `x86_64-linux-android` Rust targets are added.
 - **A separate Cargo workspace can depend on the desktop crates by path**: `nz-model`, `nz-player`,
   `nz-api` and `nz-cache` built unchanged from `~/.cache/neezer-proto/core` (their
   `version.workspace = true` / `serde = { workspace = true }` resolve against `desktop/Cargo.toml`).
@@ -67,9 +69,22 @@ never committed; Rust 1.99.1):
 - **`strip = true` deletes UniFFI's metadata**: bindgen on the stripped release `.so` said `No
   UniFFI metadata found`. Bindings are generated from the unstripped host DEBUG build; the Android
   release libraries may be stripped.
-- The prototype `.so` with tokio + reqwest/rustls + rusqlite (bundled SQLite) + the four crates:
-  602 KB stripped on x86_64 host (`opt-level = "s"`, thin LTO) — before symphonia, libopus,
-  rhythm and the GL renderer.
+- **cargo-ndk 4.1.2 + NDK 30 cross-compile the shared stack for `arm64-v8a`, API 26**: `nz-api`
+  (reqwest + rustls, whose crypto provider here is **aws-lc-rs** — C, built by the NDK's clang),
+  `nz-cache` (bundled SQLite), `rustls-platform-verifier` + its `-android` crate, `nz-player`,
+  `nz-model`, and all of `nz-audio`'s native dependencies (`opusic-sys` = libopus, `signalsmith-stretch`
+  C++, `rubato`, `cpal` + `ndk`). A cold arm64 release build took **685 s** with
+  `CARGO_BUILD_JOBS=4` (aws-lc and libopus dominate); an incremental one 11 s.
+- **`nz-audio` itself does NOT compile for Android today**: `output.rs` names
+  `cpal::HostId::PipeWire` and `cpal::HostId::Alsa`, which do not exist on that target (4 × E0599).
+  That is SC2's first job (the `cpal` feature, Linux hosts behind `cfg`).
+- The prototype's `.so` was 620 KB on arm64, but it called none of the crates (LTO dropped them):
+  that number says NOTHING about the real size. MB0 measures the first real one.
+- **The emulator boots headless**: AVD API 35 x86_64 (`pixel_6` profile), `-no-window -no-audio
+  -gpu swiftshader_indirect -no-boot-anim -no-snapshot -memory 3072 -cores 4`: `sys.boot_completed`
+  after **23 s** cold, the emulator process at **3.8 GB RSS** (hence two emulators at most). With
+  `-no-audio` the guest still has an AudioFlinger MIXER output on `AUDIO_DEVICE_OUT_SPEAKER` at
+  48 kHz, so AAudio has a device to open; whether it consumes at real time is MQ1's measure.
 
 **Pitfalls known before the first line** (each is repeated in the lots it concerns):
 
@@ -141,7 +156,7 @@ the desktop CI green; it is never forked into `mobile/`.
 | `nz-api` | **As is + 1 lot (SC3).** Lanes, `503`/`Retry-After`, 409 split, offline, cache seam, `SessionJar::at(path)` already injectable. | SC3 adds: a TOFU pin (`ApiBuilder::pinned_leaf_sha256`, accept platform-valid OR that exact leaf, `ApiError::Certificate{sha256, changed}`), `probe_certificate(url)` (handshake refused, nothing sent — `Ssl.kt`'s rule), a byte/request counter per screen tag, and documents the Android verifier init. `directories` stays (only used by `default_path`, which mobile never calls). |
 | `nz-cache` | **As is.** `Cache::open_with_cache_dir(data, cache)` takes both dirs. | Nothing. Data dir = `filesDir/neezer` (offline audio, SQLite), cache dir = `cacheDir/neezer` (covers, play cache — the system may clear it, which is what those are for). `covers::variant` (image crate) unused on mobile: Android decodes (see *Covers*). |
 | `nz-player` | **As is.** Pure queue/transport state machine, listen accounting, shuffle. | Nothing. |
-| `nz-audio` | **Reused + 1 lot (SC2).** The engine already has `Engine::new_offline` → `OfflineSink::render(&mut [f32])`, a pull-driven sink. | SC2 turns it into a supported EXTERNAL sink: `Engine::new_external(cfg, opener) -> (Engine, ExternalSink)` with `render`, `set_output(OutputInfo)` (rate, channels, `latency_frames` the clock subtracts — the party and the analysis need it), `note_underrun(n)`; puts `cpal` behind a default feature `cpal` so the Android build compiles none of it; `EngineConfig.spool_dir` is always passed (no `$XDG` default on Android). Desktop unchanged with default features. |
+| `nz-audio` | **Reused + 1 lot (SC2).** The engine already has `Engine::new_offline` → `OfflineSink::render(&mut [f32])`, a pull-driven sink. | SC2 turns it into a supported EXTERNAL sink: `Engine::new_external(cfg, opener) -> (Engine, ExternalSink)` with `render`, `Engine::set_external_output(OutputInfo)` (rate, channels, `latency_frames` the clock subtracts — the party and the analysis need it), `Engine::note_underruns(total)`; makes the crate compile for Android (today it does not: `HostId::PipeWire`/`Alsa`); puts `cpal` behind a default feature `cpal` so the Android build compiles none of it; `EngineConfig.spool_dir` is always passed (no `$XDG` default on Android). Desktop unchanged with default features. |
 | `nz-viz` | **As is.** Bars + scope geometry from `rhythm`. | Drawn by Compose `Canvas` (MB21). |
 | `nz-mpris` | **Not used** (Linux D-Bus). | Media3 is its Android counterpart. |
 | `nz-transcribe` | **Not used** (local whisper is desktop-only). | — |
@@ -515,9 +530,9 @@ holds **at most four Rust-building lots at once** (`CARGO_BUILD_JOBS=4` each) an
 
 | Wave | Lots (parallel) | Waits for |
 |---|---|---|
-| 0a | **SC0** shared-crate stubs | — |
-| 0b | **MB0** skeleton: Cargo + Gradle + UniFFI + cargo-ndk + CI | SC0 |
-| 1 | **MB2** core runtime · **MB1** design system · **SC2** engine external sink · **SC3** TLS pin + counters · SC1 `nz-analysis` · SC4 `nz-offline` · SC5 `nz-remote` · SC6 `nz-party` · LG1 logo · MQ1 test harness | MB0 |
+| 0a | **SC0** shared-crate stubs · **SC2** engine external sink + `cpal` feature (`nz-audio` must build for Android before any mobile crate depends on it) | — |
+| 0b | **MB0** skeleton: Cargo + Gradle + UniFFI + cargo-ndk + CI | SC0, SC2 |
+| 1 | **MB2** core runtime · **MB1** design system · **SC3** TLS pin + counters · SC1 `nz-analysis` · SC4 `nz-offline` · SC5 `nz-remote` · SC6 `nz-party` · LG1 logo · MQ1 test harness | MB0 |
 | 2 | **MB3a** AAudio output · **MB3b** player core · **MB4** setup/migration/updater/Deezer · MB5 home · MB5b invite + onboarding · MB6 search · MB7 artist/album/credits · MB8 library · MB10 track actions | MB1 + MB2 (+ SC2 for MB3a/b, SC3 for MB4) |
 | 3 | **MB3c** media service · MB9 playlist · MB11 now playing · MB12 audio effects · MB13 podcasts · MB14 discovery · MB15 offline · MB16 Réglages (user) · MB17 Réglages (admin) · MB19 remote · MB20 party · MB21 bars + scope | wave 2 (+ SC1/SC4/SC5/SC6 where named) |
 | 4 | MB18 genre studio · **MB22** worlds renderer · **MB24** car mode · MB25 Android Auto | MB3c (MB24, MB25), MB21 (MB22) |
@@ -527,7 +542,8 @@ holds **at most four Rust-building lots at once** (`CARGO_BUILD_JOBS=4` each) an
 ```mermaid
 graph LR
   SC0 --> MB0
-  MB0 --> MB1 & MB2 & SC1 & SC2 & SC3 & SC4 & SC5 & SC6 & LG1 & MQ1
+  SC2 --> MB0
+  MB0 --> MB1 & MB2 & SC1 & SC3 & SC4 & SC5 & SC6 & LG1 & MQ1
   SC2 --> MB3a & MB3b
   MB2 --> MB3b & MB4 & MB5 & MB5b & MB6 & MB7 & MB8 & MB10
   MB1 --> MB4 & MB5 & MB5b & MB6 & MB7 & MB8 & MB10
@@ -695,7 +711,7 @@ dependency pin and CI job exists, so that no later lot ever edits a shared file.
   { version = "0.9", features = ["audio", "api-level-26"] }`, `jni = "0.21"`, `libc`, `glow`,
   `khronos-egl` (dynamic), `rustls-platform-verifier` (the version reqwest's lock already has), and
   the shared crates by path (`nz-model`, `nz-api`, `nz-cache`, `nz-player`, `nz-audio` with
-  `default-features = false` (a no-op until SC2 makes `cpal` a default feature; no later edit needed), `nz-viz`, `nz-analysis`,
+  `default-features = false` (SC2, merged before MB0, made `cpal` a default feature), `nz-viz`, `nz-analysis`,
   `nz-offline`, `nz-remote`, `nz-party`, `appcore`, `rhythm`). Profile: release `opt-level = "s"`,
   `lto = "thin"`, `codegen-units = 1`, `strip = true`, `panic = "unwind"`; `[profile.release.package.X]
   opt-level = 3` for `nz-audio`, `symphonia*`, `rhythm`, `nscore`, `rubato`, `signalsmith-stretch`,
@@ -996,11 +1012,12 @@ Fin : branche <ta-branche>/sc1, PR « refactor(desktop): SC1 extract nz-analysis
 diff --stat, merge, section SC1 réécrite, `ao report --done`.
 ```
 
-### SC2 — `nz-audio`: external sink, `cpal` feature, output latency (wave 1)
+### SC2 — `nz-audio`: external sink, `cpal` feature, output latency (wave 0a)
 
 **Goal.** Let a platform output (AAudio, AudioTrack, later CoreAudio) drive the engine with the
-same clock the desktop's cpal output gives it. **Depends on**: MB0 (only so that the mobile CI
-exists to prove it). **Exclusive files**: `desktop/crates/nz-audio/**`.
+same clock the desktop's cpal output gives it, and make the crate BUILD for Android at all (today
+`output.rs` names `cpal::HostId::PipeWire`/`Alsa`, which do not exist there: 4 × E0599, measured).
+**Depends on**: nothing (runs beside SC0; MB0 waits for both). **Exclusive files**: `desktop/crates/nz-audio/**`.
 **Contract.**
 ```rust
 // nz-audio/Cargo.toml: [features] default = ["cpal"]; cpal = ["dep:cpal"]
@@ -1025,7 +1042,7 @@ false`, everything that names cpal is compiled out (`output_devices()` returns a
 renders a gapless seam sample-exact (the D5 assertion) and reports `position` minus the latency
 given; `cargo ndk -t arm64-v8a -P 26 build -p nz-audio --no-default-features` passes and its
 `cargo tree` has no `cpal`; `libopus` (symphonia-adapter-libopus, bundled) and `signalsmith-stretch`
-cross-compile (C/C++ through the NDK's clang) — write what each needed.
+cross-compile (C/C++ through the NDK's clang — measured in the planning prototype: they do, with NDK 30 and cargo-ndk 4.1.2) — write what each needed.
 **Pitfalls.** `render` must stay allocation-free and lock-free; the latency changes on a route change
 (the platform calls `set_external_output` again).
 
@@ -1062,7 +1079,7 @@ Règles (non négociables, apprises sur l'app desktop) :
 - Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
   scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
 Fin : branche <ta-branche>/sc2, PR « feat(desktop): SC2 nz-audio external sink for platform outputs »,
-CI desktop ET mobile vertes, rebase + diff --stat, merge, section SC2 réécrite, `ao report --done`.
+CI desktop verte (la CI mobile n'existe pas encore : la preuve Android est le cargo ndk build de la PR), rebase + diff --stat, merge, section SC2 réécrite, `ao report --done`.
 ```
 
 ### SC3 — `nz-api`: certificate pin (TOFU), probe, counters (wave 1)
