@@ -13,7 +13,8 @@ use serde_json::Value;
 use crate::client::{Api, encode};
 use crate::endpoints::query;
 use crate::error::ApiError;
-use nz_model::{Party, PartyMine, RemoteLink, RemoteLinks};
+use crate::lanes::Lane;
+use nz_model::{Party, PartyMine, PartyPublish, PartyState, RemoteLink, RemoteLinks};
 
 /// `POST /api/remote/links`'s answer: the new link. `link.token` is shown ONCE —
 /// it is the capability another device claims.
@@ -94,10 +95,40 @@ impl Api {
         .await
     }
 
-    /// `POST /api/party/<id>/state` — the host's anchor (clock, position, next
-    /// track, gap), published on the output clock's own beat.
-    pub async fn party_publish(&self, id: &str, state: &Value) -> Result<(), ApiError> {
-        self.send_none(Method::POST, &format!("/party/{}/state", encode(id)), state)
+    /// `POST /api/party/<id>/state` — the host's timeline (clock, position, the
+    /// next handover, the normalisation level), published on the output clock's
+    /// own beat. A heartbeat is the same route with `hb: true` and no track.
+    ///
+    /// The answer is the host's own view (`_host_view`), which is `Party`.
+    pub async fn party_publish(&self, id: &str, state: &PartyPublish) -> Result<Party, ApiError> {
+        self.send_json(Method::POST, &format!("/party/{}/state", encode(id)), state)
             .await
+    }
+
+    /// `GET /api/party/<id>` — the timeline a GUEST polls, no session needed
+    /// (the SPA's `lib/party/guest.js`; `/state` is the HOST's POST, not this
+    /// read). `listener` is the seat the guest holds (`?l=`), which marks it
+    /// alive and gets `me` back; `quality_ms` is its current sync estimate
+    /// (`?q=`, milliseconds) and `state` its word for the host's list (`?st=`).
+    pub async fn party_state(
+        &self,
+        id: &str,
+        listener: Option<&str>,
+        quality_ms: Option<u32>,
+        state: Option<&str>,
+    ) -> Result<PartyState, ApiError> {
+        let path = format!("/party/{}", encode(id));
+        self.fetch(
+            Lane::User,
+            &format!(
+                "{path}{}",
+                query(&[
+                    ("l", listener.map(str::to_owned)),
+                    ("q", quality_ms.map(|ms| ms.to_string())),
+                    ("st", state.map(str::to_owned)),
+                ])
+            ),
+        )
+        .await
     }
 }

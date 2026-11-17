@@ -414,6 +414,15 @@ fn run(
 }
 
 fn fail(bus: &EventBus, id: &str, message: &str, status: &VoiceStatus) {
+    // **A cancelled decode is not a failure.** The engine stops a voice the
+    // moment the person changes track, seeks or quits; the read it was in the
+    // middle of then fails (`corps interrompu`, a closed body, `Interrupted`),
+    // and that failure is the click the person just made. Reporting it put an
+    // error toast on every fast track change (D10b's report). A voice that was
+    // stopped has nothing to tell anybody: the mixer has already forgotten it.
+    if status.is_stopped() {
+        return;
+    }
     status.fail();
     bus.emit(EngineEvent::Error {
         id: Some(id.to_string()),
@@ -665,6 +674,43 @@ mod tests {
         let mut out = Vec::new();
         to_stereo(&[1.0, 2.0, 3.0, 4.0], 1, 2, 2, &mut out);
         assert_eq!(out, vec![3.0, 4.0], "a seek skip drops whole source frames");
+    }
+
+    /// **A cancelled decode says nothing.** A stopped voice's read fails where it
+    /// stood (`corps interrompu`, a body closed by the server, a file that went
+    /// away), and that failure is the person's own track change: it must not
+    /// become an `EngineEvent::Error` — which the app turns into an error toast
+    /// ("Lecture impossible"). A voice that was NOT stopped still reports, so a
+    /// real decode failure keeps its cause.
+    #[test]
+    fn a_stopped_voice_reports_nothing_and_a_live_one_reports_its_cause() {
+        let bus = EventBus::new();
+        let events = bus.subscribe();
+
+        let cancelled = VoiceStatus::default();
+        cancelled.stop();
+        fail(
+            &bus,
+            "track-a",
+            "lecture impossible : corps interrompu",
+            &cancelled,
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "a cancelled voice must not raise an error"
+        );
+
+        let live = VoiceStatus::default();
+        fail(&bus, "track-b", "décodage impossible : bitstream", &live);
+        let event = events.try_recv().expect("a real failure is reported");
+        match event {
+            EngineEvent::Error { id, message } => {
+                assert_eq!(id.as_deref(), Some("track-b"));
+                assert!(message.contains("décodage impossible"));
+            }
+            other => panic!("expected an Error, got {other:?}"),
+        }
+        assert!(live.is_stopped() || live.is_ended(), "the voice is over");
     }
 
     #[test]
