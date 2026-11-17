@@ -34,6 +34,8 @@ from playhouse.db_url import parseresult_to_dict, schemes
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+from .media_types import transcode_mimetype
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "20261123"
@@ -663,10 +665,7 @@ class Track(PathMixin, _Model):
             and prefs.format != self.suffix()
         ):
             info["transcodedSuffix"] = prefs.format
-            info["transcodedContentType"] = (
-                mimetypes.guess_type("dummyname." + prefs.format, False)[0]
-                or "application/octet-stream"
-            )
+            info["transcodedContentType"] = transcode_mimetype(prefs.format)
 
         return info
 
@@ -1431,10 +1430,7 @@ class PodcastEpisode(_Model):
 
         if prefs is not None and prefs.format is not None and prefs.format != suffix:
             info["transcodedSuffix"] = prefs.format
-            info["transcodedContentType"] = (
-                mimetypes.guess_type("dummyname." + prefs.format, False)[0]
-                or "application/octet-stream"
-            )
+            info["transcodedContentType"] = transcode_mimetype(prefs.format)
         return info
 
 

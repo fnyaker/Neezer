@@ -14,7 +14,16 @@ players that trust the header refuse. The targets are a closed set, so
 import mimetypes
 import unittest
 
-from neezer.db import Track
+from neezer.db import (
+    Album,
+    Artist,
+    ClientPrefs,
+    Folder,
+    PodcastChannel,
+    PodcastEpisode,
+    Track,
+    User,
+)
 from neezer.managers.folder import FolderManager
 from neezer.scanner import Scanner
 
@@ -60,6 +69,67 @@ class MimeTableTestCase(unittest.TestCase):
 
         self.assertEqual(transcode_mimetype("zzz"), "application/octet-stream")
         self.assertEqual(transcode_mimetype(None), "application/octet-stream")
+
+
+class TranscodedContentTypeTestCase(ApiTestBase):
+    """`as_subsonic_child`'s `transcodedContentType`, with no host mime table.
+
+    `neezer/api/media.py` answers a stream's Content-Type from
+    `neezer.media_types` (PR #280); `neezer/db.py` announces the same value
+    about a track or an episode, so it must not read the host's tables either.
+    """
+
+    def setUp(self):
+        super().setUp()
+        Folder.create(name="Root", root=True, path="tests")
+        Folder.create(
+            name="Folder",
+            root=False,
+            path="tests/assets",
+            parent=Folder.get(name="Root"),
+        )
+        artist = Artist.create(name="Artist")
+        album = Album.create(name="Album", artist=artist)
+        self.track = Track.create(
+            title="Track",
+            album=album,
+            artist=artist,
+            disc=1,
+            number=1,
+            path="tests/assets/empty",
+            folder=Folder.get(name="Folder"),
+            root_folder=Folder.get(name="Root"),
+            duration=2,
+            bitrate=320,
+            last_modification=0,
+        )
+        self.user = User.get(name="alice")
+        channel = PodcastChannel.create(
+            user=self.user, url="https://example.test/feed"
+        )
+        self.episode = PodcastEpisode.create(
+            channel=channel,
+            title="Episode",
+            path="episode.mp3",
+            duration=60,
+            status="completed",
+        )
+        # What a client that asked for ogg carries (`request.client`).
+        self.prefs = ClientPrefs.create(
+            user=self.user, client_name="tests", format="ogg"
+        )
+
+    def test_a_song_announces_audio_ogg_without_a_host_mime_table(self):
+        with _NoHostMimeTable():
+            info = self.track.as_subsonic_child(self.user, self.prefs)
+        self.assertEqual(info["transcodedSuffix"], "ogg")
+        self.assertEqual(info["transcodedContentType"], "audio/ogg")
+
+    def test_a_podcast_episode_announces_audio_ogg_without_a_host_mime_table(self):
+        with _NoHostMimeTable():
+            info = self.episode.as_subsonic_episode(self.user, self.prefs)
+        self.assertEqual(info["transcodedSuffix"], "ogg")
+        self.assertEqual(info["transcodedContentType"], "audio/ogg")
 
 
 class TranscodeContentTypeTestCase(ApiTestBase):
