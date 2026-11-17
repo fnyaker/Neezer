@@ -1009,3 +1009,23 @@ which is why the four such answers in `webui/services.py` and `webui/onboarding_
 closed as false positives too. A line a scanner flagged stays **untouched**: rewriting it moves the
 alert onto the new line instead of closing it, so a false positive is dismissed by the API, and only
 a real problem changes the code.
+
+**Code scanning in this area** (CodeQL, Semgrep, Bandit): a finding is settled on the line it points
+at — `# nosec B603 - fixed argv, the media path is one element, no shell` on every ffmpeg call,
+`# nosemgrep: <full rule id>` on the line **before** for Semgrep — never by disabling a rule. A
+swallowed exception that hides a real failure gets a `logger.debug(..., exc_info=True)` instead, and
+only teardown (a `close()` in a `finally`) keeps a bare `pass`.
+**Blowfish and ECB are false positives to DISMISS, not to silence in `decrypt_blocks`.** Deezer's
+stream format picks the cipher (BF-CBC), the key and the chaining; the ECB object is the raw block
+primitive under that chain and nothing of ours is protected by it (`provider.decrypt_blocks`,
+byte-identical to CBC, checked against OpenSSL in `test_deezer_stream`). Putting `# nosec B304` /
+`# nosemgrep:` there is tempting but **turns the PR's code-scanning gate red**: CodeQL's alert
+fingerprint covers the enclosing function, so any edit inside `decrypt_blocks` re-reports the
+pre-existing `py/weak-cryptographic-algorithm` alert as "new in this pull request" (measured: three
+pushes, the gate stayed red until the function was byte-identical to master again). Same for
+`provider.resolve`, which carries a `py/log-injection` alert: leave those two functions alone, or
+expect the gate to complain.
+**Log injection needs no per-call escaping:** `neezer/logsafe.py` escapes the line breaks of every
+record's ARGUMENTS, so untrusted text is always passed as an argument and never interpolated into
+the format string (`tests/test_security.py` pins it; the per-site tests in
+`test_deezer_lyrics`/`test_deezer_resilience` fail if one is turned into an f-string).

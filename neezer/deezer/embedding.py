@@ -46,7 +46,7 @@ import math
 import os
 import shutil
 import struct
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed argv list, never a shell
 import threading
 import time
 
@@ -200,7 +200,7 @@ def _config() -> dict:
             if out:
                 _config_cache.update(out)
                 return out
-    except Exception:
+    except Exception:  # nosec B110 - outside a Flask app context there is no config to read; the file config below answers
         pass
     if _config_cache:
         return dict(_config_cache)
@@ -519,7 +519,7 @@ def _decode(path, seconds=None, start=None):
     if seconds:
         cmd += ["-t", f"{seconds:.3f}"]
     cmd += ["-map", "0:a:0", "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "pipe:1"]
-    raw = subprocess.run(
+    raw = subprocess.run(  # nosec B603 - fixed argv, the media path is one element, no shell
         cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         timeout=FFMPEG_TIMEOUT, check=True,
     ).stdout
@@ -1078,7 +1078,7 @@ def self_test(paths, progress=None):
 def _probe_duration(path):
     import re
 
-    out = subprocess.run(
+    out = subprocess.run(  # nosec B603 B607 - fixed argv, ffmpeg from PATH, no shell
         ["ffmpeg", "-nostats", "-v", "info", "-i", path, "-f", "null", "-"],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         timeout=FFMPEG_TIMEOUT, check=False,

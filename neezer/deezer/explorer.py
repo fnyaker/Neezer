@@ -502,7 +502,7 @@ def explore_once(provider, throttle, *, rng=None, targets=TARGETS_PER_BATCH,
     seams for the tests."""
     from . import analysis as ana
 
-    rng = rng or random.Random()
+    rng = rng or random.Random()  # nosec B311 - a draw for variety, not a secret
     api = provider.dz.api
     analyze = analyze or ana.analyze_file
     fetch = fetch or (lambda url, dest: fetch_preview(provider, url, dest))

@@ -61,6 +61,22 @@ class ParsingTestCase(unittest.TestCase):
             self.assertEqual(scheduler._parse_at(None), (4, 0))
             self.assertEqual(scheduler._parse_at(""), (4, 0))
 
+    def test_a_hostile_sync_at_cannot_forge_a_log_line(self):
+        # sync_at is typed in Réglages, and the value reaches the log as an
+        # ARGUMENT: neezer/logsafe.py escapes the line breaks of every such
+        # argument, so it cannot forge a second entry (py/log-injection).
+        from neezer import logsafe
+
+        logsafe.install()
+        with self.assertLogs(scheduler.logger, "WARNING") as captured:
+            self.assertEqual(
+                scheduler._parse_at("04:00\nINFO  neezer.deezer.scheduler: sync ok"),
+                (4, 0),
+            )
+        self.assertEqual(len(captured.output), 1)
+        self.assertNotIn("\n", captured.output[0])
+        self.assertNotIn("\r", captured.output[0])
+
     def _until(self, now, hour, minute):
         class Fixed(datetime):
             @classmethod

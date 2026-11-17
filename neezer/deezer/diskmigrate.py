@@ -241,7 +241,7 @@ def _run(app, job):
         finally:
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - the migration run is over; a close that fails has nothing left to report
                 pass
 
 
@@ -284,7 +284,7 @@ def resume_if_interrupted(app):
             finally:
                 try:
                     close_connection()
-                except Exception:
+                except Exception:  # nosec B110 - the thread is done with the database either way
                     pass
         if fresh or forced:
             logger.info("Resuming the interrupted archive migration")

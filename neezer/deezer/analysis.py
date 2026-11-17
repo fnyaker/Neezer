@@ -47,7 +47,7 @@ import math
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed argv list, never a shell
 import threading
 import time
 import unicodedata
@@ -310,7 +310,7 @@ def _spectral(path):
     reported "analysis failed" for a file that is in perfect health, so what
     counts is whether there is a measurement, not how the process ended.
     """
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - fixed argv, the media path is one element, no shell
         _spectral_cmd(path), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         timeout=FFMPEG_TIMEOUT, check=False,
     )
@@ -347,7 +347,7 @@ def _spectral(path):
             "analysis: ffmpeg died of signal %s on %s; retrying without ebur128",
             -proc.returncode, path,
         )
-        retry = subprocess.run(
+        retry = subprocess.run(  # nosec B603 - fixed argv, the media path is one element, no shell
             _spectral_cmd(path, loudness=False),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=FFMPEG_TIMEOUT, check=False,
@@ -388,7 +388,7 @@ def _low_envelope(path):
         "-af", "lowpass=f=170",
         "-ac", "1", "-ar", str(_SR), "-f", "u8", "pipe:1",
     ]
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - fixed argv, the media path is one element, no shell
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         timeout=FFMPEG_TIMEOUT, check=False,
     )
@@ -1513,7 +1513,7 @@ def probe_audio(path):
     """``(sample rate, channels)`` of the first audio stream, read from ffmpeg's
     own banner — the image ships ffmpeg alone, no ffprobe. ``ValueError`` with
     ffmpeg's words when there is no audio stream to read."""
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 B607 - fixed argv, ffmpeg from PATH, no shell
         ["ffmpeg", "-hide_banner", "-nostdin", "-i", path],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60, check=False,
     )

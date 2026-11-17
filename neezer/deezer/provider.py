@@ -28,7 +28,7 @@ import requests
 from requests.utils import get_environ_proxies, select_proxy
 
 try:  # pycryptodome
-    from Crypto.Cipher import Blowfish
+    from Crypto.Cipher import Blowfish  # nosec B413 - pycryptodome, the maintained fork, not the pycrypto B413 targets
 except ImportError:  # pycryptodomex
     from Cryptodome.Cipher import Blowfish
 
@@ -524,7 +524,7 @@ class DeezerProvider:
         if closer is not None:
             try:
                 closer()
-            except Exception:
+            except Exception:  # nosec B110 - the session is dropped either way; a close that fails leaves nothing to report
                 pass
 
     def relogin(self) -> Deezer:

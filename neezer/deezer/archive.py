@@ -666,7 +666,7 @@ class _LiveArchive:
         try:
             _database.connect(reuse_if_open=True)
         except Exception:
-            pass
+            logger.debug("Download thread could not open the database", exc_info=True)
         stopped = False
         try:
             self.dest.parent.mkdir(parents=True, exist_ok=True)
@@ -713,7 +713,7 @@ class _LiveArchive:
             _live_release(self._key, self)
             try:
                 _database.close()
-            except Exception:
+            except Exception:  # nosec B110 - the download's outcome is already recorded; a close that fails says nothing
                 pass
             if idle:
                 self._unlink_tmp()

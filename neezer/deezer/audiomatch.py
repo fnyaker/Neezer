@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed argv list, never a shell
 import threading
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def decode(src: str | None = None, chunks=None, seconds: float | None = MAX_SECO
 
     cmd = _cmd(src or "pipe:0", seconds)
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # nosec B603 - fixed argv, the media path is one element, no shell
             cmd,
             stdin=subprocess.PIPE if chunks is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -105,7 +105,7 @@ def decode(src: str | None = None, chunks=None, seconds: float | None = MAX_SECO
                 if close:
                     try:
                         close()
-                    except Exception:
+                    except Exception:  # nosec B110 - the caller's stream is done with either way
                         pass
                 try:
                     proc.stdin.close()

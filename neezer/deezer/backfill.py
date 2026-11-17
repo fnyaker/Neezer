@@ -129,7 +129,7 @@ def run(provider, tracks, episodes, on_event=None, should_stop=None) -> dict:
             try:
                 on_event(kind)
             except Exception:
-                pass
+                logger.debug("Archive sweep progress callback failed", exc_info=True)
 
     workload.renice(10)
     gate = sweep_gate(should_stop)
@@ -269,6 +269,7 @@ def archive_tracks(app, tracks, event: str | None = None) -> int:
             if getattr(t, "deezer_id", None) and _needs_file(t):
                 ids.append(t.deezer_id)
         except Exception:
+            logger.debug("Could not tell whether %r needs a file", t, exc_info=True)
             continue
     return archive_now(app, deezer_ids=ids)
 
@@ -568,7 +569,7 @@ def sweep_for(
             try:
                 on_total(total)
             except Exception:
-                pass
+                logger.debug("Archive sweep total callback failed", exc_info=True)
         if not total:
             return dict(IDLE)
         logger.info("Archiving %d missing item(s) for %s", total, user.name)

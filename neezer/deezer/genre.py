@@ -192,7 +192,7 @@ def active_head():
             temp = float((json.loads(row.metrics or "{}") or {}).get("temperature") or 1.0)
             if 0.25 <= temp <= 8.0:
                 head["temperature"] = temp
-        except Exception:
+        except Exception:  # nosec B110 - a metric that will not parse keeps the calibrated 1.0
             pass
         head["families"] = _families(row.metrics, labels)
         head["inputs"] = _inputs(row.metrics, dim)
