@@ -101,10 +101,10 @@ class AggregateException(SubsonicAPIException):
             if not isinstance(exc, SubsonicAPIException):
                 # Try to convert regular exceptions to SubsonicAPIExceptions
                 handler = current_app._find_error_handler(exc)  # meh
-                if handler:
-                    exc = handler(exc)
-                    assert isinstance(exc, SubsonicAPIException)
-                else:
+                exc = handler(exc) if handler else exc
+                # Not an assert: it disappears under `python -O`, which let a
+                # handler's plain exception reach the response formatter.
+                if not isinstance(exc, SubsonicAPIException):
                     exc = GenericError(str(exc))
             self.exceptions.append(exc)
 

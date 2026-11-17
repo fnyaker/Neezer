@@ -9,6 +9,7 @@ API_VERSION = "1.12.0"
 
 import binascii
 import logging
+import re
 import uuid
 from flask import request, current_app
 from flask import Blueprint
@@ -63,9 +64,23 @@ def _auth_rate_limited(username=None):
     )
 
 
+# A failed-login line is read by operators and parsed by log shippers. The user
+# name and the address come straight from the request, so a CR/LF or an escape
+# sequence in them would forge or hide an entry.
+_LOG_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _loggable(value, limit=64):
+    """One log line per event, whatever the client put in the field."""
+    text = "" if value is None else str(value)
+    return _LOG_CONTROL_RE.sub("?", text)[:limit]
+
+
 def _record_auth_failure(username):
     logger.error(
-        "Failed login attempt for user %s (IP: %s)", username, request.remote_addr
+        "Failed login attempt for user %s (IP: %s)",
+        _loggable(username),
+        _loggable(request.remote_addr),
     )
     if not current_app.testing:
         auth_limiter.record_failure(request.remote_addr, username)

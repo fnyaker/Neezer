@@ -1029,3 +1029,14 @@ expect the gate to complain.
 record's ARGUMENTS, so untrusted text is always passed as an argument and never interpolated into
 the format string (`tests/test_security.py` pins it; the per-site tests in
 `test_deezer_lyrics`/`test_deezer_resilience` fail if one is turned into an f-string).
+
+**Scanner suppressions in `neezer/api/`, `neezer/managers/` and `neezer/lastfm.py`** state the
+mechanism, never "safe". `media._popen` receives an argv list built from the operator's TRANSCODING
+config, so a title or a path is one argument and never a command (the only client-chosen parts are an
+`int` bitrate, a `[a-z0-9]{1,8}` format and a float offset). The Subsonic token `md5(password + salt)`
+and Last.fm's `api_sig` are md5 **by wire protocol**, and the SHA1 branch only verifies a pre-argon2
+hash that the same successful login rewrites to argon2: those three digest choices are what keeps an
+old client and an old database working (rule 7). A failed login goes through `api._loggable` (control
+characters replaced, 64 chars), so a user name cannot forge a second log entry. `/getCoverArt` treats
+`Folder.cover_art` as a file NAME (`basename`) and resolves the result through `_local_file`, so a
+hand-edited or restored row cannot read outside the library.

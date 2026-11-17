@@ -1,0 +1,111 @@
+# This file is part of Neezer.
+#
+# Distributed under terms of the GNU AGPLv3 license.
+
+"""Regressions for the CodeQL/Semgrep fixes that cover real risks.
+
+Both tests fail on the code they replace: one because a CR/LF in the submitted
+user name reached the log record verbatim, the other because a folder row whose
+``cover_art`` column held a relative path served a file outside the folder.
+"""
+
+import logging
+import os
+import os.path
+import shutil
+import tempfile
+import unittest
+
+from PIL import Image
+
+from neezer.db import Folder
+
+from .apitestbase import ApiTestBase
+from ..testbase import TestBase
+
+
+class AuthFailureLogTestCase(TestBase):
+    __with_api__ = True
+
+    def test_user_name_cannot_forge_a_log_line(self):
+        from neezer.api import _record_auth_failure
+
+        records = []
+
+        class Collector(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        collector = Collector()
+        log = logging.getLogger("neezer.api")
+        log.addHandler(collector)
+        try:
+            with self.request_context(
+                "/rest/ping.view", environ_base={"REMOTE_ADDR": "203.0.113.9"}
+            ):
+                _record_auth_failure(
+                    "eve\nERROR admin logged in from 10.0.0.1\rFAILED"
+                )
+        finally:
+            log.removeHandler(collector)
+
+        self.assertEqual(len(records), 1)
+        line = records[0].getMessage()
+        # Exactly one line, and the attempt is still readable as evidence.
+        self.assertNotIn("\n", line)
+        self.assertNotIn("\r", line)
+        self.assertIn("eve?ERROR admin logged in from 10.0.0.1?FAILED", line)
+
+
+class CoverArtPathTestCase(ApiTestBase):
+    def setUp(self):
+        super().setUp()
+        self.music = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.music, True)
+        self.outside = os.path.join(os.path.dirname(self.music), ".cover-outside.jpg")
+        Image.new("RGB", (8, 8), (12, 34, 56)).save(self.outside, "JPEG")
+        self.addCleanup(os.remove, self.outside)
+
+    def _cover_query(self, folder):
+        return {
+            "u": "alice",
+            "p": "Alic3",
+            "c": "tests",
+            "id": str(folder.id),
+        }
+
+    def test_folder_cover_cannot_escape_its_folder(self):
+        folder = Folder.create(
+            name="Root",
+            path=self.music,
+            root=True,
+            cover_art="../.cover-outside.jpg",
+        )
+        # A relative cover_art used to be joined as-is: this answered with a
+        # real image that lives outside the library.
+        with self.client.get(
+            "/rest/getCoverArt.view", query_string=self._cover_query(folder)
+        ) as rv:
+            self.assertNotEqual(
+                (rv.status_code, rv.mimetype),
+                (200, "image/jpeg"),
+                "served a cover file from outside the folder",
+            )
+        self._make_request("getCoverArt", {"id": str(folder.id)}, error=70)
+
+    def test_a_cover_inside_the_folder_is_still_served(self):
+        Image.new("RGB", (9, 9), (1, 2, 3)).save(
+            os.path.join(self.music, "cover.jpg"), "JPEG"
+        )
+        folder = Folder.create(
+            name="Root", path=self.music, root=True, cover_art="cover.jpg"
+        )
+        with self.client.get(
+            "/rest/getCoverArt.view", query_string=self._cover_query(folder)
+        ) as rv:
+            self.assertEqual(rv.status_code, 200)
+            self.assertEqual(rv.mimetype, "image/jpeg")
+
+
+if __name__ == "__main__":
+    unittest.main()

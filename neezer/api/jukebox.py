@@ -72,7 +72,7 @@ def jukebox_control():
         else:
             # Subsonic's gain is 0.0..1.0. float() also accepts "nan" and
             # "inf", which would reach the player as a volume.
-            gain = float(gain)
+            gain = float(gain)  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - nan/inf are rejected by math.isfinite just below
             if not math.isfinite(gain):
                 raise GenericError("Invalid gain")
             args = (min(max(gain, 0.0), 1.0),)

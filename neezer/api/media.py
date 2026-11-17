@@ -15,7 +15,7 @@ import mimetypes
 import os.path
 import re
 import shlex
-import subprocess
+import subprocess  # nosec B404 - an argv list from the operator's config, never a shell
 import zlib
 from functools import wraps
 
@@ -183,6 +183,20 @@ def _prefetch_next(res):
     pf.enqueue_many(siblings, count)
 
 
+def _popen(argv, **kwargs):
+    """Start a transcoder from an argv list, never through a shell.
+
+    ``argv`` is the operator's TRANSCODING template (``shlex.split``) with each
+    per-track value substituted into one existing element. Nothing here is
+    re-parsed by a shell, so a title, an album name or a path stays a single
+    argument instead of becoming a command. The client-influenced parts are an
+    ``int`` bitrate, a ``[a-z0-9]{1,8}`` format and a float offset.
+    """
+    return subprocess.Popen(  # nosec B603  # nosemgrep: python.lang.security.dangerous-subprocess-use.dangerous-subprocess-use, python.flask.security.injection.subprocess-injection.subprocess-injection - argv list from the operator's config, no shell
+        argv, **kwargs
+    )
+
+
 def prepare_transcoding_cmdline(
     base_cmdline, res, input_format, output_format, output_bitrate
 ):
@@ -253,7 +267,7 @@ def stream_media():
     time_offset = 0.0
     if "timeOffset" in request.values:
         try:
-            time_offset = float(request.values["timeOffset"])
+            time_offset = float(request.values["timeOffset"])  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - nan/inf are rejected by math.isfinite just below
         except (TypeError, ValueError):
             time_offset = None
         if time_offset is None or not math.isfinite(time_offset) or time_offset < 0:
@@ -343,14 +357,14 @@ def stream_media():
                 # stdout) — a source of "random freezes" under load.
                 if transcoder:
                     dec_proc = None
-                    proc = subprocess.Popen(
+                    proc = _popen(
                         transcoder, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
                     )
                 else:
-                    dec_proc = subprocess.Popen(
+                    dec_proc = _popen(
                         decoder, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
                     )
-                    proc = subprocess.Popen(
+                    proc = _popen(
                         encoder,
                         stdin=dec_proc.stdout,
                         stdout=subprocess.PIPE,
@@ -581,7 +595,13 @@ def _cover_from_collection(obj, extract=True, user=None):
     cover_path = None
 
     if isinstance(obj, Folder) and obj.cover_art:
-        cover_path = os.path.join(obj.path, obj.cover_art)
+        # `cover_art` is a file NAME the scanner (or a Deezer sidecar) wrote in
+        # this folder, never a path. Reducing it to its basename keeps a
+        # hand-edited or restored row from turning /getCoverArt into an
+        # arbitrary-file read.
+        name = os.path.basename(obj.cover_art)
+        if name not in ("", os.curdir, os.pardir):
+            cover_path = os.path.join(obj.path, name)
 
     elif isinstance(obj, Album):
         tracks = Track.visible(obj.tracks, user)
@@ -601,6 +621,20 @@ def _cover_from_collection(obj, extract=True, user=None):
     if not cover_path or not os.path.isfile(cover_path):
         return None
     return cover_path
+
+
+def _local_file(path):
+    """The resolved path of a real file, or None.
+
+    Cover paths come from the database (a folder's ``cover_art``), the
+    extracted-art cache and the Deezer archive. Resolving the path and
+    requiring a regular file means the endpoint serves the file it named and
+    nothing else.
+    """
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    return real if os.path.isfile(real) else None
 
 
 def _get_cover_path(eid):
@@ -660,6 +694,7 @@ def cover_art():
 
             cover_path = deezer_cover_path(provider, cache, eid)
 
+    cover_path = _local_file(cover_path)
     if not cover_path:
         raise NotFound("Cover art")
 

@@ -87,7 +87,11 @@ class LastFm:
             k = k.encode("utf-8")
             v = v.encode("utf-8") if isinstance(v, str) else str(v).encode("utf-8")
             sig_str += k + v
-        sig = hashlib.md5(sig_str + self.__api_secret).hexdigest()
+        # Last.fm's API signature IS md5(sorted params + secret): both sides
+        # compute the same digest, so this is the protocol, not a password hash.
+        sig = hashlib.md5(  # nosec B324  # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5 - the Last.fm API signature is md5 by protocol
+            sig_str + self.__api_secret
+        ).hexdigest()
 
         kwargs["api_sig"] = sig
         kwargs["format"] = "json"

@@ -53,7 +53,7 @@ def _archive_added(tracks):
         backfill.archive_tracks(
             current_app._get_current_object(), tracks, event="on_playlist_add"
         )
-    except Exception:
+    except Exception:  # nosec B110 - the playlist edit already succeeded; archiving is best-effort
         pass
 
 

@@ -23,12 +23,12 @@ from argon2 import PasswordHasher
 from argon2.exceptions import Argon2Error
 from peewee import IntegrityError
 
-try:  # pycryptodome
-    from Crypto.Cipher import AES
-    from Crypto.Random import get_random_bytes
+try:  # pycryptodome (the maintained fork of pyCrypto), or pycryptodomex
+    from Crypto.Cipher import AES  # nosec B413 - pycryptodome, not the abandoned pyCrypto
+    from Crypto.Random import get_random_bytes  # nosec B413 - pycryptodome, not the abandoned pyCrypto
 except ImportError:  # pycryptodomex
-    from Cryptodome.Cipher import AES
-    from Cryptodome.Random import get_random_bytes
+    from Cryptodome.Cipher import AES  # nosec B413 - pycryptodomex, not the abandoned pyCrypto
+    from Cryptodome.Random import get_random_bytes  # nosec B413 - pycryptodomex, not the abandoned pyCrypto
 
 from ..db import Invite, PodcastChannel, ProviderAccount, Track, User, db, now
 from ..utils import get_secret_key
@@ -105,8 +105,8 @@ BANNED_PASSWORDS = frozenset(
 # LAN installs keep working; set NEEZER_MIN_PASSWORD_LENGTH=12 on anything
 # reachable from the internet. The pre-rebrand SUPYSONIC_MIN_PASSWORD_LENGTH is
 # still read.
-_MIN_PASSWORD_LENGTH_ENV = "NEEZER_MIN_PASSWORD_LENGTH"
-_LEGACY_MIN_PASSWORD_LENGTH_ENV = "SUPYSONIC_MIN_PASSWORD_LENGTH"
+_MIN_PASSWORD_LENGTH_ENV = "NEEZER_MIN_PASSWORD_LENGTH"  # nosec B105 - the NAME of an environment variable, not a password
+_LEGACY_MIN_PASSWORD_LENGTH_ENV = "SUPYSONIC_MIN_PASSWORD_LENGTH"  # nosec B105 - the NAME of an environment variable, not a password
 
 
 def _min_password_length() -> int:
@@ -567,7 +567,9 @@ class UserManager:
             password = decrypt_password(user.password_clear)
         except Exception:
             return None
-        expected = hashlib.md5((password + salt).encode("utf-8")).hexdigest()
+        expected = hashlib.md5(  # nosec B324  # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5, python.lang.security.audit.md5-used-as-password.md5-used-as-password - the Subsonic protocol's token IS md5(password + salt); this is not how a password is stored
+            (password + salt).encode("utf-8")
+        ).hexdigest()
         if hmac.compare_digest(expected, str(token).lower()):
             UserManager.touch_last_login(user)
             return user
@@ -652,6 +654,6 @@ class UserManager:
 
     @staticmethod
     def __legacy_sha1(password, salt):
-        return hashlib.sha1(
+        return hashlib.sha1(  # nosec B324  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 - only to verify a pre-argon2 hash we no longer write, and upgraded on login
             salt.encode("utf-8") + password.encode("utf-8")
         ).hexdigest()
