@@ -151,7 +151,7 @@ glyph at this screen's density (420 dpi → 63 px) and four times larger, which 
 where a stroke under 2 dp would show.
 
 `mobile/tools/emu.sh` (lot MQ1) is the harness that owns the emulator lifecycle;
-before it lands, the same flags are used by hand: `emulator -avd nz35 -port 5580
+before it lands, the same flags are used by hand: `emulator -avd nz35 -port 5600
 -no-window -no-audio -gpu swiftshader_indirect -no-boot-anim -no-snapshot-save
 -readonly -memory 3072 -cores 4`.
 

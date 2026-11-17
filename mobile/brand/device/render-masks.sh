@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # LG1 — the launcher evidence, on the emulator, without the user's display.
 #
-#   mobile/brand/device/render-masks.sh --serial emulator-5580 --out ~/shots [--apk FILE]
+#   mobile/brand/device/render-masks.sh --serial emulator-5600 --out ~/shots [--apk FILE]
 #
 # It installs the APK (or reuses the installed one), compiles IconMasks.java with
 # the platform's d8, runs it through `app_process` on the device, pulls the PNGs

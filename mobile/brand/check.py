@@ -23,8 +23,10 @@ Ce que le script mesure, et pourquoi (docs/agents/mobile.md, LG1) :
    morphologique 2×2 sur le rasteur 16 px ne doit pas manger plus de 20 % de la
    surface (un trait de 1 px disparaît entièrement).
 3. **Traits ≥ 2 dp à 24 dp** — le glyphe de notification est dessiné à 24 dp,
-   en blanc sur transparent, et une ouverture 2×2 doit y conserver la surface :
-   un trait de 1 dp n'y survit pas (source AOSP, icon_design_status_bar).
+   en blanc sur transparent, et une ouverture 2×2 doit y conserver ≥ 90 % de la
+   surface : mesuré, une bande de 1 dp tombe à 0 % (elle disparaît), une bande
+   de 2 dp en garde 94 à 100 % (elle ne perd que ses bouts arrondis). Source
+   AOSP, icon_design_status_bar (blanc sur transparent, 24 dp, ~1 dp de marge).
 4. **Contrastes WCAG** — chaque couleur du logo contre un fond blanc et un fond
    noir. Le rapport est calculé, pas estimé. La règle de Sillon (crème et citron
    ont la même luminance, 1,05:1) est vérifiée ici : ils ne doivent jamais se
