@@ -3659,21 +3659,6 @@ pub fn conflict_running(error: &ApiError) -> bool {
     }
 }
 
-/// The batch sizes the card offers (the SPA's `batchOptions`): 5, then 10 and 20
-/// when the show has that many eligible episodes.
-pub fn batch_options(eligible: usize) -> Vec<usize> {
-    let mut out = vec![eligible.min(5)];
-    if eligible >= 10 {
-        out.push(10);
-    }
-    if eligible >= 20 {
-        out.push(20);
-    }
-    out.retain(|count| *count > 0);
-    out.dedup();
-    out
-}
-
 /// A `f64` in a query string, rounded to 0.01 s with no trailing zeros.
 fn trim_float(value: f64) -> String {
     let rounded = (value * 100.0).round() / 100.0;
@@ -4449,11 +4434,11 @@ mod tests {
 
     #[test]
     fn a_show_offers_five_ten_or_twenty_episodes_to_transcribe() {
-        assert_eq!(batch_options(3), vec![3]);
-        assert_eq!(batch_options(7), vec![5]);
-        assert_eq!(batch_options(12), vec![5, 10]);
-        assert_eq!(batch_options(40), vec![5, 10, 20]);
-        assert!(batch_options(0).is_empty());
+        assert_eq!(batch_choices(3), vec![3]);
+        assert_eq!(batch_choices(7), vec![5]);
+        assert_eq!(batch_choices(12), vec![5, 10]);
+        assert_eq!(batch_choices(40), vec![5, 10, 20]);
+        assert!(batch_choices(0).is_empty());
     }
 
     #[test]
