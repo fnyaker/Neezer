@@ -3317,6 +3317,12 @@ Waves that can run in parallel (disjoint files):
   le worker ne relie que les nouveaux, donc une playlist de 4 000 titres qui en gagne un coûte UN
   téléchargement et ZÉRO requête pour les 3 999 autres. Aucune autre app ne le fait : la SPA
   télécharge des titres, pas des listes, donc un ajout après coup y est oublié.
+- **La règle, une action atterrit sur l'écran que la ROUTE nomme.** Le panneau 420 px est un
+  SECOND `queue::Screen` monté à côté de l'écran de la route (`app.rs#toggle_queue`), et GPUI
+  exécute TOUS les écouteurs enregistrés pour une action : sans garde, `t` sur la bibliothèque
+  panneau ouvert met en file les favoris ET toute la file. Chaque écran n'agit donc que si
+  `download_control::is_front` (la route est la sienne) — `the_panel_queue_does_not_download_behind_another_screen`
+  le tient, et les boutons du panneau continuent de marcher (un clic atteint SON contrôle).
 - **La règle, le clavier et la souris sont le même chemin** : `t` (`DownloadSelection`) et `Maj+T`
   (`RemoveDownload`) sont liés une fois (`keymap.rs`) et chaque écran les enregistre sur l'app avec
   une poignée faible (D8b : un écran ne prend pas le focus). Le bouton du contrôle, l'entrée du
@@ -3327,7 +3333,7 @@ Waves that can run in parallel (disjoint files):
   arme le bouton au premier clic et supprime au second, avec le compte de ce qu'il a retiré. Un
   téléchargement est permanent ; c'est le seul contrôle destructeur de l'app.
 - **Mesuré** (cette machine, 16 threads, Rust 1.99.1 ; `cargo test --workspace` :
-  **448 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
+  **449 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
   vertes ; `cargo fmt --check` et `cargo clippy --workspace --all-targets -- -D warnings` propres) :
   - **requêtes par collection** : un album de 3 titres coûte **3 requêtes `/api/stream/<id>`**
     (une par titre, chacune une fois), et une SECONDE demande du même album **0** — mesuré sur une

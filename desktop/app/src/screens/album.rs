@@ -405,10 +405,21 @@ impl Screen {
         let weak = cx.entity().downgrade();
         let for_download = weak.clone();
         gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
-            for_download.update(cx, |this, cx| this.download(cx)).ok();
+            for_download
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx) {
+                        this.download(cx);
+                    }
+                })
+                .ok();
         });
         gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
-            weak.update(cx, |this, cx| this.drop_download(cx)).ok();
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx) {
+                    this.drop_download(cx);
+                }
+            })
+            .ok();
         });
     }
 
@@ -1244,6 +1255,11 @@ mod tests {
             let offline = offline.clone();
             move |_window, cx| Screen::with_downloads(route, state, Some(offline), cx)
         });
+        // The screen is in front, as the shell leaves it (`is_front`): a panel
+        // mounted beside it is what the guard keeps out.
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(route.clone()));
+        });
         stub::until(&runtime, cx, "the album's answer", |_| true);
 
         cx.update(|window, cx| {
@@ -1321,6 +1337,9 @@ mod tests {
             let route = route.clone();
             let offline = offline.clone();
             move |_window, cx| Screen::with_downloads(route, state, Some(offline), cx)
+        });
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(route.clone()));
         });
         stub::until(&runtime, cx, "the album's answer", |_| true);
 

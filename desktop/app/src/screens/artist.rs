@@ -601,7 +601,9 @@ impl Screen {
         gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
             for_ask
                 .update(cx, |this, cx| {
-                    if let Some(index) = this.list.selected() {
+                    if download_control::is_front(&this.state, &this.route, cx)
+                        && let Some(index) = this.list.selected()
+                    {
                         this.row_download(index, cx);
                     }
                 })
@@ -609,7 +611,9 @@ impl Screen {
         });
         gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
             weak.update(cx, |this, cx| {
-                if let Some(index) = this.list.selected() {
+                if download_control::is_front(&this.state, &this.route, cx)
+                    && let Some(index) = this.list.selected()
+                {
                     this.row_download(index, cx);
                 }
             })

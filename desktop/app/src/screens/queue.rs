@@ -384,10 +384,21 @@ impl Screen {
         let weak = cx.entity().downgrade();
         let for_download = weak.clone();
         gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
-            for_download.update(cx, |this, cx| this.download(cx)).ok();
+            for_download
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx) {
+                        this.download(cx);
+                    }
+                })
+                .ok();
         });
         gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
-            weak.update(cx, |this, cx| this.drop_download(cx)).ok();
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx) {
+                    this.drop_download(cx);
+                }
+            })
+            .ok();
         });
     }
 
@@ -962,6 +973,66 @@ mod tests {
         assert_eq!(plural(2), "s");
         assert_eq!(plural(4_000), "s");
         assert_eq!(ROW_HEIGHT, 56.0, "the one number the windowing depends on");
+    }
+
+    /// **The panel's queue stays inert for `t` / `Maj+T` while the route is
+    /// another screen.**
+    ///
+    /// The 420 px panel is a SECOND `queue::Screen` (`app.rs#toggle_queue`)
+    /// mounted beside the route's screen, and GPUI runs EVERY listener
+    /// registered for an action — so without the guard `t` on the library would
+    /// queue the favourites AND the whole queue. The screen acts only when the
+    /// route is its own; this test is what keeps that.
+    #[gpui::test]
+    async fn the_panel_queue_does_not_download_behind_another_screen(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = temp_dir("panel-guard");
+        let state = small_queue(cx, &dir);
+        let cache =
+            nz_cache::Cache::open_with_cache_dir(temp_dir("panel-store"), temp_dir("panel-cache"))
+                .expect("a store");
+        let offline = crate::wiring::offline::Offline::start(cache);
+        let (host, cx) = cx.add_window_view({
+            let state = state.clone();
+            let offline = offline.clone();
+            move |_window, cx| {
+                let screen = cx.new(|cx| Screen::new(Route::Queue, state, cx));
+                screen.update(cx, |screen, cx| {
+                    screen.downloads = download_control::Watch::with_service(Some(offline), cx);
+                    screen.bind_download(cx);
+                });
+                Host { screen }
+            }
+        });
+        // The route is the library: the panel is a bystander.
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.nav.replace(Route::Library {
+                    tab: crate::nav::LibraryTab::Favorites,
+                });
+            })
+        });
+        cx.update(|window, cx| window.dispatch_action(Box::new(DownloadSelection), cx));
+        cx.run_until_parked();
+        assert!(
+            offline.snapshot().note.is_none(),
+            "the panel queued work while another screen was in front: {:?}",
+            offline.snapshot().note
+        );
+
+        // The route IS the queue: now it acts.
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(Route::Queue));
+        });
+        cx.update(|window, cx| window.dispatch_action(Box::new(DownloadSelection), cx));
+        cx.run_until_parked();
+        let note = offline.snapshot().note.unwrap_or_default();
+        assert!(
+            note.contains("ajouté aux téléchargements"),
+            "the queue's own screen answers « t »: {note}"
+        );
+        drop(host);
     }
 
     /// A host view so the window has something to draw: the acceptance is about

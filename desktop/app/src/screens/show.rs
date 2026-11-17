@@ -1947,11 +1947,20 @@ impl Screen {
         let for_download = weak.clone();
         gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
             for_download
-                .update(cx, |this, cx| this.download_all(cx))
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx) {
+                        this.download_all(cx);
+                    }
+                })
                 .ok();
         });
         gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
-            weak.update(cx, |this, cx| this.drop_show_download(cx)).ok();
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx) {
+                    this.drop_show_download(cx);
+                }
+            })
+            .ok();
         });
     }
 

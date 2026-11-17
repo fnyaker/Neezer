@@ -443,6 +443,18 @@ pub fn chip(state: &State, cx: &App) -> Option<AnyElement> {
     )
 }
 
+/// **The screen a global action belongs to: the one the ROUTE names.**
+///
+/// The 420 px queue panel is a SECOND `queue::Screen` mounted beside the route's
+/// screen (`app.rs#toggle_queue`), and GPUI runs EVERY listener registered for
+/// an action — so without this guard, `t` on the library with the panel open
+/// would queue the favourites AND the whole queue. A screen acts only when the
+/// route is its own; the panel's buttons still work, because a click reaches the
+/// panel's own control and the handler it runs is the one that checked.
+pub fn is_front(state: &Entity<AppState>, route: &crate::nav::Route, cx: &App) -> bool {
+    state.read(cx).nav.current() == Some(route)
+}
+
 /// The page's download control: a status chip when there is something to say,
 /// and ONE button that always carries the verb of the moment.
 ///
