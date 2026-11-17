@@ -1297,13 +1297,101 @@ Waves that can run in parallel (disjoint files):
   visible (assert 0 analyser calls when hidden); settings: palette (cover/theme), intensity, fps cap,
   scope orientation and colour, eco.
 
-### D11 — Podcasts
+### D11 — Podcasts (delivered 2026-11-17)
 
 - **Files**: `screens/{podcasts,show}.rs`, `app/src/widgets/{episode_panel,chapters,markers,
-  transcript_panel}.rs`.
-- **Acceptance**: progress synced as in *Streams* (pause, 30 s, quit, offline queue); speed per show
-  remembered (`podcast.speeds`); transcript panel follows playback and searches; server
-  transcription start/stop with its state; episode list paged by cursor (no unbounded fetch).
+  transcript_panel}.rs`, captures under `docs/desktop/d11/`.
+- **The rule, the episode list is the page's content**: the head never takes more than 45 % of the
+  page, and it FOLDS the admin block before it reaches that cap. At 1280×800 the page is 656 px and
+  the cap 295 px; the full hero (236) + actions (44) + the transcription card (220) + the transcript
+  search (40) is 540 px, so the card used to be cut through a switch exactly where the list started
+  — the complaint that opened this lot. `head_fit(page_height)` decides both: a compact hero
+  (96 px sleeve, no description, 1.5 rem title) under 900 px of page, and the admin block as ONE
+  summary row (« Réglages de l'émission · Archivage auto désactivé · 1 sur 8 transcrits ») that the
+  person opens, until the head with it fits the cap (a page of 1200 px, i.e. a 1344 px window). The
+  opened block scrolls inside the head (measured on the bench: the wheel moves its card into view
+  while the list keeps 4 rows).
+- **The rule, a page is a cursor, never a fetch per episode**: `GET /api/podcast/<id>?limit=50`
+  paints the first page and nothing per row: **4 API requests** for the whole screen (the page, the
+  show's markers in one read, the transcription settings for an admin, and the one-time
+  `/podcast/progress` merge) against the bench, and « Charger plus » is the only thing that sends
+  the cursor back (asserted on the stub's queries: `limit=50`, then `limit=50&cursor=…`, and 0
+  requests under `/podcast/episode/` before a panel opens). The list is windowed: a page of 50
+  builds the ~13 rows the window shows.
+- **The rule, the panel is a column beside the list, and its body is the scroller**: every wrapper
+  is a FLEX container. A plain block with `flex_1` gives its child no definite height, so the
+  virtual list's `h_full` resolved to 0 and the episodes painted NOTHING beside an open panel while
+  the panel's own body ran under the player bar instead of scrolling (both seen at 1280 and 2560;
+  `the_episode_list_survives_the_panel_beside_it` is the regression test). Under 1040 px of content
+  the panel replaces the list with « Retour à la liste »; on any width its ✕ folds it (a mouse has
+  no Échap).
+- **The rule, progress is written on pause, every 30 s, at quit, and once the link is back**: one
+  keeper for the process (`attach_keeper`, started by the first podcasts/show screen), a position
+  under `PROGRESS_MIN = 8 s` is a mis-tap and never written, the last 15 s are the server's own
+  « finished », and the device's copy (`podcast.progress.<owner>`) paints before the server's merge. The
+  speed is per show (`podcast.speeds`, the `channel_id`, else the album's Deezer id) and is applied
+  by D9's watcher, so an episode started from another screen still gets its show's rate.
+- **The rule, the transcript panel follows and searches where it is**: `follow_to` re-arms on the
+  playing episode's frame only (a pause leaves the reader where they scrolled, `pause_follow`
+  /`resume_follow`), a page of 200 lines is read once and re-read when the playhead leaves it, a
+  poll is ONE request with `limit=1` and only while a job is running, and a search folds accents
+  (`fold_text`) before it highlights. The server job is started, stopped and relaunched from the
+  panel with each failure's own French cause (`engine_crashed`, `too_long`, `queue_full`,
+  `already_running` read as a job, not an error).
+- **T4's slot, ready and empty**: `transcript_panel::LocalTranscript` / `LocalSource` /
+  `set_local_source` / `local_for` are the seam. When the server answers `status: "none"` and a
+  reader is installed, the panel shows the machine's sidecar with a « transcrite sur cet appareil »
+  badge and searches it in memory (`Search::locally`); `nz-transcribe` is untouched — T4 fills the
+  reader and nothing else.
+- **Measured** (this machine: 16 threads, Rust 1.99.1; the debug binary on a private `Xvfb :118`
+  with `-dpi 96` + `GPUI_X11_SCALE_FACTOR=1`, a private `dbus-run-session`, its own XDG dirs and
+  `tools/perf_api.py --serve --podcasts --tracks 8000`; RSS from `/proc/<pid>/status`):
+  - `cargo test --workspace`: **every crate green**; `cargo test -p neezer-desktop` is **319 tests,
+    0 failed** (6 of them the heavy benches their parent runs in a child process). `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean. **35 of those tests
+    are this lot's** (11 `screens::show`, 3 `screens::podcasts`, 5 `chapters`, 4 `episode_panel`,
+    3 `markers`, 9 `transcript_panel`).
+  - **requests**: podcasts **1** (`/api/podcasts`) + the keeper's one-time `/podcast/progress`;
+    show **4** (page, markers, transcription settings, progress); a panel opens with 2 more
+    (chapters, transcript), a transcript search 1, a page change 1.
+  - **RSS**: **261 008 kB** on Podcasts, **261 912 kB** on the show (+904), **267 368 kB** with the
+    episode panel open and its transcript page (+5 456), **270 580 kB** with the 420 px queue panel
+    too (+3 212), **357 956 kB** at 2560×1600 (the window's own surfaces). `testmem`: the screen's
+    model for the worst realistic case — 50 episodes, a 200-line transcript page and the 100 hits
+    of a show search — is **98 877 B**: nothing per row beyond the model.
+  - **a frame** of the 50-episode show, windowed, at the default window: **14.2 ms median in a
+    debug build** (the release budget is 4.2 ms for 240 Hz; D13 quotes the release number, this lot
+    had no release build to hand — the assertion is the loose debug bound).
+  - **looked at**, 7 captures in `docs/desktop/d11/`: podcasts at both sizes, the show (compact head,
+    folded admin block), the panel beside the list, the panel with the 420 px queue panel (the
+    narrow « Retour à la liste » branch), and 2560×1600 with and without the queue panel. Both
+    screens cap their content column at 1800 px, so a 2560 px window is margins rather than a
+    two-metre episode row. The pass fixed three things no test saw: the list blank beside an open
+    panel, the panel's body overflowing under the player bar, and a switch cut in half above the
+    first episode.
+- **What it is now**: `screens/podcasts.rs` (the subscriptions in one read, a 300 ms debounced
+  catalogue search whose cards SUBSCRIBE, a pasted Deezer link, `j`/`k`/`Début`/`Fin`/`Entrée`
+  through `track_list::own`), `screens/show.rs` (`PAGE = 50` + cursor, `head_fit`, the keeper and
+  its `Watch` state machine, chapters/markers/transcripts, the batch transcription card, the speed
+  menu, the 64 px windowed rows, `Exit`/Échap interceptors), `widgets/episode_panel.rs` (stacked
+  chapters → transcript → description → facts, `Act::{Seek,LoadChapters,RetryChapters,AddMarker,
+  DeleteMarker,ToggleDescription,ToggleAllChapters,Transcript,Close}`), `widgets/chapters.rs`
+  (normalise/sort/dedupe, the playhead's chapter, the inline cap), `widgets/markers.rs` (one read
+  per show, optimistic add/remove reconciled with the server's answer), `widgets/transcript_panel.rs`
+  (pages, follow, search, the job's state card, T4's local branch).
+- **Pitfalls found by building**: (1) a GPUI flex item with `flex_1` inside a BLOCK parent has no
+  definite height — `h_full`/`flex_1` under it collapse to 0 (the blank list) or grow to content
+  (the panel running under the player bar); make every wrapper on the path a flex container. (2)
+  The window's own single-instance and MPRIS names are per SESSION BUS: a second isolated bench
+  without `dbus-run-session` reads itself as a second instance, calls `Raise` on the other worker's
+  app and quits — the symptom was an app that disappeared between two clicks. (3) Under Xvfb with no
+  window manager the app-level key bindings (`q`, `g p`) did not fire while text into a focused
+  field did; the suite's journey tests are what prove the keyboard, the bench drives the mouse.
+- **A contract that is wrong (not this lot's)**: `nz-api`'s `set_podcast_auto_archive` returns
+  `Result<(), ApiError>` through `send_none` and DROPS the body, while
+  `POST /api/podcast/<id>/auto_archive` answers `{…channel, "queued": n}` (the SPA's toast counts
+  those episodes). Reported to the API owner; the screen's documented workaround is one re-read of
+  the page (`self.load`) plus « Archivage des épisodes manquants lancé » — the count is not claimed.
 
 ### D12 — Discovery (delivered 2026-11-17)
 
