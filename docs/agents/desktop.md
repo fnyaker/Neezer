@@ -514,8 +514,15 @@ Waves that can run in parallel (disjoint files):
     `[label, score, head, proto]` (`genre.py#rank_scores`), `head`/`proto` possibly `null`.
   - `GenreTrack.tag` declared a `String`; `_tag_json` sends the tag OBJECT, so `GenreTag` is a type.
   - `GenreConstruction.missing` declared `Vec<String>`; each entry is `{"id", "bpm"}`.
+  - `PartyState` declared the HOST's publish body (`{id, p, t, gap}`); `GET /api/party/<id>` answers
+    the guests' PUBLIC timeline (`_public_state`: `track`, `playing`, `buf`, `anchor: {t, p}`,
+    `xfade`, `next: {track, at, start, fade, gap}`, `norm`, `chunk`, `listeners`, `now`, `me`). The
+    publish body is its own type (`PartyPublish`), and the party's clock is a FLOAT on the wire
+    (`server_ms()` → `1794878678797.0752`): a `u64` there does not round, it fails to decode.
   The fixture test's `shrink` had to learn the same lesson: it truncates a list of ROWS to one row,
   but a fixed-arity array is a VALUE (a score tuple), and a 1-tuple is a different question.
+  `party-state` is a write-then-read like the three below: the route answers an empty shell until
+  its host published a timeline, so `dump_fixtures.py` hosts one on the bench first.
 - **Measured** (this machine, debug build, `cargo test -p nz-model`): **32 tests, 0 failed** (28 rules
   + the fixture walks); the **105** fixtures deserialize in **23.3 ms** at the lot, stripping their
   optional keys in **185 ms**, and the whole run is **1.56 s** against the lot's 2 s budget. `cargo fmt --all --check` and
@@ -604,6 +611,10 @@ Waves that can run in parallel (disjoint files):
   - `Service Unavailable` from `_admit_by_priority` and the stream's `{"queued": true}` are the same
     status: the difference is the lane. A User-lane 503 is an ordinary `Http { 503 }` the GET may
     retry; a background one becomes `Busy { retry_after }` and is repeated once only.
+  - **The party's two routes are one name apart and read opposite ways**: `POST /api/party/<id>/state`
+    is the HOST's timeline (`PartyPublish` → the host view, typed `Party`), `GET /api/party/<id>` is
+    the GUEST's public state (`PartyState`, typed now that the model has the right shape). Both were
+    `Api::send`/`Api::get` with `Value` because the model's one `PartyState` was the publish body.
   - **A request body is a contract too, and an empty answer hides it.** `Api::radio_next` posted
     `{"seed": "3000123"}` where `radio_next` requires an OBJECT (`{"kind", "id", "artist"?}`,
     `400 invalid seed` otherwise) — the SPA builds that object in `lib/queryradio.js#radioSeed`, and
@@ -887,6 +898,15 @@ Waves that can run in parallel (disjoint files):
   (`TrackMeta::podcast` decides, not the app's current setting: music always plays at 1×), and the
   stage runs on the DECODE thread, in front of the voice ring, never in the callback. The timeline
   stays media time: the clock advances by `frames × speed`, so a 2× episode shows its real duration.
+- **The rule, a cancelled decode says nothing**: the engine stops a voice the instant the person
+  changes track, seeks or quits, and the read that voice was in the middle of then fails (a body
+  closed by the server, `corps interrompu`, `Interrupted`). That failure is the person's own click,
+  not a verdict about the track: `decode::fail` returns WITHOUT an `EngineEvent::Error` when the
+  voice was stopped, and a load or seek superseded by a later one is silent too (its `mark` is
+  stale). D10b saw the opposite on every fast next/next — an error toast per track change. The app
+  has the second half of the rule: an `EngineEvent::Error` naming a track that is no longer current
+  is logged, not toasted (`state.rs`, `a_late_error_for_another_track_is_not_a_toast`), and only a
+  failure of the track that IS playing keeps its cause and its « Réessayer ».
 - **The rule, the tap**: post-DSP and **pre-mono/balance** (`pan.js`: the analysers keep the original
   stereo), an `rtrb` ring of 8 192 frames (170 ms), pushed by the callback with
   `push_partial_slice` and DROPPED when the analysis thread is behind — a hidden window costs the

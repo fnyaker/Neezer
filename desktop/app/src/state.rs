@@ -1147,6 +1147,24 @@ impl AppState {
                 cx.notify();
             }
             EngineEvent::Error { id, message } => {
+                // A failure about a track that is no longer the one playing is
+                // STALE, not news: the engine drops cancelled voices without a
+                // word (`decode::fail`), and what is left here is an answer that
+                // arrived after the person moved on — the next track's prefetch,
+                // or a stream the queue left behind. Nothing to offer: the bar
+                // already names what plays now.
+                let current = self
+                    .player
+                    .current()
+                    .and_then(Entry::reference)
+                    .map(str::to_owned);
+                if let Some(id) = &id
+                    && current.as_deref() != Some(id.as_str())
+                {
+                    debug!(track = %id, %message, "erreur de lecture périmée");
+                    cx.notify();
+                    return;
+                }
                 let cause = match &id {
                     Some(id) => format!("Lecture impossible ({id}) : {message}"),
                     None => format!("Sortie audio : {message}"),
@@ -2152,6 +2170,154 @@ mod tests {
             engine.balance()
         );
         assert!(engine.fade().enabled, "the saved crossfade is on");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **An error about a track that is not playing is not a toast.**
+    ///
+    /// The engine stops a voice the instant the person changes track, and the
+    /// read it was in the middle of then fails — D10b saw an error toast on
+    /// every fast next/next. The engine no longer raises those
+    /// (`nz-audio`'s `a_stopped_voice_reports_nothing_and_a_live_one_reports_its_cause`),
+    /// and this is the app's own guard for an answer that arrives late: it is
+    /// logged, and the bar still names what plays now. A failure of the track
+    /// that IS playing keeps its cause and its « Réessayer ».
+    #[gpui::test]
+    async fn a_late_error_for_another_track_is_not_a_toast(cx: &mut gpui::TestAppContext) {
+        use gpui_kit::AppContext as _;
+
+        let dir = temp_dir("stale-error");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (tx, _rx) = event_channel();
+        let config = AppConfig {
+            server: Some(net::DEFAULT_SERVER.to_owned()),
+            start_audio: false,
+            start_mpris: false,
+            ..AppConfig::for_test(&dir)
+        };
+        let state = {
+            let handle = runtime.handle().clone();
+            cx.update(move |cx| cx.new(move |_| AppState::new(config, handle, tx, None)))
+        };
+        // A queue of two, the first one current — what a track change leaves.
+        let (tx, _rx2) = event_channel();
+        cx.update(|cx| {
+            state.update(cx, |state, _| state.events = tx);
+        });
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.pending_load = Some(PendingLoad {
+                    entry: Entry {
+                        id: "a".into(),
+                        title: "A".into(),
+                        duration: 100,
+                        ..Entry::default()
+                    },
+                    autoplay: false,
+                    start_s: 0.0,
+                });
+                state.on_event(
+                    AppEvent::AudioReady(Ok(Box::new(Audio {
+                        engine: nz_audio::Engine::new_offline(
+                            nz_audio::EngineConfig::default(),
+                            std::sync::Arc::new(Files(std::collections::HashMap::new())),
+                        )
+                        .0,
+                        sample_rate: 48_000.,
+                    }))),
+                    cx,
+                );
+            });
+        });
+        // The state machine's own current is what the guard reads.
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.command(
+                    Command::PlayQueue {
+                        args: nz_player::QueueArgs {
+                            tracks: vec![
+                                Entry {
+                                    id: "a".into(),
+                                    title: "A".into(),
+                                    duration: 100,
+                                    ..Entry::default()
+                                },
+                                Entry {
+                                    id: "b".into(),
+                                    title: "B".into(),
+                                    duration: 100,
+                                    ..Entry::default()
+                                },
+                            ],
+                            start: 0,
+                            context: None,
+                        },
+                    },
+                    cx,
+                );
+            });
+        });
+        let toasts = |cx: &mut gpui::TestAppContext| {
+            state.read_with(cx, |state, _| {
+                state
+                    .toasts
+                    .items()
+                    .iter()
+                    .map(|toast| (toast.kind, toast.message.clone()))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let before = toasts(cx).len();
+
+        // What a superseded voice used to raise: a read that died with the track.
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.on_event(
+                    AppEvent::Engine(EngineEvent::Error {
+                        id: Some("b".to_owned()),
+                        message: "lecture impossible : corps interrompu".to_owned(),
+                    }),
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            toasts(cx).len(),
+            before,
+            "an error about the track that is NOT playing raises nothing"
+        );
+
+        // A failure of the track that IS playing keeps its cause and its retry.
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.on_event(
+                    AppEvent::Engine(EngineEvent::Error {
+                        id: Some("a".to_owned()),
+                        message: "décodage impossible : bitstream".to_owned(),
+                    }),
+                    cx,
+                );
+            });
+        });
+        let after = toasts(cx);
+        assert_eq!(
+            after.len(),
+            before + 1,
+            "the playing track's failure is news"
+        );
+        assert!(matches!(
+            after.last().map(|(kind, _)| kind),
+            Some(ToastKind::Error)
+        ));
+        assert!(
+            after
+                .last()
+                .is_some_and(|(_, message)| message.contains("décodage impossible")),
+            "the cause is kept, never a bare « Lecture impossible »"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

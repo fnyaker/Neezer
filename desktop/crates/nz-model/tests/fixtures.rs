@@ -158,6 +158,7 @@ fixtures! {
     // remote control and listen party
     "remote-links" => RemoteLinks,
     "party-mine" => PartyMine,
+    "party-state" => PartyState,
 }
 
 /// Where the fixtures are: the committed copy, or what CI just regenerated.

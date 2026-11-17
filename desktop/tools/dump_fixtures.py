@@ -397,6 +397,68 @@ def shared_playlist(bench):
     return raw, None
 
 
+def party_state(bench):
+    """Host a listen party, publish one timeline, and read what a guest sees.
+
+    `/api/party/<id>/state` answers the party's PUBLIC timeline, and it says
+    nothing at all until its host published one — the fixture this lot lacked.
+    A guest has no session, so the read is the same route without a cookie.
+    """
+    status, raw = bench.call("/party", "POST", {})
+    if status != 200:
+        return None, f"party start answered {status}"
+    pid = (json.loads(raw) or {}).get("id")
+    if not pid:
+        return None, "the party had no id"
+    # The publish anchor must sit within ten minutes of the SERVER's clock, so
+    # the first read is what says what that clock is (`now`, milliseconds).
+    # The guest's read is `GET /party/<id>` (the SPA's `lib/party/guest.js`);
+    # `/state` is the host's POST.
+    status, raw = bench.call(f"/party/{quote(pid)}")
+    if status != 200:
+        return None, f"party state answered {status}"
+    now = (json.loads(raw) or {}).get("now")
+    # `server_ms()` is a FLOAT (`1794878678797.0752`): an int-shaped anchor is
+    # what made `nz-model`'s `PartyAnchor::t` a `u64` and unreadable.
+    if not isinstance(now, (int, float)):
+        return None, f"the party state carried no server clock: {raw[:200]!r}"
+    track = {
+        "id": str(bench.ids["track"]),
+        "title": "Balancing the Dark",
+        "artist": "Kaya Project",
+        "album": "Songs from the Inside",
+        "duration": 312,
+        "podcast": False,
+        "gain": -8.5,
+    }
+    status, raw = bench.call(
+        f"/party/{quote(pid)}/state",
+        "POST",
+        {
+            "track": track,
+            "playing": True,
+            "buf": False,
+            "t": now,
+            "p": 42.25,
+            "xfade": 2,
+            "next": {
+                "track": dict(track, id=str(bench.ids["ids"][1]), title="Le suivant"),
+                "at": 310,
+                "start": 0.4,
+                "fade": 2,
+                "gap": 0.18,
+            },
+            "norm": "medium",
+        },
+    )
+    if status != 200:
+        return None, f"the publish answered {status}: {raw[:160]!r}"
+    status, raw = bench.call(f"/party/{quote(pid)}")
+    if status != 200:
+        return None, f"the party state answered {status} after a publish"
+    return raw, None
+
+
 def seed_reads(bench):
     """The three writes a read route needs to have anything to answer with."""
     ready = bench.ids["podcast"]["ready"]
@@ -460,9 +522,20 @@ def main():
             written += 1
             print(f"  {'shared-playlist':28s} {len(raw):8d} B", file=sys.stderr)
 
+        # The party's public timeline: a guest's read route that has nothing to
+        # answer before its host published one (same class as the three writes).
+        raw, why = party_state(bench)
+        if raw is None:
+            failures.append(f"party-state: {why}")
+        else:
+            with open(os.path.join(out, "party-state.json"), "wb") as handle:
+                handle.write(raw)
+            written += 1
+            print(f"  {'party-state':28s} {len(raw):8d} B", file=sys.stderr)
+
         # Nothing stale: a fixture the server no longer answers would otherwise
         # keep passing the Rust test against a payload nobody sends any more.
-        expected = {name for name, *_ in todo} | {"shared-playlist"}
+        expected = {name for name, *_ in todo} | {"shared-playlist", "party-state"}
         for name in sorted(os.listdir(out)):
             if name.endswith(".json") and name[:-5] not in expected:
                 os.unlink(os.path.join(out, name))

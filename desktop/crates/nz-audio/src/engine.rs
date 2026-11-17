@@ -352,7 +352,15 @@ impl Engine {
         inner.spawn_loader(format!("nz-load-{mark}"), move || {
             match build_at(&loading, &id, quality, start, Lane::User, true) {
                 Ok(built) => loading.install_current(mark, &id, quality, built),
-                Err(e) => loading.fail(Some(&id), e),
+                // A load SUPERSEDED by a later one (the person tapped another
+                // track while this one was still opening) is not a failure:
+                // nothing is wrong with this track, it is simply not wanted any
+                // more. Reporting it put an error toast on a fast next/next.
+                Err(e) => {
+                    if mark == loading.load_gen.load(Ordering::SeqCst) {
+                        loading.fail(Some(&id), e);
+                    }
+                }
             }
         });
     }
@@ -374,9 +382,13 @@ impl Engine {
                 Ok(built) => loading.install_next(mark, &id, quality, built),
                 // A prefetch that fails is not a verdict about the track: the
                 // app can try again when it becomes current (rule 3, *A failure
-                // to reach a provider is never a verdict*). It is silent only
-                // when the engine itself is closing.
-                Err(e) => loading.fail(Some(&id), e),
+                // to reach a provider is never a verdict*). It is silent when the
+                // engine is closing, and when a newer load made this one moot.
+                Err(e) => {
+                    if mark == loading.load_gen.load(Ordering::SeqCst) {
+                        loading.fail(Some(&id), e);
+                    }
+                }
             }
         });
     }
@@ -763,7 +775,13 @@ impl Inner {
         if local_path(self, id, quality).is_some() {
             match build_at(self, id, quality, Some(target), Lane::User, false) {
                 Ok(built) => self.land_seek(mark, id, quality, built),
-                Err(e) => self.fail(Some(id), e),
+                // A seek overtaken by another one, or by a track change, is a
+                // cancellation: the person's later gesture won.
+                Err(e) => {
+                    if !cancelled() {
+                        self.fail(Some(id), e);
+                    }
+                }
             }
             return;
         }
@@ -777,7 +795,11 @@ impl Inner {
                 Ok(ready) if ready.ready || ready.offset => {
                     match build_at(self, id, quality, Some(target), Lane::User, false) {
                         Ok(built) => self.land_seek(mark, id, quality, built),
-                        Err(e) => self.fail(Some(id), e),
+                        Err(e) => {
+                            if !cancelled() {
+                                self.fail(Some(id), e);
+                            }
+                        }
                     }
                     return;
                 }
@@ -788,12 +810,15 @@ impl Inner {
                             .emit(EngineEvent::SeekDeferred { target_s: target });
                     }
                     if started.elapsed() > self.cfg.seek_poll_limit {
-                        self.fail(
-                            Some(id),
-                            EngineError::Decode(
-                                "le serveur ne peut pas encore répondre à ce déplacement".into(),
-                            ),
-                        );
+                        if !cancelled() {
+                            self.fail(
+                                Some(id),
+                                EngineError::Decode(
+                                    "le serveur ne peut pas encore répondre à ce déplacement"
+                                        .into(),
+                                ),
+                            );
+                        }
                         return;
                     }
                     if !self.poll_wait(ready.retry_delay()) {
@@ -801,7 +826,9 @@ impl Inner {
                     }
                 }
                 Err(e) => {
-                    self.fail(Some(id), e.into());
+                    if !cancelled() {
+                        self.fail(Some(id), e.into());
+                    }
                     return;
                 }
             }
