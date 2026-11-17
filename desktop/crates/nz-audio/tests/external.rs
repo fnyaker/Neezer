@@ -337,7 +337,10 @@ fn the_sink_moves_into_a_platform_callback_thread_and_renders_there() {
         "the app reads the clock the callback wrote: {:.6} s",
         shared.clock.position()
     );
-    assert!(Arc::ptr_eq(&shared, &sink.shared()), "one clock, not a copy");
+    assert!(
+        Arc::ptr_eq(&shared, &sink.shared()),
+        "one clock, not a copy"
+    );
     engine.shutdown();
 }
 
