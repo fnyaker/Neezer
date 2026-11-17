@@ -1588,6 +1588,13 @@ do, on a device.
 - **AGP's `connected…AndroidTest` runs on EVERY device adb sees.** Without `ANDROID_SERIAL`, a run of
   ours started on another lot's `emulator-5590` (observed in the log). Both tools now export
   `ANDROID_SERIAL=emulator-<port>` — a lot never drives a device it did not start.
+- **The artifact's release APK cannot be silently replaced by the debug one.** The workflow hands
+  `app-release.apk` over with `versionCode = 2 000 000 + the apk job's run number` (2 000 037 on the
+  run that found this), while the debug build the instrumented step installs is 2 000 001 — so Android
+  answers `INSTALL_FAILED_VERSION_DOWNGRADE: Update version code 2000001 is older than current
+  2000037`. The smoke runs against the release APK, then `ci-emulator.sh` uninstalls the package before
+  `connectedDebugAndroidTest`, which installs its own; a lot re-running the job on a dirty emulator
+  would otherwise meet the same refusal.
 - **A `-read-only` emulator is a fresh guest every boot**: the app a previous run installed is gone,
   and `emu.sh wait` is not an install. `measure.sh` installs the worktree's APK when the launcher does
   not resolve, so `memory`/`cpu` work on a newly booted emulator.

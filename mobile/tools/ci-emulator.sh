@@ -344,6 +344,16 @@ if (( ${#test_modules[@]} == 0 )); then
 else
     printf 'instrumented_modules=%s (%s)\n' "${#test_modules[@]}" "${test_modules[*]}"
     prepare_android_build
+
+    # The APK the workflow handed over is the RELEASE build, whose versionCode is
+    # `2 000 000 + the apk job's run number` (2 000 037 on the run that found
+    # this); the DEBUG build `connectedDebugAndroidTest` installs is 2 000 001,
+    # because VERSION_CODE is not set in this job — so Android refused it:
+    # "INSTALL_FAILED_VERSION_DOWNGRADE: Update version code 2000001 is older than
+    # current 2000037". The smoke has already run against the release APK, so the
+    # app is removed here and the instrumented step installs its own.
+    adb_dev uninstall org.nsupysonic.app >/dev/null 2>&1 || true
+
     tasks=()
     for module in "${test_modules[@]}"; do
         tasks+=("$module:connectedDebugAndroidTest")
