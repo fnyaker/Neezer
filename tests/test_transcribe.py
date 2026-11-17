@@ -50,6 +50,9 @@ from neezer.managers.user import UserManager
 from neezer.transcribe import engine, job, runner, settings, sidecar
 
 WAIT = 20.0
+#: Not a bound anything is asserted on: a thread that never ends would hang the suite instead
+#: of failing it. The tests below wait for an EVENT and use this only as that guard.
+DEADLOCK_GUARD = 120.0
 HAVE_FFMPEG = shutil.which("ffmpeg")
 
 if not HAVE_FFMPEG and os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
@@ -954,13 +957,33 @@ class RunnerTestCase(_Base):
         episode = self.episode(duration=600)
         job.enqueue(episode.id, app=self.config)
         workload.note_stream_open()
-        thread = threading.Thread(target=lambda: self.drain(limit=1), daemon=True)
-        thread.start()
-        time.sleep(0.5)
-        self.assertEqual(self.log_lines(), [])
-        self.assertEqual(PodcastTranscript.get().status, "running")
-        workload.note_stream_close()
-        thread.join(WAIT)
+        finished = threading.Event()
+
+        def drain():
+            try:
+                self.drain(limit=1)
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=drain, daemon=True)
+        # The engine is paused while the MACHINE is loaded as well (`_busy()` reads
+        # workload.load_per_core, CLAUDE.md rule 1). This test is about the STREAM gate: on a
+        # loaded CI the load gate alone would keep the engine stopped for the whole run, and
+        # say nothing about the stream. Its own rule has its own tests.
+        with mock.patch.object(workload, "load_per_core", lambda: 0.0):
+            thread.start()
+            time.sleep(0.5)
+            self.assertEqual(self.log_lines(), [])
+            self.assertEqual(PodcastTranscript.get().status, "running")
+            workload.note_stream_close()
+            # The end of the drain is the EVENT, never a duration: a machine under load takes
+            # as long as it takes. `DEADLOCK_GUARD` only keeps a hung thread from hanging the
+            # suite, and it is not what the assertion is about.
+            self.assertTrue(
+                finished.wait(DEADLOCK_GUARD),
+                "the drain never finished once the stream closed",
+            )
+            thread.join(DEADLOCK_GUARD)
         self.assertFalse(thread.is_alive())
         self.assertEqual(PodcastTranscript.get().status, "ready")
         self.assertEqual(len(self.log_lines()), 1)

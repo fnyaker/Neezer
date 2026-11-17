@@ -567,6 +567,8 @@ class RegistrationTestCase(_DbCase):
 
     def test_the_app_registers_them_outside_of_tests(self):
         """The upgrade path: an old config, an existing database."""
+        import threading
+
         from neezer.config import DefaultConfig
         from neezer.web import create_application
 
@@ -580,7 +582,17 @@ class RegistrationTestCase(_DbCase):
                 self.DEEZER = dict(self.DEEZER, enabled=True, arl="x" * 192, archive_dir=cache)
 
         release_database()
-        with mock.patch("neezer.web._enrich_backfill", create=True):
+        # A production-shaped boot starts the app's BACKGROUND WORKERS (the Deezer scheduler,
+        # the analysis/genre resumes, the library job, `trackcredits.start_if_needed`, the
+        # release/explorer crawls). They are daemon threads that outlive this test and run
+        # against whatever database the global `db` points at WHEN THEY WAKE — 45 to 60 s
+        # later, inside another test — and a bulk writer there holds that test's SQLite write
+        # lock until its `busy_timeout` expires: `test_multi_o.DecideTestCase.setUp` died with
+        # 'database is locked' exactly this way (run 44081450853). This test needs the app
+        # OBJECT, not its background life, so no thread is allowed to start during the boot.
+        with mock.patch.object(threading.Thread, "start", lambda self: None), mock.patch(
+            "neezer.web._enrich_backfill", create=True
+        ):
             app = create_application(Config())
         self.assertEqual([p.id for p in app.providers.all()][:3], ["deezer", "youtube", "local"])
         self.assertTrue(app.providers.get("deezer").configured())
