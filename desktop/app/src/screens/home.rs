@@ -35,10 +35,20 @@ use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::track_list::{self, Intent, TrackList as List};
 use crate::wiring::events::{self, Sender};
 
-/// How many release sleeves the shelf shows, and how many artists.
+/// How many release sleeves the shelf shows at the narrowest window, and the
+/// most it ever shows. The row FILLS the width it is given: six sleeves at
+/// 1280, up to twelve on the 2560 panel — a fixed six left the right half of a
+/// wide window empty (measured on D17's 2560×1600 captures).
 const RELEASE_ROWS: usize = 6;
+const RELEASE_ROWS_MAX: usize = 12;
 const ARTISTS_SHOWN: usize = 12;
 const RECO_ROWS: usize = 6;
+
+/// How many sleeves one shelf row holds at `width`: one per ~190 px, clamped to
+/// [`RELEASE_ROWS`]..[`RELEASE_ROWS_MAX`].
+fn shelf_count(width: f32) -> usize {
+    ((width / 190.0) as usize).clamp(RELEASE_ROWS, RELEASE_ROWS_MAX)
+}
 
 enum Msg {
     Releases(Box<Result<Releases, ApiError>>),
@@ -333,7 +343,7 @@ impl Screen {
             }
         }
         if let Some(releases) = self.releases.ready() {
-            for release in releases.releases.iter().take(RELEASE_ROWS) {
+            for release in releases.releases.iter().take(RELEASE_ROWS_MAX) {
                 if let Some(cover) = release.cover.clone() {
                     asked.push(cover);
                 }
@@ -423,6 +433,8 @@ impl Render for Screen {
 
         let visible = self.list.visible();
         self.covers_for_visible(visible, cx);
+        // A shelf is as wide as the window (see `shelf_count`).
+        let shelf = shelf_count(f32::from(window.viewport_size().width));
 
         let mut page = div()
             .flex()
@@ -573,7 +585,7 @@ impl Render for Screen {
                             },
                         ),
                     ));
-                    if release_cards.len() >= RELEASE_ROWS {
+                    if release_cards.len() >= shelf {
                         break;
                     }
                 }
@@ -639,7 +651,7 @@ impl Render for Screen {
             }
             Section::Failed(_) => {}
             Section::Loading => {
-                page = page.child(card::skeleton(RELEASE_ROWS, px(148.), cx));
+                page = page.child(card::skeleton(shelf, px(148.), cx));
             }
         }
 
@@ -649,7 +661,7 @@ impl Render for Screen {
         {
             let cards: Vec<_> = artists
                 .iter()
-                .take(ARTISTS_SHOWN)
+                .take(shelf * 2)
                 .map(|artist| {
                     let id = artist.request_id().as_str().to_owned();
                     let picture = artist
@@ -922,6 +934,21 @@ impl Render for Screen {
 
 #[cfg(test)]
 mod tests {
+    /// D17: the shelf fills the window it is given. Six sleeves at 1280 (its
+    /// right half was empty at 2560 with a fixed six), twelve on the panel —
+    /// the defect the 2560×1600 capture showed and this pins.
+    #[test]
+    fn the_release_shelf_fills_the_width_it_is_given() {
+        assert_eq!(shelf_count(1280.), 6);
+        assert_eq!(shelf_count(1600.), 8);
+        assert_eq!(shelf_count(2560.), 12);
+        assert_eq!(shelf_count(600.), RELEASE_ROWS, "never fewer than six");
+        assert_eq!(
+            shelf_count(4000.),
+            RELEASE_ROWS_MAX,
+            "and never more than twelve"
+        );
+    }
     use super::*;
     use crate::widgets::card::stub;
 

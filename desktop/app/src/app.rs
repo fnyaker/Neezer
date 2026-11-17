@@ -726,7 +726,7 @@ impl Render for RootView {
                         .text_color(theme::secondary(cx))
                         .child(
                             "Ce serveur est plus ancien que cette fonction. Les autres \
-                             écrans continuent de marcher : la lecture, la bibliothèque \
+                             écrans continuent de marcher ; la lecture, la bibliothèque \
                              et la file ne dépendent pas de lui.",
                         ),
                 )

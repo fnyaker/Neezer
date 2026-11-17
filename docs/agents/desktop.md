@@ -7,7 +7,7 @@ player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
 **Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D10b, D11, D12, D13, D14a,
-D14b, D15a, D16, M1, P1, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
+D14b, D15a, D16, D17, M1, P1, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
 trim, saved sound at `AudioReady`, `409` told apart, the `auto` payload, the output list) and the
 contract follow-up (Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding
 route); the rest planned.**
@@ -2836,15 +2836,202 @@ Waves that can run in parallel (disjoint files):
     install.
 
 
-### D17 — The whole journey, measured
+### D17 — The whole journey, measured (delivered 2026-11-17)
 
-- **Goal**: the definition of done for the app, on the worst realistic input.
-- **Acceptance**: on `perf_api.py --serve` (8 000 tracks, 4 000 favourites, 4 000-track playlist) and
-  on a real server over a throttled link (`tc netem` 300 ms, 1 Mb/s, 2 % loss): every screen's
-  request count and bytes in a table; click-to-sound for a cached, an archived and a cold track;
-  frame time p95/max during navigation and scrolling; RSS idle/playing/with viz; 0 underruns over
-  one hour with downloads and a transcription running; the upgrade path (an old desktop DB opens; an
-  older server without a route hides the feature). Results replace the plan paragraphs in this note.
+- **The rule, "fini" is a run, not a claim.** The acceptance is one command on the worst
+  realistic input, and every number below comes from it: the app (release build) against
+  `tools/perf_api.py --serve` — 8 000 tracks, 4 000 favourites, a 4 000-row playlist, a show,
+  1 333 albums with a real 1 000 px sleeve — either directly or through a **degraded link with no
+  root** (`desktop/tools/journey/throttle.py`: 300 ms RTT, 1 Mb/s, 2 % of chunks paying one
+  retransmission timeout), on **its own Xvfb** (`:130`+, never the person's session), each screen
+  opened by `--route <token>` so a run is the same run every time. The tools are
+  `desktop/tools/journey/{throttle,drive,bench,checks,soak,frame_stats}.py` and `frame_bench.sh`;
+  their README states the method. **A benchmark that cannot be re-taken by the next person is not a
+  measurement.**
+- **The rule, a screen is reached by a path.** D17's first audit answered one question for every
+  variant of `Route`: *can someone who has never seen this screen open it?* One could not —
+  `Route::Queue` existed, the `q` panel drew the same screen, and **nothing in the app ever pushed
+  the route**, so the full-screen queue was unreachable. `g q` is its way in now, and
+  `Route::access()` (`nav.rs`) states, for every route, whether it is reached by a sidebar entry, a
+  shortcut the `?` overlay prints, a link on another screen, or the app itself (login,
+  onboarding); `screens::every_route_of_the_table_has_a_way_in` walks the whole table and fails on a
+  shortcut the overlay does not list. The other 30 routes were already reachable (the eight
+  Bibliothèque tabs by their strip, Genres by `g e` **and** the admin's sidebar row, Récap and
+  Historique from Nouveautés).
+- **The rule, the playhead is not the UI's.** D7 reported the 4 Hz position tick freezing with the
+  window hidden, and it was true: the tick was a GPUI `spawn`ed task, a hidden window stops the
+  frame loop, and `playerctl position` answered the same value for as long as the window was away.
+  Three things changed. **MPRIS is published by its own thread** (`wiring::mpris::PositionClock`,
+  250 ms, reading the mixer's clock through `Audio::position`, writing the silent `Position`
+  property) — measured with the window unmapped: **2.00 s advanced visible, 2.00 s hidden**, the
+  same 2 s of audio. **The listen ledger reads the engine's clock before every command**
+  (`AppState::sync_playhead_from_engine`), so a `next` pressed with the window hidden no longer
+  under-counts the seconds heard. And the shell's tick only redraws. The clock's own test
+  (`the_position_clock_moves_without_a_window`) runs the real loop with no window at all.
+- **The rule, opening the queue is enough to use it with the keys.** D9 left the focus to a click,
+  so `q` opened a panel that ignored `j`, `Alt+↑` and `Suppr` until a row was clicked. The first
+  paint of `screens::queue::Screen` takes the focus (`window.focus`, once), which is what Tab would
+  do; `opening_the_queue_is_enough_to_use_the_keys` drives `Fin`, `Alt+↑` and `Suppr` without ever
+  focusing the window itself. **And a row drags**: an upcoming row carries `on_drag`/`on_drop` and a
+  drop is `Command::move_to` — the same edit `Alt+↑` makes, so the gesture cannot move the playing
+  row or a played one (`move_row` refuses both). One command, two gestures.
+- **The rule, a sleeve is painted at the class of its box — including the two places that were
+  not.** The now-playing stage painted the archived 1 000 px file through `img()`, and the player
+  bar drew a disc glyph and claimed it was "until the cover widget exists". Both go through
+  `cover::view` now: the stage at **`Class::Page` (512 px)** for a box of at most 340 px, the bar at
+  **`Class::Row` (128 px)** for its 44 px slot, each with its own `Covers` (shown, freed and
+  frame-swept like every list). Counted, not guessed: **1 048 576 B** of decoded pixels per stage
+  sleeve instead of **4 000 000 B**, **65 536 B** per bar sleeve, and the archive's own 1 753 091 B
+  JPEG becomes a 512 px copy the first time it is drawn.
+- **The rule, an older server hides its features.** A server that predates a feature answers 404 for
+  its routes; a client that finds out by opening the screen shows a menu entry that cannot work.
+  `nz-api`'s `Feature` (Party, Remote, Genres, Transcription, Folders) is asked once per session with
+  **one `OPTIONS` per feature on the `Prefetch` lane** — a route that exists answers 200, or 405 for
+  another method (Folders has no GET), an unknown one 404 — and the shell does not draw the entry it
+  is missing and replaces a screen reached by a link with « … n'est pas sur ce serveur » and the
+  reason. A doubt (offline, a 5xx) hides nothing. Measured against the bench: the five probes exist
+  (`an_optional_route_is_told_apart_from_a_missing_one`), and the whole set costs **5 requests,
+  1.6 kB** per session.
+- **The rule, the bench's library must be one the app can actually play.** Building the benchmark
+  found three bugs in `tools/perf_api.py`, all of which made a measurement say the wrong thing:
+  `--archived --recap` aborted with `UNIQUE constraint failed: track_analysis.track_id` (the
+  listening seed had measured the 300 titles its events play, and `make_archived` inserted them
+  again — it **updates** them now); `--archived` wrote a style without `style_confidence`, so the
+  Récap read an archived library as **0 % measured** (and `--archived`'s own coverage check failed at
+  0.90); and the archived rows all pointed at **silent WAVs**, which the desktop cannot decode — a
+  real server's archive holds FLAC/Opus and the benchmark now points the rows it plays at real FLACs
+  **inside the archive** (the server serves nothing outside it). The store keeps a row id as **32 hex
+  characters without the dashes the API prints**, which cost one debugging round: an `UPDATE` keyed
+  by the dashed form matched nothing and every stream answered 503.
+- **Measured** — every number below from `desktop/tools/journey/bench.py`, `checks.py` and
+  `soak.py` on this machine (release build, Xvfb `:130` 2600×1700, `GPUI_X11_SCALE_FACTOR=1`), with
+  `perf_api.py --serve --archived --podcasts --seed-lyrics --recap --onboarding --covers`:
+
+  **Requêtes et octets par écran** (première visite, app store vide ; `_startup` = `/api/me`
+  seul, mesuré à part). Le lien dégradé est le même serveur derrière `throttle.py` à
+  300 ms RTT / 1 Mb/s / 2 % : une ligne `≤` est une borne basse — la fenêtre de silence de
+  ce passage s'est refermée avant les pochettes de cet écran, et le chiffre n'est donc pas
+  complet. Les 5 `OPTIONS` des sondes de fonctionnalités atterrissent dans chaque fenêtre
+  (5 requêtes, 1,6 kB).
+
+  | écran | 1280 req | 1280 octets | 2560 req | 2560 octets | dégradé req | octets |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `home` | 19 | 44 kB | 25 | 197 kB | 31 | 203 kB |
+  | `search` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `library:playlists` | 62 | 1.5 MB | 62 | 1.5 MB | 68 | 1.5 MB |
+  | `library:favorites` | 14 | 672 kB | 28 | 1.0 MB | 3 | ≤7 kB |
+  | `library:artists` | 3 | 20 kB | 3 | 20 kB | 9 | 26 kB |
+  | `library:albums` | 63 | 1.5 MB | 63 | 1.5 MB | 69 | 1.5 MB |
+  | `library:folders` | 3 | 11 kB | 3 | 11 kB | 9 | 17 kB |
+  | `library:uploads` | 3 | 7 kB | 3 | 7 kB | 9 | 13 kB |
+  | `library:dislikes` | 3 | 7 kB | 3 | 7 kB | 9 | 13 kB |
+  | `library:unavailable` | 3 | 7 kB | 3 | 7 kB | 9 | 13 kB |
+  | `podcasts` | 3 | 4 kB | 3 | 4 kB | 9 | 9 kB |
+  | `releases` | 4 | 13 kB | 3 | 12 kB | 10 | 18 kB |
+  | `recap` | 19 | 290 kB | 19 | 290 kB | 25 | 296 kB |
+  | `history` | 5 | 85 kB | 16 | 365 kB | 11 | 91 kB |
+  | `genres` | 4 | 12 kB | 4 | 12 kB | 10 | 18 kB |
+  | `import` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `party` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `remote` | 2 | 2 kB | 2 | 2 kB | 8 | 8 kB |
+  | `now-playing` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `queue` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `viz` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:lecture-et-son` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:apparence` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:visualiseur` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:telechargements` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:decouverte` | 4 | 5 kB | 4 | 5 kB | 10 | 11 kB |
+  | `settings:sources` | 6 | 9 kB | 6 | 9 kB | 12 | 15 kB |
+  | `settings:compte` | 2 | 3 kB | 2 | 3 kB | 8 | 9 kB |
+  | `settings:transcription-locale` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:assistance` | 3 | 4 kB | 3 | 4 kB | 9 | 9 kB |
+  | `settings:raccourcis` | 1 | 1 kB | 1 | 1 kB | 7 | 7 kB |
+  | `settings:utilisateurs` | 3 | 5 kB | 3 | 5 kB | 9 | 11 kB |
+  | `settings:serveur` | 11 | 13 kB | 11 | 13 kB | 17 | 19 kB |
+  | `artist:1000185` | 6 | 34 kB | 6 | 34 kB | 12 | 39 kB |
+  | `album:2000435` | 4 | 29 kB | 4 | 29 kB | 10 | 35 kB |
+  | `credits:track:3000329` | 2 | 3 kB | 2 | 3 kB | 8 | 9 kB |
+  | `credits:person:1000185` | 2 | 2 kB | 2 | 2 kB | 8 | 8 kB |
+  | `playlist:00d27951-1bf7-446e-bfce-5f02457019c7` | 24 | 545 kB | 13 | 288 kB | — | — |
+
+  Ce que la table dit, en clair : l'ouverture de l'app coûte **1 requête, 1,4 kB**
+  (`/api/me`) ; un écran qui liste la bibliothèque coûte **1,5 MB de pochettes** (60
+  playlistes ou albums, chacune une copie 384 px) ; les Favoris passent de **672 kB à
+  1,0 MB** quand la fenêtre passe de 1280 à 2560, parce qu'une fenêtre large peint plus de
+  rangées ; et la moitié des écrans (Réglages, File, Lecture en cours, Visualiseur,
+  Import) ne demandent **rien** de plus que `/api/me`.
+
+  **Clic → son**, mesuré sur les deux liens (le temps est l'horloge de l'app : `load` au
+  geste, `started` au premier échantillon ; les octets sont ceux du proxy) :
+
+  | état | local | 300 ms / 1 Mb/s | ce qui se passe |
+  |---|---:|---:|---|
+  | en cache (appareil) | 83 ms | **87 ms** | le fichier est déjà dans `nz-cache`, 0 octet d'audio demandé |
+  | archivé (transcodage serveur prêt) | 88 ms | **2 273 ms** | le serveur sert un fichier fini ; le lien paie la tête de lecture (≈ 200 kB) |
+  | froid (le serveur génère) | 87 ms | **4 688 ms** | le serveur transcode en l'envoyant : la génération s'ajoute au lien |
+
+  Les trois passent par la même `Command`, celle qu'un clic sur une rangée envoie. Sur le
+  lien dégradé, 2,3 s et 4,7 s sont ce qu'un mobile à 1 Mb/s paie pour un titre jamais
+  entendu, et 87 ms ce qu'il paie pour un titre déjà écouté — la règle 3 en un tableau.
+
+  **Temps d'image** (release, Xvfb `:160`, 2600×1700, lavapipe) : au repos **9 images**
+  tracées en 1,2 s, intervalle p50 **32 ms**, construction d'arbre p95 **0,23 ms** ;
+  pendant 40 `Page suivante` sur 4 000 favoris **33 images**, intervalle p50 **92 ms** (le
+  rasteriseur logiciel), construction p95 **0,19 ms**, max **0,50 ms** ; visualiseur
+  ouvert, même ordre. **Le taux d'images de Xvfb est un plancher** : c'est lavapipe, pas le
+  panneau. Le chiffre du panneau vient de `frame_bench.sh`, que la personne lance
+  elle-même (la commande est dans la PR) — ce script ne lance rien.
+
+  **RSS** (la table ci-dessus, par taille de fenêtre) : app au repos **214–219 MB à
+  1280×800**, **297–335 MB à 2560×1600** — l'écart est celui de la fenêtre, pas de l'app
+  (*Memory* ci-dessus) ; lecture en cours avec la file ouverte **~218 MB**, visualiseur
+  **~215 MB**. Rien de tout cela n'est les données de l'app : le tas vivant reste ~9 MB.
+
+  **Une heure de lecture** (`soak.py`) : lecture en boucle d'un FLAC de 30 s **pris dans le
+  cache de lecture de l'appareil** (donc zéro réseau pour l'audio), **40 téléchargements
+  bulk** en file et un vrai `neezer-transcribe file` (ggml-tiny, Vulkan) en parallèle sur la
+  même machine, pendant 3 600 s : **0 sous-alimentation** sur 369 relevés, **125
+  démarrages de piste** (la boucle), 14 téléchargements bulk en file (2 terminés dans
+  l'heure — le débit bulk est plafonné à 25 % du flux, règle 1), RSS 214 → 224 MB, aucun
+  arrêt de la lecture. Le détecteur de gel du banc lit les `started` (une boucle = un `started`), parce
+  que l'échantillonneur d'état à 30 s s'aligne sur la boucle de 30 s et lit toujours la
+  même phase : un relevé de position seul aurait dit « gelé » à tort.
+
+  **Chemin de mise à jour** : une base desktop d'une version antérieure s'ouvre
+  (`nz-cache`'s tests : un fichier v1, un fichier de 0 octet, une base existante, 0,5 ms),
+  et un serveur sans une route masque la fonctionnalité — `an_optional_route_is_told_apart_from_a_missing_one`
+  la prouve contre le vrai serveur, et un passage du banc derrière un proxy qui répond 404
+  pour `/api/party/*` montre l'entrée « Écoute partagée » disparue et la phrase « L'écoute
+  partagée n'est pas sur ce serveur » à la place de l'écran.
+
+- **Pitfalls found by measuring** (each cost a round):
+  - **GPUI uses Wayland when it can, whatever `DISPLAY` says.** The first bench run set `DISPLAY=:130`
+    and inherited `WAYLAND_DISPLAY`, and the window opened on the developer's Hyprland session while
+    the bench waited for it on Xvfb. `App::env` strips `WAYLAND_DISPLAY`/`WAYLAND_SOCKET`/the
+    Hyprland signature and sets `XDG_SESSION_TYPE=x11`, and `drive.assert_isolated` refuses to run
+    with `WAYLAND_DISPLAY` set.
+  - **`XGetImage` on a 24-bit root answers four bytes per pixel**, BGRX: handing that stream to
+    `convert -depth 8 bgr:-` fails on a truncated tail. The bench drops the fourth byte.
+  - **A log the app appends to cannot be emptied by deleting it**: the handle writes to the unlinked
+    inode. Truncate the path instead.
+  - **Keys pressed before a list's rows land play nothing** (`Intent::PlayFrom` on an empty list),
+    and the run then measures a session that never started: the bench waits for the link to go quiet
+    before pressing, and retries the gesture.
+  - **`EngineEvent::Started` fires once per voice**: replaying the row that is already playing
+    measures the previous play's start (a 6 ms "click to sound" that never happened). A cold/archived
+    pair needs a different row played in between, or a fresh process.
+  - **The app prefetches the row AFTER the playing one**, so a "cold" target must be a row it has not
+    prefetched — row 0, from a fresh store, is the honest cold click; row 1 is warm before the click.
+  - **A queue that walks into a row the bench did not archive stops the sound**: the first soak sat
+    silent for 780 s with 0 underruns, which measures nothing. The soak now sets **repeat one** on a
+    known-good FLAC and recovers a stall by going back to row 0 — not by pressing `Entrée` on the
+    same row again.
+  - **The app's own probes land inside a screen's request window** (`/api/me`, then the five
+    `OPTIONS`): the table below separates `_startup` and `_probes`.
+  - **Under Xvfb the present rate is the software renderer's** (lavapipe: 10–30 fps whatever the app
+    draws). The frame numbers below are the app's own frame-build time and the X server's delivered
+    interval; the panel's rate comes from `frame_bench.sh`, run by the person on their display.
 
 ## Worker prompt template
 
