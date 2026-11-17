@@ -1056,6 +1056,11 @@ impl AppState {
                 // a loan, the HOST otherwise — one call, so a link that was live
                 // before a restart answers again without opening a screen.
                 crate::wiring::remote_host::start(self, cx);
+                // Écoute partagée (lot D15b): a party this account hosts is
+                // picked back up, so a relaunched app does not strand the guests
+                // on a link nobody publishes to (the SPA's `maybeResumeHosting`).
+                // One read, and only when this store ever hosted one.
+                crate::wiring::party_host::resume_at_launch(self, cx);
                 self.warm_owner();
                 self.sync_mpris();
             }
@@ -1092,6 +1097,11 @@ impl AppState {
                 // a loan, the HOST otherwise — one call, so a link that was live
                 // before a restart answers again without opening a screen.
                 crate::wiring::remote_host::start(self, cx);
+                // Écoute partagée (lot D15b): a party this account hosts is
+                // picked back up, so a relaunched app does not strand the guests
+                // on a link nobody publishes to (the SPA's `maybeResumeHosting`).
+                // One read, and only when this store ever hosted one.
+                crate::wiring::party_host::resume_at_launch(self, cx);
                 self.warm_owner();
                 self.sync_mpris();
             }

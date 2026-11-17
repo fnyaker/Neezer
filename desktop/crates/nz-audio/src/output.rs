@@ -23,9 +23,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, StreamConfig, SupportedStreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::clock::AtomicF32;
 use crate::dsp::Settings;
 use crate::events::{EngineEvent, EventBus, MixerNote};
 use crate::mixer::{Mixer, MixerCmd, MixerShared};
+use crate::party::PartyCmd;
 use crate::tap::Tap;
 
 /// What the app shows about the output, and what the voice rings are sized for.
@@ -150,6 +152,14 @@ impl Callback {
         if frames > 0 {
             self.shared.clock.set_latency_frames(frames);
         }
+        // The pair a party guest schedules on: the device says the frame at this
+        // stream position reaches the speakers at this instant of its own clock
+        // (cpal: the backend's monotonic seconds, an origin of its own choosing,
+        // which cancels in every difference taken from it).
+        let at_s = stamp.playback.as_nanos() as f64 / 1e9;
+        self.shared
+            .clock
+            .note_output(at_s, self.shared.clock.stream_position());
     }
 }
 
@@ -716,12 +726,19 @@ pub(crate) fn start(
     notes: Producer<MixerNote>,
     settings: Arc<Settings>,
     tap: Tap,
-) -> (Output, Arc<MixerShared>, Producer<MixerCmd>, OutputInfo) {
+) -> (
+    Output,
+    Arc<MixerShared>,
+    Producer<MixerCmd>,
+    Producer<PartyCmd>,
+    Arc<AtomicF32>,
+    OutputInfo,
+) {
     match probe(choice, preferred_rate, period_frames) {
         Ok(setup) => {
             let rate = setup.config.sample_rate();
             let shared = Arc::new(MixerShared::new(rate, volume));
-            let (mixer, cmds) = Mixer::new(
+            let (mixer, cmds, party, party_gain) = Mixer::new(
                 Arc::clone(&shared),
                 notes,
                 settings,
@@ -730,11 +747,18 @@ pub(crate) fn start(
             );
             let info = info_of(&setup);
             let output = build_device_output(setup, mixer, Arc::clone(&shared), bus);
-            (Output::Device(output), shared, cmds, info)
+            (
+                Output::Device(output),
+                shared,
+                cmds,
+                party,
+                party_gain,
+                info,
+            )
         }
         Err(_) => {
             let shared = Arc::new(MixerShared::new(preferred_rate, volume));
-            let (mixer, cmds) =
+            let (mixer, cmds, party, party_gain) =
                 Mixer::new(Arc::clone(&shared), notes, settings, tap, preferred_rate);
             let pump = NullOutput::start(mixer, preferred_rate, period_frames);
             let info = OutputInfo {
@@ -743,7 +767,14 @@ pub(crate) fn start(
                 channels: 2,
                 latency_frames: u64::from(period_frames),
             };
-            (Output::Null { _pump: pump }, shared, cmds, info)
+            (
+                Output::Null { _pump: pump },
+                shared,
+                cmds,
+                party,
+                party_gain,
+                info,
+            )
         }
     }
 }
@@ -756,14 +787,22 @@ pub(crate) fn start_offline(
     notes: Producer<MixerNote>,
     settings: Arc<Settings>,
     tap: Tap,
-) -> (Output, OfflineSink, Arc<MixerShared>, Producer<MixerCmd>) {
+) -> (
+    Output,
+    OfflineSink,
+    Arc<MixerShared>,
+    Producer<MixerCmd>,
+    Producer<PartyCmd>,
+    Arc<AtomicF32>,
+) {
     let shared = Arc::new(MixerShared::new(sample_rate, volume));
-    let (mixer, cmds) = Mixer::new(Arc::clone(&shared), notes, settings, tap, sample_rate);
+    let (mixer, cmds, party, party_gain) =
+        Mixer::new(Arc::clone(&shared), notes, settings, tap, sample_rate);
     let sink = OfflineSink {
         mixer,
         shared: Arc::clone(&shared),
     };
-    (Output::Offline, sink, shared, cmds)
+    (Output::Offline, sink, shared, cmds, party, party_gain)
 }
 
 #[cfg(test)]
@@ -815,7 +854,7 @@ mod tests {
     fn callback_with_voice(device_channels: usize, samples: &[f32], generation: u64) -> Callback {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
         let (notes, _notes_rx) = RingBuffer::new(8);
-        let (mixer, mut cmds) = Mixer::new(
+        let (mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             notes,
             Settings::new(),

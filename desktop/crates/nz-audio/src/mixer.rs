@@ -42,6 +42,7 @@ use crate::clock::{AtomicF32, Clock};
 use crate::crossfade;
 use crate::dsp::{self, Master, Normalization, Pan, Settings, Snapshot};
 use crate::events::MixerNote;
+use crate::party::{PartyCmd, PartyVoice};
 use crate::tap::Tap;
 use crate::voice::VoiceConsumer;
 
@@ -233,6 +234,12 @@ pub(crate) struct Mixer {
     spare: Vec<f32>,
     /// Media frames already reported to the clock for the current voice.
     reported_media: u64,
+    /// The listen party's scheduled PCM (`crate::party`): a guest's audio lands
+    /// here, on the OUTPUT clock, and shares this buffer's DSP, volume and tap.
+    party: PartyVoice,
+    /// The stream position (seconds) of the next frame this mixer writes. Unlike
+    /// the media clock it never resets: it is what a party schedule is made of.
+    stream_s: f64,
 }
 
 impl Mixer {
@@ -244,10 +251,15 @@ impl Mixer {
         settings: Arc<Settings>,
         tap: Tap,
         sample_rate: u32,
-    ) -> (Self, Producer<MixerCmd>) {
+    ) -> (Self, Producer<MixerCmd>, Producer<PartyCmd>, Arc<AtomicF32>) {
         // 8 slots: at most a current, a next, a trim end and a clear between two
         // buffers.
         let (cmd_tx, cmd_rx) = RingBuffer::new(8);
+        // The party's own ring: a poll schedules up to four chunks at once and a
+        // correction clears before it schedules again.
+        let (party_tx, party_rx) = RingBuffer::new(16);
+        let party_gain = Arc::new(AtomicF32::new(1.0));
+        let party_own = Arc::new(AtomicBool::new(false));
         // The widest buffer the callback renders in one span: the output's
         // scratch (8 192 frames) and the device's own.
         let spare = vec![0.0f32; 16_384 * 2];
@@ -268,8 +280,12 @@ impl Mixer {
                 ended_gen: None,
                 spare,
                 reported_media: 0,
+                party: PartyVoice::new(party_rx, Arc::clone(&party_gain), party_own),
+                stream_s: 0.0,
             },
             cmd_tx,
+            party_tx,
+            party_gain,
         )
     }
 
@@ -420,15 +436,34 @@ impl Mixer {
         if frames == 0 {
             return;
         }
-        if self.shared.paused() {
-            // Keep the master chain in step so the first audible buffer after a
-            // resume already has the EQ the person set.
-            self.master.sync(&self.settings.snapshot());
-            return;
-        }
+        let started_at = self.stream_s;
+        let step = 1.0 / f64::from(self.sample_rate.max(1));
+        self.stream_s += frames as f64 * step;
+        // The output timeline moves whatever plays: the party schedules on it.
+        self.shared.clock.advance_stream(frames as u64);
+
         let spec = self.settings.snapshot();
         self.master.sync(&spec);
         self.pan.configure(spec.mono, spec.balance);
+
+        // The party first: it is addressed in stream positions, and it is what a
+        // guest hears whether or not the local player is paused.
+        self.party.drain(started_at);
+        self.party.retire(started_at);
+        let party_audible = self
+            .party
+            .mix(out, started_at, f64::from(self.sample_rate), frames);
+        // While a party owns the output the person's own voices are left exactly
+        // as they are (their position, their queue) and simply not mixed in: two
+        // songs at once is not a feature.
+        let taken = self.party.taken_over();
+        if self.shared.paused() || taken {
+            if !party_audible {
+                return;
+            }
+            self.finish(out, frames);
+            return;
+        }
 
         let mut done = 0;
         let mut starved = false;
@@ -437,8 +472,19 @@ impl Mixer {
             done += wrote;
         }
 
-        // The page's order after the mix: the DSP on the SUM, the volume, the
-        // analysis tap, then the ears (mono/balance).
+        self.finish(out, frames);
+
+        if starved && self.started {
+            // Playing, not ended, nothing to play: the decoder did not keep up.
+            // One per buffer, not one per missing sample.
+            self.shared.note_underrun();
+            let _ = self.notes.push(MixerNote::Underrun);
+        }
+    }
+
+    /// The page's order after the mix: the DSP on the SUM, the volume, the
+    /// analysis tap, then the ears (mono/balance).
+    fn finish(&mut self, out: &mut [f32], frames: usize) {
         self.master.process(&mut out[..frames * 2], frames);
         let gain = if self.shared.muted() {
             0.0
@@ -452,13 +498,6 @@ impl Mixer {
         }
         self.tap.push(&out[..frames * 2]);
         self.pan.process(&mut out[..frames * 2], frames);
-
-        if starved && self.started {
-            // Playing, not ended, nothing to play: the decoder did not keep up.
-            // One per buffer, not one per missing sample.
-            self.shared.note_underrun();
-            let _ = self.notes.push(MixerNote::Underrun);
-        }
     }
 
     /// Render one decision-free stretch of the buffer, and report how many
@@ -618,7 +657,7 @@ mod tests {
     fn silence_when_paused_and_no_underrun_before_the_first_sample() {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
         let (note_tx, mut note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Settings::new(),
@@ -656,7 +695,7 @@ mod tests {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
         shared.set_paused(false);
         let (note_tx, mut note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Settings::new(),
@@ -699,7 +738,7 @@ mod tests {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
         shared.set_paused(false);
         let (note_tx, mut note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Settings::new(),
@@ -734,7 +773,7 @@ mod tests {
         let shared = Arc::new(MixerShared::new(48_000, 0.5));
         shared.set_paused(false);
         let (note_tx, _note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Settings::new(),
@@ -763,7 +802,7 @@ mod tests {
     fn installing_a_current_voice_stops_the_previous_decoder() {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
         let (note_tx, _note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Settings::new(),
@@ -796,7 +835,7 @@ mod tests {
         let settings = Settings::new();
         settings.set_normalization(Normalization::High);
         let (note_tx, _note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Arc::clone(&settings),
@@ -842,7 +881,7 @@ mod tests {
             ..Default::default()
         });
         let (note_tx, _note_rx) = RingBuffer::new(64);
-        let (mut mixer, mut cmds) = Mixer::new(
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
             Arc::clone(&shared),
             note_tx,
             Arc::clone(&settings),
