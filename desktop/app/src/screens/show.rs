@@ -2274,7 +2274,11 @@ impl Screen {
         // push the list out of the window at 1280x800).
         if !self.transcribe_open {
             let ready = self.ready_transcripts();
-            let archived = self.episodes.iter().filter(|episode| episode.archived).count();
+            let archived = self
+                .episodes
+                .iter()
+                .filter(|episode| episode.archived)
+                .count();
             return div()
                 .id("show-transcribe-folded")
                 .debug_selector(|| "show-transcribe-folded".to_owned())
