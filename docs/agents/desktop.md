@@ -1346,8 +1346,8 @@ Waves that can run in parallel (disjoint files):
 - **Measured** (this machine: 16 threads, Rust 1.99.1; the debug binary on a private `Xvfb :118`
   with `-dpi 96` + `GPUI_X11_SCALE_FACTOR=1`, a private `dbus-run-session`, its own XDG dirs and
   `tools/perf_api.py --serve --podcasts --tracks 8000`; RSS from `/proc/<pid>/status`):
-  - `cargo test --workspace`: **every crate green**; `cargo test -p neezer-desktop` is **319 tests,
-    0 failed** (6 of them the heavy benches their parent runs in a child process). `cargo fmt
+  - `cargo test --workspace`: **every crate green**; `cargo test -p neezer-desktop` is **344 tests,
+    0 failed** (7 of them the heavy benches their parent runs in a child process). `cargo fmt
     --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean. **35 of those tests
     are this lot's** (11 `screens::show`, 3 `screens::podcasts`, 5 `chapters`, 4 `episode_panel`,
     3 `markers`, 9 `transcript_panel`).
