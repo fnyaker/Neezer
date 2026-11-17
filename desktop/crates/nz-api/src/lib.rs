@@ -40,17 +40,21 @@
 //! ```
 
 pub mod cache_trait;
+pub mod cert;
 pub mod client;
 pub mod endpoints;
 pub mod error;
 pub mod features;
 pub mod lanes;
 pub mod session;
+pub mod stats;
 
 pub use cache_trait::{NoCache, ResponseCache, is_cacheable};
+pub use cert::{CertificateInfo, PROBE_TIMEOUT, fingerprint, hex_fingerprint, parse_fingerprint};
 pub use client::{
     ANSWER_TIMEOUT, Api, ApiBuilder, BACKGROUND_HEADER, CONNECT_TIMEOUT, DownloadReport, Fresh,
-    NO_RETRY_HEADER, Quality, STALL_TIMEOUT, START_HEADER, StreamReady, StreamResponse, TrackId,
+    MAX_REDIRECTS, NO_RETRY_HEADER, Quality, STALL_TIMEOUT, START_HEADER, StreamReady,
+    StreamResponse, TrackId,
 };
 pub use endpoints::entities::RadioSeed;
 pub use endpoints::library::DownloadQueued;
@@ -61,3 +65,4 @@ pub use error::ApiError;
 pub use lanes::{Lane, bulk_cap_from_stream};
 pub use reqwest::Method;
 pub use session::SessionJar;
+pub use stats::{TAG_NONE, TagStats};

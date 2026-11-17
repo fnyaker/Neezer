@@ -93,6 +93,37 @@ pub enum ApiError {
     /// The bytes arrived but are not the JSON this app models.
     #[error("cannot decode the answer: {0}")]
     Decode(String),
+
+    /// A request this client refuses to BUILD, so no socket was opened: a
+    /// redirect that would downgrade the session to plaintext off the
+    /// configured origin, a certificate probe of a plaintext URL, a redirect
+    /// chain longer than ten hops (`Net.kt`'s rules, SC3).
+    ///
+    /// The string is already the French sentence a screen prints:
+    /// [`ApiError::cause_fr`] returns it unchanged, because the refusal is
+    /// decided here and the server never had a status for it.
+    #[error("refused: {0}")]
+    Invalid(String),
+
+    /// The certificate a handshake presented is not the one this client
+    /// trusts (`Ssl.kt`'s trust-on-first-use, SC3).
+    ///
+    /// `sha256` is the PRESENTED leaf's SHA-256, colon-separated hex, in the
+    /// exact form the pin stores and the setup screen shows — so it can be
+    /// pinned by re-saving, or compared to the one somebody read on the server.
+    /// `changed` says whether this client already held a pin for that origin
+    /// and a DIFFERENT leaf answered: then "le certificat a changé", which is
+    /// the sentence a phone shows instead of letting somebody sign in over a
+    /// channel a café's Wi-Fi could be on.
+    ///
+    /// Never retried: a second handshake presents the same certificate.
+    #[error("certificate {sha256} (changed: {changed})")]
+    Certificate {
+        /// The presented leaf's SHA-256, colon-separated hex (`AB:CD:…`).
+        sha256: String,
+        /// `true` when a pin was held for this origin and another leaf came.
+        changed: bool,
+    },
 }
 
 impl ApiError {
@@ -103,6 +134,11 @@ impl ApiError {
     /// [`ApiError::Conflict`] is not either: the request was valid and the
     /// world moved, so re-sending the same body fetches the same `409` — the
     /// caller re-reads and offers the action again.
+    ///
+    /// A [`ApiError::Certificate`] is not either: the same handshake presents
+    /// the same leaf, so only a person can decide (re-pin it, or fix the
+    /// server). A refusal this client made itself ([`ApiError::Invalid`]) has
+    /// nothing to retry either: the address it named will be refused again.
     pub fn retryable(&self) -> bool {
         matches!(
             self,
@@ -191,6 +227,16 @@ impl ApiError {
                 }
             }
             ApiError::Decode(_) => "réponse du serveur illisible".to_owned(),
+            // Both new refusals already carry their French sentence (SC3): a
+            // certificate refusal is a person's decision, never a status code.
+            ApiError::Invalid(sentence) => sentence.clone(),
+            ApiError::Certificate { changed, .. } => {
+                if *changed {
+                    "Le certificat du serveur a changé".to_owned()
+                } else {
+                    "Le certificat du serveur n'est pas reconnu".to_owned()
+                }
+            }
         }
     }
 }
@@ -308,5 +354,46 @@ mod tests {
             Some("forbidden")
         );
         assert_eq!(ApiError::Offline.code(), None);
+    }
+
+    /// SC3's two refusals. A certificate is a PERSON's decision (re-pin it, or
+    /// fix the server), so it is never retried by the client, and a refusal this
+    /// client made itself has nothing to retry either. Both already carry their
+    /// French sentence, which is what `LoadFailed` shows.
+    #[test]
+    fn a_certificate_and_an_invalid_request_are_not_retried() {
+        let changed = ApiError::Certificate {
+            sha256: "AB:CD".into(),
+            changed: true,
+        };
+        assert_eq!(changed.cause_fr(), "Le certificat du serveur a changé");
+        assert!(!changed.retryable());
+        assert_eq!(changed.code(), None);
+        assert_eq!(changed.retry_after(), None);
+
+        let unrecognised = ApiError::Certificate {
+            sha256: "AB:CD".into(),
+            changed: false,
+        };
+        assert_eq!(
+            unrecognised.cause_fr(),
+            "Le certificat du serveur n'est pas reconnu"
+        );
+        assert_ne!(
+            changed, unrecognised,
+            "a pinned leaf that changed and a chain nobody vouched for are two different answers"
+        );
+
+        let refused = ApiError::Invalid(
+            "adresse refusée (http://ailleurs/x) : le trafic en clair n'est permis que vers le serveur configuré"
+                .into(),
+        );
+        assert!(
+            refused.cause_fr().contains("en clair"),
+            "the sentence says why: {}",
+            refused.cause_fr()
+        );
+        assert!(!refused.retryable());
+        assert_eq!(refused.retry_after(), None);
     }
 }

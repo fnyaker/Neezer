@@ -19,9 +19,37 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 directories = { workspace = true }
 nz-model = { path = "../nz-model" }
+# SC3's trust-on-first-use pin is a `rustls::client::danger::ServerCertVerifier`
+# of our own (`src/cert.rs`): reqwest's builder has no verifier hook, so the
+# client is handed a preconfigured `rustls::ClientConfig` instead. Both crates
+# are ALREADY in `desktop/Cargo.lock` — `reqwest`'s `rustls` feature builds its
+# own client with exactly these, same versions and same features — so this adds
+# two edges to `nz-api` and no new package to the lock. The desktop never calls
+# `pinned_leaf_sha256`, so it pays for none of it at runtime.
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "aws_lc_rs",
+] }
+rustls-platform-verifier = "0.7"
+# The fingerprint's SHA-256. Already in the graph: `rustls`'s provider IS
+# aws-lc-rs, so a second hash implementation would be dead weight and a second
+# answer to "what does this digest mean".
+aws-lc-rs = { version = "1", default-features = false, features = [
+    "aws-lc-sys",
+    "prebuilt-nasm",
+] }
 
 [dev-dependencies]
 # `test-util` gives the lane tests a virtual clock (`start_paused`), so the
 # 250 ms / 1 s quiet periods are measured exactly instead of slept through.
 tokio = { workspace = true, features = ["test-util"] }
 nz-model = { path = "../nz-model" }
+# `tests/tls.rs` runs the self-signed server the pin is proven against. The same
+# crate, same version, same features as the dependency above: the lockfile is
+# unchanged by a second mention.
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "aws_lc_rs",
+] }

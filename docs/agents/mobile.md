@@ -153,7 +153,7 @@ the desktop CI green; it is never forked into `mobile/`.
 | Crate | Verdict | What the mobile needs, and the lot |
 |---|---|---|
 | `nz-model` | **As is.** Pure serde types, tolerant. | Nothing. FFI records are NOT derived on it (it has `serde_json::Value` fields UniFFI cannot carry, and the FFI wants screen-shaped, slimmer rows): `nz-ffi` converts. |
-| `nz-api` | **As is + 1 lot (SC3).** Lanes, `503`/`Retry-After`, 409 split, offline, cache seam, `SessionJar::at(path)` already injectable. | SC3 adds: a TOFU pin (`ApiBuilder::pinned_leaf_sha256`, accept platform-valid OR that exact leaf, `ApiError::Certificate{sha256, changed}`), `probe_certificate(url)` (handshake refused, nothing sent — `Ssl.kt`'s rule), a byte/request counter per screen tag, and documents the Android verifier init. `directories` stays (only used by `default_path`, which mobile never calls). |
+| `nz-api` | **As is + SC3 (delivered).** Lanes, `503`/`Retry-After`, 409 split, offline, cache seam, `SessionJar::at(path)` already injectable. | SC3's additions, all opt-in so the desktop keeps its client: a TOFU pin (`ApiBuilder::pinned_leaf_sha256`, platform-valid OR that exact leaf, `ApiError::Certificate{sha256, changed}`), `Api::probe_certificate(url)` (handshake refused, 0 application bytes — `Ssl.kt`'s rule), a byte/request counter per screen tag (`with_tag`/`stats`), `http` only to the configured origin with redirects followed by hand (`Net.kt`'s rule), and the Android verifier init documented (MB2's Kotlin side). `directories` stays (only used by `default_path`, which mobile never calls). |
 | `nz-cache` | **As is.** `Cache::open_with_cache_dir(data, cache)` takes both dirs. | Nothing. Data dir = `filesDir/neezer` (offline audio, SQLite), cache dir = `cacheDir/neezer` (covers, play cache — the system may clear it, which is what those are for). `covers::variant` (image crate) unused on mobile: Android decodes (see *Covers*). |
 | `nz-player` | **As is.** Pure queue/transport state machine, listen accounting, shuffle. | Nothing. |
 | `nz-audio` | **Reused + 1 lot (SC2).** The engine already has `Engine::new_offline` → `OfflineSink::render(&mut [f32])`, a pull-driven sink. | SC2 turns it into a supported EXTERNAL sink: `Engine::new_external(cfg, opener) -> (Engine, ExternalSink)` with `render`, `Engine::set_external_output(OutputInfo)` (rate, channels, `latency_frames` the clock subtracts — the party and the analysis need it), `Engine::note_underruns(total)`; makes the crate compile for Android (today it does not: `HostId::PipeWire`/`Alsa`); puts `cpal` behind a default feature `cpal` so the Android build compiles none of it; `EngineConfig.spool_dir` is always passed (no `$XDG` default on Android). Desktop unchanged with default features. |
@@ -1098,63 +1098,109 @@ changed except this section).
   `tests/external.rs` (five tests: the seam, the latency, the xrun total, the callback thread, and
 the cpal-less fallback).
 
-### SC3 — `nz-api`: certificate pin (TOFU), probe, counters (wave 1)
+### SC3 — `nz-api`: certificate pin (TOFU), probe, counters (delivered 2026-11-17)
 
-**Goal.** `Ssl.kt`'s trust model and per-screen counting, in the shared client. **Depends on**: MB0.
-**Exclusive files**: `desktop/crates/nz-api/**`.
-**Contract.** `ApiBuilder::pinned_leaf_sha256(Option<[u8; 32]>)` — a custom rustls verifier: the
-platform verifier's verdict OR an exact leaf match; a mismatch on a pinned origin →
-`ApiError::Certificate { sha256: String /* hex, colon-separated */, changed: bool }` with a French
-`cause_fr` ("Le certificat du serveur a changé"); `pub async fn probe_certificate(url) ->
-Result<CertificateInfo { sha256, subject, issuer, not_after, system_trusted }, ApiError>` that
-completes a TLS handshake, sends NO request bytes and closes; `Api::stats() -> Vec<TagStats { tag,
-requests, bytes_in, bytes_out }>` and `Api::with_tag(tag)` (a cheap clone carrying the screen tag);
-http allowed only to the configured origin (any other `http://` URL → `ApiError::Invalid`); redirects
-followed by hand, the cookie sent only to the configured origin. The desktop keeps its behaviour
-(no pin unless asked).
-**Acceptance.** Desktop CI green; tests with a local self-signed TLS server (rcgen-generated cert at
-test time): unpinned → `Certificate{changed:false}` refused; pinned → accepted; another cert on the
-same origin → `changed:true`; `probe_certificate` reads the fingerprint and the server receives 0
-application bytes (counted on the server side); a redirect to another origin never carries the
-cookie; counters add up to the bytes the test server sent.
-**Pitfalls.** `rustls-platform-verifier` on Android needs the Kotlin-side init (MB2), not this crate;
-keep the platform verifier as the first opinion — the pin only ADDS the one leaf.
+**Goal.** `Ssl.kt`'s trust model and per-screen counting, in the shared client.
+**Exclusive files**: `desktop/crates/nz-api/**` — plus three lines of `desktop/Cargo.lock` (the
+crate's own dependency list; **no new package**, see below) and this section.
 
-```text
-Tu es le worker du lot SC3 du plan mobile Neezer. Lis CLAUDE.md, docs/agents/mobile.md (« Auth,
-security, data », « Worker rules », « SC3 »), docs/agents/android.md (« Trust boundaries »),
-android/app/src/main/java/org/nsupysonic/app/{Ssl,Net}.kt, et desktop/crates/nz-api.
-Objectif : ajouter à nz-api l'épinglage TOFU, probe_certificate sans envoyer d'octet applicatif, les
-compteurs par écran (with_tag/stats), le http limité à l'origine configurée et les redirections suivies
-à la main, selon la section SC3, sans changer le comportement par défaut du desktop.
-Fichiers à toi seul : desktop/crates/nz-api/**.
-Acceptation : CI desktop verte ; tests avec un serveur TLS auto-signé local (non épinglé refusé, épinglé
-accepté, certificat changé = changed:true, sonde = 0 octet applicatif reçu, cookie jamais envoyé à une
-autre origine, compteurs exacts).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc3, PR « feat(desktop): SC3 nz-api certificate pin, probe, counters », CI
-desktop ET mobile vertes, rebase + diff --stat, merge, section SC3 réécrite, `ao report --done`.
-```
+- **The pin is opt-in, and that is what keeps the desktop byte-for-byte itself.** A client that never
+  calls `ApiBuilder::pinned_leaf_sha256` is built exactly as before: no custom verifier, reqwest's own
+  platform-backed TLS, the SPA's three attempts on a dead link. Measured in `tests/tls.rs`: the same
+  self-signed server costs the default client **3 handshakes** and `ApiError::Offline`, while a client
+  that asked for a pin (even `None`) costs **1** and `ApiError::Certificate` — a certificate does not
+  change between two attempts, so retrying it only delays the sentence.
+  ```rust
+  Api::builder("https://192.168.1.10:5000")
+      .pinned_leaf_sha256(Some(leaf)) // or None: platform verdict only, still *reported* as a certificate
+      .session_file(".../neezer/session.json")   // SessionJar::at, app-private
+      .build()
+  ```
+- **The platform keeps the first opinion.** `PinnedVerifier` asks `rustls_platform_verifier::Verifier`
+  and only then the pin: a chain a real CA signed is never refused because it is not the pinned leaf,
+  and the pin only ADDS one leaf **for the configured host** (`ServerName` compared against the base
+  URL's host), so a redirect to another HTTPS host gets the system's checks, never a relaxed one.
+  Another origin → `Certificate { sha256: <presented leaf, AB:CD:…>, changed: true }` ("Le certificat
+  du serveur a changé"); a chain nobody vouched for and no pin held → `changed: false` ("…n'est pas
+  reconnu"), which is exactly what the setup screen shows before pinning anything.
+- **A certificate failure is attributed by a MARK, not by "the last error".** The verifier records
+  `(seq, leaf, platform verdict)` in the client's `PinState`; a request reads `seq` before sending and
+  only blames the certificate if a handshake it paid for presented one (`certificate_error(mark)`).
+  Without that, six `User`-lane requests in flight would let one request's certificate refusal speak
+  for another's timeout. A certificate refusal also leaves the client ONLINE: the server did answer.
+- **`probe_certificate` sends NOTHING.** `Api::probe_certificate(url)` (https only, else
+  `ApiError::Invalid`) runs a handshake whose verifier RECORDS the leaf, asks the platform for its
+  verdict and then REFUSES the handshake — `Ssl.kt`'s rule — so the server reads **0 application
+  bytes** (measured on the server side: not even a request line). It answers `CertificateInfo {
+  sha256, subject, issuer, not_after, system_trusted }`: the fingerprint in the pin's own spelling, the
+  names (`CN=127.0.0.1, O=Neezer tests, OU=SC3`) and the expiry (`2126-10-24T19:53:13Z`) read off the
+  DER by a 120-line reader (`src/cert.rs`), no X.509 crate, no date crate. `parse_fingerprint` reads a
+  fingerprint back (upper or lower case, with or without `:`), which is the one place the app can turn
+  what it shows into what it pins.
+- **Counters are per screen tag, in bytes.** `Api::with_tag("home")` is a cheap clone sharing the
+  pool, the jar, the lanes, the pin **and** the counters; `Api::stats() -> Vec<TagStats { tag,
+  requests, bytes_in, bytes_out }>` is sorted by tag, `clear_stats()` is what a bench between two
+  measures needs. `requests` counts every hop actually sent (a redirect costs two), `bytes_in` the
+  response BODY bytes as they arrive (a streamed FLAC is counted in `StreamResponse::chunk`, where it
+  is read), `bytes_out` the request body exactly as written. **Headers are not counted**: their size
+  depends on the server's own casing and its `Date` line, so a test that added them up would be
+  measuring the server's banner instead of the app's cost. Measured: home 1 request / 9 bytes,
+  search 1 request / 11 bytes in and / 8 bytes out, and a redirect chain 2 requests / 11 bytes.
+- **Redirects are followed by HAND** (`Api::attempt`, `Api::stream`, `download_from` for the API
+  target): `reqwest::redirect::Policy::none()`, ten hops at most, `301`/`302`/`303` become a `GET`
+  without a body, `307`/`308` keep both — the semantics reqwest's own policy had, so the desktop sees
+  no difference. Each hop goes through `Api::hop` BEFORE a socket opens: `https` anywhere, `http` only
+  to the configured origin, everything else `ApiError::Invalid` ("le trafic en clair n'est permis que
+  vers le serveur configuré"). The session is also structurally confined: the client's `cookie_provider`
+  is an `OriginJar` that answers only for the configured origin, so an off-origin hop carries no cookie
+  and an off-origin `Set-Cookie` cannot reach the person's session file. Measured with two loopback TLS
+  servers: hop 1 `cookie: session=topsecret`, hop 2 no cookie at all; and a `Location` to
+  `http://` off-origin is refused with **0** connections to the target.
+- **What the desktop pays**: one `Mutex` per request under `TAG_NONE` ("app"), one `Arc` clone per
+  `with_tag`, and nothing else — no TLS configuration change, no new verifier, no extra thread. The
+  probe is the only blocking work and it is `spawn_blocking`, bounded by `CONNECT_TIMEOUT` (4 s) and
+  `PROBE_TIMEOUT` (6 s), one call from a setup screen.
+
+**Rules a measurement taught** (each cost a red build or a wrong dependency):
+
+- **`reqwest` 0.13 has no custom-verifier hook** (`tls_danger_accept_invalid_certs` is the only door it
+  opens), so the pinned client is built with `tls_backend_preconfigured(rustls::ClientConfig)` and this
+  crate owns the config. A preconfigured config is used AS IT IS: reqwest sets `alpn_protocols` only on
+  the configs it builds itself, so the file must set `["h2", "http/1.1"]` or every request silently
+  drops to HTTP/1.1.
+- **`aws-lc-rs` with DEFAULT features adds a package.** `aws-lc-rs = "1"` turned on `ring-io` and
+  `ring-sig-verify`, which pulled **`untrusted 0.7.1`** into `desktop/Cargo.lock` (measured in the
+  lockfile diff: a new `[[package]]` and an `untrusted 0.9.0` rename in two other entries). Repeating
+  rustls's own request — `default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"]` — brings
+  the diff down to **three lines** (`aws-lc-rs`, `rustls`, `rustls-platform-verifier` in `nz-api`'s
+  dependency list) and **zero** new packages. CI runs `--locked`, so that three-line update is part of
+  this lot, not an accident.
+- **rustls 0.23's `CryptoProvider` has no hash**: `hash_provider` lives on `CipherSuiteCommon`, and the
+  suite that would answer is not necessarily SHA-256 (`TLS_AES_256_GCM_SHA384` is not). The fingerprint
+  therefore comes from `aws_lc_rs::digest::SHA256` — the provider rustls already runs with — and not
+  from a fourth hashing crate.
+- **A test TLS server must stop reading at the first CRLFCRLF, not when the buffer ENDS with it.** A
+  POST's body arrives in the same TLS record, so `ends_with(b"\r\n\r\n")` never matched, the server
+  waited, and the client's `ANSWER_TIMEOUT` (12 s) turned the test into `Offline`: one red test, and the
+  reason `tests/tls.rs` truncates the head at its first terminator.
+- **`rcgen` at test time would have cost four packages** (`rcgen`, `yasna`, `time`, `pem`) for two
+  fixtures. Two throwaway self-signed certificates (ECDSA P-256, `CN=127.0.0.1`, valid a hundred years,
+  524 B of DER each, OpenSSL 3) are committed with their keys and their subject/expiry asserted, so
+  they cannot rot silently.
+- **The probe is driven by `std::io`**: `rustls::StreamOwned` over a `std::net::TcpStream` in
+  `spawn_blocking`, because one read drives the whole handshake (write the ClientHello, read the flight,
+  hand the certificate to the verifier, get the refusal). No second async TLS stack, no thread left
+  borrowing the runtime.
+- **A refusal this client makes needs its own error variant**: `ApiError::Invalid(String)` carries the
+  French sentence as it is (`cause_fr` returns it), because there is no status code for "I refused to
+  dial that". `ApiError::Certificate { sha256, changed }` is the other; both are non-retryable and
+  `code()`/`retry_after()` answer `None`, so a screen can never print a status it never got.
+
+**Owed to a later lot**: MB2 maps these two variants into `NzError::{Certificate, Invalid}` and calls
+`with_tag` per screen (`home`, `search`, …) so `NzCore::stats()` is the numbers this counter holds; the
+setup screen (MB4) calls `Api::probe_certificate` and pins `CertificateInfo::sha256` with
+`parse_fingerprint`; the Android `rustls-platform-verifier` init stays MB2's Kotlin side, this crate
+only requires that it has run.
 
 ### SC4 — Extract `nz-offline` (wave 1)
 

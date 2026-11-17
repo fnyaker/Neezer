@@ -4580,9 +4580,12 @@ dependencies = [
 name = "nz-api"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "directories",
  "nz-model",
  "reqwest",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
