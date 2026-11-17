@@ -102,6 +102,15 @@ def _extractor_status() -> dict:
     # take most of a minute to paint. The probe reports what is known and loads
     # in the background; the page shows "vérification…" and asks again.
     probe = emb.session_probe() if usable else {"state": "ok", "error": None}
+    # A loader's own message quotes a path or the runtime's internals, and it is
+    # already in the server log: the page only needs to know what to do.
+    session_error = None
+    if probe.get("error"):
+        session_error = (
+            "the model could not be loaded; see the server log"
+            if emb.model_path()
+            else "no model file; upload it in the genre studio or set [deezer] embed_model"
+        )
     return {
         "available": usable,
         "reason": emb.why_unavailable(),
@@ -111,11 +120,32 @@ def _extractor_status() -> dict:
         "model": emb.model_info(),
         "uploadable": emb.can_write_model(),
         "session_state": probe["state"],
-        "session_error": probe["error"],
+        "session_error": session_error,
         # Where to get the exact export the front-end needs, so the studio never
         # has to say "find the model file yourself".
         "model_url": emb.MODEL_URL,
     }
+
+
+#: What an extractor upload may be refused for, in the words the studio shows.
+#: Only these constants are echoed: a loader's message may quote a path or the
+#: runtime's internals, and it stays in the server log.
+_EXTRACTOR_REFUSALS = (
+    "the extractor must be a .onnx file",
+    "no writable models directory is configured",
+    "file too large",
+    "empty file",
+    "the model exposes no input",
+)
+
+
+def _extractor_refusal(err) -> str:
+    for message in _EXTRACTOR_REFUSALS:
+        if err == message:
+            return message
+    if err and err.startswith("this model expects "):
+        return "the model expects a different input shape"
+    return "the extractor could not be installed"
 
 
 def _extractor_job_json() -> dict:
@@ -203,7 +233,7 @@ def _run_embed(app, force, workers=None):
             invalidate_predictions()
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - closing a worker's connection must not mask its outcome
                 pass
 
 
@@ -244,7 +274,7 @@ def resume_if_interrupted(app):
             finally:
                 try:
                     close_connection()
-                except Exception:
+                except Exception:  # nosec B110 - closing a probe's connection must not mask the outcome
                     pass
         with _embed_lock:
             if _embed_job["running"]:
@@ -358,7 +388,7 @@ def _run_relabel(app):
             invalidate_predictions()
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - closing a worker's connection must not mask its outcome
                 pass
 
 
@@ -388,7 +418,7 @@ def relabel_if_stale(app):
             finally:
                 try:
                     close_connection()
-                except Exception:
+                except Exception:  # nosec B110 - closing a probe's connection must not mask the outcome
                     pass
         if stale:
             logger.info("Re-applying the genre head to the library")
@@ -521,7 +551,11 @@ def _resolve(ident):
         # whole transaction — not a query that returns nothing.
         return None
     except Exception:
-        logger.warning("genre: could not resolve %r", ident, exc_info=True)
+        logger.warning(
+            "genre: could not resolve %r",
+            str(ident).replace("\r\n", " ").replace("\n", " "),
+            exc_info=True,
+        )
         return None
 
 
@@ -629,7 +663,11 @@ def genre_extractor_upload():
         return jsonify({"error": "upload one .onnx file at a time"}), 400
     path, err = emb.store_model(onnx[0].stream, onnx[0].filename)
     if err:
-        return jsonify({"error": err}), 400
+        logger.info(
+            "Extractor upload refused: %s",
+            str(err).replace("\r\n", " ").replace("\n", " "),
+        )
+        return jsonify({"error": _extractor_refusal(err)}), 400
     _reset_extractor_job()
     logger.info("Extractor installed by %s: %s", request.webuser.name, path)
     return jsonify({"ok": True, "extractor": _extractor_status()})
@@ -730,7 +768,7 @@ def _run_extractor_test(app):
                 _extractor_job["running"] = False
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - closing a worker's connection must not mask its outcome
                 pass
 
 
@@ -1227,7 +1265,7 @@ def genre_candidates():
         # Fisher-Yates over the remainder, so the reserve is genuinely random
         # rather than "the least-played of the uncertain".
         for i in range(len(rest) - 1, 0, -1):
-            j = int(_math.floor((i + 1) * _random.random()))
+            j = int(_math.floor((i + 1) * _random.random()))  # nosec B311 - a Fisher-Yates draw for variety, not a secret
             rest[i], rest[j] = rest[j], rest[i]
         rows = head_rows + rest[:reserve]
 
@@ -1492,8 +1530,10 @@ def genre_bulk_preview():
         return jsonify({"error": "unknown tag"}), 404
     try:
         rows, missing = _bulk_tracks(data)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        # The only refusal here is a body whose "tracks" is not a list; the
+        # message is this server's own, never the exception's text.
+        return jsonify({"error": "tracks must be a list"}), 400
     current = _current_tags(rows)
     head = gen.active_head()
     knows = bool(head) and tag.name in head["labels"]
@@ -1571,8 +1611,10 @@ def genre_bulk():
         return jsonify({"error": "tracks must be listed"}), 400
     try:
         rows, missing = _bulk_tracks(data)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        # The only refusal here is a body whose "tracks" is not a list; the
+        # message is this server's own, never the exception's text.
+        return jsonify({"error": "tracks must be a list"}), 400
     ids = [t.id for t in rows]
     with db.atomic():
         for i in range(0, len(ids), _IN_CHUNK):
@@ -1611,7 +1653,7 @@ def _run_redecide(app, ids):
         finally:
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - closing a worker's connection must not mask its outcome
                 pass
 
 
@@ -1741,7 +1783,11 @@ def genre_reference_import():
             root = library.get_root_folder(provider.archive_dir)
             track = _ensure_track_row(provider, did, root, library.ImportCache())
         except Exception:
-            logger.warning("genre: could not import reference %s", did, exc_info=True)
+            logger.warning(
+                "genre: could not import reference %s",
+                str(did).replace("\r\n", " ").replace("\n", " "),
+                exc_info=True,
+            )
             return jsonify({"error": "the track could not be imported"}), 502
     TrackTag.delete().where(TrackTag.track == track).execute()
     TrackTag.create(track=track, tag=tag)
@@ -1875,7 +1921,7 @@ def _run_sounds(app):
                 _sounds_job["finished"] = now().isoformat()
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - closing a worker's connection must not mask its outcome
                 pass
 
 

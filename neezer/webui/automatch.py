@@ -73,6 +73,18 @@ def _youtube_enabled() -> bool:
 
 # -- one track -----------------------------------------------------------------------
 
+def _cause_label(exc) -> str:
+    """A failed track's cause as one of this server's own categories.
+
+    The exception's text stays in the log: it may quote a URL from a provider
+    or a path from the disk, and the admin's browser has no need for either."""
+    if isinstance(exc, OSError):
+        return "file access failed"
+    if isinstance(exc, ValueError):
+        return "a candidate could not be prepared"
+    return "internal error"
+
+
 def _target_row(app, provider, c: am.Candidate):
     from ..deezer import archive
 
@@ -191,7 +203,7 @@ def _run_one(app, track_id) -> dict:
         finally:
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - closing a worker's connection must not mask the track's outcome
                 pass
 
 
@@ -263,7 +275,9 @@ def _run_job(app, job):
                         job["stopped"] = "Deezer is unreachable: stopped, nothing was decided"
                     break
                 logger.warning("Auto-match of %s failed", tid, exc_info=True)
-                out = {"status": "error", "reason": am.cause(exc)}
+                # The exception's text stays in the log: a report the admin's
+                # browser reads never carries a traceback or a URL from it.
+                out = {"status": "error", "reason": _cause_label(exc)}
             with _state_lock:
                 job["done"] += 1
                 st = out.get("status", "error")
