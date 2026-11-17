@@ -147,7 +147,19 @@ object MigrationRunner {
         // The WebView comes first: it is what brings the cookie store up, and a
         // `CookieManager.getCookie` asked before it answers nothing on a cold
         // process (measured: `session=0` while the old app's cookie was there).
-        val found = origin?.let { MigrationWeb.readOrNull(context, it) }
+        var settingsCause: String? = null
+        val found = when {
+            origin == null -> {
+                settingsCause = "aucun serveur n'est configuré pour lire ses réglages"
+                null
+            }
+            else -> runCatching { MigrationWeb.read(context, origin) }
+                .onFailure { error ->
+                    settingsCause = error.message ?: error::class.java.simpleName
+                    Log.w(TAG, "SPA storage unreadable: $settingsCause", error)
+                }
+                .getOrNull()
+        }
         val cookie = origin?.let { OldAppData.cookie(it) }
         val downloads = OldAppData.downloads(context, found?.owners.orEmpty())
         val input = MigrationInputRecord(
@@ -162,6 +174,7 @@ object MigrationRunner {
             downloads = downloads,
             settings = found?.settings.orEmpty(),
             offlineSets = (found?.albums ?: 0).toUInt(),
+            settingsCause = settingsCause,
         )
         return screens.runMigration(input)
     }

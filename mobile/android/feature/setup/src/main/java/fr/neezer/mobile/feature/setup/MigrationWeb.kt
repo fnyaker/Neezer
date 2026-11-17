@@ -76,12 +76,22 @@ internal object MigrationWeb {
         // the configuration the platform supports); the caller's coroutine waits
         // on the page's own report, so nothing blocks the UI while it does.
         var view: WebView? = null
+        var opening: Throwable? = null
         withContext(Dispatchers.Main) {
             view = runCatching { open(context, url, answer) }
                 .onFailure { error ->
+                    opening = error
                     Log.w(TAG, "the migration page could not open: ${error.message}", error)
                 }
                 .getOrNull()
+        }
+        if (view == null) {
+            // A WebView that refuses to exist is a CAUSE the report prints, not
+            // a silent `settings = 0` (rule 2).
+            throw IllegalStateException(
+                "la page de migration n'a pas pu s'ouvrir" +
+                    (opening?.message?.let { " ($it)" } ?: ""),
+            )
         }
         try {
             val payload = withTimeout(TIMEOUT_MS) { answer.await() }

@@ -152,8 +152,12 @@ pub struct MigrationInputRecord {
     pub cookie: Option<String>,
     pub downloads: Vec<OldDownloadRecord>,
     pub settings: Vec<OldSettingRecord>,
-    /// How many download sets the SPA's IndexedDB still listed.
+    /// How many albums the SPA's IndexedDB still had a downloaded track of.
     pub offline_sets: u32,
+    /// Why the SPA's own storage could not be read, when it could not: the hidden
+    /// WebView has a deadline and may refuse to open at all, and a settings step
+    /// that fails must name its cause (rule 2), never just count 0.
+    pub settings_cause: Option<String>,
 }
 
 impl From<MigrationInputRecord> for MigrationInput {
@@ -164,6 +168,7 @@ impl From<MigrationInputRecord> for MigrationInput {
             downloads: input.downloads.into_iter().map(OldDownload::from).collect(),
             settings: input.settings.into_iter().map(OldSetting::from).collect(),
             offline_sets: input.offline_sets,
+            settings_cause: input.settings_cause,
         }
     }
 }
@@ -454,6 +459,7 @@ mod tests {
                 value: "\"papier\"".to_owned(),
             }],
             offline_sets: 2,
+            settings_cause: None,
         };
         let converted: MigrationInput = input.clone().into();
         assert_eq!(converted.prefs.port, "4533");
@@ -464,6 +470,37 @@ mod tests {
         // The record's Debug never carries the cookie into a log line by
         // accident: only the enum's fields the caller prints itself would.
         assert!(!format!("{:?}", input.prefs).contains("abc123"));
+    }
+
+    /// **The sentence a person reads when the certificate changed**, through the
+    /// very register the UI uses (`nz_error_text`), from the error `nz-core`
+    /// raises on an ordinary request once a pin is held. The end-to-end proof
+    /// that the request IS refused lives in
+    /// `nz-core/src/core/server.rs::an_ordinary_request_refuses_the_certificate_that_changed_after_pinning`;
+    /// this is the half that owns the French copy, so neither can drift alone.
+    #[test]
+    fn a_changed_certificate_is_one_french_sentence() {
+        use nz_core::core::CoreError;
+
+        let error = NzError::from(CoreError::Certificate {
+            sha256: "AB:CD".to_owned(),
+            changed: true,
+        });
+        assert_eq!(
+            crate::errors::nz_error_text(&error),
+            "Le certificat du serveur a changé"
+        );
+        // A chain nobody vouched for, with no pin held, is the other sentence —
+        // never the same one, or a person could not tell the two apart.
+        let refused = NzError::from(CoreError::Certificate {
+            sha256: "AB:CD".to_owned(),
+            changed: false,
+        });
+        assert_eq!(
+            crate::errors::nz_error_text(&refused),
+            "Le certificat du serveur n'est pas accepté"
+        );
+        assert_eq!(error.to_string(), "Le certificat du serveur a changé");
     }
 
     /// The setup screen's sentences never pretend a plaintext origin is secure

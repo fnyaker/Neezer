@@ -105,6 +105,10 @@ pub struct MigrationInput {
     pub settings: Vec<OldSetting>,
     /// How many albums the SPA's IndexedDB still had a downloaded track of.
     pub offline_sets: u32,
+    /// Why the SPA's own storage could not be read, when it could not. The page
+    /// has a deadline and a WebView that may refuse to open at all: a settings
+    /// step that fails must name its cause (rule 2), never just count 0.
+    pub settings_cause: Option<String>,
 }
 
 /// One step that could not be taken, with the cause the screen prints (rule 2:
@@ -373,6 +377,16 @@ impl Core {
 
         // 5. The SPA's own storage.
         report.settings = self.take_settings(&input.settings, &mut failures)?;
+        if let Some(cause) = input
+            .settings_cause
+            .as_deref()
+            .filter(|cause| !cause.trim().is_empty())
+        {
+            failures.push(MigrationFailure {
+                step: "réglages".to_owned(),
+                cause: cause.to_owned(),
+            });
+        }
 
         report.failures = failures;
         report.notice = notice(&report);
@@ -789,6 +803,27 @@ mod tests {
         assert_eq!(report.failures.len(), 1, "{report:?}");
         assert_eq!(report.failures[0].step, "réglages");
         assert!(report.notice.contains("viz.fps"), "{}", report.notice);
+    }
+
+    /// A settings step that could not run at all names its cause instead of
+    /// counting 0 (rule 2): the hidden WebView has a deadline, and a page that
+    /// never answers must cost the settings and say why.
+    #[tokio::test]
+    async fn an_unreadable_spa_storage_keeps_its_cause() {
+        let dir = TempDir::new("migrate-settings-cause");
+        let core = dir.core("test");
+        let report = core
+            .run_migration(MigrationInput {
+                settings_cause: Some("la page de migration n'a pas répondu".to_owned()),
+                ..MigrationInput::default()
+            })
+            .await
+            .expect("the migration runs");
+        assert_eq!(report.settings, 0);
+        assert_eq!(report.failures.len(), 1, "{report:?}");
+        assert_eq!(report.failures[0].step, "réglages");
+        assert!(report.failures[0].cause.contains("pas répondu"));
+        assert!(report.notice.contains("Non repris"), "{}", report.notice);
     }
 
     /// The session: the old WebView's cookie is seeded for the CONFIGURED

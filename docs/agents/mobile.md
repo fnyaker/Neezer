@@ -1831,13 +1831,24 @@ updating from the WebView app — everything where they left it.
   ARL to `/api/settings` — the route `lib/nativeDeezer.js`'s caller uses. The
   value reaches no file on the device and no log line.
 
-**Two completions outside this lot's files** (both authorized, both listed in the
+**Three completions outside this lot's files** (all authorized, all listed in the
 PR): `nz-api::SessionJar::seed` (a jar had no way to take a cookie a browser
 already held, and writing `session.json` by hand would only count from the next
-launch), and the two lines in `nz-core::core::server` MB2 left for this lot —
+launch); the two lines in `nz-core::core::server` MB2 left for this lot —
 `build_api_with` hands the stored pin to every client, and `pin_certificate`
 rebuilds that client, so the pin is enforced on **every** request in this
-process, not only on the setup screen.
+process, not only on the setup screen; and a `rustls` **dev-dependency** in
+`nz-core`'s manifest (the same 0.23.46 the lock already builds through
+`reqwest`, so the lock gains one line and no package) for the one test that
+joins the two halves: `an_ordinary_request_refuses_the_certificate_that_changed_after_pinning`
+runs a loopback TLS server that presents cert A then cert B on the SAME origin,
+pins A through `core.pin_certificate`, and shows an ORDINARY `core.cover_path`
+reaching A (bytes counted at the server) and being refused by B with
+`CoreError::Certificate { changed: true }`, the answering leaf's fingerprint, and
+**0** application bytes — while `nz-ffi`'s
+`a_changed_certificate_is_one_french_sentence` holds the sentence
+« Le certificat du serveur a changé » (and its distinct sibling, « n'est pas
+accepté ») so the two cannot drift apart.
 
 **Measured on this machine** (API 35 x86_64 `-no-window -no-audio` on my own
 port, `perf_api.py --serve` reached at `10.0.2.2`, old app built from `android/`
@@ -1865,9 +1876,11 @@ same debug key, `adb install -r` over it):
   carried over (`server.pin.https://10.0.2.2:4699` = A's fingerprint) and the
   first ordinary request is refused: « serveur : le serveur n'a pas répondu (le
   **certificat du serveur a changé**) » in the report and the notice.
-- **Rust**: `cargo test --workspace --locked` = **82 tests** (63 `nz-core`, 17
-  `nz-ffi`, 2 others), of which **19** are this lot's `nz-core::setup` and **3**
-  its FFI conversions; `cargo clippy --all-targets -- -D warnings` and
+- **Rust**: `cargo test --workspace --locked` = **85 tests** (65 `nz-core`, 18
+  `nz-ffi`, 2 others), of which **20** are this lot's `nz-core::setup`, **3** its
+  FFI conversions, and one the end-to-end pin test in `core::server` (cert A
+  pinned, cert B on the same origin, an ordinary request refused with
+  `changed: true`, 0 application bytes); `cargo clippy --all-targets -- -D warnings` and
   `cargo fmt --check` clean. The update tests drive a loopback HTTP server with
   a **script of answers** (a `202` then an APK; three `202`s; a body that dies
   mid-transfer) and count what the server received.
@@ -1961,9 +1974,12 @@ given by hand on port 5592 exactly as `docs/agents/mobile.md` documents them.
 
 **Files.** `mobile/rust/crates/nz-core/src/setup/**` (5 files),
 `mobile/rust/crates/nz-ffi/src/setup.rs`, `mobile/android/feature/setup/**`
-(9 Kotlin files, its manifest, its build file, 3 JVM test files), plus the two
+(9 Kotlin files, its manifest, its build file, 3 JVM test files), plus the three
 authorized completions (`desktop/crates/nz-api/src/session.rs`,
-`mobile/rust/crates/nz-core/src/core/server.rs`) and this section.
+`mobile/rust/crates/nz-core/src/core/server.rs` — pin on every client, and its
+end-to-end test with SC3's two leaves under `core/fixtures/tls/` — and
+`mobile/rust/crates/nz-core/Cargo.toml`, one dev-dependency),
+`mobile/rust/Cargo.lock` (one line) and this section.
 
 
 ### Screen lots, wave 2: MB5, MB5b, MB6, MB7, MB8, MB10
