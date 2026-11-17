@@ -264,7 +264,12 @@ jobs:
         if: steps.harness.outputs.present == 'true'
         run: |
           set -euo pipefail
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          # `yes | sdkmanager --licenses` is the documented recipe, and under
+          # `pipefail` it fails the step when sdkmanager has nothing left to ask
+          # and closes the pipe first: "yes: standard output: Broken pipe" →
+          # exit 1 (measured on the first run of this job, 2026-11-17). The
+          # licences are what we want, not yes's exit status.
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "emulator" "system-images;android-35;default;x86_64"
           echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
