@@ -136,11 +136,9 @@ def local_open(url: str, timeout: float, **request) -> object:
 
     `**request` is what `urllib.request.Request` takes: `data`, `headers`,
     `method`. One place builds the request, so one place to audit: the two calls
-    sit on one line because they are one request, and both are refused by
-    `local_url` unless the URL is http on this machine (urllib would otherwise
-    also speak `file://`).
+    sit on one line because they are one request.
     """
-    return urllib.request.urlopen(urllib.request.Request(local_url(url), **request), timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    return urllib.request.urlopen(urllib.request.Request(local_url(url), **request), timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- local_url() refuses every URL that is not http on this machine
 
 
 def wait_http(url: str, timeout: float = 60.0) -> bool:
