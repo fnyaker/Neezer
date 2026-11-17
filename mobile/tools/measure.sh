@@ -158,13 +158,24 @@ resolve_launcher() {
 
 launch_app() {
     resolve_launcher
-    adb_dev shell am start -W -n "$APP_COMPONENT" >/dev/null 2>&1 || die "am start failed for $APP_COMPONENT"
-    local started=$SECONDS
-    while (( SECONDS - started < 30 )); do
-        if adb_dev shell uiautomator dump /sdcard/nz-ui.xml >/dev/null 2>&1 &&
-            adb_dev shell cat /sdcard/nz-ui.xml 2>/dev/null | grep -q 'text="Accueil"'; then
-            return 0
-        fi
+    # Same determinism the CI smoke sets: a fresh guest on a busy machine covers
+    # the app with a "System UI isn't responding" dialog, and every measure after
+    # that would describe the dialog. On OUR emulator only (the serial is ours).
+    adb_dev shell settings put global hide_error_dialogs 1 >/dev/null 2>&1 || true
+    adb_dev shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+    adb_dev shell wm dismiss-keyguard >/dev/null 2>&1 || true
+
+    local attempt started
+    for attempt in 1 2 3; do
+        adb_dev shell am start -W -n "$APP_COMPONENT" >/dev/null 2>&1 || true
+        started=$SECONDS
+        while (( SECONDS - started < 30 )); do
+            if adb_dev shell uiautomator dump /sdcard/nz-ui.xml >/dev/null 2>&1 &&
+                adb_dev shell cat /sdcard/nz-ui.xml 2>/dev/null | grep -q 'text="Accueil"'; then
+                return 0
+            fi
+        done
+        adb_dev shell input keyevent KEYCODE_BACK >/dev/null 2>&1 || true
     done
     die "the app's shell never showed « Accueil »"
 }

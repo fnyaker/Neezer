@@ -1528,7 +1528,7 @@ lot copying them by hand eventually gets wrong, with the person's speakers and p
 | `mobile/tools/measure.sh {startup,frames,cpu,memory,underruns,apk,profile}` | One measure per subcommand, JSON in `~/.cache/neezer-measure/<what>-<UTC>.json` + `latest-<what>.json`, and a printed line. Every number is COUNTED where a count exists (frames, bytes, ticks, xruns, PSS bytes). |
 | `mobile/tools/benchdata.py` | AndroidX's 200 kB `benchmarkData.json` → medians and pooled p50/p90/p95/p99, and it FAILS when a bench measured none of its metrics (the emulator's frame source is a real way to get zeros). |
 | `mobile/tools/aaudio-probe.c` | Opens one AAudio stream exactly as the app's engine will (PowerSaving, media/music, 48 kHz stereo float, 1 s buffer), writes silence from a real-time callback and prints frames/ticks/xruns. Built by `measure.sh underruns` with NDK clang for API 28, pushed to `/data/local/tmp`, removed after. |
-| `mobile/tools/ci-emulator.sh` | What `mobile.yaml`'s `emulator` job runs: boot, install, walk the shell through the accessibility tree (5 doors, each proved by the text only that screen draws), probe 5 app links, print the counts, then `connectedDebugAndroidTest` on every module that has `src/androidTest`. Every failure stops the emulator through `emu.sh` first. |
+| `mobile/tools/ci-emulator.sh` | What `mobile.yaml`'s `emulator` job runs: boot, prepare the device (no error dialogs, no animation scales, keyguard down), install, walk the shell through the accessibility tree (5 doors, each proved by the text only that screen draws), probe 5 app links, print the counts, check the guest is still alive after each step, then `connectedDebugAndroidTest` on every module that has `src/androidTest` (installing the NDK, cargo-ndk and the Rust targets first when the job does not have them). Every failure stops the emulator through `emu.sh` first. |
 | `:baselineprofile` | `StartupBenchmark` (COLD, 10 iterations, profile off/on), `ScrollBenchmark` (library 8 000, queue 4 000 — inactive until the lists exist, see below), `ShellFramesBenchmark` (the tab walk), `BaselineProfileGenerator` (start → home → library scroll → play). |
 | `app/src/androidTest/.../ShellSmokeTest.kt` | Three instrumented tests on the real APK: the shell paints the home stub, a tab opens its own destination, Réglages › Aide prints the version the RUST crate reports (Gradle → APK → instrumentation → JNA → `libnz_ffi.so`). Found by semantics, never by coordinates. |
 
@@ -1537,9 +1537,10 @@ said, one emulator unless said; `/dev/kvm` `crw-rw-rw-`):
 
 | Measure | Number |
 |---|---|
-| AVD cold boot (`-no-snapshot`, `wait` on `sys.boot_completed`) | **16–25 s** over 12 boots (median ≈ 21 s); a second emulator starting beside the first: 9 s (its page cache is already warm) |
-| Emulator RSS | **2.50 / 3.04 / 3.14 GB** — hence the 2-emulator cap and the 8 GB guard (two = 6.2 GB) |
-| `emu-selftest.sh` | 2 cycles × 2 ports + 2 side by side, **3 min 45 s, 0 failures**; after each stop: 0 process, 0 PID file, 0 listening port, lock acquirable |
+| AVD cold boot (`-no-snapshot`, `wait` on `sys.boot_completed`) | **13–25 s** over 16 boots (median ≈ 17 s; the last full run: 20 / 17 / 15 / 15 / 13 / 10 s); a second emulator starting beside the first boots in 9–17 s (its page cache is warm) |
+| Emulator RSS | **2.43–3.14 GB** (last run: 2.51 / 2.53 / 2.51 / 2.59 GB) — hence the 2-emulator cap and the 8 GB guard (two ≈ 5–6.2 GB) |
+| `emu-selftest.sh` | 2 cycles × 2 ports + 2 side by side: **64 checks, 0 failures** (3 min 45 s, then 3 min 30 s on the final run); after each stop: 0 process, 0 PID file, 0 listening port, lock acquirable |
+| `ci-emulator.sh` (the CI job, run whole) | boot **12–15 s**, install, **5/5 doors** opened (Réglages prints « Version du noyau (Rust) : 0.1.0 »), app-link probes 0/5 (MB2's `resolve_link`), **1 instrumented module, 3/3 tests**, total **2 min 58 s** |
 | AAudio, `-no-audio` | **opens**: 48 000 Hz, burst **24 000 frames (500 ms)**, buffer **48 000 (1 s)**, 2 928 000 frames in 60 s, ticks 1.017 (**steady 1.000**), **0 xruns** |
 | AAudio, `-audio none` | identical: 48 000 Hz, same burst/buffer, 2 928 000 frames in 60 s, steady 1.000, **0 xruns** → **`-audio none` is not needed; `-no-audio` gives AAudio a real-time clock** |
 | Cold start TTID (10 iterations) | no profile: **p50 668.0 / p95 873.0 ms**; profile requested but absent (`UseIfAvailable`): **p50 651.9 / p95 786.0 ms**. TTFD is absent from the report: the shell does not call `reportFullyDrawn()` yet |
@@ -1592,6 +1593,12 @@ do, on a device.
 - **The perf library is 900 MB at 8 000 tracks and belongs on disk** (`TMPDIR` under `~/.cache`), and
   perf_api's cleanup is SIGTERM-driven: `perf-server.sh stop` sends SIGTERM, waits, and only then
   SIGKILLs. Measured: 0 leftover directories after a stop.
+- **A fresh guest on a busy machine covers the app with a "System UI isn't responding" dialog.** The very
+  same smoke then failed with `the shell never painted « Accueil »` while the accessibility tree described
+  `android:id/parentPanel` — the DIALOG, not the app — and it did so on one run out of two. Two device
+  settings, both standard for device tests, make it deterministic and are now set right after boot:
+  `settings put global hide_error_dialogs 1`, and `window/transition/animator_duration_scale 0` because
+  `uiautomator dump` waits for idle and a running ripple is a dump that can time out.
 - **The emulator writes its own `<port>b.log`** beside the log `emu.sh` redirects to, and AVD lock
   files (`hardware-qemu.ini.lock`, `multiinstance.lock`) can be stale for hours without blocking a
   `-read-only` boot. Neither is ours to clean; the state `emu.sh` owns is the PID file and the flock,

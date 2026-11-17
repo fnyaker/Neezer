@@ -78,6 +78,24 @@ if ! grep -qx -- '-no-audio' <<<"$cmdline" && ! (grep -qx -- '-audio' <<<"$cmdli
 fi
 printf 'emulator_rss_bytes=%s\n' "$(awk '/VmRSS/ {print $2 * 1024}' "/proc/$pid/status")"
 
+# A freshly booted guest on a busy machine pops "System UI isn't responding" on
+# top of the app, and every later dump then describes the DIALOG, not the screen.
+# Measured: one run of this very script failed "the shell never painted « Accueil »"
+# with the tree showing `android:id/parentPanel` — a system dialog. Two settings,
+# both standard for device tests, make the device deterministic:
+#   hide_error_dialogs   no ANR/crash dialog ever covers the app;
+#   0 animation scales   uiautomator waits for idle, and a ripple that never ends
+#                        is a dump that never returns.
+prepare_device() {
+    adb_dev shell settings put global hide_error_dialogs 1 >/dev/null 2>&1 || true
+    adb_dev shell settings put global window_animation_scale 0 >/dev/null 2>&1 || true
+    adb_dev shell settings put global transition_animation_scale 0 >/dev/null 2>&1 || true
+    adb_dev shell settings put global animator_duration_scale 0 >/dev/null 2>&1 || true
+    adb_dev shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+    adb_dev shell wm dismiss-keyguard >/dev/null 2>&1 || true
+}
+prepare_device
+
 # --- 2. the app ----------------------------------------------------------
 
 step "install"
@@ -137,16 +155,19 @@ dump_ui() {
     return 1
 }
 
-# Waits until a node whose text contains <needle> exists, or fails after 10 s.
-await_text() {
-    local needle="$1" started=$SECONDS
-    while (( SECONDS - started < 10 )); do
+# Waits until a node whose text contains <needle> exists, or fails after the
+# timeout (10 s for a tap's repaint, 30 s for a cold start on a loaded runner).
+await_text_timeout() {
+    local needle="$1" budget="${2:-10}" started=$SECONDS
+    while (( SECONDS - started < budget )); do
         if dump_ui | grep -qF -- "$needle"; then
             return 0
         fi
     done
     return 1
 }
+
+await_text() { await_text_timeout "$1" 10; }
 
 # Taps the node whose text is exactly <label>: its bounds come from the
 # accessibility tree, so the tap lands on the control and not on a coordinate
@@ -166,9 +187,18 @@ tap_text() {
 }
 
 launch_app() {
-    adb_dev shell am force-stop org.nsupysonic.app >/dev/null 2>&1 || true
-    adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
-    await_text "Accueil"
+    local attempt
+    for attempt in 1 2 3; do
+        adb_dev shell am force-stop org.nsupysonic.app >/dev/null 2>&1 || true
+        adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null 2>&1 || true
+        if await_text_timeout "Accueil" 30; then
+            return 0
+        fi
+        # A dialog left over from an earlier step (or the app's own first-run
+        # notice) is dismissed before the retry, never waited on.
+        adb_dev shell input keyevent KEYCODE_BACK >/dev/null 2>&1 || true
+    done
+    return 1
 }
 
 step "smoke: launch"
@@ -263,6 +293,32 @@ if (( doors_failed > 0 )); then
     exit 1
 fi
 
+# The instrumented step builds the DEBUG app, which links the Rust library: it
+# needs the NDK, cargo-ndk and the three Rust targets. The workflow's `apk` job
+# installs them for its own build; this job would otherwise die at
+# `:bridge:buildRust` with "cargo ndk: not found", long after the emulator booted
+# — the worst moment to learn it. Idempotent, and it says what it installs.
+prepare_android_build() {
+    local sdk ndk_version="${NDK_VERSION:-30.0.16248370}"
+    sdk="$(nz_sdk_root)"
+    if [[ ! -d "$sdk/ndk/$ndk_version" ]]; then
+        note "installing ndk;$ndk_version (the APK links libnz_ffi.so, built by cargo-ndk)"
+        yes | "$sdk/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+        "$sdk/cmdline-tools/latest/bin/sdkmanager" "ndk;$ndk_version" >/dev/null
+    fi
+    export ANDROID_NDK_HOME="$sdk/ndk/$ndk_version"
+    if ! command -v cargo-ndk >/dev/null 2>&1; then
+        note "installing cargo-ndk 4.1.2"
+        cargo install cargo-ndk --locked --version 4.1.2 >/dev/null 2>&1 ||
+            note "cargo-ndk could not be installed: the instrumented step will fail at :bridge:buildRust"
+    fi
+    if command -v rustup >/dev/null 2>&1; then
+        for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
+            rustup target add "$target" >/dev/null 2>&1 || true
+        done
+    fi
+}
+
 # --- 4. every module's instrumented tests --------------------------------
 
 # Later lots put their instrumented tests in THEIR module (`src/androidTest`),
@@ -287,6 +343,7 @@ if (( ${#test_modules[@]} == 0 )); then
     printf 'instrumented_modules=0 (no module has src/androidTest yet)\n'
 else
     printf 'instrumented_modules=%s (%s)\n' "${#test_modules[@]}" "${test_modules[*]}"
+    prepare_android_build
     tasks=()
     for module in "${test_modules[@]}"; do
         tasks+=("$module:connectedDebugAndroidTest")
