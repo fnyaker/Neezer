@@ -814,72 +814,90 @@ another lot; the commands it must carry are `mobile/rust/build-android.sh`,
 **Files.** Everything under `mobile/` (created here), `.github/workflows/mobile.yaml`, `.gitignore`
 (five mobile entries), `CLAUDE.md` (the workflow count, "Nine"), and this section.
 
-### MB1 — Design system `:designsystem` (wave 1)
+### MB1 — Sillon in Compose, `:designsystem` (delivered 2026-11-17)
 
-**Goal.** Sillon in Compose: every screen lot builds from these tokens and components and never
-from a literal colour, size or duration. **Depends on**: MB0. **Exclusive files**: `designsystem/**`,
-`docs/agents/screenshots/mobile/MB1/`.
-**Contract.** `NzTheme(theme: NzThemeKind /* Encre, Papier, Pochette */, accent: Color?, coverAccent:
-Color?, content)`; `object Sillon { val colors; val type; val space; val radius; val motion }` with the
-EXACT values of `webapp/src/app.css` (`--bg --s1 --s2 --ln --tx --dim --ac --onac --btn --onbtn --hrt
---ac-text --ac-mark`, the three glass tiers and `--glass-bg-strong`), the fonts already in
-`android/app/src/main/res/font/` (Bricolage Grotesque display, Instrument Sans text, JetBrains Mono
-figures), the motion tokens of `webapp/src/lib/motion.js` with the eco/reduced guard
-(`LocalNzMotion`, [transitions.md](transitions.md)). Components (stateless, previewed):
-`NzButton(kind)`, `NzIconButton`, `NzSwitch` (webapp.md's switch rule), `NzChip`, `NzSegmented`,
-`NzSheet` (glass tier 3: `RenderEffect` blur on API ≥ 31, the opaque fill below), `NzTopBar` (glass
-strong), `Icon(glyph: NzGlyph)` (the paths of `components/Icon.svelte` as `ImageVector`s — no emoji, no
-Material icon font), `LoadFailed(cause, onRetry)`, `Skeleton`, `NzToastHost` + `NzToasts.show(text,
-actionLabel?, onAction?)`, `TrackRowView(row: TrackRow, playing: Boolean, onClick, onMore,
-onSwipeQueue)` (swipe right = play next, webapp.md), `CoverImage(url, sizeDp, shape)`, `NzFader`
-(vertical), `QualityBadge`, `Avatar`, `EmptyState`, `NetworkIndicator(state)`,
-`rememberListWindow(handle: ListHandle, pageSize = 64)` (pages fetched as they near the viewport,
-dropped beyond 4 pages away).
-**Acceptance.** Paparazzi screenshots of every component in the three themes at 360 dp and 600 dp,
-committed under `docs/agents/screenshots/mobile/MB1/` and looked at; a JVM test computes every
-text/surface pair's contrast (≥ 4.5:1 body, ≥ 3:1 large/glyph — webapp.md's measured pairs, e.g. the
-lemon `#d2ff3c` never carries `#fff`); every interactive component exposes a ≥ 48 dp touch target
-(semantics test); `rememberListWindow` over a fake 8 000-row handle asks at most 3 windows for a
-fling of 2 000 rows (count).
-**Pitfalls.** `--ac` is a SURFACE (text on it is `--onac`); Papier's accent text is ink. Blur only on
-tiers 2/3 and only API ≥ 31 (cost). No Material default look: every Material component used is
-re-skinned (rule 5).
+**What landed.** Sillon as code a screen lot cannot leave: `Sillon.theme(kind, accent, coverAccent)`
+resolves the **thirteen colours** of `app.css` per theme (plus the three glass tiers, the thick step,
+the hairline, the hover, the hi/lo edges, the scrim and the two shadow steps) with the SPA's own
+colour maths ported (`nzMix`/`nzOver`/`nzContrast`/`nzReadableInk`/`nzInkFor`/`nzAccent`, the
+`color-mix` semantics included); the **type scale** (Bricolage Grotesque 600–800, Instrument Sans
+400–700, JetBrains Mono 400–500, eight named roles, the variable faces instantiated per weight); the
+**motion table** with the eco/reduced guard (`NzMotion`, `LocalNzMotion`, `Sillon.motion`); the **92
+glyphs** of `components/Icon.svelte` as `ImageVector`s generated from the Svelte file; and the
+components of the contract — `NzButton`, `NzIconButton`, `NzSwitch`, `NzChip`, `NzSegmented`,
+`NzSheet`, `NzTopBar`, `NzCard`, `Icon(glyph)`, `LoadFailed`, `Skeleton`, `NzToastHost` +
+`NzToasts.show`, `TrackRowView`, `CoverImage`, `Avatar`, `QualityBadge`, `NzFader`, `EmptyState`,
+`NetworkIndicator`, `rememberListWindow` — plus `NzComponentSheet` with four `@Preview`s and seven
+committed screenshots. **34 JVM tests**, no emulator (worker rule 7: nothing on the display).
 
-```text
-Tu es le worker du lot MB1 (design system) de la nouvelle app mobile Neezer. Lis CLAUDE.md, puis
-docs/agents/mobile.md (« Architecture », « Worker rules », « MB1 »), docs/agents/webapp.md (Sillon,
-thèmes, verre, interrupteurs), docs/agents/transitions.md, et webapp/src/app.css, lib/motion.js,
-components/Icon.svelte.
-Objectif : le module Gradle :designsystem (Compose) avec les jetons Sillon exacts, les polices, le
-mouvement avec la garde éco/réduit, et les composants de la section MB1, sans aucune couleur littérale
-hors des jetons. Captures Paparazzi des trois thèmes à 360 dp et 600 dp.
-Fichiers à toi seul : mobile/android/designsystem/** et docs/agents/screenshots/mobile/MB1/.
-Acceptation : captures commitées et regardées ; test JVM des contrastes ; cibles tactiles ≥ 48 dp ;
-rememberListWindow : ≤ 3 fenêtres demandées pour un fling de 2 000 lignes sur 8 000 (compté).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb1, PR « feat(mobile): MB1 Sillon design system », CI verte, rebase +
-diff --stat, merge, section MB1 réécrite, `ao report --done`.
-```
+**What a measurement taught** (each one is a rule a later lot inherits):
+
+- **A screenshot IS a test of the component, not a decoration of the PR.** The first render showed
+  Papier's primary button as ink on ink — an invisible « Lire » — and Encre's as cream on the lemon
+  (1.16:1). The contrast test was green: the PAIR `--onbtn` on `--btn` was right, the component used
+  Material's `onSurface` instead. `NzButton` now provides `LocalContentColor` with its own pair, and
+  the rule for every component is *a label never inherits a colour*.
+- **Paparazzi cannot render this tree — measured, three ways.** 1.3.5 bundles layoutlib 14 (API 34):
+  `compileSdk = 36` throws `NoSuchElementException at Renderer.kt:213`, and at 34 the Compose of BOM
+  2026.05.01 calls framework methods layoutlib 34 lacks (`StaticLayout$Builder.setUseBoundsForWidth`,
+  `View.setRequestedFrameRate`); 2.0.0-alpha05.1 fails `:bridge:packageDebugResources`
+  (`MergedResourceWriterRequest` changed under AGP 8.13). So the screenshots and the touch-target
+  semantics run on **Robolectric 4.18 with `GraphicsMode.NATIVE`** (`view.draw(Canvas(bitmap))` on the
+  decor view — `captureToImage()` cannot: it waits for a frame Robolectric never draws). Those three
+  coordinates are pinned in the MODULE's build file, not in `libs.versions.toml` (MB0 owns it, rule 3)
+  and `UseTomlInstead` is disabled there with that reason.
+- **A custom accent's ink is corrected against EVERY surface it is drawn on.** With the SPA's single
+  `--s2` correction, `#7C5CFF`'s ink measured **4.18:1 on Papier's `--bg` and 3.74:1 on its `--s2`** —
+  under AA on two of the three surfaces it paints. `nzAccent` folds over `{bg, s1, s2}`; the walk is
+  monotone (a light theme only darkens), and the four probes (`#7C5CFF`, `#FFF176`, `#2F2F2F`,
+  `#808080`, both themes) are held by `ContrastTest`. **The SPA has the same hole** — worth a T-lot.
+- **A fling is not a scroll.** Chasing the viewport's page at 60 fps across 2 000 rows of an 8 000-row
+  list is **31 `window()` calls** for rows nobody read. `ListWindow` loads the page under the
+  viewport, does not chase a jumped viewport (> `pageSize/8` rows since the last report), fetches only
+  what the landing covers, defers the one-page-ahead preload to the next settled report, and drops
+  everything beyond four pages: **3 calls for the whole flight, against 31** — `ListWindowTest` counts
+  them, and a slow drag still loads every page once.
+- **Compose has no `backdrop-filter`.** It cannot sample what is behind an element, so `NzSheet` takes
+  the picture it frosts (`backdrop: @Composable () -> Unit`) and blurs it with `RenderEffect` on
+  API ≥ 31 only; below 31 the 93 % fill stands alone. The SPA's one-blurred-image budget survives as
+  "the caller hands the sleeve", not as a filter the design system could not honour.
+- **`nonTransitiveRClass` means the fonts must live here.** `:designsystem` cannot read
+  `android/app/src/main/res/font`, so the three TTFs are COPIES (776 496 B); `SillonDriftTest` compares
+  them byte-size for byte-size against the SPA's, and deleting the old app's copy is MB-SWAP's (that
+  tree leaves with `android/app`).
+- **A generator must fail loud.** The glyph generator silently emitted `MNaN,NaN` twice: `points`
+  values were paired wrongly (`"7 10 12 15"` is three points, not six) and the attribute regex missed
+  `x1`/`y1` (no digits in the character class). Both produced a vector that only threw at the first
+  DRAW. It now refuses to write a path containing `NaN`; `SillonDriftTest` keeps the tokens and the
+  fonts in step with the SPA, and the enum's names are the Svelte file's (92/92, checked once).
+- **Papier's primary button is INK, never the lemon** (`--btn: #14130f`): a screen that paints
+  `--ac` as a button gets a highlighter. In code that is one line — `NzButtonKind.Primary` reads
+  `btn`/`onbtn` — and it is why `Sillon.colors` exposes `ac`, `btn`, `acText` and `acMark` apart.
+- **A pill is not a touch target.** Every interactive component wraps its 26–44 dp visual in a 48 dp
+  box and exposes it through semantics: `TouchTargetTest` measures the composed node
+  (`assertHeightIsAtLeast(48.dp)`) for the three button kinds, an icon button, a chip, both segments, a
+  switch, a fader, a track row and its ⋯, the retry of a failure and a toast's action.
+- **Eco keeps the status indicators** (M13): `NzMotion.statusMoves` is `true` at every level while
+  `moves` is false, so a running job still says so on a phone set to no animations.
+- **The 600 dp sheet is the same sheet**: nothing in the design system assumes a column width; the
+  tablet shell's two columns are each lot's layout, not a token.
+
+**Measured** (`ContrastTest`, three themes, plus two custom accents and a sleeve):
+worst pairs are **4.63:1** (Encre, `--dim` on the 93 % glass over a pure-white sleeve — the floor,
+the same pair the SPA's glass bench holds at 4.77), **4.51:1** (Encre with `#7C5CFF`, `--ac-text` on
+`--s2`), **4.72:1** (Papier with `#6967D6`), every other pair ≥ 4.73 and up to 17.7:1; white on the
+lemon is **1.16:1 on all three themes** and the lemon on Papier's cream **1.16:1** — the two forbidden
+pairs are asserted AS forbidden. Screenshots: 720 × 4160 px at 360 dp and 720 × 3960 at 600 dp,
+~310–330 KB each, seven files (three themes × two widths, plus Pochette on a real sleeve colour).
+
+**Files.** `mobile/android/designsystem/**` (13 Kotlin files, 3 fonts, this module's build file) and
+`docs/agents/screenshots/mobile/MB1/*.png`.
+
+**Still owed to a later lot.** MB2 provides `LocalNzCoverLoader` (the Coil fetcher over
+`Screens.cover_path`) — with no loader a cover is its Sillon groove and **zero requests** (rule 1: the
+design system asks for nothing). Réglages (MB16) passes the eco switch as `motion = NzMotionLevel.Off`
+and a custom accent as `accent`; Pochette's watcher passes the sleeve as `coverAccent`. The old
+`android/app`'s three TTFs are removed by MB-SWAP with that tree.
 
 ### MB2 — Core runtime, session, lists, covers, links `:bridge` (wave 1)
 
