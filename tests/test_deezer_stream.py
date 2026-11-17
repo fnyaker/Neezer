@@ -1252,7 +1252,16 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
         self._resolve_to(self.cdn.serve("route-leave", encrypt_like_deezer(FLAC, self.SID)))
         rv = self.client.get(f"/api/stream/{self.SID}", buffered=False)
         self.assertEqual(rv.status_code, 200)
-        self.assertEqual(next(iter(rv.response)), FLAC[:2048])
+        # The reader tails the `.part` with read1(), so the FIRST block is however much the
+        # download had written when it asked — 2048 bytes on an idle machine, up to 64 KiB
+        # under load. What matters is that the block is a PREFIX of the stream (no gap, no
+        # garbage), never that it is one particular size.
+        first = next(iter(rv.response))
+        self.assertTrue(first, "the first read handed nothing on")
+        self.assertTrue(
+            FLAC.startswith(first),
+            f"the first block is not a prefix of the stream ({len(first)} bytes)",
+        )
         rv.close()  # the WSGI server, when the client hangs up
         self.assertTrue(
             wait_until(lambda: os.path.exists(self.track.path)),
