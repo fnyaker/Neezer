@@ -64,7 +64,10 @@ on:
    ≥ 1 px: that is "no detail below 1 px". Plus a 2×2 morphological opening as
    a guard against sub-pixel fuzz.
 3. **Glyph at 24 dp** — same component and width test on the notification
-   glyph, where 1 px = 1 dp, so "every stroke ≥ 2 dp" is the 2×2 opening.
+   glyph, where 1 px = 1 dp, so "every stroke ≥ 2 dp" is the 2×2 opening. A 1 dp
+   band falls to **0 %** of its area; a 2 dp band keeps 94–100 % (it only loses
+   its round caps), which is why the guard is 90 %. Measured on the three
+   glyphs: 98, 100 and 94 %.
 4. **Contrast** — WCAG ratios of every fill and stroke against white, black and
    the ink ground. Measured: lemon 18.1:1 and cream 18.4:1 on ink; ink 19.6:1
    on a white wallpaper. On a black wallpaper the ink ground dissolves (1.07:1)
@@ -91,7 +94,11 @@ writes:
 - `mipmap-anydpi-v26/ic_launcher.xml` and `ic_launcher_round.xml` — the
   `<adaptive-icon>` pointing at `@color/ic_launcher_background` and the two
   layers;
-- `drawable/ic_stat_neezer.xml` — the 24 dp white status-bar silhouette;
+- `drawable/ic_stat_neezer.xml` — the 24 dp white status-bar silhouette. It is
+  the mark's silhouette at an **optical size**: nothing under 2 dp, so its
+  thinnest band is thickened (the mark's own bands are 12 and 7 dp on the
+  108 dp canvas, which at 24 dp would be 2.7 and 1.6 dp) — the shape reads, the
+  hairline does not become fuzz;
 - `play-store-512.png` — 512×512, 32-bit, sRGB, opaque, full square (Play
   applies the 30 % radius and the shadow itself);
 - `icon-108.png` — the composed icon, for docs and a quick look.

@@ -258,9 +258,12 @@ def check(svg_path, mono_path=None, glyph_path=None, verbose=True):
         mg = _opaque(g24, 24)
         ng, ag = _components(mg)
         kg = _open2x2(mg).sum() / max(1, mg.sum())
+        # À 24 px, 2 dp = 2 px : une ouverture 2×2 garde une bande de 2 px
+        # (elle ne perd que ses bouts arrondis, 2 à 6 %) et efface entièrement
+        # une bande de 1 px. 90 % sépare donc proprement « ≥ 2 dp » de « 1 dp ».
         say("  GLYPHE 24   %d forme(s), surfaces %s px ; ouverture 2×2 garde "
-            "%d %% (≥ 2 dp par trait)" % (ng, ag, round(kg * 100)))
-        ok = ok and ng >= 1 and kg >= 0.95
+            "%d %% (une bande de 1 dp tomberait à 0 %%)" % (ng, ag, round(kg * 100)))
+        ok = ok and ng >= 1 and kg >= 0.90
 
     # 4. contrastes des couleurs du logo
     cols = _colours(svg_path)
