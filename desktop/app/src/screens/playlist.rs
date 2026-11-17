@@ -185,7 +185,7 @@ impl Screen {
 
     /// The sleeves of the rows in `range`: asked for, then decoded — nothing for
     /// a row outside the window.
-    fn show_covers(&mut self, range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_covers(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let urls: Vec<String> = range
             .filter_map(|visible| self.track_index(visible))
             .filter_map(|index| {
@@ -210,11 +210,11 @@ impl Screen {
             .iter()
             .filter_map(|url| cover::file_in(&self.covers, url))
             .collect();
-        self.covers.borrow_mut().show(files, window, cx);
+        self.covers.borrow_mut().show(files, cx);
     }
 
     /// The banner's sleeve: one image, at the size the banner draws it.
-    fn show_banner(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_banner(&mut self, cx: &mut Context<Self>) {
         let url = self
             .page
             .ready()
@@ -234,7 +234,7 @@ impl Screen {
             .and_then(|url| cover::file_in(&self.banner, url))
             .into_iter()
             .collect();
-        self.banner.borrow_mut().show(files, window, cx);
+        self.banner.borrow_mut().show(files, cx);
     }
 
     /// The list's verbs, registered on the app with a weak handle — never on the
@@ -1320,7 +1320,7 @@ impl Screen {
         row
     }
 
-    fn list_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn list_body(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let count = if self.manual_view() {
             self.tracks.len()
         } else {
@@ -1370,7 +1370,7 @@ impl Screen {
             // Every row is drawn, so none of them says which sleeve it shows:
             // the images of the view mode go (4 000 morphing rows are a drag
             // surface, not a gallery), and the rows paint their placeholder.
-            self.covers.borrow_mut().show(Vec::new(), window, cx);
+            self.covers.borrow_mut().show(Vec::new(), cx);
             for visible in 0..count {
                 if let Some(index) = self.track_index(visible) {
                     list = list.child(self.row(index, cx));
@@ -1391,9 +1391,9 @@ impl Screen {
             editor,
             ElementId::Name("playlist-list".into()),
             sizes,
-            move |this, range, window, cx| {
+            move |this, range, _window, cx| {
                 // The sleeves of the rows this paint builds, and only those.
-                this.show_covers(range.clone(), window, cx);
+                this.show_covers(range.clone(), cx);
                 let mut rows = Vec::with_capacity(range.len());
                 for visible in range {
                     if let Some(index) = this.track_index(visible) {
@@ -1424,6 +1424,10 @@ impl Render for Screen {
     #[allow(refining_impl_trait)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_fields(window, cx);
+        // What the last frame showed and this one does not is freed here, its
+        // atlas tile with it.
+        self.covers.borrow_mut().begin_frame(window, cx);
+        self.banner.borrow_mut().begin_frame(window, cx);
 
         if let Some(cause) = self.page.failed().cloned() {
             return div()
@@ -1570,7 +1574,7 @@ impl Render for Screen {
             }
         }
         // The banner's own sleeve, one image at the size it is drawn.
-        self.show_banner(window, cx);
+        self.show_banner(cx);
         let banner_file = playlist
             .cover
             .as_deref()
@@ -1807,7 +1811,7 @@ impl Render for Screen {
             .child(banner)
             .child(actions)
             .child(tools)
-            .child(self.list_body(window, cx));
+            .child(self.list_body(cx));
 
         // The bottom of the playlist: what the library suggests next. It loads
         // AFTER the list is on screen and never moves it.

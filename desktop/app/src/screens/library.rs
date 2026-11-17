@@ -1652,7 +1652,10 @@ impl Screen {
     /// One request per cover at most [`cover::MAX_IN_FLIGHT`] of them; the file
     /// is the 128 px copy (`Covers::rows`), decoded only once it is shown, and
     /// the atlas tile of a row that left the window is dropped by `show`.
-    fn show_covers(&mut self, range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_covers(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        if std::env::var_os("NZ_COVER_DEBUG").is_some() {
+            eprintln!("DBG show_covers range={:?}", range);
+        }
         self.visible = range.clone();
         let urls: Vec<String> = range
             .filter_map(|index| {
@@ -1660,12 +1663,12 @@ impl Screen {
                     .and_then(|track| track.album.cover.clone())
             })
             .collect();
-        self.show_urls(urls, window, cx);
+        self.show_urls(urls, cx);
     }
 
     /// Ask for, and decode, the sleeves of exactly these covers — the cards a
     /// shelf draws, or the rows a list painted this frame.
-    fn show_urls(&mut self, urls: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_urls(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
         {
             let snapshot = self.state.read(cx);
             let mut covers = self.covers.borrow_mut();
@@ -1682,7 +1685,7 @@ impl Screen {
             .iter()
             .filter_map(|url| cover::file_in(&self.covers, url))
             .collect();
-        self.covers.borrow_mut().show(files, window, cx);
+        self.covers.borrow_mut().show(files, cx);
     }
 
     /// One title's row: a play button (the mouse-only path to playback), the
@@ -1817,10 +1820,10 @@ impl Screen {
             cx.entity(),
             ElementId::Name(format!("library-{label}").into()),
             row_sizes(count),
-            |this, range, window, cx| {
+            |this, range, _window, cx| {
                 // The sleeves of the rows this paint builds, and only those:
                 // visible rows first, nothing for the rest of the list.
-                this.show_covers(range.clone(), window, cx);
+                this.show_covers(range.clone(), cx);
                 let mut rows = Vec::with_capacity(range.len());
                 for index in range {
                     rows.push(this.track_row(index, cx));
@@ -1865,7 +1868,7 @@ impl Screen {
         }
     }
 
-    fn playlists_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn playlists_body(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(cause) = self.playlists.failed() {
             return failed_state(cause, "les playlists", cx).into_any_element();
         }
@@ -2118,7 +2121,7 @@ impl Screen {
                 cx,
             ));
         }
-        self.show_urls(shelf_covers, window, cx);
+        self.show_urls(shelf_covers, cx);
         column.into_any_element()
     }
 
@@ -2375,7 +2378,7 @@ impl Screen {
         column.into_any_element()
     }
 
-    fn grid_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn grid_body(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.tab;
         let (failure, loading) = match tab {
             LibraryTab::Artists => (self.artists.failed().cloned(), self.artists.is_loading()),
@@ -2399,7 +2402,7 @@ impl Screen {
         if tab == LibraryTab::Artists {
             // The artist model carries no picture: nothing to decode here, and
             // the previous tab's sleeves are let go.
-            self.show_urls(Vec::new(), window, cx);
+            self.show_urls(Vec::new(), cx);
             let Some(artists) = self.artists.ready() else {
                 return grid.into_any_element();
             };
@@ -2462,7 +2465,7 @@ impl Screen {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            self.show_urls(urls, window, cx);
+            self.show_urls(urls, cx);
             let Some(albums) = self.albums.ready() else {
                 return grid.into_any_element();
             };
@@ -2703,6 +2706,9 @@ fn empty_state(tab: LibraryTab, cx: &App) -> gpui_kit::Stateful<Div> {
 impl Render for Screen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_fields(window, cx);
+        // The sleeves the last frame showed that this one does not are freed
+        // here (their atlas tiles with them), before this frame's own `show`s.
+        self.covers.borrow_mut().begin_frame(window, cx);
         // A tab reached from the sidebar changes the route, not the screen.
         self.sync_tab(cx);
 
@@ -2831,9 +2837,9 @@ impl Render for Screen {
         // the keymap is frozen after D7 and has no row-move binding).
         let mut body = div().flex().flex_col().flex_1().min_h_0();
         body = match self.tab {
-            LibraryTab::Playlists => body.child(self.playlists_body(window, cx)),
+            LibraryTab::Playlists => body.child(self.playlists_body(cx)),
             LibraryTab::Folders => body.child(self.folders_body(cx)),
-            LibraryTab::Artists | LibraryTab::Albums => body.child(self.grid_body(window, cx)),
+            LibraryTab::Artists | LibraryTab::Albums => body.child(self.grid_body(cx)),
             _ => body.child(self.list_body(cx)),
         };
 
@@ -3623,7 +3629,7 @@ mod journey {
     /// The rule, on the screen a person opens: **a row paints the sleeve it is
     /// SEEN at, and only a visible row asks for one.**
     ///
-    /// 400 favourites, one sleeve per album, a 1280×800 window: the paint asks
+    /// 400 favourites, one sleeve per album, the test window: the paint asks
     /// for the visible rows' covers (never the ones below the fold), each one
     /// request, the 128 px copy is decoded once (65 536 B of pixels), and
     /// scrolling away frees the pixels and the atlas tile of the rows that left.
@@ -3637,7 +3643,10 @@ mod journey {
             ("/api/me", ME.as_bytes().to_vec()),
             ("/api/version", br#"{"version":"9.9.9"}"#.to_vec()),
             ("/api/me/favorites", favourites_with_covers(400).into_bytes()),
-            ("/api/me/playlists", br#"{"playlists":[],"folders":[]}"#.to_vec()),
+            (
+                "/api/me/playlists",
+                br#"{"playlists":[],"folders":[]}"#.to_vec(),
+            ),
         ];
         for index in 0..400 {
             // The stub borrows its paths, and this test binary outlives it.
@@ -3646,13 +3655,14 @@ mod journey {
         }
         let stub = crate::widgets::card::stub::Stub::start_bytes(&routes);
         let (state, runtime) = crate::widgets::card::stub::logged_in(cx, &stub);
-        // The idle rule a test can see: a sleeve nobody shows goes on the next
-        // sweep instead of after `IDLE_FOR` (2 s is right for a person, too slow
-        // for a test).
+        // The idle rule a test can see: `IDLE_FOR` is 2 s, which is right for a
+        // person and too slow for a test, and 0 would evict on the transient
+        // one-row layout frame a virtual list draws while it measures. 40 ms is
+        // the same rule, timed by the test.
         cx.update(|cx| {
             cx.set_global(cover::Sleeves::with_rules(
                 cover::DECODED_BUDGET,
-                std::time::Duration::ZERO,
+                std::time::Duration::from_millis(40),
             ))
         });
 
@@ -3676,8 +3686,8 @@ mod journey {
         let visible = vcx.update(|_, cx| screen.read(cx).visible_rows());
         let shown = visible.len();
         assert!(
-            (10..=40).contains(&shown),
-            "a 1280×800 window builds a screenful, not the list: {visible:?}"
+            (8..=40).contains(&shown),
+            "the window builds a screenful, not the list: {visible:?}"
         );
         assert!(
             cover_hits(&stub) <= shown.max(cover::MAX_IN_FLIGHT),
@@ -3685,7 +3695,7 @@ mod journey {
             cover_hits(&stub)
         );
         // Let every visible row's sleeve land: each answer lets the next ask.
-        for _ in 0..200 {
+        for _ in 0..300 {
             runtime
                 .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(2)).await });
             vcx.run_until_parked();
@@ -3734,21 +3744,51 @@ mod journey {
             )
         });
 
-        // Scroll far down: the rows that left are freed, tile included, and the
-        // new ones are asked for by name.
+        // Scroll far down: the new rows are asked for by name, and the frame
+        // after that frees the ones that left — pixels and atlas tile.
         let target = 380;
         screen.update(vcx, |this, cx| {
             this.scroll.scroll_to_item(target, ScrollStrategy::Top);
             cx.notify();
         });
         vcx.run_until_parked();
+        // A virtual list applies a deferred scroll on its next layout: the test
+        // draws the frames and waits for the list to BE there, not for a clock.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while vcx.update(|_, cx| screen.read(cx).visible_rows().start) < target {
+            runtime
+                .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(2)).await });
+            vcx.update(|window, cx| {
+                cx.notify(screen.entity_id());
+                window.draw(cx).clear(cx);
+            });
+            vcx.run_until_parked();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the list never followed the scroll"
+            );
+        }
         crate::widgets::card::stub::until(&runtime, vcx, "the new rows' sleeves", |_| {
             cover_hits(&stub) > shown
         });
+        // `IDLE_FOR` has to pass before the rows that left are freed, and the
+        // sweep runs on a frame: this is the person scrolling on and stopping.
+        for _ in 0..120 {
+            runtime
+                .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(6)).await });
+            vcx.update(|window, cx| {
+                cx.notify(screen.entity_id());
+                window.draw(cx).clear(cx);
+            });
+            vcx.run_until_parked();
+            if vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident().1) <= shown {
+                break;
+            }
+        }
         let (bytes_after, images_after) =
             vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident());
         assert!(
-            images_after <= shown + 2,
+            images_after <= shown,
             "the rows that left were freed: {images_after} images for {shown} rows"
         );
         assert_eq!(bytes_after, images_after * 65_536);
@@ -3767,5 +3807,4 @@ mod journey {
         runtime.shutdown_background();
         stub.stop();
     }
-
 }

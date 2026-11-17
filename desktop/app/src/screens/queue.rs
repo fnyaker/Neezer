@@ -133,12 +133,7 @@ impl Screen {
 
     /// The sleeves of the rows in `range`, and only those: the visible rows are
     /// asked for first, a row outside the window costs nothing.
-    fn show_covers(
-        &mut self,
-        range: std::ops::Range<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn show_covers(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) {
         let urls: Vec<String> = {
             let state = self.state.read(cx);
             range
@@ -162,7 +157,7 @@ impl Screen {
             .iter()
             .filter_map(|url| cover::file_in(&self.covers, url))
             .collect();
-        self.covers.borrow_mut().show(files, window, cx);
+        self.covers.borrow_mut().show(files, cx);
     }
 
     pub fn route(&self) -> &Route {
@@ -393,8 +388,11 @@ impl Screen {
 }
 
 impl Render for Screen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync(cx);
+        // A row that left the panel loses its sleeve here: the pixels and the
+        // atlas tile, not at the end of the session.
+        self.covers.borrow_mut().begin_frame(window, cx);
         let (entries, index, len) = {
             let state = self.state.read(cx);
             (
@@ -550,9 +548,9 @@ impl Render for Screen {
             cx.entity(),
             "queue-list",
             sizes,
-            move |this, range, window, cx| {
+            move |this, range, _window, cx| {
                 this.rendered_rows = range.len();
-                this.show_covers(range.clone(), window, cx);
+                this.show_covers(range.clone(), cx);
                 range
                     .filter_map(|row| {
                         let entry = entries.get(row)?.clone();
