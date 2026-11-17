@@ -1832,9 +1832,12 @@ impl Render for Screen {
             );
         }
 
+        // It wraps: a playlist carries six verbs and the 420 px panel leaves
+        // 660 px, where a single row cut the last one (the lot's capture).
         let mut actions = div()
             .id("playlist-actions")
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(rems(0.375))
             .flex_shrink_0()

@@ -3327,7 +3327,7 @@ Waves that can run in parallel (disjoint files):
   arme le bouton au premier clic et supprime au second, avec le compte de ce qu'il a retiré. Un
   téléchargement est permanent ; c'est le seul contrôle destructeur de l'app.
 - **Mesuré** (cette machine, 16 threads, Rust 1.99.1 ; `cargo test --workspace` :
-  **445 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
+  **447 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
   vertes ; `cargo fmt --check` et `cargo clippy --workspace --all-targets -- -D warnings` propres) :
   - **requêtes par collection** : un album de 3 titres coûte **3 requêtes `/api/stream/<id>`**
     (une par titre, chacune une fois), et une SECONDE demande du même album **0** — mesuré sur une
@@ -3350,6 +3350,19 @@ Waves that can run in parallel (disjoint files):
   - **états du bouton** : les cinq états sont testés en GPUI (`the_album_download_control_walks_its_five_states`),
     chaque état portant son libellé, son verbe et sa CAUSE ; `t` et `Maj+T` sont testés sans souris
     (`t_and_maj_t_queue_and_take_back_the_album`) et le menu d'une ligne via `row_verb`.
+- **Regardé, pas seulement asserté** : neuf captures dans `docs/desktop/d18/`, sur MON Xvfb
+  (`:171`, `-dpi 96`, `GPUI_X11_SCALE_FACTOR=1`, jamais l'affichage de la personne), avec le banc
+  `tools/perf_api.py --serve` et un magasin amorcé (40 titres « Téléchargé », ou 38 + 2 échecs) :
+  l'album et la playlist à 1280×800 et dans le panneau 420 px, les favoris à 2560×1600, l'état
+  « Téléchargé · 40 » + « Retirer » + un chip par ligne, l'état « 2 échecs · 38 sur l'appareil ·
+  HTTP 404 : … », et Réglages → Téléchargements aux deux tailles. **Trois défauts trouvés par les
+  captures, qu'aucun test ne voyait** : (1) le contrôle poussait « Exporter » hors de la fenêtre à
+  660 px — les barres d'outils de la bibliothèque, de la playlist et de l'album passent en
+  `flex_wrap()` ; (2) **Réglages → Téléchargements affichait encore « Bientôt »** : D13 avait livré
+  l'écran mais D14a a refactoré la page en `delegated` APRÈS, et la section n'a jamais eu son bras
+  — elle l'a maintenant, et `the_downloads_section_is_its_screen_and_not_the_stub` le tient ;
+  (3) la carte d'un podcast n'avait qu'un glyphe orphelin en bas — il est sur la ligne des
+  épisodes.
 - **Ce que c'est maintenant** : `widgets/download_control.rs` (`State`, `label`/`detail`/`action`/
   `short`/`fraction`/`busy`/`on_device`/`glyph`, `set`, `collection`, `track`, `Rows`, `key`,
   `row_verb`, `chip`, `control`, `Watch`), `widgets/context_menu.rs` (`Item::Download`,

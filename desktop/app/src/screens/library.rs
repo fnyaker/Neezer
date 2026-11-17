@@ -2997,9 +2997,13 @@ impl Render for Screen {
         };
 
         // The list's own tool bar: only what the tab can do.
+        // A wrapping row: with the 420 px queue panel open the toolbar has
+        // 660 px, and the download control pushed « Exporter » off the edge
+        // (seen on the lot's own capture). Wrapping keeps every verb reachable.
         let mut tools = div()
             .id("library-tools")
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(rems(0.375))
             .flex_shrink_0()

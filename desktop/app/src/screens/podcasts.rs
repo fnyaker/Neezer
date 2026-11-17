@@ -837,6 +837,10 @@ impl Render for Screen {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(show.title.clone()),
                                 )
+                                // The card's verb sits ON its facts line: a
+                                // lone glyph under it read as an ornament (the
+                                // lot's own capture), and a card has no room
+                                // for a second row.
                                 .child(
                                     div()
                                         .flex()
@@ -844,7 +848,44 @@ impl Render for Screen {
                                         .gap(rems(0.25))
                                         .text_size(rems(0.6875))
                                         .text_color(theme::secondary(cx))
-                                        .child(SharedString::from(subtitle)),
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .truncate()
+                                                .child(SharedString::from(subtitle)),
+                                        )
+                                        .child(
+                                            div()
+                                                .debug_selector({
+                                                    let key = format!(
+                                                        "show-download-{}",
+                                                        show.id.as_str()
+                                                    );
+                                                    move || key.clone()
+                                                })
+                                                .child(
+                                                    icon_button(
+                                                        ElementId::Name(
+                                                            format!(
+                                                                "show-download-{}",
+                                                                show.id.as_str()
+                                                            )
+                                                            .into(),
+                                                        ),
+                                                        IconName::Download,
+                                                        format!(
+                                                            "Télécharger l'émission {}",
+                                                            show.title
+                                                        ),
+                                                        ButtonVariant::Secondary,
+                                                        cx,
+                                                    )
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.download_show(index, cx);
+                                                    })),
+                                                ),
+                                        ),
                                 )
                                 .when(show.local, |meta| {
                                     meta.child(
@@ -853,32 +894,7 @@ impl Render for Screen {
                                             .text_color(theme::warning(cx))
                                             .child("Local"),
                                     )
-                                })
-                                .child(
-                                    div()
-                                        .debug_selector({
-                                            let key = format!("show-download-{}", show.id.as_str());
-                                            move || key.clone()
-                                        })
-                                        .child(
-                                            icon_button(
-                                                ElementId::Name(
-                                                    format!("show-download-{}", show.id.as_str())
-                                                        .into(),
-                                                ),
-                                                IconName::Download,
-                                                format!("Télécharger l'émission {}", show.title),
-                                                ButtonVariant::Secondary,
-                                                cx,
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    cx.stop_propagation();
-                                                    this.download_show(index, cx);
-                                                }),
-                                            ),
-                                        ),
-                                ),
+                                }),
                         ),
                 );
             }

@@ -854,8 +854,11 @@ impl Screen {
         }
         let rows_for_chips = Rc::clone(&self.rows);
 
+        // It wraps: the download control is a second row when the window is
+        // narrow (the 420 px panel leaves 660 px of content).
         let actions = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(rems(0.5))
             .px(rems(1.))

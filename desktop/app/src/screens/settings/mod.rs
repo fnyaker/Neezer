@@ -533,9 +533,15 @@ impl Field {
 
 impl Screen {
     pub fn new(section: SettingsSection, state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        // Utilisateurs and Serveur are D14b's own screens: this page hands the
-        // whole area to them, as the plan's dispatch does for every lot whose
-        // section is not a column of these cards.
+        // Utilisateurs, Serveur and Téléchargements are their own screens: this
+        // page hands the whole area to them, as the plan's dispatch does for
+        // every lot whose section is not a column of these cards.
+        //
+        // Téléchargements was the one this dispatch forgot (D13 landed before
+        // D14a refactored the page into `delegated`), so the section painted
+        // D7's « Bientôt » stub while its screen existed and passed its tests —
+        // caught by the D18 captures, which is why the capture of that page is
+        // part of the lot.
         let delegated: Option<AnyView> = match section {
             SettingsSection::Users => Some(
                 cx.new(|cx| users::Screen::new(section, state.clone(), cx))
@@ -543,6 +549,10 @@ impl Screen {
             ),
             SettingsSection::Server => Some(
                 cx.new(|cx| server::Screen::new(section, state.clone(), cx))
+                    .into(),
+            ),
+            SettingsSection::Downloads => Some(
+                cx.new(|cx| downloads::Screen::new(section, state.clone(), cx))
                     .into(),
             ),
             _ => None,
@@ -1893,6 +1903,40 @@ mod ui {
         }
     }
 
+    /// **Téléchargements is its own screen, not D7's « Bientôt » stub.**
+    ///
+    /// D13 delivered `screens/settings/downloads.rs` with its own tests, but the
+    /// Réglages page never gained its `delegated` arm (D14a refactored the page
+    /// afterwards), so a person opening Réglages → Téléchargements read
+    /// « Bientôt » while the screen existed — found by this lot's own capture,
+    /// which is why the capture is part of it. The page now paints the screen's
+    /// root (`settings-downloads`), and this test is what keeps the arm.
+    #[gpui::test]
+    async fn the_downloads_section_is_its_screen_and_not_the_stub(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_omarchy::init(cx);
+            crate::keymap::install(cx);
+        });
+        let dir = temp_dir("downloads-section");
+        let state = signed_in(cx, false, &dir);
+        let host_state = state.clone();
+        let (host, cx) = cx.add_window_view(move |_window, cx| Host {
+            screen: cx.new(|cx| Screen::new(SettingsSection::Downloads, host_state.clone(), cx)),
+            focus: cx.focus_handle(),
+            anchored: false,
+        });
+        at_laptop(cx);
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("settings-downloads").is_some(),
+            "Réglages → Téléchargements paints the downloads screen"
+        );
+        drop(host);
+    }
+
     /// Every section a person can open, at the three sizes: the body never
     /// leaves the window sideways and never grows past it vertically (it
     /// scrolls instead), and the root is exactly the window. Each PANE too.
@@ -1932,7 +1976,8 @@ mod ui {
                     || *section == SettingsSection::Downloads
                     || *section == SettingsSection::Transcribe
                 {
-                    // Another lot's stub, not this page's layout.
+                    // Its OWN screen (`delegated`), or T4's transcribe column:
+                    // not this page's layout.
                     continue;
                 }
                 let screen = cx
@@ -2358,10 +2403,14 @@ mod ui {
             for section in SettingsSection::USER.iter() {
                 cx.update(|_, cx| host.update(cx, |host, cx| host.show(*section, &state, cx)));
                 cx.run_until_parked();
-                assert!(
-                    cx.debug_bounds("settings-screen").is_some(),
-                    "{section:?} did not paint"
-                );
+                // The delegated sections are their own screens: their root is
+                // their own id, and the page's card frame is not theirs.
+                let painted = if *section == SettingsSection::Downloads {
+                    cx.debug_bounds("settings-downloads").is_some()
+                } else {
+                    cx.debug_bounds("settings-screen").is_some()
+                };
+                assert!(painted, "{section:?} did not paint");
             }
             deltas.push(before.since());
             println!(
