@@ -582,18 +582,28 @@ class RegistrationTestCase(_DbCase):
                 self.DEEZER = dict(self.DEEZER, enabled=True, arl="x" * 192, archive_dir=cache)
 
         release_database()
-        # A production-shaped boot starts the app's BACKGROUND WORKERS (the Deezer scheduler,
-        # the analysis/genre resumes, the library job, `trackcredits.start_if_needed`, the
-        # release/explorer crawls). They are daemon threads that outlive this test and run
-        # against whatever database the global `db` points at WHEN THEY WAKE — 45 to 60 s
-        # later, inside another test — and a bulk writer there holds that test's SQLite write
-        # lock until its `busy_timeout` expires: `test_multi_o.DecideTestCase.setUp` died with
-        # 'database is locked' exactly this way (run 44081450853). This test needs the app
-        # OBJECT, not its background life, so no thread is allowed to start during the boot.
+        # A production-shaped boot starts the app's BACKGROUND WORKERS — measured, 17 of them:
+        # analysis-resume, analysis-schedule, credits-resume, deezer-download (x4),
+        # deezer-explorer, deezer-prefetch (x2), disk-migrate-resume, genre-embed-resume,
+        # genre-relabel-resume, library-import, onboarding-boot, releases, transcribe-inline.
+        # They are daemon threads that outlive this test and run against whatever database the
+        # global `db` points at WHEN THEY WAKE — 45 to 60 s later, inside ANOTHER test — and a
+        # bulk writer there holds that test's SQLite write lock until its `busy_timeout`
+        # expires: `test_multi_o.DecideTestCase.setUp` died with 'database is locked' exactly
+        # this way (run 44081450853). This test needs the app OBJECT, not its background life,
+        # so no thread is allowed to start during the boot.
+        threads_before = {t.ident for t in threading.enumerate()}
         with mock.patch.object(threading.Thread, "start", lambda self: None), mock.patch(
             "neezer.web._enrich_backfill", create=True
         ):
             app = create_application(Config())
+        # The guard on that patch: a boot that starts a worker again fails HERE, next to the
+        # reason, instead of in another module's setUp a minute later.
+        self.assertEqual(
+            [t.name for t in threading.enumerate() if t.ident not in threads_before],
+            [],
+            "the app boot started background workers",
+        )
         self.assertEqual([p.id for p in app.providers.all()][:3], ["deezer", "youtube", "local"])
         self.assertTrue(app.providers.get("deezer").configured())
         self.assertIn("deezer", [p.id for p in app.providers.enabled()])
