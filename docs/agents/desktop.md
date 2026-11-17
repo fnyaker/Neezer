@@ -493,7 +493,10 @@ the app keep" (`app/src/testmem.rs`).
   `a_thousand_renders_over_four_thousand_rows_keep_one_screenful` holds it there for 1 000
   frames over 4 000 rows. RSS is not the app's data: at 2560×1600 the same screen is 327.7 /
   264.1 and **349.2 / 285.6** with the 420 px queue panel open (D7's +81.6 MB of window buffers
-  is most of it).
+  is most of it). **Looked at**, on the isolated `Xvfb :214`, seven captures in
+  `docs/desktop/neezer-62/`: the Bibliothèque's 60 playlist cards, the 4 000-row favourites
+  before and after 1 000 `PageDown`, the queue in the 420 px panel at 1280×800 and 2560×1600, the
+  favourites at 2560×1600, and a playlist's banner, rows and “Titres recommandés” strip.
 - **The rule, one decode per screenful and no decode for what is below the fold.** A visible row
   asks for exactly one sleeve (`want`, at most `MAX_IN_FLIGHT` = 8 requests in flight), the file
   it gets is the 128 px copy (`Covers::rows`), and the journey test counts it: 18 visible rows
