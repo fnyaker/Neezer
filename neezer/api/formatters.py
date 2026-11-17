@@ -8,11 +8,7 @@
 import re
 
 from flask import json, jsonify, make_response
-
-# Responses are BUILT with ElementTree (Element / SubElement / tostring): this
-# module never parses XML, so there is no entity expansion or external entity
-# to defuse. defusedxml would add a dependency for a call we do not make.
-from xml.etree import ElementTree  # nosec B405  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml - generation only, no parsing
+from xml.etree import ElementTree
 
 from . import API_VERSION
 

@@ -1033,11 +1033,17 @@ the format string (`tests/test_security.py` pins it; the per-site tests in
 **Scanner suppressions in `neezer/api/`, `neezer/managers/` and `neezer/lastfm.py`** state the
 mechanism, never "safe". `media._popen` receives an argv list built from the operator's TRANSCODING
 config, so a title or a path is one argument and never a command (the only client-chosen parts are an
-`int` bitrate, a `[a-z0-9]{1,8}` format and a float offset). The Subsonic token `md5(password + salt)`
+`int` bitrate, a `[a-z0-9]{1,8}` format and a Decimal offset). The Subsonic token `md5(password + salt)`
 and Last.fm's `api_sig` are md5 **by wire protocol**, and the SHA1 branch only verifies a pre-argon2
 hash that the same successful login rewrites to argon2: those three digest choices are what keeps an
-old client and an old database working (rule 7). A failed login goes through the package logger, so
+old client and an old database working (rule 7), so their lines are left exactly as they were — an
+inline `# nosemgrep` does **not** close an alert here (Semgrep still writes the finding to SARIF with
+`suppressions: inSource`, and code scanning raises it), and editing only that line turns an existing
+alert into a blocking "new alert in changed code". A rule that must stay is either restructured until
+it no longer matches (`timeOffset`/`gain` parse through `Decimal` + `is_finite()` instead of `float`)
+or its alert is dismissed with a justification. A failed login goes through the package logger, so
 `logsafe.py` keeps a user name on one line (the CodeQL log-injection alerts are false positives for
 that reason: never format such a value into the message with an f-string, which bypasses it).
-`/getCoverArt` treats `Folder.cover_art` as a file NAME (`basename`) and resolves the result through
-`_local_file`, so a hand-edited or restored row cannot read outside the library.
+`/getCoverArt` treats `Folder.cover_art` as a file NAME (`basename`), and art answered by the
+provider is confined to the archive and cache roots (`_confined_file`: `realpath` then
+`startswith(root + os.sep)`), so a hand-edited or restored row cannot read outside the library.

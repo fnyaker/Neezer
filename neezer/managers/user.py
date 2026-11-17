@@ -567,9 +567,7 @@ class UserManager:
             password = decrypt_password(user.password_clear)
         except Exception:
             return None
-        expected = hashlib.md5(  # nosec B324  # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5, python.lang.security.audit.md5-used-as-password.md5-used-as-password - the Subsonic protocol's token IS md5(password + salt); this is not how a password is stored
-            (password + salt).encode("utf-8")
-        ).hexdigest()
+        expected = hashlib.md5((password + salt).encode("utf-8")).hexdigest()
         if hmac.compare_digest(expected, str(token).lower()):
             UserManager.touch_last_login(user)
             return user
@@ -654,6 +652,6 @@ class UserManager:
 
     @staticmethod
     def __legacy_sha1(password, salt):
-        return hashlib.sha1(  # nosec B324  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 - only to verify a pre-argon2 hash we no longer write, and upgraded on login
+        return hashlib.sha1(
             salt.encode("utf-8") + password.encode("utf-8")
         ).hexdigest()

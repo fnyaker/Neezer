@@ -121,5 +121,48 @@ class CoverArtPathTestCase(ApiTestBase):
             self.assertEqual(rv.mimetype, "image/jpeg")
 
 
+class ProviderCoverConfinementTestCase(unittest.TestCase):
+    """Art the provider answers with must be inside the archive or the cache."""
+
+    def setUp(self):
+        self.archive = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.archive, True)
+        self.outside_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.outside_dir, True)
+        self.inside = os.path.join(self.archive, "Artist", "Album", "cover.jpg")
+        os.makedirs(os.path.dirname(self.inside))
+        Image.new("RGB", (4, 4), (9, 9, 9)).save(self.inside, "JPEG")
+        self.outside = os.path.join(self.outside_dir, "cover.jpg")
+        shutil.copyfile(self.inside, self.outside)
+
+    def test_a_file_inside_the_root_is_served(self):
+        from neezer.api.media import _confined_file
+
+        self.assertEqual(
+            _confined_file(self.inside, [self.archive]),
+            os.path.realpath(self.inside),
+        )
+
+    def test_a_file_outside_the_root_is_refused(self):
+        from neezer.api.media import _confined_file
+
+        self.assertIsNone(_confined_file(self.outside, [self.archive]))
+        # A sibling directory sharing the root's prefix is not inside it.
+        sibling = self.archive + "-evil"
+        os.makedirs(sibling, exist_ok=True)
+        self.addCleanup(shutil.rmtree, sibling, True)
+        planted = os.path.join(sibling, "cover.jpg")
+        shutil.copyfile(self.inside, planted)
+        self.assertIsNone(_confined_file(planted, [self.archive]))
+
+    def test_a_missing_path_is_refused(self):
+        from neezer.api.media import _confined_file
+
+        self.assertIsNone(_confined_file(None, [self.archive]))
+        self.assertIsNone(
+            _confined_file(os.path.join(self.archive, "absent.jpg"), [self.archive])
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
