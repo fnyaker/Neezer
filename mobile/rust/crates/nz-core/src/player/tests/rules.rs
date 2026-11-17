@@ -37,7 +37,7 @@ fn three_unplayable_rows_are_skipped_and_the_fourth_stops_the_list() {
         1,
     );
 
-    let stopped = pump_until(&mut sink, &player, 10.0, |snapshot| {
+    let stopped = pump_until(&mut sink, &player, 30.0, |snapshot| {
         snapshot.state == PlayState::Paused && snapshot.fault.is_some()
     });
     println!(
@@ -78,7 +78,7 @@ fn repeat_one_never_advances_past_a_failing_title() {
         },
         4,
     );
-    let stopped = pump_until(&mut sink, &player, 10.0, |snapshot| {
+    let stopped = pump_until(&mut sink, &player, 30.0, |snapshot| {
         snapshot.state == PlayState::Paused && snapshot.fault.is_some()
     });
     assert_eq!(stopped.repeat, Repeat::One);
@@ -121,8 +121,7 @@ fn an_empty_queue_plays_nothing() {
 fn next_advances_and_reports_one_listen() {
     let dir = TempDir::new("next");
     let bench = Bench::start();
-    let cos = dir.path().join("a.flac");
-    cosine_flac(&cos, 440.0, 2.0);
+    let cos = Fixture::Whole.write(dir.path());
     bench.track("a", &cos);
     bench.track("b", &cos);
     let player = player_for(&dir, bench.base());
@@ -177,7 +176,7 @@ fn a_row_skipped_before_it_played_reports_no_listen() {
         },
         1,
     );
-    let _ = pump_until(&mut sink, &player, 10.0, |snapshot| {
+    let _ = pump_until(&mut sink, &player, 30.0, |snapshot| {
         snapshot.state == PlayState::Paused && snapshot.fault.is_some()
     });
     assert!(bench.listens().is_empty(), "{:?}", bench.listens());
@@ -190,10 +189,9 @@ fn a_row_skipped_before_it_played_reports_no_listen() {
 fn an_episode_position_is_kept_offline_and_sent_on_reconnection() {
     let dir = TempDir::new("podcast");
     let bench = Bench::start();
-    let cos = dir.path().join("ep.flac");
     // 40 s: long enough that a position past the SPA's 8 s noise floor (below
     // which a position is a mistaken tap) is also far from its end.
-    cosine_flac(&cos, 440.0, 40.0);
+    let cos = Fixture::Silence40.write(dir.path());
     bench.track("ep", &cos);
     let (core, player) = core_and_player(&dir, bench.base());
     let (_, mut sink) = player.take_sink().expect("the sink");
@@ -206,13 +204,13 @@ fn an_episode_position_is_kept_offline_and_sent_on_reconnection() {
         },
         1,
     );
-    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.2);
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.2);
     pump(&mut sink, 8.5);
     // The link goes away, and the pause is the last thing before the app is
     // frozen: the position must not be lost.
     offline(&core);
     player.command(Command::Pause, 2);
-    let _ = pump_until(&mut sink, &player, 5.0, |snapshot| {
+    let _ = pump_until(&mut sink, &player, 20.0, |snapshot| {
         snapshot.state == PlayState::Paused
     });
     assert!(
@@ -244,8 +242,7 @@ fn an_episode_position_is_kept_offline_and_sent_on_reconnection() {
 fn the_queue_is_restored_paused_at_its_position() {
     let dir = TempDir::new("restore");
     let bench = Bench::start();
-    let cos = dir.path().join("r.flac");
-    cosine_flac(&cos, 440.0, 6.0);
+    let cos = Fixture::Whole.write(dir.path());
     bench.track("a", &cos);
     bench.track("b", &cos);
     let player = player_for(&dir, bench.base());
@@ -259,7 +256,7 @@ fn the_queue_is_restored_paused_at_its_position() {
             },
             1,
         );
-        let _ = pump_until_audio(&mut sink, &player, 10.0, 0.2);
+        let _ = pump_until_audio(&mut sink, &player, 30.0, 0.2);
         pump(&mut sink, 1.2);
         let position = player.position().position_s;
         println!("position before the close: {position:.3} s");
@@ -293,8 +290,7 @@ fn the_queue_is_restored_paused_at_its_position() {
 fn a_command_takes_one_lock() {
     let dir = TempDir::new("locks");
     let bench = Bench::start();
-    let cos = dir.path().join("l.flac");
-    cosine_flac(&cos, 440.0, 2.0);
+    let cos = Fixture::Whole.write(dir.path());
     bench.track("a", &cos);
     let player = player_for(&dir, bench.base());
     let _ = player.take_sink().expect("the sink");
@@ -387,8 +383,7 @@ fn a_queue_of_4000_rows_costs_less_than_4_mb_counted() {
 fn three_slow_streams_step_the_quality_down_to_64() {
     let dir = TempDir::new("ladder");
     let bench = Bench::start();
-    let cos = dir.path().join("slow.flac");
-    cosine_flac(&cos, 440.0, 3.0);
+    let cos = Fixture::Tone440.write(dir.path());
     for id in ["s1", "s2", "s3", "s4", "s5"] {
         bench.track(id, &cos);
     }
@@ -490,8 +485,7 @@ fn three_slow_streams_step_the_quality_down_to_64() {
 fn a_seek_in_a_finished_file_lands_with_one_byte_range() {
     let dir = TempDir::new("seek");
     let bench = Bench::start();
-    let cos = dir.path().join("seek.flac");
-    cosine_flac(&cos, 440.0, 8.0);
+    let cos = Fixture::Silence8.write(dir.path());
     bench.track("s", &cos);
     let player = player_for(&dir, bench.base());
     let (_, mut sink) = player.take_sink().expect("the sink");
@@ -504,9 +498,7 @@ fn a_seek_in_a_finished_file_lands_with_one_byte_range() {
         },
         1,
     );
-    let _ = pump_until(&mut sink, &player, 10.0, |snapshot| {
-        snapshot.state == PlayState::Playing
-    });
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
     pump(&mut sink, 0.3);
 
     let before = bench.requests();
@@ -541,8 +533,7 @@ fn a_seek_in_a_finished_file_lands_with_one_byte_range() {
 fn the_flow_asks_one_title_at_a_time_and_refills_once() {
     let dir = TempDir::new("flow");
     let bench = Bench::start();
-    let cos = dir.path().join("f.flac");
-    cosine_flac(&cos, 440.0, 3.0);
+    let cos = Fixture::Tone440.write(dir.path());
     for id in ["f1", "f2", "f3"] {
         bench.track(id, &cos);
     }
@@ -599,8 +590,7 @@ fn the_flow_asks_one_title_at_a_time_and_refills_once() {
 fn a_sleep_timer_pauses_at_its_deadline() {
     let dir = TempDir::new("sleep");
     let bench = Bench::start();
-    let cos = dir.path().join("sl.flac");
-    cosine_flac(&cos, 440.0, 4.0);
+    let cos = Fixture::Tone440.write(dir.path());
     bench.track("a", &cos);
     let player = player_for(&dir, bench.base());
     let (_, mut sink) = player.take_sink().expect("the sink");
@@ -613,9 +603,7 @@ fn a_sleep_timer_pauses_at_its_deadline() {
         },
         1,
     );
-    let _ = pump_until(&mut sink, &player, 10.0, |snapshot| {
-        snapshot.state == PlayState::Playing
-    });
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
     player.set_sleep(Some(SleepTimer::Minutes { minutes: 1 }));
     let snapshot = player.snapshot();
     assert_eq!(

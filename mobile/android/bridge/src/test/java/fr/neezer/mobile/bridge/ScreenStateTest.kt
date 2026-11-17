@@ -22,8 +22,17 @@ import org.junit.Test
  * guard, not a delay.
  */
 class ScreenStateTest {
-    /** Collects the flow in its own scope and answers when [until] holds. */
-    private class Collector<T>(private val until: (ScreenState<T>) -> Boolean) {
+    /**
+     * Collects the flow in its own scope and answers when [until] holds on what
+     * has been collected SO FAR.
+     *
+     * The predicate takes the list, not one state: a flow that emits the same
+     * `Ready` twice (the remembered copy, then the same copy stale) made the
+     * single-state form complete on the FIRST one, and the assertion on the
+     * second was then a race — it failed on a slower CI runner while passing
+     * here. Waiting on the count is the same event, spelled so it cannot race.
+     */
+    private class Collector<T>(private val until: (List<ScreenState<T>>) -> Boolean) {
         val states = mutableListOf<ScreenState<T>>()
         private val done = CompletableDeferred<Unit>()
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -32,7 +41,7 @@ class ScreenStateTest {
             scope.launch {
                 flow.collect { state ->
                     states += state
-                    if (until(state) && !done.isCompleted) done.complete(Unit)
+                    if (until(states) && !done.isCompleted) done.complete(Unit)
                 }
             }
 
@@ -42,7 +51,9 @@ class ScreenStateTest {
     /** cached, then fresh: Loading, the remembered copy, then the answer. */
     @Test
     fun a_cached_copy_paints_before_the_network_answers() = runBlocking {
-        val collector = Collector<String> { it is ScreenState.Ready<*> && !it.stale }
+        val collector = Collector<String> { states ->
+            states.lastOrNull().let { it is ScreenState.Ready<*> && !it.stale }
+        }
         val job = collector.collect(
             screenFlow(cached = { "version mémorisée" }, fresh = { "version fraîche" }),
         )
@@ -61,7 +72,9 @@ class ScreenStateTest {
     /** No cache: Loading, then the answer. */
     @Test
     fun with_nothing_cached_the_first_paint_is_the_answer() = runBlocking {
-        val collector = Collector<String> { it is ScreenState.Ready<*> }
+        val collector = Collector<String> { states ->
+            states.lastOrNull() is ScreenState.Ready<*>
+        }
         val job = collector.collect(screenFlow(cached = { null }, fresh = { "frais" }))
         collector.await()
         job.cancel()
@@ -74,7 +87,7 @@ class ScreenStateTest {
     /** A failed refresh KEEPS the remembered copy and says it is stale. */
     @Test
     fun a_failure_with_a_cached_copy_keeps_it_and_marks_it_stale() = runBlocking {
-        val collector = Collector<String> { it is ScreenState.Ready<*> }
+        val collector = Collector<String> { states -> states.size >= 3 }
         val job = collector.collect(
             screenFlow<String>(
                 cached = { "mémorisée" },
@@ -132,7 +145,9 @@ class ScreenStateTest {
     /** A cache that cannot be read is not the person's failure. */
     @Test
     fun an_unreadable_cache_does_not_become_the_failure() = runBlocking {
-        val collector = Collector<String> { it is ScreenState.Ready<*> }
+        val collector = Collector<String> { states ->
+            states.lastOrNull() is ScreenState.Ready<*>
+        }
         val job = collector.collect(
             screenFlow<String>(
                 cached = { throw IllegalStateException("base de données verrouillée") },

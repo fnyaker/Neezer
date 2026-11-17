@@ -17,13 +17,11 @@ use crate::player::{Command, PlayState};
 /// no restart, no padding, no gap.
 #[test]
 fn the_queue_hands_over_gaplessly_and_sample_exactly() {
-    if ffmpeg().is_none() {
-        eprintln!("ffmpeg absent: the gapless seam cannot be measured on this host");
-        return;
-    }
     let dir = TempDir::new("seam");
     let bench = Bench::start();
-    let (first, second, whole) = split_cosine(&dir.path().join("."));
+    let first = Fixture::First.write(dir.path());
+    let second = Fixture::Second.write(dir.path());
+    let whole = Fixture::Whole.write(dir.path());
     bench.track("first", &first);
     bench.track("second", &second);
     bench.track("whole", &whole);
@@ -44,7 +42,7 @@ fn the_queue_hands_over_gaplessly_and_sample_exactly() {
         },
         1,
     );
-    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
     // Two seconds of audio plus a margin for the preload's own cut-in.
     let played = pump(&mut sink, 2.1);
     let both = &played[..(96_000 * 2).min(played.len())];
@@ -76,16 +74,10 @@ fn the_queue_hands_over_gaplessly_and_sample_exactly() {
 /// never dip or bump by more than 0.5 dB.
 #[test]
 fn the_crossfade_is_equal_power() {
-    if ffmpeg().is_none() {
-        eprintln!("ffmpeg absent: the crossfade cannot be measured on this host");
-        return;
-    }
     let dir = TempDir::new("crossfade");
     let bench = Bench::start();
-    let low = dir.path().join("low.flac");
-    let high = dir.path().join("high.flac");
-    cosine_flac(&low, 440.0, 3.0);
-    cosine_flac(&high, 610.0, 3.0);
+    let low = Fixture::Tone440.write(dir.path());
+    let high = Fixture::Tone610.write(dir.path());
     bench.track("low", &low);
     bench.track("high", &high);
 
@@ -103,7 +95,7 @@ fn the_crossfade_is_equal_power() {
         },
         1,
     );
-    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
     // From 1.8 s the fade runs from 2.0 s to 3.0 s: collect well past it.
     let played = pump(&mut sink, 3.6);
 
@@ -136,14 +128,9 @@ fn the_crossfade_is_equal_power() {
 /// the server measured, `±10 ms` (`docs/agents/desktop.md`, D6).
 #[test]
 fn the_silence_bounds_are_trimmed_at_both_edges() {
-    if ffmpeg().is_none() {
-        eprintln!("ffmpeg absent: the trim cannot be measured on this host");
-        return;
-    }
     let dir = TempDir::new("trim");
     let bench = Bench::start();
-    let padded = dir.path().join("padded.flac");
-    padded_flac(&padded);
+    let padded = Fixture::Padded.write(dir.path());
     bench.track("padded", &padded);
     // What the server's own ffmpeg measurement answers: the head starts 0.5 s
     // in, the tone ends at 2.5 s, of a 5.5 s file.
@@ -163,7 +150,7 @@ fn the_silence_bounds_are_trimmed_at_both_edges() {
         },
         1,
     );
-    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.01);
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.01);
     // The first 100 ms of what reaches the speakers must already be the tone:
     // the 0.5 s of head silence was skipped, not played.
     let head = pump(&mut sink, 0.1);
@@ -196,14 +183,9 @@ fn the_silence_bounds_are_trimmed_at_both_edges() {
 /// 880).
 #[test]
 fn an_episode_at_double_speed_keeps_its_pitch() {
-    if ffmpeg().is_none() {
-        eprintln!("ffmpeg absent: the speed cannot be measured on this host");
-        return;
-    }
     let dir = TempDir::new("speed");
     let bench = Bench::start();
-    let tone = dir.path().join("episode.flac");
-    cosine_flac(&tone, 440.0, 4.0);
+    let tone = Fixture::Tone440.write(dir.path());
     bench.track("ep", &tone);
 
     let player = player_for(&dir, bench.base());
@@ -214,13 +196,13 @@ fn an_episode_at_double_speed_keeps_its_pitch() {
 
     player.command(
         Command::PlayQueue {
-            tracks: vec![episode_ref("ep", 4)],
+            tracks: vec![episode_ref("ep", 3)],
             start: 0,
             context: None,
         },
         1,
     );
-    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
     let played = pump(&mut sink, 0.5);
     let media = player.position().position_s;
     println!("2× episode: {media:.2} s of media after 0.5 s of output");

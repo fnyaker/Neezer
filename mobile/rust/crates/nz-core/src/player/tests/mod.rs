@@ -740,69 +740,90 @@ pub fn power_db(frames: &[f32]) -> f64 {
 }
 
 // --- fixtures ---------------------------------------------------------------
+//
+// Real audio, COMMITTED and small (`include_bytes!`): the mobile CI's Rust job
+// installs no ffmpeg, and a test that silently skips its own assertion is worse
+// than no test. The files are 48 kHz — the engine's own rate — on purpose: at
+// any other rate EVERY voice goes through the resampler, and the resampler
+// restarts at a track change, so the gapless seam would be off by the filter's
+// own delay (measured: 0.25 at 24 kHz). Made once with ffmpeg from a `lavfi`
+// expression:
+//
+//   aevalsrc=0.5*cos(2*PI*440*t):s=48000:d=2:c=stereo   -- `whole`, and the two
+//   halves cut from it at exactly one second (`first`, `second`)
+//   ...d=3 at 440 and 610 Hz                             -- `tone440`, `tone610`
+//   ...d=2 + `adelay=500|500,apad=pad_dur=3`             -- `padded` (5.5 s)
+//   anullsrc=r=48000:cl=stereo, -t 40 / -t 8             -- `silence40`, `silence8`
+//
+// A cosine (not a sine) starts at +amplitude, so a missing first sample shows;
+// 440 Hz over 2 s is a whole number of periods, so the seam is continuous by
+// construction and any dropped or repeated frame is a visible step.
 
-/// Whether ffmpeg can run here: real audio needs it, and a host without it says
-/// so instead of pretending the assertion passed.
-pub fn ffmpeg() -> Option<PathBuf> {
-    let output = std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match output {
-        Ok(status) if status.success() => Some(PathBuf::from("ffmpeg")),
-        _ => None,
+/// The committed fixtures this file's tests use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fixture {
+    /// 2 s of a 440 Hz cosine.
+    Whole,
+    /// The first second of it.
+    First,
+    /// The second second of it.
+    Second,
+    /// 5.5 s: 0.5 s of silence, 2 s of a 440 Hz tone, 3 s of silence.
+    Padded,
+    /// 3 s at 440 Hz.
+    Tone440,
+    /// 3 s at 610 Hz.
+    Tone610,
+    /// 40 s of silence: an episode long enough to have a position worth keeping.
+    Silence40,
+    /// 8 s of silence: a finished file to seek in.
+    Silence8,
+}
+
+impl Fixture {
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Fixture::Whole => include_bytes!("fixtures/whole.flac"),
+            Fixture::First => include_bytes!("fixtures/first.flac"),
+            Fixture::Second => include_bytes!("fixtures/second.flac"),
+            Fixture::Padded => include_bytes!("fixtures/padded.flac"),
+            Fixture::Tone440 => include_bytes!("fixtures/tone440.flac"),
+            Fixture::Tone610 => include_bytes!("fixtures/tone610.flac"),
+            Fixture::Silence40 => include_bytes!("fixtures/silence40.flac"),
+            Fixture::Silence8 => include_bytes!("fixtures/silence8.flac"),
+        }
     }
-}
 
-/// A FLAC of a cosine at `freq`, `seconds` long: a sine would hide a missing
-/// first sample, so every fixture starts at +amplitude.
-pub fn cosine_flac(path: &Path, freq: f64, seconds: f64) {
-    let expression = format!("0.5*cos(2*PI*{freq}*t)");
-    let source = format!("aevalsrc={expression}:s=48000:d={seconds}:c=stereo");
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-y"])
-        .args(["-f", "lavfi", "-i", &source])
-        .args(["-c:a", "flac", path.to_str().unwrap()])
-        .status()
-        .expect("ffmpeg runs");
-    assert!(status.success(), "ffmpeg made {path:?}");
-}
-
-/// A 5.5 s FLAC: 0.5 s of silence, 2 s of a 440 Hz tone, 3 s of silence — the
-/// fixture the trim is measured on.
-pub fn padded_flac(path: &Path) {
-    let source = "aevalsrc=0.5*cos(2*PI*440*t):s=48000:d=2:c=stereo";
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-y"])
-        .args(["-f", "lavfi", "-i", source])
-        .args(["-af", "adelay=500|500,apad=pad_dur=3"])
-        .args(["-c:a", "flac", path.to_str().unwrap()])
-        .status()
-        .expect("ffmpeg runs");
-    assert!(status.success(), "ffmpeg made {path:?}");
-}
-
-/// Two FLACs cut out of ONE two-second cosine at exactly one second, and the
-/// whole file: the seam's own fixture. A cosine of 440 Hz over 2 s is a whole
-/// number of periods, so the seam is continuous by construction.
-pub fn split_cosine(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
-    let whole = dir.join("whole.flac");
-    cosine_flac(&whole, 440.0, 2.0);
-    let first = dir.join("first.flac");
-    let second = dir.join("second.flac");
-    for (from, to, out) in [(0.0, 1.0, &first), (1.0, 2.0, &second)] {
-        let status = std::process::Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y"])
-            .args(["-f", "lavfi"])
-            .args(["-i", "aevalsrc=0.5*cos(2*PI*440*t):s=48000:d=2:c=stereo"])
-            .args(["-ss", &format!("{from}"), "-to", &format!("{to}")])
-            .args(["-c:a", "flac", out.to_str().unwrap()])
-            .status()
-            .expect("ffmpeg runs");
-        assert!(status.success(), "ffmpeg cut {out:?}");
+    /// The fixture's own length, in seconds, as its metadata says it: the trim's
+    /// plausibility check compares the server's measurement to this.
+    pub fn seconds(self) -> u32 {
+        match self {
+            Fixture::Whole => 2,
+            Fixture::First | Fixture::Second => 1,
+            Fixture::Padded => 5,
+            Fixture::Tone440 | Fixture::Tone610 => 3,
+            Fixture::Silence40 => 40,
+            Fixture::Silence8 => 8,
+        }
     }
-    (first, second, whole)
+
+    /// Writes it under `dir` and hands the path back (each test owns its root,
+    /// so two tests never share a file).
+    pub fn write(self, dir: &Path) -> PathBuf {
+        let name = match self {
+            Fixture::Whole => "whole.flac",
+            Fixture::First => "first.flac",
+            Fixture::Second => "second.flac",
+            Fixture::Padded => "padded.flac",
+            Fixture::Tone440 => "tone440.flac",
+            Fixture::Tone610 => "tone610.flac",
+            Fixture::Silence40 => "silence40.flac",
+            Fixture::Silence8 => "silence8.flac",
+        };
+        let path = dir.join(name);
+        std::fs::write(&path, self.bytes()).expect("the fixture is written");
+        path
+    }
 }
 
 /// Decodes a FLAC through a player of its own, so a reference is the file's own
@@ -824,7 +845,7 @@ pub fn reference_frames(path: &Path, seconds: f64) -> Vec<f32> {
         },
         1,
     );
-    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
     let frames = pump(&mut sink, seconds);
     player.shutdown();
     frames
