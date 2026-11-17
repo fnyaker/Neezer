@@ -647,7 +647,7 @@ def drain(app=None, limit=None):
     runner = InlineRunner(app)
     try:
         db.connect(reuse_if_open=True)
-    except Exception:
+    except Exception:  # nosec B110 - drain() runs on the caller's connection when it has one
         pass
     return runner.drain(limit=limit)
 

@@ -123,6 +123,37 @@ class SafeRedirectTestCase(unittest.TestCase):
             )
 
 
+    def test_a_malformed_host_is_a_fallback_not_a_crash(self):
+        """urlsplit() raises ValueError on a malformed bracketed host, so a
+        client typing one into ?returnUrl turned GET /user/login into a 500."""
+        from neezer.frontend.user import safe_redirect_target
+
+        for bad in ("//[::1", "//[", "//[a]b", "//[::1]:99999"):
+            self.assertEqual(
+                safe_redirect_target(bad, "/home"), "/home", f"leaked: {bad!r}"
+            )
+
+    def test_the_result_is_built_here_never_the_clients_string(self):
+        """The returned target always starts with exactly one "/" and has no
+        leading slash in its remainder: the client controls no prefix, so the
+        Location header cannot name another host whatever the input."""
+        from neezer.frontend.user import safe_redirect_target
+
+        for hostile in (
+            "/a//b",
+            "//a",
+            "///a",
+            "/./a",
+            "/%2f%2fa",
+            "/a?b=//evil.example",
+            "/a#//evil.example",
+            "/\x00\x01\x02",
+        ):
+            got = safe_redirect_target(hostile, "/home")
+            self.assertTrue(got.startswith("/"), got)
+            self.assertFalse(got.startswith("//"), got)
+
+
 class LogInjectionTestCase(unittest.TestCase):
     def _log(self, name, *args):
         import io
@@ -154,6 +185,18 @@ class LogInjectionTestCase(unittest.TestCase):
 
     def test_other_packages_are_left_alone(self):
         self.assertEqual(self._log("not.neezer", "%s", "a\nb"), "a\nb\n")
+
+    def test_the_login_route_escapes_what_it_logs(self):
+        """The frontend's own guard, for a stack that imports neezer.frontend
+        without neezer.web (whose factory logsafe.install() sets up)."""
+        from neezer.frontend.user import _log_text
+
+        self.assertEqual(_log_text("bob\nINFO forged"), "bob\\nINFO forged")
+        self.assertEqual(_log_text("a\r\nb"), "a\\r\\nb")
+        self.assertEqual(_log_text("a\rb"), "a\\rb")
+        # Other control characters (a terminal escape, a NUL) never pass.
+        self.assertEqual(_log_text("a\x1b[2Jb\x00c"), "a?[2Jb?c")
+        self.assertEqual(_log_text(None), "")
 
 
 class ValidIdTestCase(unittest.TestCase):
@@ -481,6 +524,51 @@ class WebHardeningTestCase(unittest.TestCase):
         self.assertNotIn("script-src 'self' 'unsafe-inline'", csp)
 
     # -- NS-02: CSRF and GET mutations ------------------------------------
+
+    def test_a_malformed_return_url_does_not_crash_the_login_page(self):
+        """?returnUrl=//[::1 made urlsplit() raise, so the page answered 500
+        instead of showing the form to whoever followed a bad link."""
+        for bad in ("//[::1", "//[", "//[a]b"):
+            rv = self.client.get("/user/login", query_string={"returnUrl": bad})
+            self.assertEqual(rv.status_code, 200, bad)
+
+    def test_a_failed_login_cannot_forge_a_log_line(self):
+        """End to end on the real route: the user name of a failed login is
+        logged, and a newline in it must not start an entry of its own."""
+        import logging
+
+        from neezer.frontend import CSRF_FIELD
+
+        page = self.client.get("/user/login").get_data(as_text=True)
+        token = re.search(r'name="_csrf" value="([^"]+)"', page).group(1)
+        records = []
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        handler = Capture()
+        logger = logging.getLogger("neezer.frontend.user")
+        logger.addHandler(handler)
+        old = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            self.client.post(
+                "/user/login",
+                data={
+                    "user": "bob\nINFO forged entry",
+                    "password": "wrong",
+                    CSRF_FIELD: token,
+                },
+            )
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old)
+        forged = [r for r in records if "forged entry" in r]
+        self.assertTrue(forged, records)
+        for line in forged:
+            self.assertNotIn("\n", line)
+            self.assertNotIn("\r", line)
 
     def _frontend_login(self):
         from neezer.frontend import CSRF_FIELD

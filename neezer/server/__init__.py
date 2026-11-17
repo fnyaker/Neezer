@@ -69,7 +69,7 @@ def find_first_available_server():
 @option(
     "-h",
     "--host",
-    default="0.0.0.0",
+    default="0.0.0.0",  # nosec B104 - the default a music server needs: the house LAN must reach it; --host narrows it
     show_default=True,
     help="Hostname or IP address on which to listen",
     cls=MutuallyExclusiveOption,

@@ -945,3 +945,23 @@ Deezer, `provider.get_show_page` raises `ShowUnavailable` (Deezer answering, nev
 the sync sets `PodcastChannel.gone` and the channel becomes a **local podcast**: episodes, art
 (`library.save_show_cover` archives a `cover.jpg` beside the audio) and playback all come off disk,
 and the sync stops asking about it until the verdict ages out (`importer.GONE_RECHECK`, 7 days).
+
+**A redirect target and a log line are BUILT, never echoed** (`frontend/user.py`,
+`tests/test_security.py`). `safe_redirect_target` validates `?returnUrl` and then hands back
+`"/" + path + query + fragment` with every leading `/` stripped from the remainder: the client
+controls no prefix, so no `//host`, `scheme:` or backslash form can leave the function even if a
+later edit of the checks misses one. Its `urlsplit()` is wrapped, because `urlsplit("//[::1")` raises
+`ValueError` — `GET /user/login?returnUrl=//[::1` answered **500** instead of the form. The two login
+log calls pass the user name and the address through `_log_text` (line breaks escaped, other control
+characters replaced): `logsafe`'s record factory already does this for every `neezer.*` logger, but
+the blueprint is also imported straight into a WSGI stack that never runs `neezer.web`.
+
+**A suppression must name its rule.** `# nosec B608 - why` silences B608 (bandit reads the ids and
+ignores the words after). `# nosemgrep: <rule-id> -- why` must carry the **rule id**: the
+`# nosemgrep: a plain-text playlist, not an HTML page` in `frontend/playlist.py` silenced nothing
+and its alert stayed open; a template uses `{# nosemgrep: <rule-id> -- why #}`. A false positive gets
+the id and the true reason, never a blanket file. `db.PathMixin`'s path hash stays
+`sha1(..., usedforsecurity=False)` — it is a unique-index KEY, not a signature, and every row of
+every existing database already holds those 20 bytes, so a SHA-256 switch would fail to find them
+all and duplicate the library. The same scanners call `0o700` on the daemon's socket directory
+"widely permissive" (`daemon/server.py`), which is inverted: 0o700 is owner-only.

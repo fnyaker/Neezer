@@ -311,7 +311,7 @@ def invalidate(user=None):
         from .deezer import explorer
 
         explorer._forget_pool()
-    except Exception:  # nothing to forget
+    except Exception:  # nosec B110 - nothing to forget; the caches below still clear
         pass
     _style_profiles.clear()
     with _cache_lock:

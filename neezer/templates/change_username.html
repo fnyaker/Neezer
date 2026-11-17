@@ -24,7 +24,7 @@
     <input type="text" class="form-control" id="user" name="user" value="{{ user.name }}" placeholder="Username" aria-label="Username" aria-describedby="username">
     <span class="input-group-text">
       <label for="admin" class="me-2">Admin</label>
-      <div class="form-switch"><input type="checkbox" class="form-check-input" role="switch" id="admin" name="admin" {{ 'checked="checked"' if user.admin }} /></div>
+      <div class="form-switch"><input type="checkbox" class="form-check-input" role="switch" id="admin" name="admin" {% if user.admin %}checked{% endif %} /></div>
     </span>
   </div>
   <button class="btn btn-light" type="submit">Update</button>

@@ -67,25 +67,39 @@ class Meta(_Model):
     value = CharField(256)
 
 
+def _path_digest(path: str) -> bytes:
+    """The 20 bytes a folder's or a track's path is indexed by.
+
+    Not a signature, and not secret: the value only has to be short, unique
+    enough for the ``path_hash`` unique index, and STABLE — every row already in
+    an existing database carries one, so switching to SHA-256 would fail to find
+    those rows and duplicate the whole library. ``usedforsecurity=False`` says
+    in the hash's own terms that nothing is authenticated with it.
+    """
+    return sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- a path's index key, not a signature; see above
+        path.encode("utf-8"), usedforsecurity=False
+    ).digest()
+
+
 class PathMixin:
     @classmethod
     def get(cls, *args, **kwargs):
         if kwargs:
             path = kwargs.pop("path", None)
             if path:
-                kwargs["_path_hash"] = sha1(path.encode("utf-8"), usedforsecurity=False).digest()
+                kwargs["_path_hash"] = _path_digest(path)
         return _Model.get.__func__(cls, *args, **kwargs)
 
     def __init__(self, *args, **kwargs):
         if "path" in kwargs:
             path = kwargs["path"]
-            kwargs["_path_hash"] = sha1(path.encode("utf-8"), usedforsecurity=False).digest()
+            kwargs["_path_hash"] = _path_digest(path)
         _Model.__init__(self, *args, **kwargs)
 
     def __setattr__(self, attr, value):
         _Model.__setattr__(self, attr, value)
         if attr == "path":
-            _Model.__setattr__(self, "_path_hash", sha1(value.encode("utf-8"), usedforsecurity=False).digest())
+            _Model.__setattr__(self, "_path_hash", _path_digest(value))
 
 
 class Folder(PathMixin, _Model):

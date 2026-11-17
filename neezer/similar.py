@@ -386,7 +386,7 @@ def _drain():
         finally:
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - the job is over; a close that failed is nothing to raise
                 pass
 
 
@@ -424,7 +424,7 @@ def run_rebuild(app, job):
             drop_index()
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - the rebuild is over; a close that failed is nothing to raise
                 pass
     Meta.delete().where(Meta.key == "similar_at").execute()
     Meta.create(key="similar_at", value=now().isoformat())

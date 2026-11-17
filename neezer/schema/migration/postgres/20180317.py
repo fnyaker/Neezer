@@ -12,11 +12,15 @@ def process_table(connection, table):
     )
 
     hashes = dict()
-    c.execute(f"SELECT path FROM {table}")
+    c.execute(f"SELECT path FROM {table}")  # nosec B608 - table is a literal at each call site
     for row in c.fetchall():
-        hashes[row[0]] = hashlib.sha1(row[0].encode("utf-8"), usedforsecurity=False).digest()
+        # The digest every row of an already-migrated database carries: it must
+        # stay SHA-1 or this migration recomputes nothing (nosemgrep below).
+        hashes[row[0]] = hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- a path's index key, not a signature; the stored rows already hold SHA-1
+            row[0].encode("utf-8"), usedforsecurity=False
+        ).digest()
     c.executemany(
-        f"UPDATE {table} SET path_hash=%s WHERE path=%s",
+        f"UPDATE {table} SET path_hash=%s WHERE path=%s",  # nosec B608 - table is a literal at each call site
         [(h, p) for p, h in hashes.items()],
     )
 

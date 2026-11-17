@@ -109,12 +109,12 @@ one.</p>
               pattern="[a-z0-9]{0,8}" title="Up to 8 letters and numbers" /></td>
           <td><select class="form-control" name="{{ client.client_name }}_bitrate">
               <option />
-              <option {{ 'selected="selected"' if client.bitrate == 64 else ''  }}>64</option>
-              <option {{ 'selected="selected"' if client.bitrate == 96 else ''  }}>96</option>
-              <option {{ 'selected="selected"' if client.bitrate == 128 else '' }}>128</option>
-              <option {{ 'selected="selected"' if client.bitrate == 192 else '' }}>192</option>
-              <option {{ 'selected="selected"' if client.bitrate == 256 else '' }}>256</option>
-              <option {{ 'selected="selected"' if client.bitrate == 320 else '' }}>320</option>
+              <option {% if client.bitrate == 64 %}selected{% endif %}>64</option>
+              <option {% if client.bitrate == 96 %}selected{% endif %}>96</option>
+              <option {% if client.bitrate == 128 %}selected{% endif %}>128</option>
+              <option {% if client.bitrate == 192 %}selected{% endif %}>192</option>
+              <option {% if client.bitrate == 256 %}selected{% endif %}>256</option>
+              <option {% if client.bitrate == 320 %}selected{% endif %}>320</option>
             </select></td>
             <td><input type="checkbox" name="{{ client.client_name }}_delete" /></td>
         </tr>

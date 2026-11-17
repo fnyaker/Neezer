@@ -779,13 +779,20 @@ def deezer_measure_compare(config, limit, styles, out):
     import csv
     import json
     import os
-    import subprocess
+    import shutil
+    import subprocess  # nosec B404 - ffmpeg on a fixed argument list, no shell
 
     import numpy as np
 
     from .db import Track, TrackAnalysis
     from .deezer import analysis as ana
     from .deezer import measure as M
+
+    # The full path, not the bare name: a "ffmpeg" picked off $PATH by execvp is
+    # whatever a compromised or careless PATH puts first (B607).
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise ClickException("ffmpeg is not installed (or not on PATH)")
 
     query = (Track.select().join(TrackAnalysis, on=(TrackAnalysis.track == Track.id))
              .where(Track.last_modification > 0))
@@ -812,8 +819,8 @@ def deezer_measure_compare(config, limit, styles, out):
             try:
                 rate, ch = ana.probe_audio(t.path)
                 ref = ana._spectral(t.path)
-                raw = subprocess.run(
-                    ["ffmpeg", "-v", "0", "-t", str(ana.MAX_SECONDS), "-i", t.path,
+                raw = subprocess.run(  # nosec B603 - a fixed argument list, no shell
+                    [ffmpeg, "-v", "0", "-t", str(ana.MAX_SECONDS), "-i", t.path,
                      "-map", "0:a:0", "-f", "f32le", "pipe:1"],
                     capture_output=True, check=True).stdout
                 a = np.frombuffer(raw, np.float32).reshape(-1, ch)
