@@ -52,9 +52,21 @@ fn spool_files(dir: &std::path::Path) -> Vec<u64> {
     sizes
 }
 
-/// How many bytes are spooled on disk right now, all bodies together.
-fn spooled(dir: &std::path::Path) -> u64 {
-    spool_files(dir).into_iter().sum()
+/// Each spool file's size, by name: a voice's own body is the file that was not
+/// there before it, which is how the test names a voice without re-implementing
+/// the spool's hash.
+fn spool_map(dir: &std::path::Path) -> std::collections::BTreeMap<String, u64> {
+    let spool = dir.join("spool");
+    let Ok(entries) = std::fs::read_dir(&spool) else {
+        return std::collections::BTreeMap::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            entry.metadata().ok().map(|meta| (name, meta.len()))
+        })
+        .collect()
 }
 
 /// A FLAC long enough that the read-ahead cap is what stops the body, not the
@@ -62,7 +74,9 @@ fn spooled(dir: &std::path::Path) -> u64 {
 /// smaller than it.
 fn long_flac(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("long.flac");
-    cosine_flac(&path, 440.0, 20.0, 48_000);
+    // 60 s: neither voice can finish its body while the test measures, so a
+    // file's size is the read-ahead and not a completed track.
+    cosine_flac(&path, 440.0, 60.0, 48_000);
     path
 }
 
@@ -94,8 +108,9 @@ fn the_read_ahead_cap_is_runtime_and_applies_to_the_next_voice() {
         matches!(event, EngineEvent::Started { .. })
     });
     pump_for(&mut sink, 0.05);
-    let small = spooled(&dir);
-    println!("spooled with a 64 KiB cap: {small} B");
+    let first_map = spool_map(&dir);
+    let first_size = first_map.values().copied().max().unwrap_or(0);
+    println!("spooled with a 64 KiB cap: {first_size} B ({first_map:?})");
 
     // Screen off: the cap rises on the SAME engine.
     engine.set_read_ahead_bytes(300 * 1024);
@@ -110,19 +125,34 @@ fn the_read_ahead_cap_is_runtime_and_applies_to_the_next_voice() {
         |event| matches!(event, EngineEvent::Started { id, .. } if id == "second"),
     );
     pump_for(&mut sink, 0.05);
-    let large = spooled(&dir) - small;
-    println!("spooled with a 300 KiB cap: {large} B");
+    let second_map = spool_map(&dir);
+    let second_size = second_map
+        .iter()
+        .filter(|(name, _)| !first_map.contains_key(*name))
+        .map(|(_, size)| *size)
+        .max()
+        .unwrap_or(0);
+    println!("spooled with a 300 KiB cap: {second_size} B ({second_map:?})");
 
-    // The second voice read ahead by roughly the new cap and not the old one:
-    // the socket adds one or two buffers, so the bound is the cap plus slack,
-    // and the floor is what proves the cap MOVED.
+    // The two voices are told apart by their own spool FILE (the name that
+    // appeared with the second one), never by a difference taken at two
+    // instants: the first body stops growing when its voice is replaced, and
+    // each size is its own body's read-ahead.
+    //
+    // The bounds are the cap plus the read itself, which is what an over-read
+    // of one or two chunks looks like (measured here: 193 536 B for the 64 KiB
+    // cap on a loaded runner, 131 072 B on an idle one).
     assert!(
-        large >= 200 * 1024,
-        "the second voice spooled {large} B, so the cap did not move"
+        first_size <= 256 * 1024,
+        "the 64 KiB cap spooled {first_size} B"
     );
     assert!(
-        large <= 300 * 1024 + 128 * 1024,
-        "the second voice spooled {large} B, past its 300 KiB cap"
+        second_size >= 260 * 1024,
+        "the 300 KiB cap spooled only {second_size} B, so the cap did not move"
+    );
+    assert!(
+        second_size <= 300 * 1024 + 192 * 1024,
+        "the 300 KiB cap spooled {second_size} B"
     );
 
     // The engine was never rebuilt: the same sink, the same clock, and the
