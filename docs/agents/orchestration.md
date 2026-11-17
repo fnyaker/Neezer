@@ -82,7 +82,16 @@ specialist reads its own notes, changes only its own files, measures, and return
 7. **The primary agent does the final pass.** Re-read the diff, run the full tests, update the
    area note, write the PR with the sources and the measured numbers, drive CI green, merge. A
    subagent never commits, pushes, opens a PR or merges.
-8. **Write down what was learned.** The specialist updates its area note; a rule that applies to
+8. **Before merging, re-read the diff against an UP-TO-DATE `origin/master`.** Rebase the branch
+   on the master you just fetched, then read `git diff --stat origin/master...HEAD` and the diff
+   itself: every file outside the lot's own perimeter must be an intended change, and nothing may
+   be a DELETION of work merged since the branch started. A commit produced from a stale base
+   silently cancels everything merged in between — #254 (D15a) was authored before #252 (memory)
+   and #253 (D10b) landed, and its squash removed 3 700 lines of them (D10b's widgets, screens and
+   captures, `Sender::Drop`, `Covers::rows`, `perf_api.py --covers`) while its own files were
+   perfect. `git merge-base --is-ancestor` and a green CI do not see that; the diffstat against
+   `origin/master` does, and a line deleted from a file the lot never owned is the signal.
+9. **Write down what was learned.** The specialist updates its area note; a rule that applies to
    every area goes into `CLAUDE.md` in one or two lines.
 
 ## Parallelisation
