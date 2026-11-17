@@ -32,6 +32,20 @@ desktop/packaging/rpm/test.sh release/neezer-desktop-1.6.0-x86_64.rpm
 `desktop/packaging/version.sh` prints the version a package would carry: the
 tag's when the build is a tag, the workspace's `0.1.0` otherwise.
 
+## Three refs, and which job reads which
+
+| Job | Tree | Why |
+|---|---|---|
+| `binaries` | the tag (`ref: <tag>`) | the binaries must be the tagged source |
+| `arch` | the tag | `makepkg` builds from the checkout |
+| `deb`, `rpm`, `appimage`, `flatpak` | `github.sha`, no `ref:` | they only need the RECIPES, which live at the commit the workflow runs at |
+
+That distinction is what makes a replay on an older tag work: `v1.6.0` predates
+`desktop/packaging/{deb,rpm,appimage,flatpak}`, so those four jobs failed on
+`version.sh: No such file or directory` (run 44150836135) when they still
+checked the tag out. The version comes from the tag (`TAG`), the binaries from
+the artefact, the recipes from the workflow's own commit.
+
 A local build is only as portable as the machine that built it: the `.deb`
 declares the glibc floor **measured** from the binary (`libc6 (>= 2.39)` for the
 release's Ubuntu 24.04 build), so a package built on this Arch machine says what

@@ -2909,6 +2909,16 @@ Waves that can run in parallel (disjoint files):
   (P1): an Arch package that did not come out of `makepkg` is not the package P1
   described. **Measured**: the four packaging jobs add 3–6 min each to a release
   run and the build itself is unchanged.
+- **The rule, three refs, each for one thing.** The `binaries` job builds the
+  TAGGED tree (its checkout keeps `ref: <tag>`); the four packaging jobs take
+  their RECIPES from the commit the workflow itself runs at (`github.sha`, no
+  `ref:`) and their VERSION from the tag (`TAG`); the attached files come from
+  the artefact. A release replay (`workflow_dispatch -f tag=v1.6.0`) is exactly
+  why: `v1.6.0` predates `desktop/packaging/{deb,rpm,appimage,flatpak}`, so a job
+  that checked the tag out failed on `desktop/packaging/version.sh: No such file
+  or directory` in all four (measured, run 44150836135) while `binaries` and
+  `arch` — which must read the tag — were green. A tag that carries the recipes
+  behaves the same way, because then `github.sha` IS the tag.
 - **The rule, the sidecar travels with the app.** Every format installs
   `neezer-transcribe` in the SAME directory as `neezer-desktop` — `/usr/bin`,
   `/app/bin`, `usr/bin` inside the AppDir — because `wiring/transcribe.rs#program`
