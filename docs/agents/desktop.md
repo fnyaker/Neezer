@@ -3327,7 +3327,7 @@ Waves that can run in parallel (disjoint files):
   arme le bouton au premier clic et supprime au second, avec le compte de ce qu'il a retiré. Un
   téléchargement est permanent ; c'est le seul contrôle destructeur de l'app.
 - **Mesuré** (cette machine, 16 threads, Rust 1.99.1 ; `cargo test --workspace` :
-  **447 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
+  **448 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
   vertes ; `cargo fmt --check` et `cargo clippy --workspace --all-targets -- -D warnings` propres) :
   - **requêtes par collection** : un album de 3 titres coûte **3 requêtes `/api/stream/<id>`**
     (une par titre, chacune une fois), et une SECONDE demande du même album **0** — mesuré sur une
@@ -3375,7 +3375,9 @@ Waves that can run in parallel (disjoint files):
   l'hors-ligne) là où la SPA écrit « Télécharger » pour les deux avec un titre qui les distingue.
 - **Pitfalls trouvés en construisant** : `Offline::snapshot()` CLONE (sets, labels) — l'appeler par
   ligne aurait cloné 4 000 entrées par ligne et par image, d'où `Rows` (résolu une fois par version)
-  et `Watch::get` qui ne relit que si la version a bougé. Un écran en `&self` (le menu d'une
+  et `Watch::get` qui ne relit que si la version a bougé. La version elle-même se lit par
+  `snapshot().version`, donc chaque écran paie UN clone par 300 ms quand rien ne bouge (quelques
+  kilo-octets, six écrans) ; un accesseur `version()` dans `nz-offline` le supprimerait. Un écran en `&self` (le menu d'une
   émission) ne peut pas appeler `Watch::get` : il lit `self.rows`. `cx.entity().read(cx)` depuis un
   rendu de la même entité PANIQUE (« cannot read … while it is already being updated ») : l'état
   « armé » de « Tout supprimer » se passe en paramètre. Et `cargo fmt --all` REFORMATE les crates
