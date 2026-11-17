@@ -46,7 +46,7 @@ pub use url::{Origin, Url, is_ip_literal};
 pub use nz_model::Me;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use nz_api::{Api, SessionJar};
@@ -153,6 +153,10 @@ pub struct Core {
     sinks: Mutex<Vec<Arc<dyn SessionSink>>>,
     meter: Meter,
     lists: Registry,
+    /// The counted bytes of the player's queue, published by MB3b after every
+    /// change: the store lives in `nz-core::player`, and `memory()` is where the
+    /// app's own total is read (worker rule 4).
+    queue_bytes: AtomicU64,
 }
 
 impl std::fmt::Debug for Core {
@@ -194,6 +198,7 @@ impl Core {
             sinks: Mutex::new(Vec::new()),
             meter: Meter::new(),
             lists: Registry::new(),
+            queue_bytes: AtomicU64::new(0),
         };
 
         // The server the person configured survives a restart (rule 7): the
@@ -358,12 +363,19 @@ impl Core {
         self.meter.stats()
     }
 
+    /// Publishes the player's own counted bytes (MB3b), so `memory()` is one
+    /// number for the whole app instead of a screen-by-screen guess.
+    pub fn set_queue_bytes(&self, bytes: u64) {
+        self.queue_bytes.store(bytes, Ordering::SeqCst);
+    }
+
     /// Counted bytes of what the core itself holds in memory, never a process
-    /// RSS (worker rule 4). The queue is MB3b's and the API cache lives in
-    /// SQLite, so both read 0 here — a later lot replaces its own line.
+    /// RSS (worker rule 4). The queue is the player's (published through
+    /// [`Core::set_queue_bytes`]) and the API cache lives in SQLite, so it reads
+    /// 0 here — a later lot replaces its own line.
     pub fn memory(&self) -> Memory {
         Memory {
-            queue_bytes: 0,
+            queue_bytes: self.queue_bytes.load(Ordering::SeqCst),
             lists_bytes: self.lists.memory_bytes() as u64,
             api_cache_mem_bytes: 0,
         }

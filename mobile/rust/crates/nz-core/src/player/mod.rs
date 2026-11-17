@@ -1153,6 +1153,9 @@ impl Player {
     /// Tells the screens what changed, after a job: the snapshot on every
     /// change, the queue's version when its composition moved.
     fn offer_work(&self, work: &mut Work) {
+        // The core's total, so `NzCore::memory()` is the app's own number
+        // (worker rule 4: counted bytes, never a process's RSS).
+        self.core.set_queue_bytes(self.memory_bytes());
         let version = self.queue_version();
         if version != work.last_queue_version {
             work.last_queue_version = version;

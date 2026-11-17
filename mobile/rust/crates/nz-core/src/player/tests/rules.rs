@@ -326,7 +326,7 @@ fn a_command_takes_one_lock() {
 fn a_queue_of_4000_rows_costs_less_than_4_mb_counted() {
     let dir = TempDir::new("memory");
     let bench = Bench::start();
-    let player = player_for(&dir, bench.base());
+    let (core, player) = core_and_player(&dir, bench.base());
 
     let tracks: Vec<TrackRef> = (0..4_000)
         .map(|n| TrackRef {
@@ -366,6 +366,16 @@ fn a_queue_of_4000_rows_costs_less_than_4_mb_counted() {
     assert!(
         took < std::time::Duration::from_millis(50),
         "enqueuing 4 000 rows took {took:?}"
+    );
+    // …and the app's own total reports it, a moment later: `NzCore::memory()`
+    // is read on the worker (it must never take the player's lock), so the test
+    // waits on the VALUE, never on a duration.
+    let published = wait_for_count(|| core.memory().queue_bytes as usize, bytes as usize, 5.0);
+    let reported = core.memory().queue_bytes;
+    println!("NzCore::memory().queue_bytes = {reported}");
+    assert!(
+        published && reported == bytes,
+        "the core's total is the player's count: {reported} vs {bytes}"
     );
     player.shutdown();
 }

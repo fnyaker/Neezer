@@ -1670,117 +1670,111 @@ CI verte, rebase + diff --stat, merge, section MB3a réécrite (mode accordé, b
 `ao report --done`.
 ```
 
-### MB3b — Player core `nz-core::player` (wave 2)
+### MB3b — Player core `nz-core::player` (delivered 2026-11-17)
 
-**Goal.** The queue, the engine and every playback rule of the SPA and of the old native player,
-in Rust, behind `PlayerApi`. **Depends on**: MB2, SC2 (MB3a for the Android wiring at the end; the
-host tests do not need it). **Exclusive files**: `nz-core/src/player/**`, `nz-ffi/src/player.rs`.
-**Contract.**
-```rust
-#[derive(uniffi::Object)] pub struct PlayerApi;
-#[uniffi::export(async_runtime = "tokio")]
-impl PlayerApi {
-    pub fn command(&self, cmd: PlayerCommand, tap_ns: u64);   // never blocks, optimistic
-    pub fn snapshot(&self) -> PlayerSnapshot;                // cheap copy
-    pub fn position(&self) -> PositionInfo;                  // atomics only
-    pub fn queue(&self) -> Arc<ListHandle>;
-    pub fn subscribe(&self, l: Box<dyn PlayerListener>);     // on_snapshot on CHANGE only
-    pub fn audio(&self) -> AudioSettings;
-    pub fn set_audio(&self, s: AudioSettings);               // persisted in kv
-    pub fn output_stats(&self) -> OutputStats;
-    pub fn set_screen_on(&self, on: bool);                   // read-ahead 2 MB on / 32 MB off
-    pub fn set_route(&self, route: AudioRoute);              // MB12 uses it for the verdict
-    pub fn set_sleep(&self, s: Option<SleepTimer>);
-    pub fn set_ducked(&self, ducked: bool);                  // audio focus "can duck": 0.2 ramp
-}
-#[derive(uniffi::Enum)] pub enum PlayerCommand {
-    Play, Pause, Toggle, Next, Prev, Seek { s: f64 }, Jump { index: u32, key: String },
-    PlayQueue { tracks: Vec<TrackRef>, start: u32, context: Option<PlayContext> },
-    PlayEntity { kind: String, id: String, shuffle: bool },   // album/playlist/artist/favorites/flow/...
-    AddToQueue { tracks: Vec<TrackRef> }, PlayNext { tracks: Vec<TrackRef> },
-    Remove { index: u32, key: String }, Move { from: u32, to: u32 }, ClearUpcoming,
-    SetShuffle { on: bool }, CycleRepeat, SetVolume { v: f32 }, ToggleMute,
-    StartRadio { kind: String, id: String }, StartFlow { style: Option<String> },
-}
-#[derive(uniffi::Record)] pub struct TrackRef { pub key: String, pub id: String }
-#[derive(uniffi::Record)] pub struct PlayContext { pub kind: String, pub id: String }
-#[derive(uniffi::Record)] pub struct PlayerSnapshot { pub state: PlayState, pub current: Option<NowPlaying>,
-    pub index: Option<u32>, pub len: u32, pub shuffle: bool, pub repeat: Repeat, pub volume: f32,
-    pub muted: bool, pub streaming: bool, pub sleep: Option<SleepState>, pub error: Option<String>,
-    pub fault: Option<String>, pub version: u64 }
-#[derive(uniffi::Record)] pub struct NowPlaying { pub key: String, pub id: String, pub title: String,
-    pub artists: String, pub album: String, pub album_id: Option<String>, pub artist_id: Option<String>,
-    pub cover: Option<String>, pub duration_s: f64, pub is_episode: bool, pub quality: String,
-    pub source: String, pub liked: bool }
-#[derive(uniffi::Record)] pub struct PositionInfo { pub position_s: f64, pub duration_s: f64,
-    pub buffered_s: f64, pub playing: bool }
-#[derive(uniffi::Record)] pub struct AudioSettings { pub quality: Quality /* Auto, Opus320, Opus128,
-    Opus64, Flac */, pub crossfade_s: f32, pub trim_silence: bool, pub normalization: Normalization,
-    pub eq_db: Vec<f32> /* 10 */, pub eq_preset: Option<String>, pub bass_db: f32, pub mono: bool,
-    pub balance: f32, pub speed: f32, pub metered_cap: Quality }
-#[derive(uniffi::Record)] pub struct OutputStats { pub underruns: u64, pub rebuffers: u64,
-    pub buffer_ms: u32, pub sample_rate: u32, pub latency_ms: u32, pub performance_mode: String,
-    pub last_tap_ns: u64, pub last_first_audible_ns: u64 }
-```
-Behaviour (port, do not invent — the SPA files of the inventory and android.md): sources in order
-download → complete play-cache file → network (`User` lane for the current, `preload_next` on
-`Prefetch` once the current is playable); the Auto quality ladder (EWMA of the last 3 streams: ≥ 600 kB/s
-→ 320, ≥ 200 → 128, else 64; capped by `metered_cap` on a metered network); the seek plan (`/ready`:
-range, `?start=`, or deferred); first-track normalisation; gains/edges in `ladder.js`'s order with
-`EDGES_AHEAD`; `POST /api/listen` on every change with the seconds PLAYED; podcast progress (pause,
-every 30 s, quit; offline → `pending_progress`); the fault policy (IO retried after 2/5/10 s, 5xx
-retried, a 4xx/decode error skips the title, at most 3 in a row, then `Paused` with `fault`); the
-Flow's refill when `context.wants_more()` (`/flow/next`), `radio_next`; repeat one/all; the sleep
-timer (minutes or end of track); the queue persisted in `nz-cache`'s `Queue` and restored PAUSED at
-the same position at start; the tap timestamps for the tap→sound measure. On Android, `nz-ffi`
-builds `Engine::new_external` + `nz_droid_audio::DroidOutput` (`cfg(target_os = "android")`); on
-the host the tests drive `ExternalSink` by hand.
-**Acceptance.** Host tests against perf_api reproducing at least: desktop D4/D5/D6's scenarios
-(gapless seam sample-exact, crossfade curve, trim at the edge ±10 ms, speed with pitch kept),
-`NativeRoutingTest`'s policy (background + next → advance; empty → stall; repeat one → no loop;
-3 faults → stop), the quality ladder transitions, listen POST count/seconds, podcast progress
-offline then flushed, queue restore; a 4 000-entry queue costs ≤ 4 MB counted (`NzCore::memory()`);
-`command()` returns in < 1 ms on the caller (it only enqueues — measured as a count of locks taken: 1).
-**Pitfalls.** Never hold the player lock while calling a listener. `PlayQueue` with 4 000 `TrackRef`s
-is one FFI call (≈ 300 KB), not 4 000. Screen-off read-ahead must fall back to 2 MB when the screen
-comes on (rule 1: a prefetch must not eat the link the person is using).
+**What landed.** The queue, the engine and every playback rule, in `nz-core::player/`, behind
+`nz-ffi`'s `PlayerApi`. Nine modules, each owning one rule: `quality` (the setting and the Auto
+ladder), `source` (the opener: download → play cache → network on rule 1's lanes, plus the typed
+cause table), `fault` (the old app's policy), `listen` (listens and an episode's position),
+`flow` (`PlayEntity`, the Flow, the radios), `sleep`, `persist` (the queue and the settings), and
+`mod` (the player itself: the machine, the worker, the effects).
 
-```text
-Tu es le worker du lot MB3b (cœur du lecteur) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« The FFI boundary », « Rule 1 », « Feature inventory », « Worker rules »,
-« MB3b »), docs/agents/playback.md EN ENTIER, docs/agents/android.md (bridges 7 à 12, la politique
-de fautes), docs/agents/desktop.md (D4, D5, D6, « Streams »), puis webapp/src/components/Player.svelte,
-lib/playback.js, lib/audio/seekplan.js, lib/ladder.js, lib/edges.js, lib/podcastProgress.js.
-Objectif : nz-core/src/player et nz-ffi/src/player.rs selon le contrat de la section MB3b : file,
-moteur nz-audio (ExternalSink), sources téléchargement → cache → réseau par voies, qualité Auto,
-plan de seek, écoutes, progression podcast, fautes, Flow/radio, minuterie, restauration de la file.
-Fichiers à toi seul : nz-core/src/player/** et nz-ffi/src/player.rs.
-Acceptation : tests hôte de la section MB3b contre tools/perf_api.py --serve ; file de 4 000 ≤ 4 Mo
-comptés ; command() n'attend jamais (1 verrou compté).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb3b, PR « feat(mobile): MB3b player core », CI verte, rebase + diff --stat,
-merge, section MB3b réécrite, `ao report --done`.
-```
+**The shape.** `Player::command` takes the machine's lock ONCE, applies the command to
+`nz_player::PlayerState` (desktop D4's own state machine, reused unchanged), hands the effects to
+the `nz-player` thread and returns. That thread owns everything that can wait — opening a stream,
+priming, a listen POST, a Flow top-up, the SQLite write — and the engine's events come back through
+the same channel, so the queue advances on ONE thread. `position()` reads atomics (the engine's own
+clock, the duration the last `Started` carried, the buffered mark) and no lock at all. A fourth
+thread (`nz-player-events`) forwards `nz-audio`'s bus; the tokio runtime (2 workers,
+`nz-player-net`) is dropped only after both are joined and after `Engine::shutdown` has joined the
+engine's own.
+
+**Contract changes this lot had to make** (each one is a line above this section, or in a shared
+crate, and each is declared in the PR):
+
+- **`TrackRef` carries what the row DRAWS** (title, artists, album, album id, artist id, cover,
+  duration, episode, liked). The note pinned `{key, id}`, but the phone has no route that turns an
+  id back into a track, and a queue row with no title is a phantom row MB2 already refused to draw.
+  A bare `{key, id}` is still valid (a queue from another device); the row then shows its id. One
+  `PlayQueue` of 4 000 titled rows is still ONE call (**≈0.83 MB**, measured).
+- **`Normalization` has four levels** (`off`/`low`/`medium`/`high`, `graph.js`'s own), not the
+  single `ReplayGain` MB0 left open.
+- **`Engine::set_read_ahead_bytes`** (a shared-crate addition, 3 lines in `nz-audio`'s engine):
+  `set_screen_on` cannot work without it, because `EngineConfig::read_ahead_bytes` was fixed at
+  construction. The desktop's behaviour is unchanged (the value is seeded from the config).
+- **`nz-ffi/src/core.rs`: `PlayerApi::open(Arc::clone(&self.core))`**, one line in MB2's merged
+  file — a unit `PlayerApi` had nowhere to hold the client, the cache or the engine.
+- **The platform's output is NOT started here.** `Player::take_sink()` hands the `ExternalSink` out
+  once; on Android MB3a's `DroidOutput` consumes it and MB3c wires it. A wave-2 build therefore has
+  the whole queue and engine and no device output, which is what `nz-droid-audio`'s stub answers.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`; `cargo test --workspace --locked`
+= **100 tests, all green**: 83 `nz-core`, 15 `nz-ffi`, the two other crates; `clippy -D warnings`
+and `fmt --check` clean; `nz-audio`'s own suite plus its new `tests/readahead.rs`, 2 tests green):
+
+- **The gapless seam, through the player**: two FLACs cut out of one 2 s cosine are, played as a
+  queue, the whole file's own samples — worst difference **0.0000000 over 96 000 frames**, with the
+  queue naming the second row at the handover.
+- **The crossfade** (1 s, two different tones): **0.03 dB** worst deviation from the steady level
+  (−9.03 dBFS) over 24 windows of 50 ms.
+- **The trim**: a 5.5 s file with 0.5 s of silence at each end starts on the tone (first 100 ms
+  peak **0.5000**) and is over at its measured end (tail peak **0.0000**, transport Paused).
+- **The speed**: a 2× episode plays **1.06 s of media in 0.5 s of output** and its 440 Hz tone
+  stays **440 Hz** (a resampler would read 880).
+- **The fault policy** (`NativeRouting`'s, ported): three unplayable rows are consumed and the
+  fourth stops the list with its cause; `repeat=one` stalls instead of advancing; a row skipped
+  before it played reports **no listen**.
+- **The Auto ladder**, on the wire: three streams at ~43 kB/s make the next request
+  `q=OPUS_64`, and one fast stream takes the following one back to `q=OPUS_320` (the ladder is
+  symmetric on purpose — a recovered link must not stay at 64 for the session).
+- **4 000 rows**: **3 310 890 counted bytes** (827 B/row, title + artists + album + cover id +
+  album/artist ids), one `PlayQueue` call at **24 ms** in a debug build. A transport command takes
+  **exactly one lock** (`Player::last_command_locks`, counted per call on the calling thread).
+- **The queue restored** comes back PAUSED at its row and at **1.410 s** (the position it was left
+  at); an episode's position kept offline is flushed on reconnection
+  (`{"episode_id":"ep","position":9,"finished":false}`).
+- **The Flow** costs one request per row — 1 for a start (two titles, one is the reserve), then 1
+  as each row becomes the last — and a transport command adds none.
+- **`nz-audio`'s read-ahead**: a 64 KiB cap spooled **131 072 B**, the same engine at 300 KiB
+  spooled **259 072 B** on the next voice, and a prefetched next track stays at **622 592 B** under
+  a 4 MiB cap (rule 1's 512 KiB mini-cap).
+
+**Rules a measurement taught** (each cost a red test):
+
+- **An optimistic state is not "playing".** `command()` sets the machine's flag at once, so a test
+  that waits for `state == Playing` measures nothing: every audio assertion waits on the ENGINE's
+  clock (`pump_until_audio`). Six assertions were reading silence or a previous row's clock before
+  that.
+- **A voice that never opened has no `current_id`.** The first fault policy compared the failed id
+  with `engine.current_id()`, which is `None` for a 404 that never opened — so every unplayable row
+  was treated as "a late failure for a row that is no longer current" and the list froze. The
+  comparison is the MACHINE's current row.
+- **`error.is_some()` is not "buffering".** A retry in flight says "reprise"; a stalled retry
+  budget is PAUSED with its cause. `Machine::retrying` tells them apart (`Buffering` only while a
+  retry is armed).
+- **`?start=` is for a source the server must ENCODE**, not for a finished file: `/ready` answers
+  `offset: true` only then. The test server that answered both made the engine slice a FLAC by
+  byte offset — a stream with no header, which fails to decode. Faithful to `stream_ready`.
+- **Priming must not sit in front of the tap.** Fetching the gains and the bounds of the tapped
+  track on every load cost two requests (one on the `Prefetch` lane's 250 ms gate) before the
+  first sound. Now only what the SETTINGS need is fetched — bounds when the trim is on, loudness
+  when normalisation is on, both on `User` — so with the defaults (both off) the first play makes
+  no extra request at all, and the next row is primed on `Prefetch`.
+- **A short clip is not "finished".** The SPA's `t >= duration − 15 s` marks a 6 s episode finished
+  at its first second. Both the mirror and the report now require a duration longer than the done
+  tail.
+- **A sleep timer is the one place a tick is honest.** The worker ticks once a second (100 ms while
+  the last 15 s fade), and every test drives the deadline through `set_sleep` + the player's own
+  clock instead of sleeping.
+- **`thread_local!` is the only exact lock count.** A global counter read before and after
+  `command()` counts the worker's locks too (measured: 2). The per-thread counter is 1, always.
+
+**Still owed to a later lot**: MB3a/MB3c consume `Player::take_sink()` for the device output;
+MB10 feeds `NowPlaying.liked` (the queue's own rows carry no like flag, so it is `false` until a
+like/dislike patch says otherwise); MB12 reads `AudioRoute` through `output_stats`' `buffer_ms` and
+`performance_mode`, which are the PLATFORM's numbers and stay empty until `DroidOutput` is wired;
+MB15's downloads are already the opener's first source (`nz-cache`'s `downloads().local`), and the
+worker's `pending_progress` flush is bounded to 25 rows per tick (a catch-up, never a bulk import).
 
 ### MB4 — Setup, migration from the old app, updater, Deezer login (wave 2)
 
