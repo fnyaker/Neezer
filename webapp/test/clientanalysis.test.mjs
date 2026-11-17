@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadMeasure, measureTrack, monoOf } from "../src/lib/analysis/measure.js";
 import { fetchBlocks } from "../src/lib/analysis/download.js";
+import { ownUrl } from "../src/lib/analysis/ownurl.js";
 import { createRunner } from "../src/lib/analysis/runner.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -104,6 +105,21 @@ test("a 404 fails at once with its status", async () => {
 test("a server that ignores Range still delivers the file", async () => {
   const whole = async () => new Response(FILE, { status: 200 });
   assert.deepEqual(await fetchBlocks("/x", { fetch: whole, block: 300 }), FILE);
+});
+
+test("a URL that names another host is refused, and never fetched", async () => {
+  // The value comes from a payload; it must not be able to move the request (nor the
+  // credentials `fetchBlocks` sends) to a host of its choosing.
+  const s = server();
+  await assert.rejects(fetchBlocks("https://evil.test/api/stream/x", { fetch: s.fn, block: 300 }), /cross-origin/);
+  // `http://localhost:1@evil.test/` reads as our host and means evil.test: the host is what counts.
+  await assert.rejects(fetchBlocks("http://localhost:1@evil.test/x", { fetch: s.fn, block: 300 }), /cross-origin/);
+  assert.equal(s.calls.length, 0);
+});
+
+test("a same-origin URL is kept whole, its userinfo and fragment dropped", () => {
+  assert.equal(ownUrl("/api/stream/x?y=1#frag"), "http://localhost/api/stream/x?y=1");
+  assert.equal(ownUrl("http://localhost:9/api/cover/x", "http://localhost:9/app/"), "http://localhost:9/api/cover/x");
 });
 
 // -- the runner ----------------------------------------------------------------------------

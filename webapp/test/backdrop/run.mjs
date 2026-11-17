@@ -38,7 +38,7 @@
 // worst frame gap of 17–33 ms; over a white sleeve --dim keeps 5.00:1 (Encre)
 // and 5.96:1 (Papier), --tx 11.8:1 and 16.3:1.
 import { existsSync, mkdirSync } from "node:fs";
-import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, deezerApi, dzcdn, pathOn } from "../harness.mjs";
 
 const { base, ids, stop } = await startServer(["--podcasts"]);
 // An assertion that throws would otherwise leave the perf server running.
@@ -135,15 +135,15 @@ async function context({ width, height, phone, cover = null }) {
     isMobile: phone,
     hasTouch: phone,
   });
-  await ctx.route(/api\.deezer\.com/, (r) => r.abort());
-  await ctx.route(/\/api\/stream\//, (r) =>
+  await ctx.route(deezerApi, (r) => r.abort());
+  await ctx.route(pathOn("/api/stream/"), (r) =>
     r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
   const body = (path) => (cover === "white" ? PNG.white : COVER.get(path) || PNG.grey);
-  await ctx.route(/dzcdn\.net/, (r) => {
+  await ctx.route(dzcdn, (r) => {
     r.fulfill({ status: 200, contentType: "image/png", body: body(new URL(r.request().url()).pathname) });
   });
-  await ctx.route(/\/api\/cover\//, (r) => {
+  await ctx.route(pathOn("/api/cover/"), (r) => {
     r.fulfill({ status: 200, contentType: "image/png", body: body(new URL(r.request().url()).pathname) });
   });
   await ctx.addInitScript(
@@ -680,8 +680,8 @@ for (const [name, size, phone] of [
     hasTouch: true,
     reducedMotion: "reduce",
   });
-  await ctx.route(/api\.deezer\.com/, (r) => r.abort());
-  await ctx.route(/dzcdn\.net|\/api\/cover\//, (r) => {
+  await ctx.route(deezerApi, (r) => r.abort());
+  await ctx.route((u) => dzcdn(u) || u.pathname.startsWith("/api/cover/"), (r) => {
     const path = new URL(r.request().url()).pathname;
     r.fulfill({ status: 200, contentType: "image/png", body: COVER.get(path) || PNG.grey });
   });

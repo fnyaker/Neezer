@@ -55,6 +55,22 @@ export async function startServer(extra = []) {
 /** How long a bench server gets between SIGTERM and SIGKILL. */
 const STOP_GRACE_MS = 15000;
 
+// Route matchers for the benches. Playwright hands a matcher the request's `URL`, and these
+// decide on the HOST or the PATH — never on the whole URL string, where `?next=api.deezer.com`
+// would match Deezer's name by accident (CodeQL js/regex/missing-regexp-anchor).
+
+/** Deezer's API. */
+export const deezerApi = (u) => u.hostname === "api.deezer.com";
+
+/** Deezer's image CDN (`e-cdns-images.dzcdn.net` and its siblings). */
+export const dzcdn = (u) => u.hostname === "dzcdn.net" || u.hostname.endsWith(".dzcdn.net");
+
+/** Every Deezer host a bench keeps the app away from. */
+export const deezerHost = (u) => deezerApi(u) || dzcdn(u);
+
+/** A path on the app's own server: `pathOn("/api/stream/")`. */
+export const pathOn = (prefix) => (u) => u.pathname.startsWith(prefix);
+
 /**
  * Stop a bench server the way `tools/perf_api.py` expects: SIGTERM first — it
  * removes its 5 MB to 2.3 GB library on SIGTERM, and `/tmp` is RAM — with

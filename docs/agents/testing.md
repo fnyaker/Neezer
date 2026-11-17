@@ -171,6 +171,16 @@ the code under it was broken:
   (`tests.test_source_order`).
 - **Tests that write files write them in their own temp directory**: `tests/assets/folder` is
   scanned by several modules, from several processes under `partest`.
+- **A test's fixtures carry no more privilege than the test needs, and a credential it must hand
+  over is not printed.** The fake `whisper-cli`/`ffmpeg` are `0o700`: the test runs them as the user
+  that wrote them, so the group and the world never reach them (CodeQL `py/overly-permissive-file`).
+  The admin bench's seeded member password goes to a `0o600` file inside the bench's own throwaway
+  library, and the READY payload names the path instead of carrying it (`tools/perf_api.py`): that
+  line travels a pipe, and CI keeps what a pipe carried (CodeQL
+  `py/clear-text-logging-sensitive-data`). And a fake that decides which requests it answers
+  matches the URL's HOST, never a substring — `urlsplit(url).hostname == "media.deezer.com"`,
+  because `?media.deezer.com` in a query is not the edge (CodeQL
+  `py/incomplete-url-substring-sanitization`).
 - **A bench that writes in the temporary directory removes it, and proves it does.** On most
   machines `/tmp` is a tmpfs — a leftover is RAM, not disk. On 2026-11-16 hundreds of `nsperf-*`
   libraries from `tools/perf_api.py` (5 MB for a small seed, 2.3 GB at 20 000 tracks) filled a

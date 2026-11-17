@@ -15,7 +15,7 @@
 // first frame already paints it, never the designed fallback.
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, deezerHost, pathOn } from "../harness.mjs";
 import { accentFor, fromHex } from "../../src/lib/sillon.js";
 
 const { chromium } = await loadPlaywright();
@@ -108,12 +108,12 @@ async function context({ width, height, phone, reduced, eco }) {
     hasTouch: phone,
     reducedMotion: reduced ? "reduce" : "no-preference",
   });
-  await ctx.route(/api\.deezer\.com|dzcdn\.net/, (r) => r.abort());
+  await ctx.route(deezerHost, (r) => r.abort());
   await ctx.route(
-    /\/api\/stream\//,
+    pathOn("/api/stream/"),
     (r) => r.fulfill({ status: 200, body: WAV, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
-  await ctx.route(/\/api\/cover\//, (r) => {
+  await ctx.route(pathOn("/api/cover/"), (r) => {
     const png = COVER.get(new URL(r.request().url()).pathname) || GREY_PNG;
     r.fulfill({ status: 200, contentType: "image/png", body: png });
   });

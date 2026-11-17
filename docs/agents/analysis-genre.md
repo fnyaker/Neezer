@@ -551,6 +551,14 @@ Worker (`worker.js`, `measure.js` over the wasm: spectral + loudness, bass attac
 to `/api/analysis/<id>/measures`; each track is stored the moment it is sent. One lane, so the PC stays the person's own. A 409
 (`version`) stops the run: the page was built for another measure. Failures keep their cause per track (`JobFailures`). Silence
 is a named failure ("no spectral frames"), never invented numbers. The vector is described in the next paragraph.
+**Every URL this path fetches is our own server's, and `lib/analysis/ownurl.js` (`ownUrl`) is what makes that true**: the
+stream (`/api/stream/…`) and the extractor route arrive in payloads and in Worker messages, so each is resolved against the
+page and confined to its origin before any `fetch` — a value can never move the request, nor the `credentials: "include"` it
+carries, to another host. `ownUrl` returns `origin + pathname + search`, not the parsed `href`: a pathname starts with one
+slash, so the result cannot become `//host` or `user@host`, and that shape is also the one CodeQL's
+`js/client-side-request-forgery` accepts (an origin comparison alone is not a sanitizer for that query — keeping `href`
+here reopens the alert). `webapp/test/clientanalysis.test.mjs` pins the refusal on a foreign host and on
+`http://localhost:1@evil.test/` (a URL that reads as ours and means another host).
 `measure.wasm` is NOT committed (gitignored): `.github/workflows/webapp.yaml` and the Dockerfile build it from `webapp/measure`; locally run `node measure/build.mjs`.
 Tests: `webapp/test/clientanalysis.test.mjs` (real wasm on a 150 BPM kick, mock server for the blocks, runner ledger/stop/409).
 

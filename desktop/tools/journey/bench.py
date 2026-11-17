@@ -50,12 +50,22 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 DESKTOP = REPO / "desktop"
+
+# The throwaway account `tools/perf_api.py` seeds for the bench, and nothing
+# else: the server it logs into lives for one run, on loopback, with a library
+# the bench made. Kept in one place so no call site invents another.
+BENCH_PASSWORD = "Bench1"
+
+# Every URL this bench asks is the perf_api server or its proxy, both bound to
+# loopback: `local_url` refuses the rest.
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # The screens the app has, and the token `Route::spec` gives each one. Settings
 # and the detail pages need ids, which `--route` cannot know: the bench fills
@@ -108,11 +118,34 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
+def local_url(url: str) -> str:
+    """`url` if it names this machine's own HTTP server, else a refusal.
+
+    urllib also speaks `file://`, and a URL that came back in a response (or
+    from an argument) must never turn the bench into a file reader or a request
+    to another host. Everything the bench asks is `perf_api.py` or its proxy.
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS:
+        raise ValueError(f"refusing a non-local URL: {url}")
+    return url
+
+
+def local_open(url: str, timeout: float, **request) -> object:
+    """The response for `url`, which `local_url` has checked, as a `Request`.
+
+    `**request` is what `urllib.request.Request` takes: `data`, `headers`,
+    `method`. One place builds the request, so one place to audit.
+    """
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- local_url() above refuses every URL that is not http on this machine, so urllib cannot be steered to file:// or another host
+    return urllib.request.urlopen(urllib.request.Request(local_url(url), **request), timeout=timeout)
+
+
 def wait_http(url: str, timeout: float = 60.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=2):
+            with local_open(url, timeout=2):
                 return True
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             time.sleep(0.1)
@@ -245,9 +278,7 @@ class Proxy:
 
     def stats(self, reset: bool = False) -> dict:
         path = "/reset" if reset else "/stats"
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{self.stats_port}{path}", timeout=30
-        ) as answer:
+        with local_open(f"http://127.0.0.1:{self.stats_port}{path}", timeout=30) as answer:
             return json.load(answer)
 
     def snapshots(self) -> dict:
@@ -465,16 +496,20 @@ class App:
 
 
 def seed_session(server_url: str, scratch: Path, user: str = "bench",
-                 password: str = "Bench1") -> None:
+                 password: str = BENCH_PASSWORD) -> None:
     """Log in with urllib and write the jar the app reads at start.
 
     The app's jar is `{"<origin>": [[name, value], …]}` (nz-api's
     `session.json`), keyed by ORIGIN — so the cookie is written under the
     proxy's origin when the app talks through the proxy, and the Flask session
     cookie is the same value either way.
+
+    `password` is the bench's own throwaway account (`BENCH_PASSWORD`), never a
+    real one: the server exists for this run and is bound to loopback.
     """
     import http.cookiejar
 
+    local_url(server_url)  # the cookie jar is only ever written to our own server
     # A login on a busy machine (two benches, downloads, whisper) can take
     # longer than one 30 s socket timeout; three tries, never a silent skip.
     last_error: Exception | None = None
@@ -509,22 +544,20 @@ def seed_session(server_url: str, scratch: Path, user: str = "bench",
 
 
 def api(url: str, path: str, cookie: str | None = None) -> dict:
-    request = urllib.request.Request(url + path)
-    if cookie:
-        request.add_header("Cookie", cookie)
-    with urllib.request.urlopen(request, timeout=60) as answer:
+    headers = {"Cookie": cookie} if cookie else {}
+    with local_open(url + path, timeout=60, headers=headers) as answer:
         return json.load(answer)
 
 
 def login_cookie(url: str) -> str:
-    body = json.dumps({"username": "bench", "password": "Bench1"}).encode()
-    request = urllib.request.Request(
+    body = json.dumps({"username": "bench", "password": BENCH_PASSWORD}).encode()
+    with local_open(
         f"{url}/api/login",
+        timeout=30,
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=30) as answer:
+    ) as answer:
         header = answer.headers.get("Set-Cookie", "")
     return header.split(";", 1)[0]
 

@@ -382,7 +382,9 @@ class VerdictTestCase(unittest.TestCase):
 
                 class Refused(DeezerRoutes):
                     def send(self, request, **kwargs):
-                        if "media.deezer.com" in request.url:
+                        # The HOST, not a substring: `?media.deezer.com` in a query is
+                        # not the edge (CodeQL py/incomplete-url-substring-sanitization).
+                        if urlsplit(request.url).hostname == "media.deezer.com":
                             self.asked.append(("get_url", None, None))
                             resp = requests.Response()
                             resp.status_code = status

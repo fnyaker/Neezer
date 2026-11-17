@@ -4,12 +4,16 @@
 // only gates and decides them. Pure functions of what is passed in, so it runs in a
 // Worker and in node alike.
 
+import { ownUrl } from "./ownurl.js";
+
 const TEMPO_RATE = 44100;
 const TEMPO_CHUNK = TEMPO_RATE * 10;
 
 export async function loadMeasure(wasm) {
   const raw = typeof wasm !== "string" && (wasm instanceof ArrayBuffer || ArrayBuffer.isView(wasm));
-  const bytes = raw ? wasm : await (await fetch(wasm)).arrayBuffer();
+  // A string is our own bundle's core: confined to this origin, so a Worker message
+  // can never choose the host it comes from.
+  const bytes = raw ? wasm : await (await fetch(ownUrl(wasm))).arrayBuffer();
   const { instance } = await WebAssembly.instantiate(bytes, {});
   return instance.exports;
 }

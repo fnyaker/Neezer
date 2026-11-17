@@ -50,7 +50,7 @@
 //           1 blurred image layer; see the numbers printed per case. (The
 //           ladder has since gone to 0.64 / 0.78 / 0.93 — see app.css.)
 import { resolve } from "node:path";
-import { loadPlaywright, startServer, login, checker } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, deezerHost, pathOn } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const { base, ids, stop } = await startServer();
@@ -432,8 +432,8 @@ async function context(size, phone) {
   const ctx = await browser.newContext(
     phone ? { viewport: size, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { viewport: size }
   );
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => r.abort());
-  await ctx.route(/\/api\/deezer\/status/, (r) =>
+  await ctx.route(deezerHost, (r) => r.abort());
+  await ctx.route(pathOn("/api/deezer/status"), (r) =>
     r.fulfill({ status: 200, contentType: "application/json", body: NOTICE })
   );
   return ctx;

@@ -204,12 +204,14 @@ class _Base(unittest.TestCase):
             os.path.join(self.bin_dir, "whisper-cli"),
             FAKE_WHISPER.format(python=sys.executable).encode(),
         )
-        os.chmod(self.whisper, 0o755)
+        # Owner only: the test runs these fakes as the user that wrote them, so the
+        # group and the world never need them (CodeQL py/overly-permissive-file).
+        os.chmod(self.whisper, 0o700)
         self.ffmpeg = write_bytes(
             os.path.join(self.bin_dir, "ffmpeg"),
             FAKE_FFMPEG.format(python=sys.executable).encode(),
         )
-        os.chmod(self.ffmpeg, 0o755)
+        os.chmod(self.ffmpeg, 0o700)
         self.model_dir = os.path.join(self.tmp, "models")
         os.makedirs(self.model_dir)
         self.model = write_model(os.path.join(self.model_dir, "ggml-small.bin"))

@@ -573,14 +573,30 @@ def seed_provider_account(app):
         return {"id": str(row.id)}
 
 
-def seed_admin(app, users, invite_count):
+def _hand_over(password, directory):
+    """Write a fixture credential where only its owner can read it, and name it.
+
+    The admin bench logs in as the seeded member with it, so it has to travel —
+    but not through the READY line, which is a pipe and a CI log keeps what a
+    pipe carried (CodeQL py/clear-text-logging-sensitive-data). It goes to a
+    0600 file in the bench's own throwaway library, removed with it.
+    """
+    path = os.path.join(directory, "member-password")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(password)
+    os.chmod(path, 0o600)
+    return path
+
+
+def seed_admin(app, users, invite_count, secret_dir):
     """The accounts and pending invitations Réglages → Utilisateurs lists.
 
     One argon2 hash is computed and reused: the bench never logs in as the
     seeded members, it only reads and mutates them. ``membre`` is the non-admin
     session, ``desactive_moi`` the active row a PATCH disables,
     ``deja_desactive`` the disabled row the filter keeps, ``supprime_moi`` the
-    row a DELETE removes.
+    row a DELETE removes. Its password is handed over as a file path
+    (``_hand_over``), never as a value in the payload.
     """
     import datetime as _dt
 
@@ -626,7 +642,7 @@ def seed_admin(app, users, invite_count):
             invites.append({"id": row.id, "note": row.note})
         return {
             "member": "membre",
-            "member_password": password,
+            "member_password_file": _hand_over(password, secret_dir),
             "delete": "supprime_moi",
             "disable": "desactive_moi",
             "disabled": "deja_desactive",
@@ -1222,7 +1238,7 @@ def main():
         ids["onboarding"] = seed_onboarding(app, args.tracks)
     if args.admin_users or args.admin_invites:
         print("seeding admin accounts…", file=sys.stderr)
-        ids["admin"] = seed_admin(app, args.admin_users, args.admin_invites)
+        ids["admin"] = seed_admin(app, args.admin_users, args.admin_invites, work)
     if args.podcasts:
         print("seeding podcasts…", file=sys.stderr)
         ids["podcast"] = seed_podcasts(app)
