@@ -101,7 +101,7 @@ And the architecture's own rules, detailed in the area notes:
 
 ## CI and merging
 
-Eight workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `release`, `security`).
+Nine workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `mobile`, `release`, `security`).
 **Fully green means every job of every workflow that ran, including the security scanners.** `security.yaml`
 (CodeQL, Semgrep, Bandit, Trivy, Gitleaks) is `continue-on-error`, so its check can show green with
 findings: read each job's log and fix every finding the change introduced (or mark a false positive

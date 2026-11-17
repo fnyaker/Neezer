@@ -1,0 +1,277 @@
+name: Mobile
+
+# The native Android app (`mobile/`): the Rust core and its UniFFI surface, the
+# Gradle tree that packages it, and — once MQ1 writes the harness — the headless
+# emulator job (docs/agents/mobile.md, MB0).
+#
+# Paths: the app itself, the shared crates it compiles (a change in `nz-audio` or
+# `nz-api` can break the phone build), the two web-app crates it links natively,
+# the JNI core `nz-audio` uses, and this file.
+#
+# NOT attached to releases: the WebView app still ships `neezer.apk` until lot
+# MB-SWAP flips the channel (then this workflow takes `android.yaml`'s place).
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - mobile/**
+      - desktop/crates/**
+      - webapp/rhythm/**
+      - webapp/appcore/**
+      - webapp/measure/**
+      - webapp/trainer/**
+      - android/nscore/**
+      - .github/workflows/mobile.yaml
+  pull_request:
+    paths:
+      - mobile/**
+      - desktop/crates/**
+      - webapp/rhythm/**
+      - webapp/appcore/**
+      - webapp/measure/**
+      - webapp/trainer/**
+      - android/nscore/**
+      - .github/workflows/mobile.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: "4"
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  NDK_VERSION: 30.0.16248370
+
+jobs:
+  # --- the Rust workspace on the host ---------------------------------------
+  # Everything the app decides is proven HERE (docs/agents/mobile.md, "Tests and
+  # emulation"): the core's logic, the FFI conversions, the lists, the error
+  # sentences. The desktop workflow proves the shared crates.
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Cache the cargo registry and binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: mobile-cargo-${{ hashFiles('mobile/rust/Cargo.lock', 'desktop/Cargo.lock') }}
+          restore-keys: mobile-cargo-
+
+      # NOT `cargo fmt --all`: that also formats the crates this workspace
+      # reaches by PATH (webapp/rhythm, android/nscore, desktop/crates/*), and
+      # reformatting those would be this lot editing another area's files —
+      # measured: 39 files and 2 189 lines of a stranger's code.
+      - name: Format
+        working-directory: mobile/rust
+        run: >
+          cargo fmt
+          -p nz-core -p nz-ffi -p nz-droid-audio -p nz-viz-gl -p nz-bindgen
+          --check
+
+      - name: Clippy (warnings are errors)
+        working-directory: mobile/rust
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Tests
+        working-directory: mobile/rust
+        run: cargo test --workspace --locked
+
+  # --- the APK ---------------------------------------------------------------
+  apk:
+    name: APK (bindings, Gradle, lint, sizes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.7"
+
+      - name: Set up Rust and the Android targets
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+
+      - name: Cache the cargo registry, binaries and target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            mobile/rust/target
+          key: mobile-apk-${{ hashFiles('mobile/rust/Cargo.lock', 'desktop/Cargo.lock') }}
+          restore-keys: mobile-apk-
+
+      # The NDK the Rust build links against, and the platform/tools the Gradle
+      # build compiles and signs with. Pinned, so a runner image change cannot
+      # move them under a build.
+      - name: Install the NDK and the SDK packages
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" "platform-tools" "ndk;$NDK_VERSION"
+
+      # Idempotent on purpose: the job caches `~/.cargo/bin`, so the second run
+      # finds the binary and `cargo install` refuses ("binary `cargo-ndk` already
+      # exists in destination", exit 101) — measured on this very PR.
+      - name: Install cargo-ndk
+        run: |
+          cargo ndk --version 2>/dev/null || cargo install cargo-ndk --locked --version 4.1.2
+          cargo ndk --version
+
+      # The one documented native build: host debug library → UniFFI bindings →
+      # cargo ndk for arm64-v8a, armeabi-v7a and x86_64 (docs/agents/mobile.md,
+      # MB0 "Contract").
+      - name: Build libnz_ffi.so and the Kotlin bindings
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          time mobile/rust/build-android.sh
+
+      - name: JVM tests
+        run: gradle -p mobile/android testDebugUnitTest -PskipRust --no-daemon
+
+      # `assembleRelease` alone only runs `lintVitalRelease`, which ignores an
+      # error-level check (the old app's lesson, android.yaml): ask for the full
+      # debug lint explicitly.
+      - name: Lint
+        run: gradle -p mobile/android lintDebug -PskipRust --no-daemon
+
+      - name: Assemble the release APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          gradle -p mobile/android assembleRelease -PskipRust --no-daemon
+          find mobile/android/app/build/outputs/apk -name '*.apk'
+
+      # An APK that cannot be proven is not published: a truncated archive opens
+      # as "not a valid application", and a v2-only signature cannot update a
+      # device signed with v1 (measured on the old app's v1.3.1). `--min-sdk-version
+      # 23` is what makes apksigner check the JAR signature at all.
+      - name: Verify the APK
+        run: |
+          set -euo pipefail
+          APK=$(find mobile/android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          unzip -t "$APK" > /dev/null
+          BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          "$BT/apksigner" verify --min-sdk-version 23 --verbose --print-certs "$APK" | tee /tmp/verify.txt
+          # `--verbose` is what MAKES apksigner print the three scheme lines at
+          # all (without it, `apksigner verify` prints nothing but "Verifies"),
+          # and the line carries the scheme's full name in parentheses
+          # (`Verified using v1 scheme (JAR signing): true`), so the check asks
+          # for the prefix and then for `true` — a literal "v1 scheme: true"
+          # never matches, which is how a correct APK failed this very check.
+          for scheme in v1 v2 v3; do
+            line=$(grep -i "Verified using $scheme scheme" /tmp/verify.txt || true)
+            case "$line" in
+              *true*) ;;
+              *) echo "::error::$scheme signature missing ($line)"; exit 1 ;;
+            esac
+          done
+          "$BT/zipalign" -c -p 4 "$APK"
+          "$BT/aapt2" dump badging "$APK" | grep -E "package: name='org.nsupysonic.app'" \
+            || { echo "::error::wrong package id"; exit 1; }
+
+      - name: Sizes (universal APK, per ABI, and the native library)
+        run: |
+          set -euo pipefail
+          echo "### Tailles" >> "$GITHUB_STEP_SUMMARY"
+          printf '| ce qui | octets |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| APK universel | %s |\n' "$(stat -c %s "$APK")" >> "$GITHUB_STEP_SUMMARY"
+          unzip -l "$APK" | awk '/lib\/.*\/libnz_ffi\.so/ {printf "| %s | %s |\n", $4, $1}' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-mobile-apk
+          path: mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+  # --- the emulator ----------------------------------------------------------
+  # MQ1 writes `mobile/tools/ci-emulator.sh` (it starts the emulator with the
+  # documented flags, waits for `sys.boot_completed`, installs the APK over the
+  # OLD one and drives the routes). Until then this job says so instead of
+  # pretending: a workflow that silently skips a test is a test that does not
+  # exist.
+  emulator:
+    name: Emulator smoke (headless, KVM)
+    runs-on: ubuntu-latest
+    needs: apk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the harness
+        id: harness
+        run: |
+          if [ -f mobile/tools/ci-emulator.sh ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Emulator::skipped: no harness yet (MQ1 writes mobile/tools/ci-emulator.sh)"
+          fi
+
+      # The documented recipe: /dev/kvm must be readable by the runner user.
+      - name: Enable KVM
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        if: steps.harness.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        if: steps.harness.outputs.present == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.7"
+
+      - uses: actions/download-artifact@v4
+        if: steps.harness.outputs.present == 'true'
+        with:
+          name: neezer-mobile-apk
+          path: mobile/android/app/build/outputs/apk/release
+
+      - name: Install the SDK, the image and the AVD
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n nz35 -k "system-images;android-35;default;x86_64" --device pixel_6 --force
+
+      - name: Smoke
+        if: steps.harness.outputs.present == 'true'
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: mobile/tools/ci-emulator.sh

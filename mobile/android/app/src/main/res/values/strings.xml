@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's own strings. Screen copy lives in the Compose modules (French,
+     no emoji, tokens of the design system), never here. -->
+<resources>
+    <string name="app_name">Neezer</string>
+    <string name="car_mode">Mode voiture</string>
+    <string name="car_tile">Mode voiture</string>
+    <string name="deezer_login_title">Compte Deezer</string>
+    <string name="notification_channel_playback">Lecture</string>
+</resources>

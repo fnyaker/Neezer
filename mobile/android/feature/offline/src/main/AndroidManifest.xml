@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- :feature:offline's manifest, merged into the app's (docs/agents/mobile.md, MB0
+     "Contract": ":feature:offline the UIDT `JobService`").
+
+     API 34+ runs the download queue as a USER-INITIATED DATA TRANSFER job (6 h
+     without the dataSync cap), below that a WorkManager `dataSync` worker keeps
+     the process alive (MB15). Both stop when the queue is empty, and the queue
+     itself resumes from SQLite after any kill (rule 2): Android may only keep
+     the process up, it never owns the transfers. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name="fr.neezer.mobile.feature.offline.OfflineTransferJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+    </application>
+</manifest>

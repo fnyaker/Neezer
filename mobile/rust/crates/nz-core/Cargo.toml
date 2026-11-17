@@ -1,0 +1,43 @@
+# The app core: sessions, the screens' data, the player wiring, offline, the
+# party, remote control, settings. Platform-free — no Android type, no FFI type
+# — so the same crate compiles for iOS (docs/agents/mobile.md, "Repository
+# layout" and "iOS later").
+#
+# MB0 creates the crate and one module per area of the ownership table
+# (`docs/agents/mobile.md`, "Module and file ownership"); each feature lot fills
+# ITS directory and edits no other file. Every dependency a lot needs is
+# declared here, once, because this manifest is shared.
+
+[package]
+name = "nz-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nz-model = { workspace = true }
+nz-api = { workspace = true }
+nz-cache = { workspace = true }
+nz-player = { workspace = true }
+nz-audio = { workspace = true }
+nz-viz = { workspace = true }
+nz-analysis = { workspace = true }
+nz-offline = { workspace = true }
+nz-remote = { workspace = true }
+nz-party = { workspace = true }
+appcore = { workspace = true }
+rhythm = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The logcat writer and the platform trust store are Android-only: the core
+# asks for them through MB2's `nz-core::core::platform`, never directly.
+paranoid-android = { workspace = true }
+rustls-platform-verifier = { workspace = true }

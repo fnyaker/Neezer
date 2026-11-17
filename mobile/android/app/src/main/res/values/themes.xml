@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window theme ONLY: everything the person sees is Compose. No
+         appcompat and no Material Views theme, so a cold start paints the app's
+         own ground (Sillon's background token) instead of flashing white
+         (rule 5). -->
+    <style name="Theme.Neezer" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nz_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

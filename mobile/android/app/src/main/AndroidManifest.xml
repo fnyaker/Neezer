@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app's own manifest (docs/agents/mobile.md, MB0 "Contract": "App manifest").
+
+  Permissions are the OLD app's union (android/app/src/main/AndroidManifest.xml)
+  plus the two the phone needs for itself: RUN_USER_INITIATED_JOBS (the A14+
+  user-initiated data transfer the download queue uses) and
+  FOREGROUND_SERVICE_DATA_SYNC (its older WorkManager sibling below A14).
+
+  applicationId and signing key are the old app's, so this APK installs as an
+  UPDATE: the icon stays, the data directory stays, and the migration has
+  something to read (rule 7).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Network and session -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Playback that outlives the screen -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Downloads: a user-initiated data transfer on API 34+, a dataSync
+         foreground worker below (docs/agents/mobile.md, "Background
+         downloads"), and the job the queue resumes from after a kill. -->
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- The car mode, ported from android/ as is: it comes back after a reboot
+         or an update, and its overlay needs the window and usage grants. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- A phone that plays for hours must be able to ask for the battery
+         exemption, once, when Android actually killed it. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- The app installs ITS OWN update from the configured server (MB4). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".NzApplication"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.Neezer"
+        android:usesCleartextTraffic="true"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
+        tools:targetApi="31">
+        <!-- usesCleartextTraffic: a home server may be http://192.168.1.10 and
+             this file cannot know which host it is. http is narrowed in CODE (in
+             Rust, nz-api) to the configured origin; the platform flag only
+             stops Android from refusing the socket. allowBackup +
+             dataExtractionRules: the session cookie and the pinned certificate
+             never leave the device. -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|fontScale|density|locale|layoutDirection|keyboard|navigation|touchscreen">
+            <!-- NO MAIN/LAUNCHER here on purpose: the launcher entry is the
+                 `SetupActivity` ALIAS below, because that is the name the old
+                 app's icon and pinned shortcuts point at. Two filters would put
+                 two icons in the launcher. -->
+            <!-- A shared link (ACTION_SEND text/plain) and the app's own scheme. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="neezer" />
+            </intent-filter>
+        </activity>
+
+        <!-- The OLD app's launcher activity name. A person's home-screen icon and
+             pinned shortcut point at `org.nsupysonic.app.SetupActivity`; without
+             this alias they would be broken by the update. -->
+        <activity-alias
+            android:name="org.nsupysonic.app.SetupActivity"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="org.nsupysonic.app.MainActivity"
+            android:targetActivity=".MainActivity"
+            android:exported="false" />
+    </application>
+</manifest>
