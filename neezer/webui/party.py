@@ -56,7 +56,7 @@ import math
 import os
 import re
 import secrets
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed binary, an argument list, no shell
 import threading
 import time
 import uuid
@@ -685,7 +685,7 @@ def _build_master(app, src: str, mkey: str) -> None:
     ]
     try:
         with _ffmpeg_slots:
-            out = subprocess.run(
+            out = subprocess.run(  # nosec B603 - "ffmpeg", then the archived track's own path after "-i"; no shell
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -747,7 +747,7 @@ def _cut_cmd(src: str, k: int, fmt: str, rate: int) -> list:
 
 
 def _cut(src: str, k: int, fmt: str, rate: int) -> bytes:
-    return subprocess.run(
+    return subprocess.run(  # nosec B603 - "ffmpeg", then the archived track's own path after "-i"; no shell
         _cut_cmd(src, k, fmt, rate),
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

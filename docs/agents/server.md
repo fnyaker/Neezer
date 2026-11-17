@@ -979,3 +979,18 @@ same reason as the inline comment), never in bulk and never by disabling a rule.
 every existing database already holds those 20 bytes, so a SHA-256 switch would fail to find them
 all and duplicate the library. The same scanners call `0o700` on the daemon's socket directory
 "widely permissive" (`daemon/server.py`), which is inverted: 0o700 is owner-only.
+
+**This lot's numbers, and the two cases.** The 24 `py/log-injection` alerts of the `neezer/webui/`
+routes — `request.path` in the shared error handler of seven blueprints, a Deezer id, an account
+name, a party id, a search query, over 16 lines in 11 files — are covered by the hook above and were
+closed as false positives, with every one of those lines left exactly as it was. That claim holds
+only while the value reaches `logger` as a %-argument: an f-string carries it inside the message,
+where the factory has no argument left to escape. `py/stack-trace-exposure` is the other case, with
+no guard at all: answer with a constant, never `str(exc)` — **except** a `ServiceError`, whose
+message is one of this server's own literal sentences
+(`tests/test_service_error_messages.py` walks the AST of `neezer/services/` and fails on any
+`raise ServiceError(...)` handed anything but a literal, or an f-string of an integer status code),
+which is why the four such answers in `webui/services.py` and `webui/onboarding_account.py` were
+closed as false positives too. A line a scanner flagged stays **untouched**: rewriting it moves the
+alert onto the new line instead of closing it, so a false positive is dismissed by the API, and only
+a real problem changes the code.
