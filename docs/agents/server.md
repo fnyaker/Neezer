@@ -1054,4 +1054,5 @@ tools, not Debian's `media-types`: `.ogg` was missing there, so every Opus/ogg t
 announced `application/octet-stream` and a player that trusts the header refused a stream whose bytes
 were audio. `neezer/media_types.py` lists the closed set of targets; `neezer/api/media.py` asks it
 (`tests/api/test_transcode_mimetype.py` empties the host table and still requires `audio/ogg`).
-`neezer/db.py`'s `transcodedContentType` has the same shape and should read that table too.
+`neezer/db.py`'s `transcodedContentType`, for a song and for a podcast episode, reads the same table:
+it announces the same type to the client, and the same test holds it to `audio/ogg`.

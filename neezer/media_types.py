@@ -11,8 +11,8 @@ that trust the header refused the stream even though the bytes were audio. The
 targets the transcoders write are a closed set, so they are listed here instead
 of asking the host.
 
-``neezer/db.py`` announces the same value as ``transcodedContentType`` and
-should read this table too.
+``neezer/db.py`` announces the same value as ``transcodedContentType`` and reads
+this table too.
 """
 
 import mimetypes
