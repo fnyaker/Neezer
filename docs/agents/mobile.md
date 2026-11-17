@@ -1264,55 +1264,99 @@ setup screen (MB4) calls `Api::probe_certificate` and pins `CertificateInfo::sha
 `parse_fingerprint`; the Android `rustls-platform-verifier` init stays MB2's Kotlin side, this crate
 only requires that it has run.
 
-### SC4 — Extract `nz-offline` (wave 1)
+### SC4 — Extract `nz-offline` (delivered 2026-11-17)
 
-**Goal.** One downloads worker for both apps. **Depends on**: SC0.
-**Exclusive files**: `desktop/crates/nz-offline/**`, `desktop/app/src/wiring/offline.rs`.
-**Contract.** Everything of `wiring/offline.rs` that is not GPUI moves; the GPUI glue (the
-`cx`/`Entity` updates, ~5 uses) stays in the desktop file as an adapter. The crate exposes a
-`Downloader` trait (`fetch(track, quality, dest_part) -> Result<u64>`; default impl = `nz-api` on the
-Bulk lane) so iOS can supply `URLSession` later, an `Offline` handle (`add_set/remove_set/pause/resume/
-retry/progress/events()`), and joins its `nz-bulk` thread on drop (D13's pitfall).
-**Acceptance.** Desktop CI green, same test count (the `#[gpui::test]` ones stay in the desktop file
-or are rewritten without GPUI); `cargo ndk … check -p nz-offline` passes; a crate test downloads a set
-from perf_api, kills the handle mid-file, restarts, resumes without re-downloading finished files
-(count of bytes fetched).
-**Pitfalls.** The worker yields through the Bulk lane only — no second throttle. A file is published
-by rename once complete; a `.part` is never listed.
+**What landed.** `desktop/crates/nz-offline` owns the downloads worker, and
+`desktop/app/src/wiring/offline.rs` went from **3 059 to 456 lines**: a
+`pub use nz_offline::*` (so every screen keeps its
+`crate::wiring::offline::{Offline, Snapshot, Failure, …}` path unchanged),
+`attach(&AppState)` — the one line that turns a session into the process's
+worker — and the seven tests that need this binary. Five modules, one rule each:
+`service` (the `nz-bulk` thread, `Offline`, the process singleton),
+`download` (`Downloader`, `ApiDownloader`, `Stop`, `Outcome`), `settings` (the
+SPA's keys and the four-rung picker), `state` (the published `Snapshot`) and
+`testing` (the local server/scratch store/panic recorder). No shared file and no
+`Cargo.lock` entry changed.
 
-```text
-Tu es le worker du lot SC4 du plan mobile Neezer. Lis CLAUDE.md, docs/agents/mobile.md (« Reuse »,
-« Rule 1 », « Worker rules », « SC4 »), docs/agents/desktop.md (D13 et ses pièges).
-Objectif : extraire la partie sans GPUI de desktop/app/src/wiring/offline.rs dans desktop/crates/nz-offline
-(trait Downloader, handle Offline, thread nz-bulk joint au drop), le fichier desktop devenant un
-adaptateur GPUI, comportement inchangé.
-Fichiers à toi seul : desktop/crates/nz-offline/** et desktop/app/src/wiring/offline.rs.
-Acceptation : CI desktop verte, même nombre de tests ; check Android arm64 ; test de reprise après
-arrêt en plein fichier (octets récupérés comptés, aucun fichier terminé retéléchargé).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc4, PR « refactor(desktop): SC4 extract nz-offline », CI verte, rebase +
-diff --stat, merge, section SC4 réécrite, `ao report --done`.
-```
+- **The rule, only the app-shaped part stays.** 15 of the 22 `wiring::offline`
+  tests moved with the worker; 7 stayed because they prove *this* app's seams —
+  the engine's `NetOpener` (a downloaded track plays with the link cut, ×2), the
+  `NetRuntime` global (a quit joins `nz-bulk` before its runtime goes, ×2), the
+  real engine beside a 200-track download (rule 1's no-underrun half, ×2) and
+  the `#[gpui::test]` that a restored session starts the worker (×1). Moving the
+  two audio benches would have meant a second opener next to `NetOpener`, which
+  is the duplication `wiring::engine`'s own comment forbids.
+- **The rule, the fetcher is a trait, and it does not publish.** A
+  `Downloader::fetch(track, quality, part, stop, progress)` opens the `.part`
+  `nz-cache` reserved, writes it and answers a byte count; the WORKER marks the
+  row, calls `complete` (rename + length read back) and removes a `.part` a
+  verdict abandoned. So a platform with another HTTP stack (iOS's `URLSession`,
+  the reason the trait exists) cannot make a half file look finished, and cannot
+  skip `Lane::Bulk` on desktop either: `ApiDownloader` is the only fetcher that
+  touches the network and every byte of it is a Bulk request — there is no
+  second throttle, by design.
+- **The rule, the close is the crate's own** (PR #246's fix, verified here).
+  `Worker` owns its thread, `shutdown()` and the last clone's `Drop` both join
+  it, `Stop` abandons a body in flight through `select!`, and nothing
+  `catch_unwind`s the panic away. The app keeps its `NetRuntime` bench (the
+  global that must join first); the crate adds
+  `dropping_the_worker_joins_it_before_its_runtime_goes`, which is the contract
+  the mobile core relies on when IT drops a runtime: measured **246 µs** to
+  close, **0 panics**, exactly one row left `active`.
+- **The rule, one stop for the whole worker.** `Shared` carries a single
+  `Stop` (flag + `watch`) instead of a separate `AtomicBool` and channel:
+  `Worker::stop` sets it, `Stop::drive` races it against one future, `stopped()`
+  is the chunk-loop check. `Stop::set` uses `send_replace`, because `send` to a
+  channel nobody is waiting on does NOT update the value — a stop set before the
+  first download would have been lost. The runtime moved into `ApiDownloader`
+  (the worker holds no `Handle` any more), so "join the thread before its
+  runtime goes" is unchanged and still `Worker::stop` (D13).
+- **The rule, test support is public and inert.** `testing` is a `pub mod`,
+  **not `#[cfg(test)]`**: `wiring::engine`'s benches already reuse this crate's
+  one local server, scratch store and panic recorder (their own comment asked
+  for one place), and a `cfg(test)` item is invisible to the app crate — the
+  only alternative was a feature, and a feature means editing `app/Cargo.toml`,
+  which SC0's manifest rule gives to one lot. It starts no thread until a test
+  calls it. The same applies to `Offline::publish_for_test`, which the downloads
+  screen's layout bench calls: a `pub(crate)` method on a `pub` type is NOT
+  test-only from a dependency's point of view.
+- **The rule, the handle speaks both apps' words.** `add_set`/`remove_set`/
+  `retry`/`events()` sit beside the desktop's `choose`/`drop_set`/
+  `retry_failures`/`snapshot`, because MB15's FFI is already generated against
+  the first four (`mobile/rust/crates/nz-ffi/src/offline.rs`). `events()` is a
+  `watch<u64>` of the snapshot's `version`: one channel, and a phone can wait
+  for a publication instead of polling a mutex.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, NDK 30.0.16248370):
+  - **`cargo test -p nz-offline`: 20 tests** — 15 lib tests, 4 heavy benches
+    (restart, drop-order close, session change, rule 1's shared link) that run
+    in a process of their own, and the perf_api resume bench. `cargo test -p
+    neezer-desktop --bins wiring::offline`: **7** (4 + their 3 children). The
+    workspace's offline tests go from 22 to 27: the picker/engine contract, the
+    `events()` signal, the perf_api resume bench and the crate's own drop-order
+    close are new.
+  - **The resume bench, counted in bytes in the fetcher** (never in a file's
+    size: a published file looks the same whether it came down once or twice):
+    6 archived tracks of **300 044 bytes**; the stop landed with **24 576 bytes**
+    in the `.part` (`0 < 24 576 < 300 044`); the restarted worker fetched
+    **1 824 840 bytes for 1 800 264 published** — the library plus exactly the
+    `24 576` the interruption wasted — and the track published before the stop
+    cost **0 requests and 0 bytes**. The lane's floor (64 kB/s) is what makes
+    the stop land inside a body.
+  - **Rule 1, re-measured after the move** (its numbers must not drift with the
+    code that owns it): **799 382 B/s** alone, **574 486 B/s** beside a
+    200-track download (**28.1 %** drop, budget 30 %), the armed cap
+    **127 574 B/s**; the real-engine bench rendered **6.00 s with 0 underruns**
+    and fetched **200/200**.
+  - **`cargo ndk -t arm64-v8a -P 26 check -p nz-offline`** → Finished (the crate
+    links no GPUI, cpal, zbus or whisper: `cargo tree -p nz-offline -e normal`
+    has none of them), `cargo clippy --workspace --all-targets -D warnings` and
+    `cargo fmt --check` clean.
+- **Pitfalls.** The app crate has `#![allow(dead_code)]`; the library has not,
+  which is why a private `Offline::stopped` the app had been hiding did not
+  survive the move — dead code cannot hide in a crate two apps depend on. And
+  D13's paragraph in [desktop.md](desktop.md) still names
+  `wiring/offline.rs` as the worker's home: this lot could not edit another
+  lot's section, so that line is the follow-up when desktop.md is next touched.
 
 ### SC5 — Extract `nz-remote` (wave 1)
 
