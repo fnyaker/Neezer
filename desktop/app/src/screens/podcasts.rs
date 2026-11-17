@@ -34,13 +34,13 @@ use std::time::Duration;
 use gpui_kit::base::input::{InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Entity, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, Window, div, px, rems,
+    App, AppContext as _, Context, Div, ElementId, Entity, FontWeight, InteractiveElement as _,
+    IntoElement, ParentElement, Pixels, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, div, px, rems,
 };
-use gpui_omarchy::{IconName, button, icon};
+use gpui_omarchy::{ButtonVariant, IconName, button, icon, icon_button};
 use nz_api::ApiError;
-use nz_model::{PodcastCard, PodcastShow};
+use nz_model::{PodcastCard, PodcastPage, PodcastShow};
 use serde_json::Value;
 
 use crate::nav::Route;
@@ -49,8 +49,10 @@ use crate::theme;
 use crate::toast::ToastKind;
 use crate::widgets::card;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::Watch;
 use crate::widgets::track_list::{self, Intent};
 use crate::wiring::events::{self, Sender};
+use crate::wiring::offline::Choice;
 
 /// The search field's quiet time: the SPA's 300 ms.
 pub const DEBOUNCE_MS: u64 = 300;
@@ -71,6 +73,8 @@ enum Msg {
     /// The answer to a subscribe (a show, or the cause it failed).
     Subscribed(Box<Result<Value, ApiError>>),
     Cover(String, Option<PathBuf>),
+    /// The page a « Télécharger » on a card asked for, with the show it names.
+    ShowPage(String, String, Box<Result<PodcastPage, ApiError>>),
 }
 
 pub struct Screen {
@@ -92,6 +96,8 @@ pub struct Screen {
     /// A subscribe is in flight: the card says so instead of looking dead.
     subscribing: Option<String>,
     covers: Rc<RefCell<Covers>>,
+    /// The downloads worker, as this screen reads it (lot D18).
+    downloads: Watch,
     scroll: ScrollHandle,
     events: Sender<Msg>,
     debounce: Option<Task<()>>,
@@ -116,6 +122,7 @@ impl Screen {
             search_failed: None,
             subscribing: None,
             covers: Rc::new(RefCell::new(Covers::new())),
+            downloads: Watch::attach(&state, cx),
             scroll: ScrollHandle::new(),
             events: tx,
             debounce: None,
@@ -163,6 +170,50 @@ impl Screen {
 
     fn on_msg(&mut self, msg: Msg, cx: &mut Context<Self>) {
         match msg {
+            Msg::ShowPage(id, title, answer) => {
+                let Some(service) = self.downloads.service().cloned() else {
+                    return;
+                };
+                match *answer {
+                    Ok(page) => {
+                        let choices: Vec<_> = page
+                            .episodes
+                            .iter()
+                            .map(|episode| {
+                                Choice::new(
+                                    crate::widgets::episode_panel::key(episode),
+                                    episode.title.clone(),
+                                )
+                            })
+                            .filter(|choice| !choice.track.is_empty())
+                            .collect();
+                        if choices.is_empty() {
+                            self.notice(
+                                ToastKind::Info,
+                                "Cette émission n'a aucun épisode à télécharger.",
+                                cx,
+                            );
+                            return;
+                        }
+                        let count = choices.len();
+                        service.choose("show", &id, &title, choices);
+                        self.notice(
+                            ToastKind::Info,
+                            format!(
+                                "« {title} » : {count} épisode{} en file de téléchargement",
+                                if count > 1 { "s" } else { "" }
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(error) => self.notice(
+                        ToastKind::Error,
+                        format!("Téléchargement impossible : {}", card::cause(&error)),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            }
             Msg::Listed(answer) => {
                 self.loading = false;
                 match *answer {
@@ -345,6 +396,36 @@ impl Screen {
             format!("https://www.deezer.com/show/{}", card.deezer_id),
             cx,
         );
+    }
+
+    /// « Télécharger l'émission » from its card: the first page of episodes, on
+    /// the Bulk lane once it reaches the worker.
+    ///
+    /// The card carries a count, not the episodes, so one READ is what turns it
+    /// into a download; the show's own page offers the same verb with its state.
+    fn download_show(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(show) = self.channels.get(index) else {
+            return;
+        };
+        let id = show.id.as_str().to_owned();
+        let title = show.title.clone();
+        if self.downloads.service().is_none() {
+            self.notice(
+                ToastKind::Error,
+                "Les téléchargements ne sont pas disponibles sans stockage local.",
+                cx,
+            );
+            return;
+        }
+        let Some(api) = self.state.read(cx).api.clone() else {
+            return;
+        };
+        let tx = self.events.clone();
+        self.state.read(cx).runtime.spawn(async move {
+            let answer = api.podcast(&id, crate::screens::show::PAGE, None).await;
+            tx.send(Msg::ShowPage(id, title, Box::new(answer)));
+        });
+        cx.notify();
     }
 
     fn open_show(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -772,7 +853,32 @@ impl Render for Screen {
                                             .text_color(theme::warning(cx))
                                             .child("Local"),
                                     )
-                                }),
+                                })
+                                .child(
+                                    div()
+                                        .debug_selector({
+                                            let key = format!("show-download-{}", show.id.as_str());
+                                            move || key.clone()
+                                        })
+                                        .child(
+                                            icon_button(
+                                                ElementId::Name(
+                                                    format!("show-download-{}", show.id.as_str())
+                                                        .into(),
+                                                ),
+                                                IconName::Download,
+                                                format!("Télécharger l'émission {}", show.title),
+                                                ButtonVariant::Secondary,
+                                                cx,
+                                            )
+                                            .on_click(
+                                                cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.download_show(index, cx);
+                                                }),
+                                            ),
+                                        ),
+                                ),
                         ),
                 );
             }

@@ -49,12 +49,14 @@ use crate::state::{AppState, entry_from_track};
 use crate::theme;
 use crate::toast::ToastKind;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::{self, Rows, State as DownloadState, Watch};
 use crate::widgets::folder_tree::{FolderTree, NodeKind, Target};
 use crate::widgets::playlist_picker::{PlaylistPicker, fold};
 use crate::widgets::sheets::{
     ExportKind, ExportSheet, SheetEvent, card, field_label, note_line, push_toast,
 };
 use crate::wiring::events::Sender;
+use crate::wiring::offline::Choice;
 
 /// What the screen's own tasks answer back: the file the device holds for a
 /// sleeve, or `None` when it has none (the row keeps its placeholder).
@@ -370,6 +372,10 @@ pub struct Screen {
     /// The sleeves the list and the shelves draw: a 128 px copy per row, and
     /// the images decoded for what is on screen only (`cover::Covers::show`).
     covers: Rc<RefCell<Covers>>,
+    /// The downloads worker, as this screen reads it (lot D18).
+    downloads: Watch,
+    rows: Rc<Rows>,
+    rows_version: u64,
     /// The rows the last paint built, for the tests that hold the windowing and
     /// the sleeve requests to their promise.
     visible: Range<usize>,
@@ -381,6 +387,7 @@ impl Screen {
     /// The shell's constructor: no window, so the text fields a tab needs are
     /// made on the first paint (the screen is built inside `screens::build`).
     pub fn new(route: Route, state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let downloads = Watch::attach(&state, cx);
         let tab = match &route {
             Route::Library { tab } => *tab,
             _ => LibraryTab::default(),
@@ -413,6 +420,9 @@ impl Screen {
             export: None,
             busy: false,
             covers: Rc::new(RefCell::new(Covers::rows())),
+            downloads,
+            rows: Rc::new(Rows::default()),
+            rows_version: u64::MAX,
             visible: 0..0,
             events,
             _subscriptions: Vec::new(),
@@ -429,6 +439,7 @@ impl Screen {
         cx.on_release(|this, cx| this.covers.borrow_mut().release(cx))
             .detach();
         this.bind_list_actions(cx);
+        this.bind_download(cx);
         this.load(cx);
         this
     }
@@ -450,6 +461,138 @@ impl Screen {
             }
         })
         .detach();
+    }
+
+    // --- downloads (lot D18) ------------------------------------------------
+
+    /// The favourites' ids: the one list this screen downloads to the device
+    /// (the SPA's Library only archives; the desktop does both).
+    fn download_keys(&self) -> Vec<String> {
+        self.titles()
+            .map(|(_, tracks)| {
+                tracks
+                    .iter()
+                    .map(download_control::key)
+                    .filter(|key| !key.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The favourites are downloaded as the set `("favorites", "me")`: the store
+    /// keys a set by `(kind, ident)`, and « mes favoris » has no server id.
+    fn download_state(&mut self) -> DownloadState {
+        let keys = self.download_keys();
+        download_control::collection(self.downloads.get(), "favorites", "me", &keys)
+    }
+
+    fn bind_download(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let for_download = weak.clone();
+        gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
+            for_download.update(cx, |this, cx| this.download(cx)).ok();
+        });
+        gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
+            weak.update(cx, |this, cx| this.drop_download(cx)).ok();
+        });
+    }
+
+    fn download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            push_toast(
+                cx,
+                &self.state,
+                ToastKind::Error,
+                "Les téléchargements ne sont pas disponibles sans stockage local.",
+            );
+            return;
+        };
+        match self.download_state() {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                );
+            }
+            DownloadState::Idle => {
+                let choices: Vec<_> = self
+                    .titles()
+                    .map(|(_, tracks)| tracks)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|track| !download_control::key(track).is_empty())
+                    .map(|track| Choice::new(download_control::key(track), track.title.clone()))
+                    .collect();
+                if choices.is_empty() {
+                    push_toast(
+                        cx,
+                        &self.state,
+                        ToastKind::Error,
+                        "Aucun titre à télécharger dans cette liste.",
+                    );
+                    return;
+                }
+                let count = choices.len();
+                service.choose("favorites", "me", "Favoris", choices);
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    format!(
+                        "{count} titre{} en file de téléchargement",
+                        if count > 1 { "s" } else { "" }
+                    ),
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {}
+        }
+    }
+
+    fn drop_download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        match self.download_state() {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {
+                service.drop_set("favorites", "me");
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    "Téléchargement des favoris retiré",
+                );
+            }
+            DownloadState::Idle => {
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    "Les favoris ne sont pas téléchargés sur cet appareil.",
+                );
+            }
+        }
     }
 
     /// The list's verbs, bound to THIS screen and NOT to the keyboard focus.
@@ -1764,6 +1907,12 @@ impl Screen {
                     .text_color(theme::secondary(cx))
                     .child(format_duration(track.duration)),
             );
+        if self.tab == LibraryTab::Favorites
+            && let Some(chip) =
+                download_control::chip(&self.rows.state(&download_control::key(track)), cx)
+        {
+            row = row.child(chip);
+        }
         if self.tab == LibraryTab::Dislikes {
             row = row.child(
                 button(
@@ -2706,6 +2855,15 @@ impl Render for Screen {
         self.covers.borrow_mut().begin_frame(window, cx);
         // A tab reached from the sidebar changes the route, not the screen.
         self.sync_tab(cx);
+        // The downloads control: one state for the list, one chip per row. The
+        // rows are resolved ONCE per published version, never per row.
+        let download_state = self.download_state();
+        let version = self.downloads.get().version;
+        if version != self.rows_version {
+            let done = matches!(download_state, DownloadState::Done { .. });
+            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows_version = version;
+        }
 
         let count = self.row_count();
         let favourite_count = self.favourites.ready().map_or(0, Vec::len);
@@ -2866,13 +3024,24 @@ impl Render for Screen {
                     .on_click(cx.listener(|this, _, window, cx| this.open_picker(window, cx))),
                 )
                 .child(
-                    button(
-                        "library-archive",
-                        "Télécharger",
-                        ButtonVariant::Secondary,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
+                    button("library-archive", "Archiver", ButtonVariant::Secondary, cx)
+                        .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
+                )
+                .children(
+                    // The device download, on the list that has one: the
+                    // favourites (« télécharger mes favoris hors ligne »). The
+                    // SPA's Library only archives; this does both, and the
+                    // button above says which is which.
+                    (self.tab == LibraryTab::Favorites)
+                        .then(|| {
+                            download_control::control(
+                                "library-download",
+                                &download_state,
+                                self.downloads.available(),
+                                cx,
+                            )
+                        })
+                        .flatten(),
                 )
                 .child(
                     button("library-export", "Exporter", ButtonVariant::Secondary, cx)

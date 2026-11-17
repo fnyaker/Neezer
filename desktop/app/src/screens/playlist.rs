@@ -44,11 +44,13 @@ use crate::state::{AppState, entry_from_track};
 use crate::theme;
 use crate::toast::ToastKind;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::{self, Rows, State as DownloadState, Watch};
 use crate::widgets::sheets::{
     ExportKind, ExportSheet, MembersAnswer, MembersSheet, SheetEvent, error_line, face,
     is_conflict, is_forbidden, note_line, push_toast,
 };
 use crate::wiring::events::Sender;
+use crate::wiring::offline::Choice;
 
 /// What the screen's own tasks answer back: the file the device holds for a
 /// sleeve, or `None` when it has none (the row keeps its placeholder).
@@ -103,6 +105,10 @@ pub struct Screen {
     scroll: VirtualListScrollHandle,
     /// The rows' sleeves: a 128 px copy per row, decoded for what is visible.
     covers: Rc<RefCell<Covers>>,
+    /// The downloads worker, as this page reads it (lot D18).
+    downloads: Watch,
+    rows: Rc<Rows>,
+    rows_version: u64,
     /// The banner's own sleeve, at the size the banner is drawn (`Class::Card`):
     /// one image, so it may be crisp where a row may not.
     banner: Rc<RefCell<Covers>>,
@@ -117,6 +123,7 @@ impl Screen {
             _ => String::new(),
         };
         let (events, answers) = crate::wiring::events::channel::<Msg>();
+        let downloads = Watch::attach(&state, cx);
         let mut this = Self {
             route,
             state,
@@ -148,6 +155,9 @@ impl Screen {
             scroll: VirtualListScrollHandle::new(),
             covers: Rc::new(RefCell::new(Covers::rows())),
             banner: Rc::new(RefCell::new(Covers::new())),
+            downloads,
+            rows: Rc::new(Rows::default()),
+            rows_version: u64::MAX,
             events,
             _subscriptions: Vec::new(),
         };
@@ -163,6 +173,7 @@ impl Screen {
         })
         .detach();
         this.bind_list_actions(cx);
+        this.bind_download(cx);
         this.load(cx);
         this
     }
@@ -419,6 +430,7 @@ impl Screen {
         self.page = Loaded::Ready(page);
         self.recompute();
         self.clamp_selection();
+        self.sync_download_set(cx);
         cx.notify();
     }
 
@@ -839,8 +851,179 @@ impl Screen {
         );
     }
 
-    /// « Télécharger » : ask the server to archive this playlist (rule 2: the
-    /// work is a server job; the answer says how much it queued).
+    // --- downloads (lot D18) ------------------------------------------------
+
+    /// The ids of the rows this page holds, in order: what a download chooses.
+    fn track_keys(&self) -> Vec<String> {
+        self.tracks
+            .iter()
+            .map(download_control::key)
+            .filter(|key| !key.is_empty())
+            .collect()
+    }
+
+    fn download_state(&mut self) -> DownloadState {
+        let keys = self.track_keys();
+        download_control::collection(self.downloads.get(), "playlist", &self.id, &keys)
+    }
+
+    fn bind_download(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let for_download = weak.clone();
+        gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
+            for_download.update(cx, |this, cx| this.download(cx)).ok();
+        });
+        gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
+            weak.update(cx, |this, cx| this.drop_download(cx)).ok();
+        });
+    }
+
+    /// « Télécharger » : the playlist goes to the worker's queue on the Bulk
+    /// lane, behind whatever is playing (rule 1).
+    ///
+    /// Asking again is what keeps a downloaded playlist COMPLETE: a playlist can
+    /// gain titles after it was chosen, so a page that opens on a chosen set
+    /// hands the worker the rows it has (`adopt`). The store links only what is
+    /// new and skips every track it already published, so a title added later
+    /// costs one download and the rest cost NO request.
+    fn download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            push_toast(
+                cx,
+                &self.state,
+                ToastKind::Error,
+                "Les téléchargements ne sont pas disponibles sans stockage local.",
+            );
+            return;
+        };
+        match self.download_state() {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                );
+            }
+            DownloadState::Idle => {
+                let title = self
+                    .playlist()
+                    .map(|playlist| playlist.title.clone())
+                    .unwrap_or_default();
+                let choices: Vec<_> = self
+                    .tracks
+                    .iter()
+                    .filter(|track| !download_control::key(track).is_empty())
+                    .map(|track| Choice::new(download_control::key(track), track.title.clone()))
+                    .collect();
+                if choices.is_empty() {
+                    push_toast(
+                        cx,
+                        &self.state,
+                        ToastKind::Error,
+                        "Cette playlist ne contient aucun titre à télécharger.",
+                    );
+                    return;
+                }
+                let count = choices.len();
+                service.choose("playlist", &self.id, &title, choices);
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    format!(
+                        "{count} titre{} en file de téléchargement",
+                        if count > 1 { "s" } else { "" }
+                    ),
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {}
+        }
+    }
+
+    /// « Retirer » : the playlist's download goes; a track another set still
+    /// wants stays on the device (`DownloadStore::remove_set`).
+    fn drop_download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        match self.download_state() {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {
+                service.drop_set("playlist", &self.id);
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    "Téléchargement de la playlist retiré",
+                );
+            }
+            DownloadState::Idle => {
+                push_toast(
+                    cx,
+                    &self.state,
+                    ToastKind::Info,
+                    "Cette playlist n'est pas téléchargée sur cet appareil.",
+                );
+            }
+        }
+    }
+
+    /// The rows a chosen playlist gained since it was downloaded join its set.
+    ///
+    /// It runs when a page arrives and the set already exists: the worker links
+    /// only the new ids, so a playlist of 4 000 titles that gained one costs ONE
+    /// download and no request for the other 3 999 (`DownloadStore::add_set`).
+    fn sync_download_set(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        let Some(set) = download_control::set(self.downloads.get(), "playlist", &self.id).cloned()
+        else {
+            return;
+        };
+        if set.tracks >= self.tracks.len() {
+            return;
+        }
+        let title = self
+            .playlist()
+            .map(|playlist| playlist.title.clone())
+            .unwrap_or(set.title);
+        let choices: Vec<_> = self
+            .tracks
+            .iter()
+            .filter(|track| !download_control::key(track).is_empty())
+            .map(|track| Choice::new(download_control::key(track), track.title.clone()))
+            .collect();
+        if choices.len() > set.tracks {
+            service.choose("playlist", &self.id, &title, choices);
+        }
+        cx.notify();
+    }
+
+    /// « Archiver » : ask the server to archive this playlist (rule 2: the work
+    /// is a server job; the answer says how much it queued). It is NOT the
+    /// device download — the SPA's `TrackBrowser` spells the difference in its
+    /// own title (« Télécharger (archiver) ») and so does this button.
     fn archive(&mut self, cx: &mut Context<Self>) {
         if self.rec_busy {
             return;
@@ -1201,6 +1384,14 @@ impl Screen {
                 |row| row.bg(theme::accent(cx).opacity(0.16)),
             )
             .hover(|style| style.bg(theme::selected(cx)));
+        if !editing {
+            // The row's own download state (a glyph, or nothing at all).
+            if let Some(chip) =
+                download_control::chip(&self.rows.state(&download_control::key(track)), cx)
+            {
+                row = row.child(chip);
+            }
+        }
         if editing {
             row = row
                 .cursor_grab()
@@ -1440,6 +1631,15 @@ impl Render for Screen {
         // atlas tile with it.
         self.covers.borrow_mut().begin_frame(window, cx);
         self.banner.borrow_mut().begin_frame(window, cx);
+        // The downloads control: one state for the page, one chip per row. The
+        // rows are resolved ONCE per published version, never per row.
+        let download_state = self.download_state();
+        let version = self.downloads.get().version;
+        if version != self.rows_version {
+            let done = matches!(download_state, DownloadState::Done { .. });
+            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows_version = version;
+        }
 
         if let Some(cause) = self.page.failed().cloned() {
             return div()
@@ -1650,14 +1850,15 @@ impl Render for Screen {
                     .on_click(cx.listener(|this, _, _, cx| this.play(0, true, cx))),
             )
             .child(
-                button(
-                    "playlist-download",
-                    "Télécharger",
-                    ButtonVariant::Secondary,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
+                button("playlist-archive", "Archiver", ButtonVariant::Secondary, cx)
+                    .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
             )
+            .children(download_control::control(
+                "playlist-download",
+                &download_state,
+                self.downloads.available(),
+                cx,
+            ))
             .child(
                 div().debug_selector(|| "playlist-export".to_owned()).child(
                     button("playlist-export", "Exporter", ButtonVariant::Secondary, cx)

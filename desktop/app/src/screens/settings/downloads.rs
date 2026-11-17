@@ -56,6 +56,10 @@ pub struct Screen {
     /// is windowed or paged, never drawn whole.
     sets_page: usize,
     failures_page: usize,
+    /// « Tout supprimer » was pressed once: the second press does it. A
+    /// download is permanent, so the one destructive control in the app asks
+    /// twice (the SPA's `clearAll` sits behind its own confirmation).
+    clear_armed: bool,
     scroll: ScrollHandle,
     _state: Subscription,
 }
@@ -115,9 +119,41 @@ impl Screen {
             painted: 0,
             sets_page: 0,
             failures_page: 0,
+            clear_armed: false,
             scroll: ScrollHandle::new(),
             _state,
         }
+    }
+
+    /// « Tout supprimer » : every set goes, files and all. The first press ARMS
+    /// the button and says what the second does — nothing here deletes by itself.
+    fn clear_all(&mut self, cx: &mut Context<Self>) {
+        if !self.clear_armed {
+            self.clear_armed = true;
+            cx.notify();
+            return;
+        }
+        self.clear_armed = false;
+        let Some(offline) = &self.offline else {
+            return;
+        };
+        let sets = offline.snapshot().sets;
+        let count = sets.len();
+        for set in sets {
+            offline.drop_set(&set.kind, &set.ident);
+        }
+        self.state.update(cx, |state, cx| {
+            state.toasts.push(
+                crate::toast::ToastKind::Info,
+                format!(
+                    "{count} téléchargement{} retiré{}",
+                    if count > 1 { "s" } else { "" },
+                    if count > 1 { "s" } else { "" }
+                ),
+            );
+            cx.notify();
+        });
+        cx.notify();
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -141,6 +177,14 @@ impl Render for Screen {
         // One column, centred, at most 56 rem: a Réglages page is read, not
         // scanned, and a 2 560 px window must not stretch a paragraph 200
         // characters wide.
+        // Where the files are: a path is the one thing a person needs to find
+        // them in their own file manager, and it is the store's own answer.
+        let dir = self
+            .state
+            .read(cx)
+            .cache
+            .as_ref()
+            .map(|cache| cache.offline_dir().display().to_string());
         let mut column = div()
             .id("downloads-column")
             .debug_selector(|| "downloads-column".to_owned())
@@ -153,12 +197,12 @@ impl Render for Screen {
             .py(rems(1.125))
             .child(status_card(&snapshot, cx))
             .child(quality_card(&snapshot, cx))
-            .child(storage_card(&snapshot, cx))
+            .child(storage_card(&snapshot, dir.as_deref(), cx))
             .child(play_cache_card(&snapshot, cx));
         if !snapshot.failures.is_empty() {
             column = column.child(failures_card(&snapshot, self.failures_page, cx));
         }
-        column = column.child(sets_card(&snapshot, self.sets_page, cx));
+        column = column.child(sets_card(&snapshot, self.sets_page, self.clear_armed, cx));
 
         div()
             .id("settings-downloads")
@@ -389,7 +433,7 @@ fn quality_card(snapshot: &Snapshot, cx: &mut Context<Screen>) -> AnyElement {
         .into_any_element()
 }
 
-fn storage_card(snapshot: &Snapshot, cx: &mut Context<Screen>) -> AnyElement {
+fn storage_card(snapshot: &Snapshot, dir: Option<&str>, cx: &mut Context<Screen>) -> AnyElement {
     let this = cx.entity();
     let bytes = snapshot.progress.bytes.max(0) as u64;
     let offline_only = snapshot.settings.offline_only;
@@ -406,6 +450,15 @@ fn storage_card(snapshot: &Snapshot, cx: &mut Context<Screen>) -> AnyElement {
              n'est supprimé automatiquement, et aucune limite de cache ne les atteint.",
             cx,
         ))
+        .when_some(dir.map(str::to_owned), |card, dir| {
+            card.child(
+                div()
+                    .text_size(rems(0.6875))
+                    .font_family(theme::mono(cx))
+                    .text_color(theme::secondary(cx))
+                    .child(SharedString::from(dir)),
+            )
+        })
         .child(
             div()
                 .flex()
@@ -657,7 +710,12 @@ fn failures_card(snapshot: &Snapshot, page: usize, cx: &mut Context<Screen>) -> 
     card.into_any_element()
 }
 
-fn sets_card(snapshot: &Snapshot, page: usize, cx: &mut Context<Screen>) -> AnyElement {
+fn sets_card(
+    snapshot: &Snapshot,
+    page: usize,
+    armed: bool,
+    cx: &mut Context<Screen>,
+) -> AnyElement {
     let mut card = card(cx).child(titled(IconName::CloudDownload, "Titres téléchargés", cx));
 
     if snapshot.sets.is_empty() {
@@ -689,15 +747,52 @@ fn sets_card(snapshot: &Snapshot, page: usize, cx: &mut Context<Screen>) -> AnyE
         .iter()
         .partition(|set| set.kind == "track");
 
-    card = card.child(hint(
-        format!(
-            "{} titre{} · {} sur cet appareil",
-            snapshot.progress.done,
-            if snapshot.progress.done > 1 { "s" } else { "" },
-            bytes_label(snapshot.progress.bytes.max(0) as u64)
-        ),
-        cx,
-    ));
+    let this = cx.entity();
+    card = card
+        .child(hint(
+            format!(
+                "{} titre{} · {} sur cet appareil",
+                snapshot.progress.done,
+                if snapshot.progress.done > 1 { "s" } else { "" },
+                bytes_label(snapshot.progress.bytes.max(0) as u64)
+            ),
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(rems(0.375))
+                .child(
+                    button(
+                        "downloads-clear-all",
+                        if armed {
+                            "Confirmer : tout supprimer"
+                        } else {
+                            "Tout supprimer"
+                        },
+                        if armed {
+                            ButtonVariant::Danger
+                        } else {
+                            ButtonVariant::Secondary
+                        },
+                        cx,
+                    )
+                    .child(icon(IconName::Trash).size(rems(0.75)))
+                    .on_click({
+                        let this = this.clone();
+                        move |_, _, cx| {
+                            this.update(cx, |this, cx| this.clear_all(cx));
+                        }
+                    }),
+                )
+                .when(armed, |row| {
+                    row.child(hint(
+                        "Le second clic supprime tous les téléchargements de cet appareil.",
+                        cx,
+                    ))
+                }),
+        );
 
     if !others.is_empty() {
         let mut groups = div().flex().flex_col().gap(rems(0.25));
@@ -833,6 +928,8 @@ fn set_row(
         "album" => "Album",
         "show" => "Émission",
         "track" => "Titre",
+        "favorites" => "Favoris",
+        "queue" => "File d'attente",
         _ => "Ensemble",
     };
 
@@ -847,6 +944,8 @@ fn set_row(
                 "playlist" => IconName::ListMusic,
                 "album" => IconName::Disc3,
                 "show" => IconName::Mic,
+                "favorites" => IconName::Heart,
+                "queue" => IconName::ListChecks,
                 _ => IconName::Music,
             })
             .size(rems(1.))
