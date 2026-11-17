@@ -171,12 +171,19 @@ jobs:
           echo "APK=$APK" >> "$GITHUB_ENV"
           unzip -t "$APK" > /dev/null
           BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
-          "$BT/apksigner" verify --min-sdk-version 23 --print-certs "$APK" | tee /tmp/verify.txt
+          "$BT/apksigner" verify --min-sdk-version 23 --verbose --print-certs "$APK" | tee /tmp/verify.txt
+          # `--verbose` is what MAKES apksigner print the three scheme lines at
+          # all (without it, `apksigner verify` prints nothing but "Verifies"),
+          # and the line carries the scheme's full name in parentheses
+          # (`Verified using v1 scheme (JAR signing): true`), so the check asks
+          # for the prefix and then for `true` — a literal "v1 scheme: true"
+          # never matches, which is how a correct APK failed this very check.
           for scheme in v1 v2 v3; do
-            grep -qi "Verified using $scheme scheme: true" /tmp/verify.txt || {
-              echo "::error::$scheme signature missing"
-              exit 1
-            }
+            line=$(grep -i "Verified using $scheme scheme" /tmp/verify.txt || true)
+            case "$line" in
+              *true*) ;;
+              *) echo "::error::$scheme signature missing ($line)"; exit 1 ;;
+            esac
           done
           "$BT/zipalign" -c -p 4 "$APK"
           "$BT/aapt2" dump badging "$APK" | grep -E "package: name='org.nsupysonic.app'" \
