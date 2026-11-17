@@ -514,7 +514,7 @@ pub mod stub {
     }
 
     struct Inner {
-        routes: HashMap<String, String>,
+        routes: HashMap<String, Vec<u8>>,
         hits: Vec<Hit>,
         closed: AtomicBool,
     }
@@ -529,11 +529,22 @@ pub mod stub {
         /// `routes` maps a path (`/api/search`, `/api/album/1`) to its JSON body.
         /// A request no route answers is `404` with `{}`.
         pub fn start(routes: &[(&str, &str)]) -> Self {
+            Self::start_bytes(
+                &routes
+                    .iter()
+                    .map(|(path, body)| (*path, body.as_bytes().to_vec()))
+                    .collect::<Vec<_>>(),
+            )
+        }
+
+        /// The same server, with raw bodies: a sleeve is a JPEG, not a string
+        /// (`/api/cover/<album>` answers the bytes the person's device saves).
+        pub fn start_bytes(routes: &[(&str, Vec<u8>)]) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
             let address = listener.local_addr().expect("address");
             let mut table = HashMap::new();
             for (path, body) in routes {
-                table.insert((*path).to_owned(), (*body).to_owned());
+                table.insert((*path).to_owned(), body.clone());
             }
             let inner = Arc::new(Mutex::new(Inner {
                 routes: table,
@@ -747,15 +758,22 @@ pub mod stub {
         };
         let (status, body) = match body {
             Some(body) => ("200 OK", body),
-            None => ("404 Not Found", "{}".to_owned()),
+            None => ("404 Not Found", b"{}".to_vec()),
         };
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+        let mut response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {}\r\n\
              Set-Cookie: session=stub; Path=/\r\nContent-Length: {}\r\n\
-             Connection: close\r\n\r\n{body}",
+             Connection: close\r\n\r\n",
+            if path.starts_with("/api/cover/") {
+                "image/jpeg"
+            } else {
+                "application/json"
+            },
             body.len()
-        );
-        let _ = stream.write_all(response.as_bytes());
+        )
+        .into_bytes();
+        response.extend_from_slice(&body);
+        let _ = stream.write_all(&response);
         let _ = stream.flush();
     }
 }
