@@ -334,6 +334,53 @@ fn cpu_and_vulkan_transcribe_jfk_identically() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The default language is `auto`, and it must still produce text.
+///
+/// Found by T4: with `params.language = null` AND `detect_language = true`,
+/// whisper.cpp 1.8.3 detected "en" (the log said so) and then decoded only
+/// timestamp tokens — 0 segments on this same `jfk.wav`, while `--lang en` gave
+/// the two famous lines. The server's default language is `auto`, so the whole
+/// worker would have written empty transcripts. `"auto"` as the STRING (the
+/// branch whisper.cpp itself treats as detection) is the working path, and the
+/// document still records the detected language.
+#[test]
+fn language_auto_still_transcribes() {
+    let Some(model) = model() else {
+        eprintln!("NZ_WHISPER_MODEL absent : test ignoré");
+        return;
+    };
+    let Some(speech) = speech() else {
+        eprintln!("NZ_WHISPER_AUDIO absent : test ignoré");
+        return;
+    };
+    let dir = scratch("auto-language");
+    let out = dir.join("auto.json");
+    let output = run(
+        &[
+            "file",
+            speech.to_str().expect("utf-8 path"),
+            "--model",
+            model.to_str().expect("utf-8 path"),
+            "--out",
+            out.to_str().expect("utf-8 path"),
+        ],
+        &[],
+    );
+    let document = document(&out, &output);
+    assert!(
+        !document.transcription.is_empty(),
+        "auto language produced no lines: {}",
+        text(&document)
+    );
+    assert!(
+        text(&document).contains("ask not what your country"),
+        "{}",
+        text(&document)
+    );
+    assert_eq!(document.language().as_deref(), Some("en"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `engine` is the chunk contract T3's supervisor runs: raw 16 kHz mono `f32` in,
 /// the same lines as `file` out (chunk 0 starts at 0, so the offsets agree).
 #[test]

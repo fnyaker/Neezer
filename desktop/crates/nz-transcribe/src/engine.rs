@@ -532,7 +532,11 @@ impl Engine {
         params.set_translate(false);
         params.set_no_context(true);
         params.set_print_special(false);
-        params.set_print_progress(false);
+        // The supervisor parses `progress = N %` from this child's stderr: it is
+        // the only real intra-chunk progress there is (T3's `chunk_pct`, and
+        // T4's job card). With it off, a 600 s chunk showed 0 % for its whole
+        // run and then jumped to done.
+        params.set_print_progress(true);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_no_timestamps(false);
@@ -545,8 +549,15 @@ impl Engine {
                 params.set_detect_language(false);
             }
             None => {
-                params.set_language(None);
-                params.set_detect_language(true);
+                // `"auto"` with `detect_language` FALSE, not a null language
+                // with the flag: whisper.cpp's `whisper_full_with_state` treats
+                // the STRING as auto-detect (line 6812) and then decodes with the
+                // detected language, while the flag path left `detect_language`
+                // set and produced only timestamp tokens (measured: 0 segments
+                // on jfk.wav with `ggml-base`, the same file with `--lang en`
+                // giving the two famous lines).
+                params.set_language(Some("auto"));
+                params.set_detect_language(false);
             }
         }
         params

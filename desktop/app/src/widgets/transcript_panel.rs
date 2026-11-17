@@ -1036,7 +1036,16 @@ pub fn view<V: Render>(
     let term = panel.search.term.clone();
     let sizes = panel.sizes.clone();
     let scroll = panel.scroll.clone();
-    column = column.child(div().flex_1().min_h_0().w_full().child(segments(
+    // A virtual list needs a DEFINITE height. The standalone panel gives it the
+    // remaining height (`flex_1`); stacked in the episode panel's scroll body
+    // there is no bounded parent, and the list collapsed to 0 — the lines were
+    // there and invisible. Eight rows is the floor both contexts can honour.
+    column = column.child(
+        div()
+            .flex_1()
+            .min_h(px(ROW_HEIGHT * 8.0))
+            .w_full()
+            .child(segments(
         panel,
         entity,
         active,
@@ -1137,12 +1146,13 @@ fn local_block<V: Render>(
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(rems(0.5))
+                    .flex_col()
+                    .gap(rems(0.25))
+                    .w_full()
                     .child(
                         div()
                             .relative()
-                            .flex_1()
+                            .w_full()
                             .h(rems(0.1875))
                             .bg(theme::border(cx))
                             .child(
@@ -1159,8 +1169,6 @@ fn local_block<V: Render>(
                     )
                     .child(
                         div()
-                            .flex_shrink_0()
-                            .max_w(rems(14.))
                             .text_size(rems(0.6875))
                             .font_family(theme::mono(cx))
                             .text_color(theme::secondary(cx))
@@ -1238,6 +1246,28 @@ fn local_block<V: Render>(
             .into_any_element(),
         );
     }
+    if let Some(failure) = transcription
+        .failures
+        .iter()
+        .rev()
+        .find(|failure| failure.episode == panel.episode)
+    {
+        card = card.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(rems(0.25))
+                .text_size(rems(0.6875))
+                .text_color(theme::danger(cx))
+                .child(icon(IconName::TriangleAlert).size(rems(0.75)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(SharedString::from(failure.message.clone())),
+                ),
+        );
+    }
     if !has_model {
         return Some(
             card.child(
@@ -1268,6 +1298,7 @@ fn local_block<V: Render>(
         );
     }
     let episode = panel.episode.clone();
+    let duration_ms = panel.duration_ms;
     let state = state.clone();
     card = card.child(
         button(
@@ -1278,7 +1309,7 @@ fn local_block<V: Render>(
         )
         .on_click(cx.listener(move |_, _, _, cx| {
             let service = transcribe::ensure(&state.read(cx));
-            service.start_local(&episode, None);
+            service.start_local(&episode, None, duration_ms);
         })),
     );
     Some(card.into_any_element())

@@ -72,7 +72,7 @@ pub fn body(screen: &mut Screen, _window: &mut Window, cx: &mut Context<Screen>)
         .flex()
         .flex_col()
         .gap(rems(0.75))
-        .max_w(px(1_100.))
+        .max_w(px(1_800.))
         .min_w_0();
 
     if let Some(note) = &snapshot.note {
@@ -187,7 +187,6 @@ fn engine_card(
         card = card.child(value_line("Appareil", device.to_owned(), cx));
     }
     if let Engine::Cpu { cause } = engine {
-        card = card.child(hint(cause.explain_fr(), cx));
         if *cause == FallbackCause::UserForcedCpu {
             card = card.child(hint(
                 "Le processeur est forcé par le réglage ci-dessous. Désactivez-le pour \
@@ -226,9 +225,12 @@ fn models_card(
         cx,
     ));
     if let Some(recommended) = snapshot.models.iter().find(|row| row.recommended) {
-        card = card.child(value_line(
-            "Recommandé pour cette machine",
-            recommended.label(),
+        card = card.child(hint(
+            format!(
+                "Recommandé pour cette machine : {} ({}).",
+                recommended.name,
+                bytes_label(recommended.bytes)
+            ),
             cx,
         ));
     }
@@ -369,20 +371,22 @@ fn model_row(
             selected,
             cx,
         ));
-        let service = service.clone();
-        let name = row.name;
-        line = line.child(
-            toggle(
-                ElementId::Name(format!("model-choose-{name}").into()),
-                if selected { "Choisi" } else { "Utiliser" },
-                selected,
-                cx,
-            )
-            .on_click(cx.listener(move |_, _, _, cx| {
-                service.set_setting(MODEL_KEY, &serde_json::Value::from(name));
-                cx.notify();
-            })),
-        );
+        if !selected {
+            let service = service.clone();
+            let name = row.name;
+            line = line.child(
+                toggle(
+                    ElementId::Name(format!("model-choose-{name}").into()),
+                    "Utiliser",
+                    false,
+                    cx,
+                )
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    service.set_setting(MODEL_KEY, &serde_json::Value::from(name));
+                    cx.notify();
+                })),
+            );
+        }
     } else if row.invalid {
         line = line
             .child(
@@ -585,6 +589,7 @@ fn preferences_card(
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .child(label),
                     )
+                    .child(div().text_color(theme::secondary(cx)).child("—"))
                     .child(
                         div()
                             .flex_1()
@@ -744,7 +749,7 @@ fn failures_card(
             row = row.child(
                 button("transcribe-retry-job", "Réessayer", ButtonVariant::Secondary, cx)
                     .on_click(cx.listener(move |_, _, _, _| {
-                        service.start_local(&episode, None)
+                        service.start_local(&episode, None, 0)
                     })),
             );
         }

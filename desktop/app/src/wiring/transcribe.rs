@@ -207,12 +207,7 @@ impl Engine {
         match self {
             Engine::Unknown => "Statut inconnu".to_owned(),
             Engine::Probing => "Vérification du processeur graphique…".to_owned(),
-            Engine::Vulkan { device } => match device {
-                Some(device) if !device.is_empty() => {
-                    format!("Vulkan — {device}")
-                }
-                _ => "Vulkan".to_owned(),
-            },
+            Engine::Vulkan { .. } => "Vulkan".to_owned(),
             Engine::Cpu { cause } => cause.explain_fr(),
             Engine::Unavailable { message } => message.clone(),
         }
@@ -347,11 +342,11 @@ impl Job {
     /// `42 min transcrites sur 1 h 12`.
     pub fn progress_label(&self) -> String {
         if self.duration_ms <= 0 {
-            return format!("{} min transcrites (durée inconnue)", self.done_ms / 60_000);
+            return format!("{} min transcrites", self.done_ms / 60_000);
         }
         match self.percent() {
             Some(percent) => format!(
-                "{} % · {} min sur {}",
+                "{} % · {} min sur {} min",
                 percent,
                 self.done_ms / 60_000,
                 self.duration_ms / 60_000
@@ -981,6 +976,11 @@ impl Service {
     /// have changed them on another page).
     pub fn attach(&self, state: &crate::state::AppState) {
         *self.shared.api.lock().unwrap_or_else(|e| e.into_inner()) = state.api.clone();
+        *self
+            .shared
+            .runtime
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(state.runtime.clone());
         *self.shared.audio.lock().unwrap_or_else(|e| e.into_inner()) =
             state.audio.as_ref().map(|audio| audio.engine.clone());
         *self
@@ -1204,11 +1204,17 @@ impl Service {
     /// `audio` is a local file when the caller already has one (an offline
     /// download); anything else is streamed to the cache at Opus 128 on
     /// `Lane::Bulk`. Everything after the first line is async work on `nz-net`.
-    pub fn start_local(&self, episode: &str, title: Option<String>) {
-        self.start_with(episode, title, None);
+    pub fn start_local(&self, episode: &str, title: Option<String>, duration_ms: u64) {
+        self.start_with(episode, title, duration_ms, None);
     }
 
-    fn start_with(&self, episode: &str, title: Option<String>, audio: Option<PathBuf>) {
+    fn start_with(
+        &self,
+        episode: &str,
+        title: Option<String>,
+        duration_ms: u64,
+        audio: Option<PathBuf>,
+    ) {
         if !is_episode_id(episode) {
             self.note("Cet identifiant d’épisode n’est pas valide.");
             return;
@@ -1255,7 +1261,9 @@ impl Service {
                     .map(|_| Phase::Transcribing)
                     .unwrap_or(Phase::Audio { done: 0, total: None }),
                 done_ms: 0,
-                duration_ms: 0,
+                // The show page's own length: the card has a percent while the
+                // first chunk runs instead of a bar that waits for it.
+                duration_ms: duration_ms.min(i64::MAX as u64) as i64,
                 backend: snapshot.engine.backend(),
                 device: match &snapshot.engine {
                     Engine::Vulkan { device } => device.clone(),
@@ -1350,8 +1358,17 @@ impl Service {
         stderr: &Path,
     ) -> bool {
         let mut child = self.shared.child.lock().unwrap_or_else(|e| e.into_inner());
-        if child.is_some() {
-            return true;
+        if let Some(running) = child.as_mut() {
+            match running.try_wait() {
+                Ok(None) => return true,
+                // A child that has gone leaves a pipe that looks open until the
+                // first write: a job sent to it then vanished (measured: the card
+                // stayed at 0 % for minutes while an idle supervisor sat there).
+                _ => {
+                    child.take();
+                    *self.shared.stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                }
+            }
         }
         self.shared.stopping.store(false, Ordering::SeqCst);
         if let Some(parent) = stderr.parent()
@@ -1429,6 +1446,13 @@ impl Service {
                 // running was interrupted, and the partial file is where it
                 // stopped — say so (rule 2), never an endless bar.
                 let stopped = shared.stopping.swap(false, Ordering::SeqCst);
+                // The pipe closed: the handles are dead. Keeping them made the
+                // next `ensure_child` answer "already running" and write into a
+                // closed pipe.
+                if let Ok(mut child) = shared.child.lock() {
+                    child.take();
+                }
+                *shared.stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 shared.publish(|snapshot| {
                     if stopped {
                         snapshot.job = None;
@@ -2035,7 +2059,22 @@ fn send_via(shared: &Shared, command: Control) {
     };
     line.push(b'\n');
     if let Err(error) = pipe.write_all(&line).and_then(|()| pipe.flush()) {
+        // The child is gone or its pipe broke: the command did not happen, and
+        // a job that waits for it must say why (rule 2), not spin.
         warn!("canal du superviseur : {error}");
+        shared.publish(|snapshot| {
+            snapshot.failures.push(Failure {
+                episode: snapshot
+                    .job
+                    .as_ref()
+                    .map(|job| job.episode.clone())
+                    .unwrap_or_default(),
+                code: "control_channel".to_owned(),
+                message: format!("Le superviseur de transcription ne répond plus ({error})."),
+            });
+            Snapshot::trim_failures(&mut snapshot.failures);
+            snapshot.job = None;
+        });
     }
 }
 
@@ -2097,12 +2136,16 @@ fn apply_event(shared: &Shared, event: Event) {
                 snapshot.job = None;
             }
             snapshot.last_done = Some(episode_id.clone());
-            snapshot.note = Some(format!(
-                "Transcription terminée : {} ligne{} écrite{} sur cet ordinateur.",
-                segments.len(),
-                if segments.len() > 1 { "s" } else { "" },
-                if segments.len() > 1 { "s" } else { "" }
-            ));
+            snapshot.note = Some(if segments.is_empty() {
+                "Transcription terminée : aucune parole reconnue dans cet épisode.".to_owned()
+            } else {
+                format!(
+                    "Transcription terminée : {} ligne{} écrite{} sur cet ordinateur.",
+                    segments.len(),
+                    if segments.len() > 1 { "s" } else { "" },
+                    if segments.len() > 1 { "s" } else { "" }
+                )
+            });
         }),
         Event::Error {
             episode_id,
@@ -2223,10 +2266,14 @@ pub fn audio_plan(offline: Option<PathBuf>, episode: &str) -> AudioPlan {
     }
 }
 
-/// Fetch one episode's audio on `Lane::Bulk` (rule 1: a transcription's bytes
-/// yield to the track the person tapped), reporting its progress in the job.
+/// Fetch one episode's audio on `Lane::Bulk`: the plan's lane for a
+/// transcription's bytes, so the request waits for a quiet second, sends
+/// `X-NS-Background: 1` and is paced by the token bucket — the tapped track is
+/// never slowed by a text nobody is waiting on. Its progress is on the job card
+/// (rule 2), and the download is one bounded Opus 128 body, kept for a retry.
 async fn stream_audio(shared: &Arc<Shared>, episode: &str) -> Result<PathBuf, String> {
-    let plan = audio_plan(crate::wiring::offline::local_path(episode), episode);
+    let offline = crate::wiring::offline::local_path(episode);
+    let plan = audio_plan(offline, episode);
     if let AudioPlan::Local(path) = plan {
         return Ok(path);
     }

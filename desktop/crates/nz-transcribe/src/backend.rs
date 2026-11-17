@@ -97,13 +97,20 @@ impl FallbackCause {
 
     /// The sentence Réglages → Transcription locale shows, cause included.
     ///
-    /// The ratio is the measured one (Vulkan 72.2× real time against CPU 13.1×
-    /// with `ggml-base` on this machine; T4 measured 40.6× against 13.0× on the
-    /// same file), rounded down to "3×" so the promise is never optimistic.
+    /// The ratio is the measured one: **5.0×** on 176 s of speech with
+    /// `ggml-base` (Vulkan 57.8× real time against CPU 11.6×, T4's bench), the
+    /// largest measured on this machine (T2 saw 3.2–3.4× on shorter inputs). The
+    /// sentence quotes the largest, so it never promises a speed the machine
+    /// does not deliver.
     pub fn explain_fr(self) -> String {
+        if self == FallbackCause::UserForcedCpu {
+            return "Transcription sur le processeur : c'est votre choix. Environ 5× plus \
+                    lent."
+                .to_owned();
+        }
         format!(
             "Transcription sur le processeur : aucun GPU Vulkan utilisable ({}). \
-             Environ 3× plus lent.",
+             Environ 5× plus lent.",
             self.code()
         )
     }
@@ -133,6 +140,11 @@ mod tests {
         let sentence = FallbackCause::NoVulkanDevice.explain_fr();
         assert!(sentence.contains("processeur"), "{sentence}");
         assert!(sentence.contains("no_vulkan_device"), "{sentence}");
-        assert!(sentence.contains("3×"), "{sentence}");
+        assert!(sentence.contains("5×"), "{sentence}");
+        // A forced CPU is a CHOICE, and its sentence says so instead of naming
+        // a GPU it never tried.
+        let forced = FallbackCause::UserForcedCpu.explain_fr();
+        assert!(forced.contains("votre choix"), "{forced}");
+        assert!(!forced.contains("aucun GPU"), "{forced}");
     }
 }
