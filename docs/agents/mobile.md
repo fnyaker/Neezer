@@ -1541,11 +1541,11 @@ said, one emulator unless said; `/dev/kvm` `crw-rw-rw-`):
 | AVD cold boot (`-no-snapshot`, `wait` on `sys.boot_completed`) | **13–25 s** over 16 boots (median ≈ 17 s; the last full run: 20 / 17 / 15 / 15 / 13 / 10 s); a second emulator starting beside the first boots in 9–17 s (its page cache is warm) |
 | Emulator RSS | **2.43–3.14 GB** (last run: 2.51 / 2.53 / 2.51 / 2.59 GB) — hence the 2-emulator cap and the 8 GB guard (two ≈ 5–6.2 GB) |
 | `emu-selftest.sh` | 2 cycles × 2 ports + 2 side by side: **64 checks, 0 failures** (3 min 45 s, then 3 min 30 s on the final run); after each stop: 0 process, 0 PID file, 0 listening port, lock acquirable |
-| `ci-emulator.sh` (the CI job, run whole) | boot **12–15 s**, install, **5/5 doors** opened (Réglages prints « Version du noyau (Rust) : 0.1.0 »), app-link probes 0/5 (MB2's `resolve_link`), **1 instrumented module, 3/3 tests**, total **2 min 58 s** |
+| `ci-emulator.sh` (the CI job, run whole) | boot **11–15 s**, install, **5/5 doors** opened (Réglages prints « Version du noyau (Rust) : 0.1.0 » — the Rust call really answers on the device), app-link probes 0/5 (`resolve_link` still answers nothing at this stage), **1 instrumented module, 3/3 tests**, total **2 min 58 s** |
 | AAudio, `-no-audio` | **opens**: 48 000 Hz, burst **24 000 frames (500 ms)**, buffer **48 000 (1 s)**, 2 928 000 frames in 60 s, ticks 1.017 (**steady 1.000**), **0 xruns** |
 | AAudio, `-audio none` | identical: 48 000 Hz, same burst/buffer, 2 928 000 frames in 60 s, steady 1.000, **0 xruns** → **`-audio none` is not needed; `-no-audio` gives AAudio a real-time clock** |
-| Cold start TTID (10 iterations) | no profile: **p50 668.0 / p95 873.0 ms**; profile requested but absent (`UseIfAvailable`): **p50 651.9 / p95 786.0 ms**. TTFD is absent from the report: the shell does not call `reportFullyDrawn()` yet |
-| Shell frames (tab walk, 5 iterations, **150 frames each / 750 pooled**) | `frameDurationCpuMs` **p50 10.1 / p90 14.6 / p95 19.4 / p99 20.8 ms**; `frameOverrunMs` p50 −6.0 / p95 3.1 / p99 4.4 ms — p95 above the 16.7 ms budget, on swiftshader (a GPU-less software rasteriser) |
+| Cold start TTID (10 iterations, on the MB0+MB1+MB2+SC3 tree) | no profile: **p50 633.5 / p90 755.2 / p95 840.8 ms**; profile requested but absent (`UseIfAvailable`, no `baseline-prof.txt` in the APK yet): **p50 558.4 / p95 695.6 ms**. TTFD is absent from the report: the shell does not call `reportFullyDrawn()` yet. On MB0's bare skeleton the same bench read 668.0 / 651.9 ms p50 |
+| Shell frames (tab walk, 5 iterations, **152 frames each / 745 pooled**, MB1+MB2 tree) | `frameDurationCpuMs` **p50 31.1 / p90 44.2 / p95 50.6 / p99 73.2 ms**; `frameOverrunMs` p50 22.4 / p95 51.0 / p99 80.8 ms — every frame misses the 16.7 ms budget on swiftshader. On MB0's placeholder-only shell the same bench read p50 10.1 / p95 19.4 ms: **MB1's real themed UI (surface, type, ripple, glass tokens) costs 3× the frame time of a static placeholder, and that is the number MB1/MQ2 now own** |
 | App memory (home, no player yet) | **PSS 28 768 256 B (28.1 MiB)** for `org.nsupysonic.app` |
 | App CPU (screen off, Doze forced, 60 s) | **10 ms = 0.017 %** of one core — the skeleton's idle floor, not a playback figure |
 | APK | **4 962 439 B** universal, `classes.dex` 2 397 656 B, `libnz_ffi.so` **902 056 B arm64**, 944 776 B x86_64, 605 620 B armeabi-v7a |
@@ -1594,6 +1594,12 @@ do, on a device.
 - **The perf library is 900 MB at 8 000 tracks and belongs on disk** (`TMPDIR` under `~/.cache`), and
   perf_api's cleanup is SIGTERM-driven: `perf-server.sh stop` sends SIGTERM, waits, and only then
   SIGKILLs. Measured: 0 leftover directories after a stop.
+- **A newer runner stable silently changed the rules of a green build.** On 2026-11-17 the runner's
+  `stable` became **1.100.0**, which emits `cargo::unused_dependencies`; `-D warnings` then failed a
+  tree that is clean on **1.99.1** (measured: the same `cargo clippy -p nz-viz-gl … -- -D warnings`
+  → `Finished` here, red there). The pin is read by `rustup` inside `mobile/rust` — the job log says
+  so in one line (`the missing active toolchain 1.99.1 … has been auto-installed`) — and `desktop/`
+  keeps its own toolchain, untouched.
 - **The pre-declared dependencies are a debt, not a mistake, and the lint that flags them is now
   pinned out of the way.** MB0's manifests declare the shared crates the stubs do not call yet
   (`nz-core`'s `nz-analysis`/`nz-offline`/`nz-remote`/`nz-party`/`nz-viz`, `nz-droid-audio`'s
