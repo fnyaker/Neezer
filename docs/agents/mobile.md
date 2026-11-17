@@ -1035,7 +1035,9 @@ and `desktop/app/src/wiring/analysis.rs` (now `pub use nz_analysis::*;` plus one
   no `use` line shows — so an archived Opus (the YouTube fallback) would have stopped decoding. It is
   a workspace pin already in the lock: `desktop/Cargo.lock` gains **one dependency line** inside the
   `nz-analysis` entry, **0 package, 0 version**, and `--locked` still passes. The manifest's own
-  comment says why.
+  comment says why. `mobile/rust` depends on the crate by path, so its OWN lock records the same
+  list: `mobile/rust/Cargo.lock` gains the same one line (the package was already there through
+  `nz-audio`), and both workflows' `--locked` are green again.
 - **Measured on this machine** (NDK `30.0.16248370`, cargo-ndk 4.1.2, `CARGO_BUILD_JOBS=4`, debug):
   - **Test count, before → after: 447 → 447.** Before: `cargo test -p neezer-desktop -- --list` =
     **447**, of which **11** `wiring::analysis` and `cargo test -p nz-analysis -- --list` = **0**.
@@ -1062,7 +1064,15 @@ and `desktop/app/src/wiring/analysis.rs` (now `pub use nz_analysis::*;` plus one
     later in its OWN file.
 - **Files**: `desktop/crates/nz-analysis/Cargo.toml` (the Opus adapter pin + why), `src/lib.rs`,
   `src/analysis.rs` (the moved file), `src/events.rs` (the channel), `desktop/app/src/wiring/analysis.rs`
-  (re-export + `training::families`), `desktop/Cargo.lock` (+1 line).
+  (re-export + `training::families`), `desktop/Cargo.lock` and `mobile/rust/Cargo.lock` (+1 line
+  each).
+- **The lesson the mobile workflow taught**: a shared crate's manifest change is NOT local. The
+  first push was red in `mobile` only — `Rust (fmt, clippy, tests)` and `APK`, both with
+  `cannot update the lock file mobile/rust/Cargo.lock because --locked was passed` — because
+  `mobile/rust` links `desktop/crates/nz-analysis` by path and freezes that crate's dependency list
+  in its own lock. Any lot that adds, removes or moves a dependency of a shared crate must
+  regenerate BOTH locks in the same PR (`cargo metadata --offline` in `mobile/rust` is enough, no
+  build), or the desktop job goes green while the phone's goes red.
 
 ### SC2 — `nz-audio`: external sink, `cpal` feature, output latency (delivered 2026-11-17)
 
