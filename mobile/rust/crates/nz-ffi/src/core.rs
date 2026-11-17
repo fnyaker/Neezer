@@ -353,7 +353,11 @@ impl NzCore {
     }
 
     pub fn player(&self) -> Arc<PlayerApi> {
-        Arc::new(PlayerApi)
+        // MB3b: the player needs the core's client, cache and lists, so it is
+        // built over it. `PlayerApi::open` is infallible by contract — a runtime
+        // that cannot start answers empty values with `error` set, never a
+        // panic on a click.
+        PlayerApi::open(Arc::clone(&self.core))
     }
 
     pub fn offline(&self) -> Arc<OfflineApi> {
