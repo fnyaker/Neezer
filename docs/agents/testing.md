@@ -114,7 +114,21 @@ the code under it was broken:
   (`assertEqual(moods.now(), FROZEN)`) fails the moment a pin is removed — at any hour, where the
   count only moved once a day. The counts stay exact: a route that rescans moves them to 2 and 5,
   asserted against that mutation.
-- **Never compute the expectation from the constant under test** (`cleanup.GB`,
+- **Attribute a job's calls to the thread that ran it, and keep the promise global.** A test that
+  counts "what this import asked" cannot read one flat list: the app boots background workers
+  (`neezer/web.py:93` starts `credits-resume`, asleep for 45 s), a `partest` batch outlives that
+  delay, and the guard's class-wide `DeezerProvider.dz` patch makes a worker left behind by an
+  earlier test report into the current spy. `tests/test_detach_guard.py` then saw
+  `gw.get_tracks_data` in a window where the import had only read its lists
+  (`trackcredits._Backfill._answers` → `provider.get_tracks` → `gw.get_tracks_data`), reproduced by
+  starting that worker inside the window — the call arrives on another thread — and confirmed by
+  the same CI job logging "Credits backfill crashed … Cannot use uninitialized Proxy"
+  (run 43990956743): the worker outliving its database. The cure is attribution, never a wider
+  allowance: the job's own calls (its thread — `libraryimport.run` is synchronous) are held to
+  `LIBRARY_READS`, and the promise the test exists for, no worker reads the ACCOUNT, is asserted
+  for every thread over the whole window. A real account read added on purpose outside the job —
+  from another thread, or one the job never makes — still fails it.
+
   `_MAX_OUTAGE_RETRIES + 1`): write the literal. And keep a test's own timeout below the cap it is
   checking, or "it waited the cap out" passes as "it did not wait".
 - **Real ffmpeg, physical answers** (`tests/test_ffmpeg_integration.py`): the command lines run
