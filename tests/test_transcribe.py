@@ -972,9 +972,14 @@ class RunnerTestCase(_Base):
         # say nothing about the stream. Its own rule has its own tests.
         with mock.patch.object(workload, "load_per_core", lambda: 0.0):
             thread.start()
-            time.sleep(0.5)
+            # The CLAIM is the event that could have started the engine: only once the row is
+            # running does "nothing was transcribed" mean the stream held it (a fixed sleep
+            # before the claim would pass vacuously on a slow machine).
+            wait_until(
+                lambda: PodcastTranscript.get().status == "running", "the claim"
+            )
+            time.sleep(0.5)  # a moment for an engine that must NOT start
             self.assertEqual(self.log_lines(), [])
-            self.assertEqual(PodcastTranscript.get().status, "running")
             workload.note_stream_close()
             # The end of the drain is the EVENT, never a duration: a machine under load takes
             # as long as it takes. `DEADLOCK_GUARD` only keeps a hung thread from hanging the
