@@ -3304,14 +3304,15 @@ Waves that can run in parallel (disjoint files):
   une fois par version publiée, redessiné seulement quand `version` bouge, 300 ms). Aucun écran ne
   re-dérive un état : album, playlist, favoris, émission, file et le menu d'une ligne appellent les
   mêmes fonctions, donc le même mot ne peut pas dire deux choses.
-- **La règle, l'état vient du SNAPSHOT — et il ne MENT pas.** Lire `is_downloaded` par ligne serait
-  une requête SQLite sur le thread GPUI (`nz-cache` : une connexion derrière un mutex, donc une
-  lecture d'écran peut attendre la transaction d'écriture du worker et figer une image). L'état
-  vient donc de `Snapshot` : les échecs sont par titre, le titre en vol est publié, et un titre
-  téléchargé seul est un « ensemble » de un (D13). Ce que le snapshot ne peut pas PROUVER n'est pas
-  inventé : une ligne d'une collection téléchargée PARTIELLEMENT lit « Télécharger », et c'est le
-  contrôle de la collection qui dit `12 / 40`. Sans coût : le store ignore un titre déjà publié
-  (`add_set`'s `ON CONFLICT DO NOTHING`), donc ré-appuyer ne redemande rien.
+- **La règle, l'état vient du SNAPSHOT, et il dit ce qui EST sur l'appareil.** Lire `is_downloaded`
+  par ligne serait une requête SQLite sur le thread GPUI (`nz-cache` : une connexion derrière un
+  mutex, donc une lecture d'écran peut attendre la transaction d'écriture du worker et figer une
+  image). `Snapshot.downloaded` est donc l'ensemble des titres PUBLIÉS, en UN `Arc<HashSet>` : une
+  publication clone un pointeur, pas quatre mille identifiants, et une ligne répond « téléchargé »
+  quelle que soit la collection qui l'a amené (le membre d'un album téléchargé aussi). Les échecs
+  sont par titre avec leur cause, le titre en vol dit ses octets, et un ensemble inachevé dit où il
+  en est (`12 / 40`). Ré-appuyer ne redemande rien : le store ignore un titre déjà publié
+  (`add_set`'s `ON CONFLICT DO NOTHING`).
 - **La règle, une playlist téléchargée reste COMPLÈTE** : `screens/playlist.rs` re-`choose` son
   ensemble à chaque ouverture quand il compte moins de titres que la page (`sync_download_set`) —
   le worker ne relie que les nouveaux, donc une playlist de 4 000 titres qui en gagne un coûte UN
@@ -3349,10 +3350,13 @@ Waves that can run in parallel (disjoint files):
     `click_to_first_sample_over_the_network_is_under_250_ms`) — le worker est un thread `nice 10`
     et la voie Bulk, donc un titre lancé démarre sans l'attendre.
   - **mémoire comptée** (`app/src/testmem.rs`, pas de RSS) : un écran paie **un `Rows` par version
-    publiée**, soit **271 B** pour une collection de 4 000 titres (1 en vol, 2 échecs), et **235 706 B**
-    pour le pire cas que le snapshot exprime — 4 000 titres choisis UN PAR UN
-    (`a_four_thousand_row_list_keeps_a_few_kilobytes_and_not_its_rows`). Un `Watch` ou un `Rows`
-    vide ne coûte rien : aucun écran sans téléchargement ne change.
+    publiée**, et ce `Rows` ne copie plus l'index des titres — il CLONE l'`Arc` du snapshot, soit
+    **un pointeur** ; le seul coût fixe est l'ensemble lui-même, rempli une fois par publication
+    (une requête `SELECT track … state = 'done'`). Mesuré : **271 B** pour les lignes d'une
+    collection de 4 000 titres (1 en vol, 2 échecs), **235 706 B** pour le pire cas — 4 000 titres
+    choisis un par un (`a_four_thousand_row_list_keeps_a_few_kilobytes_and_not_its_rows`). Un
+    `Watch` ou un `Rows` vide ne coûte rien : aucun écran sans téléchargement ne change. Mesuré
+    aussi : un `Rows` au-dessus de 4 000 titres publiés coûte **0 B** (un `Arc` cloné).
   - **états du bouton** : les cinq états sont testés en GPUI (`the_album_download_control_walks_its_five_states`),
     chaque état portant son libellé, son verbe et sa CAUSE ; `t` et `Maj+T` sont testés sans souris
     (`t_and_maj_t_queue_and_take_back_the_album`) et le menu d'une ligne via `row_verb`.
@@ -3371,10 +3375,11 @@ Waves that can run in parallel (disjoint files):
   épisodes.
 - **Ce que c'est maintenant** : `widgets/download_control.rs` (`State`, `label`/`detail`/`action`/
   `short`/`fraction`/`busy`/`on_device`/`glyph`, `set`, `collection`, `track`, `Rows`, `key`,
-  `row_verb`, `chip`, `control`, `Watch`), `widgets/context_menu.rs` (`Item::Download`,
+  `row_verb`, `is_front`, `chip`, `control`, `Watch`), `widgets/context_menu.rs` (`Item::Download`,
   `RetryDownload`, `CancelDownload`, `RemoveDownload` et le vocabulaire `Download`), les six écrans
-  (album, playlist, bibliothèque/favoris, émission, podcasts, file) et `screens/settings/downloads.rs`
-  (« Tout supprimer », l'emplacement des fichiers, les libellés de collection Favoris et File).
+  (album, playlist, bibliothèque/favoris, émission, podcasts, file), `screens/settings/downloads.rs`
+  (« Tout supprimer », l'emplacement des fichiers, les libellés de collection Favoris et File) et,
+  côté données, `Snapshot.downloaded` (`nz-offline`) rempli par `Downloads::published` (`nz-cache`).
 - **Différence assumée avec la SPA** : le menu d'une ligne n'a pas de sous-menu « Télécharger en… » ;
   la qualité est celle de Réglages → Téléchargements (ou du contrôle de la page), comme le worker la
   range. Le bouton d'ARCHIVAGE garde son mot séparé (« Archiver », contre « Télécharger » pour

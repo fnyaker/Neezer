@@ -2017,7 +2017,7 @@ impl Screen {
         // screen lists it and can remove it like a playlist's. The verb is the
         // episode's own state, so a second press takes it back.
         if let Some(message) =
-            download_control::row_verb(&service, self.downloads.get(), &key, &title, false)
+            download_control::row_verb(&service, self.downloads.get(), &key, &title)
         {
             self.notice(ToastKind::Info, message, cx);
         }
@@ -3613,11 +3613,9 @@ impl Screen {
 
         // The downloads rows for this published version: one chip per episode,
         // and the state the row menu reads.
-        let download_state = self.show_download_state();
         let version = self.downloads.get().version;
         if version != self.rows_version {
-            let done = matches!(download_state, DownloadState::Done { .. });
-            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows = Rc::new(Rows::build(self.downloads.get()));
             self.rows_version = version;
         }
 
