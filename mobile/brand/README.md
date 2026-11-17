@@ -76,16 +76,80 @@ on:
 
 ## Export
 
-`export.sh` (written once the direction is chosen) produces, offline from these
-sources only:
+```sh
+mobile/brand/export.sh            # write every generated resource
+mobile/brand/export.sh --check    # fail if one of them has drifted from the sources
+```
 
-- `drawable/ic_launcher_foreground.xml` — the light shapes, `viewport 0..108`;
-- `drawable/ic_launcher_monochrome.xml` — the same geometry, one colour;
+Offline, stdlib Python + `rsvg-convert` (or `resvg`); no Gradle, no network. It
+writes:
+
+- `drawable/ic_launcher_foreground.xml` — the light shapes, viewport from
+  `logo.svg` (1024), drawn at 108 dp;
+- `drawable/ic_launcher_monochrome.xml` — the same geometry in one colour, for
+  themed icons (Android 13+);
 - `mipmap-anydpi-v26/ic_launcher.xml` and `ic_launcher_round.xml` — the
-  `<adaptive-icon>` that points at them plus `@color/ic_launcher_background`;
-- `drawable/ic_stat_neezer.xml` — the 24 dp white silhouette;
-- `brand/play-store-512.png` — the 512×512, 32-bit, opaque PNG Google Play
-  wants (full square: Play applies the 30 % radius and the shadow itself).
+  `<adaptive-icon>` pointing at `@color/ic_launcher_background` and the two
+  layers;
+- `drawable/ic_stat_neezer.xml` — the 24 dp white status-bar silhouette;
+- `play-store-512.png` — 512×512, 32-bit, sRGB, opaque, full square (Play
+  applies the 30 % radius and the shadow itself);
+- `icon-108.png` — the composed icon, for docs and a quick look.
 
-`icon.svg` stays the 108 dp source of the icon's own composition (ground +
-mark); `logo.svg` is the 1024 master the other assets derive from.
+Three rules the script enforces instead of documenting:
+
+- **The background colour is MB0's file.** `values/colors.xml` is not LG1's: the
+  script *reads* `ic_launcher_background`, refuses to run if it is not
+  `#0C0C0B`, and never edits it.
+- **An element the exporter does not understand is a hard error** — a silently
+  dropped element is a wrong icon, and a wrong icon ships. Supported: `<path>`,
+  `<circle>`, `<ellipse>`, `<rect>` (converted to `pathData`), `fill-rule`
+  `evenodd` (as `android:fillType`), strokes, and `rotate(a cx cy)` as a
+  `<group>`. Anything else stops the export.
+- **`--check` is the drift guard**: it renders into a temp tree and compares
+  byte for byte, so a source edited without re-exporting fails loudly. It was
+  tested in both directions (matching, and one injected comment in a committed
+  drawable).
+
+Checked against `aapt2 compile` + `aapt2 link` for all three directions (a minimal
+manifest, `--min-sdk-version 26`): every generated drawable links.
+
+## Evidence on the emulator
+
+The lot's emulator image (API 35 `default`, `nz35`) ships **neither** the
+`com.android.theme.icon.*` overlays **nor** the themed-icons setting: `cmd
+overlay list` has one `com.android.theme.font.*` entry and nothing else, and
+`settings list secure` has no `themed_icons`. The launcher therefore can only
+ever show its own mask. Two things are captured instead, both headless
+(`-no-window -no-audio`, `adb -s emulator-<port>` only, the lot's own PID):
+
+1. **The real launcher**: the app installed from `:app:assembleDebug`, the icon
+   in the app drawer, `adb exec-out screencap`.
+2. **The three masks and the themed icon**, drawn *on the device* by the
+   framework's own `AdaptiveIconDrawable` over the **installed APK's real
+   resources** (`AssetManager.addAssetPath` + `getIdentifier`), applying the
+   AOSP mask geometry (circle, superellipse squircle, teardrop with its sharp
+   corner) and the monochrome layer tinted in the two modes that exist. Run as
+   `app_process` under the shell uid — no app, no signature, no Gradle:
+
+```sh
+mobile/brand/device/render-masks.sh --serial emulator-5580 \
+    --apk mobile/android/app/build/outputs/apk/debug/app-debug.apk \
+    --out ~/.cache/neezer-lg1/shots
+```
+
+It compiles `device/IconMasks.java` with the platform's `d8`, pushes the dex,
+runs it, pulls the PNGs and writes a strip. It also renders the 24 dp status
+glyph at this screen's density (420 dpi → 63 px) and four times larger, which is
+where a stroke under 2 dp would show.
+
+`mobile/tools/emu.sh` (lot MQ1) is the harness that owns the emulator lifecycle;
+before it lands, the same flags are used by hand: `emulator -avd nz35 -port 5580
+-no-window -no-audio -gpu swiftshader_indirect -no-boot-anim -no-snapshot-save
+-readonly -memory 3072 -cores 4`.
+
+`icon.svg` stays the 108 dp composition of the icon (ground + mark), so a human
+can open one file and see what the launcher draws; `logo.svg` is the 1024 master
+every other asset derives from, `logo-mono.svg` its monochrome twin and
+`logo-notification.svg` the 24 dp glyph. The three files in `directions/` are the
+frozen candidates the person chose from — not sources to keep in sync.
