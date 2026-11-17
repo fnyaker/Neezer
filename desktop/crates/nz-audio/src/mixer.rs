@@ -53,7 +53,13 @@ use crate::voice::VoiceConsumer;
 pub struct MixerShared {
     /// What the person hears, in seconds of the current track.
     pub clock: Clock,
+    /// Output callbacks that starved since the engine started: the mixer's own
+    /// count, one per buffer, never one per missing sample.
     underruns: AtomicU64,
+    /// The DEVICE's own xrun total (AAudio's `getXRunCount`, our cpal callback's
+    /// `Xrun`), reported by whoever owns the device. See
+    /// [`MixerShared::set_device_underruns`].
+    device_underruns: AtomicU64,
     volume: AtomicF32,
     muted: AtomicBool,
     paused: AtomicBool,
@@ -68,6 +74,7 @@ impl MixerShared {
         Self {
             clock: Clock::new(sample_rate),
             underruns: AtomicU64::new(0),
+            device_underruns: AtomicU64::new(0),
             volume: AtomicF32::new(volume.clamp(0.0, 1.0)),
             muted: AtomicBool::new(false),
             paused: AtomicBool::new(true),
@@ -75,15 +82,31 @@ impl MixerShared {
         }
     }
 
-    /// Output callbacks that ran out of samples since the engine started. This
-    /// counts only playing audio: the silence before a track's first sample is
-    /// buffering, and a paused mixer is not starving.
+    /// Everything the person HEARD stutter since the engine started: the
+    /// mixer's own starvations plus the device's xruns.
+    ///
+    /// The mixer's count only covers playing audio (the silence before a
+    /// track's first sample is buffering, and a paused mixer is not starving);
+    /// the device's is whatever its own counter says, a total since it opened.
     pub fn underruns(&self) -> u64 {
-        self.underruns.load(Ordering::Acquire)
+        self.underruns.load(Ordering::Acquire) + self.device_underruns.load(Ordering::Acquire)
     }
 
     pub(crate) fn note_underrun(&self) {
         self.underruns.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The device's own xrun counter, a TOTAL (not a delta) as the platform
+    /// reports it (AAudio `getXRunCount`). Replacing it rather than adding keeps
+    /// `underruns()` monotonic however often the platform repeats a reading.
+    pub fn set_device_underruns(&self, total: u64) {
+        self.device_underruns.store(total, Ordering::Release);
+    }
+
+    /// The device's xruns alone, the mixer's own excluded: what a bench prints
+    /// when it wants to tell a slow decoder from a slow device.
+    pub fn device_underruns(&self) -> u64 {
+        self.device_underruns.load(Ordering::Acquire)
     }
 
     pub fn set_volume(&self, volume: f32) {

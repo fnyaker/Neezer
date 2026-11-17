@@ -28,7 +28,7 @@ use crate::decode::{self, DecodeError};
 use crate::dsp::{Normalization, Settings};
 use crate::events::{EngineEvent, EventBus, VoiceInfo, VoiceInfoEntry};
 use crate::mixer::{MixerCmd, MixerShared};
-use crate::output::{self, OfflineSink, Output, OutputChoice, OutputInfo};
+use crate::output::{self, ExternalSink, OfflineSink, Output, OutputChoice, OutputInfo};
 use crate::party::{PartyCmd, Segment};
 use crate::source::{Lane, Quality, SourceError, Spoolers, StreamOpener, spool_path};
 use crate::tap::{TAP_FRAMES, Tap, TapReader};
@@ -338,8 +338,26 @@ impl Engine {
 
     /// Start with a pull-driven sink the caller renders: what the acceptance
     /// tests use, so a gapless seam does not race a sound card.
+    ///
+    /// It IS the platform path ([`Engine::new_external`]): the same mixer, the
+    /// same clock, the same seam — only the reason for not opening a device
+    /// differs.
     pub fn new_offline(cfg: EngineConfig, opener: Arc<dyn StreamOpener>) -> (Self, OfflineSink) {
-        Self::build_offline(cfg, opener)
+        Self::build_external(cfg, opener, "sortie de test")
+    }
+
+    /// Start with an EXTERNAL sink: the platform owns the device — AAudio or
+    /// `AudioTrack` on Android, CoreAudio later — and calls
+    /// [`ExternalSink::render`] from its own real-time callback.
+    ///
+    /// The platform must open its device at [`EngineConfig::sample_rate`] (the
+    /// decode threads resample every track to it, and the voices are built
+    /// before the first callback runs), then say what it really opened with
+    /// [`Engine::set_external_output`] — the latency of THAT buffer is what the
+    /// clock subtracts. `nz-audio` opens nothing here: on a target without the
+    /// `cpal` feature there is no host to open.
+    pub fn new_external(cfg: EngineConfig, opener: Arc<dyn StreamOpener>) -> (Self, ExternalSink) {
+        Self::build_external(cfg, opener, "sortie de l'hôte")
     }
 
     fn build(cfg: EngineConfig, opener: Arc<dyn StreamOpener>) -> Self {
@@ -397,13 +415,23 @@ impl Engine {
         engine
     }
 
-    fn build_offline(cfg: EngineConfig, opener: Arc<dyn StreamOpener>) -> (Self, OfflineSink) {
+    /// The pull-driven engine: the mixer goes into the sink the caller holds.
+    /// `device` is only what `output_info()` answers before the platform's first
+    /// [`Engine::set_external_output`].
+    fn build_external(
+        cfg: EngineConfig,
+        opener: Arc<dyn StreamOpener>,
+        device: &str,
+    ) -> (Self, ExternalSink) {
         let _ = std::fs::create_dir_all(&cfg.spool_dir);
         let events = EventBus::new();
         let notes = events.take_note_producer();
         let settings = Settings::new();
         let (tap, reader) = Tap::pair(TAP_FRAMES);
-        let (output, sink, shared, mixer, party, party_gain) = output::start_offline(
+        // `spool_dir` is always the caller's: no `$XDG` default on a phone,
+        // where `EngineConfig::default` would land in a directory that does not
+        // exist (SC2, docs/agents/mobile.md).
+        let (output, sink, shared, mixer, party, party_gain) = output::start_external(
             cfg.sample_rate,
             cfg.volume,
             notes,
@@ -411,7 +439,7 @@ impl Engine {
             tap,
         );
         let out_info = OutputInfo {
-            device: "sortie de test".into(),
+            device: device.into(),
             sample_rate: cfg.sample_rate,
             channels: 2,
             latency_frames: 0,
@@ -658,6 +686,44 @@ impl Engine {
     /// Seconds of the current track that have reached the speakers.
     pub fn position(&self) -> f64 {
         self.inner.shared.clock.position()
+    }
+
+    /// What the platform's device really is — its rate, its channel count and,
+    /// above all, how many frames it holds after a callback returns. Called by a
+    /// platform output ([`Engine::new_external`]) whenever it opens or re-opens
+    /// its device, because the latency is the one number the engine cannot
+    /// guess: the position is `rendered frames − latency_frames`, exactly as on
+    /// the cpal path, and a route change (a headset plugged in, a Bluetooth
+    /// sink) calls this again.
+    ///
+    /// The device must be at [`EngineConfig::sample_rate`]; the voices were
+    /// decoded at it before the first callback. A different rate is recorded as
+    /// asked — it is what `output_info()` and Réglages show — but the mix is
+    /// still produced at the engine's rate.
+    pub fn set_external_output(&self, info: OutputInfo) {
+        if info.sample_rate != self.inner.cfg.sample_rate {
+            tracing::warn!(
+                target: "nz_audio",
+                opened = info.sample_rate,
+                engine = self.inner.cfg.sample_rate,
+                "la sortie de l'hôte n'a pas le taux du moteur : le mix reste au taux du moteur"
+            );
+        }
+        self.inner
+            .shared
+            .clock
+            .set_latency_frames(info.latency_frames);
+        *self.inner.out_info.lock().expect("output info poisoned") = info;
+        self.inner.emit_output();
+    }
+
+    /// The platform's own xrun counter — AAudio's `getXRunCount`, `AudioTrack`'s
+    /// `getUnderrunCount` — a TOTAL since the device opened, not a delta. It is
+    /// added to the mixer's own starvation count so `underruns()` is the one
+    /// number the person's « Réglages » page shows: what they actually heard
+    /// stutter, whatever missed the deadline.
+    pub fn note_underruns(&self, total: u64) {
+        self.inner.shared.set_device_underruns(total);
     }
 
     pub fn events(&self) -> Receiver<EngineEvent> {
