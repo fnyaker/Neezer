@@ -362,14 +362,25 @@ def share_file(mid):
     )
 
 
+def _seconds(raw):
+    """A share clip's ``?start=``/``?end=`` as seconds, or ``None`` for junk.
+
+    NaN and the infinities parse here — the range check that follows refuses
+    them, since a clip needs ``0 <= start < end`` and a bounded length.
+    """
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 @webapi.route("/share/clip/<mid>")
 @login_required
 def share_clip(mid):
     """An excerpt of the file, cut+encoded by ffmpeg, as a named download."""
-    try:
-        start = float(request.args.get("start"))  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - nan/inf fail the range check below
-        end = float(request.args.get("end"))  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - nan/inf fail the range check below
-    except (TypeError, ValueError):
+    start = _seconds(request.args.get("start"))
+    end = _seconds(request.args.get("end"))
+    if start is None or end is None:
         return jsonify({"error": "invalid range"}), 400
     if not (0 <= start < end) or end - start > CLIP_MAX_SECONDS or end > 10**7:
         return jsonify({"error": "invalid range"}), 400

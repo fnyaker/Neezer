@@ -5268,16 +5268,29 @@ def _archive_state(path):
     return None, False
 
 
+def _offset_seconds(raw):
+    """A seek offset: finite and non-negative, else ``None``.
+
+    ``float()`` accepts "nan", "inf" and "1e999"; none of them is a place in a
+    track, and a NaN would poison every later comparison (``min``/``max`` and
+    sorts), so they are refused with the junk strings.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
 def _start_offset():
     """``?start=<seconds>`` into the track, and the refusal for a bad value."""
     raw = request.args.get("start")
     if raw is None or raw == "":
         return None, None
-    try:
-        value = float(raw)  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - nan/inf are refused by the isfinite check below
-    except (TypeError, ValueError):
-        value = None
-    if value is None or not math.isfinite(value) or value < 0:
+    value = _offset_seconds(raw)
+    if value is None:
         return None, (jsonify({"error": "invalid start"}), 400)
     return value, None
 
