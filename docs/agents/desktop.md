@@ -491,7 +491,7 @@ the app keep" (`app/src/testmem.rs`).
   four full traversals went 263.3 → 263.3 → 263.3 MB (+8.1 MB once, then flat). The decoded stock
   is **20 images = 1 310 720 B** (counted, `Sleeves::resident`), and
   `a_thousand_renders_over_four_thousand_rows_keep_one_screenful` holds it there for 1 000
-  frames over 4 000 rows. RSS is not the app's data: at 2560×1600 the same screen is 327.7 /
+  frames over 4 000 rows, and `cargo test --workspace` is **362 app tests, every crate green**. RSS is not the app's data: at 2560×1600 the same screen is 327.7 /
   264.1 and **349.2 / 285.6** with the 420 px queue panel open (D7's +81.6 MB of window buffers
   is most of it). **Looked at**, on the isolated `Xvfb :214`, seven captures in
   `docs/desktop/neezer-62/`: the Bibliothèque's 60 playlist cards, the 4 000-row favourites
