@@ -934,8 +934,6 @@ impl Render for Screen {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// D17: the shelf fills the window it is given. Six sleeves at 1280 (its
     /// right half was empty at 2560 with a fixed six), twelve on the panel —
     /// the defect the 2560×1600 capture showed and this pins.
