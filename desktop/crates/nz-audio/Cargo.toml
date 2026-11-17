@@ -15,9 +15,18 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# The desktop's device output (PipeWire, then ALSA) is cpal's. A platform that
+# drives the mixer itself — Android's AAudio, later CoreAudio — builds this
+# crate with `default-features = false`: nothing that names cpal is compiled
+# then, which is what lets `nz-audio` build for a target where
+# `cpal::HostId::PipeWire` does not exist at all (SC2, docs/agents/mobile.md).
+default = ["cpal"]
+cpal = ["dep:cpal"]
+
 [dependencies]
 nscore = { path = "../../../android/nscore" }
-cpal = { workspace = true }
+cpal = { workspace = true, optional = true }
 symphonia = { workspace = true }
 symphonia-adapter-libopus = { workspace = true }
 rtrb = { workspace = true }

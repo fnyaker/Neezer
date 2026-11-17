@@ -1012,75 +1012,84 @@ Fin : branche <ta-branche>/sc1, PR « refactor(desktop): SC1 extract nz-analysis
 diff --stat, merge, section SC1 réécrite, `ao report --done`.
 ```
 
-### SC2 — `nz-audio`: external sink, `cpal` feature, output latency (wave 0a)
+### SC2 — `nz-audio`: external sink, `cpal` feature, output latency (delivered 2026-11-17)
 
 **Goal.** Let a platform output (AAudio, AudioTrack, later CoreAudio) drive the engine with the
-same clock the desktop's cpal output gives it, and make the crate BUILD for Android at all (today
-`output.rs` names `cpal::HostId::PipeWire`/`Alsa`, which do not exist there: 4 × E0599, measured).
-**Depends on**: nothing (runs beside SC0; MB0 waits for both). **Exclusive files**: `desktop/crates/nz-audio/**`.
-**Contract.**
-```rust
-// nz-audio/Cargo.toml: [features] default = ["cpal"]; cpal = ["dep:cpal"]
-impl Engine {
-    pub fn new_external(cfg: EngineConfig, opener: Arc<dyn StreamOpener>) -> (Engine, ExternalSink);
-}
-pub struct ExternalSink { /* the Mixer, moved into the platform callback */ }
-impl ExternalSink {                      // Send; render is real-time safe
-    pub fn render(&mut self, out: &mut [f32]);          // interleaved stereo f32
-    pub fn shared(&self) -> Arc<MixerShared>;
-}
-impl Engine {
-    pub fn set_external_output(&self, info: OutputInfo); // rate, channels, latency_frames (clock)
-    pub fn note_underruns(&self, total: u64);           // the platform's xrun count
-}
-```
-`new_offline` stays (tests use it) and becomes a thin alias where possible. With `default-features =
-false`, everything that names cpal is compiled out (`output_devices()` returns an empty list,
-`Engine::new` falls back to the null pump). The engine's position = rendered frames −
-`latency_frames`, exactly as for the cpal path.
-**Acceptance.** Desktop CI green, same tests + new ones: an `ExternalSink` driven by a test loop
-renders a gapless seam sample-exact (the D5 assertion) and reports `position` minus the latency
-given; `cargo ndk -t arm64-v8a -P 26 build -p nz-audio --no-default-features` passes and its
-`cargo tree` has no `cpal`; `libopus` (symphonia-adapter-libopus, bundled) and `signalsmith-stretch`
-cross-compile (C/C++ through the NDK's clang — measured in the planning prototype: they do, with NDK 30 and cargo-ndk 4.1.2) — write what each needed.
-**Pitfalls.** `render` must stay allocation-free and lock-free; the latency changes on a route change
-(the platform calls `set_external_output` again).
+same clock the desktop's cpal output gives it, and make the crate BUILD for Android at all.
+**Depends on**: nothing. **Exclusive files**: `desktop/crates/nz-audio/**` (kept: nothing outside it
+changed except this section).
 
-```text
-Tu es le worker du lot SC2 du plan mobile Neezer. Lis CLAUDE.md, docs/agents/mobile.md (« Reuse »,
-« Threads », « Worker rules », « SC2 »), docs/agents/desktop.md (D5, D6, « Threads ») et
-docs/agents/playback.md.
-Objectif : dans desktop/crates/nz-audio, ajouter Engine::new_external / ExternalSink /
-set_external_output / note_underruns et mettre cpal derrière une feature par défaut `cpal`, selon le
-contrat de la section SC2, sans changer le comportement du desktop.
-Fichiers à toi seul : desktop/crates/nz-audio/**.
-Acceptation : CI desktop verte + nouveaux tests (couture gapless exacte au sample via ExternalSink,
-position moins la latence) ; build Android arm64 sans features par défaut, sans cpal dans `cargo tree` ;
-libopus et signalsmith-stretch compilent pour Android (ce qu'il a fallu dans la PR).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc2, PR « feat(desktop): SC2 nz-audio external sink for platform outputs »,
-CI desktop verte (la CI mobile n'existe pas encore : la preuve Android est le cargo ndk build de la PR), rebase + diff --stat, merge, section SC2 réécrite, `ao report --done`.
-```
+- **What it is now**: `[features] default = ["cpal"]; cpal = ["dep:cpal"]`. With default features
+  the desktop is untouched — same `probe`, same `Mixer` created at the DEVICE's rate, same
+  PipeWire→ALSA order, same silence pump. With `default-features = false` nothing that names cpal
+  is compiled: `output_devices()` answers `[]`, `Engine::new` runs the pump, and the only device
+  path left is the external sink.
+  ```rust
+  let (engine, sink) = Engine::new_external(cfg, opener); // cfg.spool_dir always passed
+  engine.set_external_output(OutputInfo { device, sample_rate, channels, latency_frames });
+  engine.note_underruns(xruns_total);                    // AAudio getXRunCount
+  // then, from the platform's real-time thread, per device buffer:
+  sink.render(&mut interleaved_stereo_f32);              // no alloc, no lock, no wait
+  ```
+  `ExternalSink::shared() -> Arc<MixerShared>` is the handle a bench or the platform keeps when the
+  callback owns the sink (same atomics, not a copy). `OfflineSink` is now a **type alias** for
+  `ExternalSink`: D5's and D6's tests are driven by the very seam a phone runs, not a lookalike.
+- **The position contract holds**: `position() = rendered frames − latency_frames`, and
+  `set_external_output` is the ONE number the platform must report (its own buffer) — called again
+  on every route change. Measured: 4 800 frames with a 1 440-frame (30 ms) report → **0.070000 s**
+  exactly; after a "route change" to 480 frames → **0.090000 s**. Paused, the latency clamps at 0.
+  The platform MUST open its device at `EngineConfig::sample_rate` (voices are decoded at it before
+  the first callback runs); a different rate is recorded for `output_info()` and logged, the mix
+  stays at the engine's rate.
+- **The seam is the desktop's, to the sample**: two FLACs cut out of one 2 s cosine, rendered through
+  `ExternalSink::render` in 10 ms buffers → **max difference from the whole file 0.0000000** over
+  96 000 frames, seam Δ **0.000829** against a sine step of 0.057596, frame 96 000 exactly `0.0`.
+  The sink is proven `Send` by moving it into another thread (a real platform callback is one):
+  10 buffers rendered there, peak **0.2500**, clock read back by the app **0.100000 s**.
+- **`note_underruns(total)` is a TOTAL, not a delta** (AAudio's `getXRunCount` and AudioTrack's
+  `getUnderrunCount` are totals since the device opened): storing it keeps `underruns()` monotonic
+  however often the platform repeats a reading — `3, 3, 7` reads **7**, not 13. `underruns()` is
+  the mixer's own starvations **plus** the device's xruns, because it is the one number Réglages
+  shows and both are glitches the person heard. `MixerShared::device_underruns()` separates them.
+- **Android, measured on this machine** (NDK `30.0.16248370`, cargo-ndk 4.1.2, `-P 26`, arm64-v8a,
+  `CARGO_BUILD_JOBS=4`, debug):
+  - `cargo ndk -t arm64-v8a -P 26 build -p nz-audio --no-default-features` → **OK, 14.0 s** (first
+    build for that target dir), `cargo tree --no-default-features` has **0 `cpal` lines**.
+  - The same command WITH default features fails exactly as the plan predicted: **4 × E0599**
+    (`HostId::PipeWire` ×2, `HostId::Alsa` ×2). Note what that proves: **cpal 0.18.2 itself
+    cross-compiles for aarch64-linux-android** — the feature is about our Linux host names and an
+    unused backend, not about cpal failing to build.
+  - `libopus` (through `symphonia-adapter-libopus` → `opusic-sys 0.7.7`, **Opus 1.6.1**) builds with
+    **CMake** and the NDK's **Clang 21** (the NDK toolchain file is found from `ANDROID_NDK_HOME`);
+    `signalsmith-stretch 0.1.3` compiles its C++ with `clang++` (the `cc` crate's
+    `CXX_aarch64-linux-android`, set from the NDK). Nothing needed a `Cargo.toml` override, a
+    `-D` flag or a hand-written CMake argument.
+  - `opusic-sys` prints three harmless warnings in every Android build — `Unable to find Android env
+    variable 'ANDROID_STL' / 'ANDROID_ARM_MODE' / 'ANDROID_ARM_NEON'. Hope for good default...` —
+    and the build is correct: CMake takes the NDK toolchain's defaults (c++_static, thumb, NEON on
+    arm64). Do not "fix" them by exporting those variables.
+- **Pitfalls confirmed by building**:
+  - In `output.rs`, EVERY item that names cpal carries `#[cfg(feature = "cpal")]` — the callback,
+    `Setup`, `SCRATCH_FRAMES`, `HOSTS`, `configure`/`probe`/`host_name`, `OutCmd`, `DeviceOutput`
+    and its `Drop`, the output thread, `wait_mixer`, `build_stream` — and `start` has two
+    definitions. A `#[cfg]` on a match ARM keeps `Output` compiling in both worlds (the `Device`
+    arm is simply absent). It is worth doing it item by item rather than moving all of cpal into a
+    `mod cpal_output`: the module form is correct but re-indents 300 lines of the desktop's
+    playback path, and a reviewer reads a rewrite where the change is 8 attributes.
+  - Making cpal optional changes **no lockfile line** (`Cargo.lock` lists optional dependencies
+    regardless of features) — the proof that the desktop's dependency graph did not move.
+  - `Engine::new` on a cpal-less build still returns an engine (silence pump), which is what keeps
+    the shared `tests/playback.rs` suite green for Android even though there is no device.
+  - `set_output_device` answers `Err("aucune sortie audio réelle")` on an external sink: the
+    platform owns its device, and the app must not pretend to switch it (MB3a wires its own).
+  - The test-side `scratch()` directory is `std::env::temp_dir()`: fine on this machine's tmpfs for
+    the few FLAC fixtures, but a phone has no `TMPDIR` — `EngineConfig.spool_dir` is always passed
+    from the caller there, never `EngineConfig::default()`'s `$XDG`/`HOME` guess.
+- **Files**: `Cargo.toml` (the feature), `src/output.rs` (the split, `ExternalSink`, `OfflineSink`
+  alias), `src/engine.rs` (`new_external`, `set_external_output`, `note_underruns`),
+  `src/mixer.rs` (the device xrun total), `src/lib.rs` (exports and the cpal-gated host test),
+  `tests/external.rs` (five tests: the seam, the latency, the xrun total, the callback thread, and
+the cpal-less fallback).
 
 ### SC3 — `nz-api`: certificate pin (TOFU), probe, counters (wave 1)
 

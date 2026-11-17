@@ -1,34 +1,65 @@
-//! The output: PipeWire first, ALSA second, and a paced silence pump when
-//! neither exists.
+//! The output: PipeWire first, ALSA second, a paced silence pump when neither
+//! exists, and an EXTERNAL sink for a platform that owns the device itself.
 //!
-//! cpal's `Stream` is created **inside** a dedicated thread and never moves: on
-//! several backends it is not `Send`, and a device change needs a new stream on
-//! the same thread that dropped the old one. The [`Mixer`] lives inside the
-//! callback; to rebuild the stream without losing what is playing, the callback
-//! hands it back through a one-slot ring when asked (a move, no allocation, no
-//! lock) and the new stream takes it over through another one-slot ring.
+//! Two shapes, one mixer:
+//!
+//! - **A device this crate opens** (`cpal` feature, the desktop's default):
+//!   cpal's `Stream` is created **inside** a dedicated thread and never moves —
+//!   on several backends it is not `Send`, and a device change needs a new
+//!   stream on the same thread that dropped the old one. The [`Mixer`] lives
+//!   inside the callback; to rebuild the stream without losing what is playing,
+//!   the callback hands it back through a one-slot ring when asked (a move, no
+//!   allocation, no lock) and the new stream takes it over through another
+//!   one-slot ring.
+//! - **A device the platform opens** ([`ExternalSink`], no `cpal` at all): AAudio
+//!   or `AudioTrack` on Android, CoreAudio later, calls [`ExternalSink::render`]
+//!   from its own real-time callback. The same [`Mixer`] is moved into that
+//!   callback, and the clock is the same one; only the latency changes hands —
+//!   the platform knows its own buffer, so it tells the engine with
+//!   [`crate::Engine::set_external_output`].
 //!
 //! A machine with no sound server at all (CI, a headless box) still runs the
 //! engine: [`start`] falls back to a pump thread that calls the same `render`
 //! every period. That is what makes the whole pipeline testable, and it is why
 //! the D5 acceptance numbers can be measured without a speaker.
+//!
+//! With the `cpal` feature OFF, everything that names cpal is compiled out:
+//! [`output_devices`] answers with an empty list, [`crate::Engine::new`] runs
+//! the silence pump, and the only device path left is [`ExternalSink`]. That is
+//! what lets `nz-audio` build for Android, where `cpal::HostId::PipeWire` and
+//! `HostId::Alsa` do not exist at all (measured before SC2: 4 × E0599).
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, SampleFormat, StreamConfig, SupportedStreamConfig};
-use rtrb::{Consumer, Producer, RingBuffer};
+use rtrb::Producer;
+#[cfg(feature = "cpal")]
+use rtrb::RingBuffer;
 
 use crate::clock::AtomicF32;
 use crate::dsp::Settings;
-use crate::events::{EngineEvent, EventBus, MixerNote};
+use crate::events::MixerNote;
 use crate::mixer::{Mixer, MixerCmd, MixerShared};
 use crate::party::PartyCmd;
 use crate::tap::Tap;
+
+#[cfg(feature = "cpal")]
+use std::sync::Mutex;
+#[cfg(feature = "cpal")]
+use std::sync::mpsc::{Receiver, Sender, channel};
+
+#[cfg(feature = "cpal")]
+use crate::events::EngineEvent;
+use crate::events::EventBus;
+
+#[cfg(feature = "cpal")]
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(feature = "cpal")]
+use cpal::{FromSample, Sample, SampleFormat, StreamConfig, SupportedStreamConfig};
+#[cfg(feature = "cpal")]
+use rtrb::Consumer;
 
 /// What the app shows about the output, and what the voice rings are sized for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +91,9 @@ pub enum OutputError {
     /// No host answered: no PipeWire, no ALSA, or no output device on either.
     Unavailable(String),
     /// The device exists but refused this configuration.
+    /// Only the cpal path builds a stream; a platform driving an
+    /// [`ExternalSink`] reports its own failures.
+    #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
     Build(String),
 }
 
@@ -73,11 +107,49 @@ impl std::fmt::Display for OutputError {
 
 impl std::error::Error for OutputError {}
 
+/// Pull-driven output for a platform's own real-time callback: the caller
+/// decides when a buffer is rendered, so the mixer runs inside AAudio's (or
+/// `AudioTrack`'s, or CoreAudio's) callback instead of cpal's.
+///
+/// `render` is the same call cpal's callback makes: no allocation, no lock, no
+/// wait. The platform owns the sink for as long as it owns its device; the
+/// engine keeps only the [`MixerShared`] atomics, so a `pause`, a `seek` or a
+/// `set_volume` reaches the mixer through the same lock-free rings as on the
+/// desktop.
+pub struct ExternalSink {
+    mixer: Mixer,
+    shared: Arc<MixerShared>,
+}
+
+impl ExternalSink {
+    /// Render `out` (interleaved stereo f32, at the engine's rate), exactly like
+    /// a device callback would.
+    pub fn render(&mut self, out: &mut [f32]) {
+        self.mixer.render(out);
+    }
+
+    /// The atomics behind the mixer: the clock the app reads, the underrun
+    /// count, the play/pause state. Cheap to clone, and what a platform layer
+    /// keeps when it hands the sink to its audio callback.
+    pub fn shared(&self) -> Arc<MixerShared> {
+        Arc::clone(&self.shared)
+    }
+}
+
+/// Pull-driven output for tests and CI: the caller decides when a buffer is
+/// rendered, so a gapless seam is a deterministic assertion, not a race with a
+/// sound card.
+///
+/// It IS the external sink — the tests are driven by the same seam a platform
+/// output uses, so what they prove is what the phone runs.
+pub type OfflineSink = ExternalSink;
+
 /// Everything the output callback owns. Preallocated: `scratch` holds up to
 /// `SCRATCH_FRAMES` stereo frames and is reused for every device layout.
+#[cfg(feature = "cpal")]
 struct Callback {
-    /// Arrives from the output thread once the stream is playing, and goes back
-    /// there on a device change.
+    /// Arrives from the output thread once the stream is playing, and goes
+    /// back there on a device change.
     mixer: Option<Mixer>,
     forward: Consumer<Mixer>,
     back: Producer<Mixer>,
@@ -91,11 +163,13 @@ struct Callback {
     timestamps: bool,
 }
 
-/// 8 192 stereo frames = 170 ms at 48 kHz: far more than any sane device buffer
-/// (PipeWire's maximum is 2 048 frames), and allocated once, so the callback can
-/// always render in whole chunks of it.
+/// 8 192 stereo frames = 170 ms at 48 kHz: far more than any sane device
+/// buffer (PipeWire's maximum is 2 048 frames), and allocated once, so the
+/// callback can always render in whole chunks of it.
+#[cfg(feature = "cpal")]
 const SCRATCH_FRAMES: usize = 8_192;
 
+#[cfg(feature = "cpal")]
 impl Callback {
     fn fill<T>(&mut self, data: &mut [T])
     where
@@ -152,10 +226,10 @@ impl Callback {
         if frames > 0 {
             self.shared.clock.set_latency_frames(frames);
         }
-        // The pair a party guest schedules on: the device says the frame at this
-        // stream position reaches the speakers at this instant of its own clock
-        // (cpal: the backend's monotonic seconds, an origin of its own choosing,
-        // which cancels in every difference taken from it).
+        // The pair a party guest schedules on: the device says the frame at
+        // this stream position reaches the speakers at this instant of its
+        // own clock (cpal: the backend's monotonic seconds, an origin of its
+        // own choosing, which cancels in every difference taken from it).
         let at_s = stamp.playback.as_nanos() as f64 / 1e9;
         self.shared
             .clock
@@ -163,8 +237,9 @@ impl Callback {
     }
 }
 
-/// A device for the output thread. Opened on the calling thread so a failure is
-/// reported before the engine claims to be playing.
+/// A device for the output thread. Opened on the calling thread so a failure
+/// is reported before the engine claims to be playing.
+#[cfg(feature = "cpal")]
 struct Setup {
     name: String,
     device: cpal::Device,
@@ -177,72 +252,13 @@ struct Setup {
 /// ONE list, used by the enumeration and by [`probe`]: a settings page that
 /// lists sinks in another order than the engine opens them would offer a
 /// choice that does not land where the chip says.
+#[cfg(feature = "cpal")]
 pub const HOSTS: [cpal::HostId; 2] = [cpal::HostId::PipeWire, cpal::HostId::Alsa];
 
-/// Every output this machine offers right now, named exactly as
-/// [`crate::Engine::set_output_device`] takes them (`DeviceDescription::name`,
-/// which is PipeWire's own `node.description` and what [`probe`] matches).
-///
-/// The FIRST host of [`HOSTS`] that has anything is the one `probe` opens —
-/// PipeWire normally, ALSA on a machine with no session manager — and only its
-/// devices are listed, sorted so a node's creation order never moves a chip
-/// under a pointer. Listing the other host's devices beside them would be a dump
-/// of pseudo-devices (`default`, `Discard all samples (playback)…`): measured on
-/// this machine, PipeWire's two real sinks plus **nine** more lines of ALSA
-/// plumbing, which is not a chip row. The session manager's own aliases
-/// (`default_sink`, `default_output`) are dropped for the same reason: the card's
-/// « Sortie par défaut » chip already IS that choice.
-///
-/// This replaced reading `pw-dump` from the app: same names, one in-process
-/// enumeration instead of a subprocess and 246 KB of JSON, and a headset plugged
-/// in since the engine started is seen because `host_from_id` builds a fresh
-/// host and a fresh registry snapshot.
-///
-/// An empty list means the machine has no output at all (no PipeWire socket, no
-/// ALSA card) — the caller says so rather than showing an empty row.
-pub fn output_devices() -> Vec<String> {
-    for host_id in HOSTS {
-        let Ok(host) = cpal::host_from_id(host_id) else {
-            continue;
-        };
-        let Ok(devices) = host.output_devices() else {
-            continue;
-        };
-        let mut names: Vec<String> = Vec::new();
-        for device in devices {
-            let Ok(description) = device.description() else {
-                continue;
-            };
-            let name = description.name();
-            if name.is_empty()
-                || is_default_output_alias(name)
-                || names.iter().any(|existing| existing == name)
-            {
-                continue;
-            }
-            names.push(name.to_owned());
-        }
-        if !names.is_empty() {
-            names.sort();
-            return names;
-        }
-    }
-    Vec::new()
-}
-
-/// cpal's PipeWire host lists the session manager's aliases beside the real
-/// sinks (`default_sink`, `default_output`). They are not a device a person
-/// picks: the default IS the absence of a choice.
-pub fn is_default_output_alias(name: &str) -> bool {
-    matches!(
-        name,
-        "default_sink" | "default_output" | "default_input" | "input_default"
-    )
-}
-
-/// The configuration a device is opened with: the engine's rate when the device
-/// supports it, else its own, and a buffer the size of the engine's period when
-/// the device allows it.
+/// The configuration a device is opened with: the engine's rate when the
+/// device supports it, else its own, and a buffer the size of the engine's
+/// period when the device allows it.
+#[cfg(feature = "cpal")]
 fn configure(
     device: cpal::Device,
     preferred_rate: u32,
@@ -278,7 +294,8 @@ fn configure(
         }
     };
     // The callback period is the engine's 10 ms when the device can do it
-    // (PipeWire advertises 32–2048 frames), and the device's own range otherwise.
+    // (PipeWire advertises 32–2048 frames), and the device's own range
+    // otherwise.
     let buffer_frames = match config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => period_frames.max(1).clamp(*min, *max),
         cpal::SupportedBufferSize::Unknown => period_frames.max(1),
@@ -291,6 +308,7 @@ fn configure(
     })
 }
 
+#[cfg(feature = "cpal")]
 fn probe(
     choice: &OutputChoice,
     preferred_rate: u32,
@@ -354,6 +372,7 @@ fn probe(
     }))
 }
 
+#[cfg(feature = "cpal")]
 fn host_name(host: cpal::HostId) -> &'static str {
     match host {
         cpal::HostId::PipeWire => "PipeWire",
@@ -365,12 +384,14 @@ fn host_name(host: cpal::HostId) -> &'static str {
     }
 }
 
+#[cfg(feature = "cpal")]
 /// The command the output thread obeys.
 enum OutCmd {
     SetDevice(OutputChoice),
     Stop,
 }
 
+#[cfg(feature = "cpal")]
 /// A device output, rebuilt on demand on its own thread.
 pub(crate) struct DeviceOutput {
     cmd: Sender<OutCmd>,
@@ -378,6 +399,7 @@ pub(crate) struct DeviceOutput {
     join: Option<JoinHandle<()>>,
 }
 
+#[cfg(feature = "cpal")]
 impl DeviceOutput {
     fn set_device(&self, choice: OutputChoice) {
         let _ = self.cmd.send(OutCmd::SetDevice(choice));
@@ -388,6 +410,17 @@ impl DeviceOutput {
     }
 }
 
+#[cfg(feature = "cpal")]
+impl Drop for DeviceOutput {
+    fn drop(&mut self) {
+        let _ = self.cmd.send(OutCmd::Stop);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+#[cfg(feature = "cpal")]
 fn build_device_output(
     setup: Setup,
     mixer: Mixer,
@@ -409,6 +442,7 @@ fn build_device_output(
     }
 }
 
+#[cfg(feature = "cpal")]
 fn info_of(setup: &Setup) -> OutputInfo {
     OutputInfo {
         device: setup.name.clone(),
@@ -418,6 +452,7 @@ fn info_of(setup: &Setup) -> OutputInfo {
     }
 }
 
+#[cfg(feature = "cpal")]
 /// The output thread: one stream at a time, rebuilt on `SetDevice`.
 fn run_device(
     mut setup: Setup,
@@ -533,6 +568,7 @@ fn run_device(
     }
 }
 
+#[cfg(feature = "cpal")]
 /// Ask the callback to give the mixer back, and wait for it.
 fn wait_mixer(back: &mut Consumer<Mixer>, timeout: Duration) -> Option<Mixer> {
     let deadline = Instant::now() + timeout;
@@ -547,6 +583,7 @@ fn wait_mixer(back: &mut Consumer<Mixer>, timeout: Duration) -> Option<Mixer> {
     }
 }
 
+#[cfg(feature = "cpal")]
 fn build_stream(
     setup: &Setup,
     shared: &Arc<MixerShared>,
@@ -605,6 +642,77 @@ fn build_stream(
     };
     built.map_err(|e| e.to_string())
 }
+/// Every output this machine offers right now, named exactly as
+/// [`crate::Engine::set_output_device`] takes them (`DeviceDescription::name`,
+/// which is PipeWire's own `node.description` and what `probe` matches).
+///
+/// The FIRST host of `HOSTS` that has anything is the one `probe` opens —
+/// PipeWire normally, ALSA on a machine with no session manager — and only its
+/// devices are listed, sorted so a node's creation order never moves a chip
+/// under a pointer. Listing the other host's devices beside them would be a dump
+/// of pseudo-devices (`default`, `Discard all samples (playback)…`): measured on
+/// this machine, PipeWire's two real sinks plus **nine** more lines of ALSA
+/// plumbing, which is not a chip row. The session manager's own aliases
+/// (`default_sink`, `default_output`) are dropped for the same reason: the card's
+/// « Sortie par défaut » chip already IS that choice.
+///
+/// This replaced reading `pw-dump` from the app: same names, one in-process
+/// enumeration instead of a subprocess and 246 KB of JSON, and a headset plugged
+/// in since the engine started is seen because `host_from_id` builds a fresh
+/// host and a fresh registry snapshot.
+///
+/// An empty list means the machine has no output at all (no PipeWire socket, no
+/// ALSA card) — the caller says so rather than showing an empty row. It is also
+/// the answer when the crate was built without the `cpal` feature: a platform
+/// that drives the mixer itself owns its own device list, and `nz-audio` has no
+/// business enumerating anything then.
+#[cfg(feature = "cpal")]
+pub fn output_devices() -> Vec<String> {
+    for host_id in HOSTS {
+        let Ok(host) = cpal::host_from_id(host_id) else {
+            continue;
+        };
+        let Ok(devices) = host.output_devices() else {
+            continue;
+        };
+        let mut names: Vec<String> = Vec::new();
+        for device in devices {
+            let Ok(description) = device.description() else {
+                continue;
+            };
+            let name = description.name();
+            if name.is_empty()
+                || is_default_output_alias(name)
+                || names.iter().any(|existing| existing == name)
+            {
+                continue;
+            }
+            names.push(name.to_owned());
+        }
+        if !names.is_empty() {
+            names.sort();
+            return names;
+        }
+    }
+    Vec::new()
+}
+
+/// No `cpal` feature, no host to enumerate: the platform that owns the output
+/// (AAudio, `AudioTrack`, CoreAudio) also owns the list of its devices.
+#[cfg(not(feature = "cpal"))]
+pub fn output_devices() -> Vec<String> {
+    Vec::new()
+}
+
+/// cpal's PipeWire host lists the session manager's aliases beside the real
+/// sinks (`default_sink`, `default_output`). They are not a device a person
+/// picks: the default IS the absence of a choice.
+pub fn is_default_output_alias(name: &str) -> bool {
+    matches!(
+        name,
+        "default_sink" | "default_output" | "default_input" | "input_default"
+    )
+}
 
 /// A paced pump with no device: the same `render` every period, so the engine
 /// runs (and is measured) on a machine with no sound server.
@@ -654,68 +762,48 @@ impl Drop for NullOutput {
     }
 }
 
-/// Pull-driven output for tests and CI: the caller decides when a buffer is
-/// rendered, so a gapless seam is a deterministic assertion, not a race with a
-/// sound card.
-pub struct OfflineSink {
-    mixer: Mixer,
-    shared: Arc<MixerShared>,
-}
-
-impl OfflineSink {
-    /// Render `out` (interleaved stereo f32), exactly like a callback would.
-    pub fn render(&mut self, out: &mut [f32]) {
-        self.mixer.render(out);
-    }
-
-    pub fn shared(&self) -> &Arc<MixerShared> {
-        &self.shared
-    }
-}
-
 /// The engine's output, whatever it turned out to be.
 pub(crate) enum Output {
+    #[cfg(feature = "cpal")]
     Device(DeviceOutput),
     Null {
         /// Kept for its `Drop`: stopping the pump is what ends its thread.
         _pump: NullOutput,
     },
-    /// The mixer lives in the [`OfflineSink`] the caller holds.
-    Offline,
+    /// The mixer lives in the [`ExternalSink`] the caller holds: a platform
+    /// output, or `new_offline`'s pull-driven sink.
+    External,
 }
 
 impl Output {
     pub(crate) fn info(&self) -> Option<OutputInfo> {
         match self {
+            #[cfg(feature = "cpal")]
             Output::Device(device) => Some(device.info()),
-            Output::Null { .. } | Output::Offline => None,
+            Output::Null { .. } | Output::External => None,
         }
     }
 
+    /// Switch the device. Only a cpal device can be switched: an external sink
+    /// belongs to the platform, which opens and closes its own device.
+    #[cfg_attr(not(feature = "cpal"), allow(unused_variables))]
     pub(crate) fn set_device(&self, choice: OutputChoice) -> Result<(), OutputError> {
         match self {
+            #[cfg(feature = "cpal")]
             Output::Device(device) => {
                 device.set_device(choice);
                 Ok(())
             }
-            Output::Null { .. } | Output::Offline => Err(OutputError::Unavailable(
+            Output::Null { .. } | Output::External => Err(OutputError::Unavailable(
                 "aucune sortie audio réelle".into(),
             )),
         }
     }
 }
 
-impl Drop for DeviceOutput {
-    fn drop(&mut self) {
-        let _ = self.cmd.send(OutCmd::Stop);
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
-}
-
 /// Start the engine's output: the real device when there is one, the pump
 /// otherwise. Returns the mixer's command producer with the output.
+#[cfg(feature = "cpal")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     choice: &OutputChoice,
@@ -738,25 +826,16 @@ pub(crate) fn start(
         Ok(setup) => {
             let rate = setup.config.sample_rate();
             let shared = Arc::new(MixerShared::new(rate, volume));
-            let (mixer, cmds, party, party_gain) = Mixer::new(
-                Arc::clone(&shared),
-                notes,
-                settings,
-                tap,
-                setup.config.sample_rate(),
-            );
+            let (mixer, cmds, party, party_gain) =
+                Mixer::new(Arc::clone(&shared), notes, settings, tap, rate);
             let info = info_of(&setup);
-            let output = build_device_output(setup, mixer, Arc::clone(&shared), bus);
-            (
-                Output::Device(output),
-                shared,
-                cmds,
-                party,
-                party_gain,
-                info,
-            )
+            let output =
+                Output::Device(build_device_output(setup, mixer, Arc::clone(&shared), bus));
+            (output, shared, cmds, party, party_gain, info)
         }
         Err(_) => {
+            // Nothing to play through: the mixer goes to the silence pump, which
+            // is what makes the engine testable on a machine with no sound card.
             let shared = Arc::new(MixerShared::new(preferred_rate, volume));
             let (mixer, cmds, party, party_gain) =
                 Mixer::new(Arc::clone(&shared), notes, settings, tap, preferred_rate);
@@ -779,9 +858,52 @@ pub(crate) fn start(
     }
 }
 
-/// The pull-driven variant of [`start`], for tests: the caller gets the sink and
-/// drives the clock.
-pub(crate) fn start_offline(
+/// Start the engine's output with no device of its own: there is no host to
+/// probe without the `cpal` feature, so the engine runs on its silence pump
+/// until a platform hands the mixer to its own callback through
+/// [`ExternalSink`] (`Engine::new_external`).
+#[cfg(not(feature = "cpal"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn start(
+    _choice: &OutputChoice,
+    preferred_rate: u32,
+    volume: f32,
+    period_frames: u32,
+    _bus: Arc<EventBus>,
+    notes: Producer<MixerNote>,
+    settings: Arc<Settings>,
+    tap: Tap,
+) -> (
+    Output,
+    Arc<MixerShared>,
+    Producer<MixerCmd>,
+    Producer<PartyCmd>,
+    Arc<AtomicF32>,
+    OutputInfo,
+) {
+    let shared = Arc::new(MixerShared::new(preferred_rate, volume));
+    let (mixer, cmds, party, party_gain) =
+        Mixer::new(Arc::clone(&shared), notes, settings, tap, preferred_rate);
+    let pump = NullOutput::start(mixer, preferred_rate, period_frames);
+    let info = OutputInfo {
+        device: "sans sortie audio".into(),
+        sample_rate: preferred_rate,
+        channels: 2,
+        latency_frames: u64::from(period_frames),
+    };
+    (
+        Output::Null { _pump: pump },
+        shared,
+        cmds,
+        party,
+        party_gain,
+        info,
+    )
+}
+
+/// The pull-driven output: the caller gets the sink and drives the clock. Used
+/// by `new_offline` (the tests) and by `new_external` (a platform callback).
+pub(crate) fn start_external(
     sample_rate: u32,
     volume: f32,
     notes: Producer<MixerNote>,
@@ -789,7 +911,7 @@ pub(crate) fn start_offline(
     tap: Tap,
 ) -> (
     Output,
-    OfflineSink,
+    ExternalSink,
     Arc<MixerShared>,
     Producer<MixerCmd>,
     Producer<PartyCmd>,
@@ -798,14 +920,14 @@ pub(crate) fn start_offline(
     let shared = Arc::new(MixerShared::new(sample_rate, volume));
     let (mixer, cmds, party, party_gain) =
         Mixer::new(Arc::clone(&shared), notes, settings, tap, sample_rate);
-    let sink = OfflineSink {
+    let sink = ExternalSink {
         mixer,
         shared: Arc::clone(&shared),
     };
-    (Output::Offline, sink, shared, cmds, party, party_gain)
+    (Output::External, sink, shared, cmds, party, party_gain)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cpal"))]
 mod tests {
     use super::*;
 
@@ -909,5 +1031,37 @@ mod tests {
         assert_eq!(out[0], 1.0);
         assert_eq!(out[1], -1.0);
         assert_eq!(out[2], 0.0);
+    }
+}
+
+#[cfg(all(test, not(feature = "cpal")))]
+mod tests_without_cpal {
+    use super::*;
+    use rtrb::RingBuffer;
+
+    /// Without the `cpal` feature there is no host to enumerate: the answer is
+    /// an empty list, never a panic and never a fake device.
+    #[test]
+    fn without_cpal_there_is_no_device_to_list() {
+        assert!(output_devices().is_empty());
+    }
+
+    /// The pull-driven sink is the whole output path then: it renders, it shares
+    /// the clock, and it counts the platform's underruns.
+    #[test]
+    fn the_external_sink_renders_and_shares_its_clock() {
+        let (notes, _notes_rx) = RingBuffer::new(8);
+        let (_output, mut sink, shared, _cmds, _party, _gain) = start_external(
+            48_000,
+            1.0,
+            notes,
+            Settings::new(),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+        );
+        let shared_again = sink.shared();
+        assert!(Arc::ptr_eq(&shared, &shared_again));
+        let mut out = vec![0.0f32; 480 * 2];
+        sink.render(&mut out);
+        assert_eq!(shared_again.clock.stream_position(), 0.01);
     }
 }

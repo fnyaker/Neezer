@@ -13,6 +13,14 @@
 //! output callback owns the `Mixer`, which pops the current voice and, when it
 //! ends, the preloaded next one **in the same buffer** — the gapless seam. No
 //! callback ever allocates, locks or waits.
+//!
+//! Two outputs, one mixer: the desktop's own device through cpal (the `cpal`
+//! feature, on by default: [`Engine::new`]), and an [`ExternalSink`] a platform
+//! hands to ITS real-time callback ([`Engine::new_external`], Android's AAudio
+//! and `AudioTrack`). With `default-features = false` nothing that names cpal is
+//! compiled at all, so the crate builds for a target that has no PipeWire and no
+//! ALSA (`docs/agents/mobile.md`, lot SC2). `new_offline` is `new_external` with
+//! a test's name on it: what a test renders is what a phone renders.
 
 mod clock;
 mod crossfade;
@@ -38,7 +46,8 @@ pub use engine::{
 pub use events::EngineEvent;
 pub use mixer::MixerShared;
 pub use output::{
-    OfflineSink, OutputChoice, OutputError, OutputInfo, is_default_output_alias, output_devices,
+    ExternalSink, OfflineSink, OutputChoice, OutputError, OutputInfo, is_default_output_alias,
+    output_devices,
 };
 pub use party::{EDGE_S, SLOTS as PARTY_SLOTS, Segment};
 pub use source::{ByteStream, Lane, Quality, SourceError, StreamOpener, StreamReady, TrackId};
@@ -46,7 +55,7 @@ pub use stretch::{MAX_SPEED, MIN_SPEED, clamp_speed};
 pub use tap::{TAP_FRAMES, TapReader};
 pub use trim::{EDGE_LENGTH_SLACK, Edges, MAX_EDGE_TRIM, Trim, trim_for};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cpal"))]
 mod tests {
     use symphonia::core::codecs::registry::RegisterableAudioDecoder;
 
