@@ -2698,7 +2698,9 @@ Waves that can run in parallel (disjoint files):
 - **The rule, a pinned URL is requested as it is.** `Api::download_to` builds `{base}/api{path}`, so
   handing it the absolute model URL asked the neezer SERVER for `/apihttps://huggingface.co/…` and
   every download in Réglages → Transcription locale was a **404** (v1.6.0). The two entry points are
-  now separate on purpose: `download_url_to` takes an absolute `http(s)` URL, uses a client with **no
+  now separate on purpose: `download_url_to` takes an absolute **`https`** URL (a `http`, `file`,
+  `ftp`, relative or credentialed one is refused before a byte moves, and the client's `https_only`
+  refuses a redirect that would downgrade), uses a client with **no
   cookie jar** (a neezer session never leaves its server, and a third-party `401` must not clear it),
   sends no `X-NS-Background` (a CDN does not read our headers) and follows the **`302`** Hugging Face
   answers with — the body only counts at the end of that chain — while holding the same lane slot and
@@ -2740,10 +2742,11 @@ Waves that can run in parallel (disjoint files):
   - **the snapshot** a screen holds for the worst realistic state (six models, a download, a job,
     six failures, the worker): **1 646 B** by `testmem`'s counting allocator (budget 16 KB; 258 B of
     them are the failure sentences).
-  - **tests**: `cargo test --workspace --locked` green; `cargo test -p neezer-desktop` **363
-    passed, 0 failed, 9 ignored** (15 `wiring::transcribe`, 5 `screens::settings::transcribe`, the
-    panel's local case); `cargo test -p nz-transcribe` **68 lib + 8 acceptance** (the two
-    measurement benches — Vulkan/CPU and 0 underrun — are `--ignored`, their numbers above).
+  - **tests**: `cargo test --workspace --locked` green; `cargo test -p neezer-desktop` **428
+    passed, 0 failed, 11 ignored** (19 `wiring::transcribe`, 4 of them `--ignored`: the two réseau
+    ones and the two measurement benches; 5 `screens::settings::transcribe`, the panel's local
+    case); `cargo test -p nz-transcribe` **69 lib + 8 acceptance** (the two measurement benches —
+    Vulkan/CPU and 0 underrun — are `--ignored`, their numbers above); `nz-api` **27**.
   - **RSS** (release, Xvfb + private D-Bus, `/proc/<pid>/status`): **196 760 kB** at Accueil
     against **196 616 kB** for `master`'s binary at the same screen (**+144 kB**); **199 616 kB**
     on this page and **287 016 kB** at 2560×1600 (the window's own surfaces, D11/D12's number). The
