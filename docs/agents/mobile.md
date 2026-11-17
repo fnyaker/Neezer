@@ -8,9 +8,10 @@ the app it REPLACES is [android.md](android.md) (read it: every hard-won rule th
 here or is made unnecessary, and this note says which); the Rust crates it shares come from the
 desktop app ([desktop.md](desktop.md)).
 
-**Status (2026-11-17): MB0 (the skeleton), MB1 (Sillon in Compose) and MB2 (the core runtime,
-session, lists, covers, links and `:bridge`) are delivered; the lots below are planned and follow
-this note in order.** Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
+**Status (2026-11-17): MB0 (the skeleton), MB1 (Sillon in Compose), MB2 (the core runtime,
+session, lists, covers, links and `:bridge`) and MB4 (setup, the migration from the old app, the
+updater, the Deezer login) are delivered; the lots below are planned and follow this note in
+order.** Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
 number) — a delivered lot is not a changelog. The old `android/` app keeps building and shipping
 until lot MB-SWAP.
 
@@ -1782,88 +1783,188 @@ Fin : branche <ta-branche>/mb3b, PR « feat(mobile): MB3b player core », CI ver
 merge, section MB3b réécrite, `ao report --done`.
 ```
 
-### MB4 — Setup, migration from the old app, updater, Deezer login (wave 2)
+### MB4 — Setup, migration from the old app, updater, Deezer login (delivered 2026-11-17)
 
-**Goal.** The first minutes: choose the server (URL, port, SSL toggle, TOFU pin), log in, and — for a
-person updating from the WebView app — find everything where they left it. **Depends on**: MB1,
-MB2, SC3. **Exclusive files**: `nz-core/src/setup/**`, `nz-ffi/src/setup.rs`, `feature/setup/**`.
-**Contract.** `Screens::probe_server(url) -> ServerProbe { origin, version, https, cert:
-Option<CertificateInfo>, system_trusted }`; `NzCore::pin_certificate(origin, sha256)`; setup/login
-screens (`SetupEntry`, `LoginEntry`). **Migration** (`Screens::migration_status() -> MigrationState`,
-`run_migration(input: MigrationInput) -> MigrationReport`, runs once, on Bulk, resumable):
-1. `SharedPreferences("settings")`: `host`, `port`, the SSL toggle, `pinOrigin`/`pinCert` → server +
-   pin. The car mode's own preferences file is NOT touched (`:car` reads it under the same name).
-2. The session: `CookieManager.getInstance().getCookie(origin)` (initialises the WebView library once,
-   on a worker) → seeds `SessionJar`, so the person is not logged out.
-3. Downloads: every `filesDir/offline/<sha>.audio` with its `.json` (`{id, type}`) → RENAMED (same
-   filesystem, never copied, never deleted) into `nz-cache`'s offline dir and registered as tracks of
-   a set "Repris de l'ancienne app"; metadata fetched lazily when online.
-4. The SPA's own storage (settings in `localStorage`, download sets and covers in IndexedDB): a
-   hidden WebView loads `<origin>/__nsmigrate` which `shouldInterceptRequest` answers with a local
-   page (no network needed, same origin → same storage); its script returns `JSON.stringify` of the
-   known keys (the lot builds the mapping table from `webapp/src/lib/stores.js`, `offline.js`,
-   `theme.js`: quality, crossfade, trim, normalisation, EQ + preset, bass, mono/balance, theme,
-   accent, viz settings, download sets) → `kv`/`downloads`. Unknown keys are ignored.
-5. A notice says what was taken over ("Repris : 214 titres téléchargés, 3 playlists hors ligne,
-   18 réglages") or the cause of each failure; `kv` `migrated_from_webview = 1`. The old WebView data
-   directory is left in place (cleanup is a later release's decision).
-**Updater**: `Updater.kt`, `ApkArchive.kt` and their JVM tests ported unchanged in behaviour (zip,
-binary manifest, package, versionCode, signing lineage, causes `preparing truncated archive invalid
-package signature permission`, "Réessayer" except signature); the download itself through Rust
-(`Screens::fetch_update(dest) -> UpdateFile`, Bulk lane, `202 + Retry-After` waited, a body shorter
-than `Content-Length` refused); `/api/version`'s `android.apk` → a notice + Réglages → Aide.
-**Deezer login**: `DeezerLoginActivity` ported as is (Deezer's page in a throwaway WebView, the
-Deezer jar wiped before and after — scoped to `deezer.com`, cookie polled ~600 ms, SSO refused, NO
-bridge); the ARL goes to the same server route the SPA's caller of `lib/nativeDeezer.js` uses, through
-`SettingsApi::save_deezer_arl(arl)` declared in this lot's FFI file.
-**Acceptance.** The screen standard; the **upgrade test**: on the headless emulator, install the OLD
-`neezer.apk` (built from `android/` at master), point it at perf_api, log in, download 3 tracks, set
-the EQ and the theme; `adb install -r` the new APK → it opens logged in, on that server, the 3 tracks
-play with the network off (`cmd connectivity airplane-mode enable`), the EQ and the theme are those
-set. TOFU with a self-signed local TLS proxy: pin shown, accepted, then a changed cert → "le
-certificat a changé". The ported updater tests pass on the JVM.
-**Pitfalls.** Never delete anything of the old app's data during migration (rename audio only).
-The cookie read must target the configured ORIGIN only. The intercepted migration URL must be
-answered locally and never reach the network.
+**What landed.** The app's first minutes and its update path, and — for a person
+updating from the WebView app — everything where they left it.
 
-```text
-Tu es le worker du lot MB4 (installation, migration, mise à jour, connexion Deezer) de la nouvelle app
-mobile Neezer. Lis CLAUDE.md (règle 7 surtout), docs/agents/mobile.md (« Auth », « Worker rules »,
-« The standard every screen lot meets », « MB4 »), docs/agents/android.md EN ENTIER, puis
-android/app/src/main/java/org/nsupysonic/app/{SetupActivity,Prefs,Ssl,Updater,ApkArchive,
-DeezerLoginActivity,OfflineStore}.kt et webapp/src/lib/{stores,offline,theme,nativeDeezer}.js.
-Objectif : écrans d'installation et de connexion (URL, port, SSL, épinglage TOFU), migration unique
-depuis l'ancienne app (préférences, cookie de session, téléchargements renommés jamais supprimés,
-localStorage/IndexedDB lus par une WebView cachée sur une URL interceptée localement), mise à jour
-depuis le serveur, connexion Deezer, selon la section MB4.
-Fichiers à toi seul : nz-core/src/setup/**, nz-ffi/src/setup.rs, mobile/android/feature/setup/**.
-Acceptation : le standard des écrans ; le test de mise à jour depuis l'ancien APK sur l'émulateur sans
-affichage (connecté, 3 titres lus hors réseau, EQ et thème conservés) ; TOFU avec certificat changé ;
-tests JVM du programme de mise à jour.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb4, PR « feat(mobile): MB4 setup, migration, updater, Deezer login », CI
-verte, rebase + diff --stat, merge, section MB4 réécrite, `ao report --done`.
-```
+- **The setup screen** (`SetupEntry`, `nz-core::setup::probe`,
+  `Screens.probeServer`) does what `SetupActivity` + `Prefs.buildBaseUrl` +
+  `Ssl.presentedFingerprint` did, as one call: the host and port are normalised
+  by the ONE implementation of that rule (the port lands in the AUTHORITY only,
+  a bare host is `https`, a reverse-proxied path is kept), the certificate is
+  learnt with a handshake that sends **not one application byte**, its SHA-256
+  is on screen before it is trusted, and `GET /api/version` is read through that
+  very leaf. Nothing is persisted until "Vérifier le serveur" succeeds or
+  "Continuer quand même" is pressed — the old screen's own lesson (a bad host
+  stayed saved after a probe followed by a back press).
+- **The login form lives on the same screen**, after the server step: one
+  `POST /api/login`, the cause under the fields, and the jar keeps the cookie.
+  It is not a second route because `NzNavigator` speaks `AppLink`s and the
+  Setup/Login routes are not links (a route `NavGraph` still declares
+  `LoginEntry` for a shell that opens it directly; both share one composable).
+- **The migration** (`nz-core::setup::migration`, `Screens.migrationStatus`/
+  `runMigration`, `MigrationRunner`, `SetupMigrationProvider`, `MigrationWeb`)
+  runs once per device, at process start, in the background, and RESUMES after
+  a kill: the pin is applied first, then the old server is probed and
+  remembered, the old WebView's session cookie is seeded into this app's jar
+  (configured origin only), every `filesDir/offline/<sha40>.audio` is **renamed**
+  into `nz-cache`'s offline directory under the set « Repris de l'ancienne app »
+  (never copied, never deleted, metadata read when the link is back), and the
+  SPA's `localStorage` keys the new app knows go into `kv` as the raw JSON the
+  page wrote. The hidden WebView loads `<origin>/__nsmigrate`, which
+  `shouldInterceptRequest` answers with a local document and whose every other
+  URL is a local 404: the old page's storage is read on its own origin and
+  nothing reaches the network. The report becomes one French sentence (what was
+  taken, then the CAUSE of everything that was not) and is kept in `kv`, so the
+  notice survives the launch that ran it.
+- **The updater**: the APK fetch is Rust's (`Screens.fetchUpdate`, `Bulk` lane,
+  `202` waited out, a body shorter than its `Content-Length` or too small to be
+  an application refused with its cause); Kotlin keeps every check that decides
+  whether Android may install it (`ApkArchive`, `UpdateDecisionRule`: package,
+  `versionCode`, signing lineage, several signers), and `signature` is the one
+  cause with no "Réessayer". `Updater.kt` is the old class, rewired to Rust for
+  the transfer and to the Activity Result contract for the permission round trip.
+- **Deezer**: `DeezerLoginActivity` ported rule for rule (Deezer's own page, no
+  JS bridge, the Deezer jar wiped on entry and on success, ~600 ms cookie poll,
+  SSO refused, a bad certificate cancels), and `Screens.saveDeezerArl` posts the
+  ARL to `/api/settings` — the route `lib/nativeDeezer.js`'s caller uses. The
+  value reaches no file on the device and no log line.
+
+**Two completions outside this lot's files** (both authorized, both listed in the
+PR): `nz-api::SessionJar::seed` (a jar had no way to take a cookie a browser
+already held, and writing `session.json` by hand would only count from the next
+launch), and the two lines in `nz-core::core::server` MB2 left for this lot —
+`build_api_with` hands the stored pin to every client, and `pin_certificate`
+rebuilds that client, so the pin is enforced on **every** request in this
+process, not only on the setup screen.
+
+**Measured on this machine** (API 35 x86_64 `-no-window -no-audio` on my own
+port, `perf_api.py --serve` reached at `10.0.2.2`, old app built from `android/`
+at master with `versionCode=1`, new APK `2.0.0-debug` / `versionCode=2000001`,
+same debug key, `adb install -r` over it):
+
+- **The upgrade test**: the old app was given the state a person's app has (its
+  `SharedPreferences`, three downloads in `OfflineStore`'s own
+  `<sha40>.audio`/`.json` format, and — written by ITS OWN WebView on the real
+  origin — the session cookie, eleven `localStorage` settings and three
+  IndexedDB `meta` records). After `adb install -r` and one launch:
+  **`tracks=3 settings=11 session=1 failures=0`**, notice
+  « Repris : 3 titres téléchargés, 3 albums hors ligne, 11 réglages, la
+  session. » — `kv` holds `ui.theme="papier"`, `fx.eq.bands=[3,-2,1,0,0,0,4,0,-1,2]`,
+  `fx.bass=0.35`, `fx.normalize="medium"`, `fade.seconds=8`, `viz.eco=true`,
+  `offline.quality="OPUS_128"`, a seeded key this app does not know
+  (`nz.unknown`) is **not** written, the three tracks are `done` in
+  `downloads` at **192 044 B each** (their exact size) under the set
+  « Repris de l'ancienne app », `filesDir/offline` keeps **0** audio files (a
+  rename, not a copy — the three sidecars stay, nothing is deleted), the jar
+  holds the cookie for `http://10.0.2.2:4599`, and `GET /api/me` replayed with
+  that cookie answers **200** with `bench` (a live session, not a stored string).
+- **TOFU with a certificate that changed**: a real TLS server on the host,
+  cert A in the old app's `pinOrigin`/`pinCert`, cert B presented. The pin is
+  carried over (`server.pin.https://10.0.2.2:4699` = A's fingerprint) and the
+  first ordinary request is refused: « serveur : le serveur n'a pas répondu (le
+  **certificat du serveur a changé**) » in the report and the notice.
+- **Rust**: `cargo test --workspace --locked` = **82 tests** (63 `nz-core`, 17
+  `nz-ffi`, 2 others), of which **19** are this lot's `nz-core::setup` and **3**
+  its FFI conversions; `cargo clippy --all-targets -- -D warnings` and
+  `cargo fmt --check` clean. The update tests drive a loopback HTTP server with
+  a **script of answers** (a `202` then an APK; three `202`s; a body that dies
+  mid-transfer) and count what the server received.
+- **JVM**: `:feature:setup:testDebugUnitTest` = **25 tests** — `ApkArchiveTest`
+  (4, the old app's own cases), `UpdateDecisionTest` (8: same package / higher
+  code / lineage / several signers / unreadable signers / the one cause with no
+  retry), `SetupModelTest` (7: nothing persisted before the check, empty host
+  never reaches the network, a certificate shown then pinned, a changed one
+  replaced only on acceptance, `Hors ligne` → "Continuer quand même", a refused
+  password is a form error, no password kept in the state),
+  `MigrationNoticeTest` (5: the notice, the page's sentinel, its
+  no-external-reference rule, the intercepted path, the settings payload).
+  `:feature:setup:lintDebug` and `:app:assembleDebug` are clean.
+- **Sizes**: `libnz_ffi.so` arm64-v8a **6 356 480 B** (MB2: 6 129 152 — +227 kB
+  for realtime-free setup/update/Deezer logic and `seed`), armeabi-v7a
+  4 413 880 B, x86_64 6 925 840 B. Debug APK 41 524 692 B (not the shipping
+  size: a release build with R8 is MB-SWAP's).
+
+**Rules a measurement taught** (each one cost a wrong build or a silent failure):
+
+- **A `ContentProvider` runs BEFORE `Application.onCreate`, not after.** The
+  first version of the migration logged `core=false` and did nothing at all: the
+  framework installs the providers first, so `NzBridge` had not built the core
+  yet. It now posts to the main looper — the work runs after the message that is
+  running the whole boot — with no sleep, no latch and no polling.
+- **A WebView keeps its cookies in memory.** A force-stopped old app leaves an
+  EMPTY `app_webview/Default/Cookies`, so the migration found `session=0`; after
+  closing the screen properly (BACK → `onDestroy` → `WebView.destroy()`) the
+  cookie is committed and the same run reads `session=1`. A real update happens
+  hours after the last sign-in, so this is a test-harness lesson — and the
+  migration says so out loud instead of pretending: no cookie means the login
+  screen, never a broken session.
+- **The pin must be applied BEFORE the server probe.** With the note's order
+  (server, then pin) the probe met the certificate with no pin held and the
+  cause came out as the weaker « n'est pas accepté »; with the pin first the
+  same TLS server answers « **a changé** ». The old setup screen passed its
+  fingerprint to its probe for exactly this reason.
+- **The SPA has no download-set table.** `offline.js` keeps per-track `meta`
+  records (`{id, owner, quality, track}`) and nothing that names a playlist, so
+  "3 playlists hors ligne" cannot be counted; what the page CAN count is the
+  albums its downloaded tracks belong to (`track.album.id`), which is the number
+  the notice calls « albums hors ligne ».
+- **A download's 202 body is a WAIT, never a file**, and `nz-api`'s answer
+  carries no header: the `Retry-After` of `202` is not read, so the fetch waits
+  the server's own `APK_WAIT` (5 s, `androidapk.py`) for at most three attempts
+  and answers `NotReady` after them. A body that DIES mid-transfer is
+  `ApiError::Offline` (nz-api's own sentence); a body that merely ends short is
+  the length check's « Téléchargement incomplet ». Both are refused before an
+  installer sees them.
+- **`SettingsApi` carries no core** in MB0's shape (a unit object), so
+  `saveDeezerArl` lives on `Screens` — the object that has the client — and
+  MB16's Réglages section calls it from there. Same for the Deezer card: it is
+  a composable this module exports (`DeezerAccountCard`), not a screen of its
+  own, because Réglages → Compte owns the place.
+- **A migration must never be the reason a screen waits.** The hidden WebView's
+  read has a deadline and answers `null` on failure, so a page that never
+  reports costs the SETTINGS and never the downloads (measured before the
+  reorder: `tracks=3 settings=0`).
+- **`ordinal` naming on both sides of the boundary**: `offline_sets` is a `u32`
+  and Kotlin sees a `UInt` — the first compile said `Int` and failed the module.
+
+**Deliberate deviations from the plan paragraph, and why:**
+
+- **`probe_server(host, port, verify_ssl)`** rather than `probe_server(url)`: the
+  screen's three fields are the input, and letting Kotlin build the URL would be
+  a second implementation of a rule that already produced `…/musique:5722` once.
+- **The setup and login are one screen** (see above): `NzNavigator` exposes
+  `AppLink`s, and neither route is a link.
+- **`Screens.saveDeezerArl`** instead of `SettingsApi::save_deezer_arl` (see
+  above).
+- **No `docs/agents/screenshots/mobile/MB4/`**: this lot's row has no "Elsewhere"
+  entry, so the screens were looked at on the emulator (both widths through the
+  shell's own breakpoints, Encre/Papier through the theme tokens) and the images
+  stay out of the tree rather than in a directory another lot's row does not
+  name. The screen standard's other five points are held: cf+live data, a cause
+  with "Réessayer" on every failure, no list to window, optimistic nothing
+  (every action is one request), French copy and `Icon` glyphs throughout.
+- **The `migrated` set kind** (`kind="migrated"`, `ident="old-app"`): the store
+  accepts any kind, and calling it `playlist` would make it look like a server
+  playlist whose id does not exist. MB15 renders it by its title.
+
+**Still owed to a later lot** (each named where it belongs): MB15 renders the
+`migrated` set and plays the renamed files (this lot proves they are in
+`nz-cache`'s store, `done`, at their exact size); MB16 hosts `DeezerAccountCard`
+in Réglages → Compte and reads the ARL state; the SHELL calls
+`NzCore.restore()` at launch (MB5/MB-SWAP) — the session is migrated and live
+(`GET /api/me` 200), but nothing shows "signed in" until a screen asks; the
+`/api/version` → `android.apk` notice is on the setup screen and its action is
+Aide's (MB16/MB17); `mobile/tools/emu.sh` was still not merged, so the flags were
+given by hand on port 5592 exactly as `docs/agents/mobile.md` documents them.
+
+**Files.** `mobile/rust/crates/nz-core/src/setup/**` (5 files),
+`mobile/rust/crates/nz-ffi/src/setup.rs`, `mobile/android/feature/setup/**`
+(9 Kotlin files, its manifest, its build file, 3 JVM test files), plus the two
+authorized completions (`desktop/crates/nz-api/src/session.rs`,
+`mobile/rust/crates/nz-core/src/core/server.rs`) and this section.
+
 
 ### Screen lots, wave 2: MB5, MB5b, MB6, MB7, MB8, MB10
 
