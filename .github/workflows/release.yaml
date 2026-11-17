@@ -285,6 +285,12 @@ jobs:
         with:
           name: neezer-desktop-binaries-x86_64
           path: binaries
+      # `upload-artifact`/`download-artifact` do not carry the executable bit
+      # (measured: the binaries arrived 0644 and `lib.sh` refused them, in all
+      # four jobs at once). One chmod here beats a package that cannot run its
+      # own binaries.
+      - name: Make the downloaded binaries executable
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
       # `readelf` (binutils) is what lib.sh reads the binaries' NEEDED sonames
       # and their glibc floor with; `dpkg-deb` is part of dpkg, already here.
       - name: Build tooling
@@ -341,6 +347,12 @@ jobs:
         with:
           name: neezer-desktop-binaries-x86_64
           path: binaries
+      # `upload-artifact`/`download-artifact` do not carry the executable bit
+      # (measured: the binaries arrived 0644 and `lib.sh` refused them, in all
+      # four jobs at once). One chmod here beats a package that cannot run its
+      # own binaries.
+      - name: Make the downloaded binaries executable
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
       - name: Build tooling
         run: dnf install -y rpm-build binutils >/dev/null
       - name: Build the package
@@ -387,6 +399,12 @@ jobs:
         with:
           name: neezer-desktop-binaries-x86_64
           path: binaries
+      # `upload-artifact`/`download-artifact` do not carry the executable bit
+      # (measured: the binaries arrived 0644 and `lib.sh` refused them, in all
+      # four jobs at once). One chmod here beats a package that cannot run its
+      # own binaries.
+      - name: Make the downloaded binaries executable
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
       # What the AppImage expects to find on the host, because it bundles none of
       # it: the graphics stack, PipeWire/ALSA, the Vulkan loader and a Vulkan
       # device (lavapipe on a runner), plus Xvfb for a display of our own.
@@ -443,6 +461,12 @@ jobs:
         with:
           name: neezer-desktop-binaries-x86_64
           path: binaries
+      # `upload-artifact`/`download-artifact` do not carry the executable bit
+      # (measured: the binaries arrived 0644 and `lib.sh` refused them, in all
+      # four jobs at once). One chmod here beats a package that cannot run its
+      # own binaries.
+      - name: Make the downloaded binaries executable
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
       - name: flatpak and the runtime it is built against
         run: |
           sudo apt-get update

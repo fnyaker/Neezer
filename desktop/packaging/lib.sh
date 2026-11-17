@@ -61,8 +61,13 @@ neezer_check_version() {
 neezer_check_binaries() {
   local name
   for name in neezer-desktop neezer-transcribe; do
-    [[ -x "$NEEZER_BINARY_DIR/$name" ]] ||
+    [[ -f "$NEEZER_BINARY_DIR/$name" ]] ||
       neezer_die "pas de binaire $name dans $NEEZER_BINARY_DIR (cargo build --release --workspace)"
+    # Told apart from "absent" on purpose: an artefact that came from
+    # `actions/download-artifact` arrives without its executable bit, and the
+    # message is the whole diagnosis.
+    [[ -x "$NEEZER_BINARY_DIR/$name" ]] ||
+      neezer_die "$name n'est pas exécutable dans $NEEZER_BINARY_DIR (chmod +x : un artefact d'actions perd le bit)"
   done
 }
 
