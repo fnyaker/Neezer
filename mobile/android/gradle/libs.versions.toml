@@ -23,7 +23,12 @@ serialization = "1.13.0"
 coroutines = "1.11.0"
 
 media3 = "1.10.1"
-coil = "3.6.3"
+# Coil 3.5.0, NOT 3.6.x: every 3.6 AAR declares `minCompileSdk=37`, and this tree
+# compiles against 36 (AGP 8.13.2's ceiling — the same rule the Compose, core,
+# navigation and lifecycle pins follow, MB0's "newest AndroidX" lesson). 3.5.0
+# declares 36 and is the newest generation that builds here. MB2 is Coil's first
+# consumer, which is why the pin was never checked until now.
+coil = "3.5.0"
 jna = "5.19.1"
 work = "2.12.0"
 profileinstaller = "1.4.1"

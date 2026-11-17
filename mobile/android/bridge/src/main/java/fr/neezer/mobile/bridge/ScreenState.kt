@@ -1,10 +1,9 @@
 package fr.neezer.mobile.bridge
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.first
 
 /**
  * What a screen shows while its data arrives (rule 3).
@@ -40,14 +39,24 @@ sealed interface ScreenState<out T> {
  *   re-runs the read (one click = one attempt, `webapp/test/failure/run.mjs`'s
  *   rule; nothing retries by itself)
  *
- * MB2 owns this file and its JVM test; MB0 gave it the shape every feature lot
- * compiles against, so no lot invents a second loading state.
+ * Two details that cost a debugging session each, and are why this file has its
+ * own JVM test:
+ *
+ * - **A retry that arrives before the flow listens is NOT lost.** The signal is
+ *   a CONFLATED channel, not a `SharedFlow`: with no replay, a `tryEmit` that
+ *   lands between the `Failed` value and the next `receive()` would be dropped,
+ *   and the screen would sit on "Réessayer" forever. Measured by the test where
+ *   the collector calls `retry()` inside the same `collect`.
+ * - **A screen that is closed stops the work.** The flow is a `channelFlow`, so
+ *   leaving the screen cancels it, which cancels the `suspend` FFI call — and
+ *   Rust drops the future before it writes anything (cancellation-safe).
  */
 fun <T> screenFlow(
     cached: suspend () -> T?,
     fresh: suspend () -> T,
 ): Flow<ScreenState<T>> = channelFlow {
-    val retries = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    // CONFLATED: a second click while the first is in flight is the same click.
+    val retries = Channel<Unit>(Channel.CONFLATED)
     var announced = false
 
     while (true) {
@@ -81,8 +90,8 @@ fun <T> screenFlow(
                 send(ScreenState.Ready(kept, stale = true))
                 return@channelFlow
             }
-            send(ScreenState.Failed(NzErrors.text(e)) { retries.tryEmit(Unit) })
-            retries.first()
+            send(ScreenState.Failed(NzErrors.text(e)) { retries.trySend(Unit) })
+            retries.receive()
         }
     }
 }

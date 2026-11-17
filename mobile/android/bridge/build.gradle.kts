@@ -79,6 +79,38 @@ tasks.configureEach {
     }
 }
 
+/**
+ * `rustls-platform-verifier-android`'s version, read from `mobile/rust/Cargo.lock`
+ * at configuration time (a `ValueSource`, so the Gradle configuration cache still
+ * works). The AAR and the Rust crate must be the same version: the crate's JNI
+ * calls name the component's methods, and a mismatch is a handshake that fails
+ * with "Expect rustls-platform-verifier to be initialized".
+ */
+abstract class RustlsVersion : ValueSource<String, RustlsVersion.Params> {
+    interface Params : ValueSourceParameters {
+        val lockFile: RegularFileProperty
+    }
+
+    companion object {
+        const val CRATE_NAME = "rustls-platform-verifier-android"
+    }
+
+    override fun obtain(): String {
+        val lock = parameters.lockFile.get().asFile
+        val lines = lock.readLines()
+        val index = lines.indexOfFirst { it.trim() == "name = \"$CRATE_NAME\"" }
+        check(index >= 0) { "$CRATE_NAME not found in $lock" }
+        val versionLine = lines.drop(index + 1)
+            .firstOrNull { it.trimStart().startsWith("version = ") }
+            ?: error("$CRATE_NAME has no version line in $lock")
+        return versionLine.substringAfter('"').substringBefore('"')
+    }
+}
+
+val rustlsPlatformVerifierVersion: String = providers.of(RustlsVersion::class.java) {
+    parameters.lockFile.set(rustDir.file("Cargo.lock"))
+}.get()
+
 dependencies {
     // The generated code is JNA-based, and the AAR (not the jar) carries the
     // Android natives: a `jna.jar` on Android dies on its first call.
@@ -88,4 +120,18 @@ dependencies {
     api(libs.kotlinx.coroutines.android)
     // `androidx.annotation.RequiresApi` is referenced by the generated cleaner.
     api(libs.androidx.annotation)
+
+    // --- MB2: the process lifecycle and the cover loader ---------------------
+    // `ProcessLifecycleOwner` is what tells the core somebody is looking (rule
+    // 1's prefetch gate).
+    implementation(libs.androidx.lifecycle.process)
+    // Coil: the views decode Rust's file; the singleton lives in `coil`, the
+    // fetcher/keyer API in `coil-core` (a transitive `api` of it).
+    implementation("io.coil-kt.coil3:coil:${libs.versions.coil.get()}")
+    // The Android half of `rustls-platform-verifier`: the JVM component its JNI
+    // calls into, at the version the Rust crate locked.
+    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
+
+    // The JVM tests (`screenFlow`, the error register): pure policy, no device.
+    testImplementation(libs.junit)
 }
