@@ -377,6 +377,15 @@ pub fn hero_sleeve() -> Pixels {
     px(180.)
 }
 
+/// The share of a page a TAIL may take before it scrolls on its own: the
+/// provider's half under an album's tracks, the suggestions under a playlist.
+///
+/// A tail is a SECONDARY list. Unbounded it is a page whose own list is
+/// squeezed to nothing: measured — a 12-row « Titres recommandés » strip took
+/// the whole 800 px page and left a 4 000-row playlist **0 px** tall, so the
+/// playlist could not be seen, let alone scrolled (v1.6.1).
+pub const TAIL_SHARE: f32 = 0.4;
+
 /// A neutral band behind a header, the same on the artist, the album and the
 /// credits pages (`§6`'s "a plain band under a hairline, not a gradient").
 pub fn hero_band<V: Render>(cx: &mut Context<V>) -> Div {

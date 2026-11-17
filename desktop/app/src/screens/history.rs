@@ -26,13 +26,14 @@ use gpui_kit::base::{ScrollbarAxis, VirtualListScrollHandle};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement,
-    Render, SharedString, Size, StatefulInteractiveElement as _, Styled, Subscription, Window, div,
-    px, rems, size,
+    Render, ScrollStrategy, SharedString, Size, StatefulInteractiveElement as _, Styled,
+    Subscription, Window, div, px, rems, size,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon, scrollbar, virtual_list};
 use nz_api::ApiError;
 use nz_model::{History, HistoryCursor, HistoryEvent, HistorySummary, Track};
 
+use crate::actions::{ListFirst, ListLast, ListPageDown, ListPageUp};
 use crate::nav::Route;
 use crate::state::AppState;
 use crate::theme;
@@ -117,7 +118,62 @@ impl Screen {
         };
         screen.drain(rx, cx);
         screen.load(true, cx);
+        screen.bind_page_keys(cx);
         screen
+    }
+
+    /// **The history scrolls from the keyboard** (`Page suivante`, `Page
+    /// précédente`, `Début`, `Fin`). The page has no cursor — a click opens a
+    /// track, nothing is "selected" — so these move the VIEW, as a browser
+    /// does, and they are the only way through 37 000 listens without a wheel
+    /// (measured: before this, the keys did nothing at all on this page).
+    ///
+    /// Registered on the APP with a weak handle, like every list verb: a screen
+    /// never takes the focus (D8b), and a screen that is gone answers nothing.
+    fn bind_page_keys(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        macro_rules! on {
+            ($action:ty, $handler:expr) => {{
+                let weak = weak.clone();
+                let handler = $handler;
+                gpui_kit::App::on_action(cx, move |_: &$action, cx: &mut gpui_kit::App| {
+                    weak.update(cx, |this, cx| handler(this, cx)).ok();
+                });
+            }};
+        }
+        on!(ListPageDown, |this: &mut Self, cx: &mut Context<Self>| {
+            this.shift_page(1);
+            cx.notify();
+        });
+        on!(ListPageUp, |this: &mut Self, cx: &mut Context<Self>| {
+            this.shift_page(-1);
+            cx.notify();
+        });
+        on!(ListFirst, |this: &mut Self, cx: &mut Context<Self>| {
+            this.scroll.scroll_to_item(0, ScrollStrategy::Top);
+            cx.notify();
+        });
+        on!(ListLast, |this: &mut Self, cx: &mut Context<Self>| {
+            let last = this.rows.len().saturating_sub(1);
+            this.scroll.scroll_to_item(last, ScrollStrategy::Bottom);
+            cx.notify();
+        });
+    }
+
+    /// A page is the rows the last paint built (`visible`), so `Page suivante`
+    /// moves exactly what the person sees — no per-row measurement.
+    fn shift_page(&mut self, pages: i64) {
+        let (start, end) = self.visible.get();
+        let count = self.rows.len();
+        if count == 0 {
+            return;
+        }
+        let page = end.saturating_sub(start).max(1) as i64;
+        let target = (start as i64 + pages * page).clamp(0, count as i64 - 1) as usize;
+        // `Center`, not `Top`: base's `Top`/`Bottom` are "scroll into view"
+        // (minimal travel), so a row already on screen would not move the view
+        // at all (measured: `Page suivante` moved 176 px instead of a page).
+        self.scroll.scroll_to_item(target, ScrollStrategy::Center);
     }
 
     fn drain(&mut self, rx: events::Receiver<Msg>, cx: &mut Context<Self>) {
@@ -465,6 +521,11 @@ impl Render for Screen {
                 },
                 cx,
             )
+            // The handle the screen keeps, handed to the list: without it the
+            // list builds its own on every frame, starts at offset 0 each
+            // paint, and neither the wheel nor `scroll_to_item` moves anything
+            // (v1.6.1's rule, `widgets::track_list`).
+            .track_scroll(&scroll)
             .h_full();
             page = page.child(div().relative().flex_1().min_h(px(0.)).child(view).child(
                 scrollbar(
@@ -1088,6 +1149,81 @@ mod tests {
         cx.update(|_, cx| {
             assert_eq!(screen.read(cx).events.len(), 2, "no duplicate event");
         });
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// **`Page suivante`, `Page précédente`, `Début` and `Fin` scroll the
+    /// history** (v1.6.1). The page has no cursor, and it had no key handler at
+    /// all: on a 37 000-listen log the wheel was the only way down. Measured
+    /// here with sixty events in a 800 px window: `Page suivante` moves the
+    /// view by the rows it shows, `Fin` reaches the bottom, `Début` the top,
+    /// at 1280×800 and in the 660 px pane.
+    #[gpui::test]
+    async fn the_keys_scroll_the_history(cx: &mut gpui::TestAppContext) {
+        let mut events: Vec<String> = Vec::new();
+        for index in 0..60 {
+            let minute = 59 - index;
+            events.push(format!(
+                r#"{{"id":{index},"at":"2026-11-16T20:{:02}:00","listened":200,"outcome":1,
+                    "track":{{"deezer_id":"30{index:02}","title":"Titre {index}","duration":200}}}}"#,
+                minute
+            ));
+        }
+        let page = format!(
+            r#"{{"events":[{}],"next":null,"summary":{{"days":30,"listens":60,"skips":0,
+                "minutes":200,"top_artists":[],"top_tracks":[]}}}}"#,
+            events.join(",")
+        );
+        let stub = crate::widgets::card::stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/history", page.as_str()),
+        ]);
+        let (state, runtime) = crate::widgets::card::stub::logged_in(cx, &stub);
+        let (screen, cx) =
+            cx.add_window_view(move |_, cx| Screen::new(Route::History, state.clone(), cx));
+        crate::widgets::card::stub::until(&runtime, cx, "the page", |cx| {
+            screen.read(cx).rows.len() > 60
+        });
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            })
+        };
+        let offset =
+            |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| screen.read(cx).scroll.offset().y);
+
+        for (width, what) in [(1280., "1280×800"), (660., "the 660 px pane")] {
+            cx.simulate_resize(size(px(width), px(800.)));
+            paint(cx);
+            assert_eq!(offset(cx), px(0.), "{what}: a fresh page starts at the top");
+
+            cx.update(|_, cx| cx.dispatch_action(&ListPageDown));
+            cx.run_until_parked();
+            paint(cx);
+            let paged = offset(cx);
+            assert!(
+                paged < px(-200.),
+                "{what}: Page suivante moves the view; measured {paged:?}"
+            );
+
+            cx.update(|_, cx| cx.dispatch_action(&ListPageUp));
+            cx.run_until_parked();
+            paint(cx);
+            assert_eq!(offset(cx), px(0.), "{what}: Page précédente comes back");
+
+            cx.update(|_, cx| cx.dispatch_action(&ListLast));
+            cx.run_until_parked();
+            paint(cx);
+            let bottom = offset(cx);
+            assert!(bottom < paged, "{what}: Fin reaches the end; {bottom:?}");
+
+            cx.update(|_, cx| cx.dispatch_action(&ListFirst));
+            cx.run_until_parked();
+            paint(cx);
+            assert_eq!(offset(cx), px(0.), "{what}: Début returns to the top");
+        }
         runtime.shutdown_background();
         stub.stop();
     }

@@ -10,7 +10,8 @@ player's ([playback.md](playback.md)); remote control and the listen party are
 D14b, D15a, D16, D17, M1, P1, P2, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
 trim, saved sound at `AudioReady`, `409` told apart, the `auto` payload, the output list) and the
 contract follow-up (Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding
-route); the rest planned.**
+route), plus the v1.6.1 scroll follow-up (the shared list's scroll handle, a page's tail bounded,
+the credits page, the history's keys); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -1338,6 +1339,45 @@ Waves that can run in parallel (disjoint files):
   otherwise move a row list in the same breath), so only a screen with **no text field**
   installs them: Accueil (it keeps `j`/`k` for its recomposed list), while Réglages, search,
   Bienvenue and le Récap keep their own list/deck keys and scroll with the wheel.
+- **The rule, a windowed list's scroll handle is the SCREEN's, or the list does not scroll at
+  all** (v1.6.1). `v_virtual_list` builds a `VirtualListScrollHandle` of its own on every frame
+  and the wrapper reads THAT handle's offset, so a list that is not handed the handle its screen
+  keeps begins every paint at 0: the wheel, the touchpad, `Page suivante` and the scrollbar
+  beside the list did NOTHING, while `scroll_to_item` moved a cursor nobody could see.
+  `widgets/track_list::element` (the shared list of the album, an artist's titles, a person's
+  credits, the search results, the home's reco, Nouveautés) and `screens/history.rs` both built
+  their list and never called `.track_scroll`: measured by
+  `the_album_track_list_scrolls_with_the_wheel_and_the_keys`,
+  `the_person_credits_list_scrolls_with_the_wheel_and_the_keys` and
+  `the_keys_scroll_the_history` — **0 → 57 px** for one wheel notch (one 56 px row),
+  `Page suivante` **566–623 px**, `Fin` the last row, at 1280×800 and in the 660 px pane; live
+  under Xvfb, `Page suivante` ×3 on a 14-title album changes **26 491 px** of the window.
+  `.track_scroll` belongs to the widget, never to its callers: a list built without it looks
+  right and scrolls never.
+- **The rule, a page's TAIL is bounded and its list keeps the window** (v1.6.1). A tail is a
+  second list at the bottom of a page: the provider's half under an album's tracks (« Disponible
+  sur Deezer ») and the suggestions under a playlist (« Titres recommandés »). Unbounded, the
+  tail is the page — twelve 44 px suggestions took the whole 800 px page and left a 4 000-title
+  playlist's rows **0 px** tall, and a Deezer band of twenty titles squeezed the album's list to
+  nothing. Bound by `card::TAIL_SHARE` (40 % of the page) or `RECS_MAX` (208 px, four rows) and
+  `overflow_y_scroll`, the tail scrolls inside itself: the album's own tracks keep **336 px**
+  (six rows) with a 20-title band at 1280×800 and in the 660 px pane
+  (`the_album_track_list_scrolls…`, `the_suggestions_strip_bounds_itself_and_the_rows_scroll`).
+- **The rule, un titre crédité est une PAGE** (v1.6.1). Le corps d'un écran de crédits de titre
+  n'avait aucun conteneur de défilement : un titre crédité sur douze rôles (trois personnes
+  chacun) peignait ses derniers rôles, son label et son ISRC sous la fenêtre, inatteignables à la
+  molette, au pavé tactile comme au clavier. `PageScroll::container` + `column()` + `own()`
+  (aucune liste, aucun champ : les touches sont celles de la page) : **852 px** de course pour un
+  titre à 30 rôles, un cran de molette **78 px**, `Page suivante` **640 px**, `Fin`/`Début` aux
+  extrémités (`the_track_credits_page_scrolls_with_the_wheel_and_the_keys`). Les crédits d'une
+  PERSONNE gardent les touches de leur liste : la liste EST le conteneur de cette page.
+- **The rule, the history scrolls from the keyboard** (v1.6.1). L'historique n'a pas de curseur
+  (un clic ouvre un titre, rien n'est « sélectionné ») et n'avait aucun gestionnaire de touches :
+  sur un journal de 37 000 écoutes, la molette était le seul chemin. `Page suivante`,
+  `Page précédente`, `Début` et `Fin` déplacent donc la VUE (`scroll_to_item` sur les lignes que
+  la dernière image a construites), avec `ScrollStrategy::Center` : `Top`/`Bottom` sont
+  « amener dans la vue » (course minimale) et laissaient `Page suivante` à **176 px** au lieu
+  d'une page (`the_keys_scroll_the_history` : **398 px** mesurés, 5 à 6 lignes).
 - **Pitfalls found by measuring**:
   - **A live Xvfb run cannot prove the WHEEL.** XTEST button 4/5 is not a notch on Xvfb: GPUI's
     X11 backend drops a scroll press flagged `POINTER_EMULATED` and the virtual pointer has no
@@ -1348,6 +1388,13 @@ Waves that can run in parallel (disjoint files):
     negative going down (`ScrollHandle::set_offset` docs): the two signs are one place where a
     page "scrolls the wrong way" or "does not scroll" (`Set asked=562px -> 0px` was exactly
     this).
+  - **The window the bench drives is the NEWEST root child named `Neezer`.** A run whose
+    `stop()` did not land leaves an identical 1280×800 window on the shared Xvfb at the same
+    place: `wait_window` picks the biggest, the focus goes to the stale one, and every key,
+    screenshot and pixel count then measures a dead app (measured: two runs of
+    "changed = 0 px" on a list that scrolls). Snapshot the root's windows before the launch,
+    wait for the id that appears after it, and give each run its own `XDG_*` tree and no
+    `DBUS_SESSION_BUS_ADDRESS` (two instances of one session bus fight for the window).
 
 ### D8b — Library and playlists (delivered 2026-11-16)
 

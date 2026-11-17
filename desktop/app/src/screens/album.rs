@@ -24,7 +24,7 @@ use std::rc::Rc;
 
 use gpui_kit::{
     Context, Div, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement, Pixels,
-    Render, StatefulInteractiveElement as _, Styled, Subscription, Window, div, px, rems,
+    Render, StatefulInteractiveElement as _, Styled, Subscription, Window, div, px, relative, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon};
 use nz_api::ApiError;
@@ -710,12 +710,27 @@ impl Screen {
                     .count(outside.len())
                     .render(cx, |_, _, _| {}),
             );
+            // The provider's half is a LIST like any other: an album the library
+            // holds one title of can list twenty. Bounded to a share of the page
+            // and scrolled inside it, so the library's own tracks keep the rest of
+            // the window and nothing is painted where it cannot be reached —
+            // D8a's rule, and what a page that never grows needs.
             body = body.child(
-                div().flex().flex_col().children(
-                    outside.iter().map(|track| {
-                        outside_row(track, &self.covers.borrow(), window.rem_size(), cx)
-                    }),
-                ),
+                div()
+                    .id("album-outside")
+                    .debug_selector(|| "album-outside".to_owned())
+                    .flex_shrink_0()
+                    .min_h_0()
+                    .max_h(relative(card::TAIL_SHARE))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .children(outside.iter().map(|track| {
+                                outside_row(track, &self.covers.borrow(), window.rem_size(), cx)
+                            })),
+                    ),
             );
         } else if self.outside_down {
             body = body.child(
@@ -864,6 +879,195 @@ mod tests {
         stub::until(&runtime, cx, "the revalidation", |_| {
             stub.count("/api/album/9") == 2
         });
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// The shell's focus anchor, the way the app gives it: a screen never takes
+    /// the focus (D8b), so a test that presses a key must provide the node the
+    /// keymap's `Neezer && !Input` context is looked up on.
+    struct Host {
+        screen: Entity<Screen>,
+        focus: gpui_kit::FocusHandle,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("album-host")
+                .size_full()
+                .track_focus(&self.focus)
+                .key_context("Neezer")
+                .child(self.screen.clone())
+        }
+    }
+
+    fn outside_body(tracks: usize) -> String {
+        let rows: Vec<String> = (0..tracks)
+            .map(|index| {
+                format!(
+                    r#"{{"id":"out-{index}","deezer_id":"4000{index}","title":"Hors {index}",
+                        "duration":200,"artist":{{"deezer_id":"42","name":"Kaya Project"}},
+                        "album":{{"deezer_id":"9","title":"Songs from the Inside",
+                        "cover":"/api/cover/9"}}}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"tracks":[{}]}}"#, rows.join(","))
+    }
+
+    /// **The album's list takes the wheel, the touchpad and the keys**
+    /// (v1.6.1). The shared list built a scroll handle of its own and never
+    /// attached the screen's, so every frame started from offset 0: the wheel
+    /// moved NOTHING (the visible rows stayed `0..10` whatever was sent),
+    /// `Page suivante` moved the cursor to a row nobody could see, and the
+    /// scrollbar beside the list never budged. Measured with this test, thirty
+    /// rows in a 800 px window: before, the wheel left the offset at 0 px;
+    /// after, one notch is **57 px** (`visible 1..11`), `Page suivante`
+    /// **566 px** (ten rows), `Fin` the last row, and the same in the **660 px
+    /// pane** a 1280 window keeps with the 420 px panel open.
+    #[gpui::test]
+    async fn the_album_track_list_scrolls_with_the_wheel_and_the_keys(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px, size};
+
+        // `stub::logged_in` installs the theme and the keymap (once: binding
+        // them twice would dispatch every action twice).
+        let body = album_body(30, true);
+        let outside = outside_body(20);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/album/9", body.as_str()),
+            ("/api/album/9/on-deezer", outside.as_str()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (host, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_, cx| {
+                let screen = cx.new(|cx| Screen::new(Route::Album { id: "9".into() }, state, cx));
+                Host {
+                    screen,
+                    focus: cx.focus_handle(),
+                }
+            }
+        });
+        stub::until(&runtime, cx, "the album and its Deezer half", |cx| {
+            let screen = host.read(cx).screen.read(cx);
+            screen.list.len() == 30 && screen.outside.is_some()
+        });
+        // The shell's anchor is the focused node; a screen keeps it (D8b).
+        cx.update(|window, cx| {
+            let focus = host.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            })
+        };
+        let seen = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| {
+                let list = &host.read(cx).screen.read(cx).list;
+                (list.scroll_y(), list.visible(), list.selected())
+            })
+        };
+        let wheel = |cx: &mut gpui::VisualTestContext| {
+            cx.simulate_mouse_move(point(px(320.), px(300.)), None, Modifiers::default());
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(320.), px(300.)),
+                delta: ScrollDelta::Lines(point(0., -3.)),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+            });
+        };
+
+        for (width, what) in [(1280., "1280×800"), (660., "the 660 px pane")] {
+            cx.simulate_resize(size(px(width), px(800.)));
+            paint(cx);
+            let (offset, visible, selected) = seen(cx);
+            assert_eq!(offset, px(0.), "{what}: a fresh page starts at the top");
+            assert_eq!(visible.start, 0);
+            assert_eq!(selected, Some(0));
+            assert!(
+                visible.len() < 30,
+                "{what}: the list builds a screenful, not 30 rows ({visible:?})"
+            );
+
+            // The wheel, exactly as the X11 backend builds it from a notch.
+            wheel(cx);
+            paint(cx);
+            let (after_wheel, wheeled, _) = seen(cx);
+            assert!(
+                after_wheel < px(-10.),
+                "{what}: the wheel scrolled the list; measured {after_wheel:?}"
+            );
+            assert!(
+                wheeled.start > 0,
+                "{what}: the rows on screen changed; measured {wheeled:?}"
+            );
+
+            // `Page suivante` / `Fin` / `Début`, through the action the keymap
+            // binds (the same dispatch a real keystroke produces).
+            cx.update(|_, cx| cx.dispatch_action(&crate::actions::ListPageDown));
+            cx.run_until_parked();
+            paint(cx);
+            let (after_page, paged, row) = seen(cx);
+            assert!(
+                after_page < after_wheel - px(200.),
+                "{what}: Page suivante took most of the window; measured \
+                 {after_page:?} from {after_wheel:?}"
+            );
+            assert!(
+                paged.contains(&row.expect("a selected row")),
+                "{what}: the row the cursor moved to is on screen; {row:?} not in {paged:?}"
+            );
+
+            cx.update(|_, cx| cx.dispatch_action(&crate::actions::ListLast));
+            cx.run_until_parked();
+            paint(cx);
+            let (bottom, last, row) = seen(cx);
+            assert_eq!(row, Some(29), "{what}: Fin reaches the last row");
+            assert!(
+                last.contains(&29),
+                "{what}: the last row is painted, not just selected; {last:?}"
+            );
+            assert!(
+                bottom < px(-1_000.),
+                "{what}: the list went down; {bottom:?}"
+            );
+
+            cx.update(|_, cx| cx.dispatch_action(&crate::actions::ListFirst));
+            cx.run_until_parked();
+            paint(cx);
+            assert_eq!(seen(cx).0, px(0.), "{what}: Début returns to the top");
+            println!(
+                "album_scroll {what}: wheel={after_wheel:?} pagedown={:?} bottom={bottom:?} rows={visible:?}",
+                after_page - after_wheel
+            );
+        }
+
+        // The provider's half is bounded to a share of the page and scrolls
+        // inside it: with twenty titles the library's own list keeps the window,
+        // and no row is painted where it cannot be reached. (`debug_bounds` is
+        // recorded only where the selectors are, i.e. a debug build.)
+        cx.simulate_resize(size(px(660.), px(800.)));
+        paint(cx);
+        #[cfg(debug_assertions)]
+        {
+            let band = cx
+                .debug_bounds("album-outside")
+                .expect("the Deezer band is laid out");
+            let window_height = cx.update(|window, _| window.viewport_size().height);
+            assert!(
+                band.bottom() <= window_height,
+                "the band ends inside the window: {:?} of {window_height:?}",
+                band
+            );
+        }
         runtime.shutdown_background();
         stub.stop();
     }
