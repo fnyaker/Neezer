@@ -254,6 +254,10 @@ pub struct Screen {
     language: String,
     batch: usize,
     batch_busy: bool,
+    /// The transcription card's details are folded away by default: the episode
+    /// list is what the page is for, and the card's language/backlog/batch rows
+    /// are configuration a person opens on purpose.
+    transcribe_open: bool,
     search_field: Option<Entity<InputState>>,
     search_query: String,
     search_pending: Option<String>,
@@ -331,6 +335,7 @@ impl Screen {
             language,
             batch: 5,
             batch_busy: false,
+            transcribe_open: false,
             search_field: None,
             search_query: String::new(),
             search_pending: None,
@@ -2264,6 +2269,58 @@ impl Screen {
     }
 
     fn transcribe_card(&self, cx: &mut Context<Self>) -> AnyElement {
+        // Folded, the card is ONE line: the episode list is what the page is for,
+        // and the card's rows are administration, not content (rule 5: it must not
+        // push the list out of the window at 1280x800).
+        if !self.transcribe_open {
+            let ready = self.ready_transcripts();
+            let archived = self.episodes.iter().filter(|episode| episode.archived).count();
+            return div()
+                .id("show-transcribe-folded")
+                .debug_selector(|| "show-transcribe-folded".to_owned())
+                .flex()
+                .items_center()
+                .gap(rems(0.375))
+                .mt(rems(0.25))
+                .child(
+                    icon(IconName::ScrollText)
+                        .size(rems(0.8125))
+                        .text_color(theme::secondary(cx)),
+                )
+                .child(
+                    div()
+                        .text_size(rems(0.75))
+                        .font_weight(FontWeight::BOLD)
+                        .child("Transcription des épisodes"),
+                )
+                .child(
+                    div()
+                        .text_size(rems(0.6875))
+                        .font_family(theme::mono(cx))
+                        .text_color(theme::secondary(cx))
+                        .child(format!("{ready} sur {archived}")),
+                )
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .id("show-transcribe-more")
+                        .flex()
+                        .items_center()
+                        .gap(rems(0.25))
+                        .h(rems(1.5))
+                        .px(rems(0.25))
+                        .text_size(rems(0.6875))
+                        .text_color(theme::accent(cx))
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(theme::text(cx)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.transcribe_open = true;
+                            cx.notify();
+                        }))
+                        .child("Langue, rattrapage et lot"),
+                )
+                .into_any_element();
+        }
         let mut card = div()
             .id("show-transcribe")
             .flex()
@@ -2374,6 +2431,28 @@ impl Screen {
                             ),
                     );
                 } else {
+                    let open = self.transcribe_open;
+                    card = card.child(
+                        div()
+                            .id("show-transcribe-more")
+                            .debug_selector(|| "show-transcribe-more".to_owned())
+                            .flex()
+                            .items_center()
+                            .gap(rems(0.25))
+                            .self_start()
+                            .h(rems(1.5))
+                            .px(rems(0.25))
+                            .text_size(rems(0.6875))
+                            .text_color(theme::accent(cx))
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(theme::text(cx)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.transcribe_open = false;
+                                cx.notify();
+                            }))
+                            .child("Réduire"),
+                    );
+                    let _ = open;
                     let auto = self.show().is_some_and(|show| show.auto_transcribe);
                     card = card.child(
                         switch(
@@ -2475,7 +2554,7 @@ impl Screen {
 
                     let eligible = self.eligible();
                     if eligible > 0 {
-                        let choices = batch_choices(eligible);
+                        let choices = batch_options(eligible);
                         let mut row = div().flex().items_center().gap(rems(0.375)).child(
                             div()
                                 .text_size(rems(0.6875))
@@ -3362,6 +3441,8 @@ impl Screen {
                     .min_w_0()
                     .child(
                         div()
+                            .flex()
+                            .flex_col()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
@@ -3430,7 +3511,7 @@ impl Screen {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .max_h(relative(0.45))
+            .max_h(relative(0.66))
             .min_h_0()
             .overflow_y_scroll()
             .child(header)
@@ -3466,22 +3547,6 @@ impl Screen {
         }
         column.into_any_element()
     }
-}
-
-/// The batch sizes a count of eligible episodes offers (the SPA's
-/// `batchOptions`).
-pub fn batch_choices(eligible: usize) -> Vec<usize> {
-    if eligible == 0 {
-        return Vec::new();
-    }
-    let mut out = vec![eligible.min(5)];
-    if eligible >= 10 {
-        out.push(10);
-    }
-    if eligible >= 20 {
-        out.push(20);
-    }
-    out
 }
 
 /// A `409 already running` is a job at work, not a failure: the body's `code` is
@@ -4292,6 +4357,97 @@ mod tests {
         assert_eq!(batch_options(12), vec![5, 10]);
         assert_eq!(batch_options(40), vec![5, 10, 20]);
         assert!(batch_options(0).is_empty());
+    }
+
+    /// A show page is ONE page (limit=50, no cursor) and its rows are windowed;
+    /// "Charger plus" is the only thing that sends the cursor back. This is the
+    /// acceptance's "episode list paged by cursor (no unbounded fetch)", counted in
+    /// requests rather than claimed.
+    #[gpui::test]
+    async fn a_show_page_asks_one_page_and_the_next_one_needs_the_cursor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::widgets::card::stub;
+
+        const ME: &str =
+            r#"{"user":{"id":"u1","name":"bench","admin":true,"access":{},"sources":[]}}"#;
+        let episode = |index: usize| {
+            format!(
+                r#"{{"id":"e{index}","deezer_id":"e{index}","title":"Épisode {index}",
+                    "duration":1800,"channel_id":"c1","published":1794748649,
+                    "archived":true,"unavailable":false,"explicit":false,"podcast":true,
+                    "status":"completed","chapter_count":2,"transcript":null,
+                    "artist":{{"deezer_id":"c1","name":"Les Histoires"}},
+                    "album":{{"deezer_id":"c1","title":"Les Histoires","cover":null}},
+                    "cover":null}}"#
+            )
+        };
+        let page = |range: std::ops::Range<usize>, next: Option<&str>| {
+            format!(
+                r#"{{"id":"c1","deezer_id":"9400001","title":"Les Histoires",
+                    "description":"","cover":null,"subscribed":true,"local":false,
+                    "status":"ok","episode_count":60,"archived_count":60,
+                    "auto_archive":false,"auto_transcribe":false,
+                    "transcribe_language":"auto","transcribed_count":0,
+                    "episodes":[{}],"next":{}}}"#,
+                range.map(episode).collect::<Vec<_>>().join(","),
+                next.map(|next| format!("\"{next}\""))
+                    .unwrap_or_else(|| "null".to_owned())
+            )
+        };
+        let first = page(0..50, Some("cursor-1"));
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/podcast/c1", first.as_str()),
+            ("/api/podcast/c1/markers", r#"{"markers":{}}"#),
+            (
+                "/api/transcribe/settings",
+                r#"{"available":false,"reason":"disabled"}"#,
+            ),
+            ("/api/podcast/progress", r#"{"progress":{}}"#),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| Screen::new(Route::Show { id: "c1".into() }, state, cx)
+        });
+        stub::until(&runtime, cx, "the first page", |cx| {
+            screen.read(cx).episodes.len() == 50
+        });
+        assert_eq!(
+            stub.count("/api/podcast/c1"),
+            1,
+            "one page, one request (no per-episode fetch)"
+        );
+        assert_eq!(
+            stub.queries("/api/podcast/c1"),
+            vec!["limit=50".to_owned()],
+            "the first page carries the limit and no cursor"
+        );
+        cx.run_until_parked();
+        let built = cx.update(|_, cx| screen.read(cx).rendered_rows);
+        assert!(
+            (1..=25).contains(&built),
+            "a page of 50 rows builds what the window shows ({built} rows)"
+        );
+
+        // The next page is the cursor's: one more request, no unbounded fetch.
+        cx.update(|_, cx| {
+            screen.update(cx, |screen, cx| screen.load_more(cx));
+        });
+        stub::until(&runtime, cx, "the second page", |_| {
+            stub.count("/api/podcast/c1") == 2
+        });
+        let queries = stub.queries("/api/podcast/c1");
+        assert_eq!(queries.len(), 2, "one page, one request");
+        assert!(
+            queries[1].contains("cursor=cursor-1"),
+            "the second page carries the cursor the server gave: {:?}",
+            queries[1]
+        );
+        runtime.shutdown_background();
+        stub.stop();
     }
 
     #[test]

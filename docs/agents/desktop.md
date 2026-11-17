@@ -1297,13 +1297,60 @@ Waves that can run in parallel (disjoint files):
   visible (assert 0 analyser calls when hidden); settings: palette (cover/theme), intensity, fps cap,
   scope orientation and colour, eco.
 
-### D11 — Podcasts
+### D11 — Podcasts (delivered 2026-11-17)
 
-- **Files**: `screens/{podcasts,show}.rs`, `app/src/widgets/{episode_panel,chapters,markers,
-  transcript_panel}.rs`.
-- **Acceptance**: progress synced as in *Streams* (pause, 30 s, quit, offline queue); speed per show
-  remembered (`podcast.speeds`); transcript panel follows playback and searches; server
-  transcription start/stop with its state; episode list paged by cursor (no unbounded fetch).
+- **The rule, the list is a cursor's**: a show asks ONE page (`GET /podcast/<id>?limit=50`, no
+  cursor) and only « Charger plus d'épisodes » sends the server's `next` back — the test asserts
+  the two query strings, and that a 50-episode page builds only the rows a window shows (one
+  `virtual_list` of 64 px rows, never 50 elements). The transcript is one page of `limit=200`
+  around the playhead and its search one `q=` call, so a one-hour episode never arrives whole
+  (rule 3). Requests, counted on `perf_api.py --serve --podcasts`: Podcasts **1**
+  (`/api/podcasts`); a show **1** page + **1** markers + **1** `/podcast/progress` + **1**
+  `/transcribe/settings` (the admin card); opening an episode **+1** chapters and **+1**
+  transcript page; « Charger plus » **+1**, with the cursor.
+- **The rule, progress is a process-wide keeper, not a screen** (`attach_keeper`): a 1 s beat over
+  the shell's `PlayerState` writes the episode's position on pause, every 30 s of playing, on an
+  episode change and at quit (`Context::on_app_quit`, whose future GPUI awaits within its shutdown
+  budget). Below `PROGRESS_MIN = 8 s` nothing is written (a mis-tap is not a resume point), and
+  within `DONE_TAIL = 15 s` of the end the row is `finished` — the server's own
+  `_EPISODE_DONE_TAIL`, so a completed episode never resumes into the credits. Offline, a write is
+  one `pending_progress` row (last write wins) sent when the link returns, one send per 5 s. The
+  map is per ACCOUNT (`podcast.progress.<owner>`): two people on one laptop never see each other's
+  resume points.
+- **The rule, the show's speed is the show's**: `podcast.speeds` is keyed by `channel_id` and
+  written through the same `widgets::speed` the player reads, so the rate set on the show page is
+  the rate its next episode plays at; music is never touched (the engine re-checks `podcast`).
+- **The rule, a job is a job** (rule 2): the transcription card carries the engine's availability
+  and its cause, the language and the backlog, the batch with its audio/CPU estimate, the running
+  job's progress and « Arrêter »; every refusal is a French cause (`queue_full`, `already_running`,
+  `too_long`, `not_archived`, `no_duration`, the server's own `reason`). An `already_running` 409
+  means the job is at work: the panel shows it instead of an error.
+- **The rule, the head must not eat the list**: at 1280×800 the hero, the actions, the archive
+  switch and the admin's transcription card left the episode list **38 px** of height — the list
+  unusable, which is not a compact page (the card's rows are administration, not content). The
+  card is FOLDED to one line (« Langue, rattrapage et lot ») and the head is capped at 66 % of the
+  page with its own scroll; the list keeps the rest (4 rows at 1280×800, the eight of the bench at
+  2560×1600, and it still works in a 660 px content width — the shell's 420 px queue panel open).
+- **The rule, T4's seam lives here**: `widgets/transcript_panel.rs` owns `LocalTranscript` and
+  `set_local_source`; the panel asks the hook when the server has no transcript (or the link is
+  dead), badges the machine's copy (« Transcrit sur cet ordinateur ») and searches it in memory.
+  `nz-transcribe` is untouched by this lot.
+- **Measured**: `cargo test -p neezer-desktop` **309 tests, 0 failed, 6 ignored** (the D11 tests
+  cover the keeper's pause/30 s/8 s/15 s rules, the `already_running` 409, the batch ladder
+  5/10/20, the paging above, chapters, markers, the transcript panel and its T4 hook, the episode
+  panel and `Entry`'s `podcast`/`channel_id`); `cargo fmt --check` and `cargo clippy --workspace
+  --all-targets -- -D warnings` clean. RSS (release, `/proc/<pid>/status` VmRSS, the bench above):
+  Podcasts **196 700 kB** (192 MB), the show page **197 800 kB** (193 MB), its episode panel
+  **202 496 kB** (198 MB) — the panel costs **+4.7 MB** for a chapters list and one transcript
+  page — and 2560×1600 **289 348 kB** (283 MB), i.e. **+91 MB** for the larger window (the surfaces
+  and the GPU buffers, not this lot's data).
+- **Pitfalls**: a screen's `episode_panel::entry` must set `podcast: true` AND `channel_id` — the
+  shared `entry_from_track` sets neither, and without them the engine plays an episode like a song
+  at 1× (the show's speed key is the channel); `Context::on_app_quit` takes `(this, cx)`, not an
+  `App`, so the keeper's final write reads `this.state` clone; a local transcript's in-panel search
+  must read `lines()` (the machine's copy), not `segments` (empty when the panel shows a local
+  document); and the browse stub answers one body per path, so a paged test asserts the REQUESTS
+  (count and query), not the merged list.
 
 ### D12 — Discovery (delivered 2026-11-17)
 
