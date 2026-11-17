@@ -16,6 +16,9 @@
 //! moves is coalesced into ONE `PUT /order` 350 ms after the last one, which is
 //! the SPA's own debounce.
 
+use std::cell::RefCell;
+use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::base::VirtualListScrollHandle;
@@ -35,15 +38,23 @@ use serde_json::json;
 use crate::actions::*;
 use crate::nav::Route;
 use crate::screens::library::{
-    Loaded, SortKey, artist_line, format_duration, project, reference_of, sleeve, track_cells,
+    Loaded, SortKey, artist_line, format_duration, project, reference_of, track_cells,
 };
 use crate::state::{AppState, entry_from_track};
 use crate::theme;
 use crate::toast::ToastKind;
+use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::sheets::{
     ExportKind, ExportSheet, MembersAnswer, MembersSheet, SheetEvent, error_line, face,
     is_conflict, is_forbidden, note_line, push_toast,
 };
+use crate::wiring::events::Sender;
+
+/// What the screen's own tasks answer back: the file the device holds for a
+/// sleeve, or `None` when it has none (the row keeps its placeholder).
+enum Msg {
+    Cover(String, Option<PathBuf>),
+}
 
 /// Row height in edit mode: taller than a plain row because it carries the two
 /// move buttons and the removal (a 44 px target is the minimum a finger wants).
@@ -86,6 +97,12 @@ pub struct Screen {
     members: Option<Entity<MembersSheet>>,
     export: Option<Entity<ExportSheet>>,
     scroll: VirtualListScrollHandle,
+    /// The rows' sleeves: a 128 px copy per row, decoded for what is visible.
+    covers: Rc<RefCell<Covers>>,
+    /// The banner's own sleeve, at the size the banner is drawn (`Class::Card`):
+    /// one image, so it may be crisp where a row may not.
+    banner: Rc<RefCell<Covers>>,
+    events: Sender<Msg>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -95,6 +112,7 @@ impl Screen {
             Route::Playlist { id } => id.clone(),
             _ => String::new(),
         };
+        let (events, answers) = crate::wiring::events::channel::<Msg>();
         let mut this = Self {
             route,
             state,
@@ -124,15 +142,99 @@ impl Screen {
             members: None,
             export: None,
             scroll: VirtualListScrollHandle::new(),
+            covers: Rc::new(RefCell::new(Covers::rows())),
+            banner: Rc::new(RefCell::new(Covers::new())),
+            events,
             _subscriptions: Vec::new(),
         };
         this._subscriptions
             .push(cx.observe(&this.state.clone(), |_, _, cx| {
                 cx.notify();
             }));
+        this.drain(answers, cx);
+        // Leaving the page frees the sleeves it was showing (and their tiles).
+        cx.on_release(|this, cx| {
+            this.covers.borrow_mut().release(cx);
+            this.banner.borrow_mut().release(cx);
+        })
+        .detach();
         this.bind_list_actions(cx);
         this.load(cx);
         this
+    }
+
+    /// The sleeve answers, on the screen's own thread.
+    fn drain(&mut self, answers: crate::wiring::events::Receiver<Msg>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Some(msg) = answers.next().await {
+                let Msg::Cover(url, file) = msg;
+                if this
+                    .update(cx, |this, cx| {
+                        this.covers.borrow_mut().resolved(&url, file.clone());
+                        this.banner.borrow_mut().resolved(&url, file);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The sleeves of the rows in `range`: asked for, then decoded — nothing for
+    /// a row outside the window.
+    fn show_covers(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let urls: Vec<String> = range
+            .filter_map(|visible| self.track_index(visible))
+            .filter_map(|index| {
+                self.tracks
+                    .get(index)
+                    .and_then(|track| track.album.cover.clone())
+            })
+            .collect();
+        {
+            let snapshot = self.state.read(cx);
+            let mut covers = self.covers.borrow_mut();
+            for url in &urls {
+                let for_request = url.clone();
+                let for_message = url.clone();
+                let tx = self.events.clone();
+                covers.want(snapshot, &for_request, move |file| {
+                    tx.send(Msg::Cover(for_message, file));
+                });
+            }
+        }
+        let files: Vec<PathBuf> = urls
+            .iter()
+            .filter_map(|url| cover::file_in(&self.covers, url))
+            .collect();
+        self.covers.borrow_mut().show(files, cx);
+    }
+
+    /// The banner's sleeve: one image, at the size the banner draws it.
+    fn show_banner(&mut self, cx: &mut Context<Self>) {
+        let url = self
+            .page
+            .ready()
+            .and_then(|page| page.playlist.cover.clone());
+        if let Some(url) = &url {
+            let snapshot = self.state.read(cx);
+            let mut banner = self.banner.borrow_mut();
+            let for_request = url.clone();
+            let for_message = url.clone();
+            let tx = self.events.clone();
+            banner.want(snapshot, &for_request, move |file| {
+                tx.send(Msg::Cover(for_message, file));
+            });
+        }
+        let files: Vec<PathBuf> = url
+            .as_deref()
+            .and_then(|url| cover::file_in(&self.banner, url))
+            .into_iter()
+            .collect();
+        self.banner.borrow_mut().show(files, cx);
     }
 
     /// The list's verbs, registered on the app with a weak handle — never on the
@@ -1061,6 +1163,15 @@ impl Screen {
         };
         let selected = visible == self.selected;
         let editing = self.editing;
+        let sleeve = if editing {
+            None
+        } else {
+            track
+                .album
+                .cover
+                .as_deref()
+                .and_then(|url| cover::file_in(&self.covers, url))
+        };
         let label = if editing {
             format!("ligne-{index}")
         } else {
@@ -1157,7 +1268,7 @@ impl Screen {
                     })),
                 );
         }
-        row = row.child(track_cells(track, cx)).child(
+        row = row.child(track_cells(track, sleeve.as_ref(), cx)).child(
             div()
                 .w(rems(3.5))
                 .flex_shrink_0()
@@ -1256,6 +1367,10 @@ impl Screen {
         // edit mode the rows are drawn directly, because every row is a drop
         // target and a whole-list drag surface (the SPA's own reason).
         if self.editing {
+            // Every row is drawn, so none of them says which sleeve it shows:
+            // the images of the view mode go (4 000 morphing rows are a drag
+            // surface, not a gallery), and the rows paint their placeholder.
+            self.covers.borrow_mut().show(Vec::new(), cx);
             for visible in 0..count {
                 if let Some(index) = self.track_index(visible) {
                     list = list.child(self.row(index, cx));
@@ -1277,6 +1392,8 @@ impl Screen {
             ElementId::Name("playlist-list".into()),
             sizes,
             move |this, range, _window, cx| {
+                // The sleeves of the rows this paint builds, and only those.
+                this.show_covers(range.clone(), cx);
                 let mut rows = Vec::with_capacity(range.len());
                 for visible in range {
                     if let Some(index) = this.track_index(visible) {
@@ -1307,6 +1424,10 @@ impl Render for Screen {
     #[allow(refining_impl_trait)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_fields(window, cx);
+        // What the last paint declared and this one does not is freed here, its
+        // atlas tile with it.
+        self.covers.borrow_mut().begin_frame(window, cx);
+        self.banner.borrow_mut().begin_frame(window, cx);
 
         if let Some(cause) = self.page.failed().cloned() {
             return div()
@@ -1452,6 +1573,12 @@ impl Render for Screen {
                 );
             }
         }
+        // The banner's own sleeve, one image at the size it is drawn.
+        self.show_banner(cx);
+        let banner_file = playlist
+            .cover
+            .as_deref()
+            .and_then(|url| cover::file_in(&self.banner, url));
         let mut banner = div()
             .id("playlist-banner")
             .flex()
@@ -1459,7 +1586,14 @@ impl Render for Screen {
             .gap(rems(1.25))
             .flex_shrink_0()
             .pb(rems(0.75))
-            .child(sleeve(playlist.cover.as_deref(), &playlist.title, 128., cx))
+            .child(cover::view(
+                banner_file.as_ref(),
+                playlist.cover.as_deref(),
+                &playlist.title,
+                Kind::Playlist,
+                px(128.),
+                cx,
+            ))
             .child(meta);
         if member_count > 1 {
             let mut stack = div().flex().items_center().gap(rems(0.125));
@@ -1749,9 +1883,39 @@ impl Render for Screen {
                     recs = recs.child(note_line("Pas de suggestion pour l'instant.", cx))
                 }
                 Loaded::Ready(list) => {
+                    // The strip's own sleeves: the same 128 px copy and the
+                    // same holder as the rows (`Covers::rows`), unioned into
+                    // this frame's shown set — twelve rows, so the strip costs
+                    // twelve row-sized decodes, not twelve 1 000 px ones.
+                    let mut rec_covers: Vec<String> = Vec::new();
+                    {
+                        let snapshot = self.state.read(cx);
+                        let mut covers = self.covers.borrow_mut();
+                        for track in list.iter().take(12) {
+                            if let Some(url) = track.album.cover.clone() {
+                                let for_request = url.clone();
+                                let for_message = url.clone();
+                                let tx = self.events.clone();
+                                covers.want(snapshot, &for_request, move |file| {
+                                    tx.send(Msg::Cover(for_message, file));
+                                });
+                                rec_covers.push(url);
+                            }
+                        }
+                    }
+                    let files: Vec<PathBuf> = rec_covers
+                        .iter()
+                        .filter_map(|url| cover::file_in(&self.covers, url))
+                        .collect();
+                    self.covers.borrow_mut().show(files, cx);
                     let mut rows = div().flex().flex_col().gap(rems(0.125));
                     for track in list.iter().take(12) {
                         let target = track.clone();
+                        let rec_file = track
+                            .album
+                            .cover
+                            .as_deref()
+                            .and_then(|url| cover::file_in(&self.covers, url));
                         rows = rows.child(
                             div()
                                 .flex()
@@ -1759,7 +1923,14 @@ impl Render for Screen {
                                 .gap(rems(0.5))
                                 .h(px(44.))
                                 .px(rems(0.5))
-                                .child(sleeve(track.album.cover.as_deref(), &track.title, 32., cx))
+                                .child(cover::view(
+                                    rec_file.as_ref(),
+                                    track.album.cover.as_deref(),
+                                    &track.title,
+                                    Kind::Album,
+                                    px(32.),
+                                    cx,
+                                ))
                                 .child(
                                     div()
                                         .flex()

@@ -29,6 +29,8 @@
 //! the now-playing screen's card. A screen keeps its own state, so the two do
 //! not share a scroll offset — they share the code.
 
+use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::prelude::FluentBuilder as _;
@@ -46,9 +48,17 @@ use crate::actions::{
 use crate::nav::Route;
 use crate::state::AppState;
 use crate::theme;
+use crate::widgets::cover::{self, Covers, Kind};
+use crate::wiring::events::Sender;
 
 /// One queue row's height, as `QueueList.svelte` (`.qitem { height: 56px }`).
 pub const ROW_HEIGHT: f32 = 56.;
+
+/// What the screen's own tasks answer back: the file the device holds for a
+/// row's sleeve, or `None` (the row keeps its disc glyph).
+enum Msg {
+    Cover(String, Option<PathBuf>),
+}
 
 /// The queue screen. `route` is kept because `screens::build` hands it over and
 /// a screen names itself (`docs/agents/desktop.md`, D7).
@@ -66,6 +76,9 @@ pub struct Screen {
     /// How many rows the last paint built — the windowing assertion, and the
     /// number the acceptance quotes.
     pub rendered_rows: usize,
+    /// The rows' sleeves: a 128 px copy per row, decoded for what is visible.
+    covers: Rc<RefCell<Covers>>,
+    events: Sender<Msg>,
     _subscription: Subscription,
 }
 
@@ -76,6 +89,7 @@ impl Screen {
             cx.notify();
         });
         let focus = cx.focus_handle();
+        let (events, answers) = crate::wiring::events::channel::<Msg>();
         let mut this = Self {
             route,
             state,
@@ -85,10 +99,66 @@ impl Screen {
             scroll: gpui_kit::base::VirtualListScrollHandle::new(),
             focus,
             rendered_rows: 0,
+            covers: Rc::new(RefCell::new(Covers::rows())),
+            events,
             _subscription: subscription,
         };
+        this.drain(answers, cx);
+        // A queue panel that closes frees the sleeves it was showing (and their
+        // atlas tiles), like every other screen.
+        cx.on_release(|this, cx| this.covers.borrow_mut().release(cx))
+            .detach();
         this.sync(cx);
         this
+    }
+
+    /// The sleeve answers, on the screen's own thread.
+    fn drain(&mut self, answers: crate::wiring::events::Receiver<Msg>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Some(msg) = answers.next().await {
+                let Msg::Cover(url, file) = msg;
+                if this
+                    .update(cx, |this, cx| {
+                        this.covers.borrow_mut().resolved(&url, file);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The sleeves of the rows in `range`, and only those: the rows in the
+    /// window are declared to the cache (so they are never evicted), a row
+    /// outside it costs nothing.
+    fn show_covers(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) {
+        let urls: Vec<String> = {
+            let state = self.state.read(cx);
+            range
+                .filter_map(|row| state.player.queue().get(row))
+                .filter_map(|entry| entry.cover.clone())
+                .collect()
+        };
+        {
+            let snapshot = self.state.read(cx);
+            let mut covers = self.covers.borrow_mut();
+            for url in &urls {
+                let for_request = url.clone();
+                let for_message = url.clone();
+                let tx = self.events.clone();
+                covers.want(snapshot, &for_request, move |file| {
+                    tx.send(Msg::Cover(for_message, file));
+                });
+            }
+        }
+        let files: Vec<PathBuf> = urls
+            .iter()
+            .filter_map(|url| cover::file_in(&self.covers, url))
+            .collect();
+        self.covers.borrow_mut().show(files, cx);
     }
 
     pub fn route(&self) -> &Route {
@@ -319,8 +389,11 @@ impl Screen {
 }
 
 impl Render for Screen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync(cx);
+        // A row that left the panel loses its sleeve here: the pixels and the
+        // atlas tile, not at the end of the session.
+        self.covers.borrow_mut().begin_frame(window, cx);
         let (entries, index, len) = {
             let state = self.state.read(cx);
             (
@@ -476,8 +549,9 @@ impl Render for Screen {
             cx.entity(),
             "queue-list",
             sizes,
-            move |this, range, _, cx| {
+            move |this, range, _window, cx| {
                 this.rendered_rows = range.len();
+                this.show_covers(range.clone(), cx);
                 range
                     .filter_map(|row| {
                         let entry = entries.get(row)?.clone();
@@ -546,11 +620,28 @@ impl Screen {
                 window.focus(&this.focus, cx);
                 this.jump(index, cx);
             }));
-        // No sleeve per row: a 1 000 px JPEG decoded for a 32 px slot, twenty
-        // times, cost **+291 MB RSS** in the measured run (`docs/agents/desktop.md`,
-        // D9) — the plan's decoded-image LRU (64 MB, `coverqueue.js`) is D8a's
-        // widget, not this screen's. One glyph instead, like the player bar.
-        row = row.child(row_glyph(cx));
+        // A sleeve per row, decoded at the size the row draws it: the 128 px
+        // copy (`Covers::rows`), painted only once `Covers::show` has decoded
+        // it for a visible row. D9 measured a glyph per row because the only
+        // sleeve then was the archived 1 000 px one (+291 MB predicted for
+        // twenty rows); the row's tile is 128² now, and its pixels go when the
+        // row leaves the window.
+        let cover_file = entry
+            .cover
+            .as_deref()
+            .and_then(|url| cover::file_in(&self.covers, url));
+        row = row.child(cover::view(
+            cover_file.as_ref(),
+            entry.cover.as_deref(),
+            entry
+                .album
+                .as_ref()
+                .map(|album| album.title.as_str())
+                .unwrap_or(&entry.title),
+            Kind::Album,
+            px(32.),
+            cx,
+        ));
         row = row.child(
             div()
                 .flex()
@@ -586,23 +677,6 @@ impl Screen {
         );
         row.child(self.row_controls(index, len, is_selected, cx))
     }
-}
-
-/// A 32 px disc glyph: the same honesty as the player bar.
-fn row_glyph(cx: &mut Context<Screen>) -> impl IntoElement + use<> {
-    div()
-        .flex_shrink_0()
-        .size(px(32.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .bg(theme::chrome(cx))
-        .child(
-            icon(IconName::Music)
-                .size(rems(0.875))
-                .text_color(theme::secondary(cx)),
-        )
 }
 
 fn footer_hint(cx: &mut Context<Screen>) -> impl IntoElement + use<> {

@@ -21,6 +21,9 @@
 //! `AppState::nav` (the root view rebuilds the screen from it) and plays by
 //! sending one [`nz_player::Command`] through `AppState::command`.
 
+use std::cell::RefCell;
+use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::base::VirtualListScrollHandle;
@@ -45,11 +48,19 @@ use crate::nav::{LibraryTab, Route};
 use crate::state::{AppState, entry_from_track};
 use crate::theme;
 use crate::toast::ToastKind;
+use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::folder_tree::{FolderTree, NodeKind, Target};
 use crate::widgets::playlist_picker::{PlaylistPicker, fold};
 use crate::widgets::sheets::{
     ExportKind, ExportSheet, SheetEvent, card, field_label, note_line, push_toast,
 };
+use crate::wiring::events::Sender;
+
+/// What the screen's own tasks answer back: the file the device holds for a
+/// sleeve, or `None` when it has none (the row keeps its placeholder).
+enum Msg {
+    Cover(String, Option<PathBuf>),
+}
 
 /// Row height of a title at the default rem: 56 keeps a 36 px sleeve and two
 /// lines without crowding (the SPA's own `.rec`).
@@ -187,14 +198,28 @@ pub fn sleeve(cover: Option<&str>, seed: &str, size: f32, cx: &App) -> Div {
 }
 
 /// The middle of a title's row: the sleeve, the title, the artist line.
-pub fn track_cells(track: &Track, cx: &App) -> Div {
+///
+/// `file` is the sleeve this row shows, when the screen has one for it: the
+/// 128 px copy the list asked for (`Covers::rows`), painted as a real pochette
+/// once `Covers::show` has decoded it — a 36 px tile never holds a 1 000 px
+/// image. `None` is the placeholder (a row drawn outside the windowed list, or
+/// one whose art is not on the device).
+pub fn track_cells(track: &Track, file: Option<&PathBuf>, cx: &App) -> Div {
+    let url = track.album.cover.as_deref();
     div()
         .flex()
         .items_center()
         .gap(rems(0.75))
         .flex_1()
         .min_w_0()
-        .child(sleeve(track.album.cover.as_deref(), &track.title, 36., cx))
+        .child(cover::view(
+            file,
+            url,
+            &track.album.title,
+            Kind::Album,
+            px(36.),
+            cx,
+        ))
         .child(
             div()
                 .flex()
@@ -342,6 +367,13 @@ pub struct Screen {
     picker: Option<Entity<PlaylistPicker>>,
     export: Option<Entity<ExportSheet>>,
     busy: bool,
+    /// The sleeves the list and the shelves draw: a 128 px copy per row, and
+    /// the images decoded for what is on screen only (`cover::Covers::show`).
+    covers: Rc<RefCell<Covers>>,
+    /// The rows the last paint built, for the tests that hold the windowing and
+    /// the sleeve requests to their promise.
+    visible: Range<usize>,
+    events: Sender<Msg>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -353,6 +385,7 @@ impl Screen {
             Route::Library { tab } => *tab,
             _ => LibraryTab::default(),
         };
+        let (events, answers) = crate::wiring::events::channel::<Msg>();
         let mut this = Self {
             route,
             state,
@@ -379,6 +412,9 @@ impl Screen {
             picker: None,
             export: None,
             busy: false,
+            covers: Rc::new(RefCell::new(Covers::rows())),
+            visible: 0..0,
+            events,
             _subscriptions: Vec::new(),
         };
         this._subscriptions
@@ -386,9 +422,34 @@ impl Screen {
                 this.sync_tab(cx);
                 cx.notify();
             }));
+        this.drain(answers, cx);
+        // The screen's sleeves are the process's, but the HOLD is this
+        // screen's: leaving the library drops the images it was showing (and
+        // their atlas tiles) instead of keeping them until the window dies.
+        cx.on_release(|this, cx| this.covers.borrow_mut().release(cx))
+            .detach();
         this.bind_list_actions(cx);
         this.load(cx);
         this
+    }
+
+    /// The sleeve answers, on the screen's own thread.
+    fn drain(&mut self, answers: crate::wiring::events::Receiver<Msg>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Some(msg) = answers.next().await {
+                let Msg::Cover(url, file) = msg;
+                if this
+                    .update(cx, |this, cx| {
+                        this.covers.borrow_mut().resolved(&url, file);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// The list's verbs, bound to THIS screen and NOT to the keyboard focus.
@@ -806,6 +867,12 @@ impl Screen {
 
     fn projected_len(&self) -> usize {
         self.projection.len()
+    }
+
+    /// The rows the last paint built (a test's number, and what the windowing
+    /// claim is about).
+    pub fn visible_rows(&self) -> Range<usize> {
+        self.visible.clone()
     }
 
     /// How many rows the keyboard can walk, whatever the tab shows.
@@ -1569,19 +1636,64 @@ impl Screen {
 
     // -- rows --------------------------------------------------------------
 
+    /// The title a projected row index shows, whatever the tab's ordering.
+    fn track_at(&self, index: usize) -> Option<&Track> {
+        let (_, tracks) = self.titles()?;
+        self.projection
+            .get(index)
+            .and_then(|index| tracks.get(*index))
+    }
+
+    /// The sleeves of the rows in `range`, asked for and decoded — nothing for a
+    /// row outside it.
+    ///
+    /// One request per cover at most [`cover::MAX_IN_FLIGHT`] of them; the file
+    /// is the 128 px copy (`Covers::rows`), decoded only once it is shown, and
+    /// the atlas tile of a row that left the window is dropped by `show`.
+    fn show_covers(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.visible = range.clone();
+        let urls: Vec<String> = range
+            .filter_map(|index| {
+                self.track_at(index)
+                    .and_then(|track| track.album.cover.clone())
+            })
+            .collect();
+        self.show_urls(urls, cx);
+    }
+
+    /// Ask for, and decode, the sleeves of exactly these covers — the cards a
+    /// shelf draws, or the rows a list painted this frame.
+    fn show_urls(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
+        {
+            let snapshot = self.state.read(cx);
+            let mut covers = self.covers.borrow_mut();
+            for url in &urls {
+                let for_request = url.clone();
+                let for_message = url.clone();
+                let tx = self.events.clone();
+                covers.want(snapshot, &for_request, move |file| {
+                    tx.send(Msg::Cover(for_message, file));
+                });
+            }
+        }
+        let files: Vec<PathBuf> = urls
+            .iter()
+            .filter_map(|url| cover::file_in(&self.covers, url))
+            .collect();
+        self.covers.borrow_mut().show(files, cx);
+    }
+
     /// One title's row: a play button (the mouse-only path to playback), the
     /// sleeve, the title, the album, the duration.
     fn track_row(&self, index: usize, cx: &mut Context<Self>) -> gpui_kit::Stateful<Div> {
-        let Some((_, tracks)) = self.titles() else {
+        let Some(track) = self.track_at(index) else {
             return div().id(ElementId::Name(format!("library-row-{index}").into()));
         };
-        let Some(track) = self
-            .projection
-            .get(index)
-            .and_then(|index| tracks.get(*index))
-        else {
-            return div().id(ElementId::Name(format!("library-row-{index}").into()));
-        };
+        let sleeve = track
+            .album
+            .cover
+            .as_deref()
+            .and_then(|url| cover::file_in(&self.covers, url));
         let selected = self.selected == index;
         let playing = self
             .state
@@ -1632,7 +1744,7 @@ impl Screen {
                     this.play(index, false, cx);
                 })),
             )
-            .child(track_cells(track, cx))
+            .child(track_cells(track, sleeve.as_ref(), cx))
             .child(
                 div()
                     .w(rems(12.))
@@ -1704,6 +1816,9 @@ impl Screen {
             ElementId::Name(format!("library-{label}").into()),
             row_sizes(count),
             |this, range, _window, cx| {
+                // The sleeves of the rows this paint builds, and only those:
+                // the rows in the window, nothing for the rest of the list.
+                this.show_covers(range.clone(), cx);
                 let mut rows = Vec::with_capacity(range.len());
                 for index in range {
                     rows.push(this.track_row(index, cx));
@@ -1930,6 +2045,10 @@ impl Screen {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
+        // The sleeves of the cards the shelves draw, collected as the shelves
+        // are built and decoded in ONE `show` (one screen's shown set per
+        // paint, or each shelf would evict the previous one's).
+        let mut shelf_covers: Vec<String> = Vec::new();
         let mut index = 0;
         let folders = list.folders.clone();
         for (folder_id, title, _) in &grouping.folders {
@@ -1939,7 +2058,15 @@ impl Screen {
                 .filter(|playlist| playlist.folder_id.as_deref() == Some(folder_id.as_str()))
                 .map(|playlist| playlist.id.as_str().to_owned())
                 .collect();
-            column = column.child(self.section(index, title, &ids, &folders, &list, cx));
+            column = column.child(self.section(
+                index,
+                title,
+                &ids,
+                &folders,
+                &list,
+                &mut shelf_covers,
+                cx,
+            ));
             index += 1;
         }
         if !grouping.unfiled.is_empty() {
@@ -1949,6 +2076,7 @@ impl Screen {
                 &grouping.unfiled,
                 &folders,
                 &list,
+                &mut shelf_covers,
                 cx,
             ));
             index += 1;
@@ -1972,6 +2100,7 @@ impl Screen {
                 &shared,
                 &folders,
                 &list,
+                &mut shelf_covers,
                 cx,
             ));
             index += 1;
@@ -1983,14 +2112,17 @@ impl Screen {
                 &grouping.imported,
                 &folders,
                 &list,
+                &mut shelf_covers,
                 cx,
             ));
         }
+        self.show_urls(shelf_covers, cx);
         column.into_any_element()
     }
 
     /// One shelf of playlists: its heading, its count, its "Organiser" button
     /// and the first screenful of cards.
+    #[allow(clippy::too_many_arguments)]
     fn section(
         &self,
         index: usize,
@@ -1998,6 +2130,7 @@ impl Screen {
         ids: &[String],
         folders: &[PlaylistFolder],
         list: &PlaylistList,
+        covers: &mut Vec<String>,
         cx: &mut Context<Self>,
     ) -> Div {
         let mut grid = div().flex().flex_wrap().gap(rems(0.5));
@@ -2012,6 +2145,12 @@ impl Screen {
             let target = playlist.id.as_str().to_owned();
             let title_text = playlist.title.clone();
             let cover = playlist.cover.clone();
+            if let Some(url) = cover.clone() {
+                covers.push(url);
+            }
+            let file = cover
+                .as_deref()
+                .and_then(|url| cover::file_in(&self.covers, url));
             let tracks = playlist.nb_tracks;
             let row_index = list
                 .playlists
@@ -2033,7 +2172,14 @@ impl Screen {
                         this.tree.selected = row_index;
                         this.goto(Route::Playlist { id: target.clone() }, cx);
                     }))
-                    .child(sleeve(cover.as_deref(), &title_text, 120., cx))
+                    .child(cover::view(
+                        file.as_ref(),
+                        cover.as_deref(),
+                        &title_text,
+                        Kind::Playlist,
+                        px(120.),
+                        cx,
+                    ))
                     .child(
                         div()
                             .text_size(rems(0.75))
@@ -2249,6 +2395,9 @@ impl Screen {
             .overflow_y_scroll();
         let total;
         if tab == LibraryTab::Artists {
+            // The artist model carries no picture: nothing to decode here, and
+            // the previous tab's sleeves are let go.
+            self.show_urls(Vec::new(), cx);
             let Some(artists) = self.artists.ready() else {
                 return grid.into_any_element();
             };
@@ -2298,6 +2447,20 @@ impl Screen {
                 );
             }
         } else {
+            // The sleeves of the page of albums this grid draws, before the
+            // borrow of the model that building the cards needs.
+            let urls = self
+                .albums
+                .ready()
+                .map(|albums| {
+                    self.albums_shown(albums)
+                        .into_iter()
+                        .take(self.grid_limit)
+                        .filter_map(|album| album.cover.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            self.show_urls(urls, cx);
             let Some(albums) = self.albums.ready() else {
                 return grid.into_any_element();
             };
@@ -2312,6 +2475,10 @@ impl Screen {
                 let title = album.title.clone();
                 let artist = album.artist.name.clone();
                 let year = album.year.clone().unwrap_or_default();
+                let file = album
+                    .cover
+                    .as_deref()
+                    .and_then(|url| cover::file_in(&self.covers, url));
                 grid = grid.child(
                     div()
                         .id(ElementId::Name(format!("album-card-{index}").into()))
@@ -2323,7 +2490,14 @@ impl Screen {
                         .cursor_pointer()
                         .when(index == self.selected, |card| card.bg(theme::selected(cx)))
                         .hover(|style| style.bg(theme::selected(cx)))
-                        .child(sleeve(album.cover.as_deref(), &title, 112., cx))
+                        .child(cover::view(
+                            file.as_ref(),
+                            album.cover.as_deref(),
+                            &title,
+                            Kind::Album,
+                            px(112.),
+                            cx,
+                        ))
                         .child(
                             div()
                                 .text_size(rems(0.75))
@@ -2527,6 +2701,9 @@ fn empty_state(tab: LibraryTab, cx: &App) -> gpui_kit::Stateful<Div> {
 impl Render for Screen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_fields(window, cx);
+        // The sleeves the last paint declared and this one does not are freed
+        // here (their atlas tiles with them), before this frame's own `show`s.
+        self.covers.borrow_mut().begin_frame(window, cx);
         // A tab reached from the sidebar changes the route, not the screen.
         self.sync_tab(cx);
 
@@ -2985,12 +3162,26 @@ mod journey {
     }
 
     fn favourites_json(count: usize) -> String {
+        favourites_with(count, false)
+    }
+
+    /// The same list, every row's album carrying a sleeve the bench serves.
+    fn favourites_with_covers(count: usize) -> String {
+        favourites_with(count, true)
+    }
+
+    fn favourites_with(count: usize, covers: bool) -> String {
         let tracks: Vec<String> = (0..count)
             .map(|index| {
+                let cover = if covers {
+                    format!(r#""/api/cover/c{index}""#)
+                } else {
+                    "null".to_owned()
+                };
                 format!(
                     r#"{{"deezer_id":"{}","title":"Titre {index}","duration":200,
                         "artist":{{"deezer_id":"{}","name":"Artiste {index}"}},
-                        "album":{{"deezer_id":"{}","title":"Album {index}","cover":null}}}}"#,
+                        "album":{{"deezer_id":"{}","title":"Album {index}","cover":{cover}}}}}"#,
                     3_000_000 + index,
                     1_000_000 + index,
                     2_000_000 + index
@@ -3405,5 +3596,237 @@ mod journey {
                 .any(|toast| toast.message.contains("favoris"))
         });
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The login answer the stub gives (`/api/login` and `/api/me`).
+    const ME: &str =
+        r#"{"user":{"id":"u1","name":"bench","admin":false,"access":{},"sources":[]}}"#;
+
+    /// A real 128 px JPEG, encoded by the same crate the app decodes with: the
+    /// file a row paints, 65 536 B decoded.
+    fn sleeve_jpeg() -> Vec<u8> {
+        let picture = image::RgbImage::from_fn(128, 128, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        });
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 82);
+        encoder.encode_image(&picture).expect("encode");
+        bytes
+    }
+
+    fn cover_hits(stub: &crate::widgets::card::stub::Stub) -> usize {
+        stub.hits()
+            .into_iter()
+            .filter(|hit| hit.path.starts_with("/api/cover/"))
+            .count()
+    }
+
+    /// The rule, on the screen a person opens: **a row paints the sleeve it is
+    /// SEEN at, and only a visible row asks for one.**
+    ///
+    /// 400 favourites, one sleeve per album, the test window: the paint asks
+    /// for the visible rows' covers (never the ones below the fold), each one
+    /// request, the 128 px copy is decoded once (65 536 B of pixels), and
+    /// scrolling away frees the pixels and the atlas tile of the rows that left.
+    #[gpui::test]
+    async fn the_favourites_list_paints_only_the_sleeves_it_shows(cx: &mut gpui::TestAppContext) {
+        let jpeg = sleeve_jpeg();
+        let mut routes: Vec<(&'static str, Vec<u8>)> = vec![
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+            ("/api/version", br#"{"version":"9.9.9"}"#.to_vec()),
+            (
+                "/api/me/favorites",
+                favourites_with_covers(400).into_bytes(),
+            ),
+            (
+                "/api/me/playlists",
+                br#"{"playlists":[],"folders":[]}"#.to_vec(),
+            ),
+        ];
+        for index in 0..400 {
+            // The stub borrows its paths, and this test binary outlives it.
+            let path: &'static str = Box::leak(format!("/api/cover/c{index}").into_boxed_str());
+            routes.push((path, jpeg.clone()));
+        }
+        let stub = crate::widgets::card::stub::Stub::start_bytes(&routes);
+        let (state, runtime) = crate::widgets::card::stub::logged_in(cx, &stub);
+        // The idle rule a test can see: `IDLE_FOR` is 2 s, which is right for a
+        // person and too slow for a test, and 0 would evict on the transient
+        // one-row layout frame a virtual list draws while it measures. 40 ms is
+        // the same rule, timed by the test.
+        cx.update(|cx| {
+            cx.set_global(cover::Sleeves::with_rules(
+                cover::DECODED_BUDGET,
+                std::time::Duration::from_millis(40),
+            ))
+        });
+
+        let (screen, vcx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| {
+                Screen::new(
+                    Route::Library {
+                        tab: LibraryTab::Favorites,
+                    },
+                    state,
+                    cx,
+                )
+            }
+        });
+        crate::widgets::card::stub::until(&runtime, vcx, "the favourites", |cx| {
+            screen.read(cx).projected_len() == 400
+        });
+        vcx.run_until_parked();
+
+        let visible = vcx.update(|_, cx| screen.read(cx).visible_rows());
+        let shown = visible.len();
+        assert!(
+            (8..=40).contains(&shown),
+            "the window builds a screenful, not the list: {visible:?}"
+        );
+        assert!(
+            cover_hits(&stub) <= shown.max(cover::MAX_IN_FLIGHT),
+            "the first paint asks for a screenful at most: {} requests for {shown} rows",
+            cover_hits(&stub)
+        );
+        // Let every visible row's sleeve land: each answer lets the next ask,
+        // and each frame's own declaration starts the next decode.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while cover_hits(&stub) < shown
+            || vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident().1)
+                < shown.saturating_sub(1)
+        {
+            runtime
+                .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(2)).await });
+            vcx.update(|window, cx| {
+                cx.notify(screen.entity_id());
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            vcx.run_until_parked();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the visible rows' sleeves never all landed: {} requests, {:?} resident",
+                cover_hits(&stub),
+                vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident())
+            );
+        }
+        // The picture, not a placeholder: one decoded image per visible row,
+        // each a 128 px copy (65 536 B), and no request for a row below the fold.
+        let (bytes, images) = vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident());
+        assert!(
+            images >= shown.saturating_sub(1),
+            "{images} decoded for {shown} visible rows"
+        );
+        assert_eq!(bytes, images * 65_536, "a row's image is 128 × 128 × 4 B");
+        assert_eq!(
+            stub.count("/api/cover/c0"),
+            1,
+            "the first row's sleeve, asked for once"
+        );
+        let below = format!("/api/cover/c{}", visible.end + 100);
+        assert_eq!(
+            stub.count(&below),
+            0,
+            "a row below the fold must not cost a request"
+        );
+        // The image is IN the window's atlas, painted through
+        // `ImageSource::Render` (the tile `Covers::show` can drop again).
+        let file = vcx
+            .update(|_, cx| {
+                let screen = screen.read(cx);
+                screen
+                    .track_at(visible.start)
+                    .and_then(|track| track.album.cover.as_deref())
+                    .and_then(|url| cover::file_in(&screen.covers, url))
+            })
+            .expect("the first row's file");
+        let image = vcx.update(|_, cx| match cx.global::<cover::Sleeves>().lookup(&file) {
+            cover::Look::Ready(image) => image,
+            _ => panic!("the first row's sleeve is not decoded"),
+        });
+        vcx.update(|window, _| {
+            assert!(
+                window.has_image_atlas_entry(&image),
+                "the visible row's sleeve is uploaded once"
+            )
+        });
+
+        // Scroll far down: the new rows are asked for by name, and the frame
+        // after that frees the ones that left — pixels and atlas tile. Row 300:
+        // far enough that no row of the first screenful is still on screen
+        // (`ScrollStrategy::Top` leaves the row toward the bottom of the
+        // viewport in this snapshot, three rows of overscan below it).
+        let target = 300;
+        screen.update(vcx, |this, cx| {
+            this.scroll.scroll_to_item(target, ScrollStrategy::Top);
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        // A virtual list applies a deferred scroll on its next layout: the test
+        // draws the frames (a `refresh` so the list REALLY lays out again, not
+        // a repaint of the same layout) and waits for the list to BE there.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !vcx.update(|_, cx| screen.read(cx).visible_rows().contains(&target)) {
+            runtime
+                .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(2)).await });
+            vcx.update(|window, cx| {
+                cx.notify(screen.entity_id());
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            vcx.run_until_parked();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the list never followed the scroll: {:?}",
+                vcx.update(|_, cx| screen.read(cx).visible_rows())
+            );
+        }
+        crate::widgets::card::stub::until(&runtime, vcx, "the new rows' sleeves", |_| {
+            cover_hits(&stub) > shown
+        });
+        // `IDLE_FOR` has to pass before the rows that left are freed, and the
+        // sweep runs on a frame: this is the person scrolling on and stopping.
+        // The wait is on the FIRST row's own pixels, never on a count — a
+        // count would pass while the images that must go are still there.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while vcx.update(|_, cx| cx.global::<cover::Sleeves>().holds(&file)) {
+            runtime
+                .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(6)).await });
+            vcx.update(|window, cx| {
+                cx.notify(screen.entity_id());
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            vcx.run_until_parked();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sleeve of a row that left the window was never freed"
+            );
+        }
+        let (bytes_after, images_after) =
+            vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident());
+        let visible_after = vcx.update(|_, cx| screen.read(cx).visible_rows());
+        assert!(
+            images_after <= visible_after.len() + 1,
+            "the rows that left were freed: {images_after} images for {:?}",
+            visible_after
+        );
+        assert_eq!(bytes_after, images_after * 65_536);
+        assert_eq!(
+            stub.count("/api/cover/c0"),
+            1,
+            "a sleeve already on the device is never re-requested"
+        );
+        vcx.update(|window, _| {
+            assert!(
+                !window.has_image_atlas_entry(&image),
+                "the tile of a row that left the window is dropped"
+            )
+        });
+
+        runtime.shutdown_background();
+        stub.stop();
     }
 }

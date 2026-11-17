@@ -53,3 +53,7 @@ zbus = { workspace = true }
 # resolves its optional `gpui-fast` backend — a second GPUI whose macOS
 # dependency pins conflict with the snapshot we build against.
 gpui = { workspace = true, features = ["test-support"] }
+# A test builds a `RenderImage` the way the app gets one (decoded pixels), to
+# prove the byte accounting without a window: the same crate the client decodes
+# with is already in the workspace (`nz-cache`).
+image = { workspace = true }
