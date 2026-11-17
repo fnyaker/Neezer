@@ -1601,8 +1601,12 @@ pub fn settings() -> Settings {
 
 // --- the engine's two seams ----------------------------------------------
 
+/// The test harness of the audio close benches too (`wiring::engine` reuses this
+/// one local server, scratch store and panic recorder rather than growing a
+/// second copy that would drift): one place owns "a slow link, a body in
+/// flight, a recorded panic".
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
@@ -1617,13 +1621,13 @@ mod tests {
     /// A token bucket shared by every connection: the "link". Without one, a
     /// loopback test measures the kernel and the rule 1 criterion is
     /// unmeasurable.
-    struct Link {
+    pub(crate) struct Link {
         rate: f64,
         state: Mutex<(Instant, f64)>,
     }
 
     impl Link {
-        fn new(rate: Option<f64>) -> Arc<Link> {
+        pub(crate) fn new(rate: Option<f64>) -> Arc<Link> {
             Arc::new(Link {
                 rate: rate.unwrap_or(0.0),
                 state: Mutex::new((Instant::now(), 16.0 * 1024.0)),
@@ -1658,7 +1662,7 @@ mod tests {
     /// One stream's body. A generated body costs NO heap: this bench shares the
     /// process with the other tests of the binary, and a bench that parks 20 MB
     /// of filler inflates every RSS assertion running beside it.
-    enum Payload {
+    pub(crate) enum Payload {
         /// A generated pattern of `len` bytes.
         Filler { len: usize, seed: u8 },
         /// Real bytes (the FLAC an engine decodes).
@@ -1682,7 +1686,7 @@ mod tests {
         body: String,
     }
 
-    struct TestServer {
+    pub(crate) struct TestServer {
         base: String,
         link: Arc<Link>,
         stop: Arc<AtomicBool>,
@@ -1693,7 +1697,7 @@ mod tests {
 
     impl TestServer {
         /// `bodies` maps a stream id to its byte count (filled with a pattern).
-        fn start(link: Arc<Link>, bodies: HashMap<String, Payload>) -> TestServer {
+        pub(crate) fn start(link: Arc<Link>, bodies: HashMap<String, Payload>) -> TestServer {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
             let base = format!("http://{}", listener.local_addr().expect("address"));
             let delivered: Arc<Mutex<HashMap<String, u64>>> = Arc::default();
@@ -1746,11 +1750,13 @@ mod tests {
                 .push(script);
         }
 
-        fn hits(&self, id: &str) -> usize {
+        pub(crate) fn hits(&self, id: &str) -> usize {
             Shared::lock(&self.hits).get(id).copied().unwrap_or(0)
         }
 
-        fn delivered(&self, id: &str) -> u64 {
+        /// How many bytes of `id`'s body have left the server: the proof a close
+        /// bench needs that a body is IN FLIGHT.
+        pub(crate) fn delivered(&self, id: &str) -> u64 {
             Shared::lock(&self.delivered).get(id).copied().unwrap_or(0)
         }
     }
@@ -1858,10 +1864,10 @@ mod tests {
 
     // --- the scaffolding ----------------------------------------------------
 
-    struct Scratch(PathBuf);
+    pub(crate) struct Scratch(PathBuf);
 
     impl Scratch {
-        fn new(name: &str) -> Scratch {
+        pub(crate) fn new(name: &str) -> Scratch {
             let dir = std::env::temp_dir().join(format!(
                 "neezer-d13-{name}-{}-{}",
                 std::process::id(),
@@ -1874,11 +1880,11 @@ mod tests {
             Scratch(dir)
         }
 
-        fn dir(&self) -> &PathBuf {
+        pub(crate) fn dir(&self) -> &PathBuf {
             &self.0
         }
 
-        fn store(&self) -> Cache {
+        pub(crate) fn store(&self) -> Cache {
             Cache::open_with_cache_dir(self.0.join("data"), self.0.join("cache"))
                 .expect("the local store")
         }
@@ -1890,7 +1896,7 @@ mod tests {
         }
     }
 
-    fn runtime() -> tokio::runtime::Runtime {
+    pub(crate) fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("nz-test-net")
@@ -1899,7 +1905,7 @@ mod tests {
             .expect("a runtime")
     }
 
-    fn api_for(server: &TestServer, store: &Cache, scratch: &Scratch) -> Arc<Api> {
+    pub(crate) fn api_for(server: &TestServer, store: &Cache, scratch: &Scratch) -> Arc<Api> {
         let api = Api::builder(&server.base)
             .cache(Arc::new(store.clone()))
             .session(Arc::new(SessionJar::at(scratch.dir().join("session.json"))))
@@ -1909,7 +1915,7 @@ mod tests {
         Arc::new(api)
     }
 
-    fn body_map(ids: &[&str], size: usize) -> HashMap<String, Payload> {
+    pub(crate) fn body_map(ids: &[&str], size: usize) -> HashMap<String, Payload> {
         ids.iter()
             .enumerate()
             .map(|(index, id)| {
@@ -1924,7 +1930,7 @@ mod tests {
             .collect()
     }
 
-    fn filler(size: usize, seed: u8) -> Payload {
+    pub(crate) fn filler(size: usize, seed: u8) -> Payload {
         Payload::Filler { len: size, seed }
     }
 
@@ -1936,7 +1942,7 @@ mod tests {
     /// flaky (measured: D14a's page went from +228 KB to +4 272 KB, and D14b's
     /// rows test past its 4 MB bound). A child process keeps both numbers true,
     /// and the bench is still part of `cargo test --workspace`.
-    fn in_its_own_process(name: &str) {
+    pub(crate) fn in_its_own_process(name: &str) {
         let exe = std::env::current_exe().expect("the test binary");
         let status = std::process::Command::new(exe)
             .args([
@@ -1956,7 +1962,7 @@ mod tests {
 
     /// Poll `done` until it says so or `timeout`: a test waits on the outcome,
     /// never on a clock.
-    fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
+    pub(crate) fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if done() {
@@ -1975,10 +1981,10 @@ mod tests {
     /// hook is process-wide, so the test that installs one runs in a process of
     /// its own ([`in_its_own_process`]); the default hook still runs, so the
     /// message is not hidden from a person reading the log.
-    struct Panics(Arc<Mutex<Vec<String>>>);
+    pub(crate) struct Panics(Arc<Mutex<Vec<String>>>);
 
     impl Panics {
-        fn install() -> Panics {
+        pub(crate) fn install() -> Panics {
             let seen: Arc<Mutex<Vec<String>>> = Arc::default();
             let previous = std::panic::take_hook();
             let recorded = Arc::clone(&seen);
@@ -1990,12 +1996,12 @@ mod tests {
         }
 
         /// Everything recorded since the last call.
-        fn take(&self) -> Vec<String> {
+        pub(crate) fn take(&self) -> Vec<String> {
             std::mem::take(&mut *Shared::lock(&self.0))
         }
     }
 
-    fn choices(ids: &[&str]) -> Vec<Choice> {
+    pub(crate) fn choices(ids: &[&str]) -> Vec<Choice> {
         ids.iter()
             .map(|id| Choice::new(*id, format!("Titre {id}")))
             .collect()
@@ -2989,7 +2995,7 @@ mod tests {
     /// the link is not the subject of this test (nor does it sit in memory while
     /// the other tests of this binary measure their own RSS). `false` without
     /// ffmpeg.
-    fn tone_flac(path: &PathBuf) -> bool {
+    pub(crate) fn tone_flac(path: &PathBuf) -> bool {
         let Ok(status) = std::process::Command::new("ffmpeg")
             .args([
                 "-hide_banner",
@@ -3013,7 +3019,7 @@ mod tests {
 
     /// Render the mixer in real time for `seconds` (exactly like a callback),
     /// answering how much audio was rendered.
-    fn pump_for(sink: &mut nz_audio::OfflineSink, seconds: Duration) -> f64 {
+    pub(crate) fn pump_for(sink: &mut nz_audio::OfflineSink, seconds: Duration) -> f64 {
         let frames = (48_000.0 * seconds.as_secs_f64()) as usize;
         let mut buffer = vec![0f32; 480 * 2];
         let mut rendered = 0usize;
@@ -3031,7 +3037,7 @@ mod tests {
     }
 
     /// Pump until `event` arrives: the engine's own signal, never a clock.
-    fn pump_until(
+    pub(crate) fn pump_until(
         sink: &mut nz_audio::OfflineSink,
         events: &std::sync::mpsc::Receiver<nz_audio::EngineEvent>,
         timeout: Duration,

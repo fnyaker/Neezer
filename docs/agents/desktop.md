@@ -129,11 +129,18 @@ frame for frame).
 |---|---|---|
 | main (GPUI) | windows, views, input, layout, paint | normal; never blocks: every I/O is a task |
 | `nz-net` (tokio, 2 workers) | every HTTP request, MPRIS (LocalSet on its own thread), cache writes | normal |
-| `nz-decode-{a,b}` | one per voice: read source, decode, resample, push into the voice ring | normal |
+| `nz-load-*`, `nz-preload-*`, `nz-seek-*` | one per load/preload/seek: open a source, probe it, hand the voice over | normal; owned and joined by the engine |
+| `nz-decode-{gen}` | one per voice: read source, decode, resample, push into the voice ring | normal; owned and joined by the engine |
+| `nz-audio-spool` | one per network body: pull it into its spool file, at most `read_ahead` in front of the decoder | normal; owned and joined by the engine |
 | PipeWire callback (cpal) | mix the two voices, DSP, write the device buffer, copy to the tap | real-time: no allocation, no lock, no syscall |
 | `nz-analysis` | tap → `rhythm` analyser → bars/scope state | `nice 5`; runs only while a viz is visible |
 | `nz-bulk` | downloads, cover warming, offline sync | `nice 10`, idle I/O class |
 | `neezer-transcribe` child processes | transcription supervisor + whisper engine | `nice 19`, `SCHED_IDLE`, idle I/O, SIGSTOP-able |
+
+**Every thread that borrows `nz-net` is owned somewhere that joins it** (D13's *Pitfalls*): `nz-bulk`
+by `Offline`, the engine's four families above by `nz_audio::Engine` (reached from the `NetRuntime`
+global's `Drop`), and nothing else uses `Handle::block_on` — a `spawn`ed task is not borrowed, tokio
+drops it at shutdown.
 
 ### Rule 1 on the device: lanes
 
@@ -1218,8 +1225,11 @@ Waves that can run in parallel (disjoint files):
   runtime in a GPUI `Global` (`NetRuntime`) and one event channel carries every worker's
   [`AppEvent`] to the shell; the shell drains it in a foreground task, so no worker touches
   GPUI state. That global also OWNS the threads that borrow the runtime: its `Drop` joins the
-  offline worker before the runtime goes, because a `Handle::block_on` on a shutting-down runtime
-  panics its thread (see D13's *Pitfalls*).
+  offline worker AND the audio engine's threads (loaders, decode voices, spoolers) before the
+  runtime goes, because a `Handle::block_on` on a shutting-down runtime panics its thread (see
+  D13's *Pitfalls*). The engine is reached through a registry of weak handles
+  (`wiring::engine::attach` / `shutdown_process`), since gpui drops the shell's state — the
+  engine's other owner — before the globals.
 - **The rule, the keyboard is the mouse**: every control dispatches the action the keymap
   binds (`cx.listener` → `window.dispatch_action`), and the action handler is the shell's one
   transport path (`PlayerState::apply`). The single-letter/space bindings live in
@@ -1754,8 +1764,42 @@ Waves that can run in parallel (disjoint files):
     **220 µs**, leaves **1 row `active`** and its `.part`, the run has **0 failures** and the
     process records **0 panics**; the 200-track share bench still measures 28.1 % drop with the cap
     at 127 545 B/s, so nothing got cheaper by accident. The same order is owed by every other thread
-    that borrows the runtime: `wiring/engine.rs`'s loader is the next one, and it has no stop
-    protocol yet.
+    that borrows the runtime, and the AUDIO ENGINE owed it next (`desktop/app/src/wiring/engine.rs`
+    and `desktop/crates/nz-audio`): see the bullet below.
+
+  - **The engine owns its threads too — a loader, a decode voice, a spooler is JOINED, never
+    abandoned to the runtime.** `StreamOpener` drives `nz-api` with `Handle::block_on` from four
+    families of thread that the engine spawns (load `nz-load-*`, preload `nz-preload-*`, seek
+    `nz-seek-*`, decode `nz-decode-*`, spool `nz-audio-spool`), and none of them was joined: closing
+    the window during a track, or while the next one preloaded, dropped the runtime under them.
+    Measured before the fix, with the app's own drop order, on the same test
+    (`closing_the_app_mid_track_stops_the_engine_without_a_panic`, child process, panic hook
+    installed): `thread 'nz-preload-next' panicked at tokio-1.54.1/src/runtime/time/entry.rs:534` —
+    « A Tokio 1.x context was found, but it is being shutdown. » — parked where a Prefetch request
+    waits on its lane's `timeout_at`. The rule and the shape:
+
+    - the ENGINE owns what it spawns (`loaders`, `voices` with their stop flags, `spoolers`), and
+      `Engine::shutdown` stops the opener first (a `tokio::sync::watch` raced by every `block_on`,
+      `select!`), then the voices, then joins the loaders, the decode voices and the spoolers, then
+      the event bridge. Idempotent; `Inner::drop` calls it as the last resort;
+    - a join SKIPS the caller's own thread: the last owner of the engine can be a loader, and
+      `join` on yourself is `EDEADLK` (measured — the probe's first failure was that panic);
+    - a spooler a SEEK superseded is `abandon`ed, not joined: it may be inside a socket read of
+      bytes nobody wants, and joining it hung `seek_in_a_finished_network_file_uses_a_byte_range`
+      for ever (measured);
+    - the runtime's owner reaches the engine through a process-wide registry of WEAK handles
+      (`wiring::engine::attach` / `shutdown_process`), because gpui drops the shell's state before
+      the globals — the engine's only strong owner is gone by then. `spawn_audio` also stops the
+      previous engine first, so a sign-in during a track never leaves a player on the old session;
+    - no `catch_unwind` anywhere: the panic was a lifetime, and a swallowed panic is how it reached
+      master's log with a green suite.
+
+    Measured after the fix (same bench, 120 kB/s link, a 60 s FLAC): the close returns in
+    **0.50–0.76 ms**, records **0 panics**, and the process has **0 engine threads** left when it
+    returns — the assertion `left_at_close.is_empty()` is the decisive one, since it is what the old
+    code could not satisfy. The same run proves the two bodies in flight never became play-cache
+    entries, so an interrupted stream is not a track. Gapless, seek and crossfade are untouched:
+    `cargo test -p nz-audio` (54 unit + 7 dsp + 4 network tests) is green, byte-range seek included.
 
 ### D14a — Réglages (user sections) — delivered 2026-11-17
 

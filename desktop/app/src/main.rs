@@ -117,16 +117,20 @@ struct NetRuntime(Arc<tokio::runtime::Runtime>);
 impl gpui_kit::Global for NetRuntime {}
 
 impl Drop for NetRuntime {
-    /// The download worker is joined HERE, before the `Arc<Runtime>` field above
-    /// is dropped (Rust drops the fields after this body runs).
+    /// The threads that borrow this runtime are joined HERE, before the
+    /// `Arc<Runtime>` field above is dropped (Rust drops the fields after this
+    /// body runs). Two of them do: `nz-bulk` (the download worker) and every
+    /// thread the audio engine started — a loader, a decode thread, a spooler.
     ///
-    /// `nz-bulk` borrows this runtime with `Handle::block_on`, and tokio panics —
-    /// « A Tokio 1.x context was found, but it is being shutdown. » — when a
-    /// timer is polled on a runtime that is shutting down. Closing the window
-    /// during a download used to do exactly that: the runtime shut down under a
-    /// worker that still had a track in flight (measured in CI, run 43964917017).
+    /// Both drive the network with `Handle::block_on`, and tokio panics — « A
+    /// Tokio 1.x context was found, but it is being shutdown. » — when a timer
+    /// is polled on a runtime that is shutting down. Closing the window during a
+    /// download did exactly that (measured in CI, run 43964917017); closing it
+    /// during a track, or while the next one preloaded, was the same bug with
+    /// the engine's threads.
     fn drop(&mut self) {
         crate::wiring::offline::shutdown_process();
+        crate::wiring::engine::shutdown_process();
     }
 }
 

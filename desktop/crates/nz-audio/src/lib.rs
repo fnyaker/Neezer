@@ -31,7 +31,7 @@ mod voice;
 pub use clock::Clock;
 pub use crossfade::{FadeSettings, equal_power};
 pub use dsp::{Normalization, Settings, gain_db};
-pub use engine::{Engine, EngineConfig, EngineError, TrackMeta};
+pub use engine::{Engine, EngineConfig, EngineError, EngineHandle, TrackMeta};
 pub use events::EngineEvent;
 pub use mixer::MixerShared;
 pub use output::{
