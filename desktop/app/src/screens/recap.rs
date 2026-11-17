@@ -38,6 +38,7 @@ use crate::theme;
 use crate::toast::ToastKind;
 use crate::widgets::card::{self, Phase};
 use crate::widgets::cover::Covers;
+use crate::widgets::page_scroll;
 use crate::widgets::recap_story::{self, Story};
 use crate::widgets::track_list;
 use crate::wiring::events::{self, Sender};
@@ -385,12 +386,9 @@ impl Render for Screen {
             .text_color(theme::text(cx))
             .key_context("Neezer");
 
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.))
-            .w_full()
+        // As tall as its CONTENT (see `page_scroll`): `flex_1` made the page
+        // one viewport tall, so the Récap could not be scrolled at all.
+        let mut page = page_scroll::column()
             .max_w(px(1800.))
             .gap(rems(1.))
             .p(rems(1.5));

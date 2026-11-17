@@ -23,6 +23,7 @@ pub mod genre_tree;
 pub mod lyrics;
 pub mod markers;
 pub mod mood_card;
+pub mod page_scroll;
 pub mod playlist_picker;
 pub mod quality_menu;
 pub mod recap_story;

@@ -46,6 +46,7 @@ use crate::toast::ToastKind;
 use crate::widgets::card::{self, Phase};
 use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::flow;
+use crate::widgets::page_scroll;
 use crate::widgets::track_list::{self, Intent, TrackList as List};
 use crate::wiring::events::{self, Sender};
 
@@ -562,12 +563,10 @@ impl Render for Screen {
             .text_color(theme::text(cx))
             .key_context("Neezer");
 
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.))
-            .w_full()
+        // A page column is as tall as its CONTENT: `flex_1` here made it one
+        // viewport tall and the scroller above had nothing to scroll (the
+        // Accueil's bug, in Nouveautés and le Récap too — see `page_scroll`).
+        let mut page = page_scroll::column()
             .max_w(px(1800.))
             .gap(rems(1.25))
             .p(rems(1.5));

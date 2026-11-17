@@ -946,7 +946,14 @@ impl Render for Screen {
         // column that overflows without scrolling clips the list away — measured
         // first: a click never reached a row because the rows were below the
         // window.
-        let mut page = div().flex().flex_col().flex_1().min_h_0().gap(rems(0.75));
+        // `Titres` gives the page the height (the windowed list scrolls it), and
+        // every other tab gives the page its CONTENT's height so the scroller
+        // above it can scroll — a `flex_1` page is one viewport tall and the
+        // sections below it were unreachable (see `page_scroll`).
+        let mut page = div().flex().flex_col().gap(rems(0.75));
+        if self.tab == Tab::Tracks {
+            page = page.flex_1().min_h_0();
+        }
 
         // The landing: what this device already searched, never an empty page.
         if self.query.trim().is_empty() {

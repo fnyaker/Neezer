@@ -1315,6 +1315,39 @@ Waves that can run in parallel (disjoint files):
   cached; requests per screen equal to the SPA's (`webapp/test/requests/run.mjs` counts) or fewer;
   scrolling a 4 000-row list at ≥ 230 fps on this machine (frame times logged with
   `NZ_FRAME_LOG=1`, p95 < 4.2 ms); context menu by `Menu`/`Shift+F10` and right click.
+- **The rule, a page column is as tall as its CONTENT, and the scroller around it is bounded**
+  (v1.6.1). GPUI measures a scroll container from the BOXES of its DIRECT children
+  (`Div::prepaint`'s `content_size`), never from what those children paint past their own
+  bottom edge — so a `flex: 1 1 0%` page column is exactly one viewport tall, `scroll_max` is
+  0, and the wheel, the touchpad, `Page suivante` and the arrows do nothing while every
+  section below the fold is clipped, silently. That was Accueil v1.6.0: **no scroll at all**,
+  at every window size and with the 420 px panel open. Measured by the regression test
+  `the_home_scrolls_with_the_wheel_and_the_keys` (`cargo test -p neezer-desktop screens::home`)
+  and `a_content_sized_column_scrolls_and_a_flex_1_one_does_not` (`widgets::page_scroll`, which
+  pins the failure: 1 600 px of travel with `column()`, **0** with `flex_1`): **0 → 902 px** of
+  travel on a 1280×800 window, **2 017 px** in the 660 px column a 1280 window keeps with the
+  sidebar and the 420 px queue panel open, one wheel notch **78 px**, `Page suivante` **640 px**
+  (0.8 of the window), an arrow **64 px** (4 rem). Scrolling costs nothing measurable: 40
+  `Page suivante` on a release build under Xvfb give a p95 element-tree build of **0.29 ms**
+  against **0.25 ms** idle (the 160 ms present interval is the software rasterizer, not the app).
+  One
+  implementation, `widgets/page_scroll.rs` (`PageScroll::container` for the scroller,
+  `column()` for the page, `own()` for the keys): Nouveautés, le Récap, Bienvenue and the
+  search results page were built the same way and are fixed with it. The keys are app-level
+  interceptors that CONSUME the stroke (the shared `ListPageDown`/`ListNext` actions would
+  otherwise move a row list in the same breath), so only a screen with **no text field**
+  installs them: Accueil (it keeps `j`/`k` for its recomposed list), while Réglages, search,
+  Bienvenue and le Récap keep their own list/deck keys and scroll with the wheel.
+- **Pitfalls found by measuring**:
+  - **A live Xvfb run cannot prove the WHEEL.** XTEST button 4/5 is not a notch on Xvfb: GPUI's
+    X11 backend drops a scroll press flagged `POINTER_EMULATED` and the virtual pointer has no
+    scroll valuator (`gpui-pre-linux`'s `XinputButtonPress`). Keys are real XTEST input and a
+    capture proves them; the wheel is held by a `#[gpui::test]` dispatching the exact
+    `ScrollWheelEvent` the backend builds from a notch (`ScrollDelta::Lines(point(0, -3))`).
+  - **A scroll container's `max_offset` is POSITIVE travel**, while the offset itself is
+    negative going down (`ScrollHandle::set_offset` docs): the two signs are one place where a
+    page "scrolls the wrong way" or "does not scroll" (`Set asked=562px -> 0px` was exactly
+    this).
 
 ### D8b — Library and playlists (delivered 2026-11-16)
 
