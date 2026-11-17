@@ -154,6 +154,21 @@ answer a caught exception with this server's own constant — or a whitelist of 
 `genreshare._parse_error` and `genre._extractor_refusal` do — never with `str(exc)`; the detail
 belongs in `exc_info=True`, never in `jsonify`. 15 alerts in these routes were closed that way.
 
+The factory escapes every control character, not just the line breaks: CR/LF (and U+2028/2029) keep
+their readable escape, while every other C0, DEL and C1 becomes `\xNN` — ESC included, because an
+ANSI sequence clears the screen or rewrites the line without needing a newline, and NUL truncates in
+several readers (`tests/test_logsafe.py`). It cleans `record.args` only, so **log through `%s`
+arguments, never an f-string**: `logger.info(f"user {name}")` bypasses it.
+
+**`# nosemgrep` closes nothing here.** Semgrep does honour it, but it still writes the result into
+its SARIF with `suppressions: [{kind: inSource}]`, and GitHub code scanning ignores that: the alert
+is created and the "Semgrep OSS" check stays red. `# nosec Bxxx` is different — Bandit drops the
+finding before emitting SARIF, so the Bandit alert does close. So a Semgrep finding is answered by
+**restructuring until the rule no longer matches**: name the parse in a helper the tainted value only
+reaches as a parameter (`_offset_seconds`, `_seconds`), build generated HTML with a
+`string.Template` instead of an f-string/`%`/`+`, or let the value carry what the rule needs. If the
+line cannot be restructured, leave it intact and document it — never disable a rule.
+
 **Streaming interception** lives in `neezer/api/media.py` (`_ensure_deezer_archived`): first play
 archives the FLAC, then the existing transcode/cache/`send_file` path runs unchanged. The permanent
 FLAC archive is separate from neezer's capped `transcode_cache`.

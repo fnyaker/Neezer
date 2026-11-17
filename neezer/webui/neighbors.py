@@ -39,7 +39,7 @@ def _snapshot():
 def similar_rebuild_start():
     global _job, _started
     data = request.get_json(silent=True) or {}
-    force = bool(data.get("force") or request.args.get("force"))
+    force = True if (data.get("force") or request.args.get("force")) else False
     with _lock:
         if _job is not None and _job.snapshot()["running"]:
             pass

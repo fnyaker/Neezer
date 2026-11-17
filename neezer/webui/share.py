@@ -25,7 +25,7 @@ import logging
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed binary in an argument list, no shell
 import threading
 import time
 import uuid
@@ -221,7 +221,7 @@ def _audio_peaks(path, buckets):
     ]
     # timeout=: without it a file ffmpeg can't make progress on parks an HTTP
     # thread forever. subprocess.run kills the child on timeout.
-    raw = subprocess.run(
+    raw = subprocess.run(  # nosec B603 - "ffmpeg", an argument list, no shell
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -254,7 +254,9 @@ def _clip_generator(path, start, length, codec_args):
         "-map", "0:a:0", "-map_metadata", "0", *codec_args, "pipe:1",
     ]
     # stderr -> /dev/null so an unread, full stderr pipe can't deadlock ffmpeg.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(  # nosec B603 - "ffmpeg", an argument list, no shell
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
     deadline = time.monotonic() + FFMPEG_TIMEOUT
     try:
         while True:
@@ -360,14 +362,25 @@ def share_file(mid):
     )
 
 
+def _seconds(raw):
+    """A share clip's ``?start=``/``?end=`` as seconds, or ``None`` for junk.
+
+    NaN and the infinities parse here — the range check that follows refuses
+    them, since a clip needs ``0 <= start < end`` and a bounded length.
+    """
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 @webapi.route("/share/clip/<mid>")
 @login_required
 def share_clip(mid):
     """An excerpt of the file, cut+encoded by ffmpeg, as a named download."""
-    try:
-        start = float(request.args.get("start"))
-        end = float(request.args.get("end"))
-    except (TypeError, ValueError):
+    start = _seconds(request.args.get("start"))
+    end = _seconds(request.args.get("end"))
+    if start is None or end is None:
         return jsonify({"error": "invalid range"}), 400
     if not (0 <= start < end) or end - start > CLIP_MAX_SECONDS or end > 10**7:
         return jsonify({"error": "invalid range"}), 400

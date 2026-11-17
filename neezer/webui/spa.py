@@ -19,6 +19,7 @@ from __future__ import annotations
 import html
 import os.path
 import re
+import string
 
 from flask import Blueprint, abort, make_response, request, send_from_directory
 from werkzeug.security import safe_join
@@ -155,6 +156,49 @@ def _into_app(route: str) -> str:
 # "/app/" handed out "/app/rc/<token>" — which the file route below took for a
 # missing file (the token has a dot in it) and answered 404. Those links are
 # out there, in chats and QR codes; they keep working.
+
+# One page for all three short links: they differ by an accent colour, an
+# og:type and a referrer policy. A ``string.Template`` inserts what it is
+# given, so every value is escaped ONCE, here, at the page boundary: the page
+# never depends on the regex that vetted a token, and a client-chosen owner
+# name or playlist title can never inject markup.
+_LINK_PAGE = string.Template(
+    "<!doctype html><html lang=fr><head><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>$title</title>"
+    "<meta property='og:title' content='$title'>"
+    "<meta property='og:description' content='$desc'>"
+    "$og_type"
+    "<meta name=theme-color content='#0f0d13'>"
+    "$referrer"
+    "<meta http-equiv=refresh content='0;url=$target'>"
+    "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;"
+    "background:#0f0d13;color:#f3f0f7;font:16px system-ui,sans-serif}"
+    "a{color:$accent}</style></head>"
+    "<body><a href='$target'>$title</a></body></html>"
+)
+
+
+def _short_link_page(title, desc, target, *, accent, og_type="", referrer=False):
+    """A short link's preview: it forwards into the app, and renders well."""
+    page = _LINK_PAGE.substitute(
+        title=html.escape(title),
+        desc=html.escape(desc),
+        target=html.escape(target),
+        accent=accent,
+        og_type=og_type,
+        referrer="<meta name=referrer content=no-referrer>" if referrer else "",
+    )
+    resp = make_response(page)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store"
+    # The page names a person; keep it out of search engines.
+    resp.headers["X-Robots-Tag"] = "noindex"
+    if referrer:
+        resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
 @spa.route("/party/<pid>")
 @spa.route("/app/party/<pid>")
 def party_link(pid: str):
@@ -163,36 +207,20 @@ def party_link(pid: str):
     from .party import _get
 
     party = _get(pid)
-    host = html.escape(party.owner_name) if party else ""
+    host = party.owner_name if party else ""
     title = f"Listen party de {host}" if host else "Listen party"
     desc = (
         "Rejoins l'écoute : la même musique, au même instant, sur ton appareil."
         if party
         else "Cette listen party est terminée."
     )
-    # Every interpolated value is escaped here, at the page boundary, even
-    # those a pattern already vetted: the page must not depend on the regex.
-    target = html.escape(_into_app(f"/party/{pid}"))
-    page = (
-        "<!doctype html><html lang=fr><head><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{title}</title>"
-        f"<meta property='og:title' content='{title}'>"
-        f"<meta property='og:description' content='{desc}'>"
-        "<meta property='og:type' content='music.radio_station'>"
-        "<meta name=theme-color content='#0f0d13'>"
-        f"<meta http-equiv=refresh content='0;url={target}'>"
-        "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;"
-        "background:#0f0d13;color:#f3f0f7;font:16px system-ui,sans-serif}"
-        "a{color:#a238ff}</style></head>"
-        f"<body><a href='{target}'>{title}</a></body></html>"
+    return _short_link_page(
+        title,
+        desc,
+        _into_app(f"/party/{pid}"),
+        accent="#a238ff",
+        og_type="<meta property='og:type' content='music.radio_station'>",
     )
-    resp = make_response(page)
-    resp.headers["Content-Type"] = "text/html; charset=utf-8"
-    resp.headers["Cache-Control"] = "no-store"
-    # The page names the host; keep it out of search engines.
-    resp.headers["X-Robots-Tag"] = "noindex"
-    return resp
 
 
 # A remote-control link, the same way: a short URL for the QR code and a page a
@@ -209,7 +237,7 @@ def remote_link(token: str):
     link = live_link(link_id) if link_id else None
     if link_id is None:
         abort(404)
-    owner = html.escape(describe(link)["owner"]) if link else ""
+    owner = describe(link)["owner"] if link else ""
     title = f"Piloter le lecteur de {owner}" if owner else "Contrôle à distance"
     desc = (
         "Ouvre le lien pour piloter la musique depuis ton appareil."
@@ -217,28 +245,14 @@ def remote_link(token: str):
         else "Ce lien de contrôle n'est plus valide."
     )
     # The parser strips whitespace before matching: forward the vetted form,
-    # never the raw path segment, and escape it at the page boundary.
-    target = html.escape(_into_app(f"/rc/{token.strip()}"))
-    page = (
-        "<!doctype html><html lang=fr><head><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{title}</title>"
-        f"<meta property='og:title' content='{title}'>"
-        f"<meta property='og:description' content='{desc}'>"
-        "<meta name=theme-color content='#0f0d13'>"
-        "<meta name=referrer content=no-referrer>"
-        f"<meta http-equiv=refresh content='0;url={target}'>"
-        "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;"
-        "background:#0f0d13;color:#f3f0f7;font:16px system-ui,sans-serif}"
-        "a{color:#2bd4a4}</style></head>"
-        f"<body><a href='{target}'>{title}</a></body></html>"
+    # never the raw path segment.
+    return _short_link_page(
+        title,
+        desc,
+        _into_app(f"/rc/{token.strip()}"),
+        accent="#2bd4a4",
+        referrer=True,
     )
-    resp = make_response(page)
-    resp.headers["Content-Type"] = "text/html; charset=utf-8"
-    resp.headers["Cache-Control"] = "no-store"
-    resp.headers["X-Robots-Tag"] = "noindex"
-    resp.headers["Referrer-Policy"] = "no-referrer"
-    return resp
 
 
 # A public playlist link, the same way: a short URL and a page a messaging app
@@ -262,26 +276,12 @@ def playlist_share_link(token: str):
         title = "Playlist partagée"
         desc = "Ce lien n'est plus valide."
     # The parser strips whitespace before matching: forward the vetted form,
-    # never the raw path segment, and escape it at the page boundary.
-    target = html.escape(_into_app(f"/shared/playlist/{token.strip()}"))
-    page = (
-        "<!doctype html><html lang=fr><head><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{html.escape(title)}</title>"
-        f"<meta property='og:title' content='{html.escape(title)}'>"
-        f"<meta property='og:description' content='{html.escape(desc)}'>"
-        "<meta property='og:type' content='music.playlist'>"
-        "<meta name=theme-color content='#0f0d13'>"
-        "<meta name=referrer content=no-referrer>"
-        f"<meta http-equiv=refresh content='0;url={target}'>"
-        "<style>body{margin:0;min-height:100vh;display:grid;place-items:center;"
-        "background:#0f0d13;color:#f3f0f7;font:16px system-ui,sans-serif}"
-        "a{color:#f5c518}</style></head>"
-        f"<body><a href='{target}'>{html.escape(title)}</a></body></html>"
+    # never the raw path segment.
+    return _short_link_page(
+        title,
+        desc,
+        _into_app(f"/shared/playlist/{token.strip()}"),
+        accent="#f5c518",
+        og_type="<meta property='og:type' content='music.playlist'>",
+        referrer=True,
     )
-    resp = make_response(page)
-    resp.headers["Content-Type"] = "text/html; charset=utf-8"
-    resp.headers["Cache-Control"] = "no-store"
-    resp.headers["X-Robots-Tag"] = "noindex"
-    resp.headers["Referrer-Policy"] = "no-referrer"
-    return resp

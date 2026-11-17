@@ -636,7 +636,7 @@ def _run_replace(app, job_id, source_id, target_id, user_id, admin):
     finally:
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - a job thread's own connection, best-effort
             pass
 
 
@@ -798,7 +798,7 @@ def _run_delete(app, job_id, track_id, user_id, admin):
     finally:
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - a job thread's own connection, best-effort
             pass
 
 
@@ -923,7 +923,7 @@ def _run_delete_many(app, job_id, todo, user_id, admin):
                 del _bulk_running[user_id]
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - a job thread's own connection, best-effort
             pass
 
 
