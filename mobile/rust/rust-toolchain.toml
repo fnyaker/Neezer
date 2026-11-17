@@ -1,0 +1,21 @@
+# The Rust this workspace builds with — pinned like every other tool it links
+# (Gradle 8.14.7, NDK 30.0.16248370, cargo-ndk 4.1.2, AGP 8.13.2).
+#
+# Why a pin and not "stable": on 2026-11-17 the runner's stable gained the
+# `cargo::unused_dependencies` lint, and `cargo clippy --workspace --all-targets
+# -- -D warnings` (mobile.yaml) turned MB0's DELIBERATELY declared dependencies —
+# the shared crates the stubs do not call yet, which the lots that fill them use
+# (docs/agents/mobile.md, SC0 "the entries an empty crate does not use yet are
+# deliberate") — into 11 errors on a tree that is fine with 1.99.1. Measured the
+# same day: `cargo clippy -p nz-viz-gl --all-targets --locked -- -D warnings` →
+# `Finished` locally on 1.99.1, red on the runner. A pinned toolchain makes CI
+# reproduce this machine instead of silently changing its rules; when the stubs
+# are filled (MB3a..MB25), re-evaluate: a stable newer than this may be adopted
+# with the lint satisfied rather than silenced.
+#
+# The targets are the three ABIs the APK ships, so `cargo ndk` in
+# mobile/rust/build-android.sh finds them installed (CI adds them too).
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
