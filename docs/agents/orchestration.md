@@ -53,6 +53,7 @@ specialist reads its own notes, changes only its own files, measures, and return
 | `webapp/src/lib/viz/**`, `webapp/rhythm/src/viz*.rs`, `webapp/test/render/**` | `animation` |
 | `android/**`, `webapp/src/lib/native*.js`, `webapp/src/lib/offline.js` native branch | `android` |
 | `desktop/**` (Rust/GPUI desktop app; one lot of [desktop.md](desktop.md) per writer) | primary agent or a coding worker per lot (no dedicated subagent yet) |
+| `mobile/**` and the shared `desktop/crates/nz-*` it uses (native Android app; one lot of [mobile.md](mobile.md) per writer, waves in parallel on disjoint files) | a coding worker per lot with the lot's ready prompt; `android` for the ported Kotlin (car mode, updater, Deezer login) |
 | `tests/**`, `webapp/test/**`, a failing CI test job | `qa` |
 | `Dockerfile`, `docker/**`, `.github/workflows/**`, `docker-compose.yml`, `.dockerignore` | `devops` |
 | auth, sessions, CSRF, CSP, SSRF, uploads, shares, remote/party capabilities, secrets, dependencies | `security` first, then the owner |

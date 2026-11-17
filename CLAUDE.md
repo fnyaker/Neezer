@@ -117,6 +117,7 @@ green, merge without asking. No skipped or disabled test to get there.
 | `neezer/providers/`, `sources.py`, `access.py`, accounts, groups, library import | [providers.md](docs/agents/providers.md) |
 | `android/` (WebView, native player, offline store, updater, Deezer login) | [android.md](docs/agents/android.md) |
 | `desktop/` (GPUI app for Omarchy, native audio, MPRIS, local Vulkan transcription; its lot plan) | [desktop.md](docs/agents/desktop.md) |
+| `mobile/` (native Android app replacing `android/`: Compose UI, Rust core via UniFFI, Media3 over the Rust engine; its lot plan) | [mobile.md](docs/agents/mobile.md) |
 | `webapp/src` screens, routing, back navigation, offline cache, service worker, code splitting, queue, search, sleep timer | [webapp.md](docs/agents/webapp.md) |
 | `Player.svelte`, crossfade, silence trim, direct/processed output, `webapp/appcore`, big-list cost | [playback.md](docs/agents/playback.md) |
 | server-side analysis (tempo, descriptors), genre studio, embeddings, genre tree | [analysis-genre.md](docs/agents/analysis-genre.md) |
