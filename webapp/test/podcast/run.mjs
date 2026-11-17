@@ -318,6 +318,20 @@ console.log("\n-- 1440x900: the show's inline chapters, the 100-chapter sheet, t
   check((await second.locator(".chapters.inline .chapter-row").count()) === 8, "show: the inline list caps at 8 chapters");
   await second.locator(".ch-see").click();
   await page.waitForSelector(".chsheet", { timeout: 15000 });
+  // The sheet arrives with `veil` + `sheet` (transitions.md O23): on a desktop
+  // the pane scales 0.97 → 1 over 200 ms, so a bounding box read mid-enter
+  // measures the transform (44 × 0.97 = 42.68), not the layout. Wait for the
+  // enter to settle, then measure the box the person ends up with.
+  await page
+    .waitForFunction(
+      () =>
+        !document
+          .getAnimations()
+          .some((animation) => animation.playState === "running" && animation.effect?.target?.closest?.(".chsheet")),
+      null,
+      { timeout: 5000 },
+    )
+    .catch(() => {});
   const mounted = await page.locator(".chsheet .chapter-row").count();
   check(mounted > 0 && mounted <= 33, `show: the sheet mounts at most 33 of the 100 chapters (measured ${mounted})`);
   const close = await page.locator('.chsheet button[aria-label="Fermer les chapitres"]').boundingBox();

@@ -6,6 +6,11 @@ Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.m
 `src/app.css`, `lib/theme.js`, the pure rules in `lib/sillon.js` and the fonts in `src/assets/fonts/` —
 build a screen from those, never from a literal colour. Rules that cost something to learn:
 
+**Motion is its own area:** every appearance, disappearance and displacement of the interface —
+pages, sheets, menus, rows, lists, the player's chrome — is [transitions.md](transitions.md)
+(tokens, the three levels, the eco/reduced guard, and the lint that keeps `svelte/transition` out of
+`src/`). This file says what a screen IS; that one says how it arrives.
+
 - **A theme is an attribute on `<html>`** (`encre` the default, `papier`, `pochette`), never a class
   or a component prop: `--bg --s1 --s2 --ln --tx --dim --ac --onac --btn --onbtn --hrt`. The old
   names (`--text`, `--text-dim`, `--bg-elev`, `--bg-card`, `--bg-hover`) are aliases of them;

@@ -425,7 +425,7 @@
   {:else if events === null}
     <Skeleton kind="list" count={8} />
   {:else if !events.length}
-    <div class="empty">
+    <div class="empty" in:fadeIn>
       <span class="empty-icon"><Icon name="timer" size={34} /></span>
       <p class="empty-title">
         {filter === "listen" ? "Aucune écoute dans l'historique" : filter === "skip" ? "Aucun saut dans l'historique" : "Aucune écoute pour l'instant"}

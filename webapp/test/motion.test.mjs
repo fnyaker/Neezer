@@ -13,9 +13,12 @@
 //      listened to live (`change`), and "off" is Svelte's instant path;
 //   5. every transition returns duration 0 when off, and no transform at all
 //      under reduced motion (M13/M14);
-//   6. the ONE-source-of-truth lint: the only files still importing
-//      `svelte/transition`/`svelte/animate` are the 19 the plan froze, and
-//      lib/motion.js is not one of them. T7 empties this list.
+//   6. the ONE-source-of-truth lint (M15): no file imports
+//      `svelte/transition`/`svelte/animate` at all (T7 emptied the frozen list),
+//      no `transition:`/`animation:` declaration and no transition directive
+//      carries a literal duration except the named walks and the
+//      status/decorative keyframes M13/M14 keep running in eco, and
+//      lib/motion.js exports every transition by name.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -514,38 +517,11 @@ test("animate() cancels the animation it started on the same element", () => {
 
 // -- 6. one source of truth --------------------------------------------------
 
-test("only the frozen files still import svelte/transition or svelte/animate", () => {
-  // The plan (M15) freezes today's importers so the sweep can be done lot by
-  // lot; T7 empties this set and adds the literal-duration lint. A new file
-  // that reaches for `svelte/transition` fails HERE instead of being missed.
-  //
-  // It is a SUBSET check, not an equality: a lot that moves one of these files
-  // onto `lib/motion.js` removes that importer while the other lots are still
-  // working in parallel, and an equality would turn red on every one of them.
-  // The frozen list is therefore the ceiling — nothing outside it may appear,
-  // and the list itself shrinks only in T7, which empties it.
-  const ALLOWED = new Set([
-    "components/AutomatchPanel.svelte",
-    "components/ChapterSheet.svelte",
-    "components/CreditsSheet.svelte",
-    "components/DesktopNowPlaying.svelte",
-    "components/ExportSheet.svelte",
-    "components/FlashWarning.svelte",
-    "components/GenreBulkSheet.svelte",
-    "components/GenreTagSheet.svelte",
-    "components/MobileNowPlaying.svelte",
-    "components/NetworkIndicator.svelte",
-    "components/Notices.svelte",
-    "components/NowPlaying.svelte",
-    "components/PlaylistMembersSheet.svelte",
-    "components/PlaylistTracks.svelte",
-    "components/RemoteBanner.svelte",
-    "components/RemoteHostChip.svelte",
-    "components/ReplaceSheet.svelte",
-    "components/Toasts.svelte",
-    "routes/Party.svelte",
-  ]);
-
+test("no file imports svelte/transition or svelte/animate", () => {
+  // M15: lib/motion.js is the ONE home of a transition. T0 froze the 19 files
+  // that still imported Svelte's built-ins so the sweep could be done lot by
+  // lot; T7 emptied that list, so an import is now a failure anywhere — a new
+  // file that reaches for `svelte/transition` fails HERE instead of drifting.
   const files = [];
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
@@ -564,12 +540,7 @@ test("only the frozen files still import svelte/transition or svelte/animate", (
     }
   }
 
-  assert.deepEqual(
-    [...importers].filter((name) => !ALLOWED.has(name)).sort(),
-    [],
-    "every file importing svelte/transition or svelte/animate is one of the frozen files",
-  );
-  assert.ok(ALLOWED.size === 19, `the frozen list still names 19 files (${ALLOWED.size})`);
+  assert.deepEqual([...importers].sort(), [], "nothing imports svelte/transition or svelte/animate");
   assert.ok(!importers.has("lib/motion.js"), "the one motion module implements its transitions itself");
 
   // And the module really exports the transitions the plan lists, by name.
@@ -578,5 +549,177 @@ test("only the frozen files still import svelte/transition or svelte/animate", (
   }
   for (const name of ["motionLevel", "level", "scrollBehavior", "animate", "screenKey", "pageEnter", "shiftRows"]) {
     assert.ok(createMotion({})[name] !== undefined, `createMotion() exposes ${name}`);
+  }
+});
+
+// -- 7. no literal durations -------------------------------------------------
+
+/** Every `transition:`/`animation:` declaration in a file, with its value.
+ *  Splitting on what ENDS a declaration (`;`, `{`, `}`) rather than on lines is
+ *  what catches app.css's global `button` rule, whose five properties are
+ *  written on five lines. Comments are cleared first: a rule explained in prose
+ *  is not a rule. */
+function declarations(text) {
+  const clean = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const out = [];
+  for (const chunk of clean.split(/[;{}]/)) {
+    const m = chunk.match(/(?:^|\s)(transition|animation)(-[a-z-]+)?\s*:\s*([\s\S]+)$/);
+    if (!m) continue;
+    out.push({ property: m[1] + (m[2] || ""), value: m[3].trim() });
+  }
+  return out;
+}
+
+// A keyframe name a literal `animation:` duration is allowed on: the indicators
+// M13 keeps running in eco (a frozen spinner reads as a hang) and the skeletons
+// and decorative loops M13/M14 stop. They CANNOT ride a `--dur-*` token: the
+// tokens are 0 ms in eco, which is exactly what these must not become.
+const STATUS_KEYFRAMES = new Map([
+  ["spin", "a spinner says a job is running (M13)"],
+  ["pp-spin", "the player bar's play/pause spinner (M13)"],
+  ["hero-spin", "HomeHero's loader (M13)"],
+  ["lc-spin", "the lyric card's share spinner (M13)"],
+  ["rs-spin", "the recap share poster's spinner (M13)"],
+  ["radio-spin", "the query radio's spinner (M13)"],
+  ["ytspin", "the YouTube fallback's spinner (M13)"],
+  ["rowspin", "the row that is being fetched (L7, M13)"],
+  ["shimmer", "a skeleton (F7): its shimmer is the loading state itself"],
+  ["ch-shimmer", "the chapter list's skeleton (F7)"],
+  ["recap-shimmer", "the recap's skeleton (F7)"],
+  ["slide", "an indeterminate job bar (I8, M13)"],
+  ["bar-slide", "an indeterminate job bar (I8, M13)"],
+  ["pulse", "the party/remote link's live indicator (M13)"],
+  ["blink", "the remote banner's live indicator (M13)"],
+  ["eq", "the playing row's decorative equalizer (L7): eco stops it"],
+  ["flash", "a found transcript segment's highlight (P20): eco stops it"],
+  ["grain-drift", "the visualizer's film grain (P22): eco has no canvas at all"],
+  ["bg-in", "the sleeve backdrop's own entrance (P9): lib/backdrop.js owns its 600 ms"],
+  ["gb-intro", "the shell ground's first arrival (P9): the same walk"],
+]);
+
+// A literal time that IS the plan's contract, not a UI motion the token table
+// covers. Each entry is `file`, the declaration it lives in, and why it stays a
+// number; the list is asserted to be USED, so it cannot rot into decoration.
+const WALKS = [
+  ["app.css", "transition", "--cover-ac 600ms",
+    "the registered --cover-ac colour walk (webapp.md): one timerless 600 ms custom-property transition"],
+  ["app.css", "transition-duration", "0.01ms",
+    "the eco guard's remnant (M13): 0.01 ms, never 0 s, so a transitionend can still fire"],
+  ["app.css", "animation-duration", "0.01ms",
+    "the same guard, for keyframes"],
+  ["components/GradientHeader.svelte", "transition", "--gh-c 600ms",
+    "the header tint's 600 ms walk (webapp.md)"],
+  ["components/GlobalBackdrop.svelte", "transition", "var(--gb-in, 420ms)",
+    "the ground's fade-in duration comes from the script (IN_MS); the literal is its CSS fallback (webapp.md: 420/220 ms)"],
+  ["components/GlobalBackdrop.svelte", "transition-duration", "var(--gb-out, 220ms)",
+    "the same walk's fade-out fallback"],
+  ["components/DesktopNowPlaying.svelte", "transition", "background-color 600ms",
+    "the sleeve halo's colour walk (P9): lib/backdrop.js owns the 600 ms"],
+  ["components/Visualizer.svelte", "transition", "opacity 0.6s",
+    "the visualizer's own canvas fade (animations.md, P22: unchanged), on the sleeve walk's 600 ms"],
+  ["components/Visualizer.svelte", "transition-duration", "0.2s",
+    "its reduced-motion fallback (animations.md), not a UI token"],
+];
+
+// The same rule, one syntax away: a Svelte transition DIRECTIVE takes its
+// duration from lib/motion.js too. `duration: 0` is the plan's own instant path
+// (a cache hit, a row that must not animate on mount — M4/M6/M7) and is allowed;
+// any other number is a literal.
+const WALK_DIRECTIVES = [
+  ["routes/Party.svelte", "in:fade", 420,
+    "the party guest's ground is the shell ground's own 220 + 420 ms walk (webapp.md): this is the walk's second half, and it must match it"],
+];
+
+test("no transition or animation declaration carries a literal duration", () => {
+  // M15, the second half: a duration or a distance comes from lib/motion.js or
+  // from the `--dur-*`/`--ease-*`/`--move-*` tokens. A literal is invisible to
+  // the token table, so it keeps running at 120 ms in eco where the guard is
+  // the only thing left to stop it — and it is how `button { transition:
+  // ... 0.12s }` survived the whole sweep (T7 tokenised it).
+  const files = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (/\.(svelte|css|js|mjs)$/.test(name)) files.push(path);
+    }
+  };
+  walk(SRC);
+
+  const used = new Set();
+  const offenders = [];
+  for (const path of files) {
+    const name = relative(SRC, path).replaceAll("\\", "/");
+    for (const { property, value } of declarations(readFileSync(path, "utf8"))) {
+      for (const m of value.matchAll(/(?<![\w-])(-?\d*\.?\d+)(m?s)\b/g)) {
+        const time = Number(m[1]);
+        if (time === 0) continue; // `0s`/`0ms` is "no duration", the guard's own `0s` delay aside
+        const literal = m[1] + m[2];
+
+        // A walk whose number IS the contract.
+        const walkIndex = WALKS.findIndex(
+          ([file, prop, needle]) => file === name && prop === property && value.includes(needle),
+        );
+        if (walkIndex >= 0) {
+          used.add(walkIndex);
+          continue;
+        }
+
+        // A negative delay phases an infinite loop; it is not a duration.
+        if (property === "animation-delay" && time < 0) continue;
+
+        // A status/skeleton/decorative keyframe's own loop (M13/M14).
+        if (property === "animation" || property === "animation-duration") {
+          const keyframe = value
+            .split(/[\s,]+/)
+            .find((token) => /^[a-z][\w-]*$/i.test(token) && !/^(infinite|linear|ease|ease-in|ease-out|ease-in-out|steps|normal|reverse|alternate|alternate-reverse|forwards|backwards|both|none|running|paused)$/i.test(token));
+          if (keyframe && STATUS_KEYFRAMES.has(keyframe)) continue;
+        }
+
+        offenders.push(`${name}: ${property}: ${value} (${literal})`);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    [...new Set(offenders)].sort(),
+    [],
+    "a duration comes from lib/motion.js or the --dur-* tokens: use `var(--dur-…) var(--ease-…)`, " +
+      "or name the walk/status keyframe in this test with the number it carries and why",
+  );
+
+  // The directive form of the same rule (`in:fade={{ duration: 420 }}`).
+  const directives = /\b(transition|in|out|animate):([A-Za-z][\w]*)\s*=\s*\{\{[^}]*?\bduration\s*:\s*(-?\d*\.?\d+)\b/g;
+  const usedDirectives = new Set();
+  const literalDirectives = [];
+  for (const path of files) {
+    if (!path.endsWith(".svelte")) continue;
+    const name = relative(SRC, path).replaceAll("\\", "/");
+    for (const m of readFileSync(path, "utf8").matchAll(directives)) {
+      const time = Number(m[3]);
+      if (time === 0) continue;
+      const index = WALK_DIRECTIVES.findIndex(([file, key, ms]) => file === name && key === `${m[1]}:${m[2]}` && ms === time);
+      if (index >= 0) {
+        usedDirectives.add(index);
+        continue;
+      }
+      literalDirectives.push(`${name}: ${m[1]}:${m[2]}={{ duration: ${m[3]} }}`);
+    }
+  }
+  assert.deepEqual(
+    [...new Set(literalDirectives)].sort(),
+    [],
+    "a transition directive's duration is DUR.* from lib/motion.js (0 is the instant path)",
+  );
+
+  // Keep the exemption tables honest: an unused entry is a stale claim.
+  const staleWalks = WALKS.filter((_, index) => !used.has(index)).map(([file, prop, needle]) => `${file}: ${prop}: ${needle}`);
+  assert.deepEqual(staleWalks, [], "every walk exemption is still a declaration in the source");
+  const staleDirectives = WALK_DIRECTIVES.filter((_, index) => !usedDirectives.has(index)).map(
+    ([file, key, ms]) => `${file}: ${key} {{ duration: ${ms} }}`,
+  );
+  assert.deepEqual(staleDirectives, [], "every directive exemption is still a directive in the source");
+  for (const [keyframe, why] of STATUS_KEYFRAMES) {
+    assert.ok(why.trim().length > 10, `${keyframe} says why it is not a token`);
   }
 });

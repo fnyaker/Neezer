@@ -279,6 +279,10 @@ await (async () => {
     "menu: Home goes back to the first item"
   );
   await page.keyboard.press("Escape");
+  // The pane closes AT ONCE and plays its outro (transitions.md O1: 140 ms,
+  // inert), so the element leaves the DOM a moment later. Wait for it to
+  // detach, then assert on what the person is left with.
+  await page.locator(".menu[role=menu]").waitFor({ state: "detached", timeout: 3000 }).catch(() => {});
   check((await page.locator(".menu[role=menu]").count()) === 0, "menu: Escape closes it");
   check(
     await page.evaluate(() => document.activeElement?.dataset?.kb === "1"),
@@ -287,6 +291,7 @@ await (async () => {
   await page.keyboard.press("Enter");
   await page.waitForSelector(".menu[role=menu]", { timeout: 5000 });
   await page.keyboard.press("Tab");
+  await page.locator(".menu[role=menu]").waitFor({ state: "detached", timeout: 3000 }).catch(() => {});
   check((await page.locator(".menu[role=menu]").count()) === 0, "menu: Tab leaves the menu");
   check(
     await page.evaluate(() => !document.activeElement?.closest(".menu")),
@@ -317,6 +322,12 @@ await (async () => {
     "sheet: Tab stays inside the dialog"
   );
   await page.keyboard.press("Escape");
+  // Same shape as the menu: the dialog closes at once, its outro plays for
+  // 140–200 ms and only then leaves the DOM (transitions.md O9/O23).
+  await page
+    .locator("[role=dialog][aria-modal=true]")
+    .waitFor({ state: "detached", timeout: 3000 })
+    .catch(() => {});
   check(
     (await page.locator("[role=dialog][aria-modal=true]").count()) === 0,
     "sheet: Escape closes it"
