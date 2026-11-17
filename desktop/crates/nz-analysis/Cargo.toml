@@ -31,6 +31,13 @@ nz-audio = { path = "../nz-audio", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 symphonia = { workspace = true }
+# SC0 derived the manifest from the wiring file's `use` lines; the decoder
+# registry registers `symphonia_adapter_libopus::OpusDecoder` fully qualified, so
+# the one dependency the move needs was missing. It is a workspace pin already in
+# `Cargo.lock` (the app declares it too), so `--locked` and the Android check are
+# unaffected: an archived Opus (the YouTube fallback) must decode for the
+# descriptors to mean anything.
+symphonia-adapter-libopus = { workspace = true }
 rubato = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

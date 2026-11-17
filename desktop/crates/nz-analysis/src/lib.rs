@@ -1,28 +1,45 @@
 //! Client-side whole-track analysis, shared by the desktop app and the mobile
 //! core.
 //!
-//! **Empty on purpose.** SC0 creates the crate and its manifest so that no
-//! later lot edits a shared one; **SC1** moves
-//! `desktop/app/src/wiring/analysis.rs` here unchanged in behaviour — same
-//! public names, same signatures, its tests with it — and leaves a re-export
-//! plus any GPUI glue in the desktop file. The manifest already carries every
-//! dependency that file imports (`measure` and `trainer`, the web app's own
-//! arithmetic linked natively; `nz-api`, `nz-model`; symphonia, rubato, tokio,
-//! serde, serde_json) plus the plan's `rhythm` and `nz-audio`, so the extraction
-//! declares none.
+//! SC1 moved `desktop/app/src/wiring/analysis.rs` here unchanged in behaviour:
+//! the same public names, the same signatures, its tests with it (11 of them,
+//! before and after). That file is now `pub use nz_analysis::*;` plus the one
+//! GPUI adapter it cannot lose (see [`analysis::training::families`]). The
+//! measurement itself is the web app's arithmetic linked natively (`measure`,
+//! `trainer`), so the desktop measures a file with the server's own numbers; the
+//! loop, the spool and the training round are this crate's.
 //!
-//! The rules the moved code keeps (CLAUDE.md rule 1, docs/agents/mobile.md
-//! *Rule 1 on the phone*): the whole run lives on ONE `nz-analysis` thread at
-//! `nice 10`, every request carries the `Bulk` lane, and between two tracks the
-//! thread parks while the screen says a track is starting — a person waiting for
-//! sound never waits on an analysis. It runs only while a view asks for it.
+//! Three rules shape it (CLAUDE.md rule 1, docs/agents/mobile.md *Rule 1 on the
+//! phone*):
 //!
-//! No `#![forbid(unsafe_code)]`: the file to move lowers its own thread's
-//! priority through a hand-written `setpriority` binding (`mod sys`), and the
-//! attribute would refuse SC1's extraction.
+//! - **It is background work.** The whole run lives on ONE thread named
+//!   `nz-analysis` at `nice 10` ([`analysis::NICE`]), every request carries
+//!   `Lane::Bulk`, and between two tracks — and between two training epochs —
+//!   the thread parks while [`analysis::Control::is_yielding`] is set. It runs
+//!   only while a view is visible: that gate is the screen's (`genres.rs` raises
+//!   the flag), never the crate's.
+//! - **It says what it is doing** (rule 2): one [`analysis::Event`] per track and
+//!   one at the end, with the counts AND the counted causes.
+//! - **Nothing blocks the UI thread**: the thread talks to the screen through
+//!   [`events`], and a 2 268-line file of decoding stays off the paint.
 //!
-//! `nz-audio` is declared with `default-features = false`: SC2 turns `cpal` into
-//! a default feature, and a shared crate that re-enabled it would drag PipeWire,
-//! ALSA and the desktop output stack into the Android build through feature
-//! unification. That is why `cargo ndk -t arm64-v8a -P 26 check -p nz-analysis`
-//! is part of SC0's acceptance.
+//! The channel is this crate's own copy of the shell's
+//! (`desktop/app/src/wiring/events.rs`): Android has no GPUI and this crate may
+//! not depend on the app. [`events`] says why, and why it carries no test.
+//!
+//! No `#![forbid(unsafe_code)]`: the analysis lowers its own thread's priority
+//! through a hand-written `setpriority` binding ([`analysis::lower_priority`]).
+//!
+//! `nz-audio` is declared with `default-features = false`: SC2 makes `cpal` a
+//! default feature, and re-enabling it here would drag PipeWire/ALSA into the
+//! Android build through feature unification. `measure`, `trainer` and `rhythm`
+//! are the web app's crates linked natively; `symphonia-adapter-libopus` is the
+//! one dependency SC0's manifest missed (its `use` lines do not show the
+//! fully-qualified `symphonia_adapter_libopus::OpusDecoder` the decoder
+//! registry registers), and it was already in the workspace's pins.
+
+pub mod events;
+
+mod analysis;
+
+pub use analysis::*;
