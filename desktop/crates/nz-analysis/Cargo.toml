@@ -1,0 +1,36 @@
+# Client-side whole-track analysis, shared by the desktop app and the mobile
+# core. SC0 creates the empty crate and its manifest; SC1 moves
+# `desktop/app/src/wiring/analysis.rs` in here unchanged
+# (docs/agents/mobile.md, "SC0" and "SC1").
+#
+# Every entry is the workspace's pin or a path to the repository's own crate.
+# `measure` and `trainer` are the web app's arithmetic linked natively (the same
+# Rust the page compiles to WebAssembly), and `nz-audio` is what the acceptance
+# bench plays while it analyses. No GPUI, no cpal, no zbus, no whisper: this
+# crate is compiled for Android too, which is half of SC0's acceptance.
+
+[package]
+name = "nz-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rhythm = { path = "../../../webapp/rhythm" }
+measure = { path = "../../../webapp/measure" }
+trainer = { path = "../../../webapp/trainer" }
+nz-api = { path = "../nz-api" }
+nz-model = { path = "../nz-model" }
+# SC2 turns `cpal` into a DEFAULT feature of `nz-audio`. Asking for no default
+# features here is what keeps PipeWire/ALSA out of the Android build: feature
+# unification would otherwise re-enable them for every crate in the graph.
+nz-audio = { path = "../nz-audio", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+symphonia = { workspace = true }
+rubato = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

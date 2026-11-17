@@ -26,6 +26,16 @@ nz-player = { path = "../crates/nz-player" }
 nz-audio = { path = "../crates/nz-audio" }
 nz-mpris = { path = "../crates/nz-mpris" }
 nz-viz = { path = "../crates/nz-viz" }
+# The mobile core's shared crates. SC0 creates them empty and this lot only
+# declares them, so the extraction lots (SC1, SC4, SC5, SC6) never edit a
+# manifest: they move their wiring file into its crate and re-export it here.
+# `nz-audio` is asked for with `default-features = false` inside the crates that
+# use it, which keeps `cpal` off the Android build (feature unification still
+# enables it for THIS binary, where the output stack is wanted).
+nz-analysis = { path = "../crates/nz-analysis" }
+nz-offline = { path = "../crates/nz-offline" }
+nz-remote = { path = "../crates/nz-remote" }
+nz-party = { path = "../crates/nz-party" }
 # Local transcription: the app reads the sidecar, the model pins, the token path
 # and the control words. `default-features = false` keeps whisper.cpp, Vulkan and
 # the decoders out of the graphical binary — they belong to the

@@ -4297,12 +4297,16 @@ dependencies = [
  "gpui-pre",
  "image",
  "measure",
+ "nz-analysis",
  "nz-api",
  "nz-audio",
  "nz-cache",
  "nz-model",
  "nz-mpris",
+ "nz-offline",
+ "nz-party",
  "nz-player",
+ "nz-remote",
  "nz-transcribe",
  "nz-viz",
  "reqwest",
@@ -4555,6 +4559,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nz-analysis"
+version = "0.1.0"
+dependencies = [
+ "measure",
+ "nz-api",
+ "nz-audio",
+ "nz-model",
+ "rhythm",
+ "rubato",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "tokio",
+ "tracing",
+ "trainer",
+]
+
+[[package]]
 name = "nz-api"
 version = "0.1.0"
 dependencies = [
@@ -4616,11 +4638,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "nz-offline"
+version = "0.1.0"
+dependencies = [
+ "nz-api",
+ "nz-audio",
+ "nz-cache",
+ "nz-model",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nz-party"
+version = "0.1.0"
+dependencies = [
+ "appcore",
+ "nz-api",
+ "nz-audio",
+ "nz-cache",
+ "nz-model",
+ "nz-player",
+ "reqwest",
+ "rubato",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nz-player"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "nz-remote"
+version = "0.1.0"
+dependencies = [
+ "nz-api",
+ "nz-cache",
+ "nz-model",
+ "nz-player",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

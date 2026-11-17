@@ -1,0 +1,28 @@
+# Remote control, shared: be controlled and control another player. SC0 creates
+# the empty crate and its manifest; SC5 moves the protocol state machines of
+# `desktop/app/src/wiring/remote_host.rs` and `remote_controller.rs` in here and
+# leaves the GPUI updates as desktop adapters (docs/agents/mobile.md, "SC0" and
+# "SC5").
+#
+# No GPUI, no cpal, no zbus, no whisper. `reqwest` is here because both files
+# name `reqwest::Method` to reach the server through `nz-api`'s typed send.
+
+[package]
+name = "nz-remote"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nz-api = { path = "../nz-api" }
+nz-cache = { path = "../nz-cache" }
+nz-model = { path = "../nz-model" }
+nz-player = { path = "../nz-player" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
