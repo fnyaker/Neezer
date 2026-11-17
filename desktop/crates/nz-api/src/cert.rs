@@ -489,7 +489,6 @@ fn probe_blocking(url: &str) -> Result<CertificateInfo, ApiError> {
     let verifier: Arc<dyn ServerCertVerifier> = recording.clone();
     let config = Arc::new(client_config(verifier, &provider));
 
-    let mut failure = ApiError::Offline;
     for address in addresses {
         let Ok(socket) = std::net::TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) else {
             continue;
@@ -524,9 +523,10 @@ fn probe_blocking(url: &str) -> Result<CertificateInfo, ApiError> {
                 recorded.system_trusted,
             ));
         }
-        failure = ApiError::Offline;
     }
-    Err(failure)
+    // Every address refused to present a certificate: a dead link, not a
+    // verdict about the server (`Ssl.kt` answers null for the same reason).
+    Err(ApiError::Offline)
 }
 /// The four things a setup screen shows, from the leaf DER and its digest.
 fn describe(certificate: &[u8], sha256: &[u8; 32], system_trusted: bool) -> CertificateInfo {
