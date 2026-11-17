@@ -90,6 +90,11 @@ IMPORT_READS = {"gw.get_user_playlists", "gw.get_user_favorite_ids", "gw.get_pla
 #: The holder's own library (LIBRARY, plan multi-provider §15): the import's
 #: reads plus the profile page's tabs (favourite artists and albums).
 LIBRARY_READS = IMPORT_READS | {"gw.get_user_profile_page"}
+#: The calls that read the person's ACCOUNT: their lists and the tabs of their
+#: profile. ``gw.get_user_data`` is not one of them — it is the stream's own
+#: record and ``test_the_account_is_never_read_or_written`` already exempts it
+#: (``get_user_(?!data)``) — so a worker resolving sound may still ask for it.
+ACCOUNT_READS = {"gw.get_user_playlists", "gw.get_user_favorite_ids", "gw.get_user_profile_page"}
 
 _SAMPLE = {
     "int": "1",
@@ -191,10 +196,30 @@ class DeezerGuardTestCase(_AppCase):
         ProviderAccount.update(user=User.select().first().id).where(ProviderAccount.id == row.id).execute()
         # (the spy answers every call with the same empty page, which the
         # playlists' listing does not take for a list: the run ends there)
+        me = threading.get_ident()
         libraryimport.run(self.app, row.id, kinds=list(libraryimport.KINDS))
-        heard = {c for _w, c in self.calls}
-        self.assertLessEqual(heard, LIBRARY_READS)
-        self.assertLessEqual({"gw.get_user_favorite_ids", "gw.get_user_playlists"}, heard)
+        mine = {name for (_w, name), t in zip(self.calls, self.threads) if t == me}
+        elsewhere = {name for (_w, name), t in zip(self.calls, self.threads) if t != me}
+        # The import runs on THIS thread (libraryimport.run is synchronous), so
+        # the calls it made are its own, and they are the lists plus the records.
+        self.assertLessEqual(mine, LIBRARY_READS)
+        self.assertLessEqual({"gw.get_user_favorite_ids", "gw.get_user_playlists"}, mine)
+        # Every other call heard in this window belongs to another worker: the
+        # app's boot starts `credits-resume` (neezer/web.py:93), which sleeps
+        # 45 s and then backfills the library's credits —
+        # `_Backfill._answers` -> `provider.get_tracks` -> `gw.get_tracks_data`
+        # (neezer/deezer/provider.py:725) — and a partest batch outlives that
+        # delay. `DeezerProvider.dz` is patched on the CLASS here, so a worker
+        # left by an earlier test reports into this spy: measured on CI run
+        # 43990956743 (job Python 3.13, the only failure) with
+        # `gw.get_tracks_data` on another thread, and the same job logged
+        # "Credits backfill crashed ... Cannot use uninitialized Proxy" — the
+        # worker outliving its own database. Such a worker may do what a route
+        # may (ALLOWED, where that read is: it is a catalogue fact about the
+        # holder's own titles, not the account), minus reading the account:
+        # that promise is what this test exists for, so it holds for the whole
+        # window, whatever the thread.
+        self.assertLessEqual(elsewhere, ALLOWED - ACCOUNT_READS)
 
     def test_the_things_the_user_does_stay_on_this_server(self):
         track = Track.select().first()
