@@ -367,8 +367,10 @@ of its callers.
 - **Models** — the server's ladder and file names (`ggml-large-v3-turbo-q8_0.bin` when ≥ 2.5 GB of
   free memory, else `…-q5_0.bin`, else `ggml-small.bin`), plus the Silero VAD GGML model. Nothing is
   downloaded without the person's click in Réglages → Transcription locale, which shows each size;
-  downloads go through `Lane::Bulk`, are checked against a pinned SHA-256 list in the crate, and are
-  validated like `engine.py#valid_model` (GGML magic, ≥ 1 MiB).
+  downloads go through `Lane::Bulk` to the PINNED URL as it is (`Api::download_url_to`: no session
+  cookie sent, the host's `302` to its CDN followed — never through `download_to`, whose
+  `{base}/api{path}` join made every model a 404 in v1.6.0), are checked against a pinned SHA-256
+  list in the crate, and are validated like `engine.py#valid_model` (GGML magic, ≥ 1 MiB).
 - **Audio** decoded in-process (symphonia `mp3`/`isomp4`/`aac`/`ogg`/`flac` + libopus, rubato to
   16 kHz mono): no ffmpeg dependency on the desktop.
 - **It yields (rule 1).** Two processes: a supervisor (`neezer-transcribe worker|local`, HTTP,
@@ -2688,11 +2690,25 @@ Waves that can run in parallel (disjoint files):
   priority (a visible hitch on the same GPU). It resumes after **3 s** with no reason — the
   supervisor's own `RESUME_AFTER_MS` — because one slow frame is one pause, never a start/stop per
   chunk (the first GPU call compiles whisper.cpp's pipelines).
-- **The rule, models are a click and a pin.** Nothing downloads by itself: `Api::download_to` on
-  `Lane::Bulk` with progress, then the pinned **size and SHA-256** (`nz-transcribe`'s table), then
-  `valid_model`; a file that fails is deleted and its cause printed. The person's chosen model is
-  authoritative (`model_in`), the ladder only picks when nothing is chosen. The VAD file is pinned
+- **The rule, models are a click and a pin.** Nothing downloads by itself: `Api::download_url_to`
+  on `Lane::Bulk` with progress, then the pinned **size and SHA-256** (`nz-transcribe`'s table),
+  then `valid_model`; a file that fails is deleted and its cause printed. The person's chosen model
+  is authoritative (`model_in`), the ladder only picks when nothing is chosen. The VAD file is pinned
   but NOT offered: T2 measured it at 98× the audio it removes on a CPU (rule 1).
+- **The rule, a pinned URL is requested as it is.** `Api::download_to` builds `{base}/api{path}`, so
+  handing it the absolute model URL asked the neezer SERVER for `/apihttps://huggingface.co/…` and
+  every download in Réglages → Transcription locale was a **404** (v1.6.0). The two entry points are
+  now separate on purpose: `download_url_to` takes an absolute `http(s)` URL, uses a client with **no
+  cookie jar** (a neezer session never leaves its server, and a third-party `401` must not clear it),
+  sends no `X-NS-Background` (a CDN does not read our headers) and follows the **`302`** Hugging Face
+  answers with — the body only counts at the end of that chain — while holding the same lane slot and
+  token bucket. Measured: the 5 models + the VAD answer `200` after the redirect and their
+  `Content-Length` is the pinned byte count (tiny `77 691 713`, VAD `885 098`), and a real
+  `ggml-tiny` + VAD download lands with `sha256sum` equal to the table. A `404`/`410` is said as what
+  it is — the file moved UPSTREAM, nothing installed, retry later or pick another model — and an
+  unreachable host says « votre serveur Neezer n’est pas en cause » (`download_failure_fr`). The
+  regression test drives a loopback server through a `302` and asserts the request target is the URL
+  itself: with the old call it is `/apihttp://…`, failing.
 - **The rule, audio is fetched once.** An offline download is used as it is; anything else is
   streamed once to `$XDG_CACHE_HOME/neezer/transcribe/<episode>.opus` at Opus 128 (the engine turns
   it into 16 kHz mono anyway) and kept for a retry. The `.partial.json` T3 writes after each chunk

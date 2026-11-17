@@ -221,6 +221,18 @@ jobs:
           # names the device index unconditionally (ggml-vulkan.cpp, the
           # `CUDA_VISIBLE_DEVICES` emulation).
           GGML_VK_VISIBLE_DEVICES: "0"
+      # v1.6.0 asked its own server for `/apihttps://huggingface.co/…` and every
+      # model download in Réglages → Transcription locale was a 404. The suite
+      # pins the URL's shape and the request target against a loopback server
+      # (no network); this step is the other half — the pinned hosts must still
+      # ANSWER. It is a `HEAD` per URL (no model bytes): the redirect chain is
+      # followed, the final status must be `200`, and the CDN's `Content-Length`
+      # must equal the byte count the crate pins, which is what catches a file
+      # re-uploaded under the same name between releases. This job already needs
+      # huggingface.co reachable (the fixture fetch above), so it adds no failure
+      # mode of its own.
+      - name: The pinned model hosts still serve every pinned file
+        run: cargo test -p neezer-desktop --locked the_pinned_hosts_still_serve -- --ignored --nocapture
       # `nz-model` is proven against the REAL server's answers, not a sample: the
       # committed fixtures under `crates/nz-model/tests/fixtures/` are regenerated
       # here from THIS commit's server, and the same test then reads what was just

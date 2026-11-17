@@ -527,6 +527,26 @@ mod tests {
         assert_eq!(sha256_for(TINY).map(str::len), Some(64));
         assert_eq!(sha256_for(BASE).map(str::len), Some(64));
         assert_eq!(sha256_for(VAD).map(str::len), Some(64));
+
+        // One row per name (two hashes for one file is a download that can never
+        // pass), and every name is shaped like the GGML file it names: the app
+        // appends it to a URL and writes it in `$XDG_DATA_HOME/neezer/models`.
+        for (index, entry) in FILES.iter().enumerate() {
+            assert!(entry.name.starts_with("ggml-"), "{}", entry.name);
+            assert!(entry.name.ends_with(".bin"), "{}", entry.name);
+            assert!(!entry.name.contains('/'), "{}", entry.name);
+            assert!(
+                FILES[index + 1..]
+                    .iter()
+                    .all(|other| other.name != entry.name),
+                "{} appears twice in FILES",
+                entry.name
+            );
+        }
+        // The digest of the row is the digest the download is held to: one table,
+        // not two that can drift.
+        assert_eq!(sha256_for(VAD), Some(FILES[5].sha256));
+        assert_eq!(file(VAD).map(|entry| entry.bytes), Some(885_098));
     }
 
     /// SHA-256 against the FIPS 180-4 / NIST vectors, in one shot and split at
