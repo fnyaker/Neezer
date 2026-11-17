@@ -107,12 +107,7 @@ def _json_error(exc):
 
     if isinstance(exc, HTTPException):
         return jsonify({"error": exc.name}), exc.code
-    logger.error(
-        "Unhandled error on %s %s",
-        str(request.method).replace("\r\n", " ").replace("\n", " "),
-        str(request.path).replace("\r\n", " ").replace("\n", " "),
-        exc_info=True,
-    )
+    logger.error("Unhandled error on %s %s", request.method, request.path, exc_info=True)
     return jsonify({"error": "server error"}), 500
 
 

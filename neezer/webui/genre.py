@@ -551,11 +551,7 @@ def _resolve(ident):
         # whole transaction — not a query that returns nothing.
         return None
     except Exception:
-        logger.warning(
-            "genre: could not resolve %r",
-            str(ident).replace("\r\n", " ").replace("\n", " "),
-            exc_info=True,
-        )
+        logger.warning("genre: could not resolve %r", ident, exc_info=True)
         return None
 
 
@@ -663,11 +659,9 @@ def genre_extractor_upload():
         return jsonify({"error": "upload one .onnx file at a time"}), 400
     path, err = emb.store_model(onnx[0].stream, onnx[0].filename)
     if err:
-        logger.info(
-            "Extractor upload refused: %s",
-            str(err).replace("\r\n", " ").replace("\n", " "),
-        )
-        return jsonify({"error": _extractor_refusal(err)}), 400
+        refusal = _extractor_refusal(err)
+        logger.info("Extractor upload refused: %s", refusal)
+        return jsonify({"error": refusal}), 400
     _reset_extractor_job()
     logger.info("Extractor installed by %s: %s", request.webuser.name, path)
     return jsonify({"ok": True, "extractor": _extractor_status()})
@@ -1783,11 +1777,7 @@ def genre_reference_import():
             root = library.get_root_folder(provider.archive_dir)
             track = _ensure_track_row(provider, did, root, library.ImportCache())
         except Exception:
-            logger.warning(
-                "genre: could not import reference %s",
-                str(did).replace("\r\n", " ").replace("\n", " "),
-                exc_info=True,
-            )
+            logger.warning("genre: could not import reference %s", did, exc_info=True)
             return jsonify({"error": "the track could not be imported"}), 502
     TrackTag.delete().where(TrackTag.track == track).execute()
     TrackTag.create(track=track, tag=tag)

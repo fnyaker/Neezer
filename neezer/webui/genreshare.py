@@ -437,11 +437,7 @@ def _run_import(app, entries, genres, inline=False):
                                 rows[e["deezer_id"]] = t
                                 fails = 0
                             except Exception:
-                                logger.info(
-                                    "genre share: %s not imported",
-                                    str(e["deezer_id"]).replace("\r\n", " ").replace("\n", " "),
-                                    exc_info=True,
-                                )
+                                logger.info("genre share: %s not imported", e["deezer_id"], exc_info=True)
                                 fails += 1
                                 outcome = "failed"
                     if t is None and e["deezer_id"] and fails >= DEEZER_MAX_FAILS:

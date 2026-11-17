@@ -143,15 +143,16 @@ unreachable, and the parts that do need Deezer must fail *fast* and *without a v
    stops, for the crossfade), `analysis.py` (serving the whole-track verdict) and `spa.py`, which serves the built Svelte SPA at
    **`/app/`** (hash-routed). Admin UI stays at `/`, Subsonic at `/rest`.
 
-**A request handler never echoes an exception; a log line never starts on a client's newline.**
-CodeQL's `py/log-injection` and `py/stack-trace-exposure` are both error-severity findings, and they
-stay quiet only if the value is handled at the boundary: log a client-chosen id/name through
-`.replace("\r\n", " ").replace("\n", " ")` (the query recognises that sanitizer; `neezer/logsafe`
-already escapes every record at runtime, but CodeQL cannot see it), and answer a caught exception
-with this server's own constant — or a whitelist of them, as `genreshare._parse_error` and
-`genre._extractor_refusal` do — never with `str(exc)`. The exception belongs in the log
-(`exc_info=True`), never in `jsonify`. 22 alerts in the studio and analysis routes were closed this
-way; echo no loader's message, path or runtime version back.
+**A request handler never echoes an exception; log injection is logsafe's job, not each call's.**
+CodeQL's `py/log-injection` is already neutralised at runtime: every `logger` record in this package
+has its line breaks escaped by `neezer/logsafe.py` (a `LogRecordFactory` installed by `web.py` and
+the daemon, pinned by `tests/test_security.py::LogInjectionTestCase`). A client-chosen id/name may
+therefore reach `logger` as it is; the seven alerts of the studio/analysis lot were dismissed as
+false positives, because the query cannot see a package-wide record factory. A `print` or a
+hand-written log file is NOT covered and must sanitize. `py/stack-trace-exposure` has no such guard:
+answer a caught exception with this server's own constant — or a whitelist of them, as
+`genreshare._parse_error` and `genre._extractor_refusal` do — never with `str(exc)`; the detail
+belongs in `exc_info=True`, never in `jsonify`. 15 alerts in these routes were closed that way.
 
 **Streaming interception** lives in `neezer/api/media.py` (`_ensure_deezer_archived`): first play
 archives the FLAC, then the existing transcode/cache/`send_file` path runs unchanged. The permanent

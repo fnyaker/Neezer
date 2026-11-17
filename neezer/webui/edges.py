@@ -229,11 +229,7 @@ def audio_edges(mid):
     except _Busy:
         return _busy_response()
     except Exception:
-        logger.warning(
-            "edges: silence detection failed for %s",
-            str(mid).replace("\r\n", " ").replace("\n", " "),
-            exc_info=True,
-        )
+        logger.warning("edges: silence detection failed for %s", mid, exc_info=True)
         return jsonify({"ready": False, "duration": db_duration})
 
     if duration <= 0:

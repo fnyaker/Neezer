@@ -695,23 +695,17 @@ def analysis_measures(mid):
             attacks = _number(tp.get("attacks"), 0, 100000)
             grid = _number(tp.get("grid"), 0, 1)
             tempo = ana.gate_tempo(attacks, tracker, grid)
-    except ValueError as exc:
+    except ValueError:
         # The validator's own text is in the log; a response never echoes an
         # exception message (it may quote an internal value or a path).
-        logger.info(
-            "analysis: refused measures: %s",
-            str(exc).replace("\r\n", " ").replace("\n", " "),
-        )
+        logger.info("analysis: refused measures", exc_info=True)
         return jsonify({"error": "invalid measures"}), 400
     vec = None
     if data.get("embedding") is not None:
         try:
             vec = ana.decode_client_vector(data["embedding"])
-        except ValueError as exc:
-            logger.info(
-                "analysis: refused embedding: %s",
-                str(exc).replace("\r\n", " ").replace("\n", " "),
-            )
+        except ValueError:
+            logger.info("analysis: refused embedding", exc_info=True)
             return jsonify({"error": "invalid embedding"}), 400
     if not track.path or not os.path.isfile(track.path):
         return jsonify({"error": "not archived"}), 404
@@ -720,10 +714,6 @@ def analysis_measures(mid):
         vec=vec, force=bool(data.get("force")),
     )
     if row is None:
-        logger.warning(
-            "analysis: verdict not stored: %s",
-            str(reason).replace("\r\n", " ").replace("\n", " "),
-        )
         why = str(reason or "")
         if why.startswith("classify:"):
             return jsonify({"error": "classification failed"}), 500
@@ -772,10 +762,7 @@ def analysis_embedding(mid):
         vec = ana.decode_client_vector(data)
     except ValueError as exc:
         status = 409 if "version" in str(exc) else 400
-        logger.info(
-            "analysis: refused embedding: %s",
-            str(exc).replace("\r\n", " ").replace("\n", " "),
-        )
+        logger.info("analysis: refused embedding", exc_info=True)
         return jsonify({"error": "version" if status == 409 else "invalid embedding"}), status
     if not track.path or not os.path.isfile(track.path):
         return jsonify({"error": "not archived"}), 404
@@ -945,7 +932,7 @@ def _queue_missing(ids, limit=ANALYSIS_QUEUE_MAX):
             if ana.request_analysis(track, provider):
                 accepted.append(ident)
         except Exception:
-            logger.debug("analysis: could not queue %s", track.id, exc_info=True)
+            logger.debug("analysis: could not queue %s", ident, exc_info=True)
     return accepted
 
 
@@ -1035,11 +1022,8 @@ def track_construction(mid):
         return jsonify({"error": "unknown track"}), 404
     try:
         n, features = cx.clean(request.get_json(silent=True))
-    except ValueError as exc:
-        logger.info(
-            "analysis: refused a construction summary: %s",
-            str(exc).replace("\r\n", " ").replace("\n", " "),
-        )
+    except ValueError:
+        logger.info("analysis: refused a construction summary", exc_info=True)
         return jsonify({"error": "invalid summary"}), 400
     if not track.path or not os.path.isfile(track.path):
         # Nothing on disk to keep it beside: a summary for a stream that was
