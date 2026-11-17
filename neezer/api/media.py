@@ -192,9 +192,7 @@ def _popen(argv, **kwargs):
     argument instead of becoming a command. The client-influenced parts are an
     ``int`` bitrate, a ``[a-z0-9]{1,8}`` format and a float offset.
     """
-    return subprocess.Popen(  # nosec B603  # nosemgrep: python.lang.security.dangerous-subprocess-use.dangerous-subprocess-use, python.flask.security.injection.subprocess-injection.subprocess-injection - argv list from the operator's config, no shell
-        argv, **kwargs
-    )
+    return subprocess.Popen(argv, **kwargs)  # nosec B603  # nosemgrep: python.lang.security.dangerous-subprocess-use.dangerous-subprocess-use, python.flask.security.injection.subprocess-injection.subprocess-injection - argv list from the operator's config, no shell
 
 
 def prepare_transcoding_cmdline(
