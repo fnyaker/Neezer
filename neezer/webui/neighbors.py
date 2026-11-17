@@ -39,7 +39,9 @@ def _snapshot():
 def similar_rebuild_start():
     global _job, _started
     data = request.get_json(silent=True) or {}
-    force = bool(data.get("force") or request.args.get("force"))
+    force = bool(  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - bool() is a pure bool, it cannot carry a NaN
+        data.get("force") or request.args.get("force")
+    )
     with _lock:
         if _job is not None and _job.snapshot()["running"]:
             pass

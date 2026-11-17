@@ -5274,7 +5274,7 @@ def _start_offset():
     if raw is None or raw == "":
         return None, None
     try:
-        value = float(raw)
+        value = float(raw)  # nosemgrep: python.flask.security.injection.nan-injection.nan-injection - nan/inf are refused by the isfinite check below
     except (TypeError, ValueError):
         value = None
     if value is None or not math.isfinite(value) or value < 0:
@@ -5354,7 +5354,7 @@ def _slice_generator(path, start, bitrate):
     An Opus slice takes the same per-channel ceiling as the whole-track encode
     (``_opus_args``): a mono archive at ``q=OPUS_320`` used to fail here too.
     """
-    import subprocess
+    import subprocess  # nosec B404 - ffmpeg, a fixed binary in an argument list, no shell
 
     if not _sliceable(path, bitrate):
         return None, None
@@ -5377,7 +5377,9 @@ def _slice_generator(path, start, bitrate):
     ]
 
     def generate():
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(  # nosec B603 - "ffmpeg", an argument list, no shell
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
         failed = True
         try:
             while True:
@@ -5438,7 +5440,7 @@ def _opus_generator(flac_path, bitrate):
     used to pass ``OPUS_320`` straight through, which ffmpeg refused on a mono
     source — an empty answer and nothing cached, every time.
     """
-    import subprocess
+    import subprocess  # nosec B404 - ffmpeg, a fixed binary in an argument list, no shell
 
     cmd = [
         "ffmpeg", "-v", "0", "-i", flac_path,
@@ -5446,7 +5448,9 @@ def _opus_generator(flac_path, bitrate):
         "-vn", "-f", "ogg", "pipe:1",
     ]
     # stderr -> /dev/null so an unread, full stderr pipe can't deadlock ffmpeg.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(  # nosec B603 - "ffmpeg", an argument list, no shell
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
     failed = True
     try:
         while True:
@@ -5490,7 +5494,7 @@ def _opus_live_generator(first, source, bitrate):
     refuses to start, the feeder's first write fails and the archive itself is
     dropped — OPUS_320 on a cold mono track used to fail on both counts.
     """
-    import subprocess
+    import subprocess  # nosec B404 - ffmpeg, a fixed binary in an argument list, no shell
 
     # Out as soon as it is encoded: every packet flushed to the pipe, in Ogg
     # pages of 100 ms rather than the muxer's one second. Measured at 512 KB/s,
@@ -5501,7 +5505,7 @@ def _opus_live_generator(first, source, bitrate):
         "-vn", "-flush_packets", "1", "-page_duration", "100000",
         "-f", "ogg", "pipe:1",
     ]
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # nosec B603 - "ffmpeg", an argument list, no shell
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
     )
     state = {"finished": False}
@@ -5511,7 +5515,7 @@ def _opus_live_generator(first, source, bitrate):
         # sidecars written): it needs a connection of its own.
         try:
             db.connect(reuse_if_open=True)
-        except Exception:  # pragma: no cover - connection setup best-effort
+        except Exception:  # nosec B110 - the default connection is used instead  # pragma: no cover
             pass
         try:
             if first:
@@ -5531,7 +5535,7 @@ def _opus_live_generator(first, source, bitrate):
                 pass
             try:
                 db.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # nosec B110 - the thread is ending either way  # pragma: no cover
                 pass
 
     feeder = threading.Thread(target=feed, name="opus-live-feed", daemon=True)
@@ -5634,7 +5638,7 @@ def _serve_embedded_cover(track):
                 mimetype=getattr(img, "mime_type", None) or "image/jpeg",
                 conditional=True,
             )
-    except Exception:
+    except Exception:  # nosec B110 - falls back to the folder's cover file below
         pass
 
     # Fall back to a cover file sitting in the track's folder.
@@ -5647,7 +5651,7 @@ def _serve_embedded_cover(track):
             # score), not a path: joining the name back to the folder is what
             # turns it into the file send_file can serve.
             return send_file(os.path.join(os.path.dirname(track.path), found.name), conditional=True)
-    except Exception:
+    except Exception:  # nosec B110 - "no cover" is the 404 below
         pass
     return jsonify({"error": "no cover"}), 404
 

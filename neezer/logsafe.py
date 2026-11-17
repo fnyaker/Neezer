@@ -7,21 +7,30 @@
 
 Log calls interpolate names, titles, ids and paths that a client chose; one
 carrying a newline would start a line of its own in the log, looking exactly
-like one the server wrote. Rather than wrap every such call, the arguments of
-every record this package logs have their line breaks escaped once, where the
-record is made. The format strings are the code's own and are left alone, as
-are tracebacks."""
+like one the server wrote, and one carrying ESC would repaint (or clear) the
+terminal that displays it. Rather than wrap every such call, the arguments of
+every record this package logs have their control characters escaped once,
+where the record is made. The format strings are the code's own and are left
+alone, as are tracebacks."""
 
 import logging
 
 _PACKAGE = __package__ or "neezer"
 _TABLE = str.maketrans(
     {
+        # The two that start a line of their own keep the readable escape.
         "\r": "\\r",
         "\n": "\\n",
-        "\x85": "\\x85",
-        " ": "\\u2028",
-        " ": "\\u2029",
+        # Everything else a terminal (or a log reader) ACTS on instead of
+        # printing: C0, DEL and C1. ESC starts an ANSI sequence that erases the
+        # screen or rewrites the line — the same spoofing as a forged entry,
+        # without the newline — and NUL truncates in several readers.
+        **{chr(cp): "\\x%02x" % cp for cp in range(0x20) if cp not in (10, 13)},
+        "\x7f": "\\x7f",
+        **{chr(cp): "\\x%02x" % cp for cp in range(0x80, 0xA0)},
+        # The Unicode line separators a log viewer may break on too.
+        "\u2028": "\\u2028",
+        "\u2029": "\\u2029",
     }
 )
 

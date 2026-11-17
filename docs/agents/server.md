@@ -154,6 +154,15 @@ answer a caught exception with this server's own constant — or a whitelist of 
 `genreshare._parse_error` and `genre._extractor_refusal` do — never with `str(exc)`; the detail
 belongs in `exc_info=True`, never in `jsonify`. 15 alerts in these routes were closed that way.
 
+The factory escapes every control character, not just the line breaks: CR/LF (and U+2028/2029) keep
+their readable escape, while every other C0, DEL and C1 becomes `\xNN` — ESC included, because an
+ANSI sequence clears the screen or rewrites the line without needing a newline, and NUL truncates in
+several readers (`tests/test_logsafe.py`). It cleans `record.args` only, so **log through `%s`
+arguments, never an f-string**: `logger.info(f"user {name}")` bypasses it. The other scanners are
+answered on the exact line — `# nosec B404/B603/B110`, `# nosemgrep: <rule-id>` — with a reason that
+is true (a literal `ffmpeg` argument list with no shell; a short-link page interpolating
+`html.escape`d values), never by disabling a rule.
+
 **Streaming interception** lives in `neezer/api/media.py` (`_ensure_deezer_archived`): first play
 archives the FLAC, then the existing transcode/cache/`send_file` path runs unchanged. The permanent
 FLAC archive is separate from neezer's capped `transcode_cache`.
