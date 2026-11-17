@@ -176,7 +176,7 @@ neezer_xvfb_start() {
   local number attempt
   for attempt in $(seq 10); do
     number=$((140 + RANDOM % 60))
-    if [ "$DISPLAY" = ":$number" ] || [ -e "/tmp/.X11-unix/X$number" ]; then
+    if [ "${DISPLAY:-}" = ":$number" ] || [ -e "/tmp/.X11-unix/X$number" ]; then
       continue
     fi
     Xvfb ":$number" -screen 0 1280x800x24 -nolisten tcp >/dev/null 2>&1 &

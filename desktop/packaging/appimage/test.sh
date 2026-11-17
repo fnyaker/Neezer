@@ -27,7 +27,7 @@ trap cleanup EXIT
   "$image" --appimage-extract >/dev/null 2>&1
 ) || neezer_die "l'AppImage ne s'extrait pas"
 for expected in usr/bin/neezer-desktop usr/bin/neezer-transcribe \
-  neezer-desktop.desktop neezer-desktop.svg AppRun; do
+  neezer-desktop.desktop neezer-desktop.svg neezer-desktop.png .DirIcon AppRun; do
   [ -e "$work/squashfs-root/$expected" ] || neezer_die "$expected manque dans l'AppImage"
 done
 if find "$work/squashfs-root" -name 'libvulkan*' | grep -q .; then

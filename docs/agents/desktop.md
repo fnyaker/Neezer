@@ -2936,6 +2936,15 @@ Waves that can run in parallel (disjoint files):
   the sandbox: `ggml_vulkan: 0 = AMD Radeon 780M Graphics (RADV PHOENIX)`.
 
 - **Pitfalls found by packaging, not by reading**:
+  - **`actions/upload-artifact`/`download-artifact` do not carry the executable
+    bit**: the four packaging jobs received the two binaries 0644 and every one
+    refused them (measured on #283, all four jobs at once). The four jobs `chmod
+    +x` after the download, and `neezer_check_binaries` now tells "absent" from
+    "not executable" so the next person reads the cause instead of a silence.
+  - **`DISPLAY` is unset on a runner**, so `[ "$DISPLAY" = ":140" ]` under
+    `set -u` aborted the first test with `unbound variable`: the harness reads
+    `${DISPLAY:-}`, because a machine with no display at all is the normal case
+    for a CI job, not an error.
   - **A GPUI app aborts when fontconfig resolves no font**: `failed to resolve
     font '.SystemUIFont' or any of the fallbacks` (panicked, exit 134) in a bare
     Debian container. Any desktop has a font, a `--no-install-recommends`
@@ -2962,9 +2971,14 @@ Waves that can run in parallel (disjoint files):
     sandboxed window has no launcher to group with.
   - **`appimagetool`'s `continuous` tag is a moving build**, so `build.sh` pins it
     by SHA-256 and fails on a different file; bumping the pin is a deliberate
-    act. `flatpak-builder`'s flag for a machine without the FUSE helper is
-    `--disable-rofiles-fuse` (the documentation page shows a newer name that this
-    version rejects).
+    act. Its build 370 warns that an SVG `.DirIcon` "is hard to parse, so file
+    managers and thumbnailers cannot be expected to handle it" and will refuse it
+    in a future release, so the AppDir's icon is a PNG: the web app's own
+    committed `webapp/public/icon-512.png`, which `compare -metric AE` puts at
+    **0.19 px** of difference from `neezer-desktop.svg` (the same mark, no
+    rasteriser to install). `flatpak-builder`'s flag for a machine without the
+    FUSE helper is `--disable-rofiles-fuse` (the documentation page shows a newer
+    name that this version rejects).
   - **`cargo-deb` and `cargo-generate-rpm` were read and not used**: both want
     their metadata in one crate's `Cargo.toml` (`neezer-desktop` is not the crate
     that knows about `neezer-transcribe`, and the workspace has nine), and

@@ -74,10 +74,16 @@ install -m 644 "$NEEZER_ASSETS/neezer-desktop.desktop" \
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.svg" "$appdir/neezer-desktop.svg"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.svg" \
   "$appdir/usr/share/icons/hicolor/scalable/apps/neezer-desktop.svg"
+# The AppDir's own icon is a PNG, and it is the WEB APP's committed one
+# (`webapp/public/icon-512.png`, pixel-identical to `neezer-desktop.svg`: 512x512,
+# measured with `compare -metric AE`). appimagetool builds `.DirIcon` from it and
+# refuses nothing: an SVG `.DirIcon` is a warning today ("SVG is hard to parse…
+# .DirIcon must be a PNG") and a hard error in a future release, and no rasteriser
+# has to be installed for a file the repository already has.
+install -m 644 "$NEEZER_ROOT/webapp/public/icon-512.png" "$appdir/neezer-desktop.png"
+install -Dm 644 "$NEEZER_ROOT/webapp/public/icon-512.png" \
+  "$appdir/usr/share/icons/hicolor/512x512/apps/neezer-desktop.png"
 install -m 644 "$NEEZER_ROOT/LICENSE" "$appdir/usr/share/doc/neezer-desktop/LICENSE"
-# The icon the desktop shows for the mounted AppImage, and the file managers'
-# preview of it.
-ln -sf neezer-desktop.svg "$appdir/.DirIcon"
 
 mkdir -p "$out"
 appimage="$out/neezer-desktop-$NEEZER_VERSION-$NEEZER_ARCH.AppImage"
