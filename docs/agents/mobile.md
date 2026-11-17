@@ -1012,8 +1012,8 @@ and `desktop/app/src/wiring/analysis.rs` (now `pub use nz_analysis::*;` plus one
 
 - **What it is now.** `nz-analysis` = `src/lib.rs` (the crate doc, `pub mod events;`, `mod analysis;`,
   `pub use analysis::*;`), `src/analysis.rs` (2 273 lines: the desktop file, verbatim) and
-  `src/events.rs` (166 lines: the channel). The desktop's `wiring/analysis.rs` went from 2 268 lines
-  to 46: the glob re-export and `training::families`. `genres.rs` — the only caller — was **not
+  `src/events.rs` (165 lines: the channel). The desktop's `wiring/analysis.rs` went from 2 268 lines
+  to 37: the glob re-export and `training::families`. `genres.rs` — the only caller — was **not
   touched** (0 lines): `analysis::Event`, `Control`, `Runner`, `training::{prepare, start, payload,
   families, …}` all resolve through the re-export, and the receiver it awaits is the crate's own.
 - **Proven unchanged, not asserted**: `diff` of the moved file against `origin/master` is **3 hunks**
@@ -1041,8 +1041,8 @@ and `desktop/app/src/wiring/analysis.rs` (now `pub use nz_analysis::*;` plus one
 - **Measured on this machine** (NDK `30.0.16248370`, cargo-ndk 4.1.2, `CARGO_BUILD_JOBS=4`, debug):
   - **Test count, before → after: 447 → 447.** Before: `cargo test -p neezer-desktop -- --list` =
     **447**, of which **11** `wiring::analysis` and `cargo test -p nz-analysis -- --list` = **0**.
-    After: neezer-desktop = **436**, nz-analysis = **11** (the same 11 names: `analysis::tests::*` ×5,
-    `analysis::training::tests::*` ×4, `analysis::acceptance::*` ×1, …). `cargo test -p nz-analysis`
+    After: neezer-desktop = **436**, nz-analysis = **11** (the same 11 names: `analysis::tests::*` ×6,
+    `analysis::training::tests::*` ×4, `analysis::acceptance::*` ×1). `cargo test -p nz-analysis`
     → **11 passed in 0.50 s** (the acceptance bench prints why it skipped, as it always did).
   - `cargo clippy -p neezer-desktop --all-targets --locked -- -D warnings` → **Finished in 1 m 52 s**,
     0 warning; `cargo clippy -p nz-analysis --all-targets -- -D warnings` → **8.03 s**.
