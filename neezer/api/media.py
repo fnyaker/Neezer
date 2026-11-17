@@ -11,7 +11,6 @@ import json
 import logging
 import decimal
 import mediafile
-import mimetypes
 import os.path
 import re
 import shlex
@@ -27,6 +26,7 @@ from zipstream import ZipStream
 from ..cache import CacheMiss
 from ..db import Track, Album, Artist, Folder, PodcastEpisode, User, now
 from ..covers import EXTENSIONS
+from ..media_types import transcode_mimetype
 
 from . import get_entity, get_entity_id, api_routing
 from .exceptions import (
@@ -320,12 +320,12 @@ def stream_media():
             if using_default_format:
                 dst_suffix = config.get("default_transcode_target") or dst_suffix
 
-    # Find new mimetype if we're changing formats
+    # Find new mimetype if we're changing formats. A transcode target is a
+    # closed set, so it is answered from our table: asking `mimetypes` here
+    # made an Opus/ogg stream `application/octet-stream` in an image without
+    # /etc/mime.types (see media_types.py).
     if dst_suffix != src_suffix:
-        dst_mimetype = (
-            mimetypes.guess_type("dummyname." + dst_suffix, False)[0]
-            or "application/octet-stream"
-        )
+        dst_mimetype = transcode_mimetype(dst_suffix)
 
     if dst_suffix != src_suffix or dst_bitrate != res.bitrate:
         # Requires transcoding

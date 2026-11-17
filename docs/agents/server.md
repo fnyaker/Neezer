@@ -1047,3 +1047,11 @@ that reason: never format such a value into the message with an f-string, which 
 `/getCoverArt` treats `Folder.cover_art` as a file NAME (`basename`), and art answered by the
 provider is confined to the archive and cache roots (`_confined_file`: `realpath` then
 `startswith(root + os.sep)`), so a hand-edited or restored row cannot read outside the library.
+
+**A transcode target's Content-Type comes from our table, not from `mimetypes`.** `guess_type`
+reads the interpreter's table plus the host's `/etc/mime.types`, and the image installs the codec
+tools, not Debian's `media-types`: `.ogg` was missing there, so every Opus/ogg transcode was
+announced `application/octet-stream` and a player that trusts the header refused a stream whose bytes
+were audio. `neezer/media_types.py` lists the closed set of targets; `neezer/api/media.py` asks it
+(`tests/api/test_transcode_mimetype.py` empties the host table and still requires `audio/ogg`).
+`neezer/db.py`'s `transcodedContentType` has the same shape and should read that table too.
