@@ -1,11 +1,12 @@
-# The downloads worker, shared by the desktop app and the mobile core. SC0
-# creates the empty crate and its manifest; SC4 moves everything of
-# `desktop/app/src/wiring/offline.rs` that is not GPUI in here and leaves the
-# `cx`/`Entity` updates as a desktop adapter (docs/agents/mobile.md, "SC0" and
-# "SC4").
+# The downloads worker, shared by the desktop app and the mobile core.
+# SC0 created the crate and its manifest; SC4 moved everything of
+# `desktop/app/src/wiring/offline.rs` that is not GPUI in here and left the
+# GPUI seam as a desktop adapter (docs/agents/mobile.md, "SC0" and "SC4").
 #
 # No GPUI, no cpal, no zbus, no whisper: the library is plain tokio + `nz-api` +
-# `nz-cache`, compiled for Android as well.
+# `nz-cache`, compiled for Android as well (`cargo ndk -t arm64-v8a -P 26 check
+# -p nz-offline`, which builds the library alone and therefore none of the
+# dev-dependencies below).
 
 [package]
 name = "nz-offline"
@@ -19,6 +20,11 @@ publish.workspace = true
 [dependencies]
 nz-api = { path = "../nz-api" }
 nz-cache = { path = "../nz-cache" }
+# SC0's four "for later" entries. `serde` is the labels' own derive; `nz-model`,
+# `serde_json` and `thiserror` are still unused after SC4 and are kept on
+# purpose: removing one rewrites this package's entry in the shared
+# `desktop/Cargo.lock`, and that file belongs to no lot (`mobile.md`, "Worker
+# rules" 2 and 3). Trimming them is a lockfile change for a later lot.
 nz-model = { path = "../nz-model" }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -27,8 +33,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# The playback tests that move with the worker run a REAL engine while a set
-# downloads: a bulk download that starves the player fails the test. Dev only —
-# the library never touches the engine, and `cargo ndk … check -p nz-offline`
-# builds the library alone, so no output stack reaches Android.
+# Dev only — the library never opens an output device, and the Android check
+# builds it alone. One test uses it: the picker's contract
+# (`the_picker_offers_only_the_rungs_the_engine_decodes`) proves the four rungs
+# offered here are the ones an engine can decode, which is this crate's one
+# deliberate difference from the SPA's six. The two benches that PLAY audio
+# while a set downloads stayed in the desktop app, with its engine opener.
 nz-audio = { path = "../nz-audio", default-features = false }
