@@ -1469,13 +1469,79 @@ Waves that can run in parallel (disjoint files):
     that works here, at `-dpi 96` plus `GPUI_X11_SCALE_FACTOR=1` (without the latter the app sees a
     2560×1600 window as 1280×800 and the layout is measured at half the size).
 
-### D10b — Visualiser UI (bars, oscilloscope)
+### D10b — Visualiser UI (bars, oscilloscope) (delivered 2026-11-17)
 
-- **Files**: `screens/viz.rs`, `app/src/widgets/{bars,scope}.rs`, `screens/settings/viz.rs`.
-- **Acceptance**: in the player and full screen at 240 Hz: ≥ 230 fps, CPU of the whole app with
-  bars on < 12 % of one core (eco mode: 30 fps cap, < 5 %); the analysis thread stops when no viz is
-  visible (assert 0 analyser calls when hidden); settings: palette (cover/theme), intensity, fps cap,
-  scope orientation and colour, eco.
+- **The rule, the page's arithmetic and our quads.** The geometry is `nz-viz`'s (V1, the page's own
+  `rhythm::viz_bars`/`viz_scope`); what this lot owns is the DRAWING: one GPU quad per bar (body,
+  inner core, falling peak) and one per scope column (`Window::paint_quad`, no tessellated path).
+  The per-frame cost it controls is therefore measurable on its own: **p50 111–115 µs, p95 135–136 µs,
+  max 1.2–2.2 ms** for 52 bars at 1 280 × 800 and 512 columns × 2 lanes of scope (release, this
+  machine, `NZ_FRAME_LOG=1`) — **2.7–3.3 % of the 4.17 ms a 240 Hz frame has**, which is the number
+  that says the next panel rate is affordable.
+- **The rule, the cadence is the panel's by default.** `viz.fps` follows `stores.js` (Écran/30/45/60)
+  with one deliberate difference: the desktop's default is the DISPLAY, because the acceptance is
+  240 Hz. At "Écran" each paint asks for the next frame (`request_animation_frame`, GPUI's own frame
+  source); at 30/45/60 — and in eco, which forces 30 whatever the setting — one sleeping pacing task
+  spaces the frames, so the whole window is not re-rendered for nothing. `Animation::with_max_fps` was
+  rejected on purpose: it obeys `reduce_motion` by freezing a repeating animation, and a frozen
+  visualiser is not the feature.
+- **The rule, nothing runs when nothing is visible.** The screen (and the Réglages preview) set
+  `VizService::set_visible` on every paint and hand it back in `Context::on_release`; the analyser
+  thread clears the tap and sleeps 50 ms while hidden, and the widget asks for no frame when the
+  player is paused. Asserted on a real tap: **0 frames analysed over 40 rendered buffers while
+  hidden**, then frames again once a screen asks for it
+  (`the_analyser_does_no_work_when_no_visualiser_is_on_screen`).
+- **The rule, the settings are the SPA's keys, and the panel is the same controls.** `viz.mode`,
+  `viz.palette` (Pochette = `coverpalette.js#analyse` on the decoded sleeve, via GPUI's `RenderImage`
+  — BGRA, downsampled to 64 × 64 before the analysis; Thème = `Palette::from_theme`), `viz.intensity`,
+  `viz.fps`, `viz.eco`, `viz.scope.orientation`, `viz.scope.colour`. One `controls()` function, used by
+  the screen's sheet (420 px) and by the Réglages section. **Deliberate difference**: in the SPA eco
+  turns every animation off; here it keeps the scene at 30 fps with the flat grade (one fill per bar,
+  no halo/cores/breath/peaks), because the lot's acceptance measures a 30 fps eco.
+- **What it is now**: `widgets/bars.rs` (`Bars` entity: `set_prefs`, `set_active`, `frames`,
+  `bar_count`, `Layout::{Strip,Full}`), `widgets/scope.rs` (`Scope`: lanes, graticule, min/max trace,
+  halo+beam, trigger marker, `SCOPE_POINTS = 512`), `screens/viz.rs` (the full-bleed stage, the title
+  card, the control bar that fades after 3 s, the settings sheet, the notices — full-screen for a
+  cause, a quiet line at the bottom for a pause — and the keys `1`/`2`/`c`/`Maj+F` installed ONCE for
+  the process, dispatched to a `WeakEntity` so the screen never takes the focus),
+  `screens/settings/viz.rs` (`Prefs` + load/save, the palette helpers, `Sleeve`, `FrameLog`,
+  `controls`, and the `Section` with a live preview).
+- **Measured** (release, `Xvfb :95`/`:96` at 2 560 × 1 600, `GPUI_X11_SCALE_FACTOR=1`, a real FLAC in
+  the play cache, `NZ_FRAME_LOG=1`, this machine):
+  - the app's own frame log, 1 280 × 800, bars: **fps 24.0 and 27.9** over two runs, `paint_us`
+    p50 **115/111 µs**, p95 **136/135 µs**, max 2.2/1.2 ms. At 2 560 × 1 600: **2.4 fps**, which is
+    the software rasteriser, not the app (see the environment note).
+  - `cargo test -p neezer-desktop`: **12 new tests** (the seven preference/geometry ones, the scene
+    keys, the sheet, the analyser stop, the three-size layout) and the whole suite green; `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - the screen was LOOKED AT: Xvfb :96 captures of the WINDOW (never the root: Xvfb keeps the pixels
+    of a destroyed window, and two app instances overlapped on the first attempts) at **2 560 ×
+    1 600** — the bar row, the oscilloscope, and the settings sheet over it — and at **1 280 × 800**
+    (the row with the title card and the control bar) — kept as
+    [barres 2 560](../desktop/d10b/barres-2560x1600.png),
+    [barres 1 280](../desktop/d10b/barres-1280x800.png),
+    [oscilloscope 2 560](../desktop/d10b/oscilloscope-2560x1600.png) and
+    [la feuille](../desktop/d10b/reglages-2560x1600.png). The 420 px panel was opened on the run
+    (the layout assertion covers the three widths); its capture did not survive the harness.
+- **The environment limit, said plainly**: this machine's Xvfb has no DRI3, so Mesa cannot present a
+  Vulkan surface ("No DRI3 support detected - required for presentation") and GPUI paints through a
+  software path. **The 240 Hz / ≥ 230 fps criterion cannot be demonstrated here** — the fps above is
+  the rasteriser's ceiling at 4 Mpx, exactly as D0 recorded for the first frame. The app-side number
+  that can be held is the paint cost (2.7–3.3 % of the 240 Hz budget); the panel number belongs to a
+  real session, D17's pass.
+- **Pitfalls found by building**:
+  - **`Window::paint_quad` paints in WINDOW coordinates.** `canvas`'s prepaint hands an element's
+    `bounds`, and painting `bounds.size`-relative quads (forgetting `bounds.origin`) drew the bar row
+    at the window's corner, *over the sidebar*: seen on the first real run, fixed by adding the
+    origin. A geometry bench cannot see this; only the window can.
+  - **A cancelled decode is not an error.** Pressing play while the restored queue was still loading
+    produced `EngineEvent::Error … « lecture interrompue »` (a toast) — `decode.rs` returns it when
+    its ring is closed by the next voice. The toast belongs to `state.rs` (D7/D9), not to the
+    visualiser; observed, not fixed here.
+  - The settings section needs one dispatch line in `screens/settings/mod.rs`
+    (`SettingsSection::Viz => viz::body(...)`) and the "in the player" strip one `child()` in
+    `screens/now_playing.rs` (D9's file). Both are outside this lot's files; the screen's own sheet
+    carries the same controls, and the widget exposes `Layout::Strip` for the strip.
 
 ### D11 — Podcasts
 

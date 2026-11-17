@@ -59,6 +59,10 @@ class AgentDocsTestCase(unittest.TestCase):
 
     def test_relative_links_between_area_files_resolve(self):
         for name in os.listdir(AGENTS_DIR):
+            if not name.endswith(".md"):
+                # The area folder also holds the lots' screenshots (an
+                # illustrated note is one a reviewer can check).
+                continue
             text = self.read("docs", "agents", name)
             for target in re.findall(r"\]\(([^)#:]+\.md)\)", text):
                 path = os.path.normpath(os.path.join(AGENTS_DIR, target))
