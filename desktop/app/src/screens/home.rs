@@ -945,7 +945,11 @@ mod tests {
         assert_eq!(shelf_count(1600.), 8);
         assert_eq!(shelf_count(2560.), 12);
         assert_eq!(shelf_count(600.), RELEASE_ROWS, "never fewer than six");
-        assert_eq!(shelf_count(4000.), RELEASE_ROWS_MAX, "and never more than twelve");
+        assert_eq!(
+            shelf_count(4000.),
+            RELEASE_ROWS_MAX,
+            "and never more than twelve"
+        );
     }
     use super::*;
     use crate::widgets::card::stub;
