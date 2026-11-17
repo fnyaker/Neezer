@@ -44,6 +44,15 @@ mpris-server = "0.11.0"
 # The single-instance name (`fr.neezer.Desktop`) and the `Raise` call a second
 # launch sends. `mpris-server` already pulls zbus 6, so this is the same major.
 zbus = { version = "6.3", default-features = false, features = ["tokio", "service"] }
+# The decoder behind a sleeve drawn at the size it is seen at: GPUI hands an
+# `Arc<RenderImage>` nothing, so the app has to decode and resize itself
+# (`nz-cache`'s `covers::variant`). The pin is the version gpui's own image
+# loader already builds, so this adds no crate to the lock.
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+] }
 # --- HTTP, storage, plumbing ----------------------------------------------
 reqwest = { version = "0.13.5", default-features = false, features = [
     "rustls",

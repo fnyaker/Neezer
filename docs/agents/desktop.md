@@ -377,6 +377,196 @@ of its callers.
   "episode_id","code","message"}`, `{"event":"idle"}`. The UI shows running, progress, and each
   failure's cause (rule 2); an interrupted local job resumes at its last chunk after a restart.
 
+## Memory: where the megabytes go (measured 2026-11-17)
+
+The person cares about RAM, and every lot reported its own screens only. This is the whole picture,
+measured on the release binary, on an ISOLATED display (`Xvfb :105 -screen 0 2600x1700x24 -dpi 96`,
+`GPUI_X11_SCALE_FACTOR=1`, `WAYLAND_DISPLAY` unset — never the person's session), against
+`tools/perf_api.py --serve` (8 000 tracks, 4 000 favourites, 60 playlists): one fresh XDG directory
+per run, the journey driven through the real window with keys and clicks, and at each checkpoint
+`VmRSS` + `smaps_rollup`'s `Pss` + the RSS/PSS of every mapping, grouped by kind.
+
+**The first thing to know: the environment is 197 MB before the app has any data.** At the LOGIN
+screen — no request, no list, no sleeve — the process already holds, by mapping:
+
+| Where | RSS | PSS |
+|---|---|---|
+| `libLLVM.so.23` (RADV's shader compiler) | 48.6 MB | 9.8 MB |
+| `[heap]` (glibc main arena) | 46.1 MB | 46.1 MB |
+| anonymous mmaps (arenas, driver buffers) | 36.9 MB | 36.9 MB |
+| the binary's own text + data | 29.2 MB | 29.2 MB |
+| `libgallium` (llvmpipe/lavapipe rasteriser) | 13.3 MB | 3.8 MB |
+| `libvulkan_radeon`, libc, mesa shader cache, … | ~12 MB | ~4 MB |
+| **total** | **195.8 MB** | **131.7 MB** |
+
+So a D7-era "103 MB" on the real GPU (RADV, native Wayland) and "197 MB" under Xvfb with the
+software rasteriser are **not comparable**: under Xvfb this machine keeps LLVM and gallium resident
+for every process, and no lot of this plan caused it. Everything below is therefore measured in ONE
+environment, and split into "the shell of the environment" (identical for every revision) and "the
+app's own growth".
+
+**What the app's live heap actually is**: the same release build run with `LD_PRELOAD=libjemalloc`
+on the artist page reports `Allocated: 9 708 144 B` (9.7 MB live), `active: 13.8 MB`, `mapped:
+218.7 MB`, `retained: 101.7 MB`. Nine megabytes of objects sit inside 218 MB of mapped arenas that
+the allocator keeps for reuse: the app's data is NOT where the RSS goes, which is why every lot's
+own "+11 to +17 MB" was a peak of a *churn*, not a stock.
+
+**The bisect, one environment, 1280×800, RSS (RSS/PSS at each step in the session's results):**
+
+| Revision | login | after login, Accueil |
+|---|---|---|
+| `a4c51f5` D7 shell | 197.8 MB | 199.6 MB |
+| `1c59508` #238 icon superset | 195.8 MB | 197.8 MB |
+| `3afd1f0` #241 D8a browse | 198.5 MB | 203.1 MB |
+| `dc4ad9e` master (D8b, D9, D13, D14a) | 201.5 MB | 206.3 MB |
+
+**+6.7 MB from D7 to master at the home screen**, and the icon superset costs nothing measurable
+(1 000 B of SVG sprite per glyph actually drawn). The 182–237 MB the lots reported is the
+environment plus the screens' churn, not a common regression of their models.
+
+**Where the remaining growth comes from, each measured separately (master, 1280×800):**
+
+| Step | RSS | PSS | What it is |
+|---|---|---|---|
+| login | 201.5 | 144.7 | the shell, the theme, the runtime |
+| Accueil | 206.3 | 149.1 | +4.8: six requests' data, the shelves' cards, the first glyphs |
+| page artiste | 224.7 | 166.7 | +18.4: the discography grid, the top-titles list, more glyph sizes |
+| retour à l'Accueil | 221.2 | 163.2 | −3.5 only: the rest is the allocator's high-water, not live data |
+| Bibliothèque (60 playlists) | 222.1 | 164.2 | +0.9 |
+| Favoris, 4 000 rows | 234.7 | 176.7 | +12.6: the row model (D8a measured 13.9 MB for 4 000 rows) |
+| **1 000 round trips** Accueil↔Bibliothèque | **526.1** | 469.9 | **+321.7 MB**: the leak, below |
+| the same, with this PR | **243.8** | 176.7 | **+36.3 MB** |
+
+**The window's size is worth more than any screen.** The same login screen: **201.7 MB at
+1280×800, 282.9 and 283.3 MB at 2560×1600** — +82 MB, twice. A 2560×1600 RGBA surface is 16.4 MB,
+and the swapchain plus the render targets make five of them. Nothing in the app can avoid it (the
+person chose the window); what it means is that a report of "237 MB at 2560×1600" is ~80 MB of
+driver surfaces before the first screen paints.
+
+**The leak: one screen per navigation, kept for the life of the process.** A screen owns a
+`wiring::events::channel` and one foreground task draining it. `Sender` set no `closed` flag when
+dropped, so nothing ever woke that task: GPUI kept the parked future — and the screen state it had
+captured — for ever. Measured end to end, 1 000 round trips between Accueil and Bibliothèque:
+**+321.7 MB (+161 KB per screen built)**. `Sender`'s `Drop` now closes the channel when the LAST
+sender goes (a worker holding a clone keeps it open, as it must), the drain loop ends, and the same
+1 000 round trips cost **+36.3 MB (+18 KB)**, which is the arena's own high-water and stops growing
+after the first hundred. Guarded by `app/src/app.rs`'s
+`building_a_screen_a_thousand_times_keeps_nothing` (2 000 builds, 892 936 B measured, 2 MiB budget,
+**counted bytes**, never `VmRSS` — see the pitfall in *D14a*).
+
+**A sleeve costs what it is DECODED at, not what it is drawn at.** `Window::paint_image` uploads an
+image into one atlas tile at its NATURAL size, keyed by the image's id, and nothing removes that
+tile but `Window::drop_image` (`gpui-pre-0.3.9/src/window.rs`, `paint_image`/`drop_image`); `img(path)`
+additionally keeps the DECODED copy in the App's asset cache for ever (`asset_cache.rs`, no
+eviction — `ImageSource::remove_asset` is the only way out). A 1 000 px sleeve is therefore 4 MB of
+decoded heap **and** 4 MB of atlas for a 36 px row. That is the +291 MB D9 predicted for a queue
+that draws a sleeve per row, and it is why the queue and Bibliothèque still draw placeholders
+(`screens/library.rs#sleeve`). The device-side half of `lib/coverqueue.js` now exists:
+`nz-cache`'s `Covers::variant(url, px)` writes a downscaled copy once (**3 306 B** for the bench's
+1 753 091 B 1 000 px JPEG at 128 px, 4 480 B at 384 px) and `widgets/cover.rs`'s `Class` picks it
+per screen — `Row` (128 px) for the list screens, `Card` (384) and `Page` (512) elsewhere — so a row
+paints 65 536 decoded bytes instead of 4 000 000. Measured today the browse screens pay only
++1 to +2 MB (few sleeves land inside a visit), so the remaining work is the *lists* that still draw
+placeholders, one file per lot (D8b's `library.rs`/`playlist.rs`, D9's `queue.rs`).
+
+**What to measure, and how.** `tools/perf_api.py --covers <jpeg>` gives every album a real
+`cover.jpg`, without which `/api/cover` answers 404 and no sleeve path is measurable at all. Read
+`Pss` and the per-mapping breakdown, never one `VmRSS` number: RSS counts shared library pages (a
+48 MB LLVM nobody in the app asked for), file-backed fonts, and the allocator's high-water. A guard
+on a screen's weight counts BYTES (`app/src/testmem.rs`), and a guard on a journey counts the same
+bytes across N builds.
+
+## Memory — where the megabytes go (measured 2026-11-17)
+
+The laptop this app runs on has 16 GB and the person watches `htop`. This section is the map:
+what a Neezer window costs, which part of it is the app's data and which part is the
+machine's graphics stack, and what is guarded by a test. Every number is a release build on
+`Xvfb :105 -screen 0 2600x1700x24 -dpi 96` with `GPUI_X11_SCALE_FACTOR=1` (never the person's
+session), against `tools/perf_api.py --serve` (8 000 tracks, 4 000 favourites, 60 playlists,
+`--covers cover.jpg` when sleeves matter — without it every `/api/cover` is a 404 and a screen
+paints placeholders), `/proc/<pid>/status` for RSS and `/proc/<pid>/smaps_rollup` + `smaps`
+for PSS and the per-mapping breakdown. **RSS is not the app's data**: it is what the process
+resident set holds, arenas and driver included. Count bytes when the question is "what does
+the app keep" (`app/src/testmem.rs`).
+
+- **The rule, the socle is not the app.** At the LOGIN screen — no request made, no list
+  parsed — the release binary already sits at **195.8–202.3 MB RSS** here, and `smaps` says
+  where: `libLLVM.so` **48.6 MB** (RADV's shader compiler, PSS 9.8 MB because it is shared),
+  the glibc main arena `[heap]` **46.1 MB**, 181 anonymous malloc/driver mappings **36.9 MB**,
+  the binary's own text and data **29.2 MB**, `libgallium` (llvmpipe/lavapipe) **13.3 MB**.
+  D7's famous **103 MB** is the same app on a real Wayland session with a real GPU: two
+  different machines' graphics stacks, not two versions. **Never compare a number measured
+  under Xvfb with one measured on the panel**, and never compare with the login screen of a
+  different run.
+- **The rule, the bisect — D7 to master, one environment, login then home (RSS):**
+  `a4c51f5` (D7) **197.8 → 199.6 MB**; `1c59508` (#238, the 146-icon superset) **195.8 →
+  197.8**; `3afd1f0` (#241, D8a's browse screens) **198.5 → 203.1**; master (D8b, D13, D9,
+  D14a) **201.5 → 206.3**. The whole walk from D7 to master is **+6.7 MB at home**, of which
+  the icon superset is **−0.2 MB** (it embeds 53 632 more bytes of SVG and rasterises only
+  what it draws). The "182/199/237 MB" of the lot reports are this environment's baseline,
+  not a regression: **the +80–100 MB the plan was hunting was already there before D7**.
+- **The rule, the window's area is paid in buffers.** The same build, same screen: **201.7 MB
+  at 1280×800** and **282.9 / 283.3 MB at 2560×1600** — **+81.6 MB**, twice. A 2560×1600 RGBA
+  surface is 16.4 MB, so that is ~5 of them: wgpu's swapchain plus the render targets GPUI
+  keeps for the window. Nothing the app can share, and nothing to fix: a bigger window IS a
+  bigger framebuffer. It is why every memory criterion is stated with its window size.
+- **The rule, a screen's own share is small and paid once.** 1280×800, master, no covers:
+  login **201.5**, home **206.3** (+4.8), artist **224.7** (+18.4), back to home **221.2**
+  (−3.5), Bibliothèque **222.1**, 4 000 favourites **234.7** (+12.6 for the whole 4 000-row
+  data model plus its windowed list). Of the artist page's +18.4 MB, `smaps` puts +12.0 MB in
+  anonymous mappings, +3.5 MB in `[heap]` and +1.8 MB in the binary's pages — allocator
+  working set, and it does not all come back because glibc keeps arenas. The **live** heap is
+  tiny: `LD_PRELOAD=libjemalloc.so.2` with `stats_print` at a clean quit reports **9 708 144 B
+  allocated** (9.3 MB) at the artist page, against 218 664 960 B of *mapped* arenas. When
+  someone says "Neezer uses 300 MB", 9 MB of it is the app's objects.
+- **The rule, navigation must cost nothing — and it cost 161 KB per screen.** 1 000 round
+  trips between Accueil and Bibliothèque (2 000 screen builds): **204.4 → 526.1 MB,
+  +321.7 MB (+161 KB per screen)** before the fix, **207.5 → 243.8 MB, +36.3 MB (+18 KB)**
+  after it. The cause was the screen's reply channel: `events::Sender` never closed when its
+  last clone dropped, so the drain task GPUI holds for `Receiver::next()` stayed parked for
+  the life of the process, keeping the screen state it had captured. `Sender::drop` now closes
+  the channel, the task answers `None`, and GPUI frees it. **Any new screen gets this for
+  free** because every screen already answers through `events::channel`; a channel created
+  any other way is a bug.
+- **The rule, a sleeve is painted at the size it is SEEN.** GPUI uploads a painted image into
+  one atlas tile **at the image's natural size**, keyed by the image's id, and nothing
+  releases that tile before the window goes away (`gpui_pre`'s `Window::paint_image` /
+  `drop_image`); the decoded copy lives in the App's asset cache, which also never evicts.
+  A 1 000 px sleeve drawn in a 36 px row is therefore **4 MB of decoded heap and 4 MB of
+  atlas for 1 296 useful pixels**, and a 4 000-row list that draws one per row would cost that
+  per distinct sleeve — D9's +291 MB for "a sleeve per queue row" is that arithmetic (its queue
+  still draws glyph rows, so the number was a prediction, not a measurement: this section's own
+  sleeve deltas are the measured +1 to +2 MB of a browse page's few), and it is the number this
+  rule exists to keep off the queue. `nz-cache`'s `Covers::variant` writes a
+  downscaled copy once (the bench's 1 753 091 B JPEG becomes **3 306 B at 128 px**, 4 480 B at
+  384 px) and `cover::Class` decides the size: **`Class::Row` 128 px** for a screen whose
+  sleeves are list rows, `Card` 384 px, `Page` 512 px. Decoded, 1 000² × 4 = 4 000 000 B
+  becomes 128² × 4 = 65 536 B: **61×**. A screen that paints sleeves in rows is built with
+  `Covers::rows()`; one that paints cards keeps `Covers::new()`.
+- **The rule, what is measured is counted, not read from RSS.** `app/src/testmem.rs` counts
+  bytes allocated minus bytes freed **on the test's own thread** (a `#[global_allocator]` that
+  is `#[cfg(test)]` only, so the shipped binary is unchanged). The guard is
+  `app.rs`'s `building_a_screen_a_thousand_times_keeps_nothing`: 2 000 screen builds keep
+  **892 936 B** (446 B each, GPUI's task arena settling later than the test can see), budget
+  **2 MiB** — 2.3× the measured weight and 160× tighter than the 161 KB-per-screen leak it
+  caught. A screen that starts keeping a list, a response or a decoded image fails it at once.
+  `nz-cache`'s `a_sleeve_is_stored_at_the_size_it_is_drawn` pins the resize: 128 px copy,
+  idempotent, no upscaling, `None` when there is no art.
+- **Pitfalls found by measuring**:
+  - **A screenshot on a 2600×1700 software-rendered root can block `import -window root`**;
+    drive a journey from the bench server's own access log (the route a screen asks for) and
+    take pictures outside the measured path.
+  - **`XResizeWindow` races the app's own initial size**: a resize issued before the window is
+    ready is silently lost and the run measures 1280×800 while claiming 2560×1600. Resize
+    after the first frame and assert the size you measured.
+  - **The bench must serve real cover bytes** to measure anything sleeve-shaped
+    (`tools/perf_api.py --covers <jpeg>`): with Deezer unreachable every `/api/cover` is a 404
+    and every screen paints a placeholder, which reads as "sleeves are free".
+  - **This machine is shared.** Other sessions run `pkill Xvfb` and `pkill -f perf_api`: the
+    isolated display is a copy of the binary under another name (`xserv105`) kept alive by a
+    loop, and the bench runs as `bench.py` for the same reason. A run whose X server dies
+    exits 0 and measures a dead process.
+
 ## The lots
 
 Rules for every lot (they are part of each worker prompt below):
