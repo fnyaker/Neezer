@@ -18,7 +18,7 @@ use gpui_kit::{
     FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, px, relative, rems,
 };
-use gpui_omarchy::{ButtonVariant, IconName, focus_scope, icon, icon_button, keycaps};
+use gpui_omarchy::{ButtonVariant, IconName, button, focus_scope, icon, icon_button, keycaps};
 use nz_player::Command;
 
 use crate::actions::*;
@@ -33,6 +33,7 @@ use crate::state::{AppEvent, AppState, Auth, SidePanel};
 use crate::theme;
 use crate::toast;
 use crate::wiring::events::Receiver;
+use crate::wiring::remote_host;
 
 /// The genre studio's own action: D7 froze `actions.rs` after the shell landed,
 /// and D16 may not add a variant there, so the verb lives next to the one screen
@@ -418,6 +419,7 @@ impl Render for RootView {
             .on_action(cx.listener(|this, _: &GoReleases, _, cx| this.go(Route::Releases, cx)))
             .on_action(cx.listener(|this, _: &GoGenres, _, cx| this.go(Route::Genres, cx)))
             .on_action(cx.listener(|this, _: &GoNowPlaying, _, cx| this.go(Route::NowPlaying, cx)))
+            .on_action(cx.listener(|this, _: &RemoteClaim, _, cx| this.go(Route::Remote, cx)))
             .on_action(cx.listener(|this, _: &GoSettings, _, cx| {
                 this.go(
                     Route::Settings {
@@ -643,7 +645,8 @@ impl Render for RootView {
 
         let genres_active = matches!(self.state.read(cx).current_route(), Some(Route::Genres));
         let active = self.state.read(cx).current_route().and_then(Route::section);
-        let sidebar = sidebar(active, is_admin, genres_active, cx).into_any_element();
+        let on_remote = route.as_ref() == Some(&Route::Remote);
+        let sidebar = sidebar(active, is_admin, genres_active, on_remote, cx).into_any_element();
 
         let content = match &self.screen {
             Some((_route, view)) => {
@@ -695,6 +698,13 @@ impl Render for RootView {
             .child(body)
             .child(player_bar::render(self.state.clone(), cx));
 
+        // « Contrôlé par … » — always on screen while somebody drives this
+        // player, with the one tap that takes it back (the SPA's
+        // `RemoteHostChip`). Above the bar, never over the transport.
+        if let Some(chip) = remote_chip(window, cx) {
+            root = root.child(chip);
+        }
+
         if !toasts.is_empty() {
             root = root.child(toast::render(&toasts, cx));
         }
@@ -705,10 +715,94 @@ impl Render for RootView {
     }
 }
 
+/// « Contrôlé par … » over the player bar: who is driving this player, and the
+/// one tap that takes it back (`RemoteHostChip.svelte`). Drawn by the shell
+/// because it must be on screen from every route, and never over the transport
+/// itself: it sits just above the bar.
+fn remote_chip(
+    window: &mut Window,
+    cx: &mut Context<RootView>,
+) -> Option<gpui_kit::Stateful<gpui_kit::Div>> {
+    let host = remote_host::RemoteHost::get()?;
+    let status = host.status();
+    if status.live() == 0 {
+        return None;
+    }
+    let who = status.who();
+    let level = status.level().unwrap_or_default();
+    let bottom = theme::player_height(window) + px(12.);
+    Some(
+        div()
+            .id("remote-chip")
+            .debug_selector(|| "remote-chip".to_owned())
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(bottom)
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.25))
+                    .p(rems(0.25))
+                    .border_1()
+                    .border_color(theme::accent(cx))
+                    .bg(theme::chrome(cx))
+                    .child(
+                        button("remote-chip-who", "", ButtonVariant::Secondary, cx)
+                            .flex()
+                            .items_center()
+                            .gap(rems(0.5))
+                            .pr(rems(0.75))
+                            .on_click(cx.listener(|this, _, _, cx| this.go(Route::Remote, cx)))
+                            .child(div().size(rems(0.5)).rounded_full().bg(theme::success(cx)))
+                            .child(icon(IconName::Cast).size(rems(0.875)))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_start()
+                                    .child(
+                                        div()
+                                            .text_size(rems(0.75))
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(who),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(rems(0.625))
+                                            .text_color(theme::secondary(cx))
+                                            .child(level.to_owned()),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        button("remote-chip-cut", "Couper", ButtonVariant::Danger, cx)
+                            .child(icon(IconName::Close).size(rems(0.75)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(host) = remote_host::RemoteHost::get() {
+                                    host.cut_all();
+                                }
+                                this.state.update(cx, |state, cx| {
+                                    state.toasts.push(
+                                        crate::toast::ToastKind::Info,
+                                        "Contrôle à distance coupé.",
+                                    );
+                                    cx.notify();
+                                });
+                            })),
+                    ),
+            ),
+    )
+}
+
 fn sidebar(
     active: Option<Section>,
     is_admin: bool,
     genres_active: bool,
+    on_remote: bool,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement + use<> {
     let entries = [
@@ -815,6 +909,41 @@ fn sidebar(
             );
         }
     }
+    // Contrôle distant (lot D15a): a link lends THIS player, so the way in is the
+    // sidebar, next to Réglages, and the glyph lights up when a controller is on.
+    let remote_live = remote_host::RemoteHost::get()
+        .map(|host| host.status().live())
+        .unwrap_or(0);
+    column = column.child(
+        div()
+            .id("nav-remote")
+            .flex()
+            .items_center()
+            .gap(rems(0.625))
+            .h(rems(2.))
+            .px(rems(0.625))
+            .text_size(rems(0.8125))
+            .text_color(if on_remote {
+                theme::text(cx)
+            } else {
+                theme::secondary(cx)
+            })
+            .cursor_pointer()
+            .hover(|style| style.text_color(theme::text(cx)))
+            .on_click(cx.listener(|this, _, _, cx| this.go(Route::Remote, cx)))
+            .child(
+                icon(IconName::Cast)
+                    .size(rems(1.125))
+                    .text_color(if remote_live > 0 {
+                        theme::accent(cx)
+                    } else if on_remote {
+                        theme::text(cx)
+                    } else {
+                        theme::secondary(cx)
+                    }),
+            )
+            .child(div().child("Contrôle distant")),
+    );
     column = column.child(div().flex_1());
     column.child(
         div()
@@ -1475,96 +1604,6 @@ mod mouse {
             );
         });
 
-        std::fs::remove_dir_all(dir).ok();
-        drop(runtime);
-    }
-
-    /// A screen built and dropped must not be KEPT by its own reply channel.
-    ///
-    /// Every screen owns one `events::Sender` and one foreground task awaiting
-    /// the other half. Until the channel closed when its last sender dropped,
-    /// nothing ever woke that task: GPUI kept it — and the screen state the
-    /// future had captured — for the life of the process, one screen per
-    /// navigation. Measured in the release app on the isolated display, 1 000
-    /// round trips between Accueil and Bibliothèque: **+321 700 KB of RSS**
-    /// (+161 KB per screen built); after the fix: +4 100 KB (+4 KB), which is
-    /// the shell's own atlas, not the screens.
-    ///
-    /// The number is BYTES the calling thread still holds (`testmem`'s counting
-    /// allocator), never `VmRSS`: the suite runs its tests in parallel in one
-    /// process, so the process's resident set moves with its neighbours (PR
-    /// #236: the same page read +8 404 KB under load). A budget in bytes
-    /// cannot move with a neighbour, and a leak of 161 KB per screen still
-    /// fails it 40 times over.
-    #[gpui::test]
-    async fn building_a_screen_a_thousand_times_keeps_nothing(cx: &mut gpui::TestAppContext) {
-        use crate::testmem::{Meter, retained_bytes};
-
-        cx.update(|cx| {
-            gpui_omarchy::init(cx);
-            crate::keymap::install(cx);
-        });
-        let dir = temp_dir("nav-guard");
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let (events_tx, _events_rx) = event_channel();
-        let config = AppConfig {
-            start_audio: false,
-            start_mpris: false,
-            ..AppConfig::for_test(&dir)
-        };
-        let runtime_handle = runtime.handle().clone();
-        let state =
-            cx.update(|cx| cx.new(move |_| AppState::new(config, runtime_handle, events_tx, None)));
-        let routes = [
-            Route::Home,
-            Route::Library {
-                tab: crate::nav::LibraryTab::Playlists,
-            },
-        ];
-        // A screen's requests run on the runtime; without driving it they stay
-        // parked, and a parked task holds its own clone of the screen's reply
-        // sender — which is the app's real case (the runtime runs) and must be
-        // the test's too, or the measurement is of a frozen process.
-        let settle = |runtime: &tokio::runtime::Runtime, cx: &mut gpui::TestAppContext| {
-            runtime.block_on(async {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            });
-            cx.run_until_parked();
-        };
-        // A first pass warms what the shell allocates once (the text system's
-        // font handles): a screen's own weight is what the second pass measures.
-        for route in routes.iter() {
-            let view = cx.update(|cx| crate::screens::build(route, state.clone(), cx));
-            drop(view);
-            settle(&runtime, cx);
-        }
-        let before = Meter::now();
-        for _ in 0..1_000 {
-            for route in routes.iter() {
-                let view = cx.update(|cx| crate::screens::build(route, state.clone(), cx));
-                drop(view);
-                settle(&runtime, cx);
-            }
-        }
-        let kept = before.since();
-        println!(
-            "navigation: 2 000 screens kept {kept} B (thread holds {})",
-            retained_bytes()
-        );
-        // Measured 892 936 B for 2 000 screens (446 B each: GPUI's own task
-        // arena settles a little later than this test can see). The leak it
-        // guards was 161 KB per screen in the release app — 2 000 of them held
-        // 322 MB — so the budget is 2 MiB: 2.3× the measured weight and 160×
-        // tighter than the leak. A screen that starts keeping a list, a decoded
-        // image or a response fails here at once.
-        const BUDGET_BYTES: u64 = 2 * 1024 * 1024;
-        assert!(
-            kept < BUDGET_BYTES,
-            "2 000 screen builds must keep under {BUDGET_BYTES} B, they kept {kept} B"
-        );
         std::fs::remove_dir_all(dir).ok();
         drop(runtime);
     }

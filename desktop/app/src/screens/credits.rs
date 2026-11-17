@@ -77,7 +77,7 @@ impl Screen {
             person: None,
             role: String::new(),
             list: List::new().subtitle(Subtitle::Roles),
-            covers: Rc::new(RefCell::new(crate::widgets::cover::Covers::rows())),
+            covers: Rc::new(RefCell::new(crate::widgets::cover::Covers::new())),
             menu: Menu::new(),
             menu_keys: None,
             events: tx,
