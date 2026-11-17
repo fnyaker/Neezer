@@ -1601,6 +1601,7 @@ version = "0.1.0"
 dependencies = [
  "jni",
  "nz-core",
+ "nz-droid-audio",
  "rustls-platform-verifier",
  "thiserror 2.0.21",
  "tokio",

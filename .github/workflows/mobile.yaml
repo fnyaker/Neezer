@@ -149,6 +149,27 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
           time mobile/rust/build-android.sh
 
+      # `AudioTrackPull.kt` (the API-26 output, lot MB3a) reaches its natives by
+      # NAME (`System.loadLibrary` + `external fun`), so nothing calls them from
+      # Rust and a linker that garbage-collects unreferenced sections is free to
+      # drop them from the cdylib without failing the build: measured, a cdylib
+      # that only depends on `nz-droid-audio` exports 0 of the 4. `nz-ffi` keeps
+      # them through a `#[used]` reference; this is the check that it still does,
+      # on the library the APK really ships.
+      - name: The API-26 JNI entry points are in libnz_ffi.so
+        run: |
+          set -euo pipefail
+          SO=mobile/android/bridge/src/main/jniLibs/arm64-v8a/libnz_ffi.so
+          test -f "$SO" || { echo "::error::$SO is missing"; exit 1; }
+          for name in nativeRender nativeSetLatency nativeUnderruns nativeClose; do
+            symbol="Java_fr_neezer_mobile_playback_AudioTrackPull_$name"
+            line=$(nm -D --defined-only "$SO" | grep -E " T $symbol$" || true)
+            case "$line" in
+              *"$symbol"*) printf '   %s\n' "$symbol" ;;
+              *) echo "::error::$symbol is not exported by libnz_ffi.so"; exit 1 ;;
+            esac
+          done
+
       - name: JVM tests
         run: gradle -p mobile/android testDebugUnitTest -PskipRust --no-daemon
 

@@ -48,3 +48,18 @@ pub mod settings;
 pub mod setup;
 pub mod viz;
 pub mod worlds;
+
+/// Keeps the API-26 JNI entry points in `libnz_ffi.so` (lot MB3a).
+///
+/// `AudioTrackPull.kt` reaches them by NAME (`System.loadLibrary` + `external
+/// fun`), not through Rust, so nothing in this crate calls them and the linker is
+/// free to drop an unreferenced symbol it finds in an rlib. Measured on
+/// `nz-droid-audio`'s `examples/jni-export-check.rs` (a cdylib that only depends
+/// on that crate): **0** of the four symbols survive without this reference, all
+/// **4** with it. The `mobile.yaml` job reads them back out of the built
+/// `libnz_ffi.so` on arm64-v8a, so the app's API-26 output cannot silently lose
+/// its natives.
+#[cfg(target_os = "android")]
+#[used]
+static DROID_AUDIO_JNI_ENTRY_POINTS: &nz_droid_audio::JniEntryPoints =
+    &nz_droid_audio::JNI_ENTRY_POINTS;
