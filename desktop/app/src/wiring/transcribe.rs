@@ -109,8 +109,7 @@ pub enum Priority {
 }
 
 impl Priority {
-    pub const ALL: [Priority; 3] =
-        [Priority::Lowest, Priority::Low, Priority::Normal];
+    pub const ALL: [Priority; 3] = [Priority::Lowest, Priority::Low, Priority::Normal];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -527,12 +526,7 @@ pub struct Governor {
 
 impl Governor {
     /// Feed one sample; returns the command to send, if the state changed.
-    pub fn step(
-        &mut self,
-        now: Instant,
-        signals: Signals,
-        settings: &Settings,
-    ) -> Option<Control> {
+    pub fn step(&mut self, now: Instant, signals: Signals, settings: &Settings) -> Option<Control> {
         let stalled = match self.last {
             Some((at, position, underruns)) => {
                 let elapsed = now.duration_since(at).as_secs_f64();
@@ -560,9 +554,7 @@ impl Governor {
                 }
             }
             None => {
-                let Some(paused) = self.paused else {
-                    return None;
-                };
+                let paused = self.paused?;
                 let since = *self.quiet_since.get_or_insert(now);
                 if now.duration_since(since) < RESUME_AFTER {
                     return None;
@@ -680,10 +672,11 @@ pub fn check_model(name: &str, path: &Path) -> ModelCheck {
     }
     // The VAD model is a GGML file but not a whisper model: `validate`'s 1 MiB
     // floor and magic are for the ladder.
-    if entry.name != models::VAD && entry.name != models::VAD_FOR_TESTS {
-        if let Err(error) = models::validate(path) {
-            return ModelCheck::NotAModel(error.to_string());
-        }
+    if entry.name != models::VAD
+        && entry.name != models::VAD_FOR_TESTS
+        && let Err(error) = models::validate(path)
+    {
+        return ModelCheck::NotAModel(error.to_string());
     }
     ModelCheck::Pinned
 }
@@ -758,7 +751,9 @@ struct Shared {
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, Snapshot> {
-        self.snapshot.lock().unwrap_or_else(|error| error.into_inner())
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     fn publish(&self, change: impl FnOnce(&mut Snapshot)) {
@@ -929,7 +924,10 @@ impl Service {
         if let Ok(current) = std::env::current_exe()
             && let Some(dir) = current.parent()
         {
-            for candidate in [dir.join("neezer-transcribe"), dir.join("../neezer-transcribe")] {
+            for candidate in [
+                dir.join("neezer-transcribe"),
+                dir.join("../neezer-transcribe"),
+            ] {
                 if candidate.is_file() {
                     return candidate;
                 }
@@ -940,7 +938,11 @@ impl Service {
 
     #[cfg(test)]
     pub fn set_program(&self, program: PathBuf) {
-        *self.shared.program.lock().unwrap_or_else(|e| e.into_inner()) = Some(program);
+        *self
+            .shared
+            .program
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(program);
     }
     fn new() -> Service {
         Service {
@@ -983,11 +985,7 @@ impl Service {
             .unwrap_or_else(|e| e.into_inner()) = Some(state.runtime.clone());
         *self.shared.audio.lock().unwrap_or_else(|e| e.into_inner()) =
             state.audio.as_ref().map(|audio| audio.engine.clone());
-        *self
-            .shared
-            .server
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(state.server.clone());
+        *self.shared.server.lock().unwrap_or_else(|e| e.into_inner()) = Some(state.server.clone());
         // The settings and the model list are read ONCE: after that the service
         // is what changes them (`set_setting`), so a paint is a clone and a
         // comparison, never six `stat`s and two SQLite reads (rule 4).
@@ -1020,9 +1018,7 @@ impl Service {
         let dir = models::default_dir();
         let free = models::free_memory_bytes();
         let settings = self.shared.lock().settings.clone();
-        let recommended = models::ladder(free)
-            .first()
-            .map(|name| (*name).to_owned());
+        let recommended = models::ladder(free).first().map(|name| (*name).to_owned());
         let chosen = settings.model_path().and_then(|path| models::name(&path));
         let rows: Vec<ModelRow> = models::FILES
             .iter()
@@ -1159,7 +1155,8 @@ impl Service {
             return;
         }
         let settings = self.shared.lock().settings.clone();
-        self.shared.publish(|snapshot| snapshot.engine = Engine::Probing);
+        self.shared
+            .publish(|snapshot| snapshot.engine = Engine::Probing);
         let program = self.program();
         let shared = self.shared.clone();
         if let Ok(mut at) = self.shared.probed_at.lock() {
@@ -1223,7 +1220,8 @@ impl Service {
         if let Some(job) = &snapshot.job {
             if job.episode == episode {
                 self.shared.publish(|snapshot| {
-                    snapshot.note = Some("Cet épisode est déjà en cours de transcription.".to_owned());
+                    snapshot.note =
+                        Some("Cet épisode est déjà en cours de transcription.".to_owned());
                 });
             } else {
                 self.shared.publish(|snapshot| {
@@ -1259,7 +1257,10 @@ impl Service {
                 phase: audio
                     .as_ref()
                     .map(|_| Phase::Transcribing)
-                    .unwrap_or(Phase::Audio { done: 0, total: None }),
+                    .unwrap_or(Phase::Audio {
+                        done: 0,
+                        total: None,
+                    }),
                 done_ms: 0,
                 // The show page's own length: the card has a percent while the
                 // first chunk runs instead of a bar that waits for it.
@@ -1331,7 +1332,13 @@ impl Service {
         } else {
             None
         };
-        if !self.ensure_child(&program, model, &settings, worker_mode.as_deref(), &stderr_path) {
+        if !self.ensure_child(
+            &program,
+            model,
+            &settings,
+            worker_mode.as_deref(),
+            &stderr_path,
+        ) {
             return;
         }
         self.send(Control::Local {
@@ -1476,9 +1483,7 @@ impl Service {
                                  « Reprendre » repartira du dernier passage transcrit."
                                     .to_owned()
                             } else {
-                                format!(
-                                    "Le superviseur de transcription s’est arrêté : {tail}"
-                                )
+                                format!("Le superviseur de transcription s’est arrêté : {tail}")
                             },
                         });
                         Snapshot::trim_failures(&mut snapshot.failures);
@@ -1511,12 +1516,12 @@ impl Service {
         let Some(entry) = models::file(name) else {
             return;
         };
-        if self
-            .snapshot()
-            .download
-            .as_ref()
-            .is_some_and(|download| matches!(download.phase, DownloadPhase::Downloading | DownloadPhase::Verifying))
-        {
+        if self.snapshot().download.as_ref().is_some_and(|download| {
+            matches!(
+                download.phase,
+                DownloadPhase::Downloading | DownloadPhase::Verifying
+            )
+        }) {
             return;
         }
         let Some(api) = self.shared.api.lock().ok().and_then(|api| api.clone()) else {
@@ -1753,19 +1758,19 @@ impl Service {
                 workers: Vec<Row>,
             }
             let mut id = known;
-            if id.is_none() {
-                if let Ok(fresh) = api.get::<List>(Lane::User, "/transcribe/workers").await {
-                    id = fresh
-                        .value
-                        .workers
-                        .into_iter()
-                        .find(|row| {
-                            row.kind == "client"
-                                && row.revoked.is_none()
-                                && row.name.trim() == name.trim()
-                        })
-                        .map(|row| row.id);
-                }
+            if id.is_none()
+                && let Ok(fresh) = api.get::<List>(Lane::User, "/transcribe/workers").await
+            {
+                id = fresh
+                    .value
+                    .workers
+                    .into_iter()
+                    .find(|row| {
+                        row.kind == "client"
+                            && row.revoked.is_none()
+                            && row.name.trim() == name.trim()
+                    })
+                    .map(|row| row.id);
             }
             let mut cause = None;
             if let Some(id) = id.filter(|id| !id.is_empty()) {
@@ -1784,7 +1789,9 @@ impl Service {
                         "Jeton supprimé de cet ordinateur, mais le serveur n’a pas confirmé la \
                          révocation : {cause}"
                     ),
-                    None => "Cet ordinateur n’est plus enrôlé et son jeton a été supprimé.".to_owned(),
+                    None => {
+                        "Cet ordinateur n’est plus enrôlé et son jeton a été supprimé.".to_owned()
+                    }
                 });
             });
         });
@@ -1864,7 +1871,10 @@ impl Service {
                     name: row.name,
                     enabled: row.enabled,
                     last_seen: row.last_seen,
-                    lease: row.lease.map(|lease| lease.episode_id).filter(|id| !id.is_empty()),
+                    lease: row
+                        .lease
+                        .map(|lease| lease.episode_id)
+                        .filter(|id| !id.is_empty()),
                     running: snapshot.worker.running,
                     busy: false,
                 };
@@ -1895,7 +1905,13 @@ impl Service {
         // One engine: a child started in `local` mode cannot become a worker
         // without being restarted, and it is idle (no job above), so this is
         // free.
-        if self.shared.child.lock().ok().is_some_and(|child| child.is_some()) {
+        if self
+            .shared
+            .child
+            .lock()
+            .ok()
+            .is_some_and(|child| child.is_some())
+        {
             self.shared.stopping.store(true, Ordering::SeqCst);
             self.send(Control::Stop);
             self.wait_child_exit(Duration::from_secs(2));
@@ -1903,8 +1919,9 @@ impl Service {
         if self.ensure_child(&program, &model, &settings, Some(&server), &stderr) {
             self.shared.publish(|snapshot| {
                 snapshot.worker.running = true;
-                snapshot.note =
-                    Some("La file de transcription du serveur tourne sur cet ordinateur.".to_owned());
+                snapshot.note = Some(
+                    "La file de transcription du serveur tourne sur cet ordinateur.".to_owned(),
+                );
             });
             self.probe(false);
         }
@@ -1948,7 +1965,8 @@ impl Service {
 
     fn note(&self, message: impl Into<String>) {
         let message = message.into();
-        self.shared.publish(|snapshot| snapshot.note = Some(message));
+        self.shared
+            .publish(|snapshot| snapshot.note = Some(message));
     }
 
     /// Stop the supervisor and JOIN the threads that talk to it. Called at
@@ -2228,7 +2246,9 @@ fn run_probe(program: &Path, cpu: bool) -> Engine {
 
 /// The `{"event":"engine"}` line a probe printed.
 pub fn parse_probe(text: &str) -> Option<Engine> {
-    let line = text.lines().find(|line| line.contains("\"event\":\"engine\""))?;
+    let line = text
+        .lines()
+        .find(|line| line.contains("\"event\":\"engine\""))?;
     let event: Event = serde_json::from_str(line).ok()?;
     let Event::Engine {
         backend,
@@ -2238,7 +2258,10 @@ pub fn parse_probe(text: &str) -> Option<Engine> {
     else {
         return None;
     };
-    match (Backend::parse(&backend), reason.as_deref().and_then(FallbackCause::parse)) {
+    match (
+        Backend::parse(&backend),
+        reason.as_deref().and_then(FallbackCause::parse),
+    ) {
         (Some(Backend::Vulkan), _) => Some(Engine::Vulkan { device }),
         (Some(Backend::Cpu), Some(cause)) => Some(Engine::Cpu { cause }),
         (Some(Backend::Cpu), None) => Some(Engine::Cpu {
@@ -2290,7 +2313,9 @@ async fn stream_audio(shared: &Arc<Shared>, episode: &str) -> Result<PathBuf, St
         .lock()
         .ok()
         .and_then(|api| api.clone())
-        .ok_or_else(|| "Connectez-vous pour transcrire cet épisode sur cet ordinateur.".to_owned())?;
+        .ok_or_else(|| {
+            "Connectez-vous pour transcrire cet épisode sur cet ordinateur.".to_owned()
+        })?;
     let cancel = Arc::new(AtomicBool::new(false));
     let progress_shared = shared.clone();
     let name = episode.to_owned();
@@ -2443,7 +2468,11 @@ mod tests {
             position_s: 0.0,
             ..Signals::default()
         };
-        assert_eq!(governor.step(start, playing, &settings), None, "no sample yet");
+        assert_eq!(
+            governor.step(start, playing, &settings),
+            None,
+            "no sample yet"
+        );
         assert_eq!(
             governor.step(start + Duration::from_millis(250), playing, &settings),
             Some(Control::Pause),
@@ -2539,7 +2568,11 @@ mod tests {
                 .unwrap()
                 .contains("SHA-256")
         );
-        assert!(check_model("ggml-nope.bin", &wrong).cause_fr("ggml-nope.bin").is_some());
+        assert!(
+            check_model("ggml-nope.bin", &wrong)
+                .cause_fr("ggml-nope.bin")
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2575,7 +2608,10 @@ mod tests {
         };
         let args = supervisor_args(&settings, Path::new("/m/ggml-base.bin"), None, "fr");
         assert_eq!(args[0], "local");
-        assert!(args.windows(2).any(|pair| pair == ["--model", "/m/ggml-base.bin"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--model", "/m/ggml-base.bin"])
+        );
         assert!(args.windows(2).any(|pair| pair == ["--lang", "fr"]));
         assert!(args.contains(&"--cpu".to_owned()));
         assert!(args.contains(&"--out-dir".to_owned()));
@@ -2587,8 +2623,15 @@ mod tests {
             "auto",
         );
         assert_eq!(worker[0], "worker");
-        assert!(worker.windows(2).any(|pair| pair == ["--url", "http://127.0.0.1:5000"]));
-        assert!(!worker.contains(&"--lang".to_owned()), "auto is the default");
+        assert!(
+            worker
+                .windows(2)
+                .any(|pair| pair == ["--url", "http://127.0.0.1:5000"])
+        );
+        assert!(
+            !worker.contains(&"--lang".to_owned()),
+            "auto is the default"
+        );
         assert!(!worker.contains(&"--out-dir".to_owned()));
     }
 
@@ -2668,7 +2711,12 @@ mod tests {
             "{\"event\":\"engine\",\"backend\":\"cpu\",\"reason\":\"no_vulkan_device\"}\n",
         )
         .expect("CPU");
-        assert_eq!(cpu, Engine::Cpu { cause: FallbackCause::NoVulkanDevice });
+        assert_eq!(
+            cpu,
+            Engine::Cpu {
+                cause: FallbackCause::NoVulkanDevice
+            }
+        );
         assert!(cpu.label_fr().contains("no_vulkan_device"));
         assert_eq!(parse_probe(""), None);
         assert_eq!(parse_probe("{\"event\":\"other\"}"), None);
@@ -2678,7 +2726,10 @@ mod tests {
     /// battery never does.
     #[test]
     fn only_a_discharging_battery_pauses() {
-        assert!(battery_from(&[("Mains", "Unknown"), ("Battery", "Discharging")]));
+        assert!(battery_from(&[
+            ("Mains", "Unknown"),
+            ("Battery", "Discharging")
+        ]));
         assert!(!battery_from(&[("Mains", "Unknown")]));
         assert!(!battery_from(&[("Battery", "Charging")]));
         assert!(!battery_from(&[("Battery", "Full")]));
@@ -2691,10 +2742,7 @@ mod tests {
         let dir = scratch("audio");
         let file = dir.join("episode.opus");
         std::fs::write(&file, b"audio").expect("write");
-        assert_eq!(
-            audio_plan(Some(file.clone()), "e"),
-            AudioPlan::Local(file)
-        );
+        assert_eq!(audio_plan(Some(file.clone()), "e"), AudioPlan::Local(file));
         match audio_plan(Some(dir.join("missing")), "e") {
             AudioPlan::Stream(path) => assert!(path.ends_with("e.opus")),
             other => panic!("unexpected: {other:?}"),
@@ -2788,6 +2836,14 @@ mod tests {
             note: Some("Transcription terminée".to_owned()),
         };
         let kept = before.since();
+        println!(
+            "instantané retenu : {kept} octets, {} octets de libellés",
+            snapshot
+                .failures
+                .iter()
+                .map(|f| f.message.len())
+                .sum::<usize>()
+        );
         assert!(
             kept < 16_384,
             "the snapshot of the worst state must stay under 16 KB, it held {kept} bytes"
@@ -2838,13 +2894,7 @@ mod tests {
         let model = dir.join(models::BASE);
         let settings = Settings::default();
         let program = service.program();
-        assert!(service.ensure_child(
-            &program,
-            &model,
-            &settings,
-            None,
-            &dir.join("stderr.log")
-        ));
+        assert!(service.ensure_child(&program, &model, &settings, None, &dir.join("stderr.log")));
         service.shared.publish(|snapshot| {
             snapshot.job = Some(Job {
                 episode: episode.to_owned(),
@@ -2867,13 +2917,24 @@ mod tests {
         loop {
             let snapshot = service.snapshot();
             if snapshot.job.is_none() && snapshot.last_done.as_deref() == Some(episode) {
-                assert_eq!(snapshot.engine, Engine::Vulkan {
-                    device: Some("RADV 780M".to_owned())
-                });
-                assert!(snapshot.note.unwrap_or_default().contains("Transcription terminée"));
+                assert_eq!(
+                    snapshot.engine,
+                    Engine::Vulkan {
+                        device: Some("RADV 780M".to_owned())
+                    }
+                );
+                assert!(
+                    snapshot
+                        .note
+                        .unwrap_or_default()
+                        .contains("Transcription terminée")
+                );
                 break;
             }
-            assert!(Instant::now() < deadline, "the fake supervisor said nothing: {snapshot:?}");
+            assert!(
+                Instant::now() < deadline,
+                "the fake supervisor said nothing: {snapshot:?}"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         service.shutdown();
@@ -2970,7 +3031,14 @@ mod tests {
         let dir = scratch("speed");
         let audio = long_speech(&dir, &source, 15);
         let probe = std::process::Command::new("ffprobe")
-            .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+            ])
             .arg(&audio)
             .output()
             .expect("ffprobe");
@@ -3066,12 +3134,12 @@ mod tests {
         assert!(status.success());
         let speech = long_speech(&dir, &source, 15);
 
-        let mut config = nz_audio::EngineConfig::default();
-        config.spool_dir = dir.join("spool");
-        let (engine, mut sink) = nz_audio::Engine::new_offline(
-            config,
-            Arc::new(LocalOpener(track.clone())),
-        );
+        let config = nz_audio::EngineConfig {
+            spool_dir: dir.join("spool"),
+            ..nz_audio::EngineConfig::default()
+        };
+        let (engine, mut sink) =
+            nz_audio::Engine::new_offline(config, Arc::new(LocalOpener(track.clone())));
         engine.set_volume(0.0);
         engine.load("track", nz_audio::Quality::Flac, None);
         engine.play();
@@ -3130,5 +3198,4 @@ mod tests {
         service.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

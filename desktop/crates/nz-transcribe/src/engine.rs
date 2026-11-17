@@ -50,7 +50,7 @@ use whisper_rs::{
 // The vocabulary lives in `backend.rs`, which the app depends on WITHOUT this
 // module's whisper.cpp stack; the paths that have always named it through
 // `engine` (`engine::Backend`, `engine::FORMAT_ENGINE`) keep working.
-pub use crate::backend::{Backend, FallbackCause, FORMAT_ENGINE};
+pub use crate::backend::{Backend, FORMAT_ENGINE, FallbackCause};
 use crate::error::Error;
 use crate::models;
 use crate::segments::{SAMPLE_RATE, Segment};
@@ -932,9 +932,16 @@ mod tests {
         ];
         for (cause, code) in causes {
             let sentence = cause.explain_fr();
-            assert!(sentence.contains(code), "{sentence}");
             assert!(sentence.contains("processeur"), "{sentence}");
-            assert!(sentence.contains("3× plus lent"), "{sentence}");
+            assert!(sentence.contains("5× plus lent"), "{sentence}");
+            if cause == FallbackCause::UserForcedCpu {
+                // A choice, not a GPU that failed: no cause code, and it says
+                // whose choice it was.
+                assert!(sentence.contains("votre choix"), "{sentence}");
+                assert!(!sentence.contains(code), "{sentence}");
+            } else {
+                assert!(sentence.contains(code), "{sentence}");
+            }
         }
     }
 

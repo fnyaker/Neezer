@@ -6,11 +6,11 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D10b, D11, D12, D13, D14a, D14b,
-D15a, D16, M1, P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at
-`AudioReady`, `409` told apart, the `auto` payload, the output list) and the contract follow-up
-(Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding route); the rest
-planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D10b, D11, D12, D13, D14a,
+D14b, D15a, D16, M1, P1, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
+trim, saved sound at `AudioReady`, `409` told apart, the `auto` payload, the output list) and the
+contract follow-up (Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding
+route); the rest planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -2665,16 +2665,92 @@ Waves that can run in parallel (disjoint files):
   chunk would have been silently misplaced. The window test that catches it is a file that is loud
   for half a second then silent (a window at 600 ms must be silence).
 
-### T4 — Transcription in the app
+### T4 — Transcription in the app (delivered 2026-11-17)
 
-- **Files**: `screens/settings/transcribe.rs`, `app/src/wiring/transcribe.rs`, the transcript
-  panel's local-source branch in `widgets/transcript_panel.rs` (coordinate: D11 owns the file; T4
-  runs after D11).
-- **Acceptance**: Réglages → Transcription locale: engine status (backend, device, fallback cause),
-  model choice and download with size and checksum, enrol/revoke this PC as a worker (admin),
-  battery rule, current job with progress and failures with causes; playing music while a job runs:
-  0 underruns and UI p95 frame time unchanged within 10 % (measure both with and without the job);
-  a local transcript shows in the panel and is searchable.
+- **The rule, the app does not link the engine.** `nz-transcribe` gained two features, `engine`
+  (whisper.cpp, Vulkan, the in-process decoder) and `worker` (the protocol client, the supervisor),
+  both `default` and both required by the `neezer-transcribe` BINARY (`required-features`).
+  `neezer-desktop` depends on the crate with `default-features = false`: `cargo tree -p
+  neezer-desktop` contains **0** whisper/ggml package, the release binary stays the shell's size
+  (**58 618 624 B** at this commit against **58 127 616 B** at `master`, **+491 008 B / +0.84 %**),
+  and `strings` finds no `ggml_backend`/`whisper_full` symbol in it. T4 also ships the vocabulary apart (`backend.rs`:
+  `Backend`, `FallbackCause`, `FORMAT_ENGINE`) so the screen can say "Vulkan" and "no_vulkan_device"
+  without the engine.
+- **The rule, one child and threads that borrow nothing.** The supervisor is `neezer-transcribe`
+  in its own process group at `nice 19`; the app owns it through one service (a snapshot behind a
+  mutex, a stdin writer, a stdout reader, a 250 ms governor). Neither the reader nor the governor
+  touches `NetRuntime` (one blocks on a pipe, one on its own clock), so `shutdown` sends `stop`,
+  closes the pipe, kills the group (CONT→TERM→KILL) and JOINS both; the fake-supervisor test
+  reads the child's pid and asserts `/proc/<pid>` is gone. `NetRuntime::drop` calls it, one line.
+- **The rule, the governor is measured, not guessed.** A job pauses on: a discharging battery when
+  « Seulement sur secteur » is on; an underrun, or a playhead that advanced under half the wall
+  time in 250 ms (a starving decoder); a paint interval over **25 ms** on the « Très basse »
+  priority (a visible hitch on the same GPU). It resumes after **3 s** with no reason — the
+  supervisor's own `RESUME_AFTER_MS` — because one slow frame is one pause, never a start/stop per
+  chunk (the first GPU call compiles whisper.cpp's pipelines).
+- **The rule, models are a click and a pin.** Nothing downloads by itself: `Api::download_to` on
+  `Lane::Bulk` with progress, then the pinned **size and SHA-256** (`nz-transcribe`'s table), then
+  `valid_model`; a file that fails is deleted and its cause printed. The person's chosen model is
+  authoritative (`model_in`), the ladder only picks when nothing is chosen. The VAD file is pinned
+  but NOT offered: T2 measured it at 98× the audio it removes on a CPU (rule 1).
+- **The rule, audio is fetched once.** An offline download is used as it is; anything else is
+  streamed once to `$XDG_CACHE_HOME/neezer/transcribe/<episode>.opus` at Opus 128 (the engine turns
+  it into 16 kHz mono anyway) and kept for a retry. The `.partial.json` T3 writes after each chunk
+  is the resume point: the panel reads it and says « un travail interrompu s'est arrêté à X min ».
+- **The rule, the panel's local branch.** The panel reads `$XDG_DATA_HOME/neezer/transcripts/`'s
+  sidecar through `sidecar::load`, so the local text has the server's segment shape; `at`/`covers`/
+  `loaded` follow the LOCAL lines (the playhead highlights them, a click seeks), the search folds
+  accents in memory, and a job's phase, percent, pause cause and failure are on a card above the
+  server's. A virtual list needs a definite height: stacked in the episode panel (an unbounded
+  scroll column) it collapsed to 0 and the lines were there but invisible — the floor is eight rows.
+- **Worker sink.** Enrol writes the device token 0600 and never shows it again; revoke deletes it
+  locally even when the server cannot confirm; the switch runs the server queue on this PC. One
+  child: the supervisor's worker mode also accepts `local` commands in its idle loop, so local and
+  server jobs share one engine.
+- **A T2 bug T4 found**: with `params.language = null` AND `detect_language = true`, whisper.cpp
+  auto-detected "en" and then decoded only timestamp tokens — **0 segments** on `jfk.wav`, while
+  `--lang en` gave the two lines. The server's default language is `auto`, so the worker would have
+  written empty transcripts. `"auto"` as the string (the branch whisper.cpp itself detects on) is
+  the working path; `language_auto_still_transcribes` now asserts the text.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, RADV 780M; `cargo test -p neezer-desktop`):
+  - **Vulkan vs CPU**, 176 s of speech (`jfk.wav` × 16), `ggml-base`, best of two warm runs:
+    **Vulkan 57.8× real time (3.05 s) against CPU 11.6× (15.23 s), a 5.0× factor**, identical text
+    (the same lines as `--lang en`). The CPU fallback sentence quotes 5×, the largest measured
+    here (T2 saw 3.2–3.4× on shorter inputs).
+  - **0 underrun** while a real transcription ran: 10 s of playback rendered in real time through
+    the app's own engine (offline sink) during a **CPU** transcription of 176 s — the slower path,
+    the worst case for rule 1: transcription active on **1000/1000 samples** of the window,
+    **0** underrun.
+  - **the snapshot** a screen holds for the worst realistic state (six models, a download, a job,
+    six failures, the worker): **1 646 B** by `testmem`'s counting allocator (budget 16 KB; 258 B of
+    them are the failure sentences).
+  - **tests**: `cargo test --workspace --locked` green; `cargo test -p neezer-desktop` **363
+    passed, 0 failed, 9 ignored** (15 `wiring::transcribe`, 5 `screens::settings::transcribe`, the
+    panel's local case); `cargo test -p nz-transcribe` **68 lib + 8 acceptance** (the two
+    measurement benches — Vulkan/CPU and 0 underrun — are `--ignored`, their numbers above).
+  - **RSS** (release, Xvfb + private D-Bus, `/proc/<pid>/status`): **196 760 kB** at Accueil
+    against **196 616 kB** for `master`'s binary at the same screen (**+144 kB**); **199 616 kB**
+    on this page and **287 016 kB** at 2560×1600 (the window's own surfaces, D11/D12's number). The
+    feature holds a snapshot, not a model: the engine is another process.
+  - **looked at** at **1280×800**, **2560×1600** and with the **420 px** queue panel open: the
+    settings page with Vulkan detected, the models and their sizes, the priorities; the episode
+    panel showing a local transcript following the playhead; a job's card. Captures under
+    `docs/desktop/t4/`.
+- **Pitfalls found by building**: the service's `attach` dropped the runtime assignment in an
+  early-return edit, so every `spawn` went nowhere while the job card appeared — a click that
+  "does nothing" was a missing field, not a lane; the governor thread checked a GLOBAL stop flag
+  and a test-local service never joined (60 s hang), so the flag lives in `Shared`; an async
+  `Done` can beat the job it clears, so a test publishes the job before the command; `ElementId`
+  has no `From<(&str, &str)>` and `Toggle`/`Button` expose no `debug_selector` (D8a's pitfall
+  again); `models::choose` replaces a person's explicit small model with the ladder's best, which
+  `model_in` now refuses. **A dead child looked alive**: `ensure_child` answered "already running"
+  from a handle whose process had exited, and the next `local` command was written into a closed
+  pipe — the card sat at 0 % for minutes while an idle supervisor slept beside it. `ensure_child`
+  now `try_wait`s, the reader's EOF clears the child and its stdin, and a write failure publishes a
+  `control_channel` failure instead of vanishing. **`print_progress` was off**, so whisper's
+  `progress = N %` never reached the supervisor: `chunk_pct` was always 0 (the server heartbeat too).
+  It is on in `Engine::params`, and each new percent becomes a `Progress` event while the chunk
+  runs.
 
 ### P1 — Arch packaging and release (delivered 2026-11-16)
 

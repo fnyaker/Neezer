@@ -59,7 +59,7 @@ static WATCHING: AtomicBool = AtomicBool::new(false);
 
 pub fn body(screen: &mut Screen, _window: &mut Window, cx: &mut Context<Screen>) -> AnyElement {
     let state = screen.state.clone();
-    let service = transcribe::ensure(&state.read(cx));
+    let service = transcribe::ensure(state.read(cx));
     let snapshot = service.snapshot();
     // A standing probe is cheap (one child) and cached for five minutes; the
     // first paint of this page is what asks for it.
@@ -128,7 +128,11 @@ fn note_line(note: &str, cx: &mut Context<Screen>) -> AnyElement {
         .bg(theme::chrome(cx))
         .text_size(rems(0.75))
         .text_color(theme::text(cx))
-        .child(icon(IconName::Info).size(rems(1.)).text_color(theme::secondary(cx)))
+        .child(
+            icon(IconName::Info)
+                .size(rems(1.))
+                .text_color(theme::secondary(cx)),
+        )
         .child(div().flex_1().min_w_0().child(note.to_owned()))
         .into_any_element()
 }
@@ -145,9 +149,7 @@ fn engine_card(
         Engine::Vulkan { .. } => (IconName::Zap, theme::accent(cx)),
         Engine::Cpu { .. } => (IconName::Cpu, theme::warning(cx)),
         Engine::Probing => (IconName::Activity, theme::secondary(cx)),
-        Engine::Unknown | Engine::Unavailable { .. } => {
-            (IconName::CircleAlert, theme::danger(cx))
-        }
+        Engine::Unknown | Engine::Unavailable { .. } => (IconName::CircleAlert, theme::danger(cx)),
     };
     let mut card = card("transcribe-engine", cx)
         .child(card_title("Moteur", cx))
@@ -186,14 +188,15 @@ fn engine_card(
     } {
         card = card.child(value_line("Appareil", device.to_owned(), cx));
     }
-    if let Engine::Cpu { cause } = engine {
-        if *cause == FallbackCause::UserForcedCpu {
-            card = card.child(hint(
-                "Le processeur est forcé par le réglage ci-dessous. Désactivez-le pour \
-                 réessayer le GPU : whisper.cpp recompile ses nuances au premier passage.",
-                cx,
-            ));
-        }
+    if let Engine::Cpu {
+        cause: FallbackCause::UserForcedCpu,
+    } = engine
+    {
+        card = card.child(hint(
+            "Le processeur est forcé par le réglage ci-dessous. Désactivez-le pour réessayer \
+             le GPU : whisper.cpp recompile ses nuances au premier passage.",
+            cx,
+        ));
     }
     card.child(hint(
         "La transcription tourne dans un processus séparé, à priorité basse : elle ne prend \
@@ -398,8 +401,13 @@ fn model_row(
             .child({
                 let service = service.clone();
                 let name = row.name;
-                button("model-redownload", "Retélécharger", ButtonVariant::Secondary, cx)
-                    .on_click(cx.listener(move |_, _, _, _| service.download_model(name)))
+                button(
+                    "model-redownload",
+                    "Retélécharger",
+                    ButtonVariant::Secondary,
+                    cx,
+                )
+                .on_click(cx.listener(move |_, _, _, _| service.download_model(name)))
             });
     }
 
@@ -437,7 +445,11 @@ fn state_chip(label: &str, on: bool, cx: &mut Context<Screen>) -> AnyElement {
         .h(rems(1.5))
         .px(rems(0.375))
         .border_1()
-        .border_color(if on { theme::accent(cx) } else { theme::border(cx) })
+        .border_color(if on {
+            theme::accent(cx)
+        } else {
+            theme::border(cx)
+        })
         .text_size(rems(0.6875))
         .text_color(if on {
             theme::accent(cx)
@@ -490,7 +502,10 @@ fn preferences_card(
         let service = service.clone();
         languages = languages.child(
             toggle(
-                ("transcribe-language", LANGUAGES.iter().position(|c| *c == code).unwrap_or(0)),
+                (
+                    "transcribe-language",
+                    LANGUAGES.iter().position(|c| *c == code).unwrap_or(0),
+                ),
                 language_label(code),
                 selected,
                 cx,
@@ -559,19 +574,12 @@ fn preferences_card(
         let selected = settings.priority.id() == id;
         let service = service.clone();
         priorities = priorities.child(
-            toggle(
-                format!("transcribe-priority-{id}"),
-                label,
-                selected,
-                cx,
-            )
-            .on_click(cx.listener(move |_, _, _, cx| {
-                service.set_setting(
-                    transcribe::PRIORITY_KEY,
-                    &serde_json::Value::from(id),
-                );
-                cx.notify();
-            })),
+            toggle(format!("transcribe-priority-{id}"), label, selected, cx).on_click(cx.listener(
+                move |_, _, _, cx| {
+                    service.set_setting(transcribe::PRIORITY_KEY, &serde_json::Value::from(id));
+                    cx.notify();
+                },
+            )),
         );
         let _ = hint;
     }
@@ -642,7 +650,9 @@ fn job_card(
         }
         Phase::Transcribing => (
             "Transcription sur cet ordinateur",
-            job.percent().map(|percent| percent as f32 / 100.0).unwrap_or(0.0),
+            job.percent()
+                .map(|percent| percent as f32 / 100.0)
+                .unwrap_or(0.0),
             job.progress_label(),
         ),
         Phase::Finishing => (
@@ -666,35 +676,39 @@ fn job_card(
         card = card.child(value_line("Processeur utilisé", label, cx));
     }
     if let Some(paused) = job.paused {
-        card = card
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(rems(0.5))
-                    .text_size(rems(0.75))
-                    .text_color(theme::warning(cx))
-                    .child(icon(IconName::Pause).size(rems(1.)))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(rems(0.125))
-                            .child(SharedString::from(paused.label_fr()))
-                            .child(
-                                div()
-                                    .text_size(rems(0.6875))
-                                    .text_color(theme::secondary(cx))
-                                    .child(paused.explain_fr()),
-                            ),
-                    ),
-            );
+        card = card.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(rems(0.5))
+                .text_size(rems(0.75))
+                .text_color(theme::warning(cx))
+                .child(icon(IconName::Pause).size(rems(1.)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(rems(0.125))
+                        .child(SharedString::from(paused.label_fr()))
+                        .child(
+                            div()
+                                .text_size(rems(0.6875))
+                                .text_color(theme::secondary(cx))
+                                .child(paused.explain_fr()),
+                        ),
+                ),
+        );
     }
     let service = service.clone();
     card = card.child(
         div().flex().justify_start().child(
-            button("transcribe-stop-job", "Arrêter", ButtonVariant::Secondary, cx)
-                .on_click(cx.listener(move |_, _, _, _| service.stop_local())),
+            button(
+                "transcribe-stop-job",
+                "Arrêter",
+                ButtonVariant::Secondary,
+                cx,
+            )
+            .on_click(cx.listener(move |_, _, _, _| service.stop_local())),
         ),
     );
     Some(
@@ -721,7 +735,11 @@ fn failures_card(
             .w_full()
             .min_w_0()
             .py(rems(0.25))
-            .child(icon(IconName::TriangleAlert).size(rems(1.)).text_color(theme::danger(cx)))
+            .child(
+                icon(IconName::TriangleAlert)
+                    .size(rems(1.))
+                    .text_color(theme::danger(cx)),
+            )
             .child(
                 div()
                     .flex()
@@ -747,10 +765,13 @@ fn failures_card(
             let service = service.clone();
             let episode = failure.episode.clone();
             row = row.child(
-                button("transcribe-retry-job", "Réessayer", ButtonVariant::Secondary, cx)
-                    .on_click(cx.listener(move |_, _, _, _| {
-                        service.start_local(&episode, None, 0)
-                    })),
+                button(
+                    "transcribe-retry-job",
+                    "Réessayer",
+                    ButtonVariant::Secondary,
+                    cx,
+                )
+                .on_click(cx.listener(move |_, _, _, _| service.start_local(&episode, None, 0))),
             );
         }
         card = card.child(row);
@@ -836,7 +857,11 @@ fn worker_card(
             div().flex().justify_start().child(
                 button(
                     "transcribe-revoke",
-                    if enrolling { "Révocation…" } else { "Révoquer cet ordinateur" },
+                    if enrolling {
+                        "Révocation…"
+                    } else {
+                        "Révoquer cet ordinateur"
+                    },
                     ButtonVariant::Danger,
                     cx,
                 )
@@ -852,7 +877,11 @@ fn worker_card(
                 div().flex().justify_start().child(
                     button(
                         "transcribe-enrol",
-                        if enrolling { "Enrôlement…" } else { "Enrôler cet ordinateur" },
+                        if enrolling {
+                            "Enrôlement…"
+                        } else {
+                            "Enrôler cet ordinateur"
+                        },
                         ButtonVariant::Primary,
                         cx,
                     )
@@ -879,7 +908,7 @@ mod tests {
     use crate::widgets::transcript_panel::{LANGUAGES, language_label};
     use crate::wiring::transcribe::{Priority, bytes_label};
     use nz_transcribe::models;
-    
+
     /// Every priority the enum names has a chip, in the same order, and the first
     /// is the default: a chip nobody can select, or a stored id with no chip, is
     /// a setting that silently does nothing.
@@ -915,7 +944,10 @@ mod tests {
     fn sizes_and_ids_read_in_french() {
         assert_eq!(bytes_label(1024), "1,0 ko");
         assert_eq!(bytes_label(874_188_075), "833,7 Mo");
-        assert_eq!(short_id("11111111-2222-3333-4444-555555555555"), "11111111…");
+        assert_eq!(
+            short_id("11111111-2222-3333-4444-555555555555"),
+            "11111111…"
+        );
         assert_eq!(short_id("court"), "court");
     }
 
@@ -924,7 +956,11 @@ mod tests {
     #[test]
     fn the_screen_lists_the_pinned_files() {
         assert_eq!(models::FILES.len(), 6);
-        assert!(models::FILES.iter().any(|file| file.name == models::TURBO_Q8));
+        assert!(
+            models::FILES
+                .iter()
+                .any(|file| file.name == models::TURBO_Q8)
+        );
         assert!(models::FILES.iter().any(|file| file.name == models::VAD));
     }
 }

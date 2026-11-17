@@ -45,9 +45,9 @@ use nz_model::{EpisodeTranscript, TranscriptSegment};
 
 use crate::state::AppState;
 use crate::theme;
-use crate::wiring::transcribe;
 use crate::widgets::card::encode;
 use crate::widgets::track_list::duration_label;
+use crate::wiring::transcribe;
 
 /// Lines per page: the server's own default upper bound (`PAGE_DEFAULT` is 200
 /// in `neezer/webui/transcribe.py`).
@@ -928,7 +928,7 @@ pub fn view<V: Render>(
     panel.rebuild_sizes();
     // This machine's reader and this machine's job: installed and sampled once
     // per paint, never a SQLite read per row (rule 4).
-    let transcription = transcribe::ensure(&state.read(cx)).snapshot();
+    let transcription = transcribe::ensure(state.read(cx)).snapshot();
     panel.refresh_local();
     let local_job = transcription
         .job
@@ -950,14 +950,7 @@ pub fn view<V: Render>(
         .min_w_0()
         .gap(rems(0.5));
 
-    if let Some(card) = local_block(
-        panel,
-        &transcription,
-        local_job.as_ref(),
-        resume,
-        state,
-        cx,
-    ) {
+    if let Some(card) = local_block(panel, &transcription, local_job.as_ref(), resume, state, cx) {
         column = column.child(card);
     }
 
@@ -1046,16 +1039,17 @@ pub fn view<V: Render>(
             .min_h(px(ROW_HEIGHT * 8.0))
             .w_full()
             .child(segments(
-        panel,
-        entity,
-        active,
-        sizes,
-        &scroll,
-        cx,
-        ask.clone(),
-        term,
-        should_scroll,
-    )));
+                panel,
+                entity,
+                active,
+                sizes,
+                &scroll,
+                cx,
+                ask.clone(),
+                term,
+                should_scroll,
+            )),
+    );
 
     if panel.total > panel.limit || panel.offset > 0 {
         column = column.child(pager(panel, cx, ask));
@@ -1125,7 +1119,11 @@ fn local_block<V: Render>(
                     .flex()
                     .items_center()
                     .gap(rems(0.375))
-                    .child(icon(IconName::Cpu).size(rems(1.)).text_color(theme::accent(cx)))
+                    .child(
+                        icon(IconName::Cpu)
+                            .size(rems(1.))
+                            .text_color(theme::accent(cx)),
+                    )
                     .child(
                         div()
                             .text_size(rems(0.75))
@@ -1201,7 +1199,10 @@ fn local_block<V: Render>(
         return None;
     }
     let has_model = transcription.models.iter().any(|row| row.chosen);
-    let busy_elsewhere = transcription.job.as_ref().filter(|job| job.episode != panel.episode);
+    let busy_elsewhere = transcription
+        .job
+        .as_ref()
+        .filter(|job| job.episode != panel.episode);
     let mut card = div()
         .id("transcript-local")
         .debug_selector(|| "transcript-local".to_owned())
@@ -1220,7 +1221,11 @@ fn local_block<V: Render>(
                 .flex()
                 .items_center()
                 .gap(rems(0.375))
-                .child(icon(IconName::Cpu).size(rems(1.)).text_color(theme::secondary(cx)))
+                .child(
+                    icon(IconName::Cpu)
+                        .size(rems(1.))
+                        .text_color(theme::secondary(cx)),
+                )
                 .child(
                     div()
                         .text_size(rems(0.75))
@@ -1303,12 +1308,16 @@ fn local_block<V: Render>(
     card = card.child(
         button(
             "transcript-local-start",
-            if resume_ms.is_some() { "Reprendre" } else { "Transcrire cet épisode" },
+            if resume_ms.is_some() {
+                "Reprendre"
+            } else {
+                "Transcrire cet épisode"
+            },
             ButtonVariant::Primary,
             cx,
         )
         .on_click(cx.listener(move |_, _, _, cx| {
-            let service = transcribe::ensure(&state.read(cx));
+            let service = transcribe::ensure(state.read(cx));
             service.start_local(&episode, None, duration_ms);
         })),
     );
@@ -2291,17 +2300,16 @@ mod tests {
         panel.status = "local".into();
         assert!(panel.is_local());
         assert!(panel.loaded());
-        assert!(panel.covers(2_000.0), "the whole episode is on this machine");
+        assert!(
+            panel.covers(2_000.0),
+            "the whole episode is on this machine"
+        );
         assert!(panel.follow_to(12.5));
         assert_eq!(panel.active, Some(1));
         assert_eq!(panel.at(0.5), Some(0));
         // A search runs over the local lines, accents folded.
-        assert!(
-            panel
-                .search
-                .locally(&panel.lines().to_vec(), "monde", true)
-                .is_some()
-        );
+        let lines = panel.lines().to_vec();
+        assert!(panel.search.locally(&lines, "monde", true).is_some());
         assert_eq!(panel.search.hits.len(), 1);
         assert_eq!(panel.search.hits[0].text, "le monde");
         assert!(panel.search.local);
