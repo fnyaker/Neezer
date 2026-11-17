@@ -17,6 +17,17 @@ use nz_model::{
     TranscriptSearch,
 };
 
+/// `POST /api/podcast/<id>/auto_archive`: how many episodes the switch queued,
+/// and the show's own payload untouched (`serde(flatten)` keeps every field a
+/// screen may read next, typed by `nz-model` where it reads one).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PodcastAutoArchive {
+    #[serde(default)]
+    pub queued: u32,
+    #[serde(flatten)]
+    pub show: serde_json::Map<String, serde_json::Value>,
+}
+
 impl Api {
     /// `GET /api/podcasts` — the shows this person follows.
     pub async fn podcasts(&self) -> Result<PodcastList, ApiError> {
@@ -68,10 +79,20 @@ impl Api {
     }
 
     /// `POST /api/podcast/<id>/auto_archive` — archive new episodes of this
-    /// show as they appear.
-    pub async fn set_podcast_auto_archive(&self, id: &str, on: bool) -> Result<(), ApiError> {
+    /// show as they appear, and queue the ones already listed.
+    ///
+    /// The answer is the show's payload PLUS `queued` (`neezer/webui`'s
+    /// `podcast_auto_archive` returns `{**_channel(c), "queued": n}`, `n` from
+    /// `backfill.archive_show`), and the SPA says « N épisodes en file » with it.
+    /// This function dropped the body (`send_none`), so a screen could only
+    /// re-read the whole show to count what it had just queued.
+    pub async fn set_podcast_auto_archive(
+        &self,
+        id: &str,
+        on: bool,
+    ) -> Result<PodcastAutoArchive, ApiError> {
         let path = format!("/podcast/{}/auto_archive", encode(id));
-        self.send_none(Method::POST, &path, &serde_json::json!({ "on": on }))
+        self.send_json(Method::POST, &path, &serde_json::json!({ "on": on }))
             .await
     }
 

@@ -74,6 +74,10 @@ fixtures! {
     "album" => AlbumPage,
     "search" => SearchResults,
     "lyrics" => Lyrics,
+    "lyrics-synced" => Lyrics,
+    "lyrics-plain" => Lyrics,
+    "genre-track" => GenreTrack,
+    "genre-track-tagged" => GenreTrack,
     "gain" => Gain,
     "audio-edges" => AudioEdges,
     "gains" => Gains,
@@ -293,7 +297,17 @@ fn shrink(value: &mut Value) {
             }
         }
         Value::Array(items) => {
-            items.truncate(1);
+            // A list of ROWS keeps one row (the models are tolerant about how
+            // many). A fixed-arity array is a value, not a list — the server
+            // sends genre scores as `[label, score, head, proto]` tuples — and
+            // truncating one asks a different question ("a 1-tuple"), so its
+            // elements are visited and its length is left alone.
+            let positional = items
+                .first()
+                .is_some_and(|first| !matches!(first, Value::Object(_) | Value::Array(_)));
+            if !positional {
+                items.truncate(1);
+            }
             for item in items.iter_mut() {
                 shrink(item);
             }

@@ -54,6 +54,13 @@ SEED = [
     "--big-playlist", "200",
     "--podcasts",
     "--recap",
+    # The two shapes the fixture set answered EMPTY, which is how two wrong
+    # `nz-model` types survived: `/api/lyrics/<id>` always said `{"lyrics": null}`
+    # and `/api/genre/candidates` always `[]`. These seed a real `.lrc` sidecar and
+    # a few labelled tracks with embeddings, so the object (and the ranked tuple
+    # `[label, score, head, proto]`) is what gets captured.
+    "--seed-lyrics",
+    "--seed-genre-scores",
 ]
 
 # How long the bench may take to fill its database and answer READY.
@@ -230,6 +237,25 @@ def routes(ids):
         # playlist and favourites fixtures prove.
         ("search", "/search?q=night", "GET", None, False),
         ("lyrics", f"/lyrics/{ids['track']}", "GET", None, False),
+        # The two REAL answers: an archived track with a synced sidecar, another
+        # with plain text (the SPA shows it unsynced).
+        (
+            "lyrics-synced",
+            f"/lyrics/{ids['lyrics'][0]['ref']}",
+            "GET",
+            None,
+            False,
+        ),
+        ("lyrics-plain", f"/lyrics/{ids['lyrics'][1]['ref']}", "GET", None, False),
+        # `/genre/track/<id>` on a LABELLED track: the tag arrives as the OBJECT
+        # `_tag_json` writes, not its name.
+        (
+            "genre-track-tagged",
+            f"/genre/track/{ids['genre']['labelled'][0]['ref']}",
+            "GET",
+            None,
+            False,
+        ),
         ("gain", f"/gain/{ids['track']}", "GET", None, False),
         ("audio-edges", f"/audio/edges/{ids['track']}?db=-45", "GET", None, False),
         ("gains", "/gains", "POST", {"ids": tracks}, False),
@@ -321,7 +347,9 @@ def routes(ids):
         ("genre-candidates", "/genre/candidates?limit=5", "GET", None, False),
         ("genre-labelled", "/genre/labelled", "GET", None, False),
         ("genre-pool", "/genre/pool?limit=5", "GET", None, False),
-        ("genre-track", f"/genre/track/{tracks[0]}", "GET", None, False),
+        # The track the genre seed gave a vector: a REAL ranking
+        # (`[[label, score, head, proto]]`), where `tracks[0]` has none.
+        ("genre-track", f"/genre/track/{ids['genre']['ref']}", "GET", None, False),
         ("genre-model", "/genre/model", "GET", None, False),
         ("genre-relabel", "/genre/relabel", "GET", None, False),
         ("genre-embed", "/genre/embed", "GET", None, False),

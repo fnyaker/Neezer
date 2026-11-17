@@ -1046,9 +1046,10 @@ impl AppState {
     fn on_restored(&mut self, result: Result<Box<Me>, ApiError>, cx: &mut Context<Self>) {
         match result {
             Ok(me) => {
+                let landing = landing_route(&me);
                 self.auth = Auth::LoggedIn { me };
                 self.session_cause = None;
-                self.nav.reset(Route::Home);
+                self.nav.reset(landing);
                 self.start_audio();
                 self.start_offline();
                 // Remote control (lot D15a): the CONTROLLER when this session is
@@ -1080,10 +1081,11 @@ impl AppState {
         self.login.pending = false;
         match result {
             Ok(me) => {
+                let landing = landing_route(&me);
                 self.login.error = None;
                 self.session_cause = None;
                 self.auth = Auth::LoggedIn { me };
-                self.nav.reset(Route::Home);
+                self.nav.reset(landing);
                 self.start_audio();
                 self.start_offline();
                 // Remote control (lot D15a): the CONTROLLER when this session is
@@ -1456,6 +1458,30 @@ pub fn entry_from_track(track: &Track) -> Entry {
             cover: track.album.cover.clone(),
         }),
     }
+}
+
+/// Where a session lands once the server has confirmed it.
+///
+/// The SPA's own rule (`webapp/src/App.svelte`: `onboardingRequired = !REMOTE &&
+/// stepFor($user.onboarding) !== "done"`, `lib/onboarding.js#stepFor`), and
+/// nothing else leads there: a NEW account — invited, or just created — has
+/// tastes to pick before the library means anything, and the shell used to open
+/// Home and leave `Route::Onboarding` reachable by no key at all. A
+/// remote-control loan never onboards: it drives somebody else's session.
+pub fn landing_route(me: &Me) -> Route {
+    if me.remote.is_none() && onboarding_pending(me.user.onboarding.as_deref()) {
+        Route::Onboarding
+    } else {
+        Route::Home
+    }
+}
+
+/// `stepFor`'s two unfinished steps: `"artists"` and `"account"`. Anything else
+/// (including no value at all) is a finished account — an older server that
+/// never grew the field must land on Home, not on an onboarding it cannot
+/// complete.
+pub fn onboarding_pending(step: Option<&str>) -> bool {
+    matches!(step, Some("artists" | "account"))
 }
 
 /// The server's Quality for an `Entry`'s archived state: what a screen asks
@@ -2127,6 +2153,50 @@ mod tests {
         );
         assert!(engine.fade().enabled, "the saved crossfade is on");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **A new account lands on the onboarding**, from the SPA's own rule
+    /// (`webapp/src/App.svelte#onboardingRequired`, `lib/onboarding.js#stepFor`):
+    /// `"artists"` and `"account"` are unfinished, anything else is done. Before
+    /// this, `Route::Onboarding` (D12's « Bienvenue » screen) existed and no key,
+    /// click or login ever reached it.
+    ///
+    /// A remote-control loan never onboards — it drives somebody else's session,
+    /// and an account whose field is absent (an older server) must land on Home,
+    /// not on a step it cannot complete.
+    #[test]
+    fn a_new_account_lands_on_the_onboarding_and_a_finished_one_on_home() {
+        fn me(onboarding: Option<&str>, remote: bool) -> Me {
+            Me {
+                user: nz_model::User {
+                    id: nz_model::UserId::new("u1"),
+                    name: "bench".to_owned(),
+                    onboarding: onboarding.map(str::to_owned),
+                    ..nz_model::User::default()
+                },
+                remote: remote.then(nz_model::RemoteGrant::default),
+            }
+        }
+        for step in ["artists", "account"] {
+            assert_eq!(
+                landing_route(&me(Some(step), false)),
+                Route::Onboarding,
+                "{step} is an unfinished onboarding"
+            );
+            assert_eq!(
+                landing_route(&me(Some(step), true)),
+                Route::Home,
+                "a remote-control loan never onboards"
+            );
+        }
+        for step in [Some("done"), None] {
+            assert_eq!(landing_route(&me(step, false)), Route::Home, "{step:?}");
+        }
+        assert!(onboarding_pending(Some("artists")));
+        assert!(onboarding_pending(Some("account")));
+        assert!(!onboarding_pending(Some("done")));
+        assert!(!onboarding_pending(None));
+        assert!(!onboarding_pending(Some("n'importe quoi")));
     }
 
     /// The trim setting's own value: on by default like the web player, written

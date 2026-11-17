@@ -199,7 +199,7 @@ enum Msg {
     Markers(String, Box<Result<ShowMarkers, ApiError>>),
     Chapters(String, Box<Result<EpisodeChapters, ApiError>>),
     Transcribe(Box<Result<TranscribeSettings, ApiError>>),
-    AutoArchive(Box<Result<(), ApiError>>),
+    AutoArchive(Box<Result<nz_api::PodcastAutoArchive, ApiError>>),
     ShowTranscribe(Box<Result<serde_json::Value, ApiError>>),
     Batch {
         queued: u32,
@@ -651,20 +651,42 @@ impl Screen {
             Msg::AutoArchive(result) => {
                 self.auto_busy = false;
                 match *result {
-                    Ok(()) => {
+                    Ok(answer) => {
                         if self.show().is_some_and(|show| show.auto_archive) {
+                            // The answer IS the count (`{**canal, "queued": n}`,
+                            // `backfill.archive_show`): the SPA says how many
+                            // episodes went into the queue, and a generic
+                            // « Archivage lancé » next to a re-read was D11's
+                            // workaround for a body `nz-api` used to drop.
                             self.notice(
                                 ToastKind::Info,
-                                "Archivage des épisodes manquants lancé",
+                                match answer.queued {
+                                    0 => "Archivage activé : rien à mettre en file".to_owned(),
+                                    1 => "Archivage activé : 1 épisode en file".to_owned(),
+                                    n => format!("Archivage activé : {n} épisodes en file"),
+                                },
                                 cx,
                             );
-                            self.archiving = true;
+                            self.archiving = answer.queued > 0;
                             self.stalls = 0;
-                            self.arm_poll(cx);
+                            if self.archiving {
+                                self.arm_poll(cx);
+                            }
+                        } else {
+                            self.archiving = false;
                         }
-                        // `nz-api`'s `set_podcast_auto_archive` drops the answer's
-                        // body (the queued count): one re-read instead of a guess.
-                        self.load(cx);
+                        // The channel payload comes with the count, so the
+                        // switch and the counters are already right; no re-read.
+                        if let Some(page) = self.page.ready().cloned()
+                            && let Some(auto) = answer
+                                .show
+                                .get("auto_archive")
+                                .and_then(|value| value.as_bool())
+                        {
+                            let mut show = page.show.clone();
+                            show.auto_archive = auto;
+                            self.page = Phase::Ready(PodcastPage { show, ..page });
+                        }
                     }
                     Err(error) => {
                         if let Some(show) = self.show().cloned()

@@ -636,6 +636,131 @@ def seed_admin(app, users, invite_count):
         }
 
 
+def _silent_wav(path, seconds=1):
+    """A silent WAV: the routes that matter here only check that the archived
+    file exists (the bench answers /api/stream itself)."""
+    import wave
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(1)
+        handle.setframerate(8000)
+        handle.writeframes(b"\x80" * 8000 * max(1, seconds))
+    return path
+
+
+def _archived(app, ref, stem, seconds=1, touch=True):
+    """Point the row named by `ref` (a Deezer id) at a real file under `stem`,
+    and hand the ROW back re-read: `save_embedding` and `read_sidecar` derive
+    their sidecar from `track.path`, and a stale object still holds the old one.
+
+    `touch` stamps `last_modification`, which is what `/genre/candidates` scans
+    and what makes a row a LOCAL search hit: the lyrics seed leaves it alone, so
+    it adds no search result to the fixtures other lots pinned.
+    """
+    import uuid as _uuid
+
+    from neezer.db import Track
+    from neezer.deezer import ids as dzids
+
+    path = _silent_wav(stem + ".wav", seconds=seconds)
+    key = dzids.track_uuid(str(ref))
+    stamp = 1700000000 if touch else 0
+    Track.update(path=path, last_modification=stamp).where(Track.id == key).execute()
+    row = Track.get_or_none(Track.id == key)
+    assert row is not None and row.path == path, f"archivage impossible pour {ref}"
+    assert _uuid.UUID(str(row.id))  # the row id is a UUID, never a Deezer number
+    return row
+
+
+def seed_lyrics(app, ids):
+    """Two archived tracks WITH a `.lrc` sidecar, so `/api/lyrics/<id>` answers
+
+        {"lyrics": {"text": ..., "synced": [{"time", "text"}], "source": "archive"}}
+
+    and, for the second one, the plain-text variant (`synced: []`). The fixture
+    this route had before answered `null` (nothing archived), which is how
+    `nz_model::Lyrics` kept declaring the words as a bare string: the object was
+    never seen. Pure stdlib: a WAV written here, no ffmpeg, no LRCLIB.
+
+    The two refs are chosen away from the genre seed's (a second seed that
+    archives the same row would silently repoint it).
+    """
+    with app.app_context():
+        archive = app.config["DEEZER"]["archive_dir"]
+        specs = [
+            ("synced", "[00:01.50]Premier vers\n[00:03.25]Deuxième vers\n[00:07.00]Dernier vers\n"),
+            ("plain", "Des paroles sans temps\nDeuxième ligne\n"),
+        ]
+        out = []
+        for index, (kind, text) in enumerate(specs):
+            ref = ids["ids"][index]
+            stem = os.path.join(archive, f"lyrics-{kind}")
+            row = _archived(app, ref, stem, seconds=30, touch=False)
+            with open(stem + ".lrc", "w", encoding="utf-8") as handle:
+                handle.write(text)
+            out.append({"id": str(row.id), "ref": str(ref), "kind": kind})
+        return out
+
+
+def seed_genre_scores(app, ids):
+    """Vectors for a few tracks and three hand labels, so `/genre/candidates` and
+    `/genre/track/<id>` answer a RANKED list instead of `[]`.
+
+    `genre.rank_scores` needs prototypes, and prototypes come from labelled tracks
+    that have an embedding (`genre.centroids` -> `_labelled_rows`): no trained
+    head is required, so this writes v2-width float16 sidecars (the shape
+    `embedding.common_part` reads) and the `GenreTag`/`TrackTag` rows. The
+    fixture this route had before was `{"candidates": []}`, which is how
+    `nz_model::GenreScore` kept declaring an OBJECT where the server sends the
+    tuple `[label, score, head, proto]`.
+
+    `/genre/candidates` only scans rows with `last_modification > 0` (a track the
+    library has touched), so the archived rows get that stamp too.
+    """
+    from neezer.db import GenreTag, TrackTag
+    from neezer.deezer import embedding as emb
+
+    with app.app_context():
+        archive = app.config["DEEZER"]["archive_dir"]
+        width = emb.V2_EMBED_DIM
+        third = width // 3
+
+        def vector(weights, tilt=0.0):
+            """Three blocks, one per genre, so the prototypes point apart; `tilt`
+            nudges a target's vector so its ranking is not an exact tie."""
+            vec = [0.0] * width
+            for block, weight in enumerate(weights):
+                for i in range(block * third, (block + 1) * third):
+                    vec[i] = weight / max(1, third) ** 0.5 + tilt * ((i % 7) - 3) * 0.0001
+            return vec
+
+        blocks = {
+            "Hardtek": (0.9, 0.1, 0.1),
+            "Ambient": (0.1, 0.9, 0.1),
+            "Techno": (0.1, 0.1, 0.9),
+        }
+        labelled = []
+        # 3, 4, 5: the lyrics seed owns 0 and 1.
+        for index, (name, weights) in enumerate(blocks.items()):
+            ref = ids["ids"][3 + index]
+            row = _archived(app, ref, os.path.join(archive, f"genre-{index}"))
+            tag, _ = GenreTag.get_or_create(
+                name=name, defaults={"color": None, "archetype": None}
+            )
+            TrackTag.get_or_create(track=row, tag=tag)
+            assert emb.save_embedding(row, vector(weights)), f"embedding non écrit pour {name}"
+            labelled.append({"name": name, "ref": str(ref), "scores": 0})
+
+        # The fixture's own track: an embedding, untagged, so `/genre/track/<id>`
+        # ranks the vocabulary for it and `/genre/candidates` lists it.
+        ref = ids["ids"][6]
+        target = _archived(app, ref, os.path.join(archive, "genre-target"))
+        assert emb.save_embedding(target, vector((0.5, 0.3, 0.2), tilt=1.0)), "embedding non écrit"
+        return {"labelled": labelled, "track": str(target.id), "ref": str(ref)}
+
+
 def seed_podcasts(app):
     """A show with two scanned episodes, a ready transcript, a running one.
 
@@ -952,6 +1077,19 @@ def main():
         "failed one, and expose the transcription engine as external",
     )
     ap.add_argument(
+        "--seed-lyrics",
+        action="store_true",
+        help="archive two tracks with a .lrc sidecar (one synced, one plain), so "
+        "/api/lyrics/<id> answers the OBJECT every player reads instead of null",
+    )
+    ap.add_argument(
+        "--seed-genre-scores",
+        action="store_true",
+        help="label three tracks and give four tracks a v2 embedding, so "
+        "/api/genre/candidates and /api/genre/track/<id> answer a ranked list "
+        "([[label, score, head, proto]]) instead of []",
+    )
+    ap.add_argument(
         "--seed-provider-account",
         action="store_true",
         help="link one Deezer provider account to 'bench' so /api/me/accounts "
@@ -1026,6 +1164,12 @@ def main():
     if args.podcasts:
         print("seeding podcasts…", file=sys.stderr)
         ids["podcast"] = seed_podcasts(app)
+    if args.seed_lyrics:
+        print("seeding lyrics…", file=sys.stderr)
+        ids["lyrics"] = seed_lyrics(app, ids)
+    if args.seed_genre_scores:
+        print("seeding genre scores…", file=sys.stderr)
+        ids["genre"] = seed_genre_scores(app, ids)
     if args.seed_provider_account:
         print("seeding a provider account…", file=sys.stderr)
         ids["account"] = seed_provider_account(app)
