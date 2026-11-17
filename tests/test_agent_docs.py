@@ -58,7 +58,13 @@ class AgentDocsTestCase(unittest.TestCase):
         self.assertEqual(linked - present, set(), "the docs index points at no file")
 
     def test_relative_links_between_area_files_resolve(self):
-        for name in os.listdir(AGENTS_DIR):
+        for name in sorted(os.listdir(AGENTS_DIR)):
+            # The folder also holds the lots' screenshots (`docs/agents/screenshots/
+            # <lot>/`, D16's and later), and a directory is not a note: only the
+            # Markdown files are read (`open()` on a directory raised
+            # `IsADirectoryError`, measured on D16's merge).
+            if not name.endswith(".md"):
+                continue
             text = self.read("docs", "agents", name)
             for target in re.findall(r"\]\(([^)#:]+\.md)\)", text):
                 path = os.path.normpath(os.path.join(AGENTS_DIR, target))
