@@ -18,6 +18,23 @@
 //! The client sends neither `Origin` nor `Sec-Fetch-Site`: the server's
 //! `same_origin_guard` lets a request without both through, and those headers
 //! exist to stop BROWSERS on other origins. Never forge them.
+//!
+//! Four rules the PHONE needs and the desktop gets for free (`Net.kt`,
+//! `Ssl.kt`; SC3):
+//!
+//! - **A redirect is followed by hand** ([`Api::attempt`]), never by reqwest:
+//!   each hop is checked before a socket opens, so a server (or anything in the
+//!   path) cannot send the session somewhere else or downgrade it to plaintext.
+//!   Cleartext is allowed to the configured origin and to nobody else.
+//! - **The session cookie goes to the configured origin only** ([`OriginJar`]),
+//!   before a redirect and after one. The jar itself is still origin-keyed;
+//!   this is the second lock on the same door.
+//! - **A pinned leaf may pass where the platform's store does not**
+//!   ([`crate::cert`]): one extra certificate, per origin, and the desktop —
+//!   which never pins one — is built exactly as it was.
+//! - **Every request is counted per screen tag** ([`Api::with_tag`],
+//!   [`Api::stats`]), because rule 3 asks a screen's cost in requests and bytes,
+//!   counted, never timed.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -26,15 +43,18 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use reqwest::Method;
+use reqwest::cookie::CookieStore;
 use reqwest::header::{HeaderMap, RETRY_AFTER};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 
 use crate::cache_trait::{NoCache, ResponseCache, is_cacheable};
+use crate::cert::{PinState, pinned_client_config};
 use crate::error::{ApiError, MAX_GET_ATTEMPTS, backoff};
 use crate::lanes::{Gates, Lane, bulk_cap_from_stream};
 use crate::session::SessionJar;
+use crate::stats::{Stats, TAG_NONE, TagStats};
 
 pub use nz_model::{Quality, StreamReady, TrackId};
 
@@ -120,6 +140,10 @@ pub const BACKGROUND_HEADER: &str = "X-NS-Background";
 pub const NO_RETRY_HEADER: &str = "X-NS-Error";
 /// Where the server says an earlier stream actually began (`?start=`).
 pub const START_HEADER: &str = "X-NS-Start";
+/// How many redirect hops one request may take before it is refused. The same
+/// ten reqwest's own policy used, and the reason it is hand-followed: a hop is
+/// checked (`Api::hop`) and counted before a socket opens.
+pub const MAX_REDIRECTS: usize = 10;
 
 const USER_AGENT: &str = concat!("neezer-desktop/", env!("CARGO_PKG_VERSION"));
 
@@ -168,6 +192,11 @@ pub struct StreamResponse {
     response: reqwest::Response,
     gates: Arc<Gates>,
     lane: Lane,
+    /// The counters this body's bytes belong to, and the tag they count under:
+    /// a streamed FLAC is the largest thing a screen ever costs, so it is
+    /// counted where it arrives ([`StreamResponse::chunk`]).
+    stats: Arc<Stats>,
+    tag: String,
 }
 
 impl std::fmt::Debug for StreamResponse {
@@ -210,6 +239,7 @@ impl StreamResponse {
         match self.response.chunk().await {
             Ok(Some(bytes)) => {
                 let len = bytes.len() as u64;
+                self.stats.bytes_in(&self.tag, len);
                 if self.lane == Lane::Bulk {
                     self.gates.throttle(len).await;
                 }
@@ -224,6 +254,13 @@ impl StreamResponse {
 }
 
 /// The HTTP client of the app.
+///
+/// Cheap to CLONE, and every clone shares one state: the session jar, the lane
+/// gates, the counters and the pin. That is what lets a screen say
+/// `api.with_tag("home")` and get a client whose requests are counted as the
+/// home screen's without a second connection pool, a second cookie or a second
+/// offline copy.
+#[derive(Clone)]
 pub struct Api {
     base: String,
     base_url: reqwest::Url,
@@ -235,11 +272,19 @@ pub struct Api {
     jar: Arc<SessionJar>,
     gates: Arc<Gates>,
     cache: Arc<dyn ResponseCache>,
-    owner: RwLock<Option<String>>,
+    owner: Arc<RwLock<Option<String>>>,
     online: watch::Sender<bool>,
-    caching: AtomicBool,
-    jitter: AtomicU64,
+    caching: Arc<AtomicBool>,
+    jitter: Arc<AtomicU64>,
     jitter_seed: u64,
+    /// What this clone counts under: a screen's tag, [`TAG_NONE`] when the
+    /// client was never tagged (`crate::stats`).
+    tag: String,
+    stats: Arc<Stats>,
+    /// The trust-on-first-use pin, when this client installed one
+    /// ([`ApiBuilder::pinned_leaf_sha256`]). `None` on the desktop: no pin, no
+    /// custom TLS verifier, exactly the client it always built.
+    pin: Option<Arc<PinState>>,
 }
 
 impl std::fmt::Debug for Api {
@@ -249,7 +294,44 @@ impl std::fmt::Debug for Api {
             .field("base", &self.base)
             .field("owner", &self.owner())
             .field("online", &self.is_online())
+            .field("tag", &self.tag)
+            .field("pinned", &self.pin.is_some())
             .finish()
+    }
+}
+
+/// The session jar, scoped to the ONE origin it belongs to.
+///
+/// [`SessionJar`] already keys its cookies by origin, so a redirect to another
+/// host would find nothing to send. This wrapper says it structurally, at the
+/// client's own boundary (`Net.kt`'s rule): a request to any other origin
+/// carries no cookie, and a `Set-Cookie` from any other origin is dropped
+/// instead of being written to the person's session file.
+struct OriginJar {
+    jar: Arc<SessionJar>,
+    origin: reqwest::Url,
+}
+
+impl CookieStore for OriginJar {
+    fn set_cookies(
+        &self,
+        cookie_headers: &mut dyn Iterator<Item = &reqwest::header::HeaderValue>,
+        url: &reqwest::Url,
+    ) {
+        if url.origin() == self.origin.origin() {
+            self.jar.set_cookies(cookie_headers, url);
+        }
+        // Off-origin `Set-Cookie` headers are dropped: the person's session file
+        // is the configured server's, and a redirect target has no business
+        // writing into it.
+    }
+
+    fn cookies(&self, url: &reqwest::Url) -> Option<reqwest::header::HeaderValue> {
+        if url.origin() == self.origin.origin() {
+            self.jar.cookies(url)
+        } else {
+            None
+        }
     }
 }
 
@@ -259,6 +341,7 @@ pub struct ApiBuilder {
     base: String,
     cache: Option<Arc<dyn ResponseCache>>,
     session: Option<Arc<SessionJar>>,
+    pin: Option<Option<[u8; 32]>>,
 }
 
 impl Api {
@@ -276,6 +359,47 @@ impl Api {
     /// The server root this client speaks to, without a trailing slash.
     pub fn base_url(&self) -> &str {
         &self.base
+    }
+
+    /// A clone of this client that counts under `tag` — a screen's name
+    /// (`home`, `search`, `player`), which is what [`Api::stats`] answers per
+    /// screen (rule 3). Everything else is shared: the same pool, the same
+    /// session, the same lanes, the same pin.
+    ///
+    /// Cheap by design: a `String` and an `Arc` per screen, and nothing is
+    /// allocated per request because the tag lives on the clone.
+    pub fn with_tag(&self, tag: impl Into<String>) -> Self {
+        let mut clone = self.clone();
+        clone.tag = tag.into();
+        clone
+    }
+
+    /// What this client's requests are counted under ([`TAG_NONE`] when it was
+    /// never tagged).
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    /// Requests and bytes per screen tag, cumulated since the client was built
+    /// (rule 3: counted, not timed). Sorted by tag; empty until a request
+    /// leaves.
+    pub fn stats(&self) -> Vec<TagStats> {
+        self.stats.snapshot()
+    }
+
+    /// Forget every counted total: what a bench needs between two measures, so
+    /// the second one is not the sum of both.
+    pub fn clear_stats(&self) {
+        self.stats.clear();
+    }
+
+    /// The pinned leaf's SHA-256, colon-separated hex, when this client was told
+    /// to pin one ([`ApiBuilder::pinned_leaf_sha256`]).
+    pub fn pinned_fingerprint(&self) -> Option<String> {
+        self.pin
+            .as_ref()
+            .and_then(|pin| pin.pin())
+            .map(|leaf| crate::cert::hex_fingerprint(&leaf))
     }
 
     /// The account whose cached answers this client reads and writes: the
@@ -693,38 +817,74 @@ impl Api {
             return Err(write_error(error));
         }
         let guard = self.gates.acquire(lane).await;
-        let mut request = http
-            .request(Method::GET, endpoint)
-            // A compressed body would be written compressed under the file's
-            // name and the byte count would lie.
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .header(reqwest::header::ACCEPT, "*/*");
-        if api && guard.lane().is_background() {
-            request = request.header(BACKGROUND_HEADER, "1");
-        }
-        let response = request.send().await.map_err(|err| {
-            if is_network_failure(&err) {
-                // A pinned host that does not answer says nothing about THIS
-                // server: the app stays online when a model host is down.
-                if api {
-                    self.note_unreachable();
+        // The API target's hops are followed HERE (and checked, and counted);
+        // a pinned third-party host keeps its own client, which follows its own
+        // redirects (`pinned_client`) and is not a screen's traffic.
+        let mut endpoint = if api {
+            self.hop(reqwest::Url::parse(&endpoint).map_err(|error| {
+                ApiError::Invalid(format!("adresse refusée ({endpoint}) : {error}"))
+            })?)?
+            .to_string()
+        } else {
+            endpoint
+        };
+        let mut hops = 0usize;
+        let (response, status, headers) = loop {
+            let mut request = http
+                .request(Method::GET, endpoint.clone())
+                // A compressed body would be written compressed under the file's
+                // name and the byte count would lie.
+                .header(reqwest::header::ACCEPT_ENCODING, "identity")
+                .header(reqwest::header::ACCEPT, "*/*");
+            if api && guard.lane().is_background() {
+                request = request.header(BACKGROUND_HEADER, "1");
+            }
+            if api {
+                self.stats.request(&self.tag, 0);
+            }
+            let mark = self.pin.as_ref().map(|pin| pin.mark());
+            let response = request.send().await.map_err(|err| {
+                if !api {
+                    // A pinned host that does not answer says nothing about THIS
+                    // server: the app stays online when a model host is down.
+                    return if is_network_failure(&err) {
+                        ApiError::Offline
+                    } else {
+                        ApiError::Http {
+                            status: 0,
+                            message: err.to_string(),
+                            code: None,
+                        }
+                    };
                 }
-                ApiError::Offline
-            } else {
-                ApiError::Http {
-                    status: 0,
-                    message: err.to_string(),
-                    code: None,
+                self.send_error(&err, mark)
+            })?;
+            if api {
+                self.note_reachable();
+            }
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
+            if api {
+                let current = reqwest::Url::parse(&endpoint)
+                    .expect("an endpoint this function just built or checked");
+                if let Some(next) = self.redirect(status, &headers, &current)? {
+                    if hops == MAX_REDIRECTS {
+                        return Err(ApiError::Invalid(format!(
+                            "trop de redirections ({MAX_REDIRECTS} au plus)"
+                        )));
+                    }
+                    endpoint = self.hop(next)?.to_string();
+                    hops += 1;
+                    continue;
                 }
             }
-        })?;
-        if api {
-            self.note_reachable();
-        }
-        let status = response.status().as_u16();
-        let headers = response.headers().clone();
+            break (response, status, headers);
+        };
         if !(200..300).contains(&status) {
             let text = response.text().await.unwrap_or_default();
+            if api {
+                self.stats.bytes_in(&self.tag, text.len() as u64);
+            }
             return Err(if api {
                 self.classify(status, &headers, &text, lane)
             } else {
@@ -770,6 +930,9 @@ impl Api {
                 }
             };
             let len = chunk.len() as u64;
+            if api {
+                self.stats.bytes_in(&self.tag, len);
+            }
             if let Err(error) = file.write_all(&chunk) {
                 drop(file);
                 let _ = std::fs::remove_file(&partial);
@@ -815,58 +978,74 @@ impl Api {
     ) -> Result<StreamResponse, ApiError> {
         let path = stream_path(id, q, start);
         let guard = self.gates.acquire(lane).await;
-        let mut request = self
-            .http
-            .request(Method::GET, self.url(&path))
-            // A gzip'd body has no usable byte offsets, and a Range over it is
-            // meaningless (`docs/agents/desktop.md`, D2 *Pitfalls*).
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .header(reqwest::header::ACCEPT, "*/*");
-        if guard.lane().is_background() {
-            request = request.header(BACKGROUND_HEADER, "1");
-        }
-        if let Some(byte) = from_byte {
-            request = request.header(reqwest::header::RANGE, format!("bytes={byte}-"));
-        }
-        let response = request.send().await.map_err(|err| {
-            if is_network_failure(&err) {
-                self.note_unreachable();
-                ApiError::Offline
-            } else {
-                ApiError::Http {
-                    status: 0,
-                    message: err.to_string(),
-                    code: None,
-                }
+        let mut url = self.hop(self.endpoint(&path))?;
+        // A stream is a GET with no body, so a `307`/`308` hops without
+        // changing anything; the `Range`/`start` the caller asked for does,
+        // because it describes the FILE, not the address.
+        for hop in 0..=MAX_REDIRECTS {
+            let mut request = self
+                .http
+                .request(Method::GET, url.clone())
+                // A gzip'd body has no usable byte offsets, and a Range over it
+                // is meaningless (`docs/agents/desktop.md`, D2 *Pitfalls*).
+                .header(reqwest::header::ACCEPT_ENCODING, "identity")
+                .header(reqwest::header::ACCEPT, "*/*");
+            if guard.lane().is_background() {
+                request = request.header(BACKGROUND_HEADER, "1");
             }
-        })?;
-        self.note_reachable();
-        let status = response.status().as_u16();
-        let headers = response.headers().clone();
+            if let Some(byte) = from_byte {
+                request = request.header(reqwest::header::RANGE, format!("bytes={byte}-"));
+            }
+            self.stats.request(&self.tag, 0);
+            let mark = self.pin.as_ref().map(|pin| pin.mark());
+            let response = request
+                .send()
+                .await
+                .map_err(|err| self.send_error(&err, mark))?;
+            self.note_reachable();
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
 
-        if !(200..300).contains(&status) {
-            let text = response.text().await.unwrap_or_default();
-            return Err(self.classify(status, &headers, &text, lane));
+            if let Some(next) = self.redirect(status, &headers, &url)? {
+                if hop == MAX_REDIRECTS {
+                    return Err(ApiError::Invalid(format!(
+                        "trop de redirections ({MAX_REDIRECTS} au plus)"
+                    )));
+                }
+                url = self.hop(next)?;
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                let text = response.text().await.unwrap_or_default();
+                self.stats.bytes_in(&self.tag, text.len() as u64);
+                return Err(self.classify(status, &headers, &text, lane));
+            }
+            let content_type = header_text(&headers, reqwest::header::CONTENT_TYPE);
+            let content_length = header_text(&headers, reqwest::header::CONTENT_LENGTH)
+                .and_then(|value| value.parse::<u64>().ok());
+            let accept_ranges = header_text(&headers, reqwest::header::ACCEPT_RANGES);
+            let content_range = header_text(&headers, reqwest::header::CONTENT_RANGE);
+            let start_s =
+                header_text(&headers, START_HEADER).and_then(|value| value.parse::<f64>().ok());
+            drop(guard);
+            return Ok(StreamResponse {
+                status,
+                content_type,
+                content_length,
+                accept_ranges,
+                content_range,
+                start_s,
+                response,
+                gates: Arc::clone(&self.gates),
+                lane,
+                stats: Arc::clone(&self.stats),
+                tag: self.tag.clone(),
+            });
         }
-        let content_type = header_text(&headers, reqwest::header::CONTENT_TYPE);
-        let content_length = header_text(&headers, reqwest::header::CONTENT_LENGTH)
-            .and_then(|value| value.parse::<u64>().ok());
-        let accept_ranges = header_text(&headers, reqwest::header::ACCEPT_RANGES);
-        let content_range = header_text(&headers, reqwest::header::CONTENT_RANGE);
-        let start_s =
-            header_text(&headers, START_HEADER).and_then(|value| value.parse::<f64>().ok());
-        drop(guard);
-        Ok(StreamResponse {
-            status,
-            content_type,
-            content_length,
-            accept_ranges,
-            content_range,
-            start_s,
-            response,
-            gates: Arc::clone(&self.gates),
-            lane,
-        })
+        // Ten hops without an answer, on a request the server keeps moving.
+        Err(ApiError::Invalid(format!(
+            "trop de redirections ({MAX_REDIRECTS} au plus)"
+        )))
     }
 
     /// `GET /api/stream/<id>/ready?q=` — what a stream would answer right now.
@@ -952,6 +1131,14 @@ impl Api {
     }
 
     /// Send one request (holding a lane slot) and classify what came back.
+    ///
+    /// The redirects are followed HERE, one hop at a time (`Net.kt`'s rule),
+    /// not by reqwest: every hop goes through [`Api::hop`] before a socket is
+    /// opened, so a `Location` pointing at another origin in cleartext is
+    /// refused instead of dialled, and each hop is counted as the request it is.
+    /// The semantics reqwest's own policy had are kept, so the desktop sees the
+    /// same thing it always did: ten hops at most, `301`/`302`/`303` become a
+    /// `GET` without a body, `307`/`308` keep both.
     async fn attempt(
         &self,
         want: Want,
@@ -961,57 +1148,151 @@ impl Api {
         body: Option<&[u8]>,
     ) -> Result<Vec<u8>, ApiError> {
         let guard = self.gates.acquire(lane).await;
-        let mut request = self
-            .http
-            .request(method.clone(), self.url(path))
-            .header(reqwest::header::ACCEPT, want.accept())
-            .timeout(ANSWER_TIMEOUT);
-        if guard.lane().is_background() {
-            request = request.header(BACKGROUND_HEADER, "1");
-        }
-        if let Some(bytes) = body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(bytes.to_vec());
-        }
-        let response = request.send().await.map_err(|err| {
-            if is_network_failure(&err) {
-                self.note_unreachable();
-                ApiError::Offline
-            } else {
-                ApiError::Http {
-                    status: 0,
-                    message: err.to_string(),
-                    code: None,
-                }
+        let mut url = self.hop(self.endpoint(path))?;
+        let mut method = method;
+        let mut body = body;
+        for hop in 0..=MAX_REDIRECTS {
+            let mut request = self
+                .http
+                .request(method.clone(), url.clone())
+                .header(reqwest::header::ACCEPT, want.accept())
+                .timeout(ANSWER_TIMEOUT);
+            if guard.lane().is_background() {
+                request = request.header(BACKGROUND_HEADER, "1");
             }
-        })?;
-        // Any answer at all — even a 401 — proves the server is reachable.
-        self.note_reachable();
-        let status = response.status().as_u16();
-        let headers = response.headers().clone();
-        let bytes = response.bytes().await.map_err(|err| {
-            if is_network_failure(&err) {
-                self.note_unreachable();
-                ApiError::Offline
-            } else {
-                ApiError::Http {
-                    status,
-                    message: err.to_string(),
-                    code: None,
-                }
+            if let Some(bytes) = body {
+                request = request
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(bytes.to_vec());
             }
-        })?;
-        let bytes = bytes.to_vec();
-        drop(guard);
+            self.stats
+                .request(&self.tag, body.map_or(0, |bytes| bytes.len() as u64));
+            let mark = self.pin.as_ref().map(|pin| pin.mark());
+            let response = request
+                .send()
+                .await
+                .map_err(|err| self.send_error(&err, mark))?;
+            // Any answer at all — even a 401 — proves the server is reachable.
+            self.note_reachable();
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
+            if let Some(next) = self.redirect(status, &headers, &url)? {
+                if hop == MAX_REDIRECTS {
+                    return Err(ApiError::Invalid(format!(
+                        "trop de redirections ({MAX_REDIRECTS} au plus)"
+                    )));
+                }
+                // The body of a `301`/`302`/`303` is not replayed (a browser
+                // turns the follow-up into a plain `GET`); a `307`/`308` keeps
+                // it, because the server said the request itself moved.
+                if matches!(status, 301..=303) {
+                    method = Method::GET;
+                    body = None;
+                }
+                url = self.hop(next)?;
+                continue;
+            }
+            let bytes = response.bytes().await.map_err(|err| {
+                if is_network_failure(&err) {
+                    self.note_unreachable();
+                    ApiError::Offline
+                } else {
+                    ApiError::Http {
+                        status,
+                        message: err.to_string(),
+                        code: None,
+                    }
+                }
+            })?;
+            self.stats.bytes_in(&self.tag, bytes.len() as u64);
+            let bytes = bytes.to_vec();
+            drop(guard);
 
-        if (200..300).contains(&status) {
-            return Ok(bytes);
+            if (200..300).contains(&status) {
+                return Ok(bytes);
+            }
+            // A refusal is written in JSON whatever was asked for; a body that
+            // is not text still yields the server's status and headers.
+            let body = String::from_utf8_lossy(&bytes).into_owned();
+            return Err(self.classify(status, &headers, &body, lane));
         }
-        // A refusal is written in JSON whatever was asked for; a body that is
-        // not text still yields the server's status and headers.
-        let body = String::from_utf8_lossy(&bytes).into_owned();
-        Err(self.classify(status, &headers, &body, lane))
+        Err(ApiError::Invalid(format!(
+            "trop de redirections ({MAX_REDIRECTS} au plus)"
+        )))
+    }
+
+    /// `{base}/api{path}` as a parsed URL — the first hop of every request.
+    fn endpoint(&self, path: &str) -> reqwest::Url {
+        // `Url::parse` cannot fail on a string this client built from a base it
+        // already parsed, and a panic here would be a bug in this file, not in
+        // the server's answer.
+        reqwest::Url::parse(&self.url(path)).expect("a URL built from a parsed base")
+    }
+
+    /// The ONE gate every hop goes through (`Net.kt`'s rules, `Ssl.kt`'s scope).
+    ///
+    /// Cleartext is allowed to the configured origin and to nobody else: the
+    /// desktop's own base may well be `http://192.168.1.10` (its manifest-free
+    /// world has no such rule), but a redirect must not be able to take the
+    /// session to a plaintext host, and a phone's app cannot trust the platform
+    /// to police it. `http` is refused anywhere but the configured origin,
+    /// before DNS, before a socket.
+    fn hop(&self, url: reqwest::Url) -> Result<reqwest::Url, ApiError> {
+        match url.scheme() {
+            "https" => Ok(url),
+            "http" if url.origin() == self.base_url.origin() => Ok(url),
+            "http" => Err(ApiError::Invalid(format!(
+                "adresse refusée ({url}) : le trafic en clair n’est permis que vers le serveur configuré"
+            ))),
+            other => Err(ApiError::Invalid(format!(
+                "adresse refusée ({url}) : {other} n’est pas http ou https"
+            ))),
+        }
+    }
+
+    /// The next hop a `3xx` asks for, when it asks for one.
+    ///
+    /// `None` — not a redirect, or a `3xx` that carries no usable `Location`:
+    /// the answer is then classified like any other (a `3xx` status, which is
+    /// what reqwest's policy did with it too).
+    fn redirect(
+        &self,
+        status: u16,
+        headers: &HeaderMap,
+        current: &reqwest::Url,
+    ) -> Result<Option<reqwest::Url>, ApiError> {
+        if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+            return Ok(None);
+        }
+        let Some(location) = header_text(headers, reqwest::header::LOCATION) else {
+            return Ok(None);
+        };
+        current.join(&location).map(Some).map_err(|error| {
+            ApiError::Invalid(format!("redirection illisible ({location}) : {error}"))
+        })
+    }
+
+    /// A failed `send`: a certificate this client refused is said as such, and
+    /// everything else keeps the classification it always had.
+    fn send_error(&self, error: &reqwest::Error, mark: Option<u64>) -> ApiError {
+        if let (Some(pin), Some(mark)) = (self.pin.as_ref(), mark)
+            && let Some(refusal) = pin.certificate_error(mark)
+        {
+            // The server DID answer — with a certificate this client refused —
+            // so the network indicator must not call the link dead.
+            self.note_reachable();
+            return refusal;
+        }
+        if is_network_failure(error) {
+            self.note_unreachable();
+            ApiError::Offline
+        } else {
+            ApiError::Http {
+                status: 0,
+                message: error.to_string(),
+                code: None,
+            }
+        }
     }
 
     /// The SPA's own failure classification, in the same order.
@@ -1120,6 +1401,7 @@ impl ApiBuilder {
             base: base.into(),
             cache: None,
             session: None,
+            pin: None,
         }
     }
 
@@ -1142,6 +1424,31 @@ impl ApiBuilder {
         self
     }
 
+    /// Install this client's trust-on-first-use pin (`Ssl.kt`'s model, SC3).
+    ///
+    /// `Some(leaf)` — the SHA-256 of the certificate the person accepted, as
+    /// [`CertificateInfo::sha256`](crate::CertificateInfo::sha256) gave it (or
+    /// [`parse_fingerprint`](crate::parse_fingerprint) read it back) — accepts
+    /// the platform's own verdict **or** exactly that leaf for the configured
+    /// origin, and nothing else; another leaf is
+    /// [`ApiError::Certificate`] with `changed: true`.
+    ///
+    /// `None` installs the same verifier with no pin: the platform's verdict
+    /// only, and a chain it refuses is [`ApiError::Certificate`] with
+    /// `changed: false`, which is what the setup screen shows before anything
+    /// has been pinned. That is the phone's app: it always asks, so a home
+    /// server's self-signed certificate never looks like a dead link.
+    ///
+    /// **Not calling it at all keeps the client exactly as it was** — the
+    /// desktop's case: no custom verifier, no extra TLS configuration, the
+    /// platform's verdict and nothing else. The pin only ever ADDS one leaf for
+    /// one host; it never relaxes another host and never removes a chain a real
+    /// CA signed.
+    pub fn pinned_leaf_sha256(mut self, pin: Option<[u8; 32]>) -> Self {
+        self.pin = Some(pin);
+        self
+    }
+
     pub fn build(self) -> Result<Api, ApiError> {
         let base = self.base.trim_end_matches('/').to_owned();
         let base_url = reqwest::Url::parse(&base).map_err(|err| ApiError::Http {
@@ -1153,18 +1460,35 @@ impl ApiBuilder {
             Some(jar) => jar,
             None => Arc::new(SessionJar::default_jar()),
         };
-        let http = reqwest::Client::builder()
+        // The pin, when one was asked for. Its host is the configured origin's:
+        // the only place a pin may relieve, or blame, a certificate.
+        let pin = self
+            .pin
+            .map(|leaf| PinState::new(leaf, base_url.host_str().unwrap_or_default().to_owned()));
+        let mut http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
-            .cookie_provider(Arc::clone(&jar))
+            // The jar, scoped to the configured origin: a redirect to another
+            // host carries no cookie, and no off-origin `Set-Cookie` reaches the
+            // person's session file (`Net.kt`'s rule).
+            .cookie_provider(Arc::new(OriginJar {
+                jar: Arc::clone(&jar),
+                origin: base_url.clone(),
+            }))
             .connect_timeout(CONNECT_TIMEOUT)
+            // The hops are followed by hand (`Api::attempt`), which is the only
+            // way each one can be checked before a socket opens.
+            .redirect(reqwest::redirect::Policy::none())
             // No client-wide timeout: an API answer is bounded per request
             // (`ANSWER_TIMEOUT`) while a stream must be allowed to run.
-            .build()
-            .map_err(|err| ApiError::Http {
-                status: 0,
-                message: format!("client HTTP impossible : {err}"),
-                code: None,
-            })?;
+            ;
+        if let Some(pin) = pin.as_ref() {
+            http = http.use_preconfigured_tls(pinned_client_config(pin)?);
+        }
+        let http = http.build().map_err(|err| ApiError::Http {
+            status: 0,
+            message: format!("client HTTP impossible : {err}"),
+            code: None,
+        })?;
         // The model hosts' client: the same timeouts, NO cookie jar (a neezer
         // session never leaves the server it belongs to), the redirects spelled
         // out, and `https_only` so a redirect cannot downgrade the transfer to
@@ -1187,11 +1511,14 @@ impl ApiBuilder {
             jar,
             gates: Arc::new(Gates::new()),
             cache: self.cache.unwrap_or_else(|| Arc::new(NoCache)),
-            owner: RwLock::new(None),
+            owner: Arc::new(RwLock::new(None)),
             online,
-            caching: AtomicBool::new(true),
-            jitter: AtomicU64::new(seed | 1),
+            caching: Arc::new(AtomicBool::new(true)),
+            jitter: Arc::new(AtomicU64::new(seed | 1)),
             jitter_seed: seed,
+            tag: TAG_NONE.to_owned(),
+            stats: Arc::new(Stats::default()),
+            pin,
         })
     }
 }
