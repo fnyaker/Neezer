@@ -26,6 +26,11 @@ nz-player = { path = "../crates/nz-player" }
 nz-audio = { path = "../crates/nz-audio" }
 nz-mpris = { path = "../crates/nz-mpris" }
 nz-viz = { path = "../crates/nz-viz" }
+# Local transcription: the app reads the sidecar, the model pins, the token path
+# and the control words. `default-features = false` keeps whisper.cpp, Vulkan and
+# the decoders out of the graphical binary — they belong to the
+# `neezer-transcribe` child (T4's size and RSS measurements).
+nz-transcribe = { path = "../crates/nz-transcribe", default-features = false }
 # The genre studio's measurement and training cores, linked natively: the page
 # compiles the same crates to WebAssembly (webapp/measure, webapp/trainer), so
 # the numbers and the head are the web app's own arithmetic, not a port (D16).

@@ -12,33 +12,53 @@
 //! - [`sidecar`] (T1): the transcript document and its SRT, the server's bytes.
 //! - [`error`] (T1): the failure codes the server stores and the French sentences
 //!   the person reads.
+//! - [`backend`] (T1): the vocabulary of the control line and the CPU fallback,
+//!   kept apart so the app can show it without the engine.
 //! - [`engine`] (T2): the probe, Vulkan, the model ladder and the explained CPU
 //!   fallback; [`audio`] (T2) and [`models`] (T2) are its two halves.
 //! - [`worker`], [`protocol`], [`supervisor`], [`control`] (T3): the enrolled
 //!   client, the server's routes, the two-process run and its control channel.
+//!
+//! **Two features keep the GPU stack out of the graphical app.** `engine` (the
+//! whisper.cpp/Vulkan build and the in-process decoder) and `worker` (the HTTP
+//! protocol client and the supervisor) are `default`, so the binary and the
+//! suite get them. `neezer-desktop` depends on this crate with
+//! `default-features = false`: it reads segments, the sidecar, the model pins,
+//! the token path and the control words, and links neither whisper.cpp nor
+//! Vulkan — a settings screen must not cost an 800 MB model's address space.
 //!
 //! The numbers that cross a process or a wire boundary are pinned here in T1
 //! ([`segments::CHUNK_SECONDS`], [`worker::HEARTBEAT_SECONDS`],
 //! [`models::ORDER_FREE`]), so the lots can be written against them and a change
 //! is visible in one diff instead of three.
 
-pub mod audio;
+pub mod backend;
 pub mod control;
-pub mod engine;
 pub mod error;
 pub mod models;
-pub mod protocol;
 pub mod segments;
 pub mod sidecar;
-pub mod supervisor;
 pub mod worker;
 
-pub use engine::{Backend, FORMAT_ENGINE, FallbackCause};
+// The engine half links whisper.cpp, Vulkan and the audio decoders, and it is
+// the BINARY's alone: the GPUI app depends on this crate with
+// `default-features = false`, so a settings card never maps a GPU stack into
+// the app's address space (the binary-size and RSS measurements are in T4's PR).
+#[cfg(feature = "engine")]
+pub mod audio;
+#[cfg(feature = "engine")]
+pub mod engine;
+pub mod protocol;
+#[cfg(all(feature = "engine", feature = "worker"))]
+pub mod supervisor;
+
+pub use backend::{Backend, FORMAT_ENGINE, FallbackCause};
 pub use error::{Error, SidecarError};
 pub use segments::{Segment, clean_text, normalize_segments};
 pub use sidecar::Sidecar;
 
 /// The whisper.cpp version this binary links, straight from the C build.
+#[cfg(feature = "engine")]
 pub const WHISPER_VERSION: &str = whisper_rs::WHISPER_CPP_VERSION;
 
 /// What whisper.cpp says it was built with (`whisper_print_system_info`): its
@@ -49,6 +69,7 @@ pub const WHISPER_VERSION: &str = whisper_rs::WHISPER_CPP_VERSION;
 /// without ever pulling whisper.cpp into the binary (it came out at 324 KB).
 /// It is safe on a machine with no Vulkan driver: it reads a compile-time
 /// string and creates no instance.
+#[cfg(feature = "engine")]
 pub fn system_info() -> &'static str {
     whisper_rs::print_system_info()
 }
@@ -69,7 +90,7 @@ pub fn system_info() -> &'static str {
 // in-process still aborts, so nothing else — no `--version`, no startup path, no
 // test — may call [`engine::enumerate_devices`].
 
-#[cfg(test)]
+#[cfg(all(test, feature = "engine"))]
 mod tests {
     use super::{WHISPER_VERSION, system_info};
 

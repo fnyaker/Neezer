@@ -131,6 +131,11 @@ impl Drop for NetRuntime {
     fn drop(&mut self) {
         crate::wiring::offline::shutdown_process();
         crate::wiring::engine::shutdown_process();
+        // The transcription supervisor is a child process: stopped and joined
+        // here so no whisper process outlives the window (T4).
+        if let Some(service) = crate::wiring::transcribe::started() {
+            service.shutdown();
+        }
     }
 }
 

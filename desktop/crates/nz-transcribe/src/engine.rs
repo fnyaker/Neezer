@@ -47,13 +47,13 @@ use whisper_rs::{
     WhisperVadContext, WhisperVadParams,
 };
 
+// The vocabulary lives in `backend.rs`, which the app depends on WITHOUT this
+// module's whisper.cpp stack; the paths that have always named it through
+// `engine` (`engine::Backend`, `engine::FORMAT_ENGINE`) keep working.
+pub use crate::backend::{Backend, FORMAT_ENGINE, FallbackCause};
 use crate::error::Error;
 use crate::models;
 use crate::segments::{SAMPLE_RATE, Segment};
-
-/// The `engine` every chunk, document and database row is stamped with
-/// (`engine.FORMAT_ENGINE`, `worker.ENGINE`).
-pub const FORMAT_ENGINE: &str = "whisper.cpp";
 
 /// The argument that makes the binary enumerate Vulkan devices and print them.
 ///
@@ -69,74 +69,6 @@ const WARMUP_MS: usize = 1000;
 
 /// The VAD model's overlap in whisper.cpp (`samples_overlap: 0.1`).
 const VAD_OVERLAP_SAMPLES: i64 = SAMPLE_RATE as i64 / 10;
-
-/// Which processor whisper.cpp ended up on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    /// The GPU, through whisper.cpp's `GGML_VULKAN` backend (the default).
-    Vulkan,
-    /// The CPU, after a named [`FallbackCause`] — never silently.
-    Cpu,
-}
-
-impl Backend {
-    /// The `backend` field of the `{"event":"engine"}` control line.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Backend::Vulkan => "vulkan",
-            Backend::Cpu => "cpu",
-        }
-    }
-}
-
-/// Why the GPU was not used: a stable code the server stores and the UI shows,
-/// plus the French sentence the person reads (rule 5: the UI says why).
-///
-/// The five causes are the note's, and each one is *observed*, never guessed:
-/// a missing loader, a loader with no device, a context that will not start, a
-/// device out of memory, or the person's own "seulement sur secteur"/CPU choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FallbackCause {
-    /// No Vulkan loader on the machine (`libvulkan.so.1` absent).
-    NoVulkanLoader,
-    /// A loader, but `list_devices()` finds no usable ICD.
-    NoVulkanDevice,
-    /// A device, but whisper's context would not start on it.
-    GpuInitFailed,
-    /// The device ran out of memory (a too-large model for the card).
-    GpuOutOfMemory,
-    /// The person asked for the CPU.
-    UserForcedCpu,
-}
-
-impl FallbackCause {
-    /// The code the `{"event":"engine","reason":…}` line and the server store.
-    pub fn code(self) -> &'static str {
-        match self {
-            FallbackCause::NoVulkanLoader => "no_vulkan_loader",
-            FallbackCause::NoVulkanDevice => "no_vulkan_device",
-            FallbackCause::GpuInitFailed => "gpu_init_failed",
-            FallbackCause::GpuOutOfMemory => "gpu_out_of_memory",
-            FallbackCause::UserForcedCpu => "user_forced_cpu",
-        }
-    }
-
-    /// The sentence Réglages → Transcription locale shows, cause included.
-    ///
-    /// The ratio is the measured one (44.9× Vulkan vs 13.9× CPU on the
-    /// prototype, 3.2× on this machine with `ggml-base`; see the two
-    /// measurements in this lot's PR), rounded down to "3×" so the promise is
-    /// never optimistic.
-    pub fn explain_fr(self) -> String {
-        format!(
-            "Transcription sur le processeur : aucun GPU Vulkan utilisable ({}). \
-             Environ 3× plus lent.",
-            self.code()
-        )
-    }
-}
 
 /// One physical GPU ggml can see (`whisper_rs::vulkan::list_devices`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -600,7 +532,11 @@ impl Engine {
         params.set_translate(false);
         params.set_no_context(true);
         params.set_print_special(false);
-        params.set_print_progress(false);
+        // The supervisor parses `progress = N %` from this child's stderr: it is
+        // the only real intra-chunk progress there is (T3's `chunk_pct`, and
+        // T4's job card). With it off, a 600 s chunk showed 0 % for its whole
+        // run and then jumped to done.
+        params.set_print_progress(true);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_no_timestamps(false);
@@ -613,8 +549,15 @@ impl Engine {
                 params.set_detect_language(false);
             }
             None => {
-                params.set_language(None);
-                params.set_detect_language(true);
+                // `"auto"` with `detect_language` FALSE, not a null language
+                // with the flag: whisper.cpp's `whisper_full_with_state` treats
+                // the STRING as auto-detect (line 6812) and then decodes with the
+                // detected language, while the flag path left `detect_language`
+                // set and produced only timestamp tokens (measured: 0 segments
+                // on jfk.wav with `ggml-base`, the same file with `--lang en`
+                // giving the two famous lines).
+                params.set_language(Some("auto"));
+                params.set_detect_language(false);
             }
         }
         params
@@ -989,9 +932,16 @@ mod tests {
         ];
         for (cause, code) in causes {
             let sentence = cause.explain_fr();
-            assert!(sentence.contains(code), "{sentence}");
             assert!(sentence.contains("processeur"), "{sentence}");
-            assert!(sentence.contains("3× plus lent"), "{sentence}");
+            assert!(sentence.contains("5× plus lent"), "{sentence}");
+            if cause == FallbackCause::UserForcedCpu {
+                // A choice, not a GPU that failed: no cause code, and it says
+                // whose choice it was.
+                assert!(sentence.contains("votre choix"), "{sentence}");
+                assert!(!sentence.contains(code), "{sentence}");
+            } else {
+                assert!(sentence.contains(code), "{sentence}");
+            }
         }
     }
 

@@ -19,6 +19,8 @@
 //! the protocol and the supervisor, and the bench's episodes are one-second WAV
 //! stand-ins for an hour of speech.
 
+#![cfg(all(feature = "engine", feature = "worker"))]
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

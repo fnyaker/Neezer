@@ -17,6 +17,8 @@
 //!
 //! The numbers are written next to the assertions and repeated in the PR.
 
+#![cfg(feature = "engine")]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Instant;
@@ -329,6 +331,53 @@ fn cpu_and_vulkan_transcribe_jfk_identically() {
     // Same document fields save the processor itself.
     assert_eq!(gpu.model, cpu.model);
     assert!(gpu.device.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The default language is `auto`, and it must still produce text.
+///
+/// Found by T4: with `params.language = null` AND `detect_language = true`,
+/// whisper.cpp 1.8.3 detected "en" (the log said so) and then decoded only
+/// timestamp tokens — 0 segments on this same `jfk.wav`, while `--lang en` gave
+/// the two famous lines. The server's default language is `auto`, so the whole
+/// worker would have written empty transcripts. `"auto"` as the STRING (the
+/// branch whisper.cpp itself treats as detection) is the working path, and the
+/// document still records the detected language.
+#[test]
+fn language_auto_still_transcribes() {
+    let Some(model) = model() else {
+        eprintln!("NZ_WHISPER_MODEL absent : test ignoré");
+        return;
+    };
+    let Some(speech) = speech() else {
+        eprintln!("NZ_WHISPER_AUDIO absent : test ignoré");
+        return;
+    };
+    let dir = scratch("auto-language");
+    let out = dir.join("auto.json");
+    let output = run(
+        &[
+            "file",
+            speech.to_str().expect("utf-8 path"),
+            "--model",
+            model.to_str().expect("utf-8 path"),
+            "--out",
+            out.to_str().expect("utf-8 path"),
+        ],
+        &[],
+    );
+    let document = document(&out, &output);
+    assert!(
+        !document.transcription.is_empty(),
+        "auto language produced no lines: {}",
+        text(&document)
+    );
+    assert!(
+        text(&document).contains("ask not what your country"),
+        "{}",
+        text(&document)
+    );
+    assert_eq!(document.language().as_deref(), Some("en"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

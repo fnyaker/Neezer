@@ -14,6 +14,8 @@
 //! `tools/perf_api.py --podcasts` (see `real_server.rs`'s header for the
 //! command); this file is what runs on every `cargo test --workspace`.
 
+#![cfg(all(feature = "engine", feature = "worker"))]
+
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

@@ -4303,6 +4303,7 @@ dependencies = [
  "nz-model",
  "nz-mpris",
  "nz-player",
+ "nz-transcribe",
  "nz-viz",
  "reqwest",
  "rubato",

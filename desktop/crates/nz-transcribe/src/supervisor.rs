@@ -1179,6 +1179,12 @@ impl Supervisor {
         let start = job.done_ms.max(0) as u64;
         let length = length_ms.max(1) as u64;
         let language = job.engine_language();
+        // The engine prints its own `progress = N %`; the app's card shows it
+        // WHILE the chunk runs, not only when it lands (rule 2). A 600 s chunk
+        // is one line otherwise, minutes of a bar that does not move.
+        let sink = self.sink.clone();
+        let episode = job.episode_id.clone();
+        let total_ms = job.duration_ms.unwrap_or(0);
         tokio::task::spawn_blocking(move || {
             let pcm_path = workdir.join(format!("chunk-{start}.pcm"));
             let json_path = workdir.join(format!("chunk-{start}.json"));
@@ -1198,6 +1204,7 @@ impl Supervisor {
                     0,
                 ));
             }
+            let mut last = None;
             let recognized = run_engine(
                 &engine,
                 &pcm_path,
@@ -1208,6 +1215,18 @@ impl Supervisor {
                 &halt,
                 &pct,
                 resume_after,
+                &mut |percent| {
+                    if last == Some(percent) {
+                        return;
+                    }
+                    last = Some(percent);
+                    let done = start as i64 + (i64::from(percent) * length as i64 / 100);
+                    sink.emit(Event::Progress {
+                        episode_id: episode.clone(),
+                        done_ms: done,
+                        duration_ms: total_ms,
+                    });
+                },
             )?;
             let _ = fs::remove_file(&stderr_path);
             Ok((recognized, written))
@@ -1404,6 +1423,7 @@ fn run_engine(
     halt: &Halt,
     chunk_pct: &AtomicU64,
     resume_after: Duration,
+    on_progress: &mut dyn FnMut(u32),
 ) -> Result<Recognized, Error> {
     let mut child =
         EngineChild::spawn(engine, pcm, out, language, stderr).map_err(|_| Error::NoAudio)?;
@@ -1454,6 +1474,7 @@ fn run_engine(
             log_seen = bytes.len();
             if let Some(percent) = last_percent(&bytes) {
                 chunk_pct.store(u64::from(percent), Ordering::Release);
+                on_progress(percent);
             }
         }
         std::thread::sleep(ENGINE_POLL);

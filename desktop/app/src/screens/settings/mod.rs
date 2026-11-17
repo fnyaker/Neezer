@@ -1338,6 +1338,7 @@ impl gpui_kit::Render for Screen {
             SettingsSection::Account => account::body(self, window, cx),
             SettingsSection::Help => help::body(self, window, cx),
             SettingsSection::Shortcuts => shortcuts::body(self, window, cx),
+            SettingsSection::Transcribe => transcribe::body(self, window, cx),
             // Owned by another lot: its own file, its own arm, once it lands.
             other => {
                 crate::screens::stub(&Route::Settings { section: other }, cx).into_any_element()
