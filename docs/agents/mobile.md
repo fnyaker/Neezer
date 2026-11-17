@@ -1522,6 +1522,7 @@ lot copying them by hand eventually gets wrong, with the person's speakers and p
 | Tool | What it does, and the rule it carries |
 |---|---|
 | `mobile/tools/emu.sh {create,start,wait,stop,status} --port N` | The ONLY way a lot starts an emulator. AVD `nz35` (API 35 x86_64 `default` image, `pixel_6`), `-no-window`, silent audio (`--audio no-audio` by default, `none` measured equal), `-gpu swiftshader_indirect -no-boot-anim -no-snapshot -read-only -no-metrics -memory 3072 -cores 4`. PID+log in `~/.cache/neezer-emu/<port>.{pid,log}`, `MemAvailable` ≥ 8 GB guard, at most **2**, a port only touched when this script started it, and only its own PID ever signalled (`kill -0 /proc/<pid>/cmdline` proves it is ours before `stop`). `wait` polls `sys.boot_completed` — an event, never a sleep. |
+| **Ports** | `5580` is MQ1's, exclusively. The lots of waves ≥ 2 take their own, **from `5620` in steps of 20** (`5620`, `5640`, `5660`, … each console port with its adb port +1): `emu.sh` refuses an even port outside `5554–5682`, refuses a port another process already listens on, and refuses a port its own PID file says is running — two lots can never share one, and the ones that run side by side are two. |
 | `mobile/tools/emu-selftest.sh` | The acceptance as a command: two full start/wait/stop cycles leave no process, no PID file, no listening port and no held lock; two ports boot side by side as two distinct guests (kernel `boot_id` compared); `stop` on a port it never started exits non-zero. |
 | `mobile/tools/env.sh` | SDK / JDK / Gradle resolution, sourced by the rest. AGP 8.13 refuses JDK 25+ with `java.lang.IllegalArgumentException: 25.0.5` and no mention of Java; this picks a 17–24 one (mise's `java@21`) or names the fix. |
 | `mobile/tools/perf-server.sh {start,status,stop}` | `tools/perf_api.py --serve` with the worst realistic input (8 000 tracks, a 4 000-track playlist), `TMPDIR` moved onto disk, prints `host=http://127.0.0.1:<port>` and `emulator=http://10.0.2.2:<port>` (the guest has no 127.0.0.1 of ours), stopped with SIGTERM (the signal perf_api deletes its library on). |
@@ -1593,6 +1594,14 @@ do, on a device.
 - **The perf library is 900 MB at 8 000 tracks and belongs on disk** (`TMPDIR` under `~/.cache`), and
   perf_api's cleanup is SIGTERM-driven: `perf-server.sh stop` sends SIGTERM, waits, and only then
   SIGKILLs. Measured: 0 leftover directories after a stop.
+- **The pre-declared dependencies are a debt, not a mistake, and the lint that flags them is now
+  pinned out of the way.** MB0's manifests declare the shared crates the stubs do not call yet
+  (`nz-core`'s `nz-analysis`/`nz-offline`/`nz-remote`/`nz-party`/`nz-viz`, `nz-droid-audio`'s
+  `nz-audio`, `nz-viz-gl`'s `glow`/`khronos-egl`/`nz-viz`, the workspace's `tracing-subscriber`), and
+  the lots that fill those bodies use them (SC0's rule). A newer runner `stable` gained
+  `cargo::unused_dependencies` and `-D warnings` turned all eleven into errors on a tree that is clean
+  on 1.99.1, so `mobile/rust/rust-toolchain.toml` pins that version; **re-evaluate it once MB3a..MB25
+  have filled the stubs** — the lint is to be satisfied then, not kept silent.
 - **A fresh guest on a busy machine covers the app with a "System UI isn't responding" dialog.** The very
   same smoke then failed with `the shell never painted « Accueil »` while the accessibility tree described
   `android:id/parentPanel` — the DIALOG, not the app — and it did so on one run out of two. Two device
