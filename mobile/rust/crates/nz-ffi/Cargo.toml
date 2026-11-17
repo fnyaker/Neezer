@@ -27,5 +27,7 @@ tracing = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # `Java_fr_neezer_mobile_bridge_Platform_init` (MB2) hands the platform trust
-# store its `Context` through these two.
+# store its `Context`: `jni` carries the pointers across, and the verifier is
+# what `init_with_env` installs before the first handshake.
 jni = { workspace = true }
+rustls-platform-verifier = { workspace = true }

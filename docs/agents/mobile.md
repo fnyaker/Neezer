@@ -8,7 +8,8 @@ the app it REPLACES is [android.md](android.md) (read it: every hard-won rule th
 here or is made unnecessary, and this note says which); the Rust crates it shares come from the
 desktop app ([desktop.md](desktop.md)).
 
-**Status (2026-11-17): MB0 (the skeleton) is delivered; the lots below are planned and follow
+**Status (2026-11-17): MB0 (the skeleton), MB1 (Sillon in Compose) and MB2 (the core runtime,
+session, lists, covers, links and `:bridge`) are delivered; the lots below are planned and follow
 this note in order.** Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
 number) — a delivered lot is not a changelog. The old `android/` app keeps building and shipping
 until lot MB-SWAP.
@@ -899,80 +900,105 @@ design system asks for nothing). Réglages (MB16) passes the eco switch as `moti
 and a custom accent as `accent`; Pochette's watcher passes the sleeve as `coverAccent`. The old
 `android/app`'s three TTFs are removed by MB-SWAP with that tree.
 
-### MB2 — Core runtime, session, lists, covers, links `:bridge` (wave 1)
+### MB2 — Core runtime, session, lists, covers, links `:bridge` (delivered 2026-11-17)
 
-**Goal.** The object every screen talks to: runtime, server, login/restore/logout, network state,
-counters, list handles, cover paths, app links, errors; and its Kotlin side (`NzBridge`, flows,
-`ScreenState`, Coil fetcher, platform TLS init). **Depends on**: MB0.
-**Exclusive files**: `nz-core/src/core/**`, `nz-ffi/src/{core,lists,covers,links,errors}.rs`,
-`mobile/android/bridge/src/{main/java,test}/**`.
-**Contract.** The *FFI boundary* section verbatim (`NzCore`, `CoreConfig`, `NetworkState`, `NzError`,
-`nz_error_text`, `ListHandle`, `TrackRow`), plus: `Screens::cover_path(url: String, size_px: u32) ->
-Result<String, NzError>` (async; lane `User` when called from a visible item, the CDN allow-list of
-*Covers*, LRU 300 MB, returns a file path); `nz_core::links::parse(url) -> Option<AppLink>` exported as
-`parse_app_link(url: String) -> Option<AppLink>` with `enum AppLink { Home, Search{q}, Artist{id},
-Album{id}, Playlist{id}, Track{id}, Podcast{id}, Credits{name}, SharedPlaylist{id}, Import{url},
-Party{id}, RemoteClaim{token}, Invite{code}, Settings{section}, Recap{year} }` accepting the SPA's
-`/app/#/...` URLs, `neezer://...`, and Deezer/Spotify links the import understands; `NzCore::memory()
--> MemoryReport { queue_bytes, lists_bytes, api_cache_mem_bytes }` (counted); in `nz-core`, a
-`lists::Registry` of the open lists (weak references) with `update_rows(key, f)` that patches every
-open row carrying that key and bumps those lists' `version` — what MB10's like/dislike and MB15's
-"downloaded" flag use so every visible list changes in the same frame without a re-fetch. Kotlin: `NzBridge.install`
-(creates `NzCore` with `filesDir/neezer` + `cacheDir/neezer`, calls the platform TLS init — a JNI
-export `Java_fr_neezer_mobile_bridge_Platform_init(env, cls, context)` in `nz-ffi` that calls
-`rustls_platform_verifier::android::init_hosted` — registers the default-network callback →
-`set_network`, `ProcessLifecycleOwner` → `set_foreground`, installs Coil's `ImageLoader` with
-`NzCoverFetcher`/`NzCoverKeyer` and its disk/network caches OFF); `sealed interface
-ScreenState<T> { Loading; Ready(data: T, stale: Boolean); Failed(cause: String, retry: () -> Unit) }`
-and `fun <T> screenFlow(cached: suspend () -> T?, fresh: suspend () -> T): Flow<ScreenState<T>>`
-(rule 3: cached first, fresh replaces, failure keeps the cached copy with `stale = true`).
-**Acceptance.** Rust integration tests against `tools/perf_api.py --serve`: login, restore after a new
-`NzCore` on the same dirs, logout clears the jar, `401` → `SessionListener.on_session_ended`;
-`set_network(None)` makes the next GET fail `Offline` with **0 sockets opened** (count); `stats()`
-counts requests/bytes per tag; a `ListHandle` over 8 000 rows: `window(0, 64)` returns 64 rows,
-`filter("a")` returns the fold count the SPA's `appcore` returns; `cover_path` refuses `http://10.0.0.1/x.jpg`
-and `https://evil.example/x.jpg` without opening a socket. JVM: `screenFlow` emits Loading → Ready(stale)
-→ Ready for cached+fresh, Loading → Failed for neither. Emulator: a cover from perf_api paints
-through the fetcher; TLS to an https test server with a public chain succeeds (proves the verifier init).
-**Pitfalls.** Callbacks run on Rust threads (hand to a Flow, return at once); cancellation-safe
-futures; never `block_on` in an FFI call made from the main thread; the verifier init must run before
-the first request (in `install`, before anything else).
+**What landed.** The object every screen talks to, and its Kotlin side. `NzCore` builds one
+`nz_core::core::Core`: the local store (`nz-cache`, its own migrations), the session jar
+(`filesDir/neezer/session.json`), the configured origin and its pin (in `kv`, so a restart knows the
+server before any screen exists), the person, `ConnectivityManager`'s state, the foreground flag,
+the listeners, the counters, the list registry. Login/restore/logout, `set_server` +
+`GET /api/version`, `set_network`/`set_foreground`, `stats()`, `memory()`, `open_list`/
+`open_track_list`, `cover_path`, `parse_app_link` and `nz_error_text` are real; `probe_certificate`
+answers `Unsupported` until SC3's handshake-only probe exists (the setup screen hides the control,
+rule 7). The Kotlin side: `NzBridge.install` (platform TLS init FIRST, then the core, the network
+callback, the foreground observer, the Coil loader), `NetworkWatcher`, `ForegroundWatcher`,
+`NeezerImages` + `NzCoverFetcher`/`NzCoverKeyer`, `screenFlow` and a `SharedFlow` of session events.
 
-```text
-Tu es le worker du lot MB2 (runtime du noyau) de la nouvelle app mobile Neezer. Lis CLAUDE.md, puis
-docs/agents/mobile.md (« The FFI boundary », « Threads », « Rule 1 », « Network errors », « Caches »,
-« Auth », « Worker rules », « MB2 »), docs/agents/desktop.md (« Network errors », « Caches », « Auth »),
-et le code de desktop/crates/nz-api et nz-cache.
-Objectif : remplir les stubs de nz-core/src/core, nz-ffi/src/{core,lists,covers,links,errors}.rs et du
-module Kotlin :bridge selon le contrat de la section MB2 (NzCore, session, réseau, compteurs,
-ListHandle, cover_path, liens, init TLS Android, screenFlow, fetcher Coil).
-Fichiers à toi seul : ceux de la section MB2.
-Acceptation : les tests de la section MB2 (Rust contre tools/perf_api.py --serve, JVM, émulateur sans
-affichage), avec les comptes de requêtes, d'octets et de sockets écrits dans la PR.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb2, PR « feat(mobile): MB2 core runtime, session, lists, covers », CI verte,
-rebase + diff --stat, merge, section MB2 réécrite, `ao report --done`.
-```
+What a later lot can rely on without editing a shared file: `Screens::core()` (the one core, so a
+feature file reaches the client and the caches), `ListHandle::list()` (the `Arc<List>` MB10/MB15
+patch), `Core::meter()`, `Core::lists().update_rows(key, f)` (patches every open row carrying `key`
+and bumps those lists' version — weak references, so a dropped list is not kept alive),
+`Core::jar()`, and `nz-core`'s `core::url::{Origin, Url}` (the only URL reader the phone trusts).
+`nz-core/src/links/` and `nz-core/src/lists/` are MB2's too: their module docs say so, and their
+whole content is this lot's.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, Gradle 8.14.7, NDK
+30.0.16248370, emulator API 35 x86_64 `-no-window -no-audio`):
+
+- **Rust, against `tools/perf_api.py --serve`** (24 tracks, `--covers tests/assets/cover.jpg`):
+  `cargo test --workspace --locked` = **63 tests, all green** (42 `nz-core`, 14 `nz-ffi`, 7 of
+  other crates). Login + restore + logout + the two `409`s + the app links + the list algebra are
+  proven there. **Counted:** `set_server` + `login` = **2 session requests, 127 B in** (the
+  `/api/version` body the server sent, measured again on the wire by the test itself), the login
+  body **78 B out**; a cover = **1 request, 6 155 B** (exactly the JPEG), the SAME URL asked twice =
+  **1 request** (the second is a disk hit); `set_network(None)` then `restore()`, `cover_path()` and
+  `set_server()` = **0 sockets** at a counting `TcpListener` (each call counted, and the harness's
+  own probe connections subtracted).
+- **Rust, 8 000 rows:** `window(0, 64)` answers 64 rows, `window(0, 10 000)` is clamped to 128,
+  `filter("titre 1")` answers the count the same fold gives (`appcore::fold`, accents and ligatures
+  included: "beyonce" finds "Beyoncé", "OEIL" finds "Œil"), and a patch on one key reaches every
+  open list in one call.
+- **JVM:** `:bridge:testDebugUnitTest` = **5 tests, green** — `screenFlow`'s four shapes plus the
+  retry that arrives before the flow listens (see the bug below). No device, no clock: the
+  assertion waits on a `CompletableDeferred`.
+- **Emulator** (my own port, headless, `adb -s emulator-5590`), release code paths through a
+  throwaway driver that was deleted before the commit: `set_server("https://example.com")` answered
+  **404 from Example Domain's own `/api/version`** — a completed TLS handshake through the platform
+  verifier (without `Platform.init` it fails with "Hors ligne"); the bench login answered
+  `bench/admin`; a sleeve from the bench was fetched **once (1 request, 6 155 B)**, the second ask
+  returned the same path with **0 requests** (`cover=1/6155, session=2/127` in `stats()`), and Coil
+  decoded it **420×420** through `NzCoverFetcher`. The server's own log shows exactly **one**
+  `GET /api/cover`.
+- **Sizes:** `libnz_ffi.so` **6 129 152 B** arm64-v8a, 4 256 440 B armeabi-v7a, 6 672 272 B x86_64
+  (MB0: 902 056 B when nothing was linked — the note's warning held). Universal release APK
+  **19 594 346 B** (`classes.dex` 2 454 472 B): under the 45 MB / 18 MB / 9 MB ceilings. A cold
+  three-ABI `build-android.sh` took **≈9 min** here (aws-lc, libopus and SQLite dominate).
+
+**Rules a measurement taught** (each cost a red test or a red build):
+
+- **`nz-api`'s `set_online(false)` does NOT refuse a request.** It feeds the SPA's SWR logic (`get`
+  serves the cached copy), but `fetch_want` still sends when there is nothing cached. The offline
+  gate is therefore the CORE's: `Core::api()` answers `Offline` before returning a client, and
+  `set_server` probes through that gate (its first version opened **3 sockets** offline). Proven by
+  a counting listener, not by a duration.
+- **`Api::get`/`send` consume the body inside `nz-api`, so a byte count is only honest where the
+  core reads bytes itself** (`GET /version` and `/me` go through `Api::bytes`; a cover too). Until
+  SC3's `with_tag`/`stats` lands, `NzCore::stats()` reports the core's own meter — the counts above
+  are what it can see, and nothing is invented for the rest.
+- **A signed cookie cannot be expired on demand**, so `perf_api.py` cannot prove the live-`401`
+  path. The tests start the real server when an interpreter can `import neezer` and a bare-Rust
+  HTTP server otherwise (CI's Rust job installs no Python), and the `401` test always uses the
+  controlled one. Both speak the same wire, and the real server's numbers are the ones above.
+- **`registerDefaultNetworkCallback` + `getNetworkCapabilities` need
+  `ACCESS_NETWORK_STATE` in the LIBRARY's own manifest.** `:app` declares it, but lint analyses
+  `:bridge` alone and failed the build; `bridge/src/main/AndroidManifest.xml` now states it (the
+  merger de-duplicates). It carries nothing else — a library manifest with a component is how a
+  second launcher icon appears.
+- **Coil 3.6.x requires `compileSdk 37`** (`minCompileSdk=37` in its AAR metadata), and this tree
+  compiles against 36 (AGP 8.13.2's ceiling). MB0's catalog pin `coil = 3.6.3` was never exercised
+  until MB2 was Coil's first consumer; the pin is **3.5.0**, the newest generation that declares
+  36. Same rule as the Compose/core/navigation pins, one dependency later.
+- **A `MutableSharedFlow(replay = 0)` loses a retry emitted before `first()` subscribes**: the
+  screen sat on "Réessayer" forever (`screenFlow`'s own bug, found while writing its test). The
+  signal is a CONFLATED `Channel` now, and `a_retry_asked_for_immediately_is_not_dropped` holds it.
+- **`ImageSource` needs its `FileSystem`**: `ImageSource(path.toPath(), FileSystem.SYSTEM)` — the
+  one-argument overload resolution picks the `BufferedSource` form and does not compile.
+- **An accessor a later lot needs is not dead code**: `ListHandle::list()` is used only by this
+  lot's tests, so it carries `#[cfg_attr(not(test), expect(dead_code, reason = …))]` rather than an
+  `#[allow]` that would hide a real removal.
+- **UniFFI's `async_runtime = "tokio"` owns the runtime.** The core starts no thread, so `shutdown`
+  has nothing to join (worker rule 5) and a listener callback runs on the runtime's worker — Kotlin
+  hands it to a `SharedFlow` with `tryEmit` and returns at once.
+- **`nz-ffi` gains ONE dependency** (`rustls-platform-verifier`, android-only) so
+  `Java_fr_neezer_mobile_bridge_Platform_init` can call `init_with_env`: the `Context` exists only
+  on the Kotlin side, and `nz-core` must stay platform-free. One line, plus one line in
+  `mobile/rust/Cargo.lock`.
+
+**Still owed to a later lot** (named where it belongs): SC3's `with_tag`/`stats` (the meter merges
+into it) and `probe_certificate`/`pinned_leaf_sha256` (the pin is stored and remembered, not yet
+enforced on the handshake — MB4 shows it); MB3b's queue bytes in `memory()` (0 today) and the
+`Prefetch` lane feeding on `is_foreground()`; MB5b's first screen consuming `NzBridge.sessions`;
+`mobile/tools/emu.sh` (MQ1) — this lot ran the documented flags by hand on port 5590.
 
 ### SC1 — Extract `nz-analysis` (wave 1)
 

@@ -14,10 +14,17 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // `rustls-platform-verifier`'s Android side is an AAR that ships inside
-        // the crate's own local Maven repository. `:bridge` adds that directory
-        // when it exists (MB2 wires it from `cargo metadata`); the line stays
-        // commented until then so a missing path is not a configuration error.
+        // `rustls-platform-verifier`'s Android side is an AAR published to the
+        // project's own Maven archive (its README's recipe). `:bridge` resolves
+        // its version from `mobile/rust/Cargo.lock`, so the Kotlin component and
+        // the Rust crate can never disagree (MB2).
+        maven {
+            url = uri(
+                "https://github.com/rustls/rustls-platform-verifier/raw/" +
+                    "maven-archive/android-release-support/maven/"
+            )
+            content { includeGroup("org.rustls") }
+        }
     }
 }
 

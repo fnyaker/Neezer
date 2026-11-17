@@ -66,6 +66,40 @@ impl fmt::Display for NzError {
 
 impl std::error::Error for NzError {}
 
+/// `nz-core`'s failure, read the way the boundary spells it.
+///
+/// The variants line up one for one on purpose: the core decides WHAT failed
+/// (`Offline` is the radio being down, `Session` a `401`), and this table is
+/// the only place the two enums touch. A new core variant is a compile error
+/// here, not a silently generic "erreur interne".
+impl From<nz_core::core::CoreError> for NzError {
+    fn from(error: nz_core::core::CoreError) -> Self {
+        use nz_core::core::CoreError as Core;
+        match error {
+            Core::Offline => NzError::Offline,
+            Core::Timeout => NzError::Timeout,
+            Core::Session => NzError::Session,
+            Core::RemoteEnded { restored } => NzError::RemoteEnded { restored },
+            Core::NotReady { retry_after_s } => NzError::NotReady { retry_after_s },
+            Core::Conflict { detail } => NzError::Conflict { detail },
+            Core::Provider {
+                status,
+                code,
+                detail,
+            } => NzError::Provider {
+                status,
+                code,
+                detail,
+            },
+            Core::Server { status, detail } => NzError::Server { status, detail },
+            Core::Certificate { sha256, changed } => NzError::Certificate { sha256, changed },
+            Core::Unsupported { feature } => NzError::Unsupported { feature },
+            Core::Invalid { detail } => NzError::Invalid { detail },
+            Core::Internal { detail } => NzError::Internal { detail },
+        }
+    }
+}
+
 /// The French sentence a screen shows for `e` (`ApiError::cause_fr`'s register:
 /// what happened, in the person's words, never a code).
 #[uniffi::export]
@@ -180,5 +214,63 @@ mod tests {
         }
         assert_eq!(nz_error_text(&NzError::Offline), "Hors ligne");
         assert!(nz_error_text(&NzError::NotReady { retry_after_s: 0 }).contains("1 s"));
+    }
+
+    /// Every core failure crosses with its OWN variant and its own sentence: a
+    /// screen must be able to tell "hors ligne" from "pas encore prêt".
+    #[test]
+    fn every_core_failure_crosses_as_its_own_variant() {
+        use nz_core::core::CoreError as Core;
+        let all = [
+            Core::Offline,
+            Core::Timeout,
+            Core::Session,
+            Core::RemoteEnded { restored: true },
+            Core::NotReady { retry_after_s: 30 },
+            Core::Conflict {
+                detail: "version".into(),
+            },
+            Core::Provider {
+                status: 502,
+                code: Some("DATA_ERROR".into()),
+                detail: "Deezer a refusé".into(),
+            },
+            Core::Server {
+                status: 500,
+                detail: "boum".into(),
+            },
+            Core::Certificate {
+                sha256: "ab:cd".into(),
+                changed: true,
+            },
+            Core::Unsupported {
+                feature: "mb4".into(),
+            },
+            Core::Invalid {
+                detail: "Adresse refusée".into(),
+            },
+            Core::Internal {
+                detail: "disque plein".into(),
+            },
+        ];
+        let mut tags = std::collections::BTreeSet::new();
+        for error in all {
+            let ffi = NzError::from(error);
+            let text = nz_error_text(&ffi);
+            assert!(!text.trim().is_empty(), "{ffi:?}");
+            assert!(text.chars().any(|c| c.is_alphabetic()), "{ffi:?}: {text}");
+            tags.insert(
+                format!("{ffi:?}")
+                    .split(['{', ' ', '('])
+                    .next()
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+        }
+        assert_eq!(
+            tags.len(),
+            12,
+            "no two failures collapsed into one: {tags:?}"
+        );
     }
 }

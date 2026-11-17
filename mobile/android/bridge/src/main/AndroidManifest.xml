@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :bridge — the module MB0 handed to MB2.
+
+  This manifest declares exactly one thing: the permission the network callback
+  needs. `:app` already asks for it (its manifest is the app's, and MB2 does not
+  edit it), but lint analyses a LIBRARY module on its own and refuses
+  `getNetworkCapabilities` without seeing it, so the module states what it uses
+  and the merger de-duplicates it. Nothing else belongs here: no component, no
+  provider, no label (a library that declares a launcher icon is how a second
+  icon ends up in the launcher).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+</manifest>
