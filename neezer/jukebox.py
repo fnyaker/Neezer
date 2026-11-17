@@ -11,7 +11,7 @@ import time
 
 from datetime import datetime, timedelta
 from random import shuffle
-from subprocess import Popen, DEVNULL
+from subprocess import Popen, DEVNULL  # nosec B404 - the admin's own jukebox command, no shell
 from threading import Thread, Event, RLock
 
 from .db import Track
@@ -152,7 +152,12 @@ class Jukebox:
 
         logger.debug("Start playing with command %s", args)
         try:
-            return Popen(args, stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
+            # The command is the server's own jukebox setting, split into an
+            # argument list and run without a shell: nothing typed by a client
+            # becomes a program, and %path is substituted into one element.
+            return Popen(  # nosec B603 - the admin's command as an argv list, never a shell
+                args, stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL
+            )
         except Exception:
             logger.exception("Failed to run play command")
             return None

@@ -397,7 +397,9 @@ class Scanner(Thread):
     def __find_folder(self, path):
         children = []
         drive, _ = os.path.splitdrive(path)
+        wanted = path
         path = os.path.dirname(path)
+        folder = None
         while path not in (drive, "/"):
             try:
                 folder = Folder.get(path=path)
@@ -416,7 +418,15 @@ class Scanner(Thread):
             )
             path = os.path.dirname(path)
 
-        assert folder is not None
+        # An assert would be compiled out by ``python -O`` and leave ``folder``
+        # undefined (a NameError instead of a readable cause), so this is a real
+        # check: a file whose path has no folder row above it cannot be scanned.
+        if folder is None:
+            raise Exception(
+                "Couldn't find any parent folder for '{}'.\nDon't scan files that aren't located in a defined music folder".format(
+                    wanted
+                )
+            )
         while children:
             folder = Folder.create(parent=folder, **children.pop())
 

@@ -27,7 +27,7 @@ import os
 import re
 import shutil
 import signal
-import subprocess
+import subprocess  # nosec B404 - ffmpeg and whisper.cpp on fixed argument lists, never a shell
 import sys
 import threading
 import time
@@ -237,7 +237,9 @@ def probe(paths, ttl=PROBE_TTL):
     result = quick_check(paths)
     if result["ok"]:
         try:
-            proc = subprocess.run(
+            # The binary is the admin's configured whisper path, checked by
+            # _check() above; "--version" is a literal, no shell involved.
+            proc = subprocess.run(  # nosec B603 - see above
                 [paths["bin"], "--version"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -309,7 +311,7 @@ def _preexec():
 
             libc = ctypes.CDLL(None, use_errno=True)
             libc.prctl(1, signal.SIGKILL, 0, 0, 0)
-        except Exception:
+        except Exception:  # nosec B110 - best effort: no prctl on this libc, the child still starts
             pass
 
     return hook
@@ -347,7 +349,10 @@ def _terminate(proc):
 
 def run_process(cmd, timeout, cancel=None, on_stderr=None, on_tick=None,
                 on_start=None, paused=None):
-    proc = subprocess.Popen(
+    # Every caller builds cmd itself: a configured binary path (whisper.cpp or
+    # ffmpeg, checked in _check) followed by literals and an archived episode
+    # path. It is an argv list, never a string handed to a shell.
+    proc = subprocess.Popen(  # nosec B603 - see above
         cmd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

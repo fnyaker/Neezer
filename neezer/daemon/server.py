@@ -75,7 +75,7 @@ class Daemon:
         st = os.stat(directory)
         if st.st_uid == os.getuid():
             if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-                os.chmod(directory, 0o700)
+                os.chmod(directory, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only: this directory holds the daemon's socket, and group/other access is what would be permissive
         else:
             world_writable = bool(st.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
             sticky = bool(st.st_mode & stat.S_ISVTX)

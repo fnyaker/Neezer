@@ -77,7 +77,12 @@ def _token_request(session, data: dict) -> dict:
     try:
         r = session.post(ACCOUNTS + "/api/token", data=data, timeout=TIMEOUT)
     except requests.RequestException as exc:
-        logger.warning("Spotify token request failed: %s", exc)
+        # The record carries requests' transport error (endpoint URL and the
+        # network cause); the form body, which holds the code/refresh token and
+        # the client secret, is never part of that message.
+        logger.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure -- exc is a requests transport error, no form body in it
+            "Spotify token request failed: %s", exc
+        )
         raise ServiceError("Spotify injoignable.") from exc
     if r.status_code == 400:
         # invalid_grant: the code was used, or the refresh token was revoked.

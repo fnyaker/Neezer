@@ -28,6 +28,11 @@ from . import admin_only, csrf_token, frontend
 
 logger = logging.getLogger(__name__)
 
+# Control characters (and DEL) that could end a log line, move a terminal
+# cursor or hide what was typed: replaced in a user-supplied value before it is
+# logged (see _log_text).
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
 _REFUSALS = {
     "last_admin": "Can't remove the last active administrator.",
     "self_delete": "You can't delete your own account.",
@@ -65,11 +70,16 @@ def safe_redirect_target(target, fallback):
     # Tabs and newlines are removed from ANYWHERE in the URL ("/\t/evil.com" is
     # "//evil.com" to a browser), so they go first rather than relying on the
     # Python version's urlsplit doing the same.
-    target = re.sub(r"[\t\n\r]", "", target)
+    target = re.sub(r"[\t\n\r]", "", str(target))
     target = target.replace("\\", "/").lstrip("".join(map(chr, range(0x21))))
     # Reject absolute URLs, protocol-relative (//evil), and anything with a
     # scheme or host; only a path that stays on this site is allowed.
-    parts = urlsplit(target)
+    try:
+        parts = urlsplit(target)
+    except ValueError:
+        # urlsplit() raises on a malformed host ("//[::1", "//[a"); a client
+        # typing one into ?returnUrl must get the fallback, not a 500.
+        return fallback
     if (
         parts.scheme
         or parts.netloc
@@ -77,7 +87,31 @@ def safe_redirect_target(target, fallback):
         or target.startswith("//")
     ):
         return fallback
-    return target
+    # Hand back a target BUILT here rather than the string the client sent: the
+    # result always starts with exactly one "/", followed by a remainder with no
+    # leading slash at all. The browser therefore reads the whole Location as a
+    # path on this site — there is no input for which the client controls the
+    # prefix, so no "//host", no "scheme:host" and no backslash trick can come
+    # out of this function, whatever the checks above missed in a future edit.
+    suffix = ("?" + parts.query if parts.query else "") + (
+        "#" + parts.fragment if parts.fragment else ""
+    )
+    return "/" + parts.path.lstrip("/") + suffix
+
+
+def _log_text(value):
+    """A request-supplied value about to share a log line with our own text.
+
+    ``logsafe`` already escapes the arguments of every record this package logs
+    once its factory is installed, but the login route must be safe on itself:
+    it is also reachable when something imports ``neezer.frontend`` straight
+    into a WSGI stack without going through ``neezer.web``. A newline in the
+    user name of a failed login would otherwise let whoever typed it forge a
+    whole extra entry ("... for user\nINFO ...").
+    """
+    text = "" if value is None else str(value)
+    text = text.replace("\n", "\\n").replace("\r", "\\r")
+    return _CONTROL_CHARS.sub("?", text)
 
 
 def me_or_uuid(f, arg="uid"):
@@ -439,7 +473,11 @@ def login():
     if not error:
         user = UserManager.try_auth(name, password)
         if user:
-            logger.info("Logged user %s (IP: %s)", name, request.remote_addr)
+            logger.info(
+                "Logged user %s (IP: %s)",
+                _log_text(name),
+                _log_text(request.remote_addr),
+            )
             if throttled:
                 auth_limiter.reset_user(name)
             # Drop everything the pre-auth session carried before writing the
@@ -454,7 +492,9 @@ def login():
             return redirect(return_url)
         else:
             logger.error(
-                "Failed login attempt for user %s (IP: %s)", name, request.remote_addr
+                "Failed login attempt for user %s (IP: %s)",
+                _log_text(name),
+                _log_text(request.remote_addr),
             )
             if throttled:
                 auth_limiter.record_failure(request.remote_addr, name)

@@ -20,7 +20,11 @@ def process_table(connection, table, fields, nullable_fields=()):
     to_update = {field: set() for field in fields + nullable_fields}
 
     c = connection.cursor()
-    c.execute("SELECT {1} FROM {0}".format(table, ",".join(fields + nullable_fields)))
+    c.execute(  # nosec B608 - the table and column names are this module's own literals, never input
+        "SELECT {1} FROM {0}".format(  # nosec B608 - the table and column names are this module's own literals, never input
+            table, ",".join(fields + nullable_fields)
+        )
+    )
     for row in c:
         for field, value in zip(fields + nullable_fields, row):
             if value is None or not isinstance(value, str):
@@ -30,7 +34,9 @@ def process_table(connection, table, fields, nullable_fields=()):
     for field, values in to_update.items():
         if not values:
             continue
-        sql = "UPDATE {0} SET {1}=%s WHERE {1}=%s".format(table, field)
+        sql = "UPDATE {0} SET {1}=%s WHERE {1}=%s".format(  # nosec B608 - the table and column names are this module's own literals, never input
+            table, field
+        )
         c.executemany(sql, map(lambda v: (UUID(v).bytes, v), values))
     for field in fields:
         sql = f"ALTER TABLE {table} MODIFY {field} BINARY(16) NOT NULL"

@@ -8,10 +8,14 @@ def process_table(connection, table):
     c.execute(f"ALTER TABLE {table} ADD COLUMN path_hash BLOB NOT NULL DEFAULT ROWID")
 
     hashes = dict()
-    for row in c.execute(f"SELECT path FROM {table}"):
-        hashes[row[0]] = hashlib.sha1(row[0].encode("utf-8"), usedforsecurity=False).digest()
+    for row in c.execute(f"SELECT path FROM {table}"):  # nosec B608 - table is a literal at each call site
+        # The digest every row of an already-migrated database carries: it must
+        # stay SHA-1 or this migration recomputes nothing (nosemgrep below).
+        hashes[row[0]] = hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- a path's index key, not a signature; the stored rows already hold SHA-1
+            row[0].encode("utf-8"), usedforsecurity=False
+        ).digest()
     c.executemany(
-        f"UPDATE {table} SET path_hash=? WHERE path=?",
+        f"UPDATE {table} SET path_hash=? WHERE path=?",  # nosec B608 - table is a literal at each call site
         [(h, p) for p, h in hashes.items()],
     )
 

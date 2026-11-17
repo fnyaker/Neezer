@@ -42,7 +42,7 @@ def _isrc_of(track) -> str | None:
         isrc = clean_isrc(meta.get("ISRC") or meta.get("isrc"))
         if isrc:
             return isrc
-    except Exception:  # pragma: no cover - a sidecar is a bonus
+    except Exception:  # nosec B110 - a sidecar is a bonus, the tags below still answer  # pragma: no cover
         pass
     path = getattr(track, "path", None)
     if not path:

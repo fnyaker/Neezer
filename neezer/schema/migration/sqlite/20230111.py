@@ -16,14 +16,20 @@ def process_table(connection, table, fields):
     to_update = {field: set() for field in fields}
 
     c = connection.cursor()
-    for row in c.execute("SELECT {1} FROM {0}".format(table, ",".join(fields))):
+    for row in c.execute(  # nosec B608 - the table and column names are this module's own literals, never input
+        "SELECT {1} FROM {0}".format(  # nosec B608 - the table and column names are this module's own literals, never input
+            table, ",".join(fields)
+        )
+    ):
         for field, value in zip(fields, row):
             if value is None or not isinstance(value, bytes):
                 continue
             to_update[field].add(value)
 
     for field, values in to_update.items():
-        sql = "UPDATE {0} SET {1}=? WHERE {1}=?".format(table, field)
+        sql = "UPDATE {0} SET {1}=? WHERE {1}=?".format(  # nosec B608 - the table and column names are this module's own literals, never input
+            table, field
+        )
         c.executemany(sql, map(lambda v: (UUID(bytes=v).hex, v), values))
 
     connection.commit()
