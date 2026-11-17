@@ -1,9 +1,11 @@
 // :designsystem — Sillon in Compose (docs/agents/mobile.md, MB1).
 //
-// MB0 creates the module and a MINIMAL theme so the shell and the 20 feature
-// modules compile against it; MB1 owns everything under `designsystem/**` from
-// here (exact tokens of webapp/src/app.css, the fonts, the motion tokens with
-// the eco/reduced guard, and every component).
+// Everything a screen lot draws lives here and nowhere else: the tokens of
+// `webapp/src/app.css`, the three fonts, the motion table of
+// `webapp/src/lib/motion.js` with the eco/reduced guard, the glyphs of
+// `webapp/src/components/Icon.svelte` and the components of the MB1 contract.
+// A screen lot writes `Sillon.…` and `Nz…`, never a literal colour, size or
+// duration (rule 5).
 
 plugins {
     alias(libs.plugins.android.library)
@@ -27,6 +29,21 @@ android {
     buildFeatures {
         compose = true
         buildConfig = false
+    }
+
+    // `UseTomlInstead` is answered in the dependency block below: the catalog is
+    // created once by MB0 and shared by every lot (worker rule 3), so the three
+    // coordinates only this module's JVM tests need are pinned here.
+    lint {
+        disable += "UseTomlInstead"
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric renders the screenshots: it needs the merged manifest
+            // and the resources of this module (fonts, values).
+            isIncludeAndroidResources = true
+        }
     }
 }
 
@@ -53,4 +70,48 @@ dependencies {
     // The rows the design system draws are UniFFI records; the types are the
     // bridge's, so a component never re-declares a `TrackRow`.
     api(project(":bridge"))
+
+    // --- JVM tests -----------------------------------------------------------
+    // The contrast maths, the motion guard and `ListWindow` are plain Kotlin.
+    // The touch-target and screenshot tests need a real Compose measure/layout
+    // and real pixels, so they run on Robolectric with its NATIVE graphics
+    // backend (Skia on the host): no emulator, no window on the person's
+    // display (worker rule 7).
+    //
+    // Why these coordinates are written here and not in `libs.versions.toml`:
+    // that file is created ONCE by MB0 and every lot shares it (worker rule 3).
+    // Versions that only this module's tests need therefore live here, in one
+    // place, and nowhere else.
+    //
+    // Why not Paparazzi, which the catalog already pins: MEASURED on this tree
+    // (AGP 8.13.2, Kotlin 2.4.21, Compose BOM 2026.05.01) —
+    //   * Paparazzi 1.3.5 bundles layoutlib 14 (API 34); `compileSdk = 36`
+    //     throws `NoSuchElementException at Renderer.kt:213`, and at 34 the
+    //     Compose of this BOM calls framework methods layoutlib 34 does not
+    //     have (`StaticLayout$Builder.setUseBoundsForWidth`,
+    //     `View.setRequestedFrameRate`), so nothing renders;
+    //   * Paparazzi 2.0.0-alpha05.1 fails `:bridge:packageDebugResources`
+    //     (`MergedResourceWriterRequest` signature changed under AGP 8.13).
+    // Robolectric 4.18 + the Compose test rule runs both the semantics
+    // assertions and the screenshots, with no change to the shared files.
+    testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.18")
+    testImplementation("androidx.test:core:1.7.0")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    // `createComposeRule()` hosts its content in an activity that the test
+    // manifest declares; without it Robolectric finds no window to render.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// The screenshot test writes the PNGs the lot commits under
+// `docs/agents/screenshots/mobile/MB1/` (the acceptance asks for them there),
+// and the token test reads `webapp/src/app.css` to prove the Compose table has
+// not drifted from the SPA's. Both paths are handed to the test as absolute
+// system properties: no test carries `../../..` arithmetic.
+val repoRoot = rootProject.layout.projectDirectory.dir("../..")
+
+tasks.withType<Test>().configureEach {
+    systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
+    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB1").asFile.absolutePath)
 }
