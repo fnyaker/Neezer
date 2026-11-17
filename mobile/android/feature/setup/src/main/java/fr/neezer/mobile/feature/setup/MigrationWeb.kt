@@ -2,8 +2,7 @@ package fr.neezer.mobile.feature.setup
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Handler
-import android.os.HandlerThread
+import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -14,6 +13,8 @@ import android.webkit.WebViewClient
 import java.io.ByteArrayInputStream
 import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import uniffi.nz_ffi.OldSettingRecord
@@ -40,8 +41,8 @@ import uniffi.nz_ffi.OldSettingRecord
  * - **It is bounded and it always cleans up.** The read waits for that event
  *   with a deadline, so a page that never answers becomes a CAUSE in the report
  *   instead of a migration that hangs (rule 3); the WebView is created, used and
- *   DESTROYED on its own `HandlerThread` (a WebView needs a Looper, and this app
- *   has no window open at that moment).
+ *   DESTROYED on the main thread, and never attached to any window: a WebView
+ *   needs the UI thread, and this app has no screen open at that moment.
  * - **It is a throwaway.** No cookie is read from it, nothing is written to it,
  *   and no cache is kept.
  */
@@ -57,6 +58,9 @@ internal object MigrationWeb {
     /** How long the page has to answer before the migration names the cause. */
     const val TIMEOUT_MS = 20_000L
 
+    /** The journal's tag, shared with the runner: a failed read says why. */
+    private const val TAG = "NzMigration"
+
     /** The path the page is served at, under the configured origin. */
     const val PATH = "/__nsmigrate"
 
@@ -68,77 +72,77 @@ internal object MigrationWeb {
     suspend fun read(context: Context, origin: String): Found {
         val url = "${origin.trimEnd('/')}$PATH"
         val answer = CompletableDeferred<String>()
-        val thread = HandlerThread("nz-migrate-web")
-        thread.start()
-        val handler = Handler(thread.looper)
+        // A WebView is created, used and destroyed on the MAIN thread (that is
+        // the configuration the platform supports); the caller's coroutine waits
+        // on the page's own report, so nothing blocks the UI while it does.
+        var view: WebView? = null
+        withContext(Dispatchers.Main) {
+            view = runCatching { open(context, url, answer) }
+                .onFailure { error ->
+                    Log.w(TAG, "the migration page could not open: ${error.message}", error)
+                }
+                .getOrNull()
+        }
         try {
-            handler.post { load(context, url, answer) }
             val payload = withTimeout(TIMEOUT_MS) { answer.await() }
             return parse(payload)
-        } catch (_: TimeoutException) {
+        } catch (error: Exception) {
+            Log.w(TAG, "the migration page did not answer: ${error.message}")
             throw IllegalStateException("la page de migration n'a pas répondu")
         } finally {
-            handler.post { thread.quitSafely() }
+            val dead = view
+            withContext(Dispatchers.Main) {
+                dead?.let { web ->
+                    runCatching { web.stopLoading() }
+                    runCatching { (web.parent as? android.view.ViewGroup)?.removeView(web) }
+                    runCatching { web.destroy() }
+                }
+            }
         }
     }
 
-    /** Creates the WebView on the handler's thread, loads [url], destroys it. */
-    private fun load(context: Context, url: String, answer: CompletableDeferred<String>) {
-        var finished = false
-        var web: WebView? = null
-        fun finish(payload: String?) {
-            if (finished) return
-            finished = true
-            if (payload != null && !answer.isCompleted) answer.complete(payload)
-            web?.let { view ->
-                runCatching { view.stopLoading() }
-                runCatching { (view.parent as? android.view.ViewGroup)?.removeView(view) }
-                runCatching { view.destroy() }
-            }
-            web = null
+    /** Creates the WebView, serves it the local page and arms the report. */
+    private fun open(
+        context: Context,
+        url: String,
+        answer: CompletableDeferred<String>,
+    ): WebView {
+        val web = WebView(context)
+        web.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            blockNetworkImage = true
         }
-        try {
-            val view = WebView(context)
-            web = view
-            view.settings.apply {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                databaseEnabled = true
-                // The page is local and its storage is local: no image, no font,
-                // no script is ever fetched (the interceptor would refuse them
-                // anyway, this just never asks).
-                cacheMode = WebSettings.LOAD_NO_CACHE
-                blockNetworkImage = true
+        web.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                asked: WebView?,
+                request: WebResourceRequest?,
+            ): WebResourceResponse? {
+                val target = request?.url?.toString() ?: return blocked()
+                return if (target == url) page() else blocked()
             }
-            view.webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(
-                    asked: WebView?,
-                    request: WebResourceRequest?,
-                ): WebResourceResponse? {
-                    val target = request?.url?.toString() ?: return blocked()
-                    return if (target == url) page() else blocked()
-                }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: android.webkit.WebResourceError?,
+            ) {
+                Log.w(TAG, "page error: ${error?.errorCode} ${request?.url}")
             }
-            view.webChromeClient = object : WebChromeClient() {
-                override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
-                    val text = message?.message() ?: return false
-                    val at = text.indexOf(MigrationPage.PREFIX)
-                    if (at < 0) return false
-                    finish(text.substring(at + MigrationPage.PREFIX.length))
-                    return true
-                }
-            }
-            view.loadUrl(url)
-            // A page that never reports (no storage, a Chromium that refused the
-            // document) is still destroyed: the caller's deadline ends the wait,
-            // and this timer ends the view a moment after it.
-            Handler(android.os.Looper.myLooper() ?: return).postDelayed(
-                { finish(null) },
-                TIMEOUT_MS + 1_000,
-            )
-        } catch (error: Throwable) {
-            finish("""{"error":"${error.javaClass.simpleName}"}""")
         }
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                val text = message?.message() ?: return false
+                val at = text.indexOf(MigrationPage.PREFIX)
+                if (at < 0) return false
+                if (!answer.isCompleted) answer.complete(text.substring(at + MigrationPage.PREFIX.length))
+                return true
+            }
+        }
+        web.loadUrl(url)
+        return web
     }
 
     private fun page(): WebResourceResponse {

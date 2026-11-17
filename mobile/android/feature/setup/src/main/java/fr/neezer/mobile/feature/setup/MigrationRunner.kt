@@ -1,6 +1,9 @@
 package fr.neezer.mobile.feature.setup
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzErrors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,6 +40,10 @@ import uniffi.nz_ffi.MigrationReportRecord
  * over, and the CAUSE of everything that was not) or the cause that stopped it.
  */
 object MigrationRunner {
+    /** The journal's tag: Aide reads `neezer`'s lines, and this one says what the
+     * one-shot migration did — a takeover that says nothing is a bug (rule 2). */
+    private const val TAG = "NzMigration"
+
     /** What the screens show. */
     data class State(
         /** The migration is running right now. */
@@ -61,21 +68,40 @@ object MigrationRunner {
      * provider's run is in flight) is the same run.
      */
     fun startIfNeeded(context: Context) {
-        val app = context.applicationContext
+        val application = context.applicationContext
         if (!started.compareAndSet(false, true)) return
+        // **MEASURED on API 35**: a ContentProvider's `onCreate` runs BEFORE
+        // `Application.onCreate` (the framework installs the providers first), so
+        // the core did not exist yet and the first version of this class did
+        // nothing at all — the log said `core=false` then the core started.
+        // Posting to the main looper puts the work after the message that is
+        // running the whole boot, which is where the core is built; no sleep, no
+        // latch, no polling.
+        Handler(Looper.getMainLooper()).post { begin(application) }
+    }
+
+    /** Starts the migration once, now that the process is fully up. */
+    private fun begin(app: Context) {
+        Log.i(TAG, "startIfNeeded: core=${NzBridge.core != null}")
         scope.launch {
             val screens = NzBridge.core?.screens()
             if (screens == null) {
                 started.set(false)
+                Log.w(TAG, "no core: nothing can be taken over")
                 _state.value = State(cause = "Le noyau de l'application n'est pas disponible")
                 return@launch
             }
             val status = runCatching { screens.migrationStatus() }
                 .getOrElse { error ->
                     started.set(false)
+                    Log.w(TAG, "status failed: ${error.message}", error)
                     _state.value = State(cause = NzErrors.text(error))
                     return@launch
                 }
+            Log.i(
+                TAG,
+                "status: needed=${status.needed} done=${status.done} oldApp=${status.oldAppFound}",
+            )
             if (!status.needed) {
                 _state.value = State(
                     done = true,
@@ -88,6 +114,12 @@ object MigrationRunner {
             val report = runCatching { migrate(app, screens) }
             report
                 .onSuccess { done ->
+                    Log.i(
+                        TAG,
+                        "done: tracks=${done.tracks} settings=${done.settings} " +
+                            "session=${done.session} server=${done.server} " +
+                            "failures=${done.failures.size}",
+                    )
                     _state.value = State(
                         done = true,
                         notice = done.notice,
@@ -96,6 +128,7 @@ object MigrationRunner {
                 }
                 .onFailure { error ->
                     started.set(false)
+                    Log.w(TAG, "migration failed: ${error.message}", error)
                     _state.value = State(cause = NzErrors.text(error))
                 }
         }
@@ -111,8 +144,11 @@ object MigrationRunner {
         // setup screen uses, so a reverse-proxied host keeps its path and the
         // port never lands after it.
         val origin = prefs?.let { screens.serverUrl(it.host, it.port) }
-        val cookie = origin?.let { OldAppData.cookie(it) }
+        // The WebView comes first: it is what brings the cookie store up, and a
+        // `CookieManager.getCookie` asked before it answers nothing on a cold
+        // process (measured: `session=0` while the old app's cookie was there).
         val found = origin?.let { MigrationWeb.readOrNull(context, it) }
+        val cookie = origin?.let { OldAppData.cookie(it) }
         val downloads = OldAppData.downloads(context, found?.owners.orEmpty())
         val input = MigrationInputRecord(
             prefs = prefs ?: uniffi.nz_ffi.OldPrefsRecord(

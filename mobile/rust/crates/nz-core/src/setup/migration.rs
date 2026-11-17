@@ -103,9 +103,7 @@ pub struct MigrationInput {
     pub cookie: Option<String>,
     pub downloads: Vec<OldDownload>,
     pub settings: Vec<OldSetting>,
-    /// How many download SETS the SPA's IndexedDB still lists (a playlist, an
-    /// album, a show): the notice says so, and the bytes themselves are the
-    /// files of `downloads`.
+    /// How many albums the SPA's IndexedDB still had a downloaded track of.
     pub offline_sets: u32,
 }
 
@@ -136,7 +134,9 @@ pub struct MigrationReport {
     /// How many of `settings` were kept (the rest are keys this app does not
     /// know).
     pub settings: u32,
-    /// How many download sets the SPA still listed.
+    /// How many ALBUMS the SPA's IndexedDB still had a downloaded track of (it
+    /// keeps per-track records and no set table: the page counts distinct
+    /// `track.album.id`s).
     pub offline_sets: u32,
     pub failures: Vec<MigrationFailure>,
     /// The sentence the notice shows: what was taken over, or the cause of each
@@ -276,7 +276,30 @@ impl Core {
         let mut report = MigrationReport::default();
         let mut failures: Vec<MigrationFailure> = Vec::new();
 
-        // 1. The server, remembered even when it does not answer (a home server
+        // 1. The pin FIRST: the old app trusted this leaf on first use, and the
+        // server's own probe below must already obey it. In the other order the
+        // probe met the certificate unpinned and the cause came out as the weaker
+        // "n'est pas accepté" instead of "a changé" — measured on a TLS server
+        // whose certificate had changed (the old app's setup passed its fingerprint
+        // to its probe for the same reason).
+        if let (Some(pin_origin), Some(pin_cert)) = (
+            input.prefs.pin_origin.as_ref(),
+            input.prefs.pin_cert.as_ref(),
+        ) && !pin_cert.trim().is_empty()
+        {
+            match self.pin_certificate(pin_origin, pin_cert) {
+                Ok(()) => report.pin = true,
+                Err(error) => failures.push(MigrationFailure {
+                    step: "certificat".to_owned(),
+                    cause: format!(
+                        "le certificat épinglé n'a pas pu être repris ({})",
+                        cause_of(&error)
+                    ),
+                }),
+            }
+        }
+
+        // 2. The server, remembered even when it does not answer (a home server
         // on another link is still the server the person chose).
         let mut origin: Option<Origin> = None;
         if !input.prefs.host.trim().is_empty() {
@@ -311,25 +334,6 @@ impl Core {
                     step: "serveur".to_owned(),
                     cause: "l'adresse enregistrée par l'ancienne application est illisible"
                         .to_owned(),
-                }),
-            }
-        }
-
-        // 2. The pin the old app trusted on first use, re-pinned for the same
-        // origin (another host is never relaxed).
-        if let (Some(pin_origin), Some(pin_cert)) = (
-            input.prefs.pin_origin.as_ref(),
-            input.prefs.pin_cert.as_ref(),
-        ) && !pin_cert.trim().is_empty()
-        {
-            match self.pin_certificate(pin_origin, pin_cert) {
-                Ok(()) => report.pin = true,
-                Err(error) => failures.push(MigrationFailure {
-                    step: "certificat".to_owned(),
-                    cause: format!(
-                        "le certificat épinglé n'a pas pu être repris ({})",
-                        cause_of(&error)
-                    ),
                 }),
             }
         }
@@ -601,8 +605,11 @@ fn notice(report: &MigrationReport) -> String {
         ));
     }
     if report.offline_sets > 0 {
+        // What the SPA's IndexedDB really knows: the ALBUMS a downloaded track
+        // belongs to (it keeps per-track records, never a "set"); counted in the
+        // hidden WebView, one entry per `track.album.id`.
         taken.push(format!(
-            "{} liste{} hors ligne",
+            "{} album{} hors ligne",
             report.offline_sets,
             plural(report.offline_sets)
         ));

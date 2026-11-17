@@ -193,7 +193,7 @@ pub struct MigrationReportRecord {
     pub tracks: u32,
     /// How many settings were kept (the rest are keys this app does not know).
     pub settings: u32,
-    /// How many download sets the SPA still listed.
+    /// How many albums the SPA's IndexedDB still had a downloaded track of.
     pub offline_sets: u32,
     pub failures: Vec<MigrationFailureRecord>,
     /// The sentence the notice shows: French, what was taken and the cause of
