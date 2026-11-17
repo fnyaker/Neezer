@@ -111,15 +111,20 @@ flatpak install --user ./neezer-desktop-1.6.0-x86_64.flatpak   # flatpak/test.sh
 
 ## Measured
 
-Sizes of the 1.6.0 artefacts (x86_64, both binaries included):
+Sizes of the 1.6.0 artefacts attached to the release (x86_64, both binaries
+included):
 
 | Format | Size | Installed and started in |
 |---|---|---|
-| Arch `.pkg.tar.zst` | 26.72 MiB (P1, 1.3.1) | Arch, `pacman -U` |
-| Debian `.deb` | 22 835 380 B (21.8 MiB) | Debian 13, `apt install ./…` |
-| RPM | 20 238 109 B (19.3 MiB) | Fedora 45, `dnf install ./…` |
-| AppImage | 32 733 688 B (31.2 MiB) | any desktop, run it |
-| Flatpak | 21 980 488 B (21.0 MiB) | `flatpak --user install` |
+| Arch `.pkg.tar.zst` | 34 498 908 B (32.9 MiB) | Arch, `pacman -U` |
+| Debian `.deb` | 22 831 992 B (21.8 MiB) | Debian 13, `apt install ./…` |
+| RPM | 20 238 549 B (19.3 MiB) | Fedora 45, `dnf install ./…` |
+| AppImage | 32 750 072 B (31.2 MiB) | any desktop, run it |
+| Flatpak | 21 972 128 B (21.0 MiB) | `flatpak --user install` |
+
+The five files as attached to **v1.6.0** (downloaded from the release and
+installed again): the `.deb` painted in **82 ms**, the `.rpm` in **136 ms**, the
+AppImage in **128 ms**, the Flatpak likewise on its own X server.
 
 Both binaries weigh 60 437 392 B and 38 692 288 B (99 MB installed). First frame
 on the test's own X server: `.deb` 125 ms, `.rpm` 131 ms, AppImage 373 ms,
