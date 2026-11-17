@@ -137,6 +137,10 @@ impl From<ApiError> for CoreError {
                 },
             },
             ApiError::Decode(detail) => CoreError::Internal { detail },
+            // SC3's two TLS/refusal variants: both already have a `CoreError`
+            // counterpart, so the mapping only carries them across.
+            ApiError::Invalid(sentence) => CoreError::Invalid { detail: sentence },
+            ApiError::Certificate { sha256, changed } => CoreError::Certificate { sha256, changed },
         }
     }
 }
@@ -181,6 +185,42 @@ mod tests {
         assert_eq!(
             CoreError::from(ApiError::Busy { retry_after: 12 }),
             CoreError::NotReady { retry_after_s: 12 }
+        );
+    }
+
+    /// SC3's two refusals cross the boundary with their own payload: the leaf
+    /// and whether the pin changed for the certificate, the sentence for a
+    /// refusal this client made itself. Losing either would turn "le certificat
+    /// a changé" into a generic failure on the setup screen.
+    #[test]
+    fn the_two_refusals_keep_their_payload() {
+        assert_eq!(
+            CoreError::from(ApiError::Invalid("Adresse refusée".into())),
+            CoreError::Invalid {
+                detail: "Adresse refusée".into()
+            }
+        );
+        assert_eq!(
+            CoreError::from(ApiError::Certificate {
+                sha256: "AB:CD:EF".into(),
+                changed: true,
+            }),
+            CoreError::Certificate {
+                sha256: "AB:CD:EF".into(),
+                changed: true,
+            }
+        );
+        // A new leaf is a refusal the person must act on, and `changed` is what
+        // tells "a pin was replaced" from "the chain was not accepted".
+        assert_eq!(
+            CoreError::from(ApiError::Certificate {
+                sha256: "AB:CD:EF".into(),
+                changed: false,
+            }),
+            CoreError::Certificate {
+                sha256: "AB:CD:EF".into(),
+                changed: false,
+            }
         );
     }
 
