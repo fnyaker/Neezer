@@ -89,6 +89,18 @@ pub const PROGRESS_MIN: f64 = 8.0;
 pub const DONE_TAIL: u32 = 15;
 /// One episode row's height.
 pub const ROW_HEIGHT: f32 = 64.;
+
+/// The head never takes more than this share of the page: the episode list is
+/// what the page is for.
+const HEAD_SHARE: f32 = 0.45;
+/// The page's reading width: the same 1800 px cap D12's screens use, so a
+/// 2560 px window is margins rather than a two-metre episode row.
+const PAGE_MAX: f32 = 1_800.;
+/// The shell's header and player bar, which the screen never sees.
+const SHELL_CHROME: f32 = 144.;
+/// Under this page height the hero loses its sleeve size and its description:
+/// at 1280×800 the full hero plus the admin block left the list 38 px.
+const COMPACT_BELOW: f32 = 900.;
 /// Below this much content the panel cannot sit beside the list.
 const PANEL_MIN_CONTENT: f32 = 1_040.;
 /// The panel's width when it is a column.
@@ -96,6 +108,50 @@ const PANEL_WIDTH: f32 = 460.;
 /// The shell's fixed rails (D7): a 200 px sidebar and a 420 px queue panel.
 const SIDEBAR: f32 = 200.;
 const QUEUE_PANEL: f32 = 420.;
+
+/// What the show page's head does at a given page height.
+///
+/// The head is a fixed region above a windowed list, capped at [`HEAD_SHARE`] of
+/// the page: with the admin's transcription card it is taller than the cap at
+/// every window under ~1300 px, and the person then saw a switch cut in half
+/// above the first episode (1280×800, measured). So the hero goes compact when
+/// the page is short, and the admin block FOLDS (one summary row that opens it)
+/// whenever the head with it would not fit the cap — the person can still open
+/// it, deliberately, and its body scrolls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeadFit {
+    /// A 96 px sleeve, no description, a smaller title.
+    pub compact: bool,
+    /// The admin block is expanded, not folded into its summary row.
+    pub settings: bool,
+}
+
+/// The heights the decision compares, in pixels (they are the real ones at the
+/// default rem size: the hero's 180 px sleeve plus its 28 px padding, a 44 px
+/// action row, a 34 px folded row, the 220 px unfolded admin block and the 40 px
+/// transcript search row).
+const HERO_FULL: f32 = 236.;
+const HERO_COMPACT: f32 = 152.;
+const ACTIONS_ROW: f32 = 44.;
+const FOLDED_ROW: f32 = 34.;
+const ADMIN_OPEN: f32 = 220.;
+const SEARCH_ROW: f32 = 40.;
+
+pub fn head_fit(page_height: f32) -> HeadFit {
+    let cap = page_height * HEAD_SHARE;
+    let compact = page_height < COMPACT_BELOW;
+    let hero = if compact { HERO_COMPACT } else { HERO_FULL };
+    HeadFit {
+        compact,
+        settings: hero + ACTIONS_ROW + ADMIN_OPEN + SEARCH_ROW <= cap,
+    }
+}
+
+/// The page height a window gives the screen: the shell's header and player bar
+/// are not the screen's.
+fn page_height(window: &Window) -> f32 {
+    (f32::from(window.viewport_size().height) - SHELL_CHROME).max(0.)
+}
 
 /// The backlog a show's transcription switch applies when turned on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -269,6 +325,10 @@ pub struct Screen {
     download_busy: bool,
     unsubscribe_confirm: bool,
     speed_open: bool,
+    /// The admin block, as the person left it (`None`: `head_fit` decides).
+    settings_open: Option<bool>,
+    /// What the last frame actually showed, so the row's own click flips it.
+    settings_shown: bool,
     events: Sender<Msg>,
     _subscriptions: Vec<Subscription>,
 }
@@ -346,6 +406,8 @@ impl Screen {
             download_busy: false,
             unsubscribe_confirm: false,
             speed_open: false,
+            settings_open: None,
+            settings_shown: false,
             events: tx,
             _subscriptions: vec![cx.observe(&state, |this, _, cx| {
                 this.positions = positions(cx);
@@ -1997,7 +2059,7 @@ impl Screen {
 
     // -- rendering helpers --------------------------------------------------
 
-    fn header(&self, show: &PodcastShow, cx: &mut Context<Self>) -> AnyElement {
+    fn header(&self, show: &PodcastShow, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let cover_file = show
             .cover
             .as_deref()
@@ -2022,7 +2084,11 @@ impl Screen {
                 show.cover.as_deref(),
                 &show.title,
                 Kind::Podcast,
-                card::hero_sleeve(),
+                if compact {
+                    px(96.)
+                } else {
+                    card::hero_sleeve()
+                },
                 cx,
             ))
             .child(
@@ -2041,7 +2107,7 @@ impl Screen {
                     )
                     .child(
                         div()
-                            .text_size(rems(2.))
+                            .text_size(rems(if compact { 1.5 } else { 2. }))
                             .font_weight(FontWeight::BOLD)
                             .truncate()
                             .child(show.title.clone()),
@@ -2049,7 +2115,7 @@ impl Screen {
                     .when_some(
                         show.description
                             .clone()
-                            .filter(|text| !text.trim().is_empty()),
+                            .filter(|text| !text.trim().is_empty() && !compact),
                         |column, description| {
                             column.child(
                                 div()
@@ -2214,15 +2280,84 @@ impl Screen {
         column.into_any_element()
     }
 
-    fn switches(&self, show: &PodcastShow, cx: &mut Context<Self>) -> AnyElement {
+    fn switches(&self, show: &PodcastShow, open: bool, cx: &mut Context<Self>) -> AnyElement {
         let is_admin = self.is_admin(cx);
+        if !is_admin {
+            return div().into_any_element();
+        }
+        let ready = self.ready_transcripts();
+        let archived = self.archived_episodes();
+        let mut summary = Vec::new();
+        if !show.local {
+            summary.push(format!(
+                "Archivage auto {}",
+                if show.auto_archive {
+                    "activé"
+                } else {
+                    "désactivé"
+                }
+            ));
+        }
+        summary.push(format!(
+            "{ready} sur {archived} transcrit{}",
+            plural(archived)
+        ));
         let mut column = div()
+            .id("show-settings")
+            .debug_selector(|| "show-settings".to_owned())
             .flex()
             .flex_col()
             .gap(rems(0.375))
             .px(rems(1.))
             .pb(rems(0.5));
-        if is_admin && !show.local {
+        // One row that says what is folded inside, and opens it: the head may
+        // not spend 220 px on it at 1280×800 (`head_fit`).
+        column = column.child(
+            div()
+                .id("show-settings-row")
+                .debug_selector(|| "show-settings-row".to_owned())
+                .flex()
+                .items_center()
+                .gap(rems(0.375))
+                .h(rems(2.125))
+                .cursor_pointer()
+                .text_size(rems(0.75))
+                .text_color(theme::secondary(cx))
+                .hover(|style| style.text_color(theme::text(cx)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.settings_open = Some(!this.settings_shown);
+                    cx.notify();
+                }))
+                .child(
+                    icon(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .size(rems(0.875)),
+                )
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Réglages de l'émission"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .truncate()
+                        .child(SharedString::from(summary.join(" · "))),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(rems(0.6875))
+                        .child(if open { "Replier" } else { "Ouvrir" }),
+                ),
+        );
+        if !open {
+            return column.into_any_element();
+        }
+        if !show.local {
             let archived = show.archived_count.min(show.episode_count);
             column = column.child(
                 switch(
@@ -2257,9 +2392,7 @@ impl Screen {
                     }),
             );
         }
-        if is_admin {
-            column = column.child(self.transcribe_card(cx));
-        }
+        column = column.child(self.transcribe_card(cx));
         column.into_any_element()
     }
 
@@ -2844,6 +2977,8 @@ impl Screen {
         .track_scroll(&scroll);
         let mut column = div()
             .relative()
+            .id("show-episodes-box")
+            .debug_selector(|| "show-episodes-box".to_owned())
             .flex()
             .flex_col()
             .flex_1()
@@ -3167,6 +3302,7 @@ impl Screen {
 
     fn on_panel_act(&mut self, act: Act, cx: &mut Context<Self>) {
         match act {
+            Act::Close => self.close_panel(cx),
             Act::Seek(at) => {
                 if let Some(index) = self.panel_index() {
                     self.play_at(index, at, cx);
@@ -3322,9 +3458,12 @@ impl Screen {
         }
         self.covers_for(urls, cx);
 
-        let header = self.header(&show, cx);
+        let fit = head_fit(page_height(window));
+        let settings_open = self.settings_open.unwrap_or(fit.settings);
+        self.settings_shown = settings_open;
+        let header = self.header(&show, fit.compact, cx);
         let actions = self.actions(&show, cx);
-        let switches = self.switches(&show, cx);
+        let switches = self.switches(&show, settings_open, cx);
         let search = if self.ready_transcripts() > 0
             || self.search_loading
             || !self.search_term.is_empty()
@@ -3355,6 +3494,12 @@ impl Screen {
                 .into_any_element()
         } else if let Some(panel_ref) = panel.as_mut() {
             if content_width >= PANEL_MIN_CONTENT {
+                // Every wrapper here is a FLEX container on purpose: a plain
+                // block with `flex_1` gives its child no definite height, so the
+                // virtual list's `h_full` resolved to 0 and the episode list
+                // painted NOTHING beside an open panel (seen at 1280 and 2560;
+                // the panel's own `h_full` collapsed the same way, which is why
+                // its body overflowed over the player bar instead of scrolling).
                 div()
                     .flex()
                     .size_full()
@@ -3362,6 +3507,8 @@ impl Screen {
                     .min_w_0()
                     .child(
                         div()
+                            .flex()
+                            .flex_col()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
@@ -3370,7 +3517,10 @@ impl Screen {
                     .child(
                         div()
                             .id("show-panel")
+                            .flex()
+                            .flex_col()
                             .w(px(PANEL_WIDTH))
+                            .h_full()
                             .flex_shrink_0()
                             .min_h_0()
                             .border_l_1()
@@ -3405,6 +3555,8 @@ impl Screen {
                     )
                     .child(
                         div()
+                            .flex()
+                            .flex_col()
                             .flex_1()
                             .min_h_0()
                             .child(self.panel_view(panel_ref, window, cx)),
@@ -3422,15 +3574,18 @@ impl Screen {
         };
         self.panel = panel;
 
-        // The head scrolls and never takes more than 45 % of the page: with the
-        // admin's transcription card open, a 1280x800 window left the episode list
-        // 38 px of height — the list unusable, which is not a compact page.
+        // The head scrolls and never takes more than `HEAD_SHARE` of the page:
+        // with the admin's transcription card open a 1280x800 window left the
+        // episode list 38 px of height, which is the list being unusable, not a
+        // compact page. `head_fit` is what keeps a control from being cut in
+        // half at that cap (the folded admin row is 34 px, not 220).
         let head = div()
             .id("show-head")
+            .debug_selector(|| "show-head".to_owned())
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .max_h(relative(0.45))
+            .max_h(relative(HEAD_SHARE))
             .min_h_0()
             .overflow_y_scroll()
             .child(header)
@@ -3464,7 +3619,14 @@ impl Screen {
                     ),
             );
         }
-        column.into_any_element()
+        // The page's reading width: the same 1800 px cap D12's screens use, so a
+        // 2560 px window is margins rather than a two-metre episode row.
+        div()
+            .size_full()
+            .flex()
+            .justify_center()
+            .child(column.max_w(px(PAGE_MAX)))
+            .into_any_element()
     }
 }
 
@@ -4298,7 +4460,358 @@ mod tests {
     fn a_query_carries_a_trimmed_position() {
         assert_eq!(trim_float(95.4), "95.4");
         assert_eq!(trim_float(95.0), "95");
-        assert_eq!(trim_float(0.0), "0");
+        assert_eq!(trim_float(0.), "0");
         assert_eq!(trim_float(12.345), "12.35");
+    }
+
+    /// The head's cap, at the four sizes this lot was looked at. The person's
+    /// complaint was a control cut in half above the first episode: the admin
+    /// block folds whenever the head with it would not fit `HEAD_SHARE`.
+    #[test]
+    fn the_head_folds_its_admin_block_before_it_cuts_the_list() {
+        // 1280×800: 656 px of page, 295 px of head. Compact hero, folded block.
+        let small = head_fit(656.);
+        assert!(small.compact, "1280×800 goes compact");
+        assert!(
+            !small.settings,
+            "the admin block cannot fit 45 % of a 656 px page"
+        );
+        // 2560×1600: 1456 px of page, 655 px of head: everything fits.
+        let big = head_fit(1456.);
+        assert!(!big.compact, "a 1600 px window keeps the full hero");
+        assert!(big.settings, "the admin block fits a 1456 px page");
+        // 1920×1080: the full hero fits, the admin block does not.
+        let hd = head_fit(936.);
+        assert!(!hd.compact);
+        assert!(!hd.settings, "a 936 px page folds the admin block");
+        // The threshold itself: 900 px is where the compact hero ends.
+        assert!(head_fit(899.).compact);
+        assert!(!head_fit(900.).compact);
+        // And the folded head always fits the cap it was decided against, at
+        // every size this lot was looked at (400 px of page — a 544 px window —
+        // is below any real window and the head scrolls there).
+        for page in [656., 760., 936., 1_200., 1_456.] {
+            let fit = head_fit(page);
+            let hero = if fit.compact { 152. } else { 236. };
+            let folded = hero + 44. + 34. + 40.;
+            assert!(
+                folded <= page * HEAD_SHARE,
+                "the folded head must fit {page}: {folded}"
+            );
+        }
+    }
+
+    const ME: &str = r#"{"user":{"id":"u1","name":"bench","admin":true,"access":{},"sources":[]}}"#;
+
+    fn episode_json(index: usize) -> String {
+        format!(
+            r#"{{"id":"e{index}","deezer_id":"e{index}","title":"Épisode {index}",
+                "duration":1800,"channel_id":"c1","published":1794748649,
+                "archived":true,"unavailable":false,"explicit":false,"podcast":true,
+                "status":"completed","chapter_count":2,"transcript":null,
+                "artist":{{"deezer_id":"c1","name":"Les Histoires"}},
+                "album":{{"deezer_id":"c1","title":"Les Histoires","cover":null}},
+                "cover":null}}"#
+        )
+    }
+
+    fn page_json(range: std::ops::Range<usize>, next: Option<&str>) -> String {
+        format!(
+            r#"{{"id":"c1","deezer_id":"9400001","title":"Les Histoires",
+                "description":"","cover":null,"subscribed":true,"local":false,
+                "status":"ok","episode_count":60,"archived_count":60,
+                "auto_archive":false,"auto_transcribe":false,
+                "transcribe_language":"auto","transcribed_count":0,
+                "episodes":[{}],"next":{}}}"#,
+            range.map(episode_json).collect::<Vec<_>>().join(","),
+            next.map(|next| format!("\"{next}\""))
+                .unwrap_or_else(|| "null".to_owned())
+        )
+    }
+
+    /// The acceptance's "episode list paged by cursor (no unbounded fetch)",
+    /// counted in requests: ONE page on open, ONE more when the person asks for
+    /// the next, and the second carries the cursor the server gave. The rows are
+    /// windowed, so 50 episodes do not build 50 rows.
+    #[gpui::test]
+    async fn a_show_page_asks_one_page_and_the_next_one_needs_the_cursor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::widgets::card::stub;
+
+        let first = page_json(0..50, Some("cursor-1"));
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/podcast/c1", first.as_str()),
+            ("/api/podcast/c1/markers", r#"{"markers":{}}"#),
+            (
+                "/api/transcribe/settings",
+                r#"{"available":false,"reason":"disabled"}"#,
+            ),
+            ("/api/podcast/progress", r#"{"progress":{}}"#),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| Screen::new(Route::Show { id: "c1".into() }, state, cx)
+        });
+        stub::until(&runtime, cx, "the first page", |cx| {
+            screen.read(cx).episodes.len() == 50
+        });
+        assert_eq!(
+            stub.count("/api/podcast/c1"),
+            1,
+            "one page, one request (never one per episode)"
+        );
+        assert_eq!(
+            stub.queries("/api/podcast/c1"),
+            vec!["limit=50".to_owned()],
+            "the first page carries the limit and no cursor"
+        );
+        assert_eq!(
+            stub.count("/api/podcast/c1/markers"),
+            1,
+            "the whole show's markers are ONE read, not one per episode"
+        );
+        assert_eq!(
+            stub.count("/api/transcribe/settings"),
+            1,
+            "an admin's transcription card is one read"
+        );
+        let per_episode = stub
+            .hits()
+            .iter()
+            .filter(|hit| hit.path.starts_with("/api/podcast/episode/"))
+            .count();
+        assert_eq!(
+            per_episode, 0,
+            "nothing is fetched per episode: no chapters or transcript before a panel opens"
+        );
+
+        let built = cx.update(|_, cx| screen.read(cx).rendered_rows);
+        assert!(
+            (1..=25).contains(&built),
+            "a page of 50 rows builds what the window shows, it built {built}"
+        );
+
+        // The next page is the cursor's: one more request, no unbounded fetch.
+        cx.update(|_, cx| {
+            screen.update(cx, |screen, cx| screen.load_more(cx));
+        });
+        stub::until(&runtime, cx, "the second page", |_| {
+            stub.count("/api/podcast/c1") == 2
+        });
+        let queries = stub.queries("/api/podcast/c1");
+        assert_eq!(queries.len(), 2, "one page, one request");
+        assert!(
+            queries[1].contains("cursor=cursor-1"),
+            "the second page carries the cursor the server gave: {:?}",
+            queries[1]
+        );
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// The list must still paint BESIDE an open episode panel: a plain block
+    /// wrapper gave the virtual list no definite height, so 50 episodes painted
+    /// nothing at 1280 and 2560 while the panel took the width (found by the
+    /// Xvfb pass, not by the suite).
+    #[gpui::test]
+    async fn the_episode_list_survives_the_panel_beside_it(cx: &mut gpui::TestAppContext) {
+        use crate::widgets::card::stub;
+
+        let page = page_json(0..50, None);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/podcast/c1", page.as_str()),
+            ("/api/podcast/c1/markers", r#"{"markers":{}}"#),
+            (
+                "/api/transcribe/settings",
+                r#"{"available":false,"reason":"disabled"}"#,
+            ),
+            ("/api/podcast/progress", r#"{"progress":{}}"#),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| Screen::new(Route::Show { id: "c1".into() }, state, cx)
+        });
+        stub::until(&runtime, cx, "the page", |cx| {
+            screen.read(cx).episodes.len() == 50
+        });
+        assert!(cx.update(|_, cx| screen.read(cx).rendered_rows) > 0);
+
+        cx.update(|_, cx| {
+            screen.update(cx, |screen, cx| screen.open_panel(0, cx));
+        });
+        stub::until(&runtime, cx, "the panel", |cx| {
+            screen.read(cx).panel.is_some()
+        });
+        let built = cx.update(|_, cx| screen.read(cx).rendered_rows);
+        let wide = cx.update(|window, _| {
+            f32::from(window.viewport_size().width) - SIDEBAR >= PANEL_MIN_CONTENT
+        });
+        assert!(
+            wide,
+            "this test drives the panel BESIDE the list: it needs the wide branch"
+        );
+        assert!(
+            built > 0,
+            "the list keeps painting beside the panel (it built {built} rows)"
+        );
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// The list's own geometry and a frame's cost, on the real screen: the head
+    /// stays inside its cap, the list keeps a usable height, and a paint of a
+    /// 50-episode page is measured (a person's click must answer at once).
+    #[gpui::test]
+    async fn the_head_leaves_the_list_its_room_and_a_frame_costs_little(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::widgets::card::stub;
+
+        let page = page_json(0..50, None);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/podcast/c1", page.as_str()),
+            ("/api/podcast/c1/markers", r#"{"markers":{}}"#),
+            (
+                "/api/transcribe/settings",
+                r#"{"available":false,"reason":"disabled"}"#,
+            ),
+            ("/api/podcast/progress", r#"{"progress":{}}"#),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| Screen::new(Route::Show { id: "c1".into() }, state, cx)
+        });
+        stub::until(&runtime, cx, "the page", |cx| {
+            screen.read(cx).episodes.len() == 50
+        });
+
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+        };
+        let mut samples = Vec::new();
+        for _ in 0..12 {
+            let started = std::time::Instant::now();
+            draw(cx);
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        samples.sort_by(f64::total_cmp);
+        let median = samples[samples.len() / 2];
+        let profile = if cfg!(debug_assertions) {
+            "debug, unoptimised"
+        } else {
+            "release"
+        };
+        println!("show screen frame, 50 episodes windowed ({profile}): median {median:.1} ms");
+        // Release is the acceptance's number (4.2 ms is a 240 Hz frame); a debug
+        // build is bounded loosely so CI notices a regression, as D13 does.
+        let budget = if cfg!(debug_assertions) { 400.0 } else { 8.0 };
+        assert!(
+            median < budget,
+            "a paint of the episode list stays inside {budget:.0} ms: {median:.1} ms"
+        );
+
+        // The head never takes more than its share, and the list keeps the rest.
+        // `debug_bounds` only records with `debug_assertions` (D9's pitfall).
+        #[cfg(debug_assertions)]
+        {
+            draw(cx);
+            let head = cx.debug_bounds("show-head").expect("the head is drawn");
+            let list = cx
+                .debug_bounds("show-episodes-box")
+                .expect("the list box is drawn");
+            let page =
+                cx.update(|window, _| f32::from(window.viewport_size().height)) - SHELL_CHROME;
+            assert!(
+                f32::from(head.size.height) <= page * HEAD_SHARE + 1.0,
+                "the head stays inside {} % of the page ({} of {page})",
+                HEAD_SHARE * 100.,
+                f32::from(head.size.height)
+            );
+            assert!(
+                f32::from(list.size.height) >= 240.,
+                "the list keeps at least 240 px ({} px)",
+                f32::from(list.size.height)
+            );
+        }
+        let built = cx.update(|_, cx| screen.read(cx).rendered_rows);
+        assert!(
+            built < 50,
+            "a page of 50 rows is windowed, never all built ({built})"
+        );
+
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// What this screen holds, measured in BYTES on the test's own thread
+    /// (`testmem`), for the worst case this lot can reach: a page of 50
+    /// episodes, a full transcript page (200 lines) and the 100 hits of a show
+    /// search. Nothing is kept per row beyond the model.
+    #[test]
+    fn a_page_a_transcript_and_a_search_are_what_the_screen_holds() {
+        use crate::testmem::Meter;
+        use crate::widgets::transcript_panel::Panel;
+        use nz_model::{EpisodeTranscript, TranscriptHit, TranscriptSegment};
+
+        let before = Meter::now();
+        let page: PodcastPage = serde_json::from_str(&page_json(0..50, None)).expect("a show page");
+        let segments: Vec<TranscriptSegment> = (0..200)
+            .map(|index| TranscriptSegment {
+                start: index as f64 * 15.,
+                end: index as f64 * 15. + 15.,
+                text: format!(
+                    "Ligne {} d'une transcription de deux cents lignes, avec ses mots.",
+                    index
+                ),
+            })
+            .collect();
+        let transcript = EpisodeTranscript {
+            status: "ready".into(),
+            archived: true,
+            total: 200,
+            limit: 200,
+            segments,
+            ..EpisodeTranscript::default()
+        };
+        let mut panel = Panel::new("e1", Some(true), 3600);
+        panel.apply(transcript, transcript::Tone::User);
+        let hits: Vec<TranscriptHit> = (0..100)
+            .map(|index| TranscriptHit {
+                idx: index,
+                start: index as f64 * 15.,
+                end: index as f64 * 15. + 15.,
+                text: format!("Une ligne qui parle de mémoire, la {index}e du show."),
+                episode: Some(nz_model::TranscriptEpisodeRef {
+                    id: format!("e{}", index % 50).into(),
+                    title: format!("Épisode {index}"),
+                    ..Default::default()
+                }),
+                ..TranscriptHit::default()
+            })
+            .collect();
+        let held = before.since();
+        // 50 episodes, 200 transcript lines and 100 hits: the screen keeps the
+        // models, never an element or an image per row.
+        assert!(
+            held < 512 * 1024,
+            "a page, a transcript page and its hits must stay under 512 KB, they hold {held} B"
+        );
+        assert_eq!(page.episodes.len(), 50);
+        assert!(panel.loaded());
+        assert_eq!(hits.len(), 100);
+        eprintln!("D11 screen holds {held} B for 50 episodes + 200 lines + 100 hits");
     }
 }

@@ -55,6 +55,10 @@ use crate::wiring::events::{self, Sender};
 /// The search field's quiet time: the SPA's 300 ms.
 pub const DEBOUNCE_MS: u64 = 300;
 
+/// The page's reading width: the 1800 px cap the other screens use (D12), so a
+/// 2560 px window is margins and the grid spreads from a sane left edge.
+const PAGE_MAX: f32 = 1_800.;
+
 /// What a background thread tells this screen.
 enum Msg {
     /// The subscriptions, fresh from the server.
@@ -775,7 +779,13 @@ impl Render for Screen {
             body = body.child(grid);
         }
 
-        page.child(body).into_any_element()
+        page = page.child(body);
+        div()
+            .size_full()
+            .flex()
+            .justify_center()
+            .child(page.max_w(px(PAGE_MAX)))
+            .into_any_element()
     }
 }
 

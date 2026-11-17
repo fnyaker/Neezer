@@ -52,6 +52,8 @@ pub enum Act {
     ToggleAllChapters,
     /// The transcript panel's own verbs, forwarded unchanged.
     Transcript(TranscriptAsk),
+    /// Fold the panel away (Échap does the same; a mouse needs a control).
+    Close,
 }
 
 /// Everything the panel needs to know about the world, in one struct (a dozen
@@ -279,9 +281,43 @@ pub fn view<V: Render>(
         .gap(rems(0.1875))
         .child(
             div()
-                .text_size(rems(0.875))
-                .font_weight(FontWeight::BOLD)
-                .child(episode.title.clone()),
+                .flex()
+                .items_start()
+                .gap(rems(0.375))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(rems(0.875))
+                        .font_weight(FontWeight::BOLD)
+                        .child(episode.title.clone()),
+                )
+                .child({
+                    // A mouse has no Échap: without this the panel could only be
+                    // replaced, never closed, in the wide layout (1280 and 2560).
+                    let done = on.clone();
+                    div()
+                        .id("episode-panel-close")
+                        .debug_selector(|| "episode-panel-close".to_owned())
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .w(rems(1.5))
+                        .h(rems(1.5))
+                        .rounded(rems(0.25))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme::chrome(cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            done(this, Act::Close, cx)
+                        }))
+                        .child(
+                            icon(IconName::Close)
+                                .size(rems(0.875))
+                                .text_color(theme::secondary(cx)),
+                        )
+                }),
         )
         .child(
             div()
@@ -319,6 +355,10 @@ pub fn view<V: Render>(
         .w_full()
         .min_w_0()
         .min_h_0()
+        // The scroller must BE the flex item: a block wrapper gave it no
+        // definite height, so `overflow_y_scroll` had nothing to scroll and the
+        // panel ran under the player bar (1280×800, seen on the bench).
+        .flex_1()
         .overflow_y_scroll();
 
     // -- chapters ---------------------------------------------------------
@@ -548,7 +588,7 @@ pub fn view<V: Render>(
         .min_w_0()
         .min_h_0()
         .child(head)
-        .child(div().flex_1().min_h_0().child(body))
+        .child(body)
         .into_any_element()
 }
 
