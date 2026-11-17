@@ -20,6 +20,11 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 nz-core = { path = "../nz-core" }
+# The Android output's four JNI entry points (lot MB3a's `AudioTrackPull.kt`) are
+# resolved BY NAME at runtime, and an unreferenced symbol from an rlib is dropped
+# from the cdylib: `src/lib.rs` keeps their address table, and `mobile.yaml`
+# reads the four symbols back out of the built `libnz_ffi.so`.
+nz-droid-audio = { path = "../nz-droid-audio" }
 uniffi = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }

@@ -1666,85 +1666,95 @@ Written once here; each screen lot's acceptance says "the screen standard" and a
 6. **Server older than the feature** (rule 7): `NzError::Unsupported` hides the entry instead of
    failing (feature probes come from `nz-api`'s `features.rs` / `/api/version`).
 
-### MB3a — Android audio output `nz-droid-audio` (wave 2)
+### MB3a — Android audio output `nz-droid-audio` (delivered 2026-11-18)
 
-**Goal.** The engine's sound reaches the device, with big buffers and few wake-ups, through route
-changes. **Depends on**: SC2. **Exclusive files**: `nz-droid-audio/**`,
-`playback/src/main/java/fr/neezer/mobile/playback/AudioTrackPull.kt`.
-**Contract.**
-```rust
-pub struct OutputPrefs { pub sample_rate: u32 /* 48_000 */, pub buffer_ms_min: u32 /* 500 */,
-                         pub buffer_ms_max: u32 /* 1000 */ }
-pub enum DroidOutputError { NeedsAudioTrack /* sdk < 27 */, Open(String) }
-pub struct DroidOutput { /* AAudio stream + reopen thread */ }
-impl DroidOutput {
-    pub fn start(engine: &nz_audio::Engine, sink: nz_audio::ExternalSink, prefs: OutputPrefs,
-                 sdk_int: u32) -> Result<Self, DroidOutputError>;
-    pub fn info(&self) -> nz_audio::OutputInfo;
-    pub fn underruns(&self) -> u64;
-    pub fn performance_mode(&self) -> &'static str;   // what AAudio actually granted
-    pub fn stop(self);                                // joins the reopen thread
-}
-// API 26: JNI exports for AudioTrackPull.kt (the only hand-written JNI of the app):
-// Java_fr_neezer_mobile_playback_AudioTrackPull_nativeRender(env, cls, handle: jlong,
-//     buf: java.nio.ByteBuffer /* direct, float32 interleaved */, frames: jint) -> jint
-// ..._nativeSetLatency(handle, frames: jlong), ..._nativeUnderruns(handle, total: jlong)
-```
-AAudio: shared mode, `PerformanceMode::PowerSaving`, usage `Media`, content `Music`, float, stereo,
-48 kHz, `setBufferSizeInFrames` to the largest value ≤ capacity within 500–1000 ms; data callback =
-`sink.render`; error callback (`AAUDIO_ERROR_DISCONNECTED`, a Bluetooth/wired switch) only raises a
-flag — the `nz-out-reopen` thread closes and reopens the stream and moves the sink into the new one
-(AAudio forbids reopening inside the callback); after each open, `engine.set_external_output(info)`
-with `latency_frames` from `AAudioStream_getTimestamp`; xruns from `getXRunCount` →
-`engine.note_underruns`. `AudioTrackPull.kt`: one thread, `AudioTrack` `MODE_STREAM`,
-`ENCODING_PCM_FLOAT`, buffer ≥ 500 ms, `THREAD_PRIORITY_AUDIO`, loop `nativeRender → write(…,
-WRITE_BLOCKING)`, `getUnderrunCount` reported, `AudioDeviceCallback` → re-create.
-**Acceptance.** Instrumented test (headless emulator, MQ1's audio mode): 60 s of a rendered sine
-through `ExternalSink` → 0 underruns, granted performance mode and buffer frames written in the PR;
-`reopen` exercised by a test hook (stop + reopen while playing: the position continues, no
-repeated or skipped frames counted in the sink); the API-26 path on an `android-26` x86_64 image
-(downloaded under `~/.local/share/android-sdk`): 60 s, 0 underruns. No allocation in `render` (a
-counting allocator in a host test of the callback body).
-**Pitfalls.** `PowerSaving` may be silently refused (read it back). Never lock or allocate in the
-callback. The emulator's audio HAL may need `-audio none` instead of `-no-audio` (MQ1 measured it).
+**What landed.** The engine's sound reaches the device, with a half-second buffer and
+few wake-ups, through a route change.
 
-```text
-Tu es le worker du lot MB3a (sortie audio Android) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« Research » lignes audio, « Threads », « Tests and emulation », « Worker rules »,
-« MB3a »), docs/agents/android.md (bridge 12 : buffer 500 ms–1 s), docs/agents/playback.md, et le code
-de desktop/crates/nz-audio (ExternalSink de SC2).
-Objectif : la crate nz-droid-audio (AAudio via le crate ndk, PowerSaving, 500–1000 ms, réouverture
-hors callback sur changement de sortie, latence et sous-alimentations remontées au moteur) et
-AudioTrackPull.kt pour l'API 26, selon le contrat de la section MB3a.
-Fichiers à toi seul : mobile/rust/crates/nz-droid-audio/** et
-mobile/android/playback/src/main/java/fr/neezer/mobile/playback/AudioTrackPull.kt.
-Acceptation : tests instrumentés de la section MB3a (0 sous-alimentation sur 60 s, réouverture sans
-trou ni répétition comptée, chemin API 26), aucune allocation dans le callback (allocateur compteur).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb3a, PR « feat(mobile): MB3a AAudio output and API-26 AudioTrack »,
-CI verte, rebase + diff --stat, merge, section MB3a réécrite (mode accordé, buffer, mesures),
-`ao report --done`.
-```
+- `mobile/rust/crates/nz-droid-audio/`: `OutputPrefs` (48 kHz, 500–1000 ms), `output_for(sdk)`,
+  `DroidOutput` (`start`/`info`/`underruns`/`performance_mode`/`buffer_ms`/`buffer_frames`/
+  `capacity_frames`/`burst_frames`/`failures`/`last_failure`/`reopen`/`stop`), `Pull` + `Handback`
+  (the real-time callback body and the sink hand-back that makes a reopen seamless), `PullSession`
+  and the four JNI entry points `AudioTrackPull.kt` declares, `src/bin/droid-probe.rs` (the
+  on-device acceptance run), `tests/callback.rs`, `examples/jni-export-check.rs` and
+  `tests/assets/sine.flac`.
+- `mobile/android/playback/.../AudioTrackPull.kt`: the API-26 pull — one `nz-audiotrack` thread,
+  `MODE_STREAM`/`ENCODING_PCM_FLOAT`, one direct `ByteBuffer`, a blocking write, the device's
+  underrun total, and `reopen()` for a route change (`AudioDeviceCallback` → a flag, never work).
+
+**What a measurement taught** (each one is a rule a later lot inherits; the numbers are the ones
+this lot measured):
+
+- **Ask AAudio for the buffer capacity, or live with 90 ms.** In shared mode the emulator's
+  default capacity measured **4 320 frames = 90 ms**; `buffer_capacity_in_frames(24 000)` on the
+  builder made the same device open at **24 000 frames = 500 ms**. Asking is the difference
+  between the plan's margin and a normal-priority thread starving on the first GC.
+- **`setBufferSizeInFrames` cannot exceed the capacity, and on a device that cannot do 500 ms the
+  capacity IS the answer.** `buffer_frames()` returns the largest value within 500–1000 ms that the
+  capacity allows (4 800 → 4 800, 30 000 → 30 000, 96 000 → 48 000), and the number in `Réglages`
+  is the one read back, never the request.
+- **`PowerSaving` is a request, not a guarantee — read it back.** The emulator's HAL granted
+  `none`, so `performance_mode()` answers `"none"` there and `"power-saving"` where the MMAP/power
+  path exists; a lot that assumed the mode would report a battery win it never had.
+- **The AAudio builder's defaults are already `AAUDIO_USAGE_MEDIA` and
+  `AAUDIO_CONTENT_TYPE_MUSIC`, and their setters only exist from API 28.** The mobile workspace's
+  `ndk` pin carries `api-level-26`, and `libaaudio` on an API 27 phone does not export
+  `AAudioStreamBuilder_setUsage`: calling it for a value that is already right would turn a minSdk
+  26 app into one that cannot load its library. Not calling it is the correct code.
+- **An `AudioTrack` that starts empty counts an underrun the instant the HAL asks for data.**
+  Measured: **1 per track** created with `play()` before the first write, **0** when one 62.5 ms
+  block is queued first — so the loop primes, then plays, on every open including a route change.
+- **The pull block is an eighth of the device buffer, not half.** 250 ms blocks (half of 500 ms)
+  measured **3 mixer starvations in 30 s**: `nz-audio`'s decoded ring is 0.5 s, so a quarter second
+  per call leaves the decoder only a quarter second of margin. 62.5 ms blocks measured **0**, at 16
+  wake-ups a second that cost a 3 000-frame copy — the device buffer the person hears is still
+  500 ms.
+- **The JNI entry points are dropped by the linker unless the linking cdylib references them.**
+  Measured on `examples/jni-export-check.rs` (a cdylib that only depends on the crate): `nm -D`
+  prints **0** of the four symbols; with `&nz_droid_audio::JNI_ENTRY_POINTS` referenced from that
+  library, all **4** are `T`. **`nz-ffi` must carry that one line where MB3b adds the dependency**,
+  or the API-26 path is an `UnsatisfiedLinkError` in the app.
+- **A reopen keeps the SAME mixer, sample-exactly.** Host: four streams of 12 000 frames each,
+  48 000 frames total, worst deviation **0.0000305** from the fixture's waveform (= one 16-bit
+  LSB) at frame 2, position exactly **1.0000 s**; a lost or doubled frame would have moved the
+  phase by 0.058 at 440 Hz. Device: position continues across the reopen (API 26 30.265 →
+  30.265 s, API 35 29.500 s then real audio after it), never rewinds.
+- **The emulator DOES give AAudio a device that clocks in real time with `-no-audio`**: 59.750 s of
+  audio in 60.007 s of wall (API 35), which is the half of MQ1's question this lot could answer.
+- **The callback body allocates nothing, measured.** A counting allocator armed around 200
+  callbacks of 480 frames, with a voice playing: **0 allocations** (thread-local, so the decoder
+  threads cannot pollute it).
+
+**Measured on this machine** (`-no-window -no-audio`, KVM, x86_64, my own AVD on my own port;
+Rust 1.99.1, NDK 30.0.16248370, `CARGO_BUILD_JOBS=4`):
+
+| What | How | Numbers |
+|---|---|---|
+| host acceptance | `cargo test -p nz-droid-audio` | **7 tests** green, 2.4 s: 0 allocations / 200 callbacks; 48 000 frames across 4 streams, worst deviation 0.0000305, position 1.0000 s; 10 streams that never rendered → 10 hand-backs, 0 misses; the split; the sizing; the API-26 session's latency and xrun totals |
+| workspace | `cargo test --workspace --locked` | 43 + 14 + 7 tests green, 13.6 s (nothing else moved) |
+| API 26 pull (Rust) | `droid-probe 60` | **60 s, 0 underruns**, position 59.000 s (wall 60.079, latency 500 ms), monotonic, reopen at 29.250 s → 29.250 s |
+| API 26 pull (Kotlin, real `AudioTrack` + real JNI) | `app_process` harness over the crate's cdylib | **60 s, 0 underruns**, 24 000-frame buffer (the platform logs `Client defaulted notificationFrames to 12000 for frameCount 24000`), latency 24 000 frames, position 60.338 s, monotonic |
+| API 26 route change | same, `reopen()` at 30.3 s | 0 device xruns, position 30.265 → 30.265 s, **1 mixer starvation in one run of three** (see the pull-block rule) |
+| `libnz_ffi.so` arm64-v8a | `mobile/rust/build-android.sh` (release, stripped) | **9 200 696 B**, of which this lot **+35 584 B** (the library was already 9 165 112 B on master: the 9 MB ceiling in *Measures* is MQ2's to reopen); the four JNI symbols are in its `.dynsym` (`nm -D`) |
+| API 35 AAudio | `droid-probe 60` | **0 xruns, 0 mixer starvations**, buffer **24 000 frames = 500 ms**, latency 24 000 frames, granted mode **none** (PowerSaving refused), position 59.750 s (wall 60.007: the reopen itself is 257 ms with no stream), monotonic, real reopen at 29.5 s → `opens=2`, audio continued |
+
+**Deliberate deviations from the plan paragraph.**
+
+- `DroidOutput::start` keeps the contract's signature, so on API 26 it answers
+  `NeedsAudioTrack` **and the sink with it**: the caller asks `output_for(sdk_int)` first (which is
+  what the enum is for) and goes to `PullSession::new` instead. Documented on both.
+- The Kotlin class's `start(context: Context?)` takes a nullable context: the device watcher needs
+  one, the thread does not, and an `app_process` diagnostic has none (API 26 refuses
+  `ActivityThread.systemMain` for the shell uid).
+- `AudioTrackPull.reopen()` is public: `AudioDeviceCallback` uses it, and so does the acceptance
+  run — a route change had to be exercisable.
+
+**Still owed** (named where it belongs): `nz-ffi`'s `#[used]` reference to
+`nz_droid_audio::JNI_ENTRY_POINTS` and its dependency on the crate (MB3b, which also sets
+`EngineConfig.ring_seconds` to at least twice the pull block); a real phone for `PowerSaving` and
+for the screen-off battery figure (MQ1/MQ2 — the emulator refuses the mode); `mobile/tools/emu.sh`
+(MQ1) — this lot ran the documented flags by hand on port 5620, and the API-26 image lives under
+`~/.local/share/android-sdk/system-images/android-26/default/x86_64`.
 
 ### MB3b — Player core `nz-core::player` (delivered 2026-11-17)
 
