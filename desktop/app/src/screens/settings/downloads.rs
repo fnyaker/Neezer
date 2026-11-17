@@ -1247,7 +1247,7 @@ mod layout_tests {
     /// and read with both hands.
     #[gpui::test]
     async fn the_screen_fits_three_windows_and_answers_both_hands(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let dir = temp_dir("layout");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

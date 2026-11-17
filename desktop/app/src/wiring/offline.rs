@@ -162,7 +162,7 @@ pub(crate) mod tests {
 
         use crate::state::{AppConfig, AppEvent, AppState, event_channel};
 
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let scratch = Scratch::new("seam");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

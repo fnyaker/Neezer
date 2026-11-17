@@ -11,7 +11,24 @@
 //! The durations are the Omarchy shell's own (`gpui-omarchy/motion.rs`) plus
 //! the three a player needs; the reduced-motion setting collapses the slides
 //! to a 90 ms fade without changing any call site.
+//!
+//! # One entry point, and a test never observes the person's configuration
+//!
+//! [`init`] is the only place the app starts gpui-omarchy, because that call
+//! also starts the theme *observer*: `Theme::follow_system` watches
+//! `$HOME/.config/omarchy` (and its ancestors) with notify/inotify and wakes a
+//! GPUI task from that OS thread. A deterministic GPUI test scheduler treats
+//! such a wake as non-determinism and fails the test at its end with
+//! « Detected activity on thread Some("notify-rs inotify loop") …, but test
+//! scheduler is running on … »; a test that watched the real configuration
+//! therefore failed whenever anything wrote `~/.config/omarchy/shell.json`
+//! beside the theme — the whole `cargo test --workspace` failed about one run
+//! in two on the user's machine (SC4's report). What a test paints with is
+//! [`init`]'s fallback palette, or one read from a temporary file the test owns
+//! ([`init_at`]), and nothing is watched either way.
 
+#[cfg(test)]
+use std::path::Path;
 use std::time::Duration;
 
 use gpui_kit::{App, Hsla, Pixels, Window, px, rems};
@@ -31,6 +48,55 @@ pub const EXPAND_MS: u64 = 240;
 pub const REORDER_MS: u64 = 160;
 /// What reduced motion leaves of every slide.
 pub const REDUCED_MS: u64 = 90;
+
+/// Initialise gpui-omarchy's components and the palette the shell paints with:
+/// the one call the app and every GPUI test make.
+///
+/// `gpui_omarchy`'s init is what registers the widgets AND starts following the
+/// person's Omarchy theme (this module's header has the abort that causes in a
+/// test); a test stops following at once, and [`init_at`] is how a test gets a
+/// palette of its own from a temporary file.
+/// `no_other_module_starts_the_omarchy_observer` fails if any other file calls
+/// gpui-omarchy's init directly.
+pub fn init(cx: &mut App) {
+    gpui_omarchy::init(cx);
+    #[cfg(test)]
+    stop_following(cx);
+}
+
+/// A test paints with a fixed palette and observes nothing: `Theme::apply` is
+/// gpui-omarchy's own "stop following" (it removes the watcher's global, which
+/// drops the task and with it the inotify instance), and it runs here before
+/// the deterministic scheduler ever polls that task, so no event from a real
+/// thread can reach a test. Tokyo Night is gpui-omarchy's own fallback palette,
+/// the one a machine without an Omarchy theme (CI's runner) paints with.
+#[cfg(test)]
+fn stop_following(cx: &mut App) {
+    gpui_omarchy::Theme::tokyo_night().apply(cx);
+}
+
+/// A test's palette, read from `root/colors.toml` — a temporary file the test
+/// owns — with no observer, so rewriting it can never wake the test scheduler.
+/// The real app's palette comes from [`init`] and follows `omarchy-theme-set`
+/// live.
+#[cfg(test)]
+pub fn init_at(cx: &mut App, root: &Path) -> Result<(), String> {
+    init(cx);
+    apply_from(cx, root)
+}
+
+/// Re-read a test's palette: what [`init_at`] does on its own temporary file,
+/// and how a test proves a changed file reaches the shell's tokens.
+#[cfg(test)]
+pub fn apply_from(cx: &mut App, root: &Path) -> Result<(), String> {
+    let file = root.join("colors.toml");
+    let text =
+        std::fs::read_to_string(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let theme =
+        gpui_omarchy::Theme::from_colors_toml("Test", &text).map_err(|error| error.to_string())?;
+    theme.apply(cx);
+    Ok(())
+}
 
 /// The shell's surfaces.
 pub fn shell(app: &App) -> Hsla {
@@ -127,5 +193,46 @@ mod tests {
         assert_eq!(motion_ms(SCREEN_MS, false), Duration::from_millis(180));
         assert_eq!(motion_ms(EXPAND_MS, true), Duration::from_millis(90));
         assert_eq!(motion_ms(REORDER_MS, false), Duration::from_millis(160));
+    }
+
+    /// **Only this file starts the theme observer.** `gpui_omarchy::init` is
+    /// what begins watching `$HOME/.config/omarchy` from notify's inotify
+    /// thread, and a deterministic GPUI test scheduler turns that thread's wake
+    /// into a failing test — the whole workspace suite failed about one run in
+    /// two while the person's `shell.json` was being written. Ten screen modules
+    /// had copy-pasted the call, so a guard beats a comment: a new test that
+    /// pastes it again fails here instead of failing at random later.
+    #[test]
+    fn no_other_module_starts_the_omarchy_observer() {
+        // Split so that this guard's own text is not one of the hits it counts.
+        let observer = ["gpui_omarchy::", "init("].concat();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = 0;
+        let mut offenders = Vec::new();
+        let mut pending = vec![root.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read the crate's sources") {
+                let path = entry.expect("a source entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    files += 1;
+                    let text = std::fs::read_to_string(&path).expect("read a source file");
+                    let hits = text.matches(observer.as_str()).count();
+                    if path.ends_with("theme.rs") {
+                        // The single legitimate call, in `init` itself.
+                        assert_eq!(hits, 1, "{} should start the observer once", path.display());
+                    } else if hits > 0 {
+                        offenders.push(path);
+                    }
+                }
+            }
+        }
+        assert!(files > 30, "walked only {files} source files");
+        assert!(
+            offenders.is_empty(),
+            "these files start the Omarchy theme observer instead of calling \
+             `crate::theme::init`: {offenders:?}"
+        );
     }
 }

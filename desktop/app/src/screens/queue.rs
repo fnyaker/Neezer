@@ -1076,7 +1076,7 @@ mod tests {
 
     fn small_queue(cx: &mut gpui::TestAppContext, dir: &std::path::Path) -> Entity<AppState> {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1284,7 +1284,7 @@ mod tests {
     #[gpui::test]
     async fn a_four_thousand_row_queue_builds_only_the_visible_rows(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("window");

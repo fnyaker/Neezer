@@ -612,7 +612,7 @@ fn main() -> ExitCode {
         .with_assets(ShellAssets)
         .run(move |cx| {
             cx.set_global(NetRuntime(Arc::clone(&runtime)));
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             keymap::install(cx);
 
             // Quitting is the one action that is not the shell's: it must work

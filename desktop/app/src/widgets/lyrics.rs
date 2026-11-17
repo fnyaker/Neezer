@@ -646,7 +646,7 @@ mod tests {
     #[gpui::test]
     async fn the_highlighted_line_flips_on_its_timestamp(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let server = lyrics_server(

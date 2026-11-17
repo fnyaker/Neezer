@@ -812,7 +812,7 @@ mod tests {
     async fn an_idle_row_draws_nothing_and_a_downloaded_one_draws_a_glyph(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         cx.update(|cx| {
             assert!(chip(&State::Idle, cx).is_none());
             for state in [

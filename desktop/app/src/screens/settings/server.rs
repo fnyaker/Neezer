@@ -4190,7 +4190,7 @@ pub(crate) mod stub {
         tokio::runtime::Runtime,
         std::path::PathBuf,
     ) {
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let dir = std::env::temp_dir().join(format!(
             "neezer-d14b-{name}-{}-{}",
             std::process::id(),
@@ -4512,7 +4512,7 @@ mod screen_tests {
         use nz_player::{Command, Entry, QueueArgs};
 
         let stub = Stub::start(stub::server_routes());
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         cx.update(crate::keymap::install);
         let dir = std::env::temp_dir().join(format!(
             "neezer-d14b-focus-{}-{}",

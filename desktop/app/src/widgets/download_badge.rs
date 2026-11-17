@@ -178,7 +178,7 @@ mod tests {
     async fn an_idle_app_shows_a_badge_only_when_something_is_on_the_device(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         cx.update(|cx| {
             assert!(
                 chip(&snapshot(0, 0, WorkerState::Idle), cx).is_none(),

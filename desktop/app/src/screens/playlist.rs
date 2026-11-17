@@ -2542,7 +2542,7 @@ mod journey {
     async fn alt_down_moves_the_row_and_a_refusal_puts_it_back(cx: &mut gpui::TestAppContext) {
         let dir = temporary("reorder");
         let (server, log) = stub();
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let runtime = runtime();
         let state = app_state(cx, &dir, server, &runtime);
         let screen = cx.update(|cx| {
@@ -2664,7 +2664,7 @@ mod journey {
 
         let dir = temporary("drag");
         let (server, _log) = stub();
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let runtime = runtime();
         let state = app_state(cx, &dir, server, &runtime);
         let screen = cx.update(|cx| {
@@ -2847,7 +2847,7 @@ mod sheets_journey {
     ) -> (Entity<Screen>, String, tokio::runtime::Runtime) {
         let dir = temporary(name);
         let server = stub();
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

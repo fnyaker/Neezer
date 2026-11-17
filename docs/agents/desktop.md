@@ -97,6 +97,32 @@ Every choice below was checked against several sources and then **built together
   Measured again in T1: an *aborted first* build counts as interrupted — with no `VULKAN_SDK` CMake
   stops at `Could NOT find Vulkan (missing: Vulkan_INCLUDE_DIR)`, and the next attempt then fails at
   link, so set `VULKAN_SDK` (headers + `lib/libvulkan.so`) before the first build, not after.
+- **A GPUI test cannot be woken from a real OS thread, and the Omarchy theme observer is one — so a
+  test must never watch the person's configuration.** `gpui_omarchy::init` starts
+  `Theme::follow_system`, which watches `$HOME/.config/omarchy` (and its ancestors) with
+  notify/inotify and wakes a GPUI task from the `notify-rs inotify loop` thread; the deterministic
+  test scheduler records such a wake and fails the test at its end: « Detected activity on thread
+  Some("notify-rs inotify loop") ThreadId(4), but test scheduler is running on … Your test is not
+  deterministic. » Ten screen modules had copy-pasted that call (28 call sites), so every windowed
+  test observed the real configuration, and the whole `cargo test --workspace`
+  failed roughly one run in two on this machine whenever anything wrote `~/.config/omarchy/shell.json`
+  beside the theme. Measured: a temporary HOME (the person's tree untouched) whose `shell.json` a
+  20 ms loop rewrote gave **15 failing tests in one run** before the fix and **0 in 4 runs** after —
+  the failing ones were the windowed journeys, the only tests that park the scheduler —
+  then **10 of 10** `cargo test --workspace` runs green under the same loop. The rule is one entry
+  point: `app/src/theme.rs::init` calls gpui-omarchy's init and, in a test, stops following on the
+  next statement (`Theme::apply` is gpui-omarchy's own stop, so the watcher and its inotify instance
+  are dropped before the scheduler ever polls its task); a test then paints with gpui-omarchy's own
+  fallback palette (Tokyo Night — what CI's runner gets), and `theme::init_at(cx, root)` gives it a
+  palette from a temporary `colors.toml` it owns, with no observer at all. A test that rewrites that
+  file and the `shell.json` beside it while it runs proves it
+  (`a_theme_file_written_while_the_test_runs_reaches_the_shell`), and
+  `theme::tests::no_other_module_starts_the_omarchy_observer` walks `app/src` so a new test cannot
+  paste the call back. The shipped app is untouched: it still follows the person's theme live — on
+  this session's own `Xvfb :130` (temporary HOME and XDG tree, Wayland variables stripped, private
+  app process) the window's mean colour went from **srgb(11.6 %, 12.0 %, 16.2 %)** to
+  **srgb(99.9 %, 98.7 %, 94.1 %)** within 2 s of rewriting the temporary palette, and a palette that
+  no longer parses fell back to Tokyo Night with the process still alive.
 
 ## Architecture
 
@@ -1266,7 +1292,9 @@ Waves that can run in parallel (disjoint files):
     1280×800; a dead server gives `Auth::Failed`, a readable cause and one toast.
   - **theme**: the shell reads every colour through `cx.omarchy()`; a harness test applies a
     second Omarchy theme and asserts the tokens changed, and gpui-omarchy's watcher is what
-    calls `refresh_windows()` on `omarchy-theme-set`.
+    calls `refresh_windows()` on `omarchy-theme-set`. A test must not run that watcher (the
+    Pitfalls rule above): `theme::init` is the one entry point, and a temporary palette is read
+    from a file a test owns.
   - **visual**: the login and the shell were looked at at 1280×800 logical (Omarchy palette,
     French copy, no emoji, real Lucide glyphs). The 2560×1600 and 420 px panel re-shots were
     not taken: this machine has no isolated compositor or software Vulkan, and the user's
@@ -1880,9 +1908,12 @@ Waves that can run in parallel (disjoint files):
   costs about **5× more inside the shell's `focus_scope` than outside it** (166 ms against 31 ms for
   the same 28 rows, debug). Paging bounds the element count, so the cost does not follow the library.
 - **Measured** (this machine: 16 threads, Rust 1.99.1; `cargo test -p neezer-desktop`):
-  - `wiring::offline`: **18 tests** (the two acceptance benches, the restart, the cut link and the
-    session seam among them; the four heavy ones run in a process of their own, see the rule above);
-    `screens::settings::downloads`: 4, one of them the layout journey below; `widgets::download_badge`: 2.
+  - `wiring::offline`: **7 tests** — the app-shaped seams only since SC4 (the engine's opener with the
+    link cut, the `NetRuntime` join, 200 tracks beside a real engine, the restored session); the
+    worker's own **19** (`cargo test -p nz-offline`: 15 lib tests and its 4 heavy benches, the
+    restart, the cut link and the damage cases among them — a process of their own, see the rule
+    above); `screens::settings::downloads`: 4, one of them the layout journey below;
+    `widgets::download_badge`: 2.
   - the screen at 2 560×1 600, 1 280×800 and 420 px: the reading column is **896 px** (56 rem) at
     x=832 / x=192 and fills 420 px at 420, inside the viewport at all three; a page of 20 sets + 8
     failures paints in **3.9 ms median / 4.7 ms p95 in release** (45 / 57 ms in a debug build,
@@ -1896,12 +1927,20 @@ Waves that can run in parallel (disjoint files):
     **2 560×1 600**, at **1 280×800** and with the queue panel open at 420 px: the column keeps its
     896 px, the cards keep their order, the status reads « Terminé — 6 échecs » with `215 / 221`,
     and every failure prints its cause (three screenshots are attached to the lot's PR).
-- **What it is now**: `wiring/offline.rs` (`Offline` — `start`/`ensure`/`configure`, `choose`/
-  `choose_track`/`drop_set`/`drop_track`/`retry_failures`, `pause`/`resume`, `set_quality`/
-  `set_offline_only`/`set_play_cache_cap`, `clear_play_cache`, `local`/`is_downloaded`, `snapshot`,
-  and the free `attach`/`local_path`/`note_stream_bytes`/`keep_downloaded`), `Snapshot`/`Failure`/
-  `Running`/`WorkerState`, the SPA's own keys (`offline.quality`, `offline.onlyDownloaded`,
-  `cache.limit`) and the four-rung picker; `screens/settings/downloads.rs`
+- **What it is now** (SC4 moved the worker out of the app): `desktop/crates/nz-offline` owns it —
+  `Offline` (`start`/`ensure`/`configure`, `choose`/`choose_track`/`drop_set`/`drop_track`/
+  `retry_failures`, `pause`/`resume`, `set_quality`/`set_offline_only`/`set_play_cache_cap`,
+  `clear_play_cache`, `local`/`is_downloaded`, `snapshot`, and the free `local_path`/
+  `note_stream_bytes`/`keep_downloaded`), `Snapshot`/`Failure`/`Running`/`WorkerState`, the SPA's own
+  keys (`offline.quality`, `offline.onlyDownloaded`, `cache.limit`) and the four-rung picker, in five
+  modules with one rule each (`service` the `nz-bulk` thread and the process singleton, `download`
+  the `Downloader` trait, `settings`, `state` the published snapshot, `testing`; SC4 in
+  [mobile.md](mobile.md) has the split and its numbers). `desktop/app/src/wiring/offline.rs` is now
+  only the GPUI adapter — `pub use nz_offline::*` (every screen keeps its
+  `crate::wiring::offline::{Offline, Snapshot, …}` path), the free `attach(&AppState)` that turns a
+  session into the process's worker, and the seven benches that need THIS binary (the engine's
+  `NetOpener`, the `NetRuntime` join, 200 tracks beside a real engine, the restored session). The
+  screen is unchanged: `screens/settings/downloads.rs`
   (`Screen::new(section, state, cx)` — the module's own shape, `settings/mod.rs`'s arm — five cards,
   a pager, the failure list, the cache gauges);
   `widgets/download_badge.rs` (`chip` for a row that repaints anyway, `Badge` for one that does not).

@@ -664,7 +664,7 @@ pub mod stub {
         ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = tokio::runtime::Builder::new_current_thread()
