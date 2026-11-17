@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{Context, SharedString};
+pub use nz_api::features::Feature;
 use nz_api::{Api, ApiError, Lane, SessionJar};
 use nz_audio::{Edges, EngineEvent, TrackMeta};
 use nz_cache::{Cache, QueueSnapshot};
@@ -53,6 +54,10 @@ pub struct AppConfig {
     pub cache_dir: Option<PathBuf>,
     /// Session file override (tests only).
     pub session_file: Option<PathBuf>,
+    /// The screen to open once the session is restored (`--route`), instead of
+    /// the landing screen. The journey bench opens every screen this way: no
+    /// blind click, the same screen on every run (D17).
+    pub start_route: Option<Route>,
     pub start_audio: bool,
     pub start_mpris: bool,
 }
@@ -64,6 +69,7 @@ impl Default for AppConfig {
             data_dir: None,
             cache_dir: None,
             session_file: None,
+            start_route: None,
             start_audio: true,
             start_mpris: true,
         }
@@ -79,6 +85,7 @@ impl AppConfig {
             data_dir: Some(dir.join("data")),
             cache_dir: Some(dir.join("cache")),
             session_file: Some(dir.join("session.json")),
+            start_route: None,
             start_audio: false,
             start_mpris: false,
         }
@@ -153,6 +160,8 @@ pub enum AppEvent {
     LoggedIn(Result<Box<Me>, ApiError>),
     /// A second launch asked for the window.
     Raise,
+    /// Which optional features the server does not have (one `OPTIONS` each).
+    Features(Vec<Feature>),
     /// MPRIS `Quit`.
     Quit,
     /// The single-instance name was claimed, refused, or the bus was missing.
@@ -235,6 +244,12 @@ pub struct AppState {
     pub audio_error: Option<SharedString>,
     pub mpris: Option<MprisHandle>,
     pub mpris_track: Option<String>,
+    /// The 4 Hz position publication, on its own thread (D17): the shell's
+    /// tick stops when the window is hidden, and MPRIS froze with it.
+    position_clock: Option<mpris_wiring::PositionClock>,
+    /// What this server does not have (D17, `nz_api::features`): one `OPTIONS`
+    /// per feature at login, and the entries it is missing are not shown.
+    pub features: Features,
     pub viz: Option<VizService>,
     pub side_panel: Option<SidePanel>,
     pub quality: PlaybackQuality,
@@ -335,6 +350,8 @@ impl AppState {
             audio_error: None,
             mpris: None,
             mpris_track: None,
+            position_clock: None,
+            features: Features::default(),
             viz: None,
             side_panel: None,
             quality,
@@ -468,11 +485,72 @@ impl AppState {
 
     /// Send a transport command through the one state machine.
     pub fn command(&mut self, command: Command, cx: &mut Context<Self>) {
+        // The listen ledger's `now` is the state machine's, so the playhead it
+        // counts from must be the ENGINE's, not the last frame's: with the
+        // window hidden the 4 Hz shell tick does not run, and a `next` there
+        // used to under-count the seconds just heard. One read on the mixer's
+        // own clock, before the command, and the ledger is right whatever the
+        // window is doing.
+        self.sync_playhead_from_engine();
         let effects = self.player.apply(command, self.now_ms());
         self.apply_effects(effects);
         self.sync_transport();
         self.sync_mpris();
         cx.notify();
+    }
+
+    /// `player.current_time` (and therefore the listen ledger) follows the
+    /// engine's mixer clock. Called before every command and by the 4 Hz tick;
+    /// a paused player has nothing to sync (the clock does not move).
+    fn sync_playhead_from_engine(&mut self) {
+        if let Some(audio) = &self.audio
+            && self.player.playing()
+        {
+            let position = audio.position();
+            if position.is_finite() && (position - self.player.current_time()).abs() > 0.05 {
+                self.player.set_position(position);
+            }
+        }
+    }
+
+    /// Ask the server which optional features it has, once per session.
+    ///
+    /// An older server answers 404 for a route it never had, and the app must
+    /// not offer a screen that cannot work (D17). One `OPTIONS` per feature, on
+    /// the Prefetch lane, never on a screen's own path; a feature is hidden
+    /// only on a definite `404`, never on a doubt (offline, a 5xx).
+    fn probe_features(&self) {
+        let Some(api) = self.api.clone() else {
+            return;
+        };
+        let events = self.events.clone();
+        self.runtime.spawn(async move {
+            let mut missing = Vec::new();
+            for feature in Feature::ALL {
+                if api.has_route(feature.probe()).await == Some(false) {
+                    missing.push(feature);
+                }
+            }
+            events.send(AppEvent::Features(missing));
+        });
+    }
+
+    /// Start the position clock once both halves exist: the engine (the clock)
+    /// and the D-Bus server (the sink). Called from either event, so the order
+    /// they arrive in does not matter, and replaced when the engine is.
+    fn ensure_position_clock(&mut self) {
+        if self.position_clock.is_some() {
+            return;
+        }
+        let (Some(audio), Some(ticker)) = (
+            self.audio.clone(),
+            self.mpris.as_ref().and_then(|mpris| mpris.ticker()),
+        ) else {
+            return;
+        };
+        self.position_clock = Some(mpris_wiring::PositionClock::start(ticker, move || {
+            audio.position()
+        }));
     }
 
     /// The transport side the state machine does not carry: a play/pause, a
@@ -573,6 +651,7 @@ impl AppState {
             .engine
             .set_track_meta(&reference, self.meta_for(&entry));
         let quality = self.quality.audio();
+        crate::bench::load(&reference);
         audio
             .engine
             .load(&reference, quality, (start_s > 0.0).then_some(start_s));
@@ -937,6 +1016,9 @@ impl AppState {
                 self.audio_error = None;
                 self.viz = VizService::start(&audio.engine, audio.sample_rate);
                 self.audio = Some(*audio);
+                // A new engine is a new clock: the old thread read the old one.
+                self.position_clock = None;
+                self.ensure_position_clock();
                 // The saved sound, applied when the ENGINE arrives — not when
                 // the person opens Réglages (D14a's seam): a session that never
                 // opens the page must sound like the settings say, and a cold
@@ -973,7 +1055,12 @@ impl AppState {
             }
             AppEvent::MprisReady(handle) => {
                 self.mpris = Some(handle);
+                self.ensure_position_clock();
                 self.sync_mpris();
+                cx.notify();
+            }
+            AppEvent::Features(missing) => {
+                self.features = Features::from_missing(missing);
                 cx.notify();
             }
             AppEvent::Mpris(command) => self.on_mpris(command, cx),
@@ -1046,12 +1133,17 @@ impl AppState {
     fn on_restored(&mut self, result: Result<Box<Me>, ApiError>, cx: &mut Context<Self>) {
         match result {
             Ok(me) => {
-                let landing = landing_route(&me);
+                let landing = self
+                    .config
+                    .start_route
+                    .clone()
+                    .unwrap_or_else(|| landing_route(&me));
                 self.auth = Auth::LoggedIn { me };
                 self.session_cause = None;
                 self.nav.reset(landing);
                 self.start_audio();
                 self.start_offline();
+                crate::bench::mark("logged_in");
                 // Remote control (lot D15a): the CONTROLLER when this session is
                 // a loan, the HOST otherwise — one call, so a link that was live
                 // before a restart answers again without opening a screen.
@@ -1062,6 +1154,7 @@ impl AppState {
                 // One read, and only when this store ever hosted one.
                 crate::wiring::party_host::resume_at_launch(self, cx);
                 self.warm_owner();
+                self.probe_features();
                 self.sync_mpris();
             }
             Err(ApiError::Unauthorized | ApiError::RemoteEnded { .. }) => {
@@ -1086,13 +1179,18 @@ impl AppState {
         self.login.pending = false;
         match result {
             Ok(me) => {
-                let landing = landing_route(&me);
+                let landing = self
+                    .config
+                    .start_route
+                    .clone()
+                    .unwrap_or_else(|| landing_route(&me));
                 self.login.error = None;
                 self.session_cause = None;
                 self.auth = Auth::LoggedIn { me };
                 self.nav.reset(landing);
                 self.start_audio();
                 self.start_offline();
+                crate::bench::mark("logged_in");
                 // Remote control (lot D15a): the CONTROLLER when this session is
                 // a loan, the HOST otherwise — one call, so a link that was live
                 // before a restart answers again without opening a screen.
@@ -1103,6 +1201,7 @@ impl AppState {
                 // One read, and only when this store ever hosted one.
                 crate::wiring::party_host::resume_at_launch(self, cx);
                 self.warm_owner();
+                self.probe_features();
                 self.sync_mpris();
             }
             Err(error) => {
@@ -1125,10 +1224,11 @@ impl AppState {
     fn on_engine(&mut self, event: EngineEvent, cx: &mut Context<Self>) {
         match event {
             EngineEvent::Started {
+                id,
                 position_s,
                 duration_s,
-                ..
             } => {
+                crate::bench::started(&id);
                 self.player.set_position(position_s);
                 if let Some(duration) = duration_s {
                     self.player.set_duration(duration);
@@ -1143,6 +1243,7 @@ impl AppState {
                 cx.notify();
             }
             EngineEvent::Underrun { count } => {
+                crate::bench::underrun(count);
                 warn!(count, "sous-alimentation du tampon audio");
             }
             EngineEvent::SeekDeferred { target_s } => {
@@ -1195,6 +1296,7 @@ impl AppState {
                 path,
                 bytes,
             } => {
+                crate::bench::event("stream_complete", &id, Some(bytes as u128));
                 if let Some(cache) = self.cache.clone() {
                     let path = path.clone();
                     self.runtime.spawn_blocking(move || {
@@ -1350,18 +1452,28 @@ impl AppState {
     /// started by the shell, so a paused app wakes for nothing else.
     pub fn tick(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
-        if let Some(audio) = &self.audio
-            && self.player.playing()
-        {
-            let position = audio.position();
-            if position.is_finite() && (position - self.player.current_time()).abs() > 0.05 {
-                self.player.set_position(position);
-                self.sync_mpris();
-                changed = true;
-            }
+        let before = self.player.current_time();
+        self.sync_playhead_from_engine();
+        if self.player.current_time() != before {
+            // MPRIS is already told by its own clock (D17); the bar and the
+            // queue draw from `player.current_time`, so this is the redraw.
+            changed = true;
         }
         if self.toasts.prune(Instant::now()) {
             changed = true;
+        }
+        if crate::bench::active()
+            && let Some(audio) = &self.audio
+        {
+            let (sleeves_bytes, _) = cx
+                .default_global::<crate::widgets::cover::Sleeves>()
+                .resident();
+            crate::bench::status(
+                audio.engine.underruns(),
+                self.player.current_time(),
+                self.player.len(),
+                sleeves_bytes,
+            );
         }
         if changed {
             cx.notify();
@@ -1496,6 +1608,42 @@ pub fn entry_from_track(track: &Track) -> Entry {
 /// tastes to pick before the library means anything, and the shell used to open
 /// Home and leave `Route::Onboarding` reachable by no key at all. A
 /// remote-control loan never onboards: it drives somebody else's session.
+/// Which optional features this server answered it does not have.
+///
+/// The shell reads this to hide a sidebar entry and to show why a screen that
+/// was opened by a link (a remote-control URL, a folder saved in a store) says
+/// the server does not know it — never an endless spinner (rule 3).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Features {
+    missing: std::collections::BTreeSet<Feature>,
+}
+
+impl Features {
+    pub fn from_missing(missing: impl IntoIterator<Item = Feature>) -> Self {
+        Self {
+            missing: missing.into_iter().collect(),
+        }
+    }
+
+    /// Whether the server said it does not have this feature.
+    pub fn hidden(&self, feature: Feature) -> bool {
+        self.missing.contains(&feature)
+    }
+
+    /// What to show: the feature's own name when the server lacks it.
+    pub fn absent(&self, route: &Route) -> Option<&'static str> {
+        route
+            .feature()
+            .filter(|feature| self.hidden(*feature))
+            .map(|feature| feature.absent_fr())
+    }
+
+    /// How many features are missing (the diagnostic log prints this).
+    pub fn missing(&self) -> usize {
+        self.missing.len()
+    }
+}
+
 pub fn landing_route(me: &Me) -> Route {
     if me.remote.is_none() && onboarding_pending(me.user.onboarding.as_deref()) {
         Route::Onboarding
@@ -1632,6 +1780,31 @@ mod tests {
         assert_eq!(state.auth, Auth::LoggedOut);
         assert!(state.api.is_some());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// D17: a server that answered 404 for a feature's probe has it hidden —
+    /// the sidebar entry is not drawn and a screen reached by a link says why.
+    #[test]
+    fn a_feature_the_server_lacks_is_hidden_and_named() {
+        let features = Features::from_missing([Feature::Party]);
+        assert!(features.hidden(Feature::Party));
+        assert!(!features.hidden(Feature::Genres));
+        assert_eq!(features.absent(&Route::Party), Some("L'écoute partagée"));
+        assert_eq!(features.absent(&Route::Home), None);
+        assert_eq!(features.missing(), 1);
+        // Nothing missing is the shipped case for a current server: every
+        // optional screen stays reachable.
+        let none = Features::default();
+        for route in [
+            Route::Party,
+            Route::Remote,
+            Route::Genres,
+            Route::Settings {
+                section: SettingsSection::Transcribe,
+            },
+        ] {
+            assert_eq!(none.absent(&route), None, "{route:?}");
+        }
     }
 
     #[test]

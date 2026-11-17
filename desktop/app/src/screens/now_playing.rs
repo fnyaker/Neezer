@@ -32,11 +32,15 @@
 //! at 2560×1600 with the queue card open is in the lot's table (`docs/agents/desktop.md`,
 //! D9), and the lyrics flip within one frame of their timestamp.
 
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Subscription,
-    Window, div, px, rems,
+    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    px, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, icon, icon_button, tab as tab_button, tabs};
 use nz_player::Repeat;
@@ -48,10 +52,18 @@ use crate::nav::Route;
 use crate::screens::queue;
 use crate::state::AppState;
 use crate::theme;
+use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::lyrics::LyricsView;
 use crate::widgets::quality_menu::QualityMenu;
 use crate::widgets::sleep_timer::SleepControl;
 use crate::widgets::speed::SpeedChip;
+use crate::wiring::events::{self, Sender};
+
+/// What this screen's own tasks answer: the 512 px copy of the playing sleeve,
+/// or `None` (the disc glyph stays).
+enum Msg {
+    Cover(String, Option<PathBuf>),
+}
 
 /// Which half of the side card is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -70,6 +82,10 @@ pub struct Screen {
     sleep: Entity<SleepControl>,
     queue: Entity<queue::Screen>,
     tab: Tab,
+    /// The stage's sleeve: the page-size copy of the archive's art, decoded off
+    /// the paint thread and freed with the screen (`Covers::pages`, D17).
+    covers: Rc<RefCell<Covers>>,
+    events: Sender<Msg>,
     _subscription: Subscription,
 }
 
@@ -81,7 +97,8 @@ impl Screen {
         let speed = cx.new(|cx| SpeedChip::new(state.clone(), cx));
         let sleep = cx.new(|cx| SleepControl::new(state.clone(), cx));
         let queue = cx.new(|cx| queue::Screen::new(Route::Queue, state.clone(), cx));
-        Self {
+        let (tx, rx) = events::channel::<Msg>();
+        let mut screen = Self {
             route,
             state,
             lyrics,
@@ -90,8 +107,35 @@ impl Screen {
             sleep,
             queue,
             tab: Tab::Queue,
+            covers: Rc::new(RefCell::new(Covers::pages())),
+            events: tx,
             _subscription: subscription,
-        }
+        };
+        screen.drain(rx, cx);
+        // A stage that closes frees the pixels and the atlas tile it was
+        // showing, like every other screen.
+        cx.on_release(|this, cx| this.covers.borrow_mut().release(cx))
+            .detach();
+        screen
+    }
+
+    /// The sleeve answers, on the screen's own thread.
+    fn drain(&mut self, answers: events::Receiver<Msg>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Some(msg) = answers.next().await {
+                let Msg::Cover(url, file) = msg;
+                if this
+                    .update(cx, |this, cx| {
+                        this.covers.borrow_mut().resolved(&url, file);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     pub fn route(&self) -> &Route {
@@ -133,6 +177,9 @@ struct Layout {
 
 impl Render for Screen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The sleeves the last paint declared and this one does not are freed
+        // here, their atlas tiles with them, before this frame's own `show`.
+        self.covers.borrow_mut().begin_frame(window, cx);
         let viewport = window.viewport_size();
         // The shell's fixed rails are part of the window, not of this screen:
         // the stage's real width is what the columns must be measured against
@@ -167,7 +214,26 @@ impl Render for Screen {
         } else {
             0.0
         };
-        let cover = self.state.read(cx).cover_path(&entry);
+        // The stage's sleeve is the 512 px copy, not the archived 1 000 px
+        // file: GPUI uploads a painted image at its NATURAL size and keeps the
+        // tile for the life of the window, so the header's art is a page-size
+        // decode (`Covers::pages`) exactly as a list's rows are a row-size one.
+        if let Some(url) = entry.cover.as_deref() {
+            let snapshot = self.state.read(cx);
+            let tx = self.events.clone();
+            let for_message = url.to_owned();
+            self.covers.borrow_mut().want(snapshot, url, move |file| {
+                tx.send(Msg::Cover(for_message, file))
+            });
+        }
+        let cover = entry
+            .cover
+            .as_deref()
+            .and_then(|url| cover::file_in(&self.covers, url));
+        match &cover {
+            Some(file) => self.covers.borrow_mut().show([file.clone()], cx),
+            None => self.covers.borrow_mut().show(Vec::new(), cx),
+        }
         let artist = entry.artist_name().to_owned();
         let album = entry
             .album
@@ -227,23 +293,14 @@ impl Render for Screen {
             .border_1()
             .border_color(theme::border(cx))
             .bg(theme::chrome(cx));
-        sleeve = match cover {
-            Some(path) => sleeve.child(
-                gpui_kit::img(path)
-                    .w_full()
-                    .h_full()
-                    .object_fit(gpui_kit::ObjectFit::Cover),
-            ),
-            None => sleeve.child(
-                icon(if podcast {
-                    IconName::Mic
-                } else {
-                    IconName::Disc3
-                })
-                .size(layout.cover * 0.28)
-                .text_color(theme::accent(cx)),
-            ),
-        };
+        sleeve = sleeve.child(cover::view(
+            cover.as_ref(),
+            entry.cover.as_deref(),
+            &entry.title,
+            if podcast { Kind::Podcast } else { Kind::Album },
+            layout.cover,
+            cx,
+        ));
 
         let main = div()
             .id("np-main")
@@ -840,6 +897,21 @@ mod tests {
             });
         });
         state
+    }
+
+    /// D17's rule: the stage's sleeve is the PAGE-size copy (512 px), not the
+    /// archived 1 000 px file — GPUI keeps an atlas tile at the painted image's
+    /// natural size for the life of the window, so a 1 000 px sleeve is
+    /// 4 000 000 B of heap and as much atlas for a 340 px box. The bar is the
+    /// same rule one class down (`Class::Row`, pinned in `player_bar.rs`).
+    #[test]
+    fn the_stage_draws_the_page_size_sleeve() {
+        assert_eq!(Covers::pages().class(), cover::Class::Page);
+        assert_eq!(cover::Class::Page.px(), 512);
+        // 512² × 4 = 1 048 576 B decoded, against 4 000 000 B for the file the
+        // archive holds (a 1 753 091 B JPEG on the bench): 3.8× less heap and
+        // atlas per sleeve, for a box of at most 340 px.
+        assert_eq!(512u64 * 512 * 4, 1_048_576);
     }
 
     /// The mouse path on the two rails this screen owns: a click on the playhead

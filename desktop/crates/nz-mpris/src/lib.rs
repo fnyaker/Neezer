@@ -226,6 +226,20 @@ impl MprisHandle {
         self.serving
     }
 
+    /// A sender-only handle for the position clock (D17).
+    ///
+    /// The shell's 4 Hz tick is driven by GPUI, so a hidden window — or one on
+    /// another Hyprland workspace — stops painting and the position froze with
+    /// it: `playerctl position` answered the same value for as long as the
+    /// window was away, and the Omarchy bar's progress bar sat still. A clock
+    /// that owns just this sender publishes the position from its own thread,
+    /// with no window and no GPUI involved; `None` when the server never
+    /// started (nothing to publish to).
+    #[must_use]
+    pub fn ticker(&self) -> Option<MprisTicker> {
+        self.updates.clone().map(|updates| MprisTicker { updates })
+    }
+
     fn publish(&self, update: Update) {
         let Some(updates) = &self.updates else {
             debug!("MPRIS update dropped: the server never started");
@@ -233,6 +247,23 @@ impl MprisHandle {
         };
         if updates.send(update).is_err() {
             debug!("MPRIS update dropped: the server thread is gone");
+        }
+    }
+}
+
+/// What the position clock holds: the server's update channel, and nothing
+/// else. Cloning it never clones the server; dropping it never stops it.
+#[derive(Clone)]
+pub struct MprisTicker {
+    updates: mpsc::UnboundedSender<Update>,
+}
+
+impl MprisTicker {
+    /// The position actually heard, in seconds. The same silent write
+    /// [`MprisHandle::set_position_s`] makes (`Position` is never announced).
+    pub fn set_position_s(&self, position_s: f64) {
+        if self.updates.send(Update::Position(position_s)).is_err() {
+            debug!("MPRIS position dropped: the server thread is gone");
         }
     }
 }

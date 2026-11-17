@@ -32,9 +32,13 @@
 //! 100 ms, and with the queue emptied the status reads `Stopped` while the
 //! metadata is still the last track's.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use nz_mpris::{LoopStatus, Metadata, Mpris, MprisCommand, MprisHandle, PlaybackStatus};
+use nz_mpris::{
+    LoopStatus, Metadata, Mpris, MprisCommand, MprisHandle, MprisTicker, PlaybackStatus,
+};
 use nz_player::Repeat;
 
 use crate::state::AppEvent;
@@ -124,6 +128,68 @@ pub fn publish(handle: &MprisHandle, now: &NowPlaying, last_track: &mut Option<S
 /// up by the next track.
 pub const RETRY: Duration = Duration::from_secs(30);
 
+/// The position clock's period: the 4 Hz [`crate::state::AppState::tick`] uses,
+/// so MPRIS and the bar agree on how often a playhead moves.
+pub const POSITION_PERIOD: Duration = Duration::from_millis(250);
+
+/// Publishes the audible position on its OWN thread, four times a second.
+///
+/// Why it is not the shell's tick (D7's report, measured again in D17): GPUI
+/// drives `spawn`ed timers from the app's foreground executor, and a window
+/// that is hidden — minimised, or on another Hyprland workspace — stops
+/// painting. `playerctl position` then answered the same value for as long as
+/// the window was away, and the Omarchy bar's playhead froze. This clock reads
+/// the audio engine's own mixer clock and writes the (silent) MPRIS position
+/// property with no window, no frame and no GPUI in the path; it is stopped
+/// when the shell drops it (quit) or replaces the engine.
+pub struct PositionClock {
+    stop: Arc<AtomicBool>,
+}
+
+impl PositionClock {
+    /// Start the clock. `position` is `Audio::position` — the mixer's clock,
+    /// which keeps running while the window does not paint because the sound
+    /// keeps playing.
+    pub fn start(ticker: MprisTicker, position: impl Fn() -> f64 + Send + 'static) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let for_thread = stop.clone();
+        let spawned = std::thread::Builder::new()
+            .name("nz-mpris-clock".to_owned())
+            .spawn(move || {
+                run_clock(&for_thread, POSITION_PERIOD, &position, &mut |seconds| {
+                    ticker.set_position_s(seconds)
+                });
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "horloge MPRIS indisponible");
+        }
+        Self { stop }
+    }
+}
+
+impl Drop for PositionClock {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// One publication per `period`, until `stop` says otherwise. Factored out so
+/// the test drives the REAL loop at a 1 ms period, in a thread, with no window.
+fn run_clock(
+    stop: &AtomicBool,
+    period: Duration,
+    position: &(impl Fn() -> f64 + ?Sized),
+    publish: &mut impl FnMut(f64),
+) {
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(period);
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        publish(position());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -145,6 +211,51 @@ mod tests {
     /// bus of our own and the developer's own player is never shadowed.
     const PRIVATE_BUS_CHILD: &str = "NZ_MPRIS_WIRING_BUS_CHILD";
     const NO_BUS_CHILD: &str = "NZ_MPRIS_WIRING_NO_BUS_CHILD";
+
+    /// D17: the position advances with NO window and no GPUI in the path — the
+    /// clock is a thread, so a hidden window cannot stop it. Measured on a
+    /// virtual 1 ms period: 20 publications, strictly increasing positions,
+    /// while nothing paints.
+    #[test]
+    fn the_position_clock_moves_without_a_window() {
+        use std::sync::Mutex;
+        use std::sync::atomic::AtomicU64;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let clock = Arc::new(AtomicU64::new(0));
+        let published: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+        let clock_for_thread = clock.clone();
+        let published_for_thread = published.clone();
+        let stop_for_thread = stop.clone();
+        // The SAME loop `PositionClock::start` runs, at a 1 ms period, with a
+        // clock that advances 0.25 s per read: no window exists in this test.
+        let thread = std::thread::spawn(move || {
+            let position =
+                move || clock_for_thread.fetch_add(250, Ordering::Relaxed) as f64 / 1000.0;
+            run_clock(
+                &stop_for_thread,
+                Duration::from_millis(1),
+                &position,
+                &mut |seconds| published_for_thread.lock().unwrap().push(seconds),
+            );
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while published.lock().unwrap().len() < 20 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        stop.store(true, Ordering::Relaxed);
+        thread.join().expect("the clock thread stops");
+        let values = published.lock().unwrap();
+        assert!(
+            values.len() >= 20,
+            "the clock published {} times",
+            values.len()
+        );
+        assert!(
+            values.windows(2).all(|pair| pair[1] > pair[0]),
+            "every tick moved the position forward: {values:?}"
+        );
+    }
 
     #[test]
     fn the_three_repeat_modes_map_onto_mpris_loop_statuses() {

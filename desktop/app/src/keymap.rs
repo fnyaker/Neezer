@@ -110,6 +110,10 @@ pub const SHORTCUTS: &[Shortcut] = &[
         label: "Studio de genres",
     },
     Shortcut {
+        keys: "g q",
+        label: "File d'attente",
+    },
+    Shortcut {
         keys: "g ,",
         label: "Réglages",
     },
@@ -238,6 +242,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("g p", GoPodcasts, c),
         KeyBinding::new("g r", GoReleases, c),
         KeyBinding::new("g n", GoNowPlaying, c),
+        KeyBinding::new("g q", GoQueue, c),
         KeyBinding::new("g e", GoGenres, c),
         KeyBinding::new("g ,", GoSettings, c),
         // Lists and rows. A screen that does not show a list yet simply has
@@ -382,6 +387,7 @@ mod tests {
             "g p",
             "g r",
             "g n",
+            "g q",
             "g ,",
             "Alt+←",
             "Alt+→",

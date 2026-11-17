@@ -9,11 +9,15 @@
 //! to its fifth of the track through [`AppState::seek_fraction`] — the same
 //! command `Shift+→` produces — rather than inventing a second seek path.
 
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+
 use gpui_kit::{
-    Context, Entity, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled, div, px,
-    relative, rems,
+    Context, Entity, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled, Window,
+    div, px, relative, rems,
 };
-use gpui_omarchy::{ButtonVariant, IconName, button, icon, icon_button};
+use gpui_omarchy::{ButtonVariant, IconName, button, icon_button};
 use nz_player::Repeat;
 
 use crate::actions::{
@@ -23,6 +27,14 @@ use crate::actions::{
 use crate::app::RootView;
 use crate::state::AppState;
 use crate::theme;
+use crate::widgets::cover::{self, Covers, Kind};
+use crate::wiring::events::Sender;
+
+/// What the bar's sleeve fetch answers: the 128 px copy of the playing art, or
+/// `None` (the slot keeps its disc glyph).
+pub enum BarMsg {
+    Cover(String, Option<PathBuf>),
+}
 
 /// `mm:ss` for a playhead or a length. A duration of zero is `—`, never `0:00`
 /// on a row the server has not measured.
@@ -34,7 +46,42 @@ pub fn clock(seconds: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> impl IntoElement + use<> {
+pub fn render(
+    state: Entity<AppState>,
+    window: &mut Window,
+    covers: &Rc<RefCell<Covers>>,
+    cover_events: &Sender<BarMsg>,
+    cx: &mut Context<RootView>,
+) -> impl IntoElement + use<> {
+    // The bar is on every screen, so its sleeve is freed the same way a
+    // screen's is: what the last paint declared and this one does not goes
+    // here, tile included.
+    covers.borrow_mut().begin_frame(window, cx);
+    // The playing sleeve, at the size the 44 px slot draws it (`Class::Row`):
+    // the archived art is a 1 000 px file, and GPUI keeps a painted image's
+    // atlas tile for the life of the window, so the bar asks for the 128 px
+    // copy exactly as a queue row does. The `AppState` borrow is scoped: the
+    // decode is announced to the executor, which needs `cx` mutably.
+    let (cover_url, cover_file) = {
+        let snapshot = state.read(cx);
+        let url = snapshot
+            .player
+            .current()
+            .and_then(|entry| entry.cover.clone());
+        if let Some(url) = url.as_deref() {
+            let tx = cover_events.clone();
+            let for_message = url.to_owned();
+            covers.borrow_mut().want(snapshot, url, move |file| {
+                tx.send(BarMsg::Cover(for_message, file));
+            });
+        }
+        let file = url.as_deref().and_then(|url| cover::file_in(covers, url));
+        (url, file)
+    };
+    match &cover_file {
+        Some(file) => covers.borrow_mut().show([file.clone()], cx),
+        None => covers.borrow_mut().show(Vec::new(), cx),
+    }
     let state = state.read(cx);
     let entry = state.player.current();
     let has_track = entry.is_some();
@@ -149,11 +196,12 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> impl IntoE
         .bg(theme::chrome(cx))
         .text_color(theme::text(cx))
         .font_family(theme::font(cx))
-        // The cover is a square slot with the disc glyph until D8a's cover
-        // widget exists: no decoded image, no flicker, no wrong sleeve.
+        // The sleeve slot: the 128 px copy of the playing art, or the glyph
+        // when nothing is cached (D17 replaced D7's disc-only placeholder).
         .child(
             div()
                 .id("bar-cover")
+                .debug_selector(|| "bar-cover".to_owned())
                 .size(px(44.))
                 .flex_shrink_0()
                 .flex()
@@ -162,15 +210,19 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> impl IntoE
                 .border_1()
                 .border_color(theme::border(cx))
                 .bg(theme::sidebar(cx))
-                .child(
-                    icon(if has_track {
-                        IconName::Disc3
+                .overflow_hidden()
+                .child(cover::view(
+                    cover_file.as_ref(),
+                    cover_url.as_deref(),
+                    &title,
+                    if entry.is_some_and(|entry| entry.is_podcast()) {
+                        Kind::Podcast
                     } else {
-                        IconName::Music
-                    })
-                    .size(rems(1.25))
-                    .text_color(theme::secondary(cx)),
-                ),
+                        Kind::Album
+                    },
+                    px(44.),
+                    cx,
+                )),
         )
         .child(
             div()
@@ -377,6 +429,16 @@ fn progress(fraction: f32, enabled: bool, cx: &Context<RootView>) -> impl IntoEl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D17: the 44 px slot paints the ROW-size copy (128 px), so the bar costs
+    /// 65 536 B of decoded sleeve and as much atlas — not the 4 MB of the
+    /// archived file D7 drew as a glyph placeholder.
+    #[test]
+    fn the_bar_slot_paints_the_row_size_sleeve() {
+        assert_eq!(Covers::rows().class(), cover::Class::Row);
+        assert_eq!(cover::Class::Row.px(), 128);
+        assert_eq!(128u64 * 128 * 4, 65_536);
+    }
 
     #[test]
     fn a_playhead_reads_as_minutes_and_seconds_never_as_zero_for_unknown() {

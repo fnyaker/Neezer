@@ -274,6 +274,37 @@ mod tests {
         );
     }
 
+    /// D17's access-path audit: every screen the shell can build must be
+    /// reachable by someone who has never seen it — a sidebar row, a keystroke
+    /// the `?` overlay prints, or a link on another screen. `Route::Queue` was
+    /// the one hole (the `q` panel drew the same screen, so nothing noticed),
+    /// and `g q` is its way in.
+    #[test]
+    fn every_route_of_the_table_has_a_way_in() {
+        use crate::nav::{Access, Route};
+
+        for route in all_routes() {
+            match route.access() {
+                Access::Automatic => assert!(
+                    matches!(route, Route::Login | Route::Onboarding),
+                    "{route:?} has no way in: a route is only Automatic when the app \
+                     lands on it by itself"
+                ),
+                Access::Shortcut(keys) => assert!(
+                    crate::keymap::SHORTCUTS.iter().any(|row| row.keys == keys),
+                    "{route:?} is reached by « {keys} », which the ? overlay does not list"
+                ),
+                Access::Sidebar => {}
+                Access::Link(where_) => assert!(!where_.is_empty(), "{route:?} names no link"),
+            }
+        }
+        assert_eq!(
+            Route::Queue.access(),
+            Access::Shortcut("g q"),
+            "the full-screen queue is reachable, not only as a side panel"
+        );
+    }
+
     #[test]
     fn a_stub_route_names_itself() {
         assert_eq!(stub_label(), "Bientôt");

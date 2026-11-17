@@ -11,6 +11,8 @@
 //! the playhead and the toasts four times a second. A paused, idle app wakes for
 //! neither the bar nor a repaint.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::{
@@ -32,7 +34,8 @@ use crate::screens;
 use crate::state::{AppEvent, AppState, Auth, SidePanel};
 use crate::theme;
 use crate::toast;
-use crate::wiring::events::Receiver;
+use crate::widgets::cover::Covers;
+use crate::wiring::events::{Receiver, Sender};
 use crate::wiring::remote_host;
 
 /// The genre studio's own action: D7 froze `actions.rs` after the shell landed,
@@ -55,6 +58,10 @@ pub struct RootView {
     /// The next paint must give the keyboard anchor back to the shell (the
     /// login screen's field, now gone, used to hold it).
     refocus: bool,
+    /// The bar's sleeve: the 128 px copy of what plays, so a 44 px slot never
+    /// uploads a 1 000 px tile (`Covers::rows`, D17).
+    bar_covers: Rc<RefCell<Covers>>,
+    bar_events: Sender<player_bar::BarMsg>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -66,6 +73,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
+        let (bar_events, bar_answers) = crate::wiring::events::channel::<player_bar::BarMsg>();
         let mut this = Self {
             state: state.clone(),
             focus: focus.clone(),
@@ -74,6 +82,8 @@ impl RootView {
             login: None,
             shortcuts_open: false,
             refocus: false,
+            bar_covers: Rc::new(RefCell::new(Covers::rows())),
+            bar_events: bar_events.clone(),
             _subscriptions: Vec::new(),
         };
         this._subscriptions.push(cx.observe(&state, |this, _, cx| {
@@ -83,7 +93,28 @@ impl RootView {
         window.focus(&focus, cx);
         this.spawn_events(events, cx);
         this.spawn_ticker(cx);
+        this.spawn_bar_covers(bar_answers, cx);
         this
+    }
+
+    /// The bar's sleeve answers, on the shell's own thread: the bar is not a
+    /// screen, so it owns its cache and its channel here.
+    fn spawn_bar_covers(&self, answers: Receiver<player_bar::BarMsg>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            while let Some(msg) = answers.next().await {
+                let player_bar::BarMsg::Cover(url, file) = msg;
+                if this
+                    .update(cx, |this, cx| {
+                        this.bar_covers.borrow_mut().resolved(&url, file);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     pub fn state(&self) -> &Entity<AppState> {
@@ -299,6 +330,7 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let render_started = std::time::Instant::now();
         self.sync_screen(cx);
         // The shell owns the focus anchor: a screen change (the login screen
         // leaving, a screen that dropped its field) must not leave the window
@@ -419,6 +451,7 @@ impl Render for RootView {
             .on_action(cx.listener(|this, _: &GoReleases, _, cx| this.go(Route::Releases, cx)))
             .on_action(cx.listener(|this, _: &GoGenres, _, cx| this.go(Route::Genres, cx)))
             .on_action(cx.listener(|this, _: &GoNowPlaying, _, cx| this.go(Route::NowPlaying, cx)))
+            .on_action(cx.listener(|this, _: &GoQueue, _, cx| this.go(Route::Queue, cx)))
             .on_action(cx.listener(|this, _: &RemoteClaim, _, cx| this.go(Route::Remote, cx)))
             .on_action(cx.listener(|this, _: &GoSettings, _, cx| {
                 this.go(
@@ -647,22 +680,73 @@ impl Render for RootView {
         let active = self.state.read(cx).current_route().and_then(Route::section);
         let on_remote = route.as_ref() == Some(&Route::Remote);
         let on_party = route.as_ref() == Some(&Route::Party);
-        let sidebar =
-            sidebar(active, is_admin, genres_active, on_remote, on_party, cx).into_any_element();
+        // D17: a server that does not have a feature does not get its entry —
+        // an older server's 404 is what says so (`nz_api::features`).
+        let features = self.state.read(cx).features.clone();
+        let sidebar = sidebar(
+            active,
+            is_admin,
+            genres_active,
+            on_remote,
+            on_party,
+            &features,
+            cx,
+        )
+        .into_any_element();
 
-        let content = match &self.screen {
-            Some((_route, view)) => {
+        // A screen reached by a link (a remote-control URL, a folder in the
+        // store) on a server that does not have its feature says so, with the
+        // cause and the way back — not an endless spinner (rule 3).
+        let absent = route.as_ref().and_then(|route| features.absent(route));
+        let content = match (&self.screen, absent) {
+            (_, Some(label)) => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(rems(0.75))
+                .p(rems(2.))
+                .child(
+                    icon(IconName::Info)
+                        .size(rems(1.75))
+                        .text_color(theme::secondary(cx)),
+                )
+                .child(
+                    div()
+                        .text_size(rems(1.125))
+                        .font_weight(gpui_kit::FontWeight::BOLD)
+                        .child(format!("{label} n'est pas sur ce serveur")),
+                )
+                .child(
+                    div()
+                        .max_w(rems(34.))
+                        .text_center()
+                        .text_size(rems(0.8125))
+                        .text_color(theme::secondary(cx))
+                        .child(
+                            "Ce serveur est plus ancien que cette fonction. Les autres \
+                             écrans continuent de marcher : la lecture, la bibliothèque \
+                             et la file ne dépendent pas de lui.",
+                        ),
+                )
+                .into_any_element(),
+            (Some((_route, view)), None) => {
                 let reduced = self.state.read(cx).reduced_motion;
                 let duration = theme::motion_ms(theme::SCREEN_MS, reduced);
-                div().relative().size_full().min_w_0().min_h_0().child(
-                    div().size_full().child(view.clone()).with_animation(
+                div()
+                    .relative()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(div().size_full().child(view.clone()).with_animation(
                         ("screen", nav_version),
                         Animation::new(duration),
                         move |element, delta| element.opacity(delta).ml(px(24.0 * (1.0 - delta))),
-                    ),
-                )
+                    ))
+                    .into_any_element()
             }
-            None => div().size_full(),
+            (None, None) => div().size_full().into_any_element(),
         };
 
         let mut body = div()
@@ -695,10 +779,13 @@ impl Render for RootView {
             );
         }
 
-        root = root
-            .child(header)
-            .child(body)
-            .child(player_bar::render(self.state.clone(), cx));
+        root = root.child(header).child(body).child(player_bar::render(
+            self.state.clone(),
+            window,
+            &self.bar_covers,
+            &self.bar_events,
+            cx,
+        ));
 
         // « Contrôlé par … » — always on screen while somebody drives this
         // player, with the one tap that takes it back (the SPA's
@@ -713,6 +800,8 @@ impl Render for RootView {
         if self.shortcuts_open {
             root = root.child(shortcuts_overlay(cx));
         }
+        // The measurement seam: one line per painted frame, at 0.4 µs.
+        crate::bench::frame(render_started);
         root.into_any_element()
     }
 }
@@ -806,6 +895,7 @@ fn sidebar(
     genres_active: bool,
     on_remote: bool,
     on_party: bool,
+    features: &crate::state::Features,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement + use<> {
     let entries = [
@@ -878,7 +968,10 @@ fn sidebar(
                 .child(icon(icon_name).size(rems(1.125)))
                 .child(div().child(section.title())),
         );
-        if section == Section::Releases && is_admin {
+        if section == Section::Releases
+            && is_admin
+            && !features.hidden(crate::state::Feature::Genres)
+        {
             column = column.child(
                 div()
                     .id("nav-Genres")
@@ -914,83 +1007,87 @@ fn sidebar(
     }
     // Contrôle distant (lot D15a): a link lends THIS player, so the way in is the
     // sidebar, next to Réglages, and the glyph lights up when a controller is on.
-    let remote_live = remote_host::RemoteHost::get()
-        .map(|host| host.status().live())
-        .unwrap_or(0);
-    column = column.child(
-        div()
-            .id("nav-remote")
-            .flex()
-            .items_center()
-            .gap(rems(0.625))
-            .h(rems(2.))
-            .px(rems(0.625))
-            .text_size(rems(0.8125))
-            .text_color(if on_remote {
-                theme::text(cx)
-            } else {
-                theme::secondary(cx)
-            })
-            .cursor_pointer()
-            .hover(|style| style.text_color(theme::text(cx)))
-            .on_click(cx.listener(|this, _, _, cx| this.go(Route::Remote, cx)))
-            .child(
-                icon(IconName::Cast)
-                    .size(rems(1.125))
-                    .text_color(if remote_live > 0 {
-                        theme::accent(cx)
-                    } else if on_remote {
-                        theme::text(cx)
-                    } else {
-                        theme::secondary(cx)
-                    }),
-            )
-            .child(div().child("Contrôle distant")),
-    );
+    // D17: an entry whose feature the server lacks is not drawn at all.
+    if !features.hidden(crate::state::Feature::Remote) {
+        let remote_live = remote_host::RemoteHost::get()
+            .map(|host| host.status().live())
+            .unwrap_or(0);
+        column = column.child(
+            div()
+                .id("nav-remote")
+                .flex()
+                .items_center()
+                .gap(rems(0.625))
+                .h(rems(2.))
+                .px(rems(0.625))
+                .text_size(rems(0.8125))
+                .text_color(if on_remote {
+                    theme::text(cx)
+                } else {
+                    theme::secondary(cx)
+                })
+                .cursor_pointer()
+                .hover(|style| style.text_color(theme::text(cx)))
+                .on_click(cx.listener(|this, _, _, cx| this.go(Route::Remote, cx)))
+                .child(
+                    icon(IconName::Cast)
+                        .size(rems(1.125))
+                        .text_color(if remote_live > 0 {
+                            theme::accent(cx)
+                        } else if on_remote {
+                            theme::text(cx)
+                        } else {
+                            theme::secondary(cx)
+                        }),
+                )
+                .child(div().child("Contrôle distant")),
+        );
+    }
     // Écoute partagée (lot D15b): the same place as Contrôle distant — both are
     // about the room this player is in, and both light up while they are live.
-    let party_live = crate::wiring::party_host::PartyHost::get()
-        .map(|host| !host.id().is_empty())
-        .unwrap_or(false)
-        || crate::wiring::party_guest::Guest::get()
-            .map(|guest| {
-                matches!(
-                    guest.view().phase,
-                    crate::wiring::party_guest::Phase::Joining
-                        | crate::wiring::party_guest::Phase::Live
-                )
-            })
-            .unwrap_or(false);
-    column = column.child(
-        div()
-            .id("nav-party")
-            .flex()
-            .items_center()
-            .gap(rems(0.625))
-            .h(rems(2.))
-            .px(rems(0.625))
-            .text_size(rems(0.8125))
-            .text_color(if on_party {
-                theme::text(cx)
-            } else {
-                theme::secondary(cx)
-            })
-            .cursor_pointer()
-            .hover(|style| style.text_color(theme::text(cx)))
-            .on_click(cx.listener(|this, _, _, cx| this.go(Route::Party, cx)))
-            .child(
-                icon(IconName::PartyPopper)
-                    .size(rems(1.125))
-                    .text_color(if party_live {
-                        theme::accent(cx)
-                    } else if on_party {
+    if !features.hidden(crate::state::Feature::Party) {
+        let party_live = crate::wiring::party_host::PartyHost::get()
+            .map(|host| !host.id().is_empty())
+            .unwrap_or(false)
+            || crate::wiring::party_guest::Guest::get()
+                .map(|guest| {
+                    matches!(
+                        guest.view().phase,
+                        crate::wiring::party_guest::Phase::Joining
+                            | crate::wiring::party_guest::Phase::Live
+                    )
+                })
+                .unwrap_or(false);
+        column =
+            column.child(
+                div()
+                    .id("nav-party")
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.625))
+                    .h(rems(2.))
+                    .px(rems(0.625))
+                    .text_size(rems(0.8125))
+                    .text_color(if on_party {
                         theme::text(cx)
                     } else {
                         theme::secondary(cx)
-                    }),
-            )
-            .child(div().child("Écoute partagée")),
-    );
+                    })
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(theme::text(cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.go(Route::Party, cx)))
+                    .child(icon(IconName::PartyPopper).size(rems(1.125)).text_color(
+                        if party_live {
+                            theme::accent(cx)
+                        } else if on_party {
+                            theme::text(cx)
+                        } else {
+                            theme::secondary(cx)
+                        },
+                    ))
+                    .child(div().child("Écoute partagée")),
+            );
+    }
     column = column.child(div().flex_1());
     column.child(
         div()

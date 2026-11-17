@@ -24,6 +24,35 @@ pub enum LibraryTab {
 }
 
 impl LibraryTab {
+    /// The token [`Route::spec`] uses, spelled as the tab's title without its
+    /// accents and case (`favoris` → `favorites`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            LibraryTab::Playlists => "playlists",
+            LibraryTab::Favorites => "favorites",
+            LibraryTab::Artists => "artists",
+            LibraryTab::Albums => "albums",
+            LibraryTab::Uploads => "uploads",
+            LibraryTab::Dislikes => "dislikes",
+            LibraryTab::Unavailable => "unavailable",
+            LibraryTab::Folders => "folders",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Some(match slug {
+            "playlists" => LibraryTab::Playlists,
+            "favorites" => LibraryTab::Favorites,
+            "artists" => LibraryTab::Artists,
+            "albums" => LibraryTab::Albums,
+            "uploads" => LibraryTab::Uploads,
+            "dislikes" => LibraryTab::Dislikes,
+            "unavailable" => LibraryTab::Unavailable,
+            "folders" => LibraryTab::Folders,
+            _ => return None,
+        })
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             LibraryTab::Playlists => "Playlists",
@@ -58,6 +87,43 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
+    /// The token [`Route::spec`] uses, in the title's own words, unhyphenated
+    /// (`transcription-locale`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            SettingsSection::Playback => "lecture-et-son",
+            SettingsSection::Appearance => "apparence",
+            SettingsSection::Viz => "visualiseur",
+            SettingsSection::Downloads => "telechargements",
+            SettingsSection::Discovery => "decouverte",
+            SettingsSection::Sources => "sources",
+            SettingsSection::Account => "compte",
+            SettingsSection::Users => "utilisateurs",
+            SettingsSection::Server => "serveur",
+            SettingsSection::Transcribe => "transcription-locale",
+            SettingsSection::Help => "assistance",
+            SettingsSection::Shortcuts => "raccourcis",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Some(match slug {
+            "lecture-et-son" => SettingsSection::Playback,
+            "apparence" => SettingsSection::Appearance,
+            "visualiseur" => SettingsSection::Viz,
+            "telechargements" => SettingsSection::Downloads,
+            "decouverte" => SettingsSection::Discovery,
+            "sources" => SettingsSection::Sources,
+            "compte" => SettingsSection::Account,
+            "utilisateurs" => SettingsSection::Users,
+            "serveur" => SettingsSection::Server,
+            "transcription-locale" => SettingsSection::Transcribe,
+            "assistance" => SettingsSection::Help,
+            "raccourcis" => SettingsSection::Shortcuts,
+            _ => return None,
+        })
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             SettingsSection::Playback => "Lecture et son",
@@ -98,6 +164,28 @@ impl SettingsSection {
 pub enum CreditKind {
     Track,
     Person,
+}
+
+/// How a person reaches a route.
+///
+/// D17 audited every screen of the app against one question: can it be OPENED
+/// without knowing that it exists? A route nobody can reach is a screen the app
+/// does not have, and the shell's own table (`screens::all_routes`) would still
+/// build it — so the answer is written here, next to the route, and pinned by a
+/// test. The SPA's inventory is the reference: every entry of `LibraryNav` and
+/// every tab of `Settings` is reachable by a click, and everything else by the
+/// sidebar or a shortcut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// The app lands there by itself: the login screen, onboarding after a
+    /// first login, a failure screen's own « Réessayer ».
+    Automatic,
+    /// A row of the sidebar.
+    Sidebar,
+    /// A keystroke (the spelling the `?` overlay prints, `keymap::SHORTCUTS`).
+    Shortcut(&'static str),
+    /// A link on another screen (a row, a card, a button).
+    Link(&'static str),
 }
 
 /// One place the app can be.
@@ -156,6 +244,174 @@ impl Route {
             Route::Queue => "File d'attente".into(),
             Route::Viz => "Visualiseur".into(),
             Route::Settings { section } => format!("Réglages · {}", section.title()),
+        }
+    }
+
+    /// The route as one token, and back: `library:favorites`,
+    /// `settings:transcription-locale`, `artist:123`. D17's journey bench opens
+    /// each screen with `--route <token>` instead of clicking blind, so every
+    /// capture and every request count is the same screen on every run; the
+    /// round trip is a test, because the bench and the app must not drift.
+    pub fn spec(&self) -> String {
+        match self {
+            Route::Login => "login".into(),
+            Route::Onboarding => "onboarding".into(),
+            Route::Home => "home".into(),
+            Route::Search { query } => {
+                if query.is_empty() {
+                    "search".into()
+                } else {
+                    format!("search:{query}")
+                }
+            }
+            Route::Artist { id } => format!("artist:{id}"),
+            Route::Album { id } => format!("album:{id}"),
+            Route::Playlist { id } => format!("playlist:{id}"),
+            Route::Library { tab } => format!("library:{}", tab.slug()),
+            Route::Podcasts => "podcasts".into(),
+            Route::Show { id } => format!("show:{id}"),
+            Route::Releases => "releases".into(),
+            Route::Recap { year } => match year {
+                Some(year) => format!("recap:{year}"),
+                None => "recap".into(),
+            },
+            Route::History => "history".into(),
+            Route::Genres => "genres".into(),
+            Route::Credits { kind, id } => format!(
+                "credits:{}:{id}",
+                match kind {
+                    CreditKind::Track => "track",
+                    CreditKind::Person => "person",
+                }
+            ),
+            Route::Import { url } => match url {
+                Some(url) => format!("import:{url}"),
+                None => "import".into(),
+            },
+            Route::Party => "party".into(),
+            Route::Remote => "remote".into(),
+            Route::NowPlaying => "now-playing".into(),
+            Route::Queue => "queue".into(),
+            Route::Viz => "viz".into(),
+            Route::Settings { section } => format!("settings:{}", section.slug()),
+        }
+    }
+
+    /// Parse a [`Route::spec`]. `None` for anything that is not one, so a
+    /// mistyped `--route` is an error the app prints, never a silent Home.
+    pub fn parse_spec(spec: &str) -> Option<Route> {
+        let (head, rest) = match spec.split_once(':') {
+            Some((head, rest)) => (head, Some(rest)),
+            None => (spec, None),
+        };
+        let required = || rest.filter(|value| !value.is_empty());
+        Some(match head {
+            "login" => Route::Login,
+            "onboarding" => Route::Onboarding,
+            "home" => Route::Home,
+            "search" => Route::Search {
+                query: rest.unwrap_or("").to_owned(),
+            },
+            "artist" => Route::Artist {
+                id: required()?.to_owned(),
+            },
+            "album" => Route::Album {
+                id: required()?.to_owned(),
+            },
+            "playlist" => Route::Playlist {
+                id: required()?.to_owned(),
+            },
+            "library" => Route::Library {
+                tab: rest.and_then(LibraryTab::from_slug).unwrap_or_default(),
+            },
+            "podcasts" => Route::Podcasts,
+            "show" => Route::Show {
+                id: required()?.to_owned(),
+            },
+            "releases" => Route::Releases,
+            "recap" => Route::Recap {
+                year: rest.and_then(|year| year.parse().ok()),
+            },
+            "history" => Route::History,
+            "genres" => Route::Genres,
+            "credits" => {
+                let (kind, id) = rest?.split_once(':')?;
+                Route::Credits {
+                    kind: match kind {
+                        "track" => CreditKind::Track,
+                        "person" => CreditKind::Person,
+                        _ => return None,
+                    },
+                    id: id.to_owned(),
+                }
+            }
+            "import" => Route::Import {
+                url: rest.map(str::to_owned),
+            },
+            "party" => Route::Party,
+            "remote" => Route::Remote,
+            "now-playing" => Route::NowPlaying,
+            "queue" => Route::Queue,
+            "viz" => Route::Viz,
+            "settings" => Route::Settings {
+                section: rest
+                    .and_then(SettingsSection::from_slug)
+                    .unwrap_or_default(),
+            },
+            _ => return None,
+        })
+    }
+
+    /// The optional feature this screen belongs to, when one server may lack
+    /// it. `None` for the screens every server from the app's first version
+    /// has (`nz_api::Feature`).
+    pub fn feature(&self) -> Option<crate::state::Feature> {
+        match self {
+            Route::Party => Some(crate::state::Feature::Party),
+            Route::Remote => Some(crate::state::Feature::Remote),
+            Route::Genres => Some(crate::state::Feature::Genres),
+            Route::Settings {
+                section: SettingsSection::Transcribe,
+            } => Some(crate::state::Feature::Transcription),
+            // NOT `Library { tab: Folders }`: the Bibliothèque exists on an
+            // older server, only its folder tab does not, and replacing the
+            // whole screen would hide the playlists with it. The library's tab
+            // strip is where that one would be hidden.
+            _ => None,
+        }
+    }
+
+    /// The way in: how a person who has never seen this screen can open it.
+    ///
+    /// A screen that only answers a short-lived internal link (an action, a
+    /// toast, a push from a state machine) is not *reachable*: D17 found the
+    /// full-screen queue in exactly that hole — `Route::Queue` existed, the
+    /// side panel drew the same screen, and nothing in the app ever pushed the
+    /// route. `g q` is that way in now, and this table is what keeps the next
+    /// route from repeating the mistake.
+    pub fn access(&self) -> Access {
+        match self {
+            Route::Login | Route::Onboarding => Access::Automatic,
+            Route::Home
+            | Route::Search { .. }
+            | Route::Library { .. }
+            | Route::Podcasts
+            | Route::Releases
+            | Route::NowPlaying
+            | Route::Settings { .. } => Access::Sidebar,
+            Route::Artist { .. } => Access::Link("un titre, un album, une recherche"),
+            Route::Album { .. } => Access::Link("un titre, une recherche, la Bibliothèque"),
+            Route::Playlist { .. } => Access::Link("la Bibliothèque"),
+            Route::Show { .. } => Access::Link("les Podcasts"),
+            Route::Recap { .. } => Access::Link("Nouveautés, ou l'Accueil"),
+            Route::History => Access::Link("Nouveautés"),
+            Route::Genres => Access::Shortcut("g e"),
+            Route::Credits { .. } => Access::Link("le menu contextuel d'un titre"),
+            Route::Import { .. } => Access::Link("la Bibliothèque"),
+            Route::Party => Access::Sidebar,
+            Route::Remote => Access::Sidebar,
+            Route::Queue => Access::Shortcut("g q"),
+            Route::Viz => Access::Shortcut("v"),
         }
     }
 
@@ -443,6 +699,61 @@ mod tests {
         assert!(!nav.can_go_back());
         assert!(!nav.can_go_forward());
         assert_eq!(nav.current(), Some(&Route::Login));
+    }
+
+    /// D17: the bench opens each screen with `--route <spec>`, so the token
+    /// and the route must round-trip for every one of them — an unmatched spec
+    /// is a screen the bench would silently photograph as Accueil.
+    #[test]
+    fn every_route_round_trips_through_its_bench_token() {
+        for route in crate::screens::all_routes() {
+            let spec = route.spec();
+            assert_eq!(
+                Route::parse_spec(&spec),
+                Some(route.clone()),
+                "{spec} does not parse back"
+            );
+        }
+        assert_eq!(
+            Route::parse_spec("library:favorites"),
+            Some(Route::Library {
+                tab: LibraryTab::Favorites
+            })
+        );
+        assert_eq!(Route::parse_spec("nope"), None);
+        assert_eq!(Route::parse_spec("artist:"), None);
+        assert_eq!(Route::parse_spec("credits:album:1"), None);
+    }
+
+    /// D17: only the screens an older server may lack name a feature; a screen
+    /// that names one is hidden with it.
+    #[test]
+    fn only_the_optional_screens_name_a_feature() {
+        use crate::state::Feature;
+        assert_eq!(Route::Party.feature(), Some(Feature::Party));
+        assert_eq!(Route::Remote.feature(), Some(Feature::Remote));
+        assert_eq!(Route::Genres.feature(), Some(Feature::Genres));
+        assert_eq!(
+            Route::Settings {
+                section: SettingsSection::Transcribe
+            }
+            .feature(),
+            Some(Feature::Transcription)
+        );
+        for route in [
+            Route::Home,
+            Route::Search {
+                query: String::new(),
+            },
+            Route::NowPlaying,
+            Route::Queue,
+            Route::Viz,
+            Route::Library {
+                tab: LibraryTab::Folders,
+            },
+        ] {
+            assert_eq!(route.feature(), None, "{route:?}");
+        }
     }
 
     #[test]

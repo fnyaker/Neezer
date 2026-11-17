@@ -43,6 +43,7 @@ pub mod cache_trait;
 pub mod client;
 pub mod endpoints;
 pub mod error;
+pub mod features;
 pub mod lanes;
 pub mod session;
 

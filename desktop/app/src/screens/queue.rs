@@ -23,7 +23,13 @@
 //!   `Page↑`/`Page↓` move the cursor, `Entrée` plays that row, `Alt+↑`/`Alt+↓`
 //!   move an upcoming row, `Suppr` removes it — and every one of those exists as
 //!   a visible control on the row (a `✕` to remove, `⌃`/`⌄` to move), because "the
-//!   mouse can do it" is the other half of the rule.
+//!   mouse can do it" is the other half of the rule. D17 added the mouse's own
+//!   reorder: an upcoming row is DRAGGED onto another upcoming row, which is
+//!   `move_to` exactly as `Alt+↑` is — one command, two gestures.
+//! - **The list takes the keyboard when it appears.** D9 left the focus to a
+//!   click, so `q` opened the panel and `j`/`Alt+↑` did nothing until a row was
+//!   clicked. The first paint now focuses the list (`window.focus`), which is
+//!   what Tab would do and what the person means by opening it.
 //!
 //! The queue is drawn in two places by the same entity: the `q` side panel and
 //! the now-playing screen's card. A screen keeps its own state, so the two do
@@ -35,9 +41,9 @@ use std::rc::Rc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Context, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, Pixels, Render, ScrollStrategy, Size, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, px, rems,
+    AppContext as _, Context, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Pixels, Render, ScrollStrategy, Size, StatefulInteractiveElement,
+    Styled, Subscription, Window, div, px, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon, virtual_list};
 use nz_player::{Command, Entry};
@@ -60,6 +66,39 @@ enum Msg {
     Cover(String, Option<PathBuf>),
 }
 
+/// What a row drags: its own index, and the title the ghost follows the
+/// pointer with. `pub` because the drop listener and the ghost are two element
+/// types that must name the same value.
+#[derive(Clone, Debug)]
+pub struct QueueDrag {
+    pub from: usize,
+    pub label: gpui_kit::SharedString,
+}
+
+/// The little card that follows the pointer while a row is dragged. It draws
+/// the row's title, so the gesture says what it is moving.
+pub struct DragGhost {
+    label: gpui_kit::SharedString,
+}
+
+impl Render for DragGhost {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("queue-drag-ghost")
+            .px(rems(0.5))
+            .py(rems(0.25))
+            .rounded_md()
+            .border_1()
+            .border_color(theme::accent(cx))
+            .bg(theme::selected(cx))
+            .text_color(theme::text(cx))
+            .text_size(rems(0.75))
+            .font_family(theme::font(cx))
+            .truncate()
+            .child(self.label.clone())
+    }
+}
+
 /// The queue screen. `route` is kept because `screens::build` hands it over and
 /// a screen names itself (`docs/agents/desktop.md`, D7).
 pub struct Screen {
@@ -76,6 +115,9 @@ pub struct Screen {
     /// How many rows the last paint built — the windowing assertion, and the
     /// number the acceptance quotes.
     pub rendered_rows: usize,
+    /// The first paint has not taken the keyboard yet (D17: opening the queue
+    /// must be enough to use it with the keys).
+    took_focus: bool,
     /// The rows' sleeves: a 128 px copy per row, decoded for what is visible.
     covers: Rc<RefCell<Covers>>,
     events: Sender<Msg>,
@@ -99,6 +141,7 @@ impl Screen {
             scroll: gpui_kit::base::VirtualListScrollHandle::new(),
             focus,
             rendered_rows: 0,
+            took_focus: false,
             covers: Rc::new(RefCell::new(Covers::rows())),
             events,
             _subscription: subscription,
@@ -390,6 +433,13 @@ impl Screen {
 
 impl Render for Screen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // D17: the list takes the keyboard the moment it is shown — `q` opens
+        // the panel and `j`/`Alt+↑`/`Suppr` work without a click. One attempt,
+        // so a person who moves the focus elsewhere keeps it.
+        if !self.took_focus {
+            self.took_focus = true;
+            window.focus(&self.focus, cx);
+        }
         self.sync(cx);
         // A row that left the panel loses its sleeve here: the pixels and the
         // atlas tile, not at the end of the session.
@@ -620,6 +670,29 @@ impl Screen {
                 window.focus(&this.focus, cx);
                 this.jump(index, cx);
             }));
+        // D17: an upcoming row is also DRAGGED onto another one — the same
+        // `move_to` the `⌃`/`⌄` buttons and `Alt+↑`/`Alt+↓` produce, so the
+        // gesture cannot edit what the rules forbid (a playing or played row is
+        // neither draggable nor a target, which `move_row` refuses anyway).
+        if (index as i64) > playing {
+            let ghost = entry.title.clone();
+            row = row
+                .on_drag(
+                    QueueDrag {
+                        from: index,
+                        label: entry.title.clone().into(),
+                    },
+                    move |_drag: &QueueDrag, _offset, _window, cx| {
+                        let label = ghost.clone();
+                        cx.new(|_| DragGhost {
+                            label: label.into(),
+                        })
+                    },
+                )
+                .on_drop(cx.listener(move |this, drag: &QueueDrag, _, cx| {
+                    this.move_row(drag.from, index, cx)
+                }));
+        }
         // A sleeve per row, decoded at the size the row draws it: the 128 px
         // copy (`Covers::rows`), painted only once `Covers::show` has decoded
         // it for a visible row. D9 measured a glyph per row because the only
@@ -699,7 +772,7 @@ fn plural(count: i64) -> &'static str {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use gpui_kit::{AppContext as _, IntoElement, ParentElement, Styled, div};
+    use gpui_kit::{IntoElement, ParentElement, Styled, div};
     use nz_player::{Command, Entry, QueueArgs};
 
     use super::*;
@@ -1060,5 +1133,46 @@ mod tests {
 
         std::fs::remove_dir_all(dir).ok();
         drop(runtime);
+    }
+
+    /// D17: opening the queue is enough to drive it with the keys. D9 left the
+    /// focus to a click, so `q` opened the panel and `j`/`Alt+↑`/`Suppr` did
+    /// nothing until a row had been clicked — a panel that looks interactive
+    /// and ignores the keyboard. The first paint now takes the focus, and this
+    /// test NEVER focuses the window itself.
+    #[gpui::test]
+    async fn opening_the_queue_is_enough_to_use_the_keys(cx: &mut gpui::TestAppContext) {
+        let dir = temp_dir("self-focus");
+        let state = small_queue(cx, &dir);
+        let screen = cx.update(|cx| cx.new(|cx| Screen::new(Route::Queue, state.clone(), cx)));
+        let (_view, cx) = cx.add_window_view({
+            let screen = screen.clone();
+            move |_window, _cx| Host { screen }
+        });
+        cx.run_until_parked();
+        let focused = cx.update(|window, cx| screen.read(cx).focus.is_focused(window));
+        assert!(focused, "the list holds the keyboard after its first paint");
+        // `Fin` reaches the last row without a click.
+        cx.simulate_keystrokes("end");
+        cx.update(|_, cx| assert_eq!(screen.read(cx).selected(), 11));
+        // `Alt+↑` moves that row, and `Suppr` takes it out: the edits a person
+        // opens the panel to make.
+        cx.simulate_keystrokes("alt-up");
+        cx.update(|_, cx| {
+            assert_eq!(state.read(cx).player.queue()[10].id, "t11");
+        });
+        cx.simulate_keystrokes("delete");
+        cx.update(|_, cx| {
+            assert_eq!(state.read(cx).player.len(), 11);
+            assert!(
+                !state
+                    .read(cx)
+                    .player
+                    .queue()
+                    .iter()
+                    .any(|entry| entry.id == "t11")
+            );
+        });
+        std::fs::remove_dir_all(dir).ok();
     }
 }
