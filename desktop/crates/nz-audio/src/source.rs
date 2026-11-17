@@ -21,6 +21,7 @@
 //! contract for a seek (`docs/agents/playback.md`, *A seek is answered by the
 //! server, or explicitly deferred*).
 
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
@@ -197,6 +198,22 @@ pub trait StreamOpener: Send + Sync {
 
     /// A complete file for this (track, quality), if the play cache has one.
     fn local(&self, id: &str, quality: Quality) -> Option<PathBuf>;
+
+    /// The engine is closing: abandon every wait in flight instead of letting
+    /// it finish.
+    ///
+    /// The app's opener drives the network with `Handle::block_on` on the
+    /// process's tokio runtime, and tokio PANICS — it does not return an error —
+    /// when a timer is polled on a runtime that is shutting down
+    /// (`Handle::block_on`'s own documentation: « timers will panic »). The
+    /// engine's threads therefore cannot outlive that runtime: [`Engine::shutdown`]
+    /// calls this first, so each `block_on` it is racing gives up at once, and
+    /// then JOINS every thread it started. An opener that has no in-flight wait
+    /// of its own keeps this no-op — the test openers are files, and a file read
+    /// always returns.
+    ///
+    /// [`Engine::shutdown`]: crate::Engine::shutdown
+    fn shutdown(&self) {}
 }
 
 /// The spool file name: a hash of (track, quality), never a path from the
@@ -216,6 +233,70 @@ struct Restart {
     lane: Lane,
 }
 
+/// The spooler threads the engine owns, so it can JOIN them before the network
+/// runtime they borrow goes away.
+///
+/// A spooler (`nz-audio-spool`) pulls a body chunk by chunk; on the app's opener
+/// each pull is a `Handle::block_on`, and tokio panics — it returns no error —
+/// when a timer is polled on a runtime that is shutting down. The handle cannot
+/// stay inside the [`Spool`] it fills: that struct is itself owned by the
+/// thread's own closure, so it could never be joined. The engine keeps them here
+/// instead, prunes the ones that finished, and joins the rest in
+/// [`Spoolers::join_all`].
+///
+/// A spooler a SEEK superseded is `abandon`ed, not joined: it may be inside a
+/// blocking socket read of bytes nobody wants any more, and only the opener's
+/// own stop (the app closing) can end that. Measured: joining one made
+/// `seek_in_a_finished_network_file_uses_a_byte_range` hang for ever, and a
+/// close that waited for such a read would blow the 50 ms budget on a dead link.
+/// It cannot touch the runtime after the engine stops: every pull of its body
+/// checks the stop first (`ApiByteStream::read`).
+#[derive(Clone, Default)]
+pub(crate) struct Spoolers(Arc<Mutex<HashMap<u64, JoinHandle<()>>>>);
+
+impl Spoolers {
+    /// Register a spooler thread and answer the ticket that names it.
+    fn register(&self, handle: JoinHandle<()>) -> u64 {
+        let mut threads = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        // A track change leaves its spooler behind: drop the handles of the
+        // ones that are done instead of keeping one per track of a session.
+        threads.retain(|_, thread| !thread.is_finished());
+        let ticket = threads.keys().max().copied().unwrap_or(0) + 1;
+        threads.insert(ticket, handle);
+        ticket
+    }
+
+    /// Let go of a spooler without waiting for it (the handle is detached, as a
+    /// dropped `JoinHandle` always is).
+    fn abandon(&self, ticket: u64) {
+        let handle = self
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&ticket);
+        drop(handle);
+    }
+
+    /// Join every CURRENT spooler, and wait for it. Only the engine's shutdown
+    /// calls this: by then `stop` is set on every spool and the opener's own stop
+    /// has abandoned the chunk in flight, so no spooler waits for the network.
+    pub(crate) fn join_all(&self) {
+        let handles: Vec<JoinHandle<()>> = {
+            let mut threads = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            std::mem::take(&mut *threads).into_values().collect()
+        };
+        let me = thread::current().id();
+        for handle in handles {
+            // A spooler can be the thread that drops the last source, and joining
+            // yourself fails with `EDEADLK`; it is leaving anyway.
+            if handle.thread().id() == me {
+                continue;
+            }
+            let _ = handle.join();
+        }
+    }
+}
+
 /// One download attempt, writing sequentially into its own file.
 struct Spool {
     path: PathBuf,
@@ -226,7 +307,6 @@ struct Spool {
     eof: bool,
     error: Option<String>,
     stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
 }
 
 /// Everything `HttpSource::new` needs about the track it is spooling, kept in
@@ -241,6 +321,12 @@ pub(crate) struct SourceSpec<'a> {
     pub ahead: u64,
     /// Only a whole track may be renamed into the cached name.
     pub publish: bool,
+    /// The engine's own stop: set once, when the engine shuts down. A reader
+    /// waiting for bytes returns at once instead of holding its decode thread,
+    /// and no half body can be published as a complete one.
+    pub stop: Arc<AtomicBool>,
+    /// Where the spooler thread's handle goes: the engine joins it.
+    pub spoolers: Spoolers,
 }
 
 /// A network body spooled to disk, read as a blocking `Read + Seek`.
@@ -259,6 +345,13 @@ pub(crate) struct HttpSource {
     ready: Arc<Condvar>,
     /// Set when the source is dropped: the spooler stops.
     closed: Arc<AtomicBool>,
+    /// The engine's stop, shared with every source it builds (`SourceSpec::stop`).
+    stop: Arc<AtomicBool>,
+    /// Where the spooler threads' handles go (the engine joins them).
+    spoolers: Spoolers,
+    /// The ticket of the CURRENT spooler: a seek abandons it instead of joining
+    /// it (it may be inside a socket read).
+    spooler: Option<u64>,
     /// True while symphonia is probing the container. `is_seekable` answers
     /// false then, so the probe does not scan the TRAILING metadata: that scan
     /// seeks to the end of the body, which over the network is a download of
@@ -292,6 +385,8 @@ impl HttpSource {
             bus,
             ahead,
             publish,
+            stop,
+            spoolers,
         } = spec;
         let len = body.len_hint();
         let final_path = spool_path(dir, id, quality);
@@ -313,7 +408,6 @@ impl HttpSource {
             eof: false,
             error: None,
             stop: Arc::new(AtomicBool::new(false)),
-            handle: None,
         }));
         let ready = Arc::new(Condvar::new());
         let restart_cfg = restart.map(|(opener, lane)| Restart {
@@ -332,6 +426,9 @@ impl HttpSource {
             spool: Arc::clone(&spool),
             ready: Arc::clone(&ready),
             closed: Arc::clone(&closed),
+            stop,
+            spoolers,
+            spooler: None,
             probing: Arc::new(AtomicBool::new(true)),
             id: id.to_string(),
             quality,
@@ -354,6 +451,7 @@ impl HttpSource {
         let ahead = self.ahead;
         let spool = Arc::clone(&self.spool);
         let ready = Arc::clone(&self.ready);
+        let engine_stop = Arc::clone(&self.stop);
         let body = Arc::new(Mutex::new(body));
         let handle = thread::Builder::new()
             .name("nz-audio-spool".into())
@@ -366,6 +464,17 @@ impl HttpSource {
                         guard.stop.load(Ordering::Relaxed)
                     };
                     if stop || closed.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    // The engine is closing: its network runtime is about to go,
+                    // and this thread may not touch it (`nz-audio`'s sources
+                    // race every pull against this flag).
+                    if engine_stop.load(Ordering::Acquire) {
+                        let mut guard = spool.lock().expect("spool poisoned");
+                        guard.error = Some("moteur arrêté".into());
+                        guard.eof = true;
+                        drop(guard);
+                        ready.notify_all();
                         break;
                     }
                     // Rule 1: stay `ahead` bytes in front of the decoder, never
@@ -428,7 +537,7 @@ impl HttpSource {
                 }
             })
             .expect("spawn the spooler thread");
-        self.spool.lock().expect("spool poisoned").handle = Some(handle);
+        self.spooler = Some(self.spoolers.register(handle));
     }
 
     /// Stop the current download and start a new one at logical byte `target`.
@@ -444,12 +553,17 @@ impl HttpSource {
             .open(&cfg.id, cfg.quality, None, Some(target), cfg.lane)
             .map_err(|e| io::Error::other(e.to_string()))?;
         // The previous attempt keeps its own file and stops on its own; nothing
-        // here waits for a blocked socket read.
+        // here waits for a blocked socket read. Its thread is ABANDONED, not
+        // joined (`Spoolers::abandon`): it may be inside a read of bytes nobody
+        // wants, and joining it hung a seek test for ever.
         {
             let guard = self.spool.lock().expect("spool poisoned");
             guard.stop.store(true, Ordering::Relaxed);
         }
         self.ready.notify_all();
+        if let Some(ticket) = self.spooler.take() {
+            self.spoolers.abandon(ticket);
+        }
 
         let path = self.final_path.with_extension(format!("part.{target}"));
         self.temps.push(path.clone());
@@ -469,7 +583,6 @@ impl HttpSource {
             eof: false,
             error: None,
             stop: Arc::new(AtomicBool::new(false)),
-            handle: None,
         }));
         self.spool = Arc::clone(&spool);
         self.pos = target;
@@ -561,6 +674,11 @@ impl Read for HttpSource {
             if self.closed.load(Ordering::Relaxed) {
                 return Ok(0);
             }
+            // The engine is closing: stop waiting, and never let the `eof` above
+            // rename a half spool into the play cache as a complete track.
+            if self.stop.load(Ordering::Acquire) {
+                return Ok(0);
+            }
             let guard = self.spool.lock().expect("spool poisoned");
             let _ = self
                 .ready
@@ -629,6 +747,11 @@ impl Drop for HttpSource {
             let _ = std::fs::remove_file(path);
         }
         self.ready.notify_all();
+        // The spooler thread itself is NOT joined here: this runs on a decode
+        // thread, which must never wait for a socket (a skip on a stalled link
+        // would then block for the stream's 15 s timeout). It is the engine's
+        // thread registry that joins them (`Spoolers::join_all`), before the
+        // runtime they borrow goes away.
     }
 }
 
@@ -682,6 +805,7 @@ mod tests {
             read: Arc::clone(&read),
             done: Arc::clone(&done),
         };
+        let spoolers = Spoolers::default();
         let source = HttpSource::new(
             Box::new(body),
             SourceSpec {
@@ -692,6 +816,8 @@ mod tests {
                 bus: None,
                 ahead: 64 * 1024,
                 publish: true,
+                stop: Arc::new(AtomicBool::new(false)),
+                spoolers: spoolers.clone(),
             },
         )
         .expect("source");
@@ -704,6 +830,16 @@ mod tests {
         );
         assert!(!done.load(Ordering::Relaxed), "the whole body was read");
         drop(source);
+        // The engine owns the spooler thread and joins it: a dropped source only
+        // asks it to stop.
+        let closing = std::time::Instant::now();
+        spoolers.join_all();
+        println!("spooler joint en {:?}", closing.elapsed());
+        assert!(
+            closing.elapsed() < std::time::Duration::from_millis(50),
+            "the spooler was joined in {:?}",
+            closing.elapsed()
+        );
     }
 
     #[test]

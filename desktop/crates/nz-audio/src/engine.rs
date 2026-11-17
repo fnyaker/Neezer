@@ -28,7 +28,7 @@ use crate::dsp::{Normalization, Settings};
 use crate::events::{EngineEvent, EventBus, VoiceInfo, VoiceInfoEntry};
 use crate::mixer::{MixerCmd, MixerShared};
 use crate::output::{self, OfflineSink, Output, OutputChoice, OutputInfo};
-use crate::source::{Lane, Quality, SourceError, StreamOpener, spool_path};
+use crate::source::{Lane, Quality, SourceError, Spoolers, StreamOpener, spool_path};
 use crate::tap::{TAP_FRAMES, Tap, TapReader};
 use crate::trim::{self, Edges, Trim};
 use crate::voice::{VoiceConsumer, VoiceMeta, VoiceStatus};
@@ -128,7 +128,6 @@ impl From<DecodeError> for EngineError {
 struct Built {
     consumer: VoiceConsumer,
     status: Arc<VoiceStatus>,
-    handle: JoinHandle<()>,
     generation: u64,
     position_s: f64,
     duration_s: Option<f64>,
@@ -143,8 +142,6 @@ impl Built {
 /// What the engine remembers about a voice so it can stop or replace it.
 struct Slot {
     status: Arc<VoiceStatus>,
-    #[allow(dead_code)]
-    handle: JoinHandle<()>,
 }
 
 /// Only the voice THIS engine installed last as current. The mixer owns the
@@ -206,7 +203,21 @@ struct Inner {
     load_gen: AtomicU64,
     gen_seq: AtomicU64,
     playing: AtomicBool,
-    stopped: AtomicBool,
+    stopped: Arc<AtomicBool>,
+    /// Everything asked to stop once, when the engine closes ([`Inner::shutdown`]).
+    shut: AtomicBool,
+    /// The loader threads this engine started (a load, a preload, a seek). The
+    /// engine JOINS them when it closes: each one borrows the app's network
+    /// runtime inside `StreamOpener`, and that runtime may not be dropped under
+    /// a thread still inside it — tokio panics on a timer polled on a runtime
+    /// that is shutting down (`docs/agents/desktop.md`, D13 *Pitfalls*).
+    loaders: Mutex<Vec<JoinHandle<()>>>,
+    /// The decode threads, with the flag that stops each one. Kept here, not only
+    /// in the mixer, so a shutdown can stop every voice — the current one, the
+    /// preloaded next one and one in a crossfade — and join them.
+    voices: Mutex<Vec<(Arc<VoiceStatus>, JoinHandle<()>)>>,
+    /// The spooler threads the network sources started.
+    spoolers: Spoolers,
     event_stop: Arc<AtomicBool>,
     event_thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -264,7 +275,11 @@ impl Engine {
                 load_gen: AtomicU64::new(0),
                 gen_seq: AtomicU64::new(0),
                 playing: AtomicBool::new(false),
-                stopped: AtomicBool::new(false),
+                stopped: Arc::new(AtomicBool::new(false)),
+                shut: AtomicBool::new(false),
+                loaders: Mutex::new(Vec::new()),
+                voices: Mutex::new(Vec::new()),
+                spoolers: Spoolers::default(),
                 event_stop,
                 event_thread: Mutex::new(Some(event_thread)),
             }),
@@ -316,7 +331,11 @@ impl Engine {
                 load_gen: AtomicU64::new(0),
                 gen_seq: AtomicU64::new(0),
                 playing: AtomicBool::new(false),
-                stopped: AtomicBool::new(false),
+                stopped: Arc::new(AtomicBool::new(false)),
+                shut: AtomicBool::new(false),
+                loaders: Mutex::new(Vec::new()),
+                voices: Mutex::new(Vec::new()),
+                spoolers: Spoolers::default(),
                 event_stop,
                 event_thread: Mutex::new(Some(event_thread)),
             }),
@@ -329,10 +348,11 @@ impl Engine {
         let inner = Arc::clone(&self.inner);
         let mark = inner.load_gen.fetch_add(1, Ordering::SeqCst) + 1;
         let id = id.to_string();
-        spawn_loader(format!("nz-load-{mark}"), move || {
-            match build_at(&inner, &id, quality, start, Lane::User, true) {
-                Ok(built) => inner.install_current(mark, &id, quality, built),
-                Err(e) => inner.fail(Some(&id), e),
+        let loading = Arc::clone(&inner);
+        inner.spawn_loader(format!("nz-load-{mark}"), move || {
+            match build_at(&loading, &id, quality, start, Lane::User, true) {
+                Ok(built) => loading.install_current(mark, &id, quality, built),
+                Err(e) => loading.fail(Some(&id), e),
             }
         });
     }
@@ -343,21 +363,20 @@ impl Engine {
         let inner = Arc::clone(&self.inner);
         let mark = inner.load_gen.load(Ordering::SeqCst);
         let id = id.to_string();
-        spawn_loader(format!("nz-preload-{id}"), move || {
-            if inner.stopped.load(Ordering::Relaxed)
-                || mark != inner.load_gen.load(Ordering::SeqCst)
+        let loading = Arc::clone(&inner);
+        inner.spawn_loader(format!("nz-preload-{id}"), move || {
+            if loading.stopped.load(Ordering::Relaxed)
+                || mark != loading.load_gen.load(Ordering::SeqCst)
             {
                 return;
             }
-            match build_at(&inner, &id, quality, None, Lane::Prefetch, false) {
-                Ok(built) => inner.install_next(mark, &id, quality, built),
+            match build_at(&loading, &id, quality, None, Lane::Prefetch, false) {
+                Ok(built) => loading.install_next(mark, &id, quality, built),
                 // A prefetch that fails is not a verdict about the track: the
                 // app can try again when it becomes current (rule 3, *A failure
-                // to reach a provider is never a verdict*).
-                Err(e) => inner.events.emit(EngineEvent::Error {
-                    id: Some(id),
-                    message: e.to_string(),
-                }),
+                // to reach a provider is never a verdict*). It is silent only
+                // when the engine itself is closing.
+                Err(e) => loading.fail(Some(&id), e),
             }
         });
     }
@@ -389,8 +408,9 @@ impl Engine {
             });
             return;
         };
-        spawn_loader(format!("nz-seek-{mark}"), move || {
-            inner.run_seek(mark, &id, quality, target)
+        let seeking = Arc::clone(&inner);
+        inner.spawn_loader(format!("nz-seek-{mark}"), move || {
+            seeking.run_seek(mark, &id, quality, target)
         });
     }
 
@@ -546,6 +566,46 @@ impl Engine {
     pub fn current_id(&self) -> Option<String> {
         self.inner.now_playing().map(|(id, _)| id)
     }
+
+    /// Stop every thread this engine started, and WAIT for them.
+    ///
+    /// The app must call this — through [`EngineHandle::shutdown`] or straight
+    /// here — before it drops the tokio runtime its [`StreamOpener`] borrows
+    /// with `Handle::block_on`: tokio panics when a timer is polled on a runtime
+    /// that is shutting down. Idempotent, and safe to call from any thread; no
+    /// audio is heard afterwards.
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
+    /// A handle that survives the app dropping the [`Engine`] itself: the close
+    /// path keeps one so it can still stop and join the engine's threads.
+    pub fn handle(&self) -> EngineHandle {
+        EngineHandle(Arc::downgrade(&self.inner))
+    }
+}
+
+/// A weak reference to a running engine, for the app's close path.
+///
+/// It is deliberately WEAK: the app holds it in a process-wide registry (the
+/// same place `NetRuntime` lives), and a strong reference there would keep the
+/// engine — and its threads — alive for the life of the process.
+#[derive(Clone)]
+pub struct EngineHandle(std::sync::Weak<Inner>);
+
+impl EngineHandle {
+    /// Is the engine still alive? A handle whose engine went away has nothing
+    /// left to join.
+    pub fn is_alive(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+
+    /// Stop and join the engine's threads; a no-op if it is already gone.
+    pub fn shutdown(&self) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.shutdown();
+        }
+    }
 }
 
 impl Inner {
@@ -618,6 +678,12 @@ impl Inner {
     }
 
     fn fail(&self, id: Option<&str>, error: EngineError) {
+        // A thread that returns BECAUSE the engine is closing has nothing to
+        // report: the app is going away, and "application fermée" is not a
+        // verdict about the track (`docs/agents/desktop.md`, rule 3).
+        if self.shut.load(Ordering::SeqCst) {
+            return;
+        }
         self.events.emit(EngineEvent::Error {
             id: id.map(str::to_string),
             message: error.to_string(),
@@ -641,7 +707,6 @@ impl Inner {
         let mut state = self.state.lock().expect("engine state poisoned");
         if let Some(old) = state.current.replace(Slot {
             status: Arc::clone(&built.status),
-            handle: built.handle,
         }) {
             old.status.stop();
         }
@@ -673,9 +738,6 @@ impl Inner {
         // its own; the engine keeps no second copy that could go stale at a
         // gapless handover.
         self.send(MixerCmd::InstallNext(Some(built.consumer)));
-        // The handle must outlive this call: dropping a JoinHandle only detaches,
-        // which is what we want, and the status stops the thread.
-        drop(built.handle);
         drop(built.status);
     }
 
@@ -734,7 +796,9 @@ impl Inner {
                         );
                         return;
                     }
-                    thread::sleep(ready.retry_delay());
+                    if !self.poll_wait(ready.retry_delay()) {
+                        return;
+                    }
                 }
                 Err(e) => {
                     self.fail(Some(id), e.into());
@@ -743,18 +807,90 @@ impl Inner {
             }
         }
     }
+    /// The seek policy's own wait: a deferred seek polls `/ready` every 1 s
+    /// (1.5 s while an archive is written), but a shutdown must never wait out
+    /// that interval — the engine JOINS this thread before the network runtime
+    /// it borrows goes away. So the wait is cut into slices that re-read the
+    /// stop, and the total stays exactly what `retry_delay` asked for.
+    fn poll_wait(&self, total: Duration) -> bool {
+        let deadline = Instant::now() + total;
+        loop {
+            if self.stopped.load(Ordering::Relaxed) {
+                return false;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return true;
+            }
+            thread::sleep((deadline - now).min(Duration::from_millis(20)));
+        }
+    }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Stop the engine's threads and JOIN them.
+///
+/// This is the rule `docs/agents/desktop.md` (D13, *Pitfalls*) states for every
+/// thread that borrows the app's network runtime: the app's `StreamOpener`
+/// drives `nz-api` with `Handle::block_on`, and tokio PANICS — it returns no
+/// error — when a timer is polled on a runtime that is shutting down. So the
+/// engine owns the threads it starts, and the runtime's owner joins them here
+/// before it drops the runtime (the app calls [`Engine::shutdown`] from the
+/// same place it stops the download worker).
+///
+/// The order is the contract:
+/// 1. `stopped`, so no new loader, spooler or source starts anything;
+/// 2. `opener.shutdown()`, so every wait already in flight is abandoned at
+///    once instead of finishing a request nobody wants;
+/// 3. every voice stopped (the current one, the preloaded next one, a
+///    crossfading one), so their decode threads return;
+/// 4. the loaders, the decode threads and the spoolers joined — once this
+///    returns, no thread of this engine can touch the runtime again.
+///
+/// Idempotent, and a no-op the second time: `Inner::drop` calls it, and so does
+/// the app's close path.
+impl Inner {
+    fn shutdown(&self) {
+        if self.shut.swap(true, Ordering::SeqCst) {
+            return;
+        }
         self.stopped.store(true, Ordering::SeqCst);
+        self.opener.shutdown();
         {
             let mut state = self.state.lock().expect("engine state poisoned");
             if let Some(slot) = state.current.take() {
                 slot.status.stop();
             }
         }
-        self.send(MixerCmd::Shutdown);
+        for (status, _) in self.voices.lock().expect("engine voices poisoned").iter() {
+            status.stop();
+        }
+        // The mixer drops its voices (and with them the preloaded next one) on
+        // this command; `try` push, because a shutdown may be late enough for
+        // the output to have stopped draining and it must not wait 500 ms.
+        self.send_now(MixerCmd::Shutdown);
+
+        let loaders: Vec<JoinHandle<()>> = {
+            let mut loaders = self.loaders.lock().expect("engine loaders poisoned");
+            std::mem::take(&mut *loaders)
+        };
+        for loader in loaders {
+            Inner::join(loader);
+        }
+        let voices: Vec<(Arc<VoiceStatus>, JoinHandle<()>)> = {
+            let mut voices = self.voices.lock().expect("engine voices poisoned");
+            std::mem::take(&mut *voices)
+        };
+        for (status, voice) in voices {
+            status.stop();
+            Inner::join(voice);
+        }
+        self.spoolers.join_all();
         self.event_stop.store(true, Ordering::Release);
         if let Some(handle) = self
             .event_thread
@@ -765,13 +901,52 @@ impl Drop for Inner {
             let _ = handle.join();
         }
     }
-}
 
-fn spawn_loader(name: String, task: impl FnOnce() + Send + 'static) {
-    let _ = thread::Builder::new()
-        .name(name)
-        .stack_size(512 * 1024)
-        .spawn(task);
+    /// Join a thread this engine started — unless the caller IS that thread.
+    ///
+    /// A thread that drops the last `Arc<Inner>` (a loader whose engine the app
+    /// let go of, with no close path) runs `Inner::drop` on ITSELF, and
+    /// `JoinHandle::join` on one's own thread fails with `EDEADLK` — a panic in
+    /// a worker, which is exactly what this lot exists to stop. The handle is
+    /// dropped instead; that thread is on its way out anyway.
+    fn join(handle: JoinHandle<()>) {
+        if handle.thread().id() == thread::current().id() {
+            return;
+        }
+        let _ = handle.join();
+    }
+
+    /// Start a loader thread and keep its handle: the engine joins it when it
+    /// closes, so that no thread is left inside the network runtime
+    /// ([`Inner::shutdown`]).
+    fn spawn_loader(&self, name: String, task: impl FnOnce() + Send + 'static) {
+        let spawned = thread::Builder::new()
+            .name(name)
+            .stack_size(512 * 1024)
+            .spawn(task);
+        if let Ok(handle) = spawned {
+            let mut loaders = self.loaders.lock().expect("engine loaders poisoned");
+            loaders.retain(|loader| !loader.is_finished());
+            loaders.push(handle);
+        }
+    }
+
+    /// Keep a decode thread's handle and stop flag, so [`Inner::shutdown`] can
+    /// stop and join it whatever the mixer is doing.
+    fn register_voice(&self, status: Arc<VoiceStatus>, handle: JoinHandle<()>) {
+        let mut voices = self.voices.lock().expect("engine voices poisoned");
+        voices.retain(|(_, voice)| !voice.is_finished());
+        voices.push((status, handle));
+    }
+
+    /// Queue a mixer command without waiting for room. Only the shutdown uses
+    /// it: waiting up to 500 ms for an output that is going away would make a
+    /// close slower than the frame it happened in.
+    fn send_now(&self, command: MixerCmd) {
+        if let Ok(mut mixer) = self.mixer.lock() {
+            let _ = mixer.push(command);
+        }
+    }
 }
 
 fn local_path(inner: &Inner, id: &str, quality: Quality) -> Option<PathBuf> {
@@ -852,7 +1027,9 @@ fn build_at(
                         "le serveur ne peut pas encore répondre à ce déplacement".into(),
                     ));
                 }
-                thread::sleep(ready.retry_delay());
+                if !inner.poll_wait(ready.retry_delay()) {
+                    return Err(EngineError::Decode("moteur arrêté".into()));
+                }
                 continue;
             }
             Some(ready)
@@ -900,6 +1077,8 @@ fn build_at(
                 // anything else is a window and must never become the cached
                 // track.
                 publish: !slice && target.is_none(),
+                stop: Arc::clone(&inner.stopped),
+                spoolers: inner.spoolers.clone(),
             },
         )
         .map_err(|e| EngineError::Decode(format!("tampon disque : {e}")))?;
@@ -948,10 +1127,12 @@ fn finish(
         allows_speed: meta.podcast,
     });
     let status = consumer.status();
+    // The engine owns the decode thread: it stops and joins it when it closes,
+    // before the runtime the opener borrows goes away.
+    inner.register_voice(Arc::clone(&status), handle);
     Ok(Built {
         consumer,
         status,
-        handle,
         generation,
         position_s,
         duration_s,

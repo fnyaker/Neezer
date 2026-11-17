@@ -8,20 +8,39 @@
 //! User lane (D2 releases it once the headers arrive) and the decoder's
 //! read-ahead cap is what bounds memory (rule 1).
 //!
+//! Every one of those waits races a `watch`: [`shutdown_process`] — run by the
+//! app's `NetRuntime` in its `Drop`, before its runtime goes — stops the engine,
+//! the engine's own `shutdown` joins its threads, and none of them can be inside
+//! the runtime afterwards. Tokio PANICS, it does not return an error, when a
+//! timer is polled on a runtime that is shutting down (`Handle::block_on`'s own
+//! documentation: « timers will panic »), so this is a lifetime, not an error
+//! (`docs/agents/desktop.md`, D13 *Pitfalls*).
+//!
 //! The engine starts on a named thread so the first painted frame never waits
 //! for PipeWire; its events are forwarded through [`crate::wiring::events`] and
 //! the spool of a completed stream is published into the play cache here, which
 //! is the only place that knows both file names.
+//!
+//! Every wait this module drives is raced against a `watch`: [`shutdown_process`]
+//! — called by the app's `NetRuntime` in its `Drop`, before the runtime goes —
+//! stops the engine, the engine joins its own threads, and none of them can be
+//! inside this runtime afterwards. Tokio PANICS, it does not return an error,
+//! when a timer is polled on a runtime that is shutting down (`Handle::block_on`'s
+//! own documentation: « timers will panic »), so this is a lifetime, not an
+//! error (`docs/agents/desktop.md`, D13 *Pitfalls*).
 
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use nz_api::{Api, ApiError, StreamResponse};
-use nz_audio::{ByteStream, Engine, EngineConfig, SourceError, StreamOpener, StreamReady};
+use nz_audio::{
+    ByteStream, Engine, EngineConfig, EngineHandle, SourceError, StreamOpener, StreamReady,
+};
 use nz_cache::Cache;
+use tokio::sync::watch;
 use tracing::{debug, warn};
 
 use crate::state::AppEvent;
@@ -118,10 +137,21 @@ fn engine_lane(lane: nz_audio::Lane) -> nz_api::Lane {
 }
 
 /// `nz-audio`'s window of the server's `/stream` routes, over `nz-api`.
+///
+/// Every call into the network runs on an engine thread (a loader, a decode
+/// thread, a spooler) with `Handle::block_on` on the process's tokio runtime.
+/// That is why this type owns a STOP too: tokio panics — it returns no error —
+/// when a timer is polled on a runtime that is shutting down
+/// (`Handle::block_on`: « timers will panic »), so the app's `NetRuntime` global
+/// stops this opener and joins the engine's threads before it drops the
+/// runtime (`shutdown_process`, called from `NetRuntime::drop`).
 pub struct NetOpener {
     api: Arc<Api>,
     runtime: tokio::runtime::Handle,
     cache: Cache,
+    /// `true` means « the app is closing »: every wait races this, so a close
+    /// abandons the request in flight instead of waiting for the next chunk.
+    gone: watch::Sender<bool>,
 }
 
 impl NetOpener {
@@ -130,7 +160,14 @@ impl NetOpener {
             api,
             runtime,
             cache,
+            gone: watch::channel(false).0,
         }
+    }
+
+    /// Abandon every request in flight: the caller is closing, and no answer is
+    /// wanted any more.
+    pub fn shutdown(&self) {
+        let _ = self.gone.send(true);
     }
 }
 
@@ -144,19 +181,24 @@ impl StreamOpener for NetOpener {
         lane: nz_audio::Lane,
     ) -> Result<Box<dyn ByteStream>, SourceError> {
         let id = nz_api::TrackId::from(id);
-        let response = self
-            .runtime
-            .block_on(self.api.stream(
+        let mut gone = self.gone.subscribe();
+        let response = block_on(
+            &self.runtime,
+            &mut gone,
+            self.api.stream(
                 engine_lane(lane),
                 &id,
                 api_quality(quality),
                 start,
                 from_byte,
-            ))
-            .map_err(source_error)?;
+            ),
+        )
+        .ok_or_else(closed)?
+        .map_err(source_error)?;
         Ok(Box::new(ApiByteStream {
             response,
             runtime: self.runtime.clone(),
+            gone,
             pending: Vec::new(),
             done: false,
         }))
@@ -164,10 +206,14 @@ impl StreamOpener for NetOpener {
 
     fn ready(&self, id: &str, quality: nz_audio::Quality) -> Result<StreamReady, SourceError> {
         let id = nz_api::TrackId::from(id);
-        let ready = self
-            .runtime
-            .block_on(self.api.ready(&id, api_quality(quality)))
-            .map_err(source_error)?;
+        let mut gone = self.gone.subscribe();
+        let ready = block_on(
+            &self.runtime,
+            &mut gone,
+            self.api.ready(&id, api_quality(quality)),
+        )
+        .ok_or_else(closed)?
+        .map_err(source_error)?;
         Ok(StreamReady {
             ready: ready.ready,
             ranges: ready.ranges,
@@ -204,12 +250,21 @@ impl StreamOpener for NetOpener {
             .flatten()
             .map(|(path, _quality)| path)
     }
+
+    /// The engine is closing: abandon every wait in flight, on every thread it
+    /// owns. The engine calls this before it joins those threads, and the
+    /// runtime dies only once they are gone (`shutdown_process`).
+    fn shutdown(&self) {
+        NetOpener::shutdown(self);
+    }
 }
 
 /// A streaming body read synchronously by the decoder.
 struct ApiByteStream {
     response: StreamResponse,
     runtime: tokio::runtime::Handle,
+    /// The app's stop, raced against every chunk read.
+    gone: watch::Receiver<bool>,
     pending: Vec<u8>,
     done: bool,
 }
@@ -230,21 +285,108 @@ impl Read for ApiByteStream {
             if self.done {
                 return Ok(0);
             }
-            match self.runtime.block_on(self.response.chunk()) {
-                Ok(Some(chunk)) => self.pending = chunk,
-                Ok(None) => {
-                    self.done = true;
+            let Self {
+                response,
+                runtime,
+                gone,
+                pending,
+                done,
+            } = self;
+            match block_on(runtime, gone, response.chunk()) {
+                Some(Ok(Some(chunk))) => *pending = chunk,
+                Some(Ok(None)) => {
+                    *done = true;
                     return Ok(0);
                 }
-                Err(error) => {
+                Some(Err(error)) => {
                     return Err(io::Error::other(error.cause_fr()));
                 }
+                // The app is closing. This is an ERROR and not an end of body:
+                // the spool must never rename a half body into the play cache
+                // as a complete track.
+                None => return Err(io::Error::other("application fermée")),
             }
         }
         let take = out.len().min(self.pending.len());
         out[..take].copy_from_slice(&self.pending[..take]);
         self.pending.drain(..take);
         Ok(take)
+    }
+}
+
+/// Why an `open`/`ready` gave up: the app is closing ([`NetOpener::shutdown`]).
+fn closed() -> SourceError {
+    SourceError::Message("application fermée".into())
+}
+
+/// Run one future on the app's network runtime, and give it up the moment the
+/// app closes.
+///
+/// `None` means « the app is closing »: the future was dropped before it
+/// finished, and the caller names that cause. There is deliberately NO
+/// `catch_unwind` here — a panicking worker is a bug — and none is needed: the
+/// engine stops and joins every thread that calls this before the runtime is
+/// dropped (`nz_audio::Engine::shutdown`), which is the lifetime the panic came
+/// from. The `select!` is what makes that join immediate: a close abandons a
+/// request in flight instead of waiting for its answer.
+fn block_on<T>(
+    runtime: &tokio::runtime::Handle,
+    gone: &mut watch::Receiver<bool>,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    // A stop that landed between two chunks must not even enter the runtime: a
+    // `block_on` there is exactly what panics.
+    if *gone.borrow() {
+        return None;
+    }
+    runtime.block_on(async {
+        tokio::select! {
+            biased;
+            // `Err` means the sender is gone: the owner that could still ask
+            // us to stop went with it, so stop.
+            _ = gone.wait_for(|stop| *stop) => None,
+            value = future => Some(value),
+        }
+    })
+}
+
+/// **Every engine this process started, so the close path can stop and JOIN
+/// them.**
+///
+/// The engine's threads borrow the network runtime with `Handle::block_on`
+/// inside [`NetOpener`], and tokio panics when a timer is polled on a runtime
+/// that is shutting down. The engine owns its threads and joins them
+/// (`nz_audio::Engine::shutdown`); this registry is how the runtime's owner —
+/// the `NetRuntime` global in `main` — reaches the engine, whose only other
+/// owner is the shell's state (which gpui drops first). Weak handles: a
+/// registry entry never keeps a dead engine alive.
+static ENGINES: OnceLock<Mutex<Vec<EngineHandle>>> = OnceLock::new();
+
+fn engines() -> &'static Mutex<Vec<EngineHandle>> {
+    ENGINES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Register a freshly built engine, so [`shutdown_process`] can join it.
+pub(crate) fn attach(engine: &Engine) {
+    let mut registered = engines().lock().unwrap_or_else(|error| error.into_inner());
+    // A previous session's engine, or one the shell dropped on its own, is not
+    // this process's live engine any more.
+    registered.retain(EngineHandle::is_alive);
+    registered.push(engine.handle());
+}
+
+/// Stop every engine this process started, and WAIT for them.
+///
+/// This is what the app's `NetRuntime` global calls from its `Drop`: the
+/// engine's loader, decode and spooler threads borrow that very runtime, so they
+/// must be joined BEFORE its `Arc<Runtime>` field goes (Rust drops the fields
+/// after the `Drop` body). Idempotent, and a no-op when no engine ever started.
+pub fn shutdown_process() {
+    let mut registered = engines().lock().unwrap_or_else(|error| error.into_inner());
+    let handles: Vec<EngineHandle> = std::mem::take(&mut *registered);
+    drop(registered);
+    for handle in handles {
+        handle.shutdown();
     }
 }
 
@@ -256,6 +398,11 @@ pub fn spawn_audio(
     runtime: tokio::runtime::Handle,
     events: Sender<AppEvent>,
 ) {
+    // One engine per process: a new session's engine replaces the previous one,
+    // and the previous one's threads borrow the SAME runtime. Stop and join it
+    // first, or a sign-in would leave a player running on the old session (and
+    // its threads inside the runtime when the app closes).
+    shutdown_process();
     let failure = events.clone();
     let spawned = std::thread::Builder::new()
         .name("nz-audio-start".to_owned())
@@ -269,6 +416,7 @@ pub fn spawn_audio(
                 ..EngineConfig::default()
             };
             let engine = Engine::new(config, opener);
+            attach(&engine);
             let sample_rate = engine.output_info().sample_rate as f32;
             let receiver = engine.events();
             let tx = events.clone();
@@ -339,7 +487,16 @@ pub const TICK: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::time::Instant;
+
+    use nz_audio::{Engine, EngineConfig, EngineEvent, Quality};
+
     use super::*;
+    use crate::wiring::offline::tests::{
+        Link, Panics, Payload, Scratch, TestServer, api_for, in_its_own_process, pump_until,
+        runtime, tone_flac, wait_for,
+    };
 
     #[test]
     fn the_quality_ladder_names_the_wire_and_the_engine_the_same() {
@@ -364,11 +521,7 @@ mod tests {
                 nz_audio::Quality::Opus64,
                 nz_api::Quality::Opus64,
             ),
-            (
-                PlaybackQuality::Flac,
-                nz_audio::Quality::Flac,
-                nz_api::Quality::Flac,
-            ),
+            (PlaybackQuality::Flac, Quality::Flac, nz_api::Quality::Flac),
         ] {
             assert_eq!(setting.audio(), audio);
             assert_eq!(api_quality(audio), api);
@@ -403,5 +556,216 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    /// The engine's own threads, by the names `nz-audio` gives them: every one
+    /// of them may borrow the network runtime, so the close must leave none.
+    fn engine_threads() -> Vec<String> {
+        let mut names = Vec::new();
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+            return names;
+        };
+        for task in tasks.flatten() {
+            let Ok(comm) = std::fs::read_to_string(task.path().join("comm")) else {
+                continue;
+            };
+            let name = comm.trim().to_owned();
+            if [
+                "nz-load-",
+                "nz-preload-",
+                "nz-seek-",
+                "nz-decode-",
+                "nz-audio-",
+            ]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            {
+                names.push(name);
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// **Closing the app during a track: the engine stops, nothing panics.**
+    ///
+    /// This is the second owner `docs/agents/desktop.md` (D13 *Pitfalls*) names:
+    /// the engine's loader, decode and spooler threads borrow the process's tokio
+    /// runtime with `Handle::block_on` (through [`NetOpener`]), and tokio PANICS —
+    /// « A Tokio 1.x context was found, but it is being shutdown. » — when a
+    /// timer is polled on a runtime that is shutting down. The suite would still
+    /// report `ok`, exactly as `nz-bulk`'s panic did in run 43964917017.
+    ///
+    /// It drops what the app drops, in the app's order: the shell's state (which
+    /// owns the engine) first, then the `NetRuntime` global (whose `Drop` is what
+    /// a quit runs), and only then the runtime. The engine is closed in the
+    /// middle of three things at once — a track loading/streaming, that track
+    /// playing, and the next one preloading — and the test proves 0 panics, a
+    /// close under 50 ms, and no engine thread left.
+    #[test]
+    fn closing_the_app_during_a_track_stops_the_engine_without_a_panic() {
+        in_its_own_process("wiring::engine::tests::the_close_bench_in_its_own_process");
+    }
+
+    #[test]
+    #[ignore = "run by its parent, a process of its own (a panic hook is process-wide)"]
+    fn the_close_bench_in_its_own_process() {
+        let panics = Panics::install();
+        let scratch = Scratch::new("engine-close");
+        let store = scratch.store();
+
+        // Real audio (a real decoder, real resampling), because "the track
+        // plays" is the state the app closes in. Without ffmpeg there is nothing
+        // to play: the test says so and passes (CI installs it).
+        let flac = scratch.dir().join("tone.flac");
+        if !tone_flac(&flac) {
+            println!("ffmpeg absent : le critère de fermeture n'a pas été mesuré");
+            return;
+        }
+        let audio = std::fs::read(&flac).expect("the generated FLAC");
+        let mut bodies: HashMap<String, Payload> = HashMap::new();
+        bodies.insert("current".to_owned(), Payload::Bytes(audio.clone()));
+        bodies.insert("next".to_owned(), Payload::Bytes(audio));
+        // A link slow enough that BOTH bodies are still arriving when the window
+        // closes: a finished download would leave nothing in flight to stop.
+        let server = TestServer::start(Link::new(Some(120_000.0)), bodies);
+        let runtime = Arc::new(runtime());
+        let api = api_for(&server, &store, &scratch);
+
+        let opener = Arc::new(NetOpener::new(api, runtime.handle().clone(), store.clone()));
+        let config = EngineConfig {
+            sample_rate: 48_000,
+            // A quarter-second ring: the audio a test needs, and half the memory
+            // — `cargo test` runs the screens' RSS assertions in this process.
+            ring_seconds: 0.25,
+            spool_dir: store.audio_dir(),
+            ..EngineConfig::default()
+        };
+        let (engine, mut sink) = Engine::new_offline(config, opener);
+        // What `spawn_audio` does: the runtime's owner must be able to reach the
+        // engine, because gpui drops the shell's state before the globals.
+        attach(&engine);
+        let events = engine.events();
+
+        // The track loads, and the next one is ASKED for in the same breath — the
+        // way a queue does it: the prefetch parks behind the tap's own User
+        // request, on the Prefetch lane's quiet period, which is a tokio TIMER
+        // (`Gates::acquire`: `timeout_at`). That timer is the panic the CI log
+        // carried once the runtime goes.
+        engine.load("current", Quality::Flac, None);
+        engine.preload_next("next", Quality::Flac);
+        // ... and the track plays.
+        assert!(
+            pump_until(
+                &mut sink,
+                &events,
+                Duration::from_secs(15),
+                |event| matches!(event, EngineEvent::Started { .. })
+            ),
+            "the track started"
+        );
+        engine.play();
+        // Rendered, not slept: the mixer only needs buffers, and the close must
+        // land while the prefetch is still in its quiet period.
+        let mut buffer = vec![0f32; 480 * 2];
+        let mut heard = 0.0f32;
+        for _ in 0..20 {
+            sink.render(&mut buffer);
+            heard = heard.max(buffer.iter().fold(0.0f32, |top, s| top.max(s.abs())));
+        }
+        assert!(heard > 0.001, "the playing track was audible ({heard:.4})");
+        assert!(
+            server.delivered("current") > 0,
+            "the playhead's body really came over the link"
+        );
+        assert!(
+            wait_for(Duration::from_secs(10), || {
+                engine_threads()
+                    .iter()
+                    .any(|name| name.starts_with("nz-preload-"))
+            }),
+            "the prefetch loader is running"
+        );
+        // The three states the close must survive, asserted rather than assumed:
+        // a decode thread runs, a body is spooling, and a loader is inside the
+        // runtime (it holds the engine alive, which is why the registry matters).
+        let before = engine_threads();
+        println!("fils du moteur avant la fermeture : {before:?}");
+        assert!(
+            before.iter().any(|name| name.starts_with("nz-preload-")),
+            "the prefetch loader is in flight: {before:?}"
+        );
+        assert!(
+            before.iter().any(|name| name.starts_with("nz-decode-")),
+            "a track is being decoded: {before:?}"
+        );
+        assert!(
+            before.iter().any(|name| name == "nz-audio-spool"),
+            "a body is being spooled: {before:?}"
+        );
+
+        // The window closes. The shell's state goes first, the network runtime's
+        // global second (its `Drop` is what a quit runs): the loader still holds
+        // the engine here, so only the registry can reach it.
+        let closing = Instant::now();
+        drop(engine);
+        let net = crate::NetRuntime(Arc::clone(&runtime));
+        drop(net);
+        let closed = closing.elapsed();
+        // The rule, asserted where it is decided: when the close RETURNS, the
+        // engine's threads are gone — joined, not left to a runtime that is
+        // about to shut down under them. This is the assertion the pre-fix code
+        // cannot pass: it returned with the loader, the voice and the spooler
+        // still running.
+        let left_at_close = engine_threads();
+        // Only now may the runtime go: nothing of the engine can be inside it.
+        drop(runtime);
+        // A thread that survived the close would hit a shutdown runtime HERE,
+        // where a timer polled on it panics.
+        std::thread::sleep(Duration::from_millis(300));
+
+        let after = engine_threads();
+        let recorded = panics.take();
+        println!(
+            "fermeture pendant lecture + préchargement : rendue en {closed:?}, \
+             {} panique(s), fils restants {after:?}",
+            recorded.len()
+        );
+        assert!(
+            recorded.is_empty(),
+            "no thread may panic while the app closes: {recorded:?}"
+        );
+        assert!(
+            left_at_close.is_empty(),
+            "the close JOINS the engine's threads before it returns: {left_at_close:?}"
+        );
+        assert!(
+            closed < Duration::from_millis(50),
+            "the close answered in {closed:?}, not behind the body in flight"
+        );
+        assert!(
+            after.is_empty(),
+            "the engine's threads are joined before the runtime goes: {after:?}"
+        );
+        // The truncated spool is not a track: nothing was published into the play
+        // cache, and the next play fetches it again (rule 3: an interruption is
+        // not a verdict, and a half file is not a file).
+        assert!(
+            store
+                .play_cache()
+                .lookup(&nz_model::TrackId::new("current"), nz_api::Quality::Flac)
+                .expect("the play cache")
+                .is_none(),
+            "a half body must never become a complete cached track"
+        );
+        // And the same for the prefetched one.
+        assert!(
+            store
+                .play_cache()
+                .lookup(&nz_model::TrackId::new("next"), nz_api::Quality::Flac)
+                .expect("the play cache")
+                .is_none(),
+            "a prefetched half body must not be published either"
+        );
     }
 }
