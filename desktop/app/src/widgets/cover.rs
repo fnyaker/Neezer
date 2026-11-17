@@ -751,6 +751,33 @@ mod tests {
         sleeves.publish(holder);
     }
 
+    /// The rule the person's 1 000 scrolls taught: however far a list is
+    /// scrolled, the pixels held are ONE SCREENFUL — counted bytes, not RSS.
+    /// A thousand declarations over four thousand rows, each frame sweeping,
+    /// never keeps more than the viewport.
+    #[test]
+    fn a_thousand_renders_over_four_thousand_rows_keep_one_screenful() {
+        let screen = 1u64;
+        let sleeves = Sleeves::with_rules(DECODED_BUDGET, Duration::ZERO);
+        let rows: Vec<PathBuf> = (0..4_000).map(|row| path(&format!("row{row}"))).collect();
+        let mut most = 0;
+        for start in 0..1_000usize {
+            let visible: Vec<&PathBuf> = rows[start..start + 19].iter().collect();
+            frame(&sleeves, screen, &visible);
+            for row in &visible {
+                sleeves.land(row, image(128));
+            }
+            sleeves.evict();
+            let (bytes, images) = sleeves.resident();
+            assert_eq!(bytes, images * 65_536, "a row's image is 128 × 128 × 4 B");
+            most = most.max(images);
+        }
+        assert!(
+            most <= 19 + 1,
+            "a thousand frames over four thousand rows kept {most} images"
+        );
+    }
+
     /// The rule the measuring pass taught: a virtual list declares ONE row to
     /// measure its height, then the viewport it really paints. The viewport is
     /// what the frame published, so a sleeve only the measuring pass named is
