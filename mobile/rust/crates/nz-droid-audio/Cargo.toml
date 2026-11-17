@@ -12,13 +12,29 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[lib]
+# `cdylib` as well as `rlib`: the JNI entry points `AudioTrackPull.kt` calls are
+# resolved BY NAME at runtime, so they can only be checked in a shared library.
+# The APK still ships ONE library (`libnz_ffi.so`, which links this crate as an
+# rlib); the cdylib is what the API-26 acceptance run loads (MB3a).
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 nz-audio = { workspace = true }
 tracing = { workspace = true }
 libc = { workspace = true }
 
-# The NDK's audio wrappers only exist for Android. Gating them keeps the host
-# `cargo test --workspace` green (the crate then answers `Unsupported`), which is
-# how the Rust job proves the workspace builds on a machine with no device.
+# The NDK's audio wrappers and the JNI entry points only exist for Android.
+# Gating them keeps the host `cargo test --workspace` green, which is how the
+# Rust job proves the workspace builds on a machine with no device.
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { workspace = true }
+# No `jni` crate: the four entry points are written against the C ABI, as
+# `android/nscore/src/jni.rs` is, so the pull path adds no dependency to the APK.
+
+# An example that is a `cdylib`, so the four JNI symbols are measured where the
+# app will really resolve them: a shared library that only DEPENDS on this crate
+# (`nm -D` on it is the check, and the API-26 run loads it).
+[[example]]
+name = "jni-export-check"
+crate-type = ["cdylib"]
