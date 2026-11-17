@@ -45,7 +45,7 @@ def _archive_starred(cls, entity):
             backfill.archive_entity(
                 app, getattr(current_app, "deezer", None), "artist", entity.deezer_id
             )
-    except Exception:  # archiving is a consequence of starring, never a condition
+    except Exception:  # nosec B110 - archiving is a consequence of starring, never a condition
         pass
 
 

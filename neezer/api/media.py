@@ -9,13 +9,13 @@
 import hashlib
 import json
 import logging
-import math
+import decimal
 import mediafile
 import mimetypes
 import os.path
 import re
 import shlex
-import subprocess
+import subprocess  # nosec B404 - an argv list from the operator's config, never a shell
 import zlib
 from functools import wraps
 
@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 # that expands to gigabytes) and the requested thumbnail size.
 MAX_COVER_PIXELS = 64_000_000  # 8000x8000
 MAX_COVER_SIZE = 2048
+# A seek offset beyond this is not a position in a track; it is the kind of
+# value a bug or a fuzzer sends. Reject it instead of handing it to ffmpeg.
+MAX_TIME_OFFSET = decimal.Decimal("1e9")
 if Image.MAX_IMAGE_PIXELS is None or Image.MAX_IMAGE_PIXELS > MAX_COVER_PIXELS:
     Image.MAX_IMAGE_PIXELS = MAX_COVER_PIXELS
 
@@ -183,6 +186,18 @@ def _prefetch_next(res):
     pf.enqueue_many(siblings, count)
 
 
+def _popen(argv, **kwargs):
+    """Start a transcoder from an argv list, never through a shell.
+
+    ``argv`` is the operator's TRANSCODING template (``shlex.split``) with each
+    per-track value substituted into one existing element. Nothing here is
+    re-parsed by a shell, so a title, an album name or a path stays a single
+    argument instead of becoming a command. The client-influenced parts are an
+    ``int`` bitrate, a ``[a-z0-9]{1,8}`` format and a Decimal offset.
+    """
+    return subprocess.Popen(argv, **kwargs)  # nosec B603 - argv list from the operator's config, no shell
+
+
 def prepare_transcoding_cmdline(
     base_cmdline, res, input_format, output_format, output_bitrate
 ):
@@ -250,13 +265,19 @@ def _cached_transcode(cache, key, mimetype):
 def stream_media():
     res = _resolve_stream_entity()
 
-    time_offset = 0.0
+    time_offset = 0
     if "timeOffset" in request.values:
         try:
-            time_offset = float(request.values["timeOffset"])
-        except (TypeError, ValueError):
-            time_offset = None
-        if time_offset is None or not math.isfinite(time_offset) or time_offset < 0:
+            # Decimal, not float: it cannot silently become nan/inf, and
+            # `is_finite()` states the check instead of hiding it in math.
+            time_offset = decimal.Decimal(request.values["timeOffset"])
+        except (TypeError, ValueError, decimal.InvalidOperation):
+            raise GenericError("Invalid timeOffset")
+        if (
+            not time_offset.is_finite()
+            or time_offset < 0
+            or time_offset > MAX_TIME_OFFSET
+        ):
             raise GenericError("Invalid timeOffset")
     if "size" in request.values:
         raise UnsupportedParameter("size")
@@ -343,14 +364,14 @@ def stream_media():
                 # stdout) — a source of "random freezes" under load.
                 if transcoder:
                     dec_proc = None
-                    proc = subprocess.Popen(
+                    proc = _popen(
                         transcoder, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
                     )
                 else:
-                    dec_proc = subprocess.Popen(
+                    dec_proc = _popen(
                         decoder, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
                     )
-                    proc = subprocess.Popen(
+                    proc = _popen(
                         encoder,
                         stdin=dec_proc.stdout,
                         stdout=subprocess.PIPE,
@@ -581,7 +602,13 @@ def _cover_from_collection(obj, extract=True, user=None):
     cover_path = None
 
     if isinstance(obj, Folder) and obj.cover_art:
-        cover_path = os.path.join(obj.path, obj.cover_art)
+        # `cover_art` is a file NAME the scanner (or a Deezer sidecar) wrote in
+        # this folder, never a path. Reducing it to its basename keeps a
+        # hand-edited or restored row from turning /getCoverArt into an
+        # arbitrary-file read.
+        name = os.path.basename(obj.cover_art)
+        if name not in ("", os.curdir, os.pardir):
+            cover_path = os.path.join(obj.path, name)
 
     elif isinstance(obj, Album):
         tracks = Track.visible(obj.tracks, user)
@@ -601,6 +628,32 @@ def _cover_from_collection(obj, extract=True, user=None):
     if not cover_path or not os.path.isfile(cover_path):
         return None
     return cover_path
+
+
+def _provider_cover_roots():
+    """Where art served by the provider may live: the archive and the cache."""
+    roots = []
+    for section, key in (("DEEZER", "archive_dir"), ("WEBAPP", "cache_dir")):
+        value = (current_app.config.get(section) or {}).get(key)
+        if value:
+            roots.append(os.path.realpath(value))
+    return roots
+
+
+def _confined_file(path, roots):
+    """The resolved path of a regular file inside one of ``roots``, or None.
+
+    ``deezer_cover_path`` answers with a sidecar cover from the archive or with
+    art it just cached. Normalising the path and checking it against those two
+    directories is what keeps the endpoint serving only art this server wrote.
+    """
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    for root in roots:
+        if real.startswith(root + os.sep) and os.path.isfile(real):
+            return real
+    return None
 
 
 def _get_cover_path(eid):
@@ -658,7 +711,9 @@ def cover_art():
         if provider is not None:
             from ..deezer.archive import deezer_cover_path
 
-            cover_path = deezer_cover_path(provider, cache, eid)
+            cover_path = _confined_file(
+                deezer_cover_path(provider, cache, eid), _provider_cover_roots()
+            )
 
     if not cover_path:
         raise NotFound("Cover art")

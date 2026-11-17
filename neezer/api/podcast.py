@@ -188,7 +188,7 @@ def _run_refresh(app, provider, owner_name, episode_limit):
     finally:
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - the refresh thread is ending; the connection is dropped either way
             pass
         with _refresh_lock:
             _refreshing = False
@@ -363,7 +363,7 @@ def _download_worker(work):
         finally:
             try:
                 close_connection()
-            except Exception:
+            except Exception:  # nosec B110 - the download worker already reported its own failure
                 pass
             with _download_lock:
                 _download_pending.discard(key)
