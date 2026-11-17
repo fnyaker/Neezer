@@ -133,8 +133,13 @@ jobs:
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0" "platform-tools" "ndk;$NDK_VERSION"
 
+      # Idempotent on purpose: the job caches `~/.cargo/bin`, so the second run
+      # finds the binary and `cargo install` refuses ("binary `cargo-ndk` already
+      # exists in destination", exit 101) — measured on this very PR.
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked --version 4.1.2
+        run: |
+          cargo ndk --version 2>/dev/null || cargo install cargo-ndk --locked --version 4.1.2
+          cargo ndk --version
 
       # The one documented native build: host debug library → UniFFI bindings →
       # cargo ndk for arm64-v8a, armeabi-v7a and x86_64 (docs/agents/mobile.md,
