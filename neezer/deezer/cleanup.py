@@ -349,5 +349,5 @@ def _run_in_context(app):
     finally:
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - the cleanup run is over; a close that fails has nothing left to report
             pass

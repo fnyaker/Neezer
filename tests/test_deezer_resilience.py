@@ -453,6 +453,45 @@ class VerdictTestCase(unittest.TestCase):
         self.assertIsNone(self.provider.fetch_image("artist", "27"))
 
 
+class LogInjectionTestCase(unittest.TestCase):
+    """What reaches a log line is a client's bytes, not a server's own text.
+
+    A track id comes straight off a request (``/api/availability`` probes one),
+    and a provider error quotes it back. Both reach the log as ARGUMENTS, which
+    is what neezer/logsafe.py escapes; a newline in the id therefore cannot
+    forge a second entry (py/log-injection). Interpolating either into the
+    format string instead would bypass that guard, and this test says so.
+    """
+
+    def test_a_hostile_track_id_cannot_forge_a_log_line(self):
+        import shutil
+
+        from neezer import logsafe
+
+        logsafe.install()  # the package-wide escape this site relies on
+        archive_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, archive_dir, ignore_errors=True)
+        provider = DeezerProvider("dummy-arl", archive_dir, "FLAC")
+        forged = "INFO  neezer.webui.availability: track 1 is available"
+        seen = []
+
+        def resolve_once(sng_id, quality):
+            seen.append(sng_id)
+            raise DeezerError(f"gateway refused {sng_id}\r\n{forged}")
+
+        provider._resolve_once = resolve_once
+        provider.relogin = lambda: None
+        with self.assertLogs("neezer.deezer.provider", "INFO") as captured:
+            with self.assertRaises(DeezerError):
+                provider.resolve(f"3135556\n{forged}")
+        self.assertTrue(seen)  # the retry did happen: this is the retry's log
+        lines = [r for r in captured.output if "Resolve failed" in r]
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("\n", lines[0])
+        self.assertNotIn("\r", lines[0])
+        self.assertIn("3135556", lines[0])
+
+
 class DeezerRoutes(requests.adapters.HTTPAdapter):
     """gw-light.php and media.deezer.com answering the way Deezer does, per track.
 

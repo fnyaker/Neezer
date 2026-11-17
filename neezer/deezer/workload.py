@@ -376,6 +376,8 @@ def ionice_idle() -> None:
         # IOPRIO_WHO_PROCESS = 1, pid 0 = the calling thread, class IDLE = 3.
         libc.syscall(nr, 1, 0, 3 << 13)
     except Exception:  # pragma: no cover - platform specific
+        # nosec B110 - an idle I/O class is a courtesy; a kernel that refuses it
+        # (or a platform without the syscall) keeps the plain behaviour.
         pass
 
 

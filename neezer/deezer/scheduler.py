@@ -171,7 +171,7 @@ def _run_sync(app, scan_local=True) -> bool:
     finally:
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - the sync is over; a close that fails has nothing left to report
             pass
         _sync_lock.release()
     return True

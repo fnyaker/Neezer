@@ -705,7 +705,7 @@ def _queue_worker() -> None:
     try:
         db.connect(reuse_if_open=True)
     except Exception:
-        pass
+        logger.debug("Episode queue could not open the database", exc_info=True)
     while True:
         with _queue_lock:
             if not _queue:

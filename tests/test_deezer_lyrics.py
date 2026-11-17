@@ -8,6 +8,9 @@
 import os
 import os.path
 import tempfile
+import unittest
+
+import requests
 
 from neezer.db import Track
 from neezer.deezer import library, lyrics
@@ -254,3 +257,36 @@ class LyricsTestCase(TestBase):
         self.assertEqual(stats["synced"], 1)
         self.assertEqual(stats["skipped"], 1)  # track 3 already had a sidecar
         self.assertTrue(os.path.isfile(lyrics.sidecar_path(archived)))
+
+
+class LogInjectionTestCase(unittest.TestCase):
+    """A title and an artist are the FILE's own tags, an upload's included.
+
+    They reach the "lookup failed" line as logging ARGUMENTS, which is what
+    neezer/logsafe.py escapes; a tag carrying a newline therefore cannot start
+    a line of its own in the server's log (py/log-injection). Interpolating the
+    values into the format string instead would bypass that guard, and this is
+    the test that says so.
+    """
+
+    def test_a_hostile_tag_cannot_forge_a_log_line(self):
+        from neezer import logsafe
+
+        logsafe.install()  # the package-wide escape this site relies on
+        forged = "INFO  neezer.webui.availability: track 1 is available"
+
+        class Unreachable:
+            def get(self, *args, **kwargs):
+                raise requests.RequestException(f"LRCLIB said no\r\n{forged}")
+
+        with self.assertLogs(lyrics.logger, "DEBUG") as captured:
+            self.assertIsNone(
+                lyrics.fetch_lrclib(f"Creep\n{forged}", f"Radiohead\r{forged}", None, 239,
+                                    session=Unreachable())
+            )
+        # One record, one line: the tags' line breaks are neutralised, not printed.
+        self.assertEqual(len(captured.output), 1)
+        self.assertNotIn("\n", captured.output[0])
+        self.assertNotIn("\r", captured.output[0])
+        self.assertIn("Creep", captured.output[0])
+        self.assertIn("Radiohead", captured.output[0])

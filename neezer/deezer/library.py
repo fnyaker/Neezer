@@ -88,7 +88,7 @@ def mark_unavailable(track) -> None:
             try:
                 hook(track)
             except Exception:  # an observer never breaks the verdict
-                pass
+                logger.debug("Unavailable hook %r failed", hook, exc_info=True)
 
 
 def clear_unavailable(track) -> None:
@@ -99,7 +99,7 @@ def clear_unavailable(track) -> None:
         Track.update(unavailable=None).where(Track.id == track.id).execute()
         track.unavailable = None
     except Exception:
-        pass
+        logger.debug("Could not clear the unavailable flag on %s", track.id, exc_info=True)
 
 
 def _now():

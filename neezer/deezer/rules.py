@@ -231,6 +231,6 @@ def enabled(app, event: str) -> bool:
     try:
         if not app.config["DEEZER"].get("archive_library", True):
             return False
-    except Exception:
+    except Exception:  # nosec B110 - no [deezer] section at all: load() answers with the defaults
         pass
     return bool(load(app).get(event, True))

@@ -199,7 +199,7 @@ class DeezerPrefetcher:
         try:
             db.connect(reuse_if_open=True)
         except Exception:  # pragma: no cover - connection setup best-effort
-            pass
+            logger.debug("Download queue could not open the database", exc_info=True)
 
         while True:
             priority, _seq, item = self._dl_queue.get()
@@ -272,7 +272,7 @@ class DeezerPrefetcher:
         try:
             db.connect(reuse_if_open=True)
         except Exception:  # pragma: no cover - connection setup best-effort
-            pass
+            logger.debug("Prefetch worker could not open the database", exc_info=True)
 
         while True:
             tid = self._queue.get()

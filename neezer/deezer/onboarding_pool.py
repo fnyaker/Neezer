@@ -1043,7 +1043,7 @@ def account_state(app, user) -> dict:
             .tuples()
         }
     except Exception:
-        pass
+        logger.debug("Could not read the account's providers", exc_info=True)
     youtube = youtube_status(user)
     deezer_available = deezer_enabled(app)
     return {

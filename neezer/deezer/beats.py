@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import logging
 import math
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed argv list, never a shell
 import threading
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,8 @@ def _decode(path, seconds=MAX_SECONDS):
         "ffmpeg", "-v", "error", "-nostdin", "-t", str(seconds), "-i", path,
         "-vn", "-ac", "1", "-ar", str(SR), "-f", "f32le", "-",
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(  # nosec B603 - fixed argv, the media path is one element, no shell
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     timer = threading.Timer(DECODE_TIMEOUT, proc.kill)
     timer.daemon = True
     timer.start()
