@@ -106,10 +106,35 @@ nz_launcher_component "$serial" | grep -q "org.nsupysonic.app/" || {
 
 # --- 3. the shell's walk -------------------------------------------------
 
-# The app's own text, never a screenshot: `dump` is the accessibility tree.
+# The emulator is a qemu process on a software rasteriser: if it dies mid-walk,
+# every later adb call answers "device not found" and the log would blame the
+# wrong thing. Each step therefore proves the device is still ours, and a death
+# prints the emulator's own last lines.
+check_alive() {
+    local where="$1"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        note "the emulator died during $where; last log lines (${NEEZER_EMU_STATE:-$HOME/.cache/neezer-emu}/$port.log):"
+        tail -n 30 "${NEEZER_EMU_STATE:-$HOME/.cache/neezer-emu}/$port.log" >&2 || true
+        exit 1
+    fi
+    if [[ "$(adb_dev get-state 2>/dev/null || true)" != "device" ]]; then
+        note "$serial is not visible to adb during $where"
+        exit 1
+    fi
+}
+
+# The app's own text, never a screenshot: `dump` is the accessibility tree, one
+# long XML line. `uiautomator dump` refuses while the UI is animating (it waits
+# for idle and gives up), so a dump is retried — a tab's ripple is not a failure.
 dump_ui() {
-    adb_dev shell uiautomator dump /sdcard/nz-ui.xml >/dev/null 2>&1 || return 1
-    adb_dev shell cat /sdcard/nz-ui.xml 2>/dev/null
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if adb_dev shell uiautomator dump /sdcard/nz-ui.xml >/dev/null 2>&1; then
+            adb_dev shell cat /sdcard/nz-ui.xml 2>/dev/null
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Waits until a node whose text contains <needle> exists, or fails after 10 s.
@@ -131,7 +156,8 @@ await_text() {
 # and every door after the first would "fail" for the wrong reason.
 tap_text() {
     local label="$1" bounds cx cy
-    bounds="$(dump_ui | tr '>' '\n' | grep -E "text=\"$label\"" | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' | tail -1)"
+    bounds="$(dump_ui | tr '>' '\n' | grep -E "text=\"$label\"" |
+        sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' | tail -1)"
     [[ -n "$bounds" ]] || return 1
     read -r x1 y1 x2 y2 <<<"$bounds"
     cx=$(((x1 + x2) / 2))
@@ -139,20 +165,28 @@ tap_text() {
     adb_dev shell input tap "$cx" "$cy" >/dev/null
 }
 
+launch_app() {
+    adb_dev shell am force-stop org.nsupysonic.app >/dev/null 2>&1 || true
+    adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
+    await_text "Accueil"
+}
+
 step "smoke: launch"
-adb_dev shell am force-stop org.nsupysonic.app >/dev/null 2>&1 || true
-adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
-await_text "Accueil" || {
+launch_app || {
     note "the shell never painted « Accueil »"
-    dump_ui | head -5 >&2
+    dump_ui | head -c 2000 >&2
     exit 1
 }
 printf 'shell_visible=1\n'
+check_alive "the launch"
 
 # Each door is proved by the text ONLY that screen draws (its placeholder's
 # body), so a tab that opens the previous screen fails here. The bodies are
-# MB0's and disappear as the lots fill them: a door whose body is gone is
-# checked by its title instead, hence the two needles per door.
+# MB0's and disappear as the lots fill them, which is why a door that fails says
+# what it expected.
+#
+# No apostrophe in a needle: uiautomator writes the tree as XML ATTRIBUTES and
+# escapes `'`, so a needle with one can never match (« d&#39;un podcast »).
 step "smoke: the shell's doors"
 doors=0
 doors_failed=0
@@ -170,21 +204,24 @@ check_door() {
         printf 'door=%s opened=0 expected="%s"\n' "$tab" "$needle"
         doors_failed=$((doors_failed + 1))
     fi
+    check_alive "the $tab door"
 }
 check_door "Rechercher" "Titres, albums, artistes, playlists et podcasts"
 check_door "Bibliothèque" "Playlists et dossiers, favoris"
-check_door "Podcasts" "Les abonnements, la recherche d'un podcast"
+check_door "Podcasts" "Les abonnements, la recherche"
 check_door "Accueil" "Le hero, la reprise, les humeurs"
 
 # Réglages, and the one line that proves the whole chain Kotlin -> JNA -> Rust:
 # the version comes from `nz_version()`, not from a Kotlin constant.
-if tap_text "Réglages" && await_text "Choisis une section." && tap_text "Aide" && await_text "Version du noyau (Rust) :"; then
+if tap_text "Réglages" && await_text "Choisis une section." && tap_text "Aide" &&
+    await_text "Version du noyau (Rust) :"; then
     printf 'door=Réglages opened=1 rust_version=1\n'
     doors=$((doors + 1))
 else
     printf 'door=Réglages opened=0\n'
     doors_failed=$((doors_failed + 1))
 fi
+check_alive "the Réglages door"
 
 printf 'doors_opened=%s doors_failed=%s doors_expected=5\n' "$doors" "$doors_failed"
 
@@ -193,17 +230,9 @@ printf 'doors_opened=%s doors_failed=%s doors_expected=5\n' "$doors" "$doors_fai
 # turns one into a destination, and until it does this count is 0 — printed, not
 # hidden, so the day it starts working (or stops) is visible in the log.
 #
-# Each probe restarts the app first: "the route opened" must mean the link did
-# it, not that the previous screen was still on top.
+# Each probe returns to the home screen first, so "the route opened" cannot mean
+# "the previous screen was still on top". Five probes only: a smoke, not a bench.
 step "smoke: routes through an app link"
-launch_app() {
-    adb_dev shell am force-stop org.nsupysonic.app >/dev/null 2>&1 || true
-    adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
-    await_text "Accueil"
-}
-
-# url#needle: the SPA URL the SPA itself produces, and the text only that screen
-# draws. `#` as the separator because a URL holds slashes and dots.
 links_probed=0
 links_opened=0
 for probe in \
@@ -215,7 +244,7 @@ for probe in \
     url="https://neezer.example${probe%%#*}"
     needle="${probe##*#}"
     links_probed=$((links_probed + 1))
-    launch_app || true
+    launch_app >/dev/null 2>&1 || true
     adb_dev shell am start -a android.intent.action.SEND -t text/plain \
         --es android.intent.extra.TEXT "$url" >/dev/null 2>&1 || true
     if await_text "$needle"; then
@@ -224,6 +253,7 @@ for probe in \
     else
         printf 'link=%s opened=0 expected="%s"\n' "${probe%%#*}" "$needle"
     fi
+    check_alive "the link probe ${probe%%#*}"
 done
 printf 'links_opened=%s links_probed=%s (resolve_link is MB2 own: 0 today is expected, and a door that stops opening still fails above)\n' \
     "$links_opened" "$links_probed"
