@@ -1,0 +1,19 @@
+# UniFFI's Kotlin settings (read by `build-android.sh`: `--config uniffi.toml`).
+#
+# UniFFI 0.32 only accepts the GLOBAL config shape — a flat `[bindings.kotlin]`
+# file is silently ignored (it warns "old-style --config") and the defaults come
+# back, which is how `java.lang.ref.Cleaner` (API 33) ends up in a minSdk-26
+# app: a lint `NewApi` error and a `NoClassDefFoundError` below 33. Measured on
+# this machine: flat file → 4 references to `java.lang.ref.Cleaner`; the shape
+# below → 0.
+#
+# - `package_name` is the Kotlin package of the generated file: `uniffi.nz_ffi`,
+#   which `compose-stability.conf` marks stable and which `:bridge` imports.
+# - `android = true` switches the support code to JNA's cleaner.
+# - `android_cleaner` is kept explicit so a future UniFFI default cannot change
+#   it under us.
+
+[crates.nz_ffi.bindings.kotlin]
+package_name = "uniffi.nz_ffi"
+android = true
+android_cleaner = true

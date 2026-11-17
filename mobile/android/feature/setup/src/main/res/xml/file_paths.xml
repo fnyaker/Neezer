@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider may hand out, and nothing else: the two cache
+     subdirectories the app writes for somebody ELSE to read (a shared file, the
+     downloaded update handed to the system installer). -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+    <cache-path name="update" path="update/" />
+</paths>

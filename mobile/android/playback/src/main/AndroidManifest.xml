@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- :playback's own manifest, merged into the app's (docs/agents/mobile.md, MB0
+     "Contract": ":playback declares NzMediaService (foregroundServiceType=
+     mediaPlayback, intent filters androidx.media3.session.MediaLibraryService and
+     android.media.browse.MediaBrowserService)").
+
+     Both filters are what makes the notification, the lock screen, headset
+     buttons, Bluetooth AVRCP and Android Auto reach the SAME service: Media3's
+     MediaLibraryService answers the first, the platform's MediaBrowserService
+     contract the second. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name="fr.neezer.mobile.playback.NzMediaService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

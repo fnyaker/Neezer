@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- :feature:setup's own labels: the Deezer login activity is declared in THIS
+     module's manifest, and a library module cannot read :app's resources. -->
+<resources>
+    <string name="deezer_login_title">Compte Deezer</string>
+</resources>

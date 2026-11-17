@@ -1,0 +1,140 @@
+# The mobile app's own Cargo workspace (docs/agents/mobile.md, "Repository
+# layout"). It has its OWN `Cargo.lock` and never edits the desktop's: the
+# shared crates are reached by path (`../../desktop/crates/nz-*`), so a change
+# they need is made IN them and keeps the desktop CI green.
+#
+# Every external pin the plan names lives here, once, so a lot that needs one
+# writes `foo = { workspace = true }` and never a version. MB0 created this file;
+# the pins are the ones recorded in the MB0 section of the note (checked with
+# `cargo search` on 2026-11-17).
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "bindgen"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/fnyaker/Neezer"
+publish = false
+
+[workspace.dependencies]
+# --- the FFI boundary: ONE cdylib (`libnz_ffi.so`) for Android, Swift for iOS -
+uniffi = { version = "0.32.2", features = ["tokio"] }
+# `rt-multi-thread` is the `nz-net` runtime (2 workers); `time` is the lanes'
+# quiet periods; `sync` is every listener channel. No `full`: the phone build is
+# measured in bytes.
+tokio = { version = "1.54", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "fs",
+    "net",
+    "process",
+] }
+# --- plumbing ----------------------------------------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0"
+tracing = "0.1"
+# The journal goes to logcat on the device; the subscriber is installed by MB2.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The logcat writer for `tracing` that resolves and builds for Android (the
+# other candidate, `tracing-logcat`, did not build for arm64-v8a on 2026-11-17).
+paranoid-android = "0.2.2"
+# --- Android platform (target-gated in the crates that use them) --------------
+# AAudio through `ndk::audio` (API >= 27) plus the API-26 AudioTrack hook (MB3a).
+ndk = { version = "0.9", features = ["audio", "api-level-26"] }
+jni = "0.22"
+libc = "0.2"
+# The worlds' GLES 3 renderer on an ANativeWindow (MB22).
+glow = "0.18"
+khronos-egl = { version = "6.0", features = ["dynamic"] }
+# The platform trust store. Its Android side lives behind a Maven component
+# that `:bridge` wires in (MB2); the pin is the one reqwest's lock already has.
+rustls-platform-verifier = "0.7"
+# --- the repository's own crates, by path ------------------------------------
+nz-model = { path = "../../desktop/crates/nz-model" }
+nz-api = { path = "../../desktop/crates/nz-api" }
+nz-cache = { path = "../../desktop/crates/nz-cache" }
+nz-player = { path = "../../desktop/crates/nz-player" }
+# SC2 turned `cpal` into a DEFAULT feature of `nz-audio`. Asking for no default
+# features is what keeps PipeWire/ALSA out of the Android build: feature
+# unification would otherwise re-enable them for the whole graph. The desktop
+# keeps its own defaults (docs/agents/mobile.md, "SC0").
+nz-audio = { path = "../../desktop/crates/nz-audio", default-features = false }
+nz-viz = { path = "../../desktop/crates/nz-viz" }
+nz-analysis = { path = "../../desktop/crates/nz-analysis" }
+nz-offline = { path = "../../desktop/crates/nz-offline" }
+nz-remote = { path = "../../desktop/crates/nz-remote" }
+nz-party = { path = "../../desktop/crates/nz-party" }
+appcore = { path = "../../webapp/appcore" }
+rhythm = { path = "../../webapp/rhythm" }
+
+# A phone APK is judged on its download size and on how fast the cold start is
+# (docs/agents/mobile.md, "Size and cold start"): `opt-level = "s"` everywhere,
+# `opt-level = 3` for the crates whose inner loops are the audio and the
+# analysis. `panic = "unwind"` is NOT optional: UniFFI turns a panic into a
+# Kotlin exception, and `abort` would kill the process instead of a call.
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+[profile.release.package.nz-audio]
+opt-level = 3
+
+[profile.release.package.symphonia]
+opt-level = 3
+
+[profile.release.package.symphonia-core]
+opt-level = 3
+
+# Cargo refuses a wildcard in a profile override, so the decoder's own crates
+# are named one by one — the list is `grep symphonia desktop/Cargo.lock`'s.
+[profile.release.package.symphonia-adapter-libopus]
+opt-level = 3
+
+[profile.release.package.symphonia-bundle-flac]
+opt-level = 3
+
+[profile.release.package.symphonia-bundle-mp3]
+opt-level = 3
+
+[profile.release.package.symphonia-codec-aac]
+opt-level = 3
+
+[profile.release.package.symphonia-common]
+opt-level = 3
+
+[profile.release.package.symphonia-format-isomp4]
+opt-level = 3
+
+[profile.release.package.symphonia-format-ogg]
+opt-level = 3
+
+[profile.release.package.symphonia-metadata]
+opt-level = 3
+
+[profile.release.package.rhythm]
+opt-level = 3
+
+[profile.release.package.nscore]
+opt-level = 3
+
+[profile.release.package.rubato]
+opt-level = 3
+
+[profile.release.package.signalsmith-stretch]
+opt-level = 3
+
+[profile.release.package.nz-analysis]
+opt-level = 3
+
+[profile.release.package.nz-viz-gl]
+opt-level = 3

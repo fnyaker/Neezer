@@ -1,0 +1,23 @@
+# The worlds' GLES 3 renderer, on an `ANativeWindow` handed over by a
+# `SurfaceView`: `glow` (the GL function loader) plus `khronos-egl` (dynamic, so
+# the app never links a GL library the device may not have). Owned by **MB22**.
+#
+# On the host, EGL and GLES are absent, so the crate compiles to a stub and
+# `cargo test --workspace` stays green (the render bench of the SPA is what
+# photographs the worlds; the phone's own render bench is MB22's).
+
+[package]
+name = "nz-viz-gl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nz-viz = { workspace = true }
+rhythm = { workspace = true }
+tracing = { workspace = true }
+glow = { workspace = true }
+khronos-egl = { workspace = true }

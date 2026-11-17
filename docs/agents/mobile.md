@@ -8,8 +8,8 @@ the app it REPLACES is [android.md](android.md) (read it: every hard-won rule th
 here or is made unnecessary, and this note says which); the Rust crates it shares come from the
 desktop app ([desktop.md](desktop.md)).
 
-**Status (2026-11-17): planned, nothing delivered.** This note is the plan the coding lots follow,
-in order. Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
+**Status (2026-11-17): MB0 (the skeleton) is delivered; the lots below are planned and follow
+this note in order.** Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
 number) — a delivered lot is not a changelog. The old `android/` app keeps building and shipping
 until lot MB-SWAP.
 
@@ -667,139 +667,144 @@ rules block (the *Worker rules* in French, for the worker); copy a prompt whole,
   window` and `release binaries` green on the SC0 head; the four crates add no test, so the workspace
   test count is unchanged.
 
-### MB0 — Skeleton: Cargo, Gradle, UniFFI, cargo-ndk, CI (wave 0b)
+### MB0 — Skeleton: Cargo, Gradle, UniFFI, cargo-ndk, CI (delivered 2026-11-17)
 
-**Goal.** An installable, empty-but-complete app: every module, route, FFI object, manifest entry,
-dependency pin and CI job exists, so that no later lot ever edits a shared file. **Depends on**: SC0.
+**What landed.** An installable app that is empty but complete: every Gradle module of the list,
+every route of the inventory, every FFI object of the boundary with its final signature, every
+manifest entry, every dependency pin and the `mobile.yaml` workflow. The only working call is
+`nz_version()` — deliberately: it is what proves Kotlin → JNA → `libnz_ffi.so` → the crate. Every
+other stub answers `NzError::Unsupported { feature: "<lot>:<method>" }` (or an empty value where the
+call is infallible by design), and the French sentence is `nz_error_text`'s, so `LoadFailed` can
+already name a cause (rule 3).
 
-**Exclusive files**: all of `mobile/` at creation, `.github/workflows/mobile.yaml`, `.gitignore`
-(`mobile/android/**/build/`, `mobile/rust/target/`, `**/jniLibs/`, `bridge/build/generated/`),
-`CLAUDE.md` and `AGENTS.md` (only: "Eight workflows" → "Nine", `mobile` added to the list).
+What a later lot can rely on, without editing a shared file:
 
-**Contract.**
+- **Rust** (`mobile/rust`, its own `Cargo.lock`, edition 2024, rust-version 1.89): `nz-core` with one
+  module per area, `nz-ffi` with one file per lot, `nz-droid-audio`, `nz-viz-gl`, `bindgen`
+  (`uniffi-bindgen`).
+- **The contracts the note pins as shared are written in their final shape**, not approximated:
+  MB2's boundary (`NzCore`, `CoreConfig`, `NetworkState`, `NzError`, `nz_error_text`, `ListHandle`,
+  `TrackRow`, `AppLink`, `parse_app_link`, `cover_path`), MB3b's whole `PlayerApi` block verbatim
+  (`PlayerCommand` with its twenty variants, `PlayerSnapshot`, `NowPlaying`, `PositionInfo`,
+  `AudioSettings`, `OutputStats`, `TrackRef`, `PlayContext`, `AudioRoute`, `PlayerListener`), MB3a's
+  `OutputPrefs`/`DroidOutputError`/`DroidOutput`/`output_for` in `nz-droid-audio`, MB15's nine
+  `OfflineApi` methods + `OfflineListener`, MB19's links/claim/state/commands, MB20's
+  host/join/leave/members, MB21's `set_visible(view, bool)`/`frame()`.
+- **Kotlin**: `:app` (Application, ONE activity, `NavGraph.kt` with all 24 routes, `AppGraph` as the
+  one `NzNavigator`, phone shell + wide rail + a top bar whose only action is Réglages), `:bridge`
+  (generated bindings, `NzBridge`, `ScreenState`/`screenFlow`, `NzErrors`), `:designsystem` (a
+  minimal Sillon theme MB1 replaces), `:playback` (the `MediaLibraryService` component),
+  `:car` (its components under their OLD names), `:baselineprofile`, and `:feature:*` — 20 modules,
+  each with its `<Area>Entry` composable and the cross-module composables it owes the others
+  (`MiniPlayer`, `TrackActions.open`/`TrackActionsHost`, `DownloadButton`, `RemoteButton`,
+  `PartyButton`, `ExplorerStylesSection`, `AudioFxSections`, `AdminSections`, `VizSurface`,
+  `WorldSurface`).
 
-- `mobile/rust/Cargo.toml`: `[workspace] resolver = "3"`, members `crates/*` + `bindgen`; edition
-  2024, rust-version 1.89; `[workspace.dependencies]` pins EVERY external crate the plan names
-  (check each with `cargo search`, record the final versions in this note): `uniffi = { version =
-  "0.32.2", features = ["tokio"] }`, `tokio` (rt-multi-thread, sync, time, macros), `serde`,
-  `serde_json`, `thiserror`, `tracing`, `tracing-subscriber`, a logcat writer for `tracing`
-  (`paranoid-android` or `tracing-logcat` — pick one that resolves and builds for Android), `ndk =
-  { version = "0.9", features = ["audio", "api-level-26"] }`, `jni = "0.21"`, `libc`, `glow`,
-  `khronos-egl` (dynamic), `rustls-platform-verifier` (the version reqwest's lock already has), and
-  the shared crates by path (`nz-model`, `nz-api`, `nz-cache`, `nz-player`, `nz-audio` with
-  `default-features = false` (SC2, merged before MB0, made `cpal` a default feature), `nz-viz`, `nz-analysis`,
-  `nz-offline`, `nz-remote`, `nz-party`, `appcore`, `rhythm`). Profile: release `opt-level = "s"`,
-  `lto = "thin"`, `codegen-units = 1`, `strip = true`, `panic = "unwind"`; `[profile.release.package.X]
-  opt-level = 3` for `nz-audio`, `symphonia*`, `rhythm`, `nscore`, `rubato`, `signalsmith-stretch`,
-  `nz-analysis`, `nz-viz-gl`.
-- Crates `nz-core` (lib), `nz-ffi` (`crate-type = ["cdylib", "lib"]`, `uniffi::setup_scaffolding!()`),
-  `nz-droid-audio`, `nz-viz-gl`, `bindgen` (bin, `uniffi` feature `cli`). `nz-core/src/lib.rs` declares
-  every area module of the ownership table; `nz-ffi/src/lib.rs` declares every FFI file. Every stub
-  method of the *FFI boundary* and of each lot's contract exists with its final signature and returns
-  `Err(NzError::Unsupported { feature: "<lot>".into() })` (or an empty value for infallible ones);
-  `nz_version() -> String` works for real.
-- `build-android.sh`: host `cargo build -p nz-ffi` (debug, unstripped) → `cargo run -p bindgen --
-  generate --library target/debug/libnz_ffi.so --language kotlin --no-format --out-dir
-  ../android/bridge/build/generated/uniffi`; then `cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64
-  -P 26 -o ../android/bridge/src/main/jniLibs build --release -p nz-ffi`. `ANDROID_NDK_HOME` read
-  from the env or `$ANDROID_HOME/ndk/<pinned>`.
-- Gradle (`mobile/android`): Kotlin 2.x, AGP 8.x, compileSdk 36, targetSdk 35, minSdk 26, JDK 17,
-  version catalog pinning Compose BOM, Material 3, Navigation Compose (type-safe routes), Lifecycle,
-  Media3 1.10.x (`session`, `common`), Coil 3 (`coil-compose` only), WorkManager, JNA
-  (`net.java.dev.jna:jna:<5.x>@aar`), Macrobenchmark + baselineprofile plugin, Paparazzi, JUnit.
-  Modules: `:app :bridge :designsystem :playback :car :baselineprofile` and `:feature:{setup,
-  onboarding,home,search,entity,library,playlist,trackactions,nowplaying,audiofx,podcasts,discovery,
-  offline,settings,admin,genres,remote,party,viz,worlds}`; module dependencies already declared
-  (every feature → `:bridge :designsystem`; `search → discovery`; `settings → audiofx, admin,
-  offline`; `playlist, entity, podcasts → offline, trackactions`; `nowplaying → remote, party, viz,
-  worlds`; `app → all`). `:bridge` registers `build/generated/uniffi` as a source dir and runs
-  `build-android.sh` through an `Exec` task before `preBuild` (skippable with `-PskipRust` for
-  Kotlin-only CI steps that reuse built artifacts).
-- `compose-stability.conf`: `uniffi.nz_ffi.*`. R8 full mode, keep rules for `com.sun.jna.**`
-  and `uniffi.**`.
-- `applicationId = "org.nsupysonic.app"` (rule 7: same app, same data dir), namespaces
-  `fr.neezer.mobile.*`; `versionCode = 2_000_000 + (VERSION_CODE env or 1)`; signing exactly as
-  `android/app/build.gradle.kts` (v1+v2+v3, same env vars); an `activity-alias`
-  `org.nsupysonic.app.SetupActivity` (LAUNCHER) → the new `MainActivity`, so home-screen icons and
-  pinned shortcuts of the old app keep working; `org.nsupysonic.app.MainActivity` alias too.
-- App manifest: permissions = the old app's union + `RUN_USER_INITIATED_JOBS`,
-  `FOREGROUND_SERVICE_DATA_SYNC`; `data_extraction_rules.xml` excluding everything; `neezer://`
-  VIEW scheme and `ACTION_SEND text/plain` (a shared link) on `MainActivity`. Each library module
-  owns its own `AndroidManifest.xml` (merged): `:playback` declares `NzMediaService`
-  (`foregroundServiceType="mediaPlayback"`, intent filters `androidx.media3.session.MediaLibraryService`
-  and `android.media.browse.MediaBrowserService`); `:feature:offline` the UIDT `JobService`; `:car`
-  every car component under its OLD fully-qualified names (`org.nsupysonic.app.CarModeService`,
-  `CarTileService`, `CarSettingsActivity`, the receivers, the job service) so a tile the person added
-  survives the update; `:feature:setup` `DeezerLoginActivity` and the `FileProvider`.
-- `app/.../NavGraph.kt`: every route of the inventory (`Setup, Login, Invite(code), Onboarding,
-  Home, Search(q?), Artist(id), Album(id), Credits(name), Playlist(id), SharedPlaylist(id),
-  Import(url?), Library(tab?), History, Podcasts, Show(id), Releases, ReleaseShelf(kind),
-  Recap(year?), Genres, Viz, Settings(section?), Party(id), RemoteClaim(token)`), each calling
-  `<Area>Entry(route, nav)` from its module; the phone shell (bottom bar + `MiniPlayer()` + the
-  `NowPlayingSheet()` host + `TrackActionsHost()`), the wide shell (rail); `AppLink → route` mapping
-  complete. `:bridge` holds `interface NzNavigator { fun go(link: AppLink); fun back(); fun
-  openPlayer(); fun openQueue() }` and `NzBridge.install(app: Application)` (stub; MB2 fills).
-- `mobile/brand/` placeholder icon (a plain lemon disc) wired as the adaptive icon + monochrome +
-  `ic_stat_neezer`, so LG1 only swaps file contents.
-- `.github/workflows/mobile.yaml` (paths: `mobile/**`, `desktop/crates/**`, `webapp/rhythm/**`,
-  `webapp/appcore/**`, `android/nscore/**`, the workflow): job `rust` (fmt, clippy `-D warnings`,
-  `cargo test --workspace --locked`); job `apk` (JDK 17, setup-gradle pinned, Rust Android targets,
-  NDK via `sdkmanager`, `cargo install cargo-ndk --locked --version 4.1.2`, `build-android.sh`,
-  `testDebugUnitTest`, `lintDebug`, `assembleRelease`, `apksigner verify --min-sdk-version 23` with
-  v1/v2/v3 required as in `android.yaml`, size report per ABI, artifact `neezer-mobile.apk`); job `emulator` (KVM enabled by the documented udev rule, SDK
-  emulator + API 35 x86_64 image cached) that runs `mobile/tools/ci-emulator.sh` when that file
-  exists and reports "skipped: no harness yet" otherwise — MQ1 writes the script, never the workflow.
-  NOT attached to releases (MB-SWAP does that).
+**Measured on this machine** (JDK 21, Gradle 8.14.7, NDK 30.0.16248370, cargo-ndk 4.1.2,
+`CARGO_BUILD_JOBS=4`, warm Gradle dependency caches — the downloads are not the app's build):
 
-**Acceptance.** CI fully green; the APK installs on the emulator (headless, flags of *The emulator*)
-over a freshly installed OLD `neezer.apk` (`adb install -r` succeeds: same id, same key, higher
-code); the app opens on the shell, every route opens its stub, Aide shows `nz_version()` from
-Rust; `git diff --stat` shows nothing under `desktop/` or `android/`; the measured clean-build time,
-APK sizes per ABI and `libnz_ffi.so` size are in the PR and in this section.
-**Pitfalls.** The strip-vs-bindgen trap (bindgen on the host DEBUG library only). JNA's AAR must be
-`@aar` (the jar lacks the Android natives). `rustls-platform-verifier` needs its Android Maven
-component (its crate ships a local Maven repo; point Gradle at it through `cargo metadata`). Compose
-stability config, or every row recomposes. The old app's CI used `github.run_number`: the +2 000 000
-offset is not optional.
+- **Clean build** (`target/` and every `build/` removed): `215 s` for the Rust side (three ABIs
+  + the Kotlin bindings) and `13 s` for `assembleRelease` — **228 s** end to end. An
+  incremental Rust build is 10 s; `assembleRelease` after a code change 9–15 s. (The FIRST
+  `assembleRelease` of the tree took 40 s — Kotlin/R8 cold — so a first build on a fresh machine is
+  ≈ 255 s.)
+- **APK**: `app-release.apk` **4 962 430 B** (universal, three ABIs, R8 full mode, resources
+  shrunk), `classes.dex` 2 397 656 B, `libnz_ffi.so` **902 056 B on arm64-v8a**, 605 636 B on
+  armeabi-v7a, 944 776 B on x86_64 — far under the 9 MB ceiling, and the number says nothing about
+  the real size yet: MB0 calls none of the shared crates, so LTO drops them (the note's warning
+  holds; the real one arrives with MB2/MB3b).
+- **Update over the old app**: the old `neezer.apk` (built from `android/` at `versionCode` 1) then
+  `adb install -r` of the new one: **Success**, `versionCode=2000001`, same signature
+  (`SHA-256 f18d0699…b3d624`). Same id, same key, higher code — rule 7, proven by the installer.
+- **The app on the emulator** (`-no-window -no-audio`, API 35 x86_64, booted in **21.9 s**):
+  **24 of 24 routes** opened their stub (each one's French title found in the accessibility tree of
+  the running APK), and Réglages → Aide shows **« Version du noyau (Rust) : 0.1.0 »** — read from
+  `nz_version()`, not a Kotlin constant.
+- The launcher has **exactly one** entry, `org.nsupysonic.app/.SetupActivity` (`cmd package
+  resolve-activity -c LAUNCHER`): the alias is the launcher, `MainActivity` is not.
 
-```text
-Tu es le worker du lot MB0 (squelette) de la nouvelle app mobile Neezer. Lis CLAUDE.md, puis
-docs/agents/mobile.md EN ENTIER (c'est le contrat de tous les lots que ton squelette doit déjà
-déclarer), puis docs/agents/android.md (signature, versionCode, manifeste) et docs/agents/commands.md.
-Objectif : créer mobile/ (workspace Cargo, crates nz-core/nz-ffi/nz-droid-audio/nz-viz-gl/bindgen,
-build-android.sh, projet Gradle multi-module complet, manifestes, NavGraph avec toutes les routes,
-tous les stubs de contrat FFI et Compose avec leurs signatures définitives) et
-.github/workflows/mobile.yaml, exactement comme la section MB0 le décrit. Aucun code fonctionnel
-au-delà de nz_version() : des stubs qui renvoient Unsupported.
-Fichiers à toi seul : ceux de la section MB0 ; rien sous desktop/ ni android/.
-Acceptation : CI entièrement verte ; l'APK s'installe par-dessus l'ancien neezer.apk (adb install -r)
-sur l'émulateur sans affichage ; toutes les routes ouvrent leur stub ; Aide affiche nz_version() ;
-temps de build, tailles d'APK par ABI et de libnz_ffi.so dans la PR et dans la section MB0.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb0, PR « feat(mobile): MB0 skeleton (Cargo, Gradle, UniFFI, cargo-ndk, CI) »,
-CI verte, rebase + diff --stat, merge, section MB0 réécrite (versions finales épinglées, mesures),
-`ao report --done`.
-```
+**Versions pinned** (all in `mobile/rust/Cargo.toml` and `mobile/android/gradle/libs.versions.toml`):
+AGP 8.13.2, Gradle 8.14.7, Kotlin + compose plugin 2.4.21, compileSdk 36, targetSdk 35, minSdk 26,
+Compose BOM 2026.05.01 (Compose UI 1.11.2, Material 3 1.4.0), Navigation Compose 2.9.8,
+Lifecycle 2.10.0, Activity Compose 1.11.0, Media3 1.10.1, Coil 3.6.3, WorkManager 2.12.0,
+JNA 5.19.1 (`@aar`), profileinstaller 1.4.1, baselineprofile plugin 1.4.1, Paparazzi 1.3.5,
+JUnit 4.13.2; UniFFI 0.32.2, tokio 1.54, serde 1, thiserror 2.0, tracing 0.1,
+tracing-subscriber 0.3.23, paranoid-android 0.2.2, ndk 0.9, jni 0.22, libc 0.2.191, glow 0.18,
+khronos-egl 6.0 (dynamic), rustls-platform-verifier 0.7.1.
+
+**Rules a measurement taught** (each one cost a red build):
+
+- **UniFFI 0.32 only reads the GLOBAL config shape** — `[crates.nz_ffi.bindings.kotlin]`. A flat
+  `[bindings.kotlin]` file is silently IGNORED (one warning line), the defaults come back, and the
+  generated Kotlin then references `java.lang.ref.Cleaner` (API 33) in a minSdk-26 app: **4**
+  references before, **0** after (the Android branch is `@RequiresApi`-guarded, so lint accepts it).
+- **An `NzError` field called `message` does not survive the boundary.** UniFFI generates one Kotlin
+  subclass per variant and `message` collides with `Throwable.message`: 40 compile errors in the
+  generated file. The field is `detail` everywhere (`Conflict`, `Provider`, `Server`, `Invalid`,
+  `Internal`); the French sentences are unchanged.
+- **`#[uniffi::export(async_runtime = "tokio")]` is refused on an impl block with no async method**
+  ("no async methods in this impl block"). The player's block is synchronous by design (a command
+  enqueues, a read is an atomic), so it carries no attribute.
+- **The AGP version is whatever the plugin CLASSPATH resolves to — the highest.** Paparazzi
+  2.0.0-alpha05.1 (and `baselineprofile` 1.5.0) drag AGP 9's tools in, so `com.android.tools:common`
+  became 32.0.0 under an AGP 8.13.2 build and every `:feature:*:packageDebugResources` died with
+  `NoSuchMethodError: MergedResourceWriterRequest.<init>`. Paparazzi pinned to 1.3.5 and the
+  baselineprofile plugin to 1.4.1: **0** references to the 9.x tools.
+- **The newest AndroidX needs compileSdk 37 and AGP 9.1.** Compose 1.12.1, `core` 1.19.1, navigation
+  2.10.2 and lifecycle 2.11.0 refuse compileSdk 36 (**32** findings in one run), so the libraries are
+  pinned to the compileSdk-36 generation above.
+- **`cargo-ndk` copies EVERY `cdylib` it built** — `librhythm.so`, `libappcore.so`, `libtrainer.so`,
+  `libmeasure.so` and `libnscore.so` landed in `jniLibs/` beside `libnz_ffi.so`, ~1.4 MB of dead
+  weight per ABI (their code is already linked into it). `build-android.sh` deletes every `lib*.so`
+  that is not `libnz_ffi.so`; the APK ships **one** library.
+- **`cargo fmt --all` reformats the crates this workspace reaches by PATH.** It rewrote **39 files
+  and 2 189 lines** of `webapp/rhythm`, `webapp/appcore`, `webapp/measure`, `webapp/trainer` and
+  `android/nscore` (a rustfmt style change, not a Rust change) — reverted, and the CI job now formats
+  the five members by name. A path-dependency workspace must NEVER run `--all`.
+- **An XML comment cannot contain `--`** — Sillon's token names (`--bg`) in two resource comments
+  stopped `mergeDebugResources`.
+- **A library module cannot read `:app`'s resources.** `@string/deezer_login_title` and the car's
+  labels failed `verifyReleaseResources` until each moved into the module that declares the
+  component; lint's `MissingClass` refused the `FileProvider` until `:feature:setup` depended on
+  `androidx.core`.
+- **AGP's lint task class moves between minor versions** (`LintBaseTask` is gone in 8.13): the
+  generated sources are wired by task NAME (`name.startsWith("lint")`), which the next AGP cannot
+  break.
+- **Two `MAIN/LAUNCHER` filters put two icons in the launcher.** The alias exists so the old app's
+  icon keeps working, so `MainActivity` carries NO launcher filter: the alias is the only one
+  (`resolve-activity -c LAUNCHER` → `/.SetupActivity`).
+- **R8's Kotlin-metadata warning is not a failure.** `assembleRelease` prints "An error occurred when
+  parsing kotlin metadata" because the AGP 8.13 R8 predates Kotlin 2.4's metadata; downgrading to
+  Kotlin 2.3.21 does NOT remove it (a dependency's metadata triggers it too), so the newest Kotlin
+  stays and the warning is left visible rather than silenced.
+
+**Deliberate deviations from the plan paragraph, and why:**
+
+- `bindgen/`'s package is `nz-bindgen` with a `uniffi-bindgen` binary: a workspace member literally
+  named `bindgen` collides with the crates.io crate of that name that `aws-lc-sys` builds through
+  (`cargo` allows the duplicate, an unambiguous `-p bindgen` does not).
+- The feature-lot FFI files whose contracts the note only DESCRIBES (`home.rs`, `search.rs`,
+  `entity.rs`, `library.rs`, `playlist.rs`, `actions.rs`, `nowplaying.rs`, `audiofx.rs`,
+  `podcasts.rs`, `discovery.rs`, `admin.rs`, `genres.rs`, `setup.rs`, `onboarding.rs`, `worlds.rs`,
+  `car.rs`, `auto.rs`) are doc-only: the note names their behaviour and their method names in prose
+  but not their records (`HeroData`, `SearchResults`, `PlaylistData`, …), and a guessed field set
+  would become a contract its lot has to break. Each one names its lot and the note section to read.
+- The phone shell has a **top bar whose action is Réglages**: the skeleton had no door to Aide, and
+  "Aide shows `nz_version()`" has to be reachable by a person, not only by a test.
+- `mobile/brand/` carries the placeholder mark (a lemon disc) and the SVG it exports, so LG1 only
+  swaps file CONTENTS.
+
+**Still owed to a later lot** (each named in the file that owns it): the `rustls-platform-verifier`
+Android Maven component (MB2 — the crate ships a local repo; `:bridge` will add it from
+`cargo metadata`), the golden-path benches in `:baselineprofile` (MQ1/MQ2), `mobile/tools/**` (MQ1 —
+including the emulator harness that `mobile.yaml`'s `emulator` job runs as soon as
+`mobile/tools/ci-emulator.sh` exists, and the only reason that job reports "skipped" today), and a
+`mobile/` block in [commands.md](commands.md) (deliberately not written here: that file belongs to
+another lot; the commands it must carry are `mobile/rust/build-android.sh`,
+`gradle -p mobile/android assembleRelease`, `cargo test --workspace` and the emulator flags above).
+
+**Files.** Everything under `mobile/` (created here), `.github/workflows/mobile.yaml`, `.gitignore`
+(five mobile entries), `CLAUDE.md` (the workflow count, "Nine"), and this section.
 
 ### MB1 — Design system `:designsystem` (wave 1)
 

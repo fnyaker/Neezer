@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- :feature:setup's manifest, merged into the app's (docs/agents/mobile.md, MB0
+     "Contract": ":feature:setup `DeezerLoginActivity` and the `FileProvider`").
+
+     DeezerLoginActivity: Deezer's OWN login page in a throwaway WebView, with no
+     JS bridge attached, never exported. The only thing that crosses back is the
+     `arl` cookie, and only to a page served by the configured server.
+
+     FileProvider: the share sheet needs a content:// Uri for a file the app
+     wrote (a shared file, a downloaded APK handed to the installer); since
+     Android 7 a bare file:// Uri throws FileUriExposedException. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name="fr.neezer.mobile.feature.setup.DeezerLoginActivity"
+            android:exported="false"
+            android:label="@string/deezer_login_title"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

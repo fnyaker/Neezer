@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Neezer's LOGO SOURCE — PLACEHOLDER (lot LG1).
+     A plain lemon disc on the app's ground, drawn at the adaptive icon's own
+     geometry (108 dp canvas, the 72 dp safe circle). LG1 replaces this file
+     with the real mark and its export script; the NAMES below are the contract
+     Gradle and the notification already point at:
+       drawable/ic_launcher_foreground.xml   <- this foreground
+       drawable/ic_stat_neezer.xml           <- the notification glyph
+       mipmap-anydpi-v26/ic_launcher{,_round}.xml
+     Sillon's accent is a SURFACE: anything drawn ON this disc must use --onac. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <rect width="108" height="108" fill="#0C0C0B"/>
+  <circle cx="54" cy="54" r="24" fill="#D2FF3C"/>
+</svg>

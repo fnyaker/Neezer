@@ -1,0 +1,24 @@
+# Android's own audio output: AAudio through `ndk::audio` on API >= 27, and the
+# API-26 `AudioTrack` pull hook (a Kotlin thread pulls PCM into a direct
+# `ByteBuffer`; the AAudio path can crash after close on Android 8.0 — Oboe #40).
+# Owned by **MB3a** (docs/agents/mobile.md, "Research").
+
+[package]
+name = "nz-droid-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nz-audio = { workspace = true }
+tracing = { workspace = true }
+libc = { workspace = true }
+
+# The NDK's audio wrappers only exist for Android. Gating them keeps the host
+# `cargo test --workspace` green (the crate then answers `Unsupported`), which is
+# how the Rust job proves the workspace builds on a machine with no device.
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { workspace = true }

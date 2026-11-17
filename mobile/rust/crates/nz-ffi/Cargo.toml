@@ -1,0 +1,31 @@
+# The UniFFI surface, and nothing else: records, objects and listeners that
+# match the app's screens, converted from `nz-core`'s own types
+# (docs/agents/mobile.md, "The FFI boundary").
+#
+# `crate-type = ["cdylib", "lib"]`: the `cdylib` is `libnz_ffi.so`, loaded by
+# JNA from Kotlin and generated into Swift for iOS; the `lib` is what the host
+# tests and `cargo test --workspace` build.
+
+[package]
+name = "nz-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nz-core = { path = "../nz-core" }
+uniffi = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# `Java_fr_neezer_mobile_bridge_Platform_init` (MB2) hands the platform trust
+# store its `Context` through these two.
+jni = { workspace = true }

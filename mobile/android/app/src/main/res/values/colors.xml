@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sillon's background token, the same value the design system uses: the
+         window is this colour before Compose paints, so a cold start never
+         flashes white (rule 5). Note: an XML comment cannot contain a double
+         hyphen, so the token is spelled out here rather than quoted from CSS. -->
+    <color name="nz_bg">#0C0C0B</color>
+    <color name="ic_launcher_background">#0C0C0B</color>
+</resources>

@@ -1,0 +1,79 @@
+# The ONE place a version is written. A lot that needs a dependency adds it here
+# (this file is created ONCE, by MB0) and uses `libs.…` in its own module.
+#
+# The pins were resolved from Google Maven and Maven Central on 2026-11-17; the
+# MB0 section of docs/agents/mobile.md records them.
+
+[versions]
+# Android and Kotlin (docs/agents/mobile.md, MB0: "Kotlin 2.x, AGP 8.x, compileSdk
+# 36, targetSdk 35, minSdk 26, JDK 17").
+agp = "8.13.2"
+kotlin = "2.4.21"
+compileSdk = "36"
+targetSdk = "35"
+minSdk = "26"
+
+coreKtx = "1.17.0"
+annotation = "1.9.1"
+activityCompose = "1.11.0"
+lifecycle = "2.10.0"
+navigation = "2.9.8"
+composeBom = "2026.05.01"
+serialization = "1.13.0"
+coroutines = "1.11.0"
+
+media3 = "1.10.1"
+coil = "3.6.3"
+jna = "5.19.1"
+work = "2.12.0"
+profileinstaller = "1.4.1"
+
+macrobenchmark = "1.5.0"
+baselineprofile = "1.4.1"
+paparazzi = "1.3.5"
+junit = "4.13.2"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "annotation" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }
+androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+# The generated UniFFI Kotlin is JNA-based; the AAR (not the jar) carries the
+# Android natives, which is why `:bridge` asks for its `@aar` artifact.
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+# Media3: `session` for MediaLibraryService/NzPlayer, `common` for the player
+# interfaces the facade implements.
+androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
+androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "media3" }
+# Covers are fetched by Rust and DECODED by Android (docs/agents/mobile.md,
+# "Covers"): Coil 3, `coil-compose` only (its network and disk caches stay off).
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+# Benchmarking (MQ1/MQ2): Macrobenchmark drives the app on a device; the
+# baselineprofile plugin generates the profile the release build ships.
+androidx-benchmark-macro-junit4 = { module = "androidx.benchmark:benchmark-macro-junit4", version.ref = "macrobenchmark" }
+androidx-benchmark-junit4 = { module = "androidx.benchmark:benchmark-junit4", version.ref = "macrobenchmark" }
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+android-test = { id = "com.android.test", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+baselineprofile = { id = "androidx.baselineprofile", version.ref = "baselineprofile" }
+paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }
