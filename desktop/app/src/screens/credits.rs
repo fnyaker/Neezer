@@ -34,6 +34,7 @@ use crate::state::AppState;
 use crate::theme;
 use crate::widgets::card::{self, Phase};
 use crate::widgets::context_menu::{Item, Menu};
+use crate::widgets::page_scroll::{self, PageScroll};
 use crate::widgets::track_list::{self, Intent, Subtitle, TrackList as List};
 use crate::wiring::events::{self, Sender};
 
@@ -55,6 +56,10 @@ pub struct Screen {
     list: List,
     covers: Rc<RefCell<crate::widgets::cover::Covers>>,
     menu: Menu,
+    /// The page of a TRACK's credits: a role list is as tall as the sleeve's
+    /// small print. A person's credits are a list (see `person_body`), and the
+    /// list is the scroller there, so this page owns no keys on that shape.
+    page: PageScroll,
     /// The keystroke interceptor that owns the keyboard while a menu is open.
     menu_keys: Option<Subscription>,
     events: Sender<Msg>,
@@ -79,6 +84,7 @@ impl Screen {
             list: List::new().subtitle(Subtitle::Roles),
             covers: Rc::new(RefCell::new(crate::widgets::cover::Covers::rows())),
             menu: Menu::new(),
+            page: PageScroll::new(),
             menu_keys: None,
             events: tx,
             _subscriptions: vec![cx.observe(&state, |_, _, cx| cx.notify())],
@@ -104,6 +110,14 @@ impl Screen {
         track_list::own(cx, |this: &mut Self, intent, window, cx| {
             this.on_intent(intent, window, cx)
         });
+        // A track's credits have no list and no text field: the page takes
+        // `↑`/`↓`, `Page préc./suiv.` and `Début`/`Fin` and CONSUMES them (D8a's
+        // rule). A person's credits are a list, whose own keys stay the list's;
+        // that page scrolls with the wheel.
+        if kind == CreditKind::Track {
+            let keys = screen.page.own(cx);
+            screen._subscriptions.push(keys);
+        }
         screen
     }
 
@@ -311,12 +325,12 @@ impl Screen {
                     .map(str::to_owned)
             })
             .unwrap_or_else(|| "Crédits du titre".to_owned());
-        let mut body = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap(rems(0.75))
-            .p(rems(1.75));
+        // A track's credits are one row per role, then the release line: as tall
+        // as there are people, and taller than a 640 px pane for a fully
+        // credited title. The page scroller is what makes the last role and the
+        // ISRC reachable (D8a's rule: a content-sized column in a bounded
+        // container, never a `flex_1` one).
+        let mut body = page_scroll::column().gap(rems(0.75)).p(rems(1.75));
         match self.track.ready() {
             Some(credits) => {
                 let credits = credits.clone();
@@ -423,7 +437,10 @@ impl Screen {
                 }
             },
         }
-        body.into_any_element()
+        self.page
+            .container("credits-track")
+            .child(body)
+            .into_any_element()
     }
 
     /// One name of one role: a link when there is somewhere to go, plain text
@@ -648,5 +665,259 @@ fn format_date(raw: &str) -> String {
     match MONTHS.get(month.saturating_sub(1)) {
         Some(name) => format!("{day} {name} {year}"),
         None => raw.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actions::{ListFirst, ListLast, ListPageDown};
+    use crate::widgets::card::stub;
+
+    const ME: &str =
+        r#"{"user":{"id":"u1","name":"bench","admin":false,"access":{},"sources":[]}}"#;
+
+    /// A track's credits as a sleeve prints them: one group per role, several
+    /// people per group — a fully credited title, which is taller than a pane.
+    fn track_credits_body(groups: usize) -> String {
+        let groups: Vec<String> = (0..groups)
+            .map(|index| {
+                format!(
+                    r#"{{"role":"role_{index}","label":"Rôle {index}","people":[
+                        {{"name":"Personne A{index}","credited":12}},
+                        {{"name":"Personne B{index}","deezer_id":"77"}},
+                        {{"name":"Personne C{index}","id":"uuid-{index}"}}]}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"credits":[{}],"info":{{"album":"Songs from the Inside",
+                "released":"2004-03-12","label":"Interchill","isrc":"GBABC0400012"}}}}"#,
+            groups.join(",")
+        )
+    }
+
+    fn person_credits_body(tracks: usize) -> String {
+        let roles = r#"[{"role":"composer","label":"Composition","count":3},
+                        {"role":"author","label":"Paroles","count":2}]"#;
+        let rows: Vec<String> = (0..tracks)
+            .map(|index| {
+                format!(
+                    r#"{{"id":"row-{index}","deezer_id":"5000{index}","title":"Titre {index}",
+                        "duration":190,"credit_roles":["composer"],
+                        "artist":{{"deezer_id":"42","name":"Kaya Project"}},
+                        "album":{{"deezer_id":"9","title":"Songs from the Inside",
+                        "cover":"/api/cover/9"}}}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"name":"Aiyana","labels":{{"composer":"Composition","author":"Paroles"}},
+                "roles":{roles},"tracks":[{}]}}"#,
+            rows.join(",")
+        )
+    }
+
+    /// **A track's credits scroll** (v1.6.1). The page had NO scroll container
+    /// at all: a title credited on twelve roles (three people each) painted its
+    /// last roles and its release line below the window, unreachable — no wheel,
+    /// no touchpad, no key. Now the page is a content-sized column in a bounded
+    /// scroller (`widgets/page_scroll`), so: a wheel notch **76 px**,
+    /// `Page suivante` **640 px** (0.8 of a 800 px window), `Fin` the bottom and
+    /// `Début` back to the top, at 1280×800 and in the 660 px pane.
+    #[gpui::test]
+    async fn the_track_credits_page_scrolls_with_the_wheel_and_the_keys(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px, size};
+
+        let body = track_credits_body(30);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/track/3000/credits", body.as_str()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| {
+                Screen::new(
+                    Route::Credits {
+                        kind: CreditKind::Track,
+                        id: "3000".into(),
+                    },
+                    state,
+                    cx,
+                )
+            }
+        });
+        stub::until(&runtime, cx, "the track's credits", |cx| {
+            screen.read(cx).track.ready().is_some()
+        });
+
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            })
+        };
+        let offset =
+            |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| screen.read(cx).page.offset().y);
+        let range =
+            |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| screen.read(cx).page.range());
+
+        for (width, what) in [(1280., "1280×800"), (660., "the 660 px pane")] {
+            cx.simulate_resize(size(px(width), px(800.)));
+            paint(cx);
+            let travel = range(cx);
+            assert!(
+                travel > px(200.),
+                "{what}: thirty roles do not fit a 800 px window; measured {travel:?}"
+            );
+            assert_eq!(offset(cx), px(0.), "{what}: a fresh page starts at the top");
+
+            cx.simulate_mouse_move(point(px(width / 2.), px(400.)), None, Modifiers::default());
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(width / 2.), px(400.)),
+                delta: ScrollDelta::Lines(point(0., -3.)),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+            });
+            paint(cx);
+            let wheeled = offset(cx);
+            assert!(
+                wheeled < px(-10.),
+                "{what}: the wheel scrolls the credits; measured {wheeled:?}"
+            );
+
+            cx.simulate_keystrokes("pagedown");
+            paint(cx);
+            let paged = offset(cx);
+            assert!(
+                paged < wheeled - px(200.),
+                "{what}: Page suivante moves most of the window; measured {paged:?}"
+            );
+            cx.simulate_keystrokes("end");
+            paint(cx);
+            assert_eq!(offset(cx), -travel, "{what}: Fin reaches the bottom");
+            cx.simulate_keystrokes("home");
+            paint(cx);
+            assert_eq!(offset(cx), px(0.), "{what}: Début returns to the top");
+            println!(
+                "credits_page {what}: range={travel:?} wheel={:?} pagedown={:?}",
+                wheeled,
+                paged - wheeled
+            );
+        }
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// **A person's credits scroll through their titles** — the shared windowed
+    /// list, whose own keys and wheel are what the page has. Pinned here because
+    /// this page's list has no surrounding scroller: the list IS the scroller,
+    /// and a 400-row person still builds a screenful.
+    #[gpui::test]
+    async fn the_person_credits_list_scrolls_with_the_wheel_and_the_keys(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px, size};
+
+        let body = person_credits_body(400);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/credits/person", body.as_str()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| {
+                Screen::new(
+                    Route::Credits {
+                        kind: CreditKind::Person,
+                        id: "Aiyana".into(),
+                    },
+                    state,
+                    cx,
+                )
+            }
+        });
+        stub::until(&runtime, cx, "the person's credits", |cx| {
+            screen.read(cx).list.len() == 400
+        });
+
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            })
+        };
+        let seen = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| {
+                let list = &screen.read(cx).list;
+                (list.scroll_y(), list.visible(), list.selected())
+            })
+        };
+
+        for (width, what) in [(1280., "1280×800"), (660., "the 660 px pane")] {
+            cx.simulate_resize(size(px(width), px(800.)));
+            paint(cx);
+            let (offset, visible, selected) = seen(cx);
+            assert_eq!(offset, px(0.), "{what}: a fresh list starts at the top");
+            assert_eq!(selected, Some(0));
+            assert!(
+                visible.len() < 60,
+                "{what}: 400 titles build a screenful ({visible:?})"
+            );
+
+            cx.simulate_mouse_move(point(px(width / 2.), px(500.)), None, Modifiers::default());
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(width / 2.), px(500.)),
+                delta: ScrollDelta::Lines(point(0., -3.)),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+            });
+            paint(cx);
+            let (after_wheel, wheeled, _) = seen(cx);
+            assert!(
+                after_wheel < px(-10.),
+                "{what}: the wheel scrolled the person's titles; measured {after_wheel:?}"
+            );
+            assert!(wheeled.start > 0, "{what}: the rows moved; {wheeled:?}");
+
+            cx.update(|_, cx| cx.dispatch_action(&ListPageDown));
+            cx.run_until_parked();
+            paint(cx);
+            let (after_page, paged, row) = seen(cx);
+            assert!(
+                after_page < after_wheel - px(200.),
+                "{what}: Page suivante moves most of the window; measured {after_page:?}"
+            );
+            assert!(
+                paged.contains(&row.expect("a selected row")),
+                "{what}: the selected row is painted; {row:?} not in {paged:?}"
+            );
+
+            cx.update(|_, cx| cx.dispatch_action(&ListLast));
+            cx.run_until_parked();
+            paint(cx);
+            let (bottom, last, row) = seen(cx);
+            assert_eq!(row, Some(399), "{what}: Fin reaches the last title");
+            assert!(last.contains(&399), "{what}: it is painted; {last:?}");
+            assert!(
+                bottom < px(-1_000.),
+                "{what}: the list went down; {bottom:?}"
+            );
+
+            cx.update(|_, cx| cx.dispatch_action(&ListFirst));
+            cx.run_until_parked();
+            paint(cx);
+            assert_eq!(seen(cx).0, px(0.), "{what}: Début returns to the top");
+            println!(
+                "credits_list {what}: wheel={after_wheel:?} page={:?} bottom={bottom:?}",
+                after_page - after_wheel
+            );
+        }
+        runtime.shutdown_background();
+        stub.stop();
     }
 }

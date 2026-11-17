@@ -25,7 +25,7 @@ use gpui_kit::base::VirtualListScrollHandle;
 use gpui_kit::base::input::{InputEvent, InputState};
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Div, ElementId, Entity, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, Size,
+    IntoElement, ParentElement, Pixels, Render, ScrollStrategy, SharedString, Size,
     StatefulInteractiveElement as _, Styled, Subscription, Window, div,
     prelude::FluentBuilder as _, px, rems,
 };
@@ -61,6 +61,10 @@ enum Msg {
 const EDIT_ROW: f32 = 64.;
 /// The same row in view mode.
 const ROW: f32 = 56.;
+/// The suggestions strip's own height: its header and four of its 44 px rows.
+/// A teaser, not a list — unbounded it took the whole page and left the rows
+/// **0 px** tall (see the strip's comment in `render`).
+const RECS_MAX: Pixels = px(208.);
 
 /// Where the page stands.
 pub struct Screen {
@@ -1358,6 +1362,7 @@ impl Screen {
         let editor = cx.entity();
         let mut list = div()
             .id("playlist-rows")
+            .debug_selector(|| "playlist-rows".to_owned())
             .flex()
             .flex_col()
             .flex_1()
@@ -1406,7 +1411,14 @@ impl Screen {
         .track_scroll(&self.scroll)
         .flex_1()
         .min_h_0();
-        view.into_any_element()
+        // The same name as the edit-mode box: what a test measures to hold the
+        // suggestions strip to `RECS_MAX` — the rows must keep the page.
+        div()
+            .debug_selector(|| "playlist-rows".to_owned())
+            .flex_1()
+            .min_h_0()
+            .child(view)
+            .into_any_element()
     }
 }
 
@@ -1814,14 +1826,22 @@ impl Render for Screen {
             .child(self.list_body(cx));
 
         // The bottom of the playlist: what the library suggests next. It loads
-        // AFTER the list is on screen and never moves it.
+        // AFTER the list is on screen and must never move it: unbounded, twelve
+        // 44 px suggestions took the whole 800 px page and left the playlist's
+        // own rows **0 px** tall — a 4 000-title playlist you could not see, let
+        // alone scroll (v1.6.1). A strip is a teaser: at most `RECS_MAX`, and
+        // what does not fit scrolls inside it.
         if editable && !self.editing && self.query.trim().is_empty() {
             let mut recs = div()
                 .id("playlist-recommendations")
+                .debug_selector(|| "playlist-recommendations".to_owned())
                 .flex()
                 .flex_col()
                 .gap(rems(0.25))
                 .flex_shrink_0()
+                .min_h_0()
+                .max_h(RECS_MAX)
+                .overflow_y_scroll()
                 .pt(rems(0.75))
                 .child(
                     div()
@@ -2041,6 +2061,106 @@ mod tests {
             order.iter().map(reference_of).collect::<Vec<_>>(),
             ["3", "1", "2"]
         );
+    }
+
+    /// **The suggestions strip never takes the page** (v1.6.1). Twelve
+    /// unbounded 44 px suggestions pushed the playlist's own rows to **0 px**:
+    /// a 4 000-title playlist you could not see, let alone scroll. The strip is
+    /// now `RECS_MAX` (208 px: its header and four rows) and scrolls inside it;
+    /// the rows keep the page and `Page suivante` moves them. Measured at
+    /// 1280×800 and in the 660 px pane a 1280 window keeps with the 420 px
+    /// panel open.
+    #[gpui::test]
+    async fn the_suggestions_strip_bounds_itself_and_the_rows_scroll(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{px, size};
+
+        const ME_BODY: &str =
+            r#"{"user":{"id":"u1","name":"bench","admin":false,"access":{},"sources":[]}}"#;
+        let tracks: Vec<String> = (0..40)
+            .map(|index| {
+                format!(
+                    r#"{{"id":"row-{index}","deezer_id":"6000{index}","title":"Titre {index}",
+                        "duration":180,"artist":{{"deezer_id":"42","name":"Kaya Project"}},
+                        "album":{{"deezer_id":"9","title":"Songs from the Inside"}}}}"#
+                )
+            })
+            .collect();
+        let page = format!(
+            r#"{{"playlist":{{"id":"pl-1","title":"Route","nb_tracks":40,"version":1,
+                "editable":true,"can_manage":true,"role":"owner","members":[],"members_version":1}},
+                "tracks":[{}]}}"#,
+            tracks.join(",")
+        );
+        let suggestions: Vec<String> = (0..12)
+            .map(|index| {
+                format!(
+                    r#"{{"id":"rec-{index}","deezer_id":"7000{index}","title":"Suggestion {index}",
+                        "duration":200,"artist":{{"deezer_id":"43","name":"Autre"}},
+                        "album":{{"deezer_id":"10","title":"Ailleurs"}}}}"#
+                )
+            })
+            .collect();
+        let recs = format!(r#"{{"tracks":[{}]}}"#, suggestions.join(","));
+        let stub = crate::widgets::card::stub::Stub::start(&[
+            ("/api/login", ME_BODY),
+            ("/api/me", ME_BODY),
+            ("/api/playlist/pl-1", page.as_str()),
+            ("/api/playlist/pl-1/recommendations", recs.as_str()),
+        ]);
+        let (state, runtime) = crate::widgets::card::stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view(move |_, cx| {
+            Screen::new(
+                Route::Playlist {
+                    id: "pl-1".to_owned(),
+                },
+                state.clone(),
+                cx,
+            )
+        });
+        crate::widgets::card::stub::until(&runtime, cx, "the playlist and its suggestions", |cx| {
+            let screen = screen.read(cx);
+            screen.row_len() == 40
+                && screen
+                    .recommendations
+                    .ready()
+                    .is_some_and(|r| r.len() == 12)
+        });
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            })
+        };
+        for (width, what) in [(1280., "1280×800"), (660., "the 660 px pane")] {
+            cx.simulate_resize(size(px(width), px(800.)));
+            paint(cx);
+            let strip = cx
+                .debug_bounds("playlist-recommendations")
+                .expect("the strip is laid out");
+            assert!(
+                strip.size.height <= RECS_MAX + px(1.),
+                "{what}: the strip stays a teaser ({strip:?})"
+            );
+            let rows = cx
+                .debug_bounds("playlist-rows")
+                .expect("the rows are laid out");
+            assert!(
+                rows.size.height > px(120.),
+                "{what}: the playlist's own rows keep the page ({rows:?})"
+            );
+
+            cx.update(|_, cx| cx.dispatch_action(&ListPageDown));
+            cx.run_until_parked();
+            paint(cx);
+            let moved = cx.update(|_, cx| screen.read(cx).scroll.base_handle().offset().y);
+            assert!(
+                moved < px(-10.),
+                "{what}: Page suivante scrolls the rows; measured {moved:?}"
+            );
+        }
+        runtime.shutdown_background();
+        stub.stop();
     }
 }
 

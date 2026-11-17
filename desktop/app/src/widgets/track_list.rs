@@ -480,6 +480,7 @@ pub fn element<V: Render>(
         },
         cx,
     )
+    .track_scroll(&scroll)
     .h_full();
 
     // The menu floats INSIDE the list's own box: the row it belongs to is in
