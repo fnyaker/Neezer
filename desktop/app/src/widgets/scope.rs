@@ -365,19 +365,19 @@ impl Render for Scope {
                     let signal = st.signal;
                     let (a, b) = viz.scope(cols, dt);
 
-                    let face = hsla(stops[3], 0.10);
+                    let face = hsla(stops[3], 0.20);
                     for lane in [lane_a, lane_b] {
                         line(window, &lane, (0., 1.), (1., 1.), face);
                         line(window, &lane, (1., 1.), (1., -1.), face);
                         line(window, &lane, (1., -1.), (0., -1.), face);
                         line(window, &lane, (0., -1.), (0., 1.), face);
-                        line(window, &lane, (0., 0.5), (1., 0.5), face.opacity(0.5));
-                        line(window, &lane, (0., -0.5), (1., -0.5), face.opacity(0.5));
+                        line(window, &lane, (0., 0.5), (1., 0.5), face.opacity(0.55));
+                        line(window, &lane, (0., -0.5), (1., -0.5), face.opacity(0.55));
                         for d in 1..DIVISIONS {
                             let t = d as f32 / DIVISIONS as f32;
-                            line(window, &lane, (t, -1.), (t, 1.), face.opacity(0.35));
+                            line(window, &lane, (t, -1.), (t, 1.), face.opacity(0.45));
                         }
-                        line(window, &lane, (0., 0.), (1., 0.), hsla(stops[3], 0.22));
+                        line(window, &lane, (0., 0.), (1., 0.), hsla(stops[3], 0.32));
                     }
 
                     // La trace : un quadrilatère par colonne et par canal, de la
