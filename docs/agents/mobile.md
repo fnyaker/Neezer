@@ -1295,6 +1295,14 @@ SPA's keys and the four-rung picker), `state` (the published `Snapshot`) and
   skip `Lane::Bulk` on desktop either: `ApiDownloader` is the only fetcher that
   touches the network and every byte of it is a Bulk request — there is no
   second throttle, by design.
+- **The rule, the close is the crate's own** (PR #246's fix, verified here).
+  `Worker` owns its thread, `shutdown()` and the last clone's `Drop` both join
+  it, `Stop` abandons a body in flight through `select!`, and nothing
+  `catch_unwind`s the panic away. The app keeps its `NetRuntime` bench (the
+  global that must join first); the crate adds
+  `dropping_the_worker_joins_it_before_its_runtime_goes`, which is the contract
+  the mobile core relies on when IT drops a runtime: measured **246 µs** to
+  close, **0 panics**, exactly one row left `active`.
 - **The rule, one stop for the whole worker.** `Shared` carries a single
   `Stop` (flag + `watch`) instead of a separate `AtomicBool` and channel:
   `Worker::stop` sets it, `Stop::drive` races it against one future, `stopped()`
@@ -1319,12 +1327,13 @@ SPA's keys and the four-rung picker), `state` (the published `Snapshot`) and
   `watch<u64>` of the snapshot's `version`: one channel, and a phone can wait
   for a publication instead of polling a mutex.
 - **Measured** (this machine: 16 threads, Rust 1.99.1, NDK 30.0.16248370):
-  - **`cargo test -p nz-offline`: 18 tests** — 14 lib tests, 3 heavy benches
-    (restart, session change, rule 1's shared link) that run in a process of
-    their own, and the perf_api resume bench. `cargo test -p
+  - **`cargo test -p nz-offline`: 20 tests** — 15 lib tests, 4 heavy benches
+    (restart, drop-order close, session change, rule 1's shared link) that run
+    in a process of their own, and the perf_api resume bench. `cargo test -p
     neezer-desktop --bins wiring::offline`: **7** (4 + their 3 children). The
-    workspace's offline tests go from 22 to 25: the picker/engine contract, the
-    `events()` signal and the perf_api resume bench are new.
+    workspace's offline tests go from 22 to 27: the picker/engine contract, the
+    `events()` signal, the perf_api resume bench and the crate's own drop-order
+    close are new.
   - **The resume bench, counted in bytes in the fetcher** (never in a file's
     size: a published file looks the same whether it came down once or twice):
     6 archived tracks of **300 044 bytes**; the stop landed with **24 576 bytes**

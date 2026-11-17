@@ -6,6 +6,7 @@
 //! through the engine's opener stayed in the desktop app with that adapter, and
 //! the `#[gpui::test]` one too: this crate links no GPUI and no output device.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nz_api::{Api, Lane, Quality, TrackId};
@@ -685,6 +686,82 @@ fn read_stream(
     }
     let elapsed = started.elapsed().as_secs_f64();
     bytes as f64 / elapsed
+}
+
+/// **A process ending mid-download: the last `Offline` clone joins `nz-bulk`
+/// before the runtime it borrows goes.**
+///
+/// This is D13's pitfall in the crate's own words (the fix PR #246 landed): the
+/// worker owns its thread, `shutdown` and `Drop` both join it, `Stop` abandons a
+/// body in flight through `select!`, and nothing `catch_unwind`s the panic away.
+/// The desktop's `NetRuntime` bench proves the app's global does the same; this
+/// one proves the CRATE's contract, which is what the mobile core relies on when
+/// it drops its runtime.
+#[test]
+fn dropping_the_worker_joins_it_before_its_runtime_goes() {
+    in_its_own_process("tests::the_drop_bench_in_its_own_process");
+}
+
+#[test]
+#[ignore = "run by its parent, a process of its own (a panic hook is process-wide)"]
+fn the_drop_bench_in_its_own_process() {
+    let panics = Panics::install();
+    let scratch = Scratch::new("drop");
+    let store = scratch.store();
+    let ids: Vec<String> = (0..20).map(|index| format!("d{index}")).collect();
+    let borrowed: Vec<&str> = ids.iter().map(String::as_str).collect();
+    // A body in flight, and a Bulk cap that makes the worker SLEEP between its
+    // chunks: that sleep is the timer tokio asserts on once its runtime goes.
+    let server = TestServer::start(Link::new(Some(400_000.0)), body_map(&borrowed, 128 * 1024));
+    let runtime = Arc::new(runtime());
+    let api = api_for(&server, &store, &scratch);
+    api.set_bulk_cap_from_stream(Some(8_000));
+    let service = Offline::start(store.clone());
+    service.configure(Arc::clone(&api), runtime.handle().clone());
+    service.choose("playlist", "p1", "Voyage", choices(&borrowed));
+    assert!(
+        wait_for(Duration::from_secs(20), || {
+            service
+                .snapshot()
+                .running
+                .as_ref()
+                .is_some_and(|running| running.bytes > 0)
+        }),
+        "a body is being written: {:?}",
+        service.snapshot().running
+    );
+
+    // The process ends: the last handle goes, and only then its runtime.
+    let closing = Instant::now();
+    drop(service);
+    let closed = closing.elapsed();
+    drop(runtime);
+    // A worker that outlived the drop would poll a shutdown runtime HERE.
+    std::thread::sleep(Duration::from_millis(300));
+
+    let recorded = panics.take();
+    println!(
+        "fermeture par le dernier handle : rendue en {closed:?}, {} panique(s)",
+        recorded.len()
+    );
+    assert!(
+        recorded.is_empty(),
+        "no thread may panic while the process ends: {recorded:?}"
+    );
+    assert!(
+        closed < Duration::from_millis(500),
+        "the drop answered in {closed:?}, not behind the body in flight"
+    );
+    // The interrupted row stays `active` and its `.part` is on disk: the next
+    // start resumes it, and an interruption is not a verdict (rule 2).
+    let jobs = store.downloads().pending("42", 100).expect("the queue");
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| job.state == DownloadState::Active)
+            .count(),
+        1,
+        "exactly the body in flight is interrupted: {jobs:?}"
+    );
 }
 
 /// The picker offers exactly the rungs an engine can decode.
