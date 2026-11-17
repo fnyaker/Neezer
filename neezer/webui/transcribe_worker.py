@@ -359,7 +359,7 @@ def _flush_sidecar(episode_id, app):
     finally:
         try:
             db.close()
-        except Exception:
+        except Exception:  # nosec B110 - the sidecar thread is ending either way
             pass
 
 
@@ -421,7 +421,9 @@ def transcribe_worker_create():
             f"{MAX_WORKERS} appareils au maximum", code="too_many_workers", status=409
         )
     with db.atomic():
-        worker = TranscribeWorker.create(name=name, kind=kind, token="pending")
+        worker = TranscribeWorker.create(
+            name=name, kind=kind, token="pending"  # nosec B106 - a placeholder, replaced by the encrypted token below
+        )
         token = f"{worker.id}.{secrets.token_urlsafe(32)}"
         worker.token = encrypt_password(token)
         worker.save()

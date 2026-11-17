@@ -150,7 +150,7 @@ def _run_backfill(app, scope, user_id):
             _job["running"] = False
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - the job's connection is going away either way
             pass
 
 
@@ -251,8 +251,8 @@ def _empty(cache):
             if entry is not None:
                 cache._files[key] = entry.__class__(entry.size, 0)
             cache.delete(key)
-        except Exception:
-            continue  # in use, or already gone: leave it alone
+        except Exception:  # nosec B112 - in use, or already gone: leave it alone
+            continue
 
 
 # -- archive rules ----------------------------------------------------------

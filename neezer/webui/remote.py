@@ -508,7 +508,7 @@ def _touch(row):
         _touched[row.id] = t
     try:
         RemoteLink.update(last_used=now()).where(RemoteLink.id == row.id).execute()
-    except Exception:  # pragma: no cover - a timestamp is never worth a failure
+    except Exception:  # pragma: no cover  # nosec B110 - a timestamp is never worth a failure
         pass
 
 

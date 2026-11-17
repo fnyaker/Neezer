@@ -541,7 +541,7 @@ def _run_export(app, job_id, uid, client, title, rows, public):
             _running.discard(uid)
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - the request's connection is going away either way
             pass
 
 

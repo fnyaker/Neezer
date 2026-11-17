@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 - ffmpeg, a fixed binary, an argument list, no shell
 import threading
 import uuid
 import zipfile
@@ -154,7 +154,9 @@ def _transcode(path, args):
         "-map", "0:a:0", "-map_metadata", "0", *args, "pipe:1",
     ]
     # stderr to /dev/null: an unread, full stderr pipe would deadlock ffmpeg.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(  # nosec B603 - "ffmpeg", then the track's own path after "-i"; no shell
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
     finished = False
     try:
         while True:

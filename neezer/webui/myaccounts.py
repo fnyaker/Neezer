@@ -558,7 +558,7 @@ def _run_listing_refresh(app, key, job):
     finally:
         try:
             close_connection()
-        except Exception:
+        except Exception:  # nosec B110 - the listing's connection is going away either way
             pass
         with _listing_lock:
             _listing_jobs.pop(key, None)
