@@ -4,7 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
+import androidx.core.net.toUri
 import android.net.http.SslError
 import android.os.Bundle
 import android.os.Handler
@@ -24,6 +24,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.compose.ui.graphics.toArgb
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
 
@@ -244,7 +245,7 @@ class DeezerLoginActivity : ComponentActivity() {
             } catch (_: Exception) {
                 null
             } ?: continue
-            val host = Uri.parse(url).host
+            val host = url.toUri().host
             for (part in raw.split(';')) {
                 val name = part.substringBefore('=').trim()
                 if (name.isEmpty()) continue

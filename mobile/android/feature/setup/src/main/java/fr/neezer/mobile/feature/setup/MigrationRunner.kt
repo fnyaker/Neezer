@@ -125,7 +125,7 @@ object MigrationRunner {
             cookie = cookie,
             downloads = downloads,
             settings = found?.settings.orEmpty(),
-            offlineSets = found?.albums ?: 0,
+            offlineSets = (found?.albums ?: 0).toUInt(),
         )
         return screens.runMigration(input)
     }

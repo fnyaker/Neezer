@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -86,7 +87,7 @@ class Updater(
     }
 
     fun shutdown() {
-        scope.coroutineContext.cancel()
+        scope.cancel()
     }
 
     /** `Install` when [apk] may be handed to Android, else why not. */
@@ -110,27 +111,45 @@ class Updater(
         } catch (_: Exception) {
             return UpdateDecision.Invalid
         }
-        val theirs = archive.signingInfo()
-        val ours = installed.signingInfo()
+        val theirs = signingFacts(archive)
+        val ours = signingFacts(installed)
         return UpdateDecisionRule.decide(
             archivePackage = archive.packageName,
             archiveVersionCode = archive.versionCode(),
             installedPackage = activity.packageName,
             installedVersionCode = installed.versionCode(),
-            archiveSigners = theirs?.let { digests(it.apkContentsSigners) },
-            archiveLineage = theirs?.let { digests(it.signingCertificateHistory) },
-            installedSigners = ours?.let { digests(it.apkContentsSigners) } ?: emptySet(),
-            archiveMultipleSigners = theirs?.hasMultipleSigners() ?: false,
-            installedMultipleSigners = ours?.hasMultipleSigners() ?: false,
+            archiveSigners = theirs?.signers,
+            archiveLineage = theirs?.lineage,
+            installedSigners = ours?.signers ?: emptySet(),
+            archiveMultipleSigners = theirs?.multiple ?: false,
+            installedMultipleSigners = ours?.multiple ?: false,
         )
     }
 
-    private fun PackageInfo.signingInfo(): android.content.pm.SigningInfo? =
-        if (Build.VERSION.SDK_INT >= 28) {
-            signingInfo
-        } else {
-            null
-        }
+    /** What a package's signatures say, read on the one API level that has them. */
+    private class SigningFacts(
+        val signers: Set<String>,
+        val lineage: Set<String>,
+        val multiple: Boolean,
+    )
+
+    /**
+     * `SigningInfo` exists from API 28; below it an archive's signers are simply
+     * unreadable, which the rule reads as "the installer is the judge" (the old
+     * app's `sameSigner` said the same).
+     */
+    private fun signingFacts(info: PackageInfo): SigningFacts? =
+        if (Build.VERSION.SDK_INT >= 28) signingFacts28(info) else null
+
+    @androidx.annotation.RequiresApi(28)
+    private fun signingFacts28(info: PackageInfo): SigningFacts? {
+        val signing = info.signingInfo ?: return null
+        return SigningFacts(
+            signers = digests(signing.apkContentsSigners),
+            lineage = digests(signing.signingCertificateHistory),
+            multiple = signing.hasMultipleSigners(),
+        )
+    }
 
     @Suppress("DEPRECATION")
     private fun PackageInfo.versionCode(): Long =
@@ -143,8 +162,9 @@ class Updater(
         }.toSet()
     }
 
+    /** `REQUEST_INSTALL_PACKAGES` is a grant since API 26, which is this app's floor. */
     private fun canInstall(): Boolean =
-        Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()
+        activity.packageManager.canRequestPackageInstalls()
 
     private fun install(apk: File) {
         if (!canInstall()) {
@@ -154,7 +174,7 @@ class Updater(
                 activity.startActivity(
                     Intent(
                         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${activity.packageName}"),
+                        "package:${activity.packageName}".toUri(),
                     ),
                 )
             } catch (_: Exception) {
