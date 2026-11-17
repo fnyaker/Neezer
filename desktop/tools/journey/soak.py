@@ -34,6 +34,7 @@ import os
 import signal
 import sqlite3
 import subprocess
+import threading
 import sys
 import tempfile
 import time
@@ -206,23 +207,42 @@ def main() -> int:
         # The transcription, on the same machine, for the whole run.
         if args.model and Path(args.model).exists() and Path(args.transcribe).exists():
             out = scratch / "transcribe.json"
-            log = open(scratch / "transcribe.log", "ab")
-            transcribe = subprocess.Popen(
-                [
-                    "sh",
-                    "-c",
-                    f'while true; do "{args.transcribe}" file "{long_flac}" '
-                    f'--model "{args.model}" --out "{out}" || true; done',
-                ],
-                stdout=log,
-                stderr=log,
-                # Rule 1: the transcription yields to the music, as the app's
-                # supervisor does (`nice 19`, SCHED_IDLE). `nice` is a shell
-                # builtin here because `Popen` has no `nice` argument.
-                preexec_fn=lambda: os.nice(19),
-                start_new_session=True,
-            )
+            transcribe_log = open(scratch / "transcribe.log", "ab")
+
+            def loop() -> None:
+                """The transcription, again and again, for the whole run.
+
+                A Python loop with an ARGUMENT LIST, never `sh -c "<path>"`: a
+                shell command built by interpolation is both a static-analysis
+                finding and a quoting bug waiting for a path with a space.
+                """
+                while not stop_transcribe.is_set():
+                    subprocess.run(
+                        [
+                            args.transcribe,
+                            "file",
+                            str(long_flac),
+                            "--model",
+                            args.model,
+                            "--out",
+                            str(out),
+                        ],
+                        stdout=transcribe_log,
+                        stderr=transcribe_log,
+                        check=False,
+                        # `nice 19` on the child, like the app's supervisor.
+                        preexec_fn=lambda: os.nice(19),
+                    )
+
+            # Rule 1: the transcription yields to the music, as the app's
+            # supervisor does (`nice 19` on each child).
+            transcribe = None
+            stop_transcribe = threading.Event()
+            worker = threading.Thread(target=loop, daemon=True)
+            worker.start()
         else:
+            stop_transcribe = None
+            worker = None
             print("no model: the transcription leg is skipped", file=sys.stderr)
 
         started = time.monotonic()
@@ -284,11 +304,10 @@ def main() -> int:
             }
         )
     finally:
-        if transcribe is not None:
-            try:
-                os.killpg(os.getpgid(transcribe.pid), signal.SIGTERM)
-            except OSError:
-                transcribe.terminate()
+        if stop_transcribe is not None:
+            stop_transcribe.set()
+            if worker is not None:
+                worker.join(timeout=30)
         app.stop()
         bus.stop()
         xvfb.stop()
