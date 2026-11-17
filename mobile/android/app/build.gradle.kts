@@ -168,4 +168,16 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
 
     testImplementation(libs.junit)
+
+    // Instrumented tests (MQ1): the shell's smoke on a real device, and the
+    // rules every screen lot's Compose test uses. A module's own androidTest
+    // declares what it needs as well; :app is the one that proves the chain
+    // (Gradle → APK → instrumentation → Compose semantics) for all of them.
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 }

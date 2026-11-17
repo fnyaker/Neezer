@@ -1513,61 +1513,107 @@ Fin : branche <ta-branche>/lg1, PR « feat(mobile): LG1 new Neezer logo », CI v
 merge, section LG1 réécrite (direction retenue et pourquoi), `ao report --done`.
 ```
 
-### MQ1 — Test and measurement harness (wave 1)
+### MQ1 — Test and measurement harness (delivered 2026-11-17)
 
-**Goal.** The tools every later lot measures with. **Depends on**: MB0.
-**Exclusive files**: `mobile/tools/**`, `mobile/android/baselineprofile/**`, `mobile/android/app/src/androidTest/**`.
-**Contract.** `mobile/tools/emu.sh {create,start,wait,stop,status} --port N` exactly as *The emulator*
-says (AVD `nz35`, `-no-window -no-audio -gpu swiftshader_indirect`, PID file, MemAvailable guard,
-refusal to touch a port it did not start); `mobile/tools/perf-server.sh` (starts `tools/perf_api.py
---serve` on a free port, prints the URL the emulator uses: `http://10.0.2.2:<port>`); `mobile/tools/measure.sh
-{startup,frames,cpu,memory,underruns,apk}` writing JSON under `~/.cache/neezer-measure/`; the
-Macrobenchmark module with `StartupBenchmark` (COLD, 10 iterations, profile on/off), `ScrollBenchmark`
-(library 8 000, queue 4 000), `BaselineProfileGenerator` (start → home → library scroll → play);
-and `mobile/tools/ci-emulator.sh` (boot, install, smoke: launch → shell visible → every route
-opens, then `gradle connectedDebugAndroidTest` over every module — later lots put their
-instrumented tests in THEIR module's `src/androidTest`, never in `:app`'s) — `mobile.yaml` (MB0's) already calls it.
-**Also measure and write here**: whether AAudio opens and clocks with `-no-audio` vs `-audio none`
-on the emulator (the underrun measures depend on it), cold boot time of the AVD, RAM of one emulator.
-**Acceptance.** `emu.sh start/wait/stop` twice in a row leaves no process and no lock; two ports run
-side by side; the benchmarks run against the MB0 shell and print numbers; nothing ever appears on the
-display or the speakers.
+**What landed.** The tools every later lot measures with, and the numbers this machine gave them the
+same day. Owner of the flags, the ports, the PID bookkeeping and the memory guard — the four things a
+lot copying them by hand eventually gets wrong, with the person's speakers and phone on the other side.
 
-```text
-Tu es le worker du lot MQ1 (outillage de test et de mesure) de la nouvelle app mobile Neezer. Lis
-CLAUDE.md, docs/agents/mobile.md (« Tests and emulation », « Measures », « Worker rules », « MQ1 »),
-docs/agents/commands.md et docs/agents/testing.md.
-Objectif : mobile/tools/emu.sh (émulateur sans fenêtre ni son, KVM, ports distincts, PID, garde
-mémoire), perf-server.sh, measure.sh, ci-emulator.sh, le module :baselineprofile (démarrage à froid,
-défilement 8 000 / 4 000, générateur de Baseline Profile), selon la section MQ1. Mesurer et écrire si
-AAudio fonctionne avec -no-audio ou -audio none, le temps de démarrage de l'AVD et sa RAM.
-Fichiers à toi seul : mobile/tools/**, mobile/android/baselineprofile/**, mobile/android/app/src/androidTest/**.
-Acceptation : start/wait/stop deux fois sans processus restant ; deux émulateurs côte à côte ; les
-benchmarks tournent sur le squelette et donnent des nombres ; rien sur l'écran ni les haut-parleurs.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mq1, PR « test(mobile): MQ1 emulator and measurement harness », CI verte,
-rebase + diff --stat, merge, section MQ1 réécrite (mesures), `ao report --done`.
-```
+| Tool | What it does, and the rule it carries |
+|---|---|
+| `mobile/tools/emu.sh {create,start,wait,stop,status} --port N` | The ONLY way a lot starts an emulator. AVD `nz35` (API 35 x86_64 `default` image, `pixel_6`), `-no-window`, silent audio (`--audio no-audio` by default, `none` measured equal), `-gpu swiftshader_indirect -no-boot-anim -no-snapshot -read-only -no-metrics -memory 3072 -cores 4`. PID+log in `~/.cache/neezer-emu/<port>.{pid,log}`, `MemAvailable` ≥ 8 GB guard, at most **2**, a port only touched when this script started it, and only its own PID ever signalled (`kill -0 /proc/<pid>/cmdline` proves it is ours before `stop`). `wait` polls `sys.boot_completed` — an event, never a sleep. |
+| `mobile/tools/emu-selftest.sh` | The acceptance as a command: two full start/wait/stop cycles leave no process, no PID file, no listening port and no held lock; two ports boot side by side as two distinct guests (kernel `boot_id` compared); `stop` on a port it never started exits non-zero. |
+| `mobile/tools/env.sh` | SDK / JDK / Gradle resolution, sourced by the rest. AGP 8.13 refuses JDK 25+ with `java.lang.IllegalArgumentException: 25.0.5` and no mention of Java; this picks a 17–24 one (mise's `java@21`) or names the fix. |
+| `mobile/tools/perf-server.sh {start,status,stop}` | `tools/perf_api.py --serve` with the worst realistic input (8 000 tracks, a 4 000-track playlist), `TMPDIR` moved onto disk, prints `host=http://127.0.0.1:<port>` and `emulator=http://10.0.2.2:<port>` (the guest has no 127.0.0.1 of ours), stopped with SIGTERM (the signal perf_api deletes its library on). |
+| `mobile/tools/measure.sh {startup,frames,cpu,memory,underruns,apk,profile}` | One measure per subcommand, JSON in `~/.cache/neezer-measure/<what>-<UTC>.json` + `latest-<what>.json`, and a printed line. Every number is COUNTED where a count exists (frames, bytes, ticks, xruns, PSS bytes). |
+| `mobile/tools/benchdata.py` | AndroidX's 200 kB `benchmarkData.json` → medians and pooled p50/p90/p95/p99, and it FAILS when a bench measured none of its metrics (the emulator's frame source is a real way to get zeros). |
+| `mobile/tools/aaudio-probe.c` | Opens one AAudio stream exactly as the app's engine will (PowerSaving, media/music, 48 kHz stereo float, 1 s buffer), writes silence from a real-time callback and prints frames/ticks/xruns. Built by `measure.sh underruns` with NDK clang for API 28, pushed to `/data/local/tmp`, removed after. |
+| `mobile/tools/ci-emulator.sh` | What `mobile.yaml`'s `emulator` job runs: boot, install, walk the shell through the accessibility tree (5 doors, each proved by the text only that screen draws), probe 5 app links, print the counts, then `connectedDebugAndroidTest` on every module that has `src/androidTest`. Every failure stops the emulator through `emu.sh` first. |
+| `:baselineprofile` | `StartupBenchmark` (COLD, 10 iterations, profile off/on), `ScrollBenchmark` (library 8 000, queue 4 000 — inactive until the lists exist, see below), `ShellFramesBenchmark` (the tab walk), `BaselineProfileGenerator` (start → home → library scroll → play). |
+| `app/src/androidTest/.../ShellSmokeTest.kt` | Three instrumented tests on the real APK: the shell paints the home stub, a tab opens its own destination, Réglages › Aide prints the version the RUST crate reports (Gradle → APK → instrumentation → JNA → `libnz_ffi.so`). Found by semantics, never by coordinates. |
+
+**Measured on this machine** (emulator 37.2.13, API 35 x86_64, KVM, swiftshader, `-no-audio` unless
+said, one emulator unless said; `/dev/kvm` `crw-rw-rw-`):
+
+| Measure | Number |
+|---|---|
+| AVD cold boot (`-no-snapshot`, `wait` on `sys.boot_completed`) | **16–25 s** over 12 boots (median ≈ 21 s); a second emulator starting beside the first: 9 s (its page cache is already warm) |
+| Emulator RSS | **2.50 / 3.04 / 3.14 GB** — hence the 2-emulator cap and the 8 GB guard (two = 6.2 GB) |
+| `emu-selftest.sh` | 2 cycles × 2 ports + 2 side by side, **3 min 45 s, 0 failures**; after each stop: 0 process, 0 PID file, 0 listening port, lock acquirable |
+| AAudio, `-no-audio` | **opens**: 48 000 Hz, burst **24 000 frames (500 ms)**, buffer **48 000 (1 s)**, 2 928 000 frames in 60 s, ticks 1.017 (**steady 1.000**), **0 xruns** |
+| AAudio, `-audio none` | identical: 48 000 Hz, same burst/buffer, 2 928 000 frames in 60 s, steady 1.000, **0 xruns** → **`-audio none` is not needed; `-no-audio` gives AAudio a real-time clock** |
+| Cold start TTID (10 iterations) | no profile: **p50 668.0 / p95 873.0 ms**; profile requested but absent (`UseIfAvailable`): **p50 651.9 / p95 786.0 ms**. TTFD is absent from the report: the shell does not call `reportFullyDrawn()` yet |
+| Shell frames (tab walk, 5 iterations, **150 frames each / 750 pooled**) | `frameDurationCpuMs` **p50 10.1 / p90 14.6 / p95 19.4 / p99 20.8 ms**; `frameOverrunMs` p50 −6.0 / p95 3.1 / p99 4.4 ms — p95 above the 16.7 ms budget, on swiftshader (a GPU-less software rasteriser) |
+| App memory (home, no player yet) | **PSS 28 768 256 B (28.1 MiB)** for `org.nsupysonic.app` |
+| App CPU (screen off, Doze forced, 60 s) | **10 ms = 0.017 %** of one core — the skeleton's idle floor, not a playback figure |
+| APK | **4 962 439 B** universal, `classes.dex` 2 397 656 B, `libnz_ffi.so` **902 056 B arm64**, 944 776 B x86_64, 605 620 B armeabi-v7a |
+| `perf-server.sh` | 8 000 tracks + 4 000-track playlist seeded and serving; the guest reaches it at `10.0.2.2:<port>` (`ping` 2.65 ms, `GET /api/version` → 200); SIGTERM leaves **0** library directories |
+| Baseline Profile | **not generated on the emulator**: `BaselineProfileRule` skips it (its own guard, see below) — the `.txt` the release ships is MQ2's, from a phone |
+
+**What the start figures mean, and what they do not.** The plan's TTID ≤ 500 ms and p95 ≤ 16.7 ms are
+REAL-PHONE budgets. The emulator's 668 ms and 21.7 ms are the floor a screen must not regress against
+run to run on the same emulator, and the note's Measures table says exactly that ("emulator x86_64,
+KVM, swiftshader; real phone numbers reported beside"). Nothing here proves a phone number; MB3b/MQ2
+do, on a device.
+
+**Rules a measurement taught** (each cost a red run or a wasted hour):
+
+- **Macrobenchmark refuses an emulator twice, and only one of the two is switchable.** The metrics run
+  fails with `ERRORS (not suppressed): EMULATOR` until `androidx.benchmark.suppressErrors=EMULATOR`
+  (`:baselineprofile`'s `defaultConfig`); the profile GENERATOR has its own guard — `Skipping test
+  because it's running on emulator and skipOnEmulator is enabled` — and
+  `androidx.benchmark.skipBenchmarksOnEmulator=false` does not lift it (tried, still skipped). A
+  baseline profile therefore needs a real phone; `measure.sh profile` reports `status=skipped` with
+  that cause instead of pretending.
+- **`FrameTimingMetric` throws when the screen never redraws**: `Observed no renderthread slices in
+  trace`. Flung over MB0's static `NzPlaceholder` it had nothing to time — the first run of both
+  scroll benches failed exactly so. Hence `ShellFramesBenchmark` (a tab tap does repaint: 150 frames
+  per iteration, p95 19.4 ms) and, in the two list benches, an explicit `assumeTrue(scrollable)` precondition that
+  turns itself on with MB8/MB11.
+- **AAudio's first callback pre-fills the whole buffer.** A 5 s probe reads ticks 1.10–1.20, a 20 s one
+  1.05, a 60 s one 1.017 with `ticks_steady` 1.000 — the number to trust is
+  `(frames − buffer) / (rate × elapsed)`, and a short probe lies by exactly `buffer / elapsed`.
+- **`androidx.test.ext:junit` reaches a Gradle test module only at RUNTIME** (its POM scope), so
+  `@RunWith(AndroidJUnit4::class)` does not compile in `:baselineprofile` (`Unresolved reference
+  'runners'`) while the class IS in the test APK. The benches use `JUnit4` (the module's runner is
+  `AndroidJUnitRunner`, which runs any JUnit4 class); `:app`'s androidTest declares the real
+  dependencies, which MQ1 added to `libs.versions.toml` and `:app` on the orchestrator's decision.
+- **AGP 8.13 dies on JDK 25** with `java.lang.IllegalArgumentException: 25.0.5` — three words, no
+  mention of Java, and `gradle --version` looks fine. `env.sh` resolves a 17–24 JDK.
+- **`cmd package resolve-activity -c LAUNCHER <pkg>` is not a launcher lookup**: it prints a full
+  resolution dump in which `name=` also matches the `Application` class. `--brief` answers exactly the
+  component (`org.nsupysonic.app/.SetupActivity`) and is what both scripts use.
+- **AGP's `connected…AndroidTest` runs on EVERY device adb sees.** Without `ANDROID_SERIAL`, a run of
+  ours started on another lot's `emulator-5590` (observed in the log). Both tools now export
+  `ANDROID_SERIAL=emulator-<port>` — a lot never drives a device it did not start.
+- **A `-read-only` emulator is a fresh guest every boot**: the app a previous run installed is gone,
+  and `emu.sh wait` is not an install. `measure.sh` installs the worktree's APK when the launcher does
+  not resolve, so `memory`/`cpu` work on a newly booted emulator.
+- **The perf library is 900 MB at 8 000 tracks and belongs on disk** (`TMPDIR` under `~/.cache`), and
+  perf_api's cleanup is SIGTERM-driven: `perf-server.sh stop` sends SIGTERM, waits, and only then
+  SIGKILLs. Measured: 0 leftover directories after a stop.
+- **The emulator writes its own `<port>b.log`** beside the log `emu.sh` redirects to, and AVD lock
+  files (`hardware-qemu.ini.lock`, `multiinstance.lock`) can be stale for hours without blocking a
+  `-read-only` boot. Neither is ours to clean; the state `emu.sh` owns is the PID file and the flock,
+  and both are gone after `stop`.
+
+**Still owed, and to whom.** The 8 000/4 000 `ScrollBenchmark` tests are written and inactive until
+MB8 paints the library and MB11 the queue (`assumeTrue` + cause). TTFD appears in the startup report
+the day the shell calls `reportFullyDrawn()`. `baseline-prof.txt` is MQ2's (and needs a phone).
+`mobile/tools/measure.sh`'s `cpu` measure is the app's own `/proc/<pid>/stat`, ready for MB3c's
+screen-off playback work; the skeleton has no player, so today it measures an idle process. The
+`mobile/` block of [commands.md](commands.md) is still owed — that file belongs to another lot, so
+the commands live here: `mobile/tools/emu.sh {start,wait,stop} --port N`,
+`mobile/tools/measure.sh <measure> --port N`, `mobile/tools/perf-server.sh start|stop`,
+`mobile/tools/emu-selftest.sh`, `mobile/tools/ci-emulator.sh`, and
+`cd mobile/android && gradle :baselineprofile:connectedBenchmarkReleaseAndroidTest` for the benches
+themselves.
+
+**Files.** `mobile/tools/{emu.sh,emu-selftest.sh,env.sh,perf-server.sh,measure.sh,benchdata.py,aaudio-probe.c,ci-emulator.sh}`,
+`mobile/android/baselineprofile/{build.gradle.kts,src/main/java/fr/neezer/mobile/baselineprofile/*.kt}`,
+`mobile/android/app/src/androidTest/java/fr/neezer/mobile/app/ShellSmokeTest.kt`,
+`mobile/android/app/build.gradle.kts` (androidTest dependencies only),
+`mobile/android/gradle/libs.versions.toml` (the instrumented-test pins only), and this section.
 
 ### The standard every screen lot meets
 
