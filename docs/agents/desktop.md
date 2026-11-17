@@ -135,6 +135,7 @@ frame for frame).
 | `nz-decode-{gen}` | one per voice: read source, decode, resample, push into the voice ring | normal; owned and joined by the engine |
 | `nz-audio-spool` | one per network body: pull it into its spool file, at most `read_ahead` in front of the decoder | normal; owned and joined by the engine |
 | PipeWire callback (cpal) | mix the two voices, DSP, write the device buffer, copy to the tap | real-time: no allocation, no lock, no syscall |
+| `nz-party` | one per listen-party guest session: reads the output clock, asks the `Planner`, hands chunks to `PartyChannel` | normal; owned and joined by `party_guest::Guest` |
 | `nz-analysis` | tap → `rhythm` analyser → bars/scope state | `nice 5`; runs only while a viz is visible |
 | `nz-bulk` | downloads, cover warming, offline sync | `nice 10`, idle I/O class |
 | `neezer-transcribe` child processes | transcription supervisor + whisper engine | `nice 19`, `SCHED_IDLE`, idle I/O, SIGSTOP-able |
@@ -423,7 +424,7 @@ Waves that can run in parallel (disjoint files):
 3. **D2, D3, D4, D6, T2, T3** (D2/D3/D4 need D1; D6 needs D5; T2/T3 need T1 and touch disjoint files).
 4. **D7** alone (it wires everything and creates every screen stub).
 5. **D8a, D8b, D9, D13, D14a, D14b, P1** (each owns its own screen files).
-6. **D10b, D11, D12, D15a, D16** then **T4, D15b**.
+6. **D10b, D12, D15a, D16** then **T4, D15b** (D11 and D15b are delivered; D10b and T4 remain).
 7. **D17**.
 
 ### D0 — Workspace and CI (delivered 2026-11-16)
@@ -2057,15 +2058,118 @@ Waves that can run in parallel (disjoint files):
     line (measured twice, with 143s): keep the server in the foreground of a background shell and
     hold its stdin with `sleep`.
 
-### D15b — Listen party
+### D15b — Écoute partagée (delivered 2026-11-17)
 
-- **Files**: `app/src/wiring/party_host.rs`, `app/src/wiring/party_guest.rs`, `screens/party.rs`.
-- **Contract**: host publishes the anchor `{t, p}` from the OUTPUT clock (cpal timestamps — better
-  than the browser's), the next-track announcement and `gap`; guest plays `/party/<id>/chunk/<track>
-  /<k>` (6 s Opus chunks) scheduled on the device clock with `appcore`'s `sync.rs` estimators and
-  the correction rule of `party-remote.md`.
-- **Acceptance**: the repository's party bench (`webapp/test/party/run.mjs`) with the desktop as
-  host and as guest: offset ≤ 5 ms median, ≤ 15 ms p95.
+- **The rule, the guest schedules on the OUTPUT clock, not on a timer.** A party guest receives a
+  LINE (`{anchor: {t, p}}` — the media position `p` at server instant `t`) and six-second chunks of
+  the album, and must have each chunk come out of THIS machine's speakers at the instant the host's
+  does. `nz-audio` grew one channel for it (`crates/nz-audio/src/party.rs`, `Engine::party()` →
+  `PartyChannel`/`Segment`): a segment says "these PCM frames are heard over `[from_s, to_s)` of the
+  OUTPUT STREAM", the callback writes whichever samples cover the positions it is filling, and the
+  device's own `playback` timestamp is what says where that stream is (`Clock::output_anchor`,
+  `Engine::output_clock`). No second output stream, no second DSP chain: the party's audio goes
+  through the same EQ, bass, limiter, volume and tap as a track, and `PartyChannel::take_over` stops
+  the person's own voices (their queue and position are kept) while somebody else's music plays.
+  **Sample-exact**: a click scheduled at stream 2.000 s is rendered at frame 96 000, 0 frames off,
+  and still 0 frames off with +6 dB of EQ, bass and normalisation engaged.
+- **The rule, a line is FITTED, and the fit restarts on two events.** The host's position read steps
+  per audio callback and the read lands somewhere in a timer callback, so the host publishes the
+  MEDIAN of the recent `position = c + time` readings (`appcore::sync::AnchorFit`, the page's own
+  Rust) and restarts it on a new track and on a device-mapping step. That second one is not a
+  detail: the mapping `at − pos` moves (Chromium steps it by a render burst; a card's reported delay
+  settles the same way), and a line drawn across a step is off by the step for seconds. `Clock` now
+  counts those steps (`output_generation`) and `Snapshot::generation` restarts the fit — the same 4 ms
+  threshold as `appcore`'s `OutputClock`.
+- **The rule, the seam is where drift dies.** The device's crystal runs tens of ppm from the server's,
+  so a guest that scheduled a chunk 30 s early landed **1.05 ms** off it (measured); a guest places
+  only what is 7 s ahead (`SCHED_AHEAD_S`) and re-places every chunk from the line in force when it
+  places it, so the error is bounded by 7 s of drift and reset at every seam. Measured over ten
+  minutes of listening at +35 ppm: **worst |error| 0.452 ms between seams, 0.000 ms at a seam, 0
+  corrections**. A 20 ms mapping step: 0.000 ms after the two readings that believe it.
+- **The rule, one correction rule** (`timeline.js#correctionFor`, ported): ≤ 3 ms nothing, ≤ 30 ms at
+  the next seam (`ClearFuture`: the sounding chunk plays out, the future is placed again), behind by
+  more skip forward now, ahead by more fall silent and resume the same audio — past 2.5 s ahead it is
+  the host going BACK and the guest goes with it. With a pull scheduler "behind" and "ahead" are the
+  same operation (`Clear` + re-place from the line), and it never repeats what the room heard.
+- **The rule, a cut is not a stop.** A poll that fails keeps the line it has, so the music carries on
+  through the outage, extrapolated; a link that comes back **after** the look-ahead ran out rejoins
+  with |error| **0.000 ms** within one tick plus the 100 ms lead, and the view says « Connexion
+  perdue — la musique continue » rather than pretending (rule 3). Chunk fetches are `Lane::User`, two
+  in flight (`engine.js#MAX_INFLIGHT`), four ahead, and a chunk the server is still cutting is
+  retried after the delay it asks for.
+- **The rule, the host is only WATCHED.** `wiring/party_host.rs` reads `Engine::position()` (which
+  already subtracts the device latency — the number the page has to model by hand) four times a
+  second, publishes `{track, playing, buf, t, p, xfade, next, norm}` only when the line MOVED or the
+  plan changed (`host.js#measure`'s `need`, field for field), a heartbeat every 10 s otherwise, one
+  publish in flight, coalesced. The next handover is announced with `at`/`start`/`fade`/`gap`, and
+  `gap` is LEARNT from the player's own previous handovers (EMA 0.5, 0.15 s cut / 0.02 s crossfade by
+  default). A `404` means the server restarted (its registry is in memory): it takes the same id back
+  with `{resume}` so the link in everybody's hands keeps working.
+- **The rule, an app restart does not strand the guests.** `party.host` in `kv` names the party this
+  device hosts, and `state.rs`'s `on_restored`/`on_logged_in` call one `party_host::resume_at_launch`
+  next to `remote_host::start`; a device that never hosted asks NOTHING (rule 3). Measured on a real
+  restart with a party open: the same id came back, `v` went 17 → 19 (the full republish plus a
+  heartbeat) and the guest's link kept working.
+- **What it is now**: `wiring/party_guest.rs` (`ServerClock` — the NTP probes both sides use,
+  `Timeline`/`position_at`/`correction_for`/`to_stream`, the `Planner` and its `Plan`, `decode_chunk`
+  — Ogg Opus via symphonia + libopus with rubato for a 44.1 kHz device, the poll loop, the chunk
+  cache, the scheduler thread), `wiring/party_host.rs` (`HostStatus`/`Listener`, `track_info`,
+  `next_plan`, `Gaps`, `Line`, `decide`/`Tick`, the publish loop, `resume_at_launch`),
+  `screens/party.rs` (the two panes: « Animer » — link, copy, audience with each guest's own estimate,
+  clock quality, « Terminer la party » armed once; « Rejoindre » — link or id, peek, name, then the
+  live pane: sleeve, title, the room's playhead, the host's state, the next track, volume, « Décalage »
+  and « Quitter »), the « Écoute partagée » row in `sidebar()` (`app.rs`) and its glyph (already in the
+  bundle). `nz-audio` gained `party.rs`, `Clock::advance_stream`/`note_output`/`output_anchor`/
+  `output_generation`, `Engine::party()`/`output_clock()` and `PartyChannel`; the mixer mixes the party
+  before its DSP chain and takes the output over while a party plays.
+- **Measured** (this machine, Rust 1.99.1; `cargo test -p neezer-desktop`): **21 tests of this area**
+  (11 `party_guest`, 10 of them the planner's ten-minute/cut/step benches and the two real-server ones,
+  9 `party_host`, 1 screen), `cargo test --workspace` **778 tests, 0 failed**, `cargo fmt --check` and
+  `cargo clippy --workspace --all-targets -- -D warnings` clean. **Host ↔ guest, end to end through
+  two real engines** (`nz-audio` offline sinks, a real ffmpeg-cut Opus chunk per six seconds, a click
+  track): **26 clicks compared, guest minus host p50 0.0 ms, worst 0.0 ms** — the placement adds no
+  error of its own; what the clock estimate adds is the ten-minute figure above. **A real server**
+  (`webapp/test/party/server.py`, `NZ_PYTHON`): one chunk is **175 860 B of Ogg Opus → 6.0500 s** at
+  48 kHz, its click at **0.500 s** with **0.005** of level before it.
+- **Looked at, on an isolated `Xvfb :119`** (`-dpi 96`, `GPUI_X11_SCALE_FACTOR=1`, a real
+  `perf_api.py --serve --archived` on :5000, two app instances under their own `dbus-run-session` — a
+  second one otherwise reads itself as a second launch and quits): the host side at **2560×1600**, at
+  **1280×800**, and with the **420 px** queue panel open at both; the guest's live pane at 1280×800
+  and with the panel open. Five captures are the lot's artefacts. The pass fixed what no test sees:
+  the intro sentences ran under the card's edge (a `flex_1` text without `min_w_0`), a card's actions
+  were centred instead of full-width, and « Décalage » sat off its own buttons.
+- **Pitfalls found by building**:
+  - **A generation must be a generation.** `Snapshot::generation` first carried
+    `output_clock().at_s.to_bits()`, which moves on every callback: the fit restarted every tick,
+    never reached its three readings, and the host published NOTHING while looking healthy. The counter
+    the callback bumps on a real step (`|Δ(at − pos)| > 4 ms`) is what `anchor.js` waits for.
+  - **The newest placement is where the room is.** `Planner::sounding` took the FIRST covering
+    placement; consecutive chunks overlap by the server's 50 ms, so it reported the *previous* chunk's
+    line and a phantom **0.67 ms** drift after 19 s. It takes the last one now.
+  - **A schedule table that truncates re-places the same chunk for ever.** Pushing a seventh segment
+    into a six-slot table dropped the one just pushed; the next tick saw it missing and placed it
+    again — the same chunk every 100 ms, and silence where it should have been. The planner prunes what
+    played out and never exceeds the mixer's own table.
+  - **An offline sink renders as fast as the test asks**: a test that fed `Instant` to the fit while
+    the engine advanced 10 ms per render broke the line on every reading (D5's pitfall, again). The
+    benches drive a synthetic clock in the engines' own domain.
+  - **The clock route is `/party/<id>`, and the probe appends `/clock`**: passing `/party/<id>/clock`
+    asked for `/clock/clock`, got a 404 and left « Synchronisation de l'horloge… » on screen for ever
+    while the party worked.
+  - **`desktop/app` is TWO levels below the repository root**, not three (`desktop/crates/nz-api` is
+    three). The real-server test silently resolved its script outside the worktree and then waited out
+    its whole 180 s deadline before skipping; it now fails fast when the child dies and when the script
+    is missing.
+  - **`gen` is a reserved keyword in edition 2024** — the seqlock's local had to be renamed.
+  - **No QR code, deliberately**: the SPA's sheet shows one for the phones in the room; this screen
+    shows the link with « Copier » instead, because a desktop has no camera to scan its own screen
+    with. A guest pastes the link or the id (D15a's controller pastes its token the same way).
+  - **Two names for one screen**: `nav.rs`'s `Route::Party.title()` is « Soirée d'écoute » (D7) and the
+    sidebar's row is « Écoute partagée »; both are French, and D17's copy pass should settle on one
+    (`nav.rs` is not this lot's file).
+  - **The login POST failed under `Xvfb` while every other request worked** (`ApiError::Offline`), so
+    the visual pass seeds `$XDG_STATE_HOME/neezer/session.json` with a cookie taken by `curl`; it is an
+    environment artifact of the isolated display, not a party code path.
 
 ### D16 — Studio de genres et analyse côté client (livré 2026-11-17)
 

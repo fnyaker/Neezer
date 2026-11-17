@@ -31,6 +31,10 @@ nz-viz = { path = "../crates/nz-viz" }
 # the numbers and the head are the web app's own arithmetic, not a port (D16).
 measure = { path = "../../webapp/measure" }
 trainer = { path = "../../webapp/trainer" }
+# The listen party's time-sync estimators (`webapp/appcore/src/sync.rs`: the NTP
+# clock, the host's anchor fit, a guest's output-clock bridge), linked natively so
+# the desktop and the page schedule on the SAME arithmetic (D15b).
+appcore = { path = "../../webapp/appcore" }
 symphonia = { workspace = true }
 symphonia-adapter-libopus = { workspace = true }
 rubato = { workspace = true }

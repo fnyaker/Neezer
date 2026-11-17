@@ -646,7 +646,9 @@ impl Render for RootView {
         let genres_active = matches!(self.state.read(cx).current_route(), Some(Route::Genres));
         let active = self.state.read(cx).current_route().and_then(Route::section);
         let on_remote = route.as_ref() == Some(&Route::Remote);
-        let sidebar = sidebar(active, is_admin, genres_active, on_remote, cx).into_any_element();
+        let on_party = route.as_ref() == Some(&Route::Party);
+        let sidebar =
+            sidebar(active, is_admin, genres_active, on_remote, on_party, cx).into_any_element();
 
         let content = match &self.screen {
             Some((_route, view)) => {
@@ -803,6 +805,7 @@ fn sidebar(
     is_admin: bool,
     genres_active: bool,
     on_remote: bool,
+    on_party: bool,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement + use<> {
     let entries = [
@@ -943,6 +946,50 @@ fn sidebar(
                     }),
             )
             .child(div().child("Contrôle distant")),
+    );
+    // Écoute partagée (lot D15b): the same place as Contrôle distant — both are
+    // about the room this player is in, and both light up while they are live.
+    let party_live = crate::wiring::party_host::PartyHost::get()
+        .map(|host| !host.id().is_empty())
+        .unwrap_or(false)
+        || crate::wiring::party_guest::Guest::get()
+            .map(|guest| {
+                matches!(
+                    guest.view().phase,
+                    crate::wiring::party_guest::Phase::Joining
+                        | crate::wiring::party_guest::Phase::Live
+                )
+            })
+            .unwrap_or(false);
+    column = column.child(
+        div()
+            .id("nav-party")
+            .flex()
+            .items_center()
+            .gap(rems(0.625))
+            .h(rems(2.))
+            .px(rems(0.625))
+            .text_size(rems(0.8125))
+            .text_color(if on_party {
+                theme::text(cx)
+            } else {
+                theme::secondary(cx)
+            })
+            .cursor_pointer()
+            .hover(|style| style.text_color(theme::text(cx)))
+            .on_click(cx.listener(|this, _, _, cx| this.go(Route::Party, cx)))
+            .child(
+                icon(IconName::PartyPopper)
+                    .size(rems(1.125))
+                    .text_color(if party_live {
+                        theme::accent(cx)
+                    } else if on_party {
+                        theme::text(cx)
+                    } else {
+                        theme::secondary(cx)
+                    }),
+            )
+            .child(div().child("Écoute partagée")),
     );
     column = column.child(div().flex_1());
     column.child(

@@ -22,12 +22,14 @@ use std::time::{Duration, Instant};
 
 use rtrb::{Producer, PushError};
 
+use crate::clock::AtomicF32;
 use crate::crossfade::FadeSettings;
 use crate::decode::{self, DecodeError};
 use crate::dsp::{Normalization, Settings};
 use crate::events::{EngineEvent, EventBus, VoiceInfo, VoiceInfoEntry};
 use crate::mixer::{MixerCmd, MixerShared};
 use crate::output::{self, OfflineSink, Output, OutputChoice, OutputInfo};
+use crate::party::{PartyCmd, Segment};
 use crate::source::{Lane, Quality, SourceError, Spoolers, StreamOpener, spool_path};
 use crate::tap::{TAP_FRAMES, Tap, TapReader};
 use crate::trim::{self, Edges, Trim};
@@ -220,6 +222,111 @@ struct Inner {
     spoolers: Spoolers,
     event_stop: Arc<AtomicBool>,
     event_thread: Mutex<Option<JoinHandle<()>>>,
+    /// The listen party's scheduled PCM (`crate::party`), and its own gain.
+    party: Mutex<Producer<PartyCmd>>,
+    party_gain: Arc<AtomicF32>,
+}
+
+/// Where the OUTPUT clock was when it was read: the device instant at which the
+/// stream position `position_s` is heard, and how much of what the mixer wrote
+/// the device still holds.
+///
+/// This is what a listen-party guest schedules on: `at_s` is in the audio
+/// backend's own monotonic clock (its origin cancels in every difference taken
+/// from it), and `position_s` is in seconds of the stream the mixer writes — the
+/// domain [`crate::party::Segment::from_s`] lives in.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OutputClock {
+    pub at_s: f64,
+    pub position_s: f64,
+    pub latency_s: f64,
+    /// How many times the device's mapping stepped: a host restarts its line
+    /// when this moves, or the guests follow a line that is off by the step.
+    pub generation: u64,
+}
+
+/// The scheduled-PCM channel of a listen party (see [`crate::party`]).
+///
+/// Cheap to clone; it holds no audio. Every call posts to the output callback
+/// through the same lock-free ring the transport uses, so nothing here waits for
+/// the device.
+#[derive(Clone)]
+pub struct PartyChannel {
+    inner: std::sync::Weak<Inner>,
+}
+
+impl PartyChannel {
+    /// Hand the callback a run of PCM to have HEARD over its own `[from_s, to_s)`
+    /// of the output stream. A correction is [`Self::clear`] plus a new segment.
+    pub fn schedule(&self, segment: Segment) {
+        self.send(PartyCmd::Schedule(segment));
+    }
+
+    /// Cut what sounds over one edge and drop everything still to come: a pause,
+    /// a skip, a rewind, or a correction too big for a seam.
+    pub fn clear(&self) {
+        self.send(PartyCmd::Clear);
+    }
+
+    /// Drop only what has not begun, so the segment being heard plays out and the
+    /// next one lands on the corrected line (a correction inside a seam's worth).
+    pub fn clear_future(&self) {
+        self.send(PartyCmd::ClearFuture);
+    }
+
+    /// The party's own level (the person's `volume` on the party, not the app's).
+    pub fn set_gain(&self, gain: f32) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.party_gain.store(gain.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Listen to the party INSTEAD of the local player: the person's voices keep
+    /// their position and their queue and are simply not mixed in.
+    pub fn take_over(&self, on: bool) {
+        self.send(PartyCmd::TakeOver(on));
+    }
+
+    /// Give the output back and forget the schedule (leaving the party).
+    pub fn close(&self) {
+        self.clear();
+        self.take_over(false);
+    }
+
+    /// Where the OUTPUT clock is, exactly as [`Engine::output_clock`] answers:
+    /// a guest schedules on this and needs no other handle on the engine.
+    pub fn output_clock(&self) -> OutputClock {
+        let Some(inner) = self.inner.upgrade() else {
+            return OutputClock::default();
+        };
+        let (at_s, position_s, latency_s) = inner.shared.clock.output_anchor();
+        OutputClock {
+            at_s,
+            position_s,
+            latency_s,
+            generation: inner.shared.clock.output_generation(),
+        }
+    }
+
+    fn send(&self, command: PartyCmd) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let mut guard = inner.party.lock().expect("party ring poisoned");
+        let mut pending = command;
+        for _ in 0..50 {
+            match guard.push(pending) {
+                Ok(()) => return,
+                Err(PushError::Full(returned)) => {
+                    // The callback drains every buffer (10 ms): half a second of
+                    // retries is a device that stopped, and dropping a party
+                    // command then is what the next poll repairs.
+                    pending = returned;
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
 }
 
 impl Engine {
@@ -241,7 +348,7 @@ impl Engine {
         let notes = events.take_note_producer();
         let settings = Settings::new();
         let (tap, reader) = Tap::pair(TAP_FRAMES);
-        let (output, shared, mixer, out_info) = output::start(
+        let (output, shared, mixer, party, party_gain, out_info) = output::start(
             &cfg.device,
             cfg.sample_rate,
             cfg.volume,
@@ -282,6 +389,8 @@ impl Engine {
                 spoolers: Spoolers::default(),
                 event_stop,
                 event_thread: Mutex::new(Some(event_thread)),
+                party: Mutex::new(party),
+                party_gain,
             }),
         };
         engine.inner.emit_output();
@@ -294,7 +403,7 @@ impl Engine {
         let notes = events.take_note_producer();
         let settings = Settings::new();
         let (tap, reader) = Tap::pair(TAP_FRAMES);
-        let (output, sink, shared, mixer) = output::start_offline(
+        let (output, sink, shared, mixer, party, party_gain) = output::start_offline(
             cfg.sample_rate,
             cfg.volume,
             notes,
@@ -338,6 +447,8 @@ impl Engine {
                 spoolers: Spoolers::default(),
                 event_stop,
                 event_thread: Mutex::new(Some(event_thread)),
+                party: Mutex::new(party),
+                party_gain,
             }),
         };
         (engine, sink)
@@ -594,6 +705,34 @@ impl Engine {
     /// path keeps one so it can still stop and join the engine's threads.
     pub fn handle(&self) -> EngineHandle {
         EngineHandle(Arc::downgrade(&self.inner))
+    }
+
+    /// The OUTPUT clock, as the device reported it on its last callback: the
+    /// instant `at_s` at which the stream position `position_s` is heard, and the
+    /// latency the device still holds. What a listen-party guest schedules on and
+    /// what a party host publishes its anchor from — a device timestamp, which is
+    /// better than a browser's `performance.now()` (D15b).
+    ///
+    /// `None` only when no callback has run yet; an offline sink answers with the
+    /// stream as its own clock (`at_s == position_s`).
+    pub fn output_clock(&self) -> OutputClock {
+        let (at_s, position_s, latency_s) = self.inner.shared.clock.output_anchor();
+        OutputClock {
+            at_s,
+            position_s,
+            latency_s,
+            generation: self.inner.shared.clock.output_generation(),
+        }
+    }
+
+    /// This machine's scheduled-PCM channel: what a listen-party guest plays
+    /// (`crate::party`). It goes through the same DSP chain, volume and tap as a
+    /// track, and [`PartyChannel::take_over`] stops the local voices from being
+    /// mixed under it.
+    pub fn party(&self) -> PartyChannel {
+        PartyChannel {
+            inner: Arc::downgrade(&self.inner),
+        }
     }
 }
 

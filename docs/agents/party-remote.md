@@ -196,7 +196,7 @@ second interface to keep in step with the first, and that is the whole design:
   too, and where the service worker answers the navigation, `lib/linkrescue.js` (main.js's FIRST
   import, before the router reads the location) turns the path back into its hash route.
 
-**The desktop app is the fourth client of this contract** (`desktop/` D15a,
+**The desktop app is the fourth client of this contract** (`desktop/` D15a
 [wiring/remote_host.rs](../..//desktop/app/src/wiring/remote_host.rs) and
 `remote_controller.rs`; the plan is in [desktop.md](desktop.md)). It speaks the same routes with
 the same bodies: `POST /api/remote/host/<device>` + `poll?since=&chan=` for the player that is lent,
@@ -208,3 +208,23 @@ Contrôle distant screen (with the owner's queue) rather than rebinding the whol
 store, because the desktop's keys and player bar go through one shell action path that a screen
 may not replace. The level's table, the polling cadence, the `ack` rule, the position line and the
 TTL semantics are the SPA's, unchanged.
+
+**The desktop app also hosts and joins the listen party** (`desktop/` D15b:
+`app/src/wiring/party_host.rs`, `party_guest.rs`, `screens/party.rs`). The routes, the line and the
+correction rule are the ones above, unchanged:
+
+- **The host** publishes `{t, p}` fitted from the engine's own clock (`AnchorFit`, the median of the
+  readings it hears; a new track or a device-mapping step restarts the line), the next handover with
+  its `gap` learnt from its own previous ones, and nothing but a heartbeat between two moves. A server
+  restart is repaired by taking the same id back (`{resume}`), and an APP restart is repaired by the
+  one `party.host` entry in the store plus `POST /api/party/mine` at launch — the guests' link
+  survives both.
+- **The guest** schedules each `[k·6 s, (k+1)·6 s + 50 ms)` chunk on the OUTPUT clock rather than on a
+  timer: `nz-audio`'s `PartyChannel` takes a run of PCM with the stream position it must be HEARD at,
+  which the device's own `playback` timestamp anchors. Its audio goes through the app's DSP chain and
+  output, and the person's own player is taken over (their queue keeps its place) while a party plays.
+  Seven seconds of look-ahead, two chunk requests in flight, seams that reset the drift, and the same
+  four-band correction — with a 40 s outage rejoining on the line within one 100 ms tick.
+- **What a desktop cannot do**: open the host's `/party/<id>` link (it pastes the link or the id into
+  the « Rejoindre » pane) and show a QR code for the phones in the room (no camera to scan its own
+  screen); the link with « Copier » and the invitation's text are what it has instead.
