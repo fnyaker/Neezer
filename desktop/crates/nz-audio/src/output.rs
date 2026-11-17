@@ -144,208 +144,184 @@ impl ExternalSink {
 /// output uses, so what they prove is what the phone runs.
 pub type OfflineSink = ExternalSink;
 
+/// Everything the output callback owns. Preallocated: `scratch` holds up to
+/// `SCRATCH_FRAMES` stereo frames and is reused for every device layout.
 #[cfg(feature = "cpal")]
-mod cpal_output {
-    use super::*;
+struct Callback {
+    /// Arrives from the output thread once the stream is playing, and goes
+    /// back there on a device change.
+    mixer: Option<Mixer>,
+    forward: Consumer<Mixer>,
+    back: Producer<Mixer>,
+    shared: Arc<MixerShared>,
+    /// Interleaved stereo f32, the mixer's only output format.
+    scratch: Vec<f32>,
+    device_channels: usize,
+    sample_rate: u32,
+    released: Arc<AtomicBool>,
+    /// Whether `playback - callback` timestamps are usable on this backend.
+    timestamps: bool,
+}
 
-    /// Everything the output callback owns. Preallocated: `scratch` holds up to
-    /// `SCRATCH_FRAMES` stereo frames and is reused for every device layout.
-    pub(super) struct Callback {
-        /// Arrives from the output thread once the stream is playing, and goes
-        /// back there on a device change.
-        pub(super) mixer: Option<Mixer>,
-        pub(super) forward: Consumer<Mixer>,
-        pub(super) back: Producer<Mixer>,
-        pub(super) shared: Arc<MixerShared>,
-        /// Interleaved stereo f32, the mixer's only output format.
-        pub(super) scratch: Vec<f32>,
-        pub(super) device_channels: usize,
-        pub(super) sample_rate: u32,
-        pub(super) released: Arc<AtomicBool>,
-        /// Whether `playback - callback` timestamps are usable on this backend.
-        pub(super) timestamps: bool,
-    }
+/// 8 192 stereo frames = 170 ms at 48 kHz: far more than any sane device
+/// buffer (PipeWire's maximum is 2 048 frames), and allocated once, so the
+/// callback can always render in whole chunks of it.
+#[cfg(feature = "cpal")]
+const SCRATCH_FRAMES: usize = 8_192;
 
-    /// 8 192 stereo frames = 170 ms at 48 kHz: far more than any sane device
-    /// buffer (PipeWire's maximum is 2 048 frames), and allocated once, so the
-    /// callback can always render in whole chunks of it.
-    pub(super) const SCRATCH_FRAMES: usize = 8_192;
-
-    impl Callback {
-        pub(super) fn fill<T>(&mut self, data: &mut [T])
-        where
-            T: Sample + FromSample<f32> + 'static,
+#[cfg(feature = "cpal")]
+impl Callback {
+    fn fill<T>(&mut self, data: &mut [T])
+    where
+        T: Sample + FromSample<f32> + 'static,
+    {
+        if self.released.load(Ordering::Acquire) {
+            if let Some(mixer) = self.mixer.take() {
+                let _ = self.back.push(mixer);
+            }
+            data.fill(T::from_sample(0.0));
+            return;
+        }
+        if self.mixer.is_none()
+            && let Ok(mixer) = self.forward.pop()
         {
-            if self.released.load(Ordering::Acquire) {
-                if let Some(mixer) = self.mixer.take() {
-                    let _ = self.back.push(mixer);
-                }
-                data.fill(T::from_sample(0.0));
-                return;
-            }
-            if self.mixer.is_none()
-                && let Ok(mixer) = self.forward.pop()
-            {
-                self.mixer = Some(mixer);
-            }
-            let Some(mixer) = self.mixer.as_mut() else {
-                data.fill(T::from_sample(0.0));
-                return;
-            };
-            let frames = data.len() / self.device_channels;
-            let mut done = 0;
-            while done < frames {
-                let chunk = (frames - done).min(SCRATCH_FRAMES);
-                let scratch = &mut self.scratch[..chunk * 2];
-                mixer.render(scratch);
-                for frame in 0..chunk {
-                    let left = scratch[frame * 2];
-                    let right = scratch[frame * 2 + 1];
-                    let base = (done + frame) * self.device_channels;
-                    match self.device_channels {
-                        1 => data[base] = T::from_sample(0.5 * (left + right)),
-                        _ => {
-                            data[base] = T::from_sample(left);
-                            data[base + 1] = T::from_sample(right);
-                            for extra in 2..self.device_channels {
-                                data[base + extra] = T::from_sample(0.0);
-                            }
+            self.mixer = Some(mixer);
+        }
+        let Some(mixer) = self.mixer.as_mut() else {
+            data.fill(T::from_sample(0.0));
+            return;
+        };
+        let frames = data.len() / self.device_channels;
+        let mut done = 0;
+        while done < frames {
+            let chunk = (frames - done).min(SCRATCH_FRAMES);
+            let scratch = &mut self.scratch[..chunk * 2];
+            mixer.render(scratch);
+            for frame in 0..chunk {
+                let left = scratch[frame * 2];
+                let right = scratch[frame * 2 + 1];
+                let base = (done + frame) * self.device_channels;
+                match self.device_channels {
+                    1 => data[base] = T::from_sample(0.5 * (left + right)),
+                    _ => {
+                        data[base] = T::from_sample(left);
+                        data[base + 1] = T::from_sample(right);
+                        for extra in 2..self.device_channels {
+                            data[base + extra] = T::from_sample(0.0);
                         }
                     }
                 }
-                done += chunk;
             }
-        }
-
-        fn note_latency(&self, info: &cpal::OutputCallbackInfo) {
-            if !self.timestamps {
-                return;
-            }
-            let stamp = info.timestamp();
-            let delay = stamp.playback.duration_since(stamp.callback);
-            let frames = (delay.as_secs_f64() * f64::from(self.sample_rate)).round() as u64;
-            if frames > 0 {
-                self.shared.clock.set_latency_frames(frames);
-            }
-            // The pair a party guest schedules on: the device says the frame at
-            // this stream position reaches the speakers at this instant of its
-            // own clock (cpal: the backend's monotonic seconds, an origin of its
-            // own choosing, which cancels in every difference taken from it).
-            let at_s = stamp.playback.as_nanos() as f64 / 1e9;
-            self.shared
-                .clock
-                .note_output(at_s, self.shared.clock.stream_position());
+            done += chunk;
         }
     }
 
-    /// A device for the output thread. Opened on the calling thread so a failure
-    /// is reported before the engine claims to be playing.
-    pub(super) struct Setup {
-        name: String,
-        device: cpal::Device,
-        pub(super) config: SupportedStreamConfig,
-        buffer_frames: u32,
+    fn note_latency(&self, info: &cpal::OutputCallbackInfo) {
+        if !self.timestamps {
+            return;
+        }
+        let stamp = info.timestamp();
+        let delay = stamp.playback.duration_since(stamp.callback);
+        let frames = (delay.as_secs_f64() * f64::from(self.sample_rate)).round() as u64;
+        if frames > 0 {
+            self.shared.clock.set_latency_frames(frames);
+        }
+        // The pair a party guest schedules on: the device says the frame at
+        // this stream position reaches the speakers at this instant of its
+        // own clock (cpal: the backend's monotonic seconds, an origin of its
+        // own choosing, which cancels in every difference taken from it).
+        let at_s = stamp.playback.as_nanos() as f64 / 1e9;
+        self.shared
+            .clock
+            .note_output(at_s, self.shared.clock.stream_position());
     }
+}
 
-    /// PipeWire first, ALSA as the fallback (`docs/agents/desktop.md`, *Output*).
-    ///
-    /// ONE list, used by the enumeration and by [`probe`]: a settings page that
-    /// lists sinks in another order than the engine opens them would offer a
-    /// choice that does not land where the chip says.
-    pub const HOSTS: [cpal::HostId; 2] = [cpal::HostId::PipeWire, cpal::HostId::Alsa];
+/// A device for the output thread. Opened on the calling thread so a failure
+/// is reported before the engine claims to be playing.
+#[cfg(feature = "cpal")]
+struct Setup {
+    name: String,
+    device: cpal::Device,
+    config: SupportedStreamConfig,
+    buffer_frames: u32,
+}
 
-    /// The configuration a device is opened with: the engine's rate when the
-    /// device supports it, else its own, and a buffer the size of the engine's
-    /// period when the device allows it.
-    pub(super) fn configure(
-        device: cpal::Device,
-        preferred_rate: u32,
-        period_frames: u32,
-    ) -> Result<Setup, String> {
-        let name = device
-            .description()
-            .map(|description| description.name().to_string())
-            .unwrap_or_else(|_| "sortie par défaut".into());
-        let default = device
-            .default_output_config()
-            .map_err(|error| format!("{name} : {error}"))?;
-        // Keep the device's rate unless the engine asked for one it supports: the
-        // decoder resamples every track to the engine's rate, so the rate must be
-        // fixed before the first voice exists.
-        let config = if default.sample_rate() == preferred_rate {
-            default
-        } else {
-            match device.supported_output_configs() {
-                Ok(ranges) => {
-                    let mut chosen = None;
-                    for range in ranges {
-                        if range.channels() >= 2
-                            && let Some(config) = range.try_with_sample_rate(preferred_rate)
-                        {
-                            chosen = Some(config);
-                            break;
-                        }
-                    }
-                    chosen.unwrap_or(default)
-                }
-                Err(_) => default,
-            }
-        };
-        // The callback period is the engine's 10 ms when the device can do it
-        // (PipeWire advertises 32–2048 frames), and the device's own range
-        // otherwise.
-        let buffer_frames = match config.buffer_size() {
-            cpal::SupportedBufferSize::Range { min, max } => period_frames.max(1).clamp(*min, *max),
-            cpal::SupportedBufferSize::Unknown => period_frames.max(1),
-        };
-        Ok(Setup {
-            name,
-            device,
-            config,
-            buffer_frames,
-        })
-    }
+/// PipeWire first, ALSA as the fallback (`docs/agents/desktop.md`, *Output*).
+///
+/// ONE list, used by the enumeration and by [`probe`]: a settings page that
+/// lists sinks in another order than the engine opens them would offer a
+/// choice that does not land where the chip says.
+#[cfg(feature = "cpal")]
+pub const HOSTS: [cpal::HostId; 2] = [cpal::HostId::PipeWire, cpal::HostId::Alsa];
 
-    pub(super) fn probe(
-        choice: &OutputChoice,
-        preferred_rate: u32,
-        period_frames: u32,
-    ) -> Result<Setup, OutputError> {
-        let mut last = String::new();
-        // 1. A device the person NAMED: the first host that has it, in [`HOSTS`]
-        //    order. An exact match on any host wins, because a sink only ALSA
-        //    reports must not be silently replaced by PipeWire's default — which is
-        //    what falling back per host used to do (an ALSA chip opened the PipeWire
-        //    sink instead).
-        if let OutputChoice::Named(wanted) = choice {
-            for host_id in cpal_output::HOSTS {
-                let host = match cpal::host_from_id(host_id) {
-                    Ok(host) => host,
-                    Err(error) => {
-                        last = format!("{} : {error}", host_name(host_id));
-                        continue;
-                    }
-                };
-                let found = host.output_devices().ok().and_then(|mut devices| {
-                    devices.find(|device| {
-                        device
-                            .description()
-                            .map(|description| description.name() == wanted)
-                            .unwrap_or(false)
-                    })
-                });
-                if let Some(device) = found {
-                    match configure(device, preferred_rate, period_frames) {
-                        Ok(setup) => return Ok(setup),
-                        Err(error) => last = error,
+/// The configuration a device is opened with: the engine's rate when the
+/// device supports it, else its own, and a buffer the size of the engine's
+/// period when the device allows it.
+#[cfg(feature = "cpal")]
+fn configure(
+    device: cpal::Device,
+    preferred_rate: u32,
+    period_frames: u32,
+) -> Result<Setup, String> {
+    let name = device
+        .description()
+        .map(|description| description.name().to_string())
+        .unwrap_or_else(|_| "sortie par défaut".into());
+    let default = device
+        .default_output_config()
+        .map_err(|error| format!("{name} : {error}"))?;
+    // Keep the device's rate unless the engine asked for one it supports: the
+    // decoder resamples every track to the engine's rate, so the rate must be
+    // fixed before the first voice exists.
+    let config = if default.sample_rate() == preferred_rate {
+        default
+    } else {
+        match device.supported_output_configs() {
+            Ok(ranges) => {
+                let mut chosen = None;
+                for range in ranges {
+                    if range.channels() >= 2
+                        && let Some(config) = range.try_with_sample_rate(preferred_rate)
+                    {
+                        chosen = Some(config);
+                        break;
                     }
                 }
+                chosen.unwrap_or(default)
             }
+            Err(_) => default,
         }
-        // 2. A host's own default: the choice itself, or the device that was saved
-        //    and is gone (headphones unplugged, a USB interface removed) — playing
-        //    on the system default is what the person expects then.
-        for host_id in cpal_output::HOSTS {
+    };
+    // The callback period is the engine's 10 ms when the device can do it
+    // (PipeWire advertises 32–2048 frames), and the device's own range
+    // otherwise.
+    let buffer_frames = match config.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => period_frames.max(1).clamp(*min, *max),
+        cpal::SupportedBufferSize::Unknown => period_frames.max(1),
+    };
+    Ok(Setup {
+        name,
+        device,
+        config,
+        buffer_frames,
+    })
+}
+
+#[cfg(feature = "cpal")]
+fn probe(
+    choice: &OutputChoice,
+    preferred_rate: u32,
+    period_frames: u32,
+) -> Result<Setup, OutputError> {
+    let mut last = String::new();
+    // 1. A device the person NAMED: the first host that has it, in [`HOSTS`]
+    //    order. An exact match on any host wins, because a sink only ALSA
+    //    reports must not be silently replaced by PipeWire's default — which is
+    //    what falling back per host used to do (an ALSA chip opened the PipeWire
+    //    sink instead).
+    if let OutputChoice::Named(wanted) = choice {
+        for host_id in HOSTS {
             let host = match cpal::host_from_id(host_id) {
                 Ok(host) => host,
                 Err(error) => {
@@ -353,122 +329,214 @@ mod cpal_output {
                     continue;
                 }
             };
-            let Some(device) = host.default_output_device() else {
-                last = format!("{} : aucun périphérique de sortie", host_name(host_id));
+            let found = host.output_devices().ok().and_then(|mut devices| {
+                devices.find(|device| {
+                    device
+                        .description()
+                        .map(|description| description.name() == wanted)
+                        .unwrap_or(false)
+                })
+            });
+            if let Some(device) = found {
+                match configure(device, preferred_rate, period_frames) {
+                    Ok(setup) => return Ok(setup),
+                    Err(error) => last = error,
+                }
+            }
+        }
+    }
+    // 2. A host's own default: the choice itself, or the device that was saved
+    //    and is gone (headphones unplugged, a USB interface removed) — playing
+    //    on the system default is what the person expects then.
+    for host_id in HOSTS {
+        let host = match cpal::host_from_id(host_id) {
+            Ok(host) => host,
+            Err(error) => {
+                last = format!("{} : {error}", host_name(host_id));
                 continue;
-            };
-            match configure(device, preferred_rate, period_frames) {
-                Ok(setup) => return Ok(setup),
-                Err(error) => last = error,
             }
-        }
-        Err(OutputError::Unavailable(if last.is_empty() {
-            "aucune sortie audio".into()
-        } else {
-            last
-        }))
-    }
-
-    fn host_name(host: cpal::HostId) -> &'static str {
-        match host {
-            cpal::HostId::PipeWire => "PipeWire",
-            cpal::HostId::Alsa => "ALSA",
-            // Only reachable on a platform with another compiled-in host (this app
-            // targets Linux, where the two above are the whole list).
-            #[allow(unreachable_patterns)]
-            _ => "hôte audio",
+        };
+        let Some(device) = host.default_output_device() else {
+            last = format!("{} : aucun périphérique de sortie", host_name(host_id));
+            continue;
+        };
+        match configure(device, preferred_rate, period_frames) {
+            Ok(setup) => return Ok(setup),
+            Err(error) => last = error,
         }
     }
+    Err(OutputError::Unavailable(if last.is_empty() {
+        "aucune sortie audio".into()
+    } else {
+        last
+    }))
+}
 
-    /// The command the output thread obeys.
-    enum OutCmd {
-        SetDevice(OutputChoice),
-        Stop,
+#[cfg(feature = "cpal")]
+fn host_name(host: cpal::HostId) -> &'static str {
+    match host {
+        cpal::HostId::PipeWire => "PipeWire",
+        cpal::HostId::Alsa => "ALSA",
+        // Only reachable on a platform with another compiled-in host (this app
+        // targets Linux, where the two above are the whole list).
+        #[allow(unreachable_patterns)]
+        _ => "hôte audio",
+    }
+}
+
+#[cfg(feature = "cpal")]
+/// The command the output thread obeys.
+enum OutCmd {
+    SetDevice(OutputChoice),
+    Stop,
+}
+
+#[cfg(feature = "cpal")]
+/// A device output, rebuilt on demand on its own thread.
+pub(crate) struct DeviceOutput {
+    cmd: Sender<OutCmd>,
+    info: Arc<Mutex<OutputInfo>>,
+    join: Option<JoinHandle<()>>,
+}
+
+#[cfg(feature = "cpal")]
+impl DeviceOutput {
+    fn set_device(&self, choice: OutputChoice) {
+        let _ = self.cmd.send(OutCmd::SetDevice(choice));
     }
 
-    /// A device output, rebuilt on demand on its own thread.
-    pub(crate) struct DeviceOutput {
-        cmd: Sender<OutCmd>,
-        info: Arc<Mutex<OutputInfo>>,
-        join: Option<JoinHandle<()>>,
+    fn info(&self) -> OutputInfo {
+        self.info.lock().expect("output info poisoned").clone()
     }
+}
 
-    impl DeviceOutput {
-        pub(super) fn set_device(&self, choice: OutputChoice) {
-            let _ = self.cmd.send(OutCmd::SetDevice(choice));
+#[cfg(feature = "cpal")]
+impl Drop for DeviceOutput {
+    fn drop(&mut self) {
+        let _ = self.cmd.send(OutCmd::Stop);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
         }
-
-        pub(super) fn info(&self) -> OutputInfo {
-            self.info.lock().expect("output info poisoned").clone()
-        }
     }
+}
 
-    impl Drop for DeviceOutput {
-        fn drop(&mut self) {
-            let _ = self.cmd.send(OutCmd::Stop);
-            if let Some(join) = self.join.take() {
-                let _ = join.join();
+#[cfg(feature = "cpal")]
+fn build_device_output(
+    setup: Setup,
+    mixer: Mixer,
+    shared: Arc<MixerShared>,
+    bus: Arc<EventBus>,
+) -> DeviceOutput {
+    let info = Arc::new(Mutex::new(info_of(&setup)));
+    let stored = Arc::clone(&info);
+    let (cmd_tx, cmd_rx) = channel();
+    let join = thread::Builder::new()
+        .name("nz-audio-output".into())
+        .stack_size(256 * 1024)
+        .spawn(move || run_device(setup, mixer, shared, bus, cmd_rx, stored))
+        .expect("spawn the output thread");
+    DeviceOutput {
+        cmd: cmd_tx,
+        info,
+        join: Some(join),
+    }
+}
+
+#[cfg(feature = "cpal")]
+fn info_of(setup: &Setup) -> OutputInfo {
+    OutputInfo {
+        device: setup.name.clone(),
+        sample_rate: setup.config.sample_rate(),
+        channels: setup.config.channels(),
+        latency_frames: u64::from(setup.buffer_frames),
+    }
+}
+
+#[cfg(feature = "cpal")]
+/// The output thread: one stream at a time, rebuilt on `SetDevice`.
+fn run_device(
+    mut setup: Setup,
+    mut mixer: Mixer,
+    shared: Arc<MixerShared>,
+    bus: Arc<EventBus>,
+    cmd_rx: Receiver<OutCmd>,
+    info: Arc<Mutex<OutputInfo>>,
+) {
+    loop {
+        let (released, mut forward_tx, forward_rx) = {
+            let (forward_tx, forward_rx) = RingBuffer::new(1);
+            (Arc::new(AtomicBool::new(false)), forward_tx, forward_rx)
+        };
+        let (back_tx, mut back_rx) = RingBuffer::new(1);
+        let stream = build_stream(&setup, &shared, &released, forward_rx, back_tx);
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(e) => {
+                bus.emit(EngineEvent::Error {
+                    id: None,
+                    message: format!("{} : {e}", setup.name),
+                });
+                // Nothing to play through: wait for a new device or the end. The
+                // mixer never left this thread, so a retry loses nothing.
+                match cmd_rx.recv() {
+                    Ok(OutCmd::SetDevice(choice)) => {
+                        let rate = info.lock().expect("output info poisoned").sample_rate;
+                        match probe(&choice, rate, setup.buffer_frames) {
+                            Ok(new_setup) => {
+                                setup = new_setup;
+                                *info.lock().expect("output info poisoned") = info_of(&setup);
+                            }
+                            Err(e) => {
+                                bus.emit(EngineEvent::Error {
+                                    id: None,
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
+                        continue;
+                    }
+                    _ => return,
+                }
             }
+        };
+        shared
+            .clock
+            .set_latency_frames(u64::from(setup.buffer_frames));
+        if let Err(e) = stream.play() {
+            bus.emit(EngineEvent::Error {
+                id: None,
+                message: format!("{} : {e}", setup.name),
+            });
+            return;
         }
-    }
-
-    pub(super) fn build_device_output(
-        setup: Setup,
-        mixer: Mixer,
-        shared: Arc<MixerShared>,
-        bus: Arc<EventBus>,
-    ) -> DeviceOutput {
-        let info = Arc::new(Mutex::new(info_of(&setup)));
-        let stored = Arc::clone(&info);
-        let (cmd_tx, cmd_rx) = channel();
-        let join = thread::Builder::new()
-            .name("nz-audio-output".into())
-            .stack_size(256 * 1024)
-            .spawn(move || run_device(setup, mixer, shared, bus, cmd_rx, stored))
-            .expect("spawn the output thread");
-        DeviceOutput {
-            cmd: cmd_tx,
-            info,
-            join: Some(join),
+        // Only now does the callback get the mixer: a stream that failed to
+        // build can never eat it.
+        if forward_tx.push(mixer).is_err() {
+            bus.emit(EngineEvent::Error {
+                id: None,
+                message: "sortie audio indisponible".into(),
+            });
+            return;
         }
-    }
-
-    pub(super) fn info_of(setup: &Setup) -> OutputInfo {
-        OutputInfo {
+        bus.emit(EngineEvent::OutputChanged {
             device: setup.name.clone(),
             sample_rate: setup.config.sample_rate(),
-            channels: setup.config.channels(),
-            latency_frames: u64::from(setup.buffer_frames),
-        }
-    }
-
-    /// The output thread: one stream at a time, rebuilt on `SetDevice`.
-    fn run_device(
-        mut setup: Setup,
-        mut mixer: Mixer,
-        shared: Arc<MixerShared>,
-        bus: Arc<EventBus>,
-        cmd_rx: Receiver<OutCmd>,
-        info: Arc<Mutex<OutputInfo>>,
-    ) {
+        });
         loop {
-            let (released, mut forward_tx, forward_rx) = {
-                let (forward_tx, forward_rx) = RingBuffer::new(1);
-                (Arc::new(AtomicBool::new(false)), forward_tx, forward_rx)
-            };
-            let (back_tx, mut back_rx) = RingBuffer::new(1);
-            let stream = build_stream(&setup, &shared, &released, forward_rx, back_tx);
-            let stream = match stream {
-                Ok(stream) => stream,
-                Err(e) => {
-                    bus.emit(EngineEvent::Error {
-                        id: None,
-                        message: format!("{} : {e}", setup.name),
-                    });
-                    // Nothing to play through: wait for a new device or the end. The
-                    // mixer never left this thread, so a retry loses nothing.
-                    match cmd_rx.recv() {
-                        Ok(OutCmd::SetDevice(choice)) => {
+            match cmd_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(OutCmd::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    released.store(true, Ordering::Release);
+                    wait_mixer(&mut back_rx, Duration::from_millis(200));
+                    drop(stream);
+                    return;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Ok(OutCmd::SetDevice(choice)) => {
+                    released.store(true, Ordering::Release);
+                    match wait_mixer(&mut back_rx, Duration::from_millis(300)) {
+                        Some(returned) => {
+                            drop(stream);
+                            mixer = returned;
                             let rate = info.lock().expect("output info poisoned").sample_rate;
                             match probe(&choice, rate, setup.buffer_frames) {
                                 Ok(new_setup) => {
@@ -480,158 +548,100 @@ mod cpal_output {
                                         id: None,
                                         message: e.to_string(),
                                     });
+                                    return;
                                 }
                             }
-                            continue;
+                            break;
                         }
-                        _ => return,
-                    }
-                }
-            };
-            shared
-                .clock
-                .set_latency_frames(u64::from(setup.buffer_frames));
-            if let Err(e) = stream.play() {
-                bus.emit(EngineEvent::Error {
-                    id: None,
-                    message: format!("{} : {e}", setup.name),
-                });
-                return;
-            }
-            // Only now does the callback get the mixer: a stream that failed to
-            // build can never eat it.
-            if forward_tx.push(mixer).is_err() {
-                bus.emit(EngineEvent::Error {
-                    id: None,
-                    message: "sortie audio indisponible".into(),
-                });
-                return;
-            }
-            bus.emit(EngineEvent::OutputChanged {
-                device: setup.name.clone(),
-                sample_rate: setup.config.sample_rate(),
-            });
-            loop {
-                match cmd_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(OutCmd::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        released.store(true, Ordering::Release);
-                        wait_mixer(&mut back_rx, Duration::from_millis(200));
-                        drop(stream);
-                        return;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                    Ok(OutCmd::SetDevice(choice)) => {
-                        released.store(true, Ordering::Release);
-                        match wait_mixer(&mut back_rx, Duration::from_millis(300)) {
-                            Some(returned) => {
-                                drop(stream);
-                                mixer = returned;
-                                let rate = info.lock().expect("output info poisoned").sample_rate;
-                                match probe(&choice, rate, setup.buffer_frames) {
-                                    Ok(new_setup) => {
-                                        setup = new_setup;
-                                        *info.lock().expect("output info poisoned") =
-                                            info_of(&setup);
-                                    }
-                                    Err(e) => {
-                                        bus.emit(EngineEvent::Error {
-                                            id: None,
-                                            message: e.to_string(),
-                                        });
-                                        return;
-                                    }
-                                }
-                                break;
-                            }
-                            None => {
-                                drop(stream);
-                                bus.emit(EngineEvent::Error {
-                                    id: None,
-                                    message: "changement de sortie audio impossible".into(),
-                                });
-                                return;
-                            }
+                        None => {
+                            drop(stream);
+                            bus.emit(EngineEvent::Error {
+                                id: None,
+                                message: "changement de sortie audio impossible".into(),
+                            });
+                            return;
                         }
                     }
                 }
             }
         }
-    }
-
-    /// Ask the callback to give the mixer back, and wait for it.
-    fn wait_mixer(back: &mut Consumer<Mixer>, timeout: Duration) -> Option<Mixer> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Ok(mixer) = back.pop() {
-                return Some(mixer);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    fn build_stream(
-        setup: &Setup,
-        shared: &Arc<MixerShared>,
-        released: &Arc<AtomicBool>,
-        forward: Consumer<Mixer>,
-        back: Producer<Mixer>,
-    ) -> Result<cpal::Stream, String> {
-        let channels = setup.config.channels();
-        let sample_rate = setup.config.sample_rate();
-        let mut config: StreamConfig = setup.config.config();
-        config.buffer_size = cpal::BufferSize::Fixed(setup.buffer_frames);
-        let device_channels = usize::from(channels);
-        let mut state = Callback {
-            mixer: None,
-            forward,
-            back,
-            shared: Arc::clone(shared),
-            scratch: vec![0.0; SCRATCH_FRAMES * 2],
-            device_channels,
-            sample_rate,
-            released: Arc::clone(released),
-            timestamps: true,
-        };
-        let errors = Arc::clone(shared);
-        let error_callback = move |error: cpal::Error| {
-            if error.kind() == cpal::ErrorKind::Xrun {
-                // The device itself missed its deadline (not our decoder): count it
-                // in the same total, it is a glitch the person heard.
-                errors.note_underrun();
-            }
-        };
-        let built = match setup.config.sample_format() {
-            SampleFormat::F32 => setup.device.build_output_stream::<f32, _, _>(
-                config,
-                move |data, info| {
-                    state.note_latency(info);
-                    state.fill(data);
-                },
-                error_callback,
-                None,
-            ),
-            SampleFormat::I16 => setup.device.build_output_stream::<i16, _, _>(
-                config,
-                move |data, info| {
-                    state.note_latency(info);
-                    state.fill(data);
-                },
-                error_callback,
-                None,
-            ),
-            other => {
-                return Err(format!(
-                    "format d'échantillon non pris en charge : {other:?}"
-                ));
-            }
-        };
-        built.map_err(|e| e.to_string())
     }
 }
 
+#[cfg(feature = "cpal")]
+/// Ask the callback to give the mixer back, and wait for it.
+fn wait_mixer(back: &mut Consumer<Mixer>, timeout: Duration) -> Option<Mixer> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(mixer) = back.pop() {
+            return Some(mixer);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(feature = "cpal")]
+fn build_stream(
+    setup: &Setup,
+    shared: &Arc<MixerShared>,
+    released: &Arc<AtomicBool>,
+    forward: Consumer<Mixer>,
+    back: Producer<Mixer>,
+) -> Result<cpal::Stream, String> {
+    let channels = setup.config.channels();
+    let sample_rate = setup.config.sample_rate();
+    let mut config: StreamConfig = setup.config.config();
+    config.buffer_size = cpal::BufferSize::Fixed(setup.buffer_frames);
+    let device_channels = usize::from(channels);
+    let mut state = Callback {
+        mixer: None,
+        forward,
+        back,
+        shared: Arc::clone(shared),
+        scratch: vec![0.0; SCRATCH_FRAMES * 2],
+        device_channels,
+        sample_rate,
+        released: Arc::clone(released),
+        timestamps: true,
+    };
+    let errors = Arc::clone(shared);
+    let error_callback = move |error: cpal::Error| {
+        if error.kind() == cpal::ErrorKind::Xrun {
+            // The device itself missed its deadline (not our decoder): count it
+            // in the same total, it is a glitch the person heard.
+            errors.note_underrun();
+        }
+    };
+    let built = match setup.config.sample_format() {
+        SampleFormat::F32 => setup.device.build_output_stream::<f32, _, _>(
+            config,
+            move |data, info| {
+                state.note_latency(info);
+                state.fill(data);
+            },
+            error_callback,
+            None,
+        ),
+        SampleFormat::I16 => setup.device.build_output_stream::<i16, _, _>(
+            config,
+            move |data, info| {
+                state.note_latency(info);
+                state.fill(data);
+            },
+            error_callback,
+            None,
+        ),
+        other => {
+            return Err(format!(
+                "format d'échantillon non pris en charge : {other:?}"
+            ));
+        }
+    };
+    built.map_err(|e| e.to_string())
+}
 /// Every output this machine offers right now, named exactly as
 /// [`crate::Engine::set_output_device`] takes them (`DeviceDescription::name`,
 /// which is PipeWire's own `node.description` and what `probe` matches).
@@ -658,7 +668,7 @@ mod cpal_output {
 /// business enumerating anything then.
 #[cfg(feature = "cpal")]
 pub fn output_devices() -> Vec<String> {
-    for host_id in cpal_output::HOSTS {
+    for host_id in HOSTS {
         let Ok(host) = cpal::host_from_id(host_id) else {
             continue;
         };
@@ -755,7 +765,7 @@ impl Drop for NullOutput {
 /// The engine's output, whatever it turned out to be.
 pub(crate) enum Output {
     #[cfg(feature = "cpal")]
-    Device(cpal_output::DeviceOutput),
+    Device(DeviceOutput),
     Null {
         /// Kept for its `Drop`: stopping the pump is what ends its thread.
         _pump: NullOutput,
@@ -812,19 +822,15 @@ pub(crate) fn start(
     Arc<AtomicF32>,
     OutputInfo,
 ) {
-    match cpal_output::probe(choice, preferred_rate, period_frames) {
+    match probe(choice, preferred_rate, period_frames) {
         Ok(setup) => {
             let rate = setup.config.sample_rate();
             let shared = Arc::new(MixerShared::new(rate, volume));
             let (mixer, cmds, party, party_gain) =
                 Mixer::new(Arc::clone(&shared), notes, settings, tap, rate);
-            let info = cpal_output::info_of(&setup);
-            let output = Output::Device(cpal_output::build_device_output(
-                setup,
-                mixer,
-                Arc::clone(&shared),
-                bus,
-            ));
+            let info = info_of(&setup);
+            let output =
+                Output::Device(build_device_output(setup, mixer, Arc::clone(&shared), bus));
             (output, shared, cmds, party, party_gain, info)
         }
         Err(_) => {
@@ -923,7 +929,6 @@ pub(crate) fn start_external(
 
 #[cfg(all(test, feature = "cpal"))]
 mod tests {
-    use super::cpal_output::{Callback, SCRATCH_FRAMES};
     use super::*;
 
     /// The host order is the contract: PipeWire first, ALSA as the fallback
@@ -934,10 +939,7 @@ mod tests {
     fn pipewire_is_tried_before_alsa() {
         assert_eq!(cpal::ALL_HOSTS[0], cpal::HostId::PipeWire);
         assert!(cpal::ALL_HOSTS.contains(&cpal::HostId::Alsa));
-        assert_eq!(
-            cpal_output::HOSTS,
-            [cpal::HostId::PipeWire, cpal::HostId::Alsa]
-        );
+        assert_eq!(HOSTS, [cpal::HostId::PipeWire, cpal::HostId::Alsa]);
     }
 
     /// The sink list the Réglages → Lecture card shows. Measured on this machine

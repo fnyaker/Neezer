@@ -1069,11 +1069,13 @@ changed except this section).
     and the build is correct: CMake takes the NDK toolchain's defaults (c++_static, thumb, NEON on
     arm64). Do not "fix" them by exporting those variables.
 - **Pitfalls confirmed by building**:
-  - `output.rs` had to be split in two: `#[cfg(feature = "cpal")]` on the module that names cpal
-    (callback, `Setup`, `probe`, `HOSTS`, the output thread, the stream) and two `start`
-    definitions. A `#[cfg]` on a match ARM keeps `Output` compiling in both worlds
-    (`Device` arm absent without cpal); the `Drop` impl for the device output has to live INSIDE
-    the cpal module or it cannot name its private fields.
+  - In `output.rs`, EVERY item that names cpal carries `#[cfg(feature = "cpal")]` — the callback,
+    `Setup`, `SCRATCH_FRAMES`, `HOSTS`, `configure`/`probe`/`host_name`, `OutCmd`, `DeviceOutput`
+    and its `Drop`, the output thread, `wait_mixer`, `build_stream` — and `start` has two
+    definitions. A `#[cfg]` on a match ARM keeps `Output` compiling in both worlds (the `Device`
+    arm is simply absent). It is worth doing it item by item rather than moving all of cpal into a
+    `mod cpal_output`: the module form is correct but re-indents 300 lines of the desktop's
+    playback path, and a reviewer reads a rewrite where the change is 8 attributes.
   - Making cpal optional changes **no lockfile line** (`Cargo.lock` lists optional dependencies
     regardless of features) — the proof that the desktop's dependency graph did not move.
   - `Engine::new` on a cpal-less build still returns an engine (silence pump), which is what keeps
