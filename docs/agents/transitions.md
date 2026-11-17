@@ -5,12 +5,16 @@ rules apply here. Other areas: [docs/agents/](./). Read [webapp.md](webapp.md) (
 `nav.js`) and [playback.md](playback.md) (big-list cost) before coding a lot; [animations.md](animations.md)
 owns the visualizer and the eco switch itself.
 
-**Status (2026-11-16): T0 landed; T1–T7 to do.** The foundation is merged — `lib/motion.js` (the
+**Status (2026-11-16): T0–T7 landed.** The foundation is merged — `lib/motion.js` (the
 tokens, the three levels, the transitions, `screenKey`/`pageEnter`/`shiftRows`), `lib/portal.js`, the
-tokens and the eco/reduced guard in `app.css`, `test/motion.test.mjs` (unit + the frozen import
-allowlist) and `test/motion/run.mjs` (the Chromium bench every later lot adds a scenario to). Nothing
-in the app uses it yet: T1 → T7 consume it, one lot per row of the inventory below, and each updates
-the *Status per lot* table at the end of this file in its own PR with its measured numbers.
+tokens and the eco/reduced guard in `app.css`, `test/motion.test.mjs` (unit, the source lints) and
+`test/motion/run.mjs` (the Chromium bench every lot adds a scenario to). Every lot of group A consumed
+it, one lot per row of the inventory, and each recorded its measured numbers in the *Status per lot*
+table at the end of this file. **Every screen and every listed element now moves through
+`lib/motion.js`**: no file imports `svelte/transition`/`svelte/animate`, and no `transition:`/
+`animation:` declaration carries a duration outside the named walks and status keyframes
+(rule M15, enforced by `test/motion.test.mjs`). T7 closes the plan: see *What T7 found*, below the
+inventory.
 
 ## The need
 
@@ -156,8 +160,15 @@ animates the overlay's `background-color` alpha instead of its opacity (rule M8)
   keyframes carry a transform (T6d measured exactly that; the knob then jumps, the track still fades).
 - **M15 — One source of truth.** Durations, easings and distances come from `lib/motion.js` (JS) and the
   `--dur-*`/`--ease-*`/`--move-*` tokens of `app.css` (CSS). No component imports `svelte/transition` or
-  `svelte/animate` directly, no literal duration in a `transition:`/`animation:` declaration
-  (`test/motion.test.mjs` enforces both, T0 with an allowlist, T7 empties it).
+  `svelte/animate` directly, and no `transition:`/`animation:` declaration — nor a Svelte
+  `in:`/`out:`/`transition:`/`animate:` directive — carries a literal duration (only the level's own
+  `duration: 0` instant path). `test/motion.test.mjs` fails on an import anywhere (T0's 19-file
+  allowlist was emptied by T7) and on a literal outside two named sets: the **walks** whose number IS
+  the contract (the 600 ms `--cover-ac`/`--gh-c` colour walks, the backdrop's 600/420/220 ms, the
+  visualizer's own canvas fade, the party ground's 420 ms half of the same walk) and the **keyframes**
+  that must keep running in eco (M13's status indicators, F7's skeletons, L7/P20's decorative
+  `eq`/`flash`). A status/skeleton loop cannot ride a `--dur-*` token: the tokens are 0 ms in eco, which
+  is exactly what those must not become.
 
 ## The tokens
 
@@ -490,11 +501,13 @@ Generic patterns every T6 lot applies to its files:
   is what the runner's eco "nothing animates" check sees as a 0.01 ms remnant. The two scenarios' own
   assertions (one `.active`, a 200 ms opacity transition mid-fade, no transform; a veil on
   `background-color` and a sheet, both 0 ms in eco and ≤ 140 ms reduced) pass in all six level-runs, 127
-  checks of 132. **T4 or T7 closes it** by tokenising `Cover`'s fade and settling its requests.
-- **`test/motion.test.mjs`'s import allowlist is a SUBSET check**, not the exact set of 19: every lot of
-  group A converts some of those files in its own PR, on files that are disjoint between lots, so an
+  checks of 132. **T4 closed half of it and T7 the other half**: `Cover`'s fade is tokenised (200 ms, T4),
+  and the cover requests were the last level-to-level difference of the `Récap`'s window — since the sleeve
+  pipeline is a named background family, the merged tree runs the whole file at 0 failure.
+- **`test/motion.test.mjs`'s import allowlist was a SUBSET check**, not the exact set of 19: every lot of
+  group A converted some of those files in its own PR, on files that are disjoint between lots, so an
   equality turned each of the thirteen PRs red for a line outside its own column (`routes/Party.svelte` was
-  this lot's). What still holds at every point is that no file is ADDED to the list; T7 deletes it.
+  this lot's). What held at every point was that no file was ADDED to the list; T7 emptied it.
 
 ### N — Never animated (by rule)
 
@@ -533,6 +546,81 @@ reduced-gated, and the guard stops it in eco); hover tooltips opened while anoth
   path) and waits for 4.6 s of resource-timeline silence before acting -
   `page.waitForLoadState("networkidle")` is NOT that wait: it resolves at once, the lifecycle event
   having fired at the document's load. First scenario of a page load: some 8 s. Later ones immediate.
+
+### What T7 found (the closing pass)
+
+T7 had four jobs: empty the source lint, run the whole bench, walk the screens by hand, and make the two
+inherited flakes honest. What it found, and what it changed:
+
+- **The literal-duration lint found one survivor, and no earlier sweep could see it.** `app.css`'s global
+  `button` rule wrote `transform 0.12s ease, color 0.12s ease, …` across **five lines**; every sweep that
+  matched a declaration per line walked past it, so a 120 ms literal sat in the shared hover/press path
+  that `--dur-instant` was meant to own. It is `var(--dur-instant) var(--ease-standard)` now (90 ms), and
+  the bench's own `.btn` probe measures **90 ms** (foundation: "*for at most 140 ms (M6)*").
+- **The lint is two rules and three named sets.** (1) No file under `src/` imports
+  `svelte/transition`/`svelte/animate` — the 19-name allowlist is deleted, so an import fails anywhere.
+  (2) No `transition:`/`animation:` declaration carries a literal duration, and no
+  `in:`/`out:`/`transition:`/`animate:` directive does either (only the level's `duration: 0` instant
+  path). What remains is named, with the number it carries and why: **9 declarations** (the 600 ms
+  `--cover-ac`/`--gh-c` registered-colour walks, the ground's 600/420/220 ms and its two CSS fallbacks,
+  the halo's 600 ms colour walk, the visualizer's own 0.6 s/0.2 s fades, the eco guard's 0.01 ms), **1
+  directive** (the party ground's 420 ms half of that same shell walk) and **20 keyframes** that must keep
+  running in eco (M13's spinners/bars/pulse, F7's skeletons, L7's `eq`, P20's `flash`, P9's
+  `bg-in`/`gb-intro`, P22's `grain-drift`). Every exemption is asserted to still exist, so the table cannot
+  rot into a list of stale claims. Checked by breaking it: `transition: opacity 333ms`,
+  `in:fade={{ duration: 300 }}`, an `import … from "svelte/transition"`, and the party's 420 changed to 421
+  each turn the suite red.
+- **The bench had three request failures left on the merged tree, and they were ONE family: what is
+  playing.** `player-glyphe` asked for `/api/track/<id>/probe`, `/api/download` and `/api/deezer/status` in
+  REDUCED and ECO but not in FULL; `player-favori` missed the health poll in ECO; at 390 `file-vider` and
+  `piste-survol` reported a `/api/listen` in one level only, and `player-favori` a `/api/radio/next` and an
+  `/api/me`. Each was a probe of the track a scenario had just started, landing 40 ms either side of its
+  window. They are named in `BACKGROUND_REQUESTS` with those measurements (the check compares request
+  SHAPES, so a transition that ADDED a fetch is still caught — and the `SELFTEST=1` canary, which fetches
+  `/api/selftest-transition` at full motion only, still fails the run on purpose).
+- **The bench itself, on the merged tree.** `node test/motion/run.mjs`, 81 scenarios in 13 files:
+  the phone viewport (390×844) ran the whole matrix — full, reduced and eco — in one pass at **381 checks,
+  0 failure, 0 page error**. The desktop viewport (1440×900) ran the same matrix on the same build
+  (2026-11-16) and reported **the three request comparisons above and nothing else**; after naming that
+  family, `FILES=player` at 1440 × the three levels is green. Foundation, at both viewports and all three
+  levels: tokens 90/140/200/280/320 ms + 8/4 px + 0.96/0.97/0.98 at full motion, 0 ms/0 px/1 in eco,
+  ≤ 140 ms/0 px/1 at reduced; `getAnimations()` empty outside `[data-motion="status"]` in eco; a marked
+  spinner keeps its 1 s and an unmarked 1 s animation is stopped; the CSS expressions `lib/motion.js`
+  emits resolve to the right matrices and a 50 % veil to alpha 0.3.
+- **The manual walk, scripted and looked at.** Three viewports (1440×900, 390×844, the full-screen
+  player's 641×900 side panel), 25 screens/actions each: the library's five leaves, Réglages' seven
+  sections, Genres' tree, Nouveautés' disclosure, an album, an artist's two tabs, a playlist's « Ajouter
+  des titres », Historique's filter, the context menu, and the player's open/tabs/close. The probe
+  records every element a click ADDS, keeps the one that is visible and ≥ 2 000 px², and asks whether it
+  or an ancestor was an animation target within the 500 ms that follow (a count, not a screenshot diff).
+  75 actions: **11 reported an element arriving without a transition**, i.e. four distinct cases; after
+  the fix below the same walk reports **8, three cases, all three by rule**:
+  - the **rows of a genre tree** when a node expands — by rule, M4: a windowed list's rows never
+    animate on mount (an intro would replay on every scroll), and the chevron is the motion;
+  - the **invisible `.backdrop`** of the desktop context menu — by rule, O1: it has no fill, the pane's
+    `pop` is what is seen;
+  - **Nouveautés' « Afficher »** block (`div.rels`, **9 810 px tall** at 1440 and **10 210** at 641): its
+    `in:fadeIn` sits one `{#if}` too deep (T5's local-intro rule) and never plays. Left as is: fading a
+    10 000 px block promotes a ~15 MP layer for 140 ms (a phone's whole memory budget), which is exactly
+    what M4/M10 forbid — the list appears at once like a list's rows, and the chevron says it did;
+  - **Historique's empty state** (« Aucun saut dans l'historique ») after a filter — a real gap, and the
+    only one in a file no lot owns any more (`routes/History.svelte`, T6b's): it has `in:fadeIn` now,
+    like the list it replaces (M7: replace in place = intro only). Re-walked: that case now reads 0.
+- **The benches named in the Done-when columns, on the merged tree.** Green: `test/menu/run.mjs`
+  **242/242** (0 `/api` per open), `test/failure/run.mjs` **91/91** (after it was taught that a pane
+  leaves the DOM *after* its outro), `test/admin/run.mjs`, `test/ui/run.mjs`, `test/clicks/run.mjs`,
+  `test/mobile/run.mjs`, `test/backdrop/run.mjs`, `test/fullscreen/run.mjs`, `test/panel/run.mjs` and its
+  `--desktop`, `test/podcast/run.mjs` (its chapter sheet's close measured **42.68 px = 44 × 0.97**, i.e.
+  the pane's own enter scale: the bench now waits for the enter before measuring), `test/import/run.mjs`,
+  `test/onboarding/run.mjs`, `test/recap/run.mjs`, `test/eq/run.mjs`, `test/genretree/run.mjs`,
+  `test/queue/run.mjs`, `test/party/run.mjs` (at **load 5.6**, no audio-alignment failure) and
+  `test/remote/run.mjs` 34/34. **Two remain red, both pre-existing and both outside this plan**: 
+  `test/queue/run.mjs --phone` (T4's entry: Escape closes the full-screen player before the drag's own
+  cancel) and `test/import/run.mjs --phone` (T6c's entry: "every action and chip is on screen" already
+  failed on master). Neither is named in a Done-when column as `--phone` except queue's, whose desk run is
+  green; fixing them means changing the player's or the phone layout's behaviour, which this lot's brief
+  forbids.
+
 
 ## Lots
 
@@ -583,10 +671,15 @@ settle(page) }`. Checks per scenario:
 4. **No long task** (> 50 ms) during the animation window at THROTTLE=1.
 5. **Requests unchanged**: the `/api` and image requests of a scenario's window (act → settle, read on a QUIET
    page) are the same set in the three levels (`page.on("request")`). The set, not the multiset, and by URL:
-   the cover queue is frame-sliced and may re-ask the same picture. Two families of requests are NOT a
-   scenario's own and are named in `BACKGROUND_REQUESTS` — the shell's `warmPlaylists` warm-up
-   (`/api/me/favorites`, `/api/playlist/<id>`, ten seconds after a boot then one every 1.5 s) and whatever is
-   playing (`/api/stream/`, `/api/gains`, `/api/analyses`, `/api/audio/edges/`, `/api/lyrics/`). Each file
+   the cover queue is frame-sliced and may re-ask the same picture. The families of requests that are NOT a
+   scenario's own are named in `BACKGROUND_REQUESTS` — the shell's `warmPlaylists` warm-up
+   (`/api/me/favorites`, `/api/playlist/<id>`, ten seconds after a boot then one every 1.5 s), the sleeve
+   pipeline, and **whatever is playing**: the bytes and analysis of the track (`/api/stream/`, `/api/gains`,
+   `/api/analyses`, `/api/audio/edges/`, `/api/lyrics/`), the listening report (`/api/listen`), the queue's
+   top-up (`/api/radio/next`), and the player's own probes of the track it starts
+   (`/api/track/<id>/probe`, the next track's `/api/download` prefetch, `/api/deezer/status`), plus the
+   account payload the shell refreshes (`/api/me`). T7 measured every one of those as a level-to-level
+   difference with nothing else changed; each is named with the measurement in `run.mjs`. Each file
    also gets a **fresh page per level** (a page is a session: its warm cover cache and its background work
    must not decide what the next file's windows ask for), and `SELFTEST=1` arms a scenario that adds a fetch at
    full motion only, so this check MUST fail — the bench's own canary.
@@ -617,10 +710,10 @@ settle(page) }`. Checks per scenario:
   read the page three frames after it answered; S2's `.layout` fade is still running then, and the
   foundation's "reduced motion starts no transition" hover probe measured it instead of the `.btn`. It now
   waits (bounded) for `__motion.running()` to empty, which is what "a quiet page" always meant.
-- **The frozen import allowlist is a CEILING, not an equality.** `test/motion.test.mjs` fails when a file
-  OUTSIDE its 19-name list imports `svelte/transition`/`svelte/animate`; a lot that moves one of those files
-  onto `lib/motion.js` simply stops matching, and the list is emptied in T7. (An equality turns red on every
-  lot of group A at once — it did, for T6b and T1.)
+- **The import allowlist was a CEILING, not an equality — and T7 emptied it.** `test/motion.test.mjs`
+  used to fail only when a file OUTSIDE its 19-name list imported `svelte/transition`/`svelte/animate`;
+  a lot that moved one of those files onto `lib/motion.js` simply stopped matching. (An equality turned
+  red on every lot of group A at once — it did, for T6b and T1.) Now nothing may import them at all.
 - **A detail page for the Back scenario is a SHORT playlist.** A 4 000-track page keeps mounting rows and
   their sleeves after any reasonable baseline, and a cover that arrives on the wrong side of the window makes
   the request check compare two different pages.
@@ -671,7 +764,7 @@ T6a, `test/motion/run.mjs`):
 | T1 | done | #222 | `npm test` 779/779 ; `node test/motion/run.mjs` **164 vérifications, 0 échec** pour les 8 scénarios de ce lot (× 1440/390 × plein/réduit/éco), et **350 vérifications / 0 échec** sur le banc complet rebasé (26 scénarios, 4 fichiers) ; `test/clicks/run.mjs` (4× CPU, médiane de 9) clic→peinture des nav : Accueil **16 → 16 ms**, Rechercher **56 → 48**, Bibliothèque **64 → 48**, Réglages **64 → 64**, Accueil(2) **48 → 48** (les onglets de bibliothèque et le plein écran varient de ±40 % d'un passage à l'autre : bruit de la machine, T1 ne touche à aucun de ces fichiers) ; `test/mobile/run.mjs` 360/390/639/640/641 tout vert ; `test/backdrop/run.mjs` tout vert. S1 : la page monte de 8 px en 200 ms sur un push, fondu seul de 140 ms en traversal, rien sur un changement d'onglet (même `screenKey`) ni au premier écran ; S3 : la colonne tient `.np-open` jusqu'à `outroend` de l'aside (sinon la colonne qui part se replie sur une nouvelle rangée de grille) ; S5/S6 : corps de dossier par `collapse` jusqu'à 30 playlists, fondu au-delà, chevron qui tourne de 90° ; S7 : seul un id absent du rendu précédent reçoit le fondu de 140 ms (les 60 lignes de `/me/playlists` ne bougent pas) ; S10/S11 : fondu de 140 ms, sans `transform` (barre collante) ; S12 : déjà instantané (`scrollTo({behavior:"instant"})` dans `lib/nav.js`), vérifié par le scénario Retour. |
 | T2a | done | #225 | `npm test` 779/779; `npm run build` 586 modules / 30 s. `test/motion/run.mjs` **152 checks / 0 failure** (O1–O6 × 1440×900 and 390×844 × full/reduced/eco, 0 page error); `test/menu/run.mjs` **242/242** with every open still costing 0 `/api` request. Measured (probe in the PR): the desktop `pop` runs **200 ms** in and **140 ms** out, `transform-origin` on the pointer's own corner (`0px 591.25px` = bottom-left for a menu pushed back up; the quality list above its badge reads `208px 337.34px` = bottom-right); the phone `sheet` **280 ms** in (O2's exit is 90, see that row) and the scrim walks its own `background-color` alpha (the sheet keeps its blur); the sub-menu `collapse` 200/140 ms with the chevron on `--dur-base var(--ease-standard)`; O4–O6 `pop` 200/140 ms from `placement`/`align`. Escape → menu out of the DOM **154 ms** (desktop pop, 140 ms animation + Svelte's one-frame dummy), **105 ms** (phone sheet + scrim), **160 ms** (sub-menu). Eco: 0 animation outside `[data-motion="status"]`; reduced: no `transform`, ≤ 140 ms; requests identical in the three levels (0 added by any open, 0 by any close). |
 | T2b | done | #229 | `npm test` 779/779; `npm run build` green (587 modules, 30 s); `node test/motion/run.mjs` avec ce fichier seul : **174 vérifications, 0 échec des règles de mouvement** — 8 scénarios × 1440×900 et 390×844 × plein/réduit/éco ; **2 rouges, tous deux la comparaison de requêtes** (des pochettes paresseuses de la page partagée, l'item de banc que T6a a listé pour T7), aucune requête ajoutée par une transition ; chaque feuille O7–O15 entre par `veil` + `sheet` : panneau et voile **280 ms** au téléphone / **200 ms** au bureau, sortie 200/140, en réduit le panneau ne garde qu'une opacité ≤ 140 ms (instantané au téléphone) et l'éco ne crée **aucune animation** ; **verre** : écart-type de luminance du panneau à 50 % de l'entrée **2,52** (1440), **3,59** (390), **8,13** (641, panneau latéral du lecteur) contre **20,2 / 31,4 / 44,8** pour le contrôle à opacité d'ancêtre — le flou est conservé (cap 10) ; `test/menu/run.mjs` 242/242 ; 0 erreur de page. |
-| T2c | done | #232 | `npm test` 779/779; `npm run build` OK; the bench 13 scenarios (this lot's 9 + T6d's 4) × 2 viewports × 3 levels: **full 0 failure, eco 0 failure**, reduced 0 failure for this lot's rows (O17/O18 measure a 140 ms `veil`/`sheet` with no transform at all, M14). 6 of the 9 rows are driven through the real UI — O16 (`Nouveau dossier` from the library's add menu), O17 (playlist ⋯ → `Déplacer vers un dossier`), O18 (admin → Utilisateurs → `Inviter`), O20 (playlist → `Ajouter des titres`), O21/O22 (the player bar's party and remote buttons); the other 3 say why they cannot run in this fixture (no linked Deezer account, no podcast, no synced lyrics) and O21/O22 on a PHONE: the shell hides that row, the buttons live in the full-screen player (T3). At the eased 50 % of the desktop enter the pane reads opacity **0.950248** (= `EASE.enter(0.5)`, T0's own number: the curve, not a linear fade) with `scale(0.9978)` and the veil at **0.57 / 0.6** of its tint; the phone sheet at half way is `translateY(228 px)` of its own height, and never an opacity (M8). Interruption (open → close → open inside 60 ms): 1 pane, pane open, focus INSIDE it — which failed until `PartySheet`/`RemoteSheet` restored the focus themselves (a reversed outro never unmounts, so `use:modalFocus` did not re-run). `LyricCard`'s 0.18 s `lc-in` keyframes and `ChapterSheet`'s `in:fade` removed; `lc-spin` and the two `spin` spinners are `[data-motion="status"]`; `RemoteSheet`'s last literal transition tokenised. Two foundation checks are red for reasons outside this lot and both are being fixed elsewhere: the `Skeleton.svelte` shimmer at 390 under reduced (neezer-30's PR) and `Cover.svelte`'s 0.35 s fade (T4). |
+| T2c | done | #232 | `npm test` 779/779; `npm run build` OK; the bench: this file's **9 scenarios** (O16–O24) — run in the same pass as T6d's 4, hence « 13 scénarios » in the original entry — × 2 viewports × 3 levels: **full 0 failure, eco 0 failure**, reduced 0 failure for this lot's rows (O17/O18 measure a 140 ms `veil`/`sheet` with no transform at all, M14). 6 of the 9 rows are driven through the real UI — O16 (`Nouveau dossier` from the library's add menu), O17 (playlist ⋯ → `Déplacer vers un dossier`), O18 (admin → Utilisateurs → `Inviter`), O20 (playlist → `Ajouter des titres`), O21/O22 (the player bar's party and remote buttons); the other 3 say why they cannot run in this fixture (no linked Deezer account, no podcast, no synced lyrics) and O21/O22 on a PHONE: the shell hides that row, the buttons live in the full-screen player (T3). At the eased 50 % of the desktop enter the pane reads opacity **0.950248** (= `EASE.enter(0.5)`, T0's own number: the curve, not a linear fade) with `scale(0.9978)` and the veil at **0.57 / 0.6** of its tint; the phone sheet at half way is `translateY(228 px)` of its own height, and never an opacity (M8). Interruption (open → close → open inside 60 ms): 1 pane, pane open, focus INSIDE it — which failed until `PartySheet`/`RemoteSheet` restored the focus themselves (a reversed outro never unmounts, so `use:modalFocus` did not re-run). `LyricCard`'s 0.18 s `lc-in` keyframes and `ChapterSheet`'s `in:fade` removed; `lc-spin` and the two `spin` spinners are `[data-motion="status"]`; `RemoteSheet`'s last literal transition tokenised. Two foundation checks were red for reasons outside this lot and both were fixed elsewhere: the `Skeleton.svelte` shimmer at 390 under reduced (T5) and `Cover.svelte`'s 0.35 s fade (T4). |
 | T3 | done | #234 | **P1–P22, 11 fichiers.** `npm test` 779/779 ; `npm run build` vert. `node test/motion/run.mjs` : 8 scénarios × 2 viewports (1440×900, 390×844) × 3 niveaux — **292 contrôles verts, 0 échec de mouvement** : `document.getAnimations()` **vide en éco** sur les 8 scénarios aux deux viewports, **aucun `transform`** en réduit et ≤ 140 ms. Les 24 échecs restants sont le contrôle (5) « requêtes identiques » (21 : réchauffement hors-ligne `warmPlaylists`, prefetch de piste, analyses, `Cover` de T4 — neezer-30 les ferme) et 3 sur la garde `.btn` en éco/réduit (neezer-30). Mesures : `screen` du téléphone **320 ms / 240 ms** sans opacité, du bureau **200/140 ms** opacité + `scale(0.98 → 1)` ; `sheet` des vues File/Paroles **280/200 ms** ; titre/artiste, parole vivante et glyphe lecture/pause **140 ms** (`swap`, `scale 0.85 → 1` pour le glyphe) ; pochette du bureau **200/140 ms** ; onglets du lecteur bureau **140 ms** + pastille **90 ms** de couleur ; sections « À propos » **140 ms** ; la ligne de position du mini-lecteur **0 transition aux trois niveaux** (vérifié après un seek, éco comprise — M6). `immersiveShown` (`introend` → `outrostart`) laisse le fond de l'app sous le lecteur qui glisse et le rétablit à la fermeture (M12/P3) ; le visualiseur attend `introend` (P1). |
 | T4 | done | #227 | `npm test` 779/779, `npm run build` OK; `node test/motion/run.mjs` — 6 scenarios (`test/motion/scenarios/lists.mjs`) × 2 viewports × 3 levels: removing a row from a **4 000-title queue** displaces **16–19 mounted rows in 1–3 layouts** (the same page idles at 0–3 — the plan's bound is 3), reduced motion displaces **0** (≤ 1 layout) and eco animates nothing, and each level's own assertions hold (the rows really moved, the header went 3 999 → 3 998, « Vider la file » leaves the playing row, a sort starts **one** 140 ms opacity-only animation on the results block while typing starts none, a pressed card is at 0.98 in 90 ms, a track row's hover is a colour step ≤ 140 ms); **the equalizer of the playing row animated `height` — one layout per frame, the page idled at 18–22 layouts per 250 ms — and is `transform: scaleY()` now: 0–2**; `test/queue/run.mjs` green on the desktop, and `--phone` fails **identically on the parent commit** (Escape closes the full-screen player before the drag's own cancel — T3's player); `test/ui/run.mjs` medians 111 / 0 / 0 / 141 ms (favourites / ten keystrokes / sort / playlist) against the recorded 154 / 55 / 52 / 216. On the merged tree `ONLY=full` is **47 scenarios (8 files) × 2 viewports, 0 failure**; the runner's cross-level **request** check cannot hold for these scenarios (nor, in the same run, for the home / library / artist / playlist ones), and this file's scenario header says why: their windows last seconds on a page that warms its playlist cache (`warmPlaylists`) and re-keys a sleeve with every queue edit — the diffs are always `/api/playlist`, `/api/stream`+`gains`+`analyses`, `/api/cover` and `/images/cover`, never a request a transition could add. |
 | T5 | done | #230 | F1-F8, P23. `npm test` 779/779, `npm run build` vert, `test/failure/run.mjs` tout vert. `node test/motion/run.mjs` : mes 3 scénarios (`feedback.mjs`) × 1440×900 et 390×844 × plein/réduit/éco = **18 passages, 0 échec**, et **0 échec** encore sur l'arbre fusionné des 9 fichiers de scénarios (331 vérifications vertes, les 33 restantes appartiennent aux lignes des autres lots : T4, T6a, T6b, T2a — voir leurs entrées). Nombres, mesurés par `Element.prototype.animate` et les images clés : toast **entrée 200 ms** (13 images, `opacity` + `translateY(8px)`, sortie **140 ms**), notice `rise` −8 px et sortie **140 ms**, échec de chargement **140 ms** (`opacity 0 → 0,66 → 1`, `translateY 4 → 0 px`, au premier rendu ET sur « Réessayer ») ; en mouvement réduit les trois sont **opacité seule ≤ 140 ms** (0 `transform` dans les images clés, le point de télécommande reste `status`) ; en éco `document.getAnimations()` **vide** après chaque geste et tokens 0 ms / 0 px / 1 ; mêmes requêtes dans les trois niveaux (F1 `/api/cache/flush` + `/api/storage`, F2 aucune, F6 `/api/me/albums`). F3/F4/F5/F7/F8 n'ont pas de déclencheur cliquable dans le banc (raison dans le fichier) : les deux composants de télécommande ont été rendus à part en Chromium (fondu d'ancrage 140 ms, `veil` + `dialog`), le squelette tient sa règle `prefers-reduced-motion` (bloc `--s2` fixe) et le badge de source son `{#key}`. Trois pièges payés et écrits plus haut : la règle locale de Svelte (la plupart des `in:` de ces fichiers ne jouaient pas), le `@keyframes` tokenisé de `LoadFailed`, et le silence réseau qu'exige la comparaison de requêtes. |
@@ -680,5 +773,5 @@ T6a, `test/motion/run.mjs`):
 | T6c | done | #228 | `npm test` 779/779, `npm run build` ok; `test/motion/run.mjs` 6 scenarios × 2 viewports × 3 levels, **0 failure**: the /api and image requests are the same multiset in full/reduced/eco, `getAnimations()` is empty in eco (status indicators aside), and every animation under reduced motion is ≤ 140 ms with no `transform`; `test/podcast/run.mjs` 49/49, `test/import/run.mjs` ok (its `--phone` mode already failed "every action and chip is on screen" on master); 641×900 side column 300 × 804 px; `LayoutCount` over act+settle at 1440×900, full motion: 3 (the two shelves), 4 (a committed search), 3 (the chapter list), 4 (the shared page's bar), 8 (the import: the working screen replaced by its result) and 3 (the episode panel's tab) — the content mount, never one layout per frame. What the bench taught: the app's own playlist warm-up (`lib/actions.js#warmPlaylists`, 10 s after boot then 25 × 1.5 s) lands `/api/playlist/<id>` inside a measured window, so a scenario waits it out once per page, and the same wait covers the covers and the player's backdrop the app loads by itself (`quiet()`, 1.7 s of request silence, 4 frames) — the bench-level item the T6a/T6b rows describe. In the combined run (47 scenarios × 2 viewports × 3 levels, 15 failures) **none of this lot's six scenarios fails**; alone, the file is 0 failure on the rebased master (T1's bench now waits for the first screen's entrances, which is what used to trip on `Skeleton.svelte`'s missing `prefers-reduced-motion` rule — still owed by T5's F7). |
 | T6d | done | #215 | `npm test` 779/779; the bench 184 checks / 0 failure (4 scenarios × 2 viewports × 3 levels): the section change is ONE animation (desktop `pane-body` 140 ms opacity; phone the pane's 200 ms `rise`), the switch 90 ms on the track's colours and the knob's transform, the admin dialog `dialog` 200 ms transform+opacity plus the veil's own background-colour 200 ms; reduced = 140 ms opacity/colour only, NO transform on the knob or the dialog, veil 140 ms; eco leaves the timeline empty after 4 frames (the click's 0.01 ms remnants swept) and the `/api` + image requests are identical in the three levels; `test/admin/run.mjs` 61 checks, `test/eq/run.mjs` 35 checks green (the fader fill is a `scaleY`, not a `height`); `test/motion.test.mjs`'s importer check became a subset, so converting a file no longer turns the 13 parallel lots red. |
 | T6e | done | #221 | I14, on `routes/Genres.svelte` + `GenreTree`, `GenreLibrary`, `GenreExtractor`, `GenreTiles`, `ExplorerStyles`, `StylePicker`, `DiscoverySlider`, `EnergyPicker`, `FlowPicker`, `FlowControls`, `FlowUpNext`, `WhoPicker`. `npm test` 779/779; `npm run build` 586 modules. `node test/motion/run.mjs`: **8 scénarios × 2 viewports × 3 niveaux, 0 échec** (onglets du studio, repli d'un nœud de l'arbre, « Réglages avancés », feuille des stations en `veil`+`sheet`, pastille d'énergie, pas de découverte, puce de style, popover du Flow) — en éco `document.getAnimations()` vide sur les 8, en réduit aucun `transform` et ≤ 140 ms, mêmes requêtes dans les trois niveaux. Mesuré à 1440×900, headless, 1× : feuille des stations **3 layouts / pire frame 16,7 ms / 4–6 ms de script** sur 320 ms; bascule d'onglet vers l'arbre **5 layouts / 16,7 ms / 25 ms** (dont le montage des 21 lignes fenêtrées); le même geste en éco → **0 animation** sur la timeline après 2 rAF. `test/genretree/run.mjs` 16/16 (21/21/20 lignes montées, 0 débordement). Les durées restent celles des tokens (onglets/puces 90 ms, panneaux 140 ms, `pop` 200/140, `veil`+`sheet` 280/200 au téléphone et 200/140 au bureau); les barres de progression passent en `transform: scaleX()` (I8), la barre indéterminée de l'extracteur dit `data-motion="status"`. Deux lignes de l'inventaire ne sont pas cliquables sur le banc : la feuille de découverte (aucun style dans `tools/perf_api.py`; la feuille des stations est le même couple `veil`+`sheet`) et la porte du Flow (le proxy Deezer est éteint; `flow-controles` clique « Lancer le Flow » puis la porte si elle existe) — leur `pop`/`swap` sont tenus par `test/motion.test.mjs` aux trois niveaux. |
-| T6f | done | #224 | **I15, 12 files.** `npm test` 779/779; `npm run build` green; `node test/motion/run.mjs` **127 checks of 132** — 2 scenarios × 2 viewports × 3 levels, the 5 failures all cover traffic inside the request comparison (see the note above: `Cover` is T4's); the story's card change measured at **200 ms opacity (`--dur-base`), 140 ms and opacity-only under reduced motion, 0 ms in eco**, exactly one `.slide-wrap.active`, no transform in any running animation; the share sheet's veil animates **`background-color` only** (never the overlay's opacity, M8) over 200/280 ms and its pane enters on `sheet`, 0 ms in eco, portalled to `<body>` (M9); the onboarding step rises 8 px on a push and only fades on the way back; the `width` transitions of the step rail and of the import bar became `scaleX()` (M1); `test/onboarding/run.mjs` and `test/recap/run.mjs` green. `test/party/run.mjs`: its four audio-alignment segments are load-sensitive on this machine — `steady` fails on the parent commit too (p95 +10.3 ms, 59 % within 5 ms), and the same segment read 17 %/59 % on two runs of the same code; nothing in `Party.svelte`'s change touches a clock. |
-| T7 | to do | — | — |
+| T6f | done | #224 | **I15, 12 files.** `npm test` 779/779; `npm run build` green; `node test/motion/run.mjs` **127 checks of 132** — 2 scenarios × 2 viewports × 3 levels, the 5 failures all cover traffic inside the request comparison (see the note above: `Cover` is T4's); the story's card change measured at **200 ms opacity (`--dur-base`), 140 ms and opacity-only under reduced motion, 0 ms in eco**, exactly one `.slide-wrap.active`, no transform in any running animation; the share sheet's veil animates **`background-color` only** (never the overlay's opacity, M8) over 200/280 ms and its pane enters on `sheet`, 0 ms in eco, portalled to `<body>` (M9); the onboarding step rises 8 px on a push and only fades on the way back; the `width` transitions of the step rail and of the import bar became `scaleX()` (M1); `test/onboarding/run.mjs` and `test/recap/run.mjs` green. `test/party/run.mjs`: its four audio-alignment segments are load-sensitive on this machine — `steady` fails on the parent commit too (p95 +10.3 ms, 59 % within 5 ms), and the same segment read 17 %/59 % on two runs of the same code; nothing in `Party.svelte`'s change touches a clock. **T7 re-ran it on the merged tree at load 5.6: green, every segment.** |
+| T7 | done | — | **Source.** `npm test` **780/780** (le fichier de mouvement passe de 12 à 13 tests) ; **0** importateur de `svelte/transition`/`svelte/animate` (l'allowlist des 19 est supprimée). Le lint des durées lit chaque `transition:`/`animation:` et chaque directive `in:`/`out:`/`transition:`/`animate:` : **9** déclarations nommées (les 600 ms `--cover-ac`/`--gh-c`, le fond 600/420/220 ms et ses deux replis, le halo 600 ms, le visualiseur 0,6 s/0,2 s, la garde éco 0,01 ms), **1** directive (le fond de la fête, 420 ms) et **20** keyframes `status`/squelette/décoratives ; chaque exemption est vérifiée encore présente. Il a trouvé **un survivant** : la règle globale `button` d'`app.css` écrivait `transform 0.12s, color 0.12s, …` sur cinq lignes → `var(--dur-instant) var(--ease-standard)`, et le survol du `.btn` se mesure à **90 ms**. Mutants (chacun rouge) : `transition: opacity 333ms`, `in:fade={{ duration: 300 }}`, un `import … from "svelte/transition"`, et le 420 de la fête changé en 421. **Banc.** `node test/motion/run.mjs`, 81 scénarios / 13 fichiers : le viewport téléphone (390×844) a couru toute la matrice — plein, réduit, éco — en une passe, **381 contrôles, 0 échec, 0 erreur de page** ; le 1440×900 a couru la même matrice sur le même build et n'a rapporté que **3 échecs, tous la famille « ce qui joue »** (`/api/track/<id>/probe`, `/api/download`, `/api/deezer/status`), désormais nommés dans `BACKGROUND_REQUESTS` avec les mesures (`/api/listen`, `/api/radio/next`, `/api/me` aussi) ; `FILES=player` 1440 × 3 niveaux et `FILES=library` 390 et 1440 × 3 niveaux sont verts après les correctifs. **Benchs nommés** : `menu` 242/242, `failure` 91/91, `admin`, `ui`, `clicks`, `mobile`, `backdrop`, `fullscreen`, `panel` et `--desktop`, `podcast`, `import`, `onboarding`, `recap`, `eq`, `genretree`, `queue`, `party` (charge 5,6), `remote` 34/34. Deux restent rouges, **préexistants et hors du plan** : `queue --phone` (T4 : Échap ferme le lecteur plein écran avant le cancel du glisser) et `import --phone` (T6c : déjà rouge sur master). **À l'œil** (1440, 390, panneau 641) : 75 actions, **11** éléments arrivant sans transition avant correctif, **8** après — rangées d'arbre (M4), `.backdrop` invisible (O1), bloc « Afficher » des Nouveautés de **9 810 px** laissé au repos (un calque de 15 MP pour 140 ms, M4/M10) — et l'état vide de l'Historique, seul vrai manque dans un fichier sans propriétaire, passe à `in:fadeIn` (re-mesuré à 0). **Hérités** : `vizcore` **10/10** passages sous charge 9,6 → 18,2 (Rust plus rapide 7/7 à chaque fois, médiane 0,59–0,66, temps CPU au lieu de l'horloge murale) ; `party` vert à charge 5,6. |

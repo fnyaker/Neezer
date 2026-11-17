@@ -169,6 +169,20 @@ test("the Rust scope is faster than the JavaScript it replaced", () => {
   // columns): JavaScript ~95 us an analysis frame, Rust ~40 us including the
   // copy of both channels into its memory. Held to "clearly faster" rather
   // than to a ratio, so a busy test machine cannot fail it.
+  //
+  // WHAT THE CLOCK COST (PR #228): the same code read Rust 49.1 us against
+  // JavaScript 50.7 us — 0.97 — on a shared runner, where a quiet machine
+  // reads 42 against 71. Nothing had got slower: `hrtime` measures WALL time,
+  // so every time the runner descheduled this process one side of the pair
+  // absorbed it unevenly. Two changes, and neither weakens the claim:
+  //   - `process.cpuUsage()` counts only the CPU this process actually spent
+  //     (getrusage, 1 us), so being descheduled costs nothing;
+  //   - the two are measured in PAIRS (alternating which goes first), and the
+  //     assertion is a COUNT — Rust wins the pair — instead of a single ratio
+  //     a noisy round cannot drag below a threshold. A real speedup wins 7 of
+  //     7 under any load; a tie does not.
+  // The ratio is still asserted (median of the pairs), so the numbers cannot
+  // silently collapse into "Rust is 1 % faster and passes on the count".
   const preset = tierPreset("high");
   const size = preset.scope.buffer;
   const geom = createGeometry();
@@ -177,26 +191,49 @@ test("the Rust scope is faster than the JavaScript it replaced", () => {
   const time = (scene) => {
     scene.resize(1920, 1080, preset, geom.out);
     for (let i = 0; i < 400; i++) scene.update(frames[i & 255], 1 / 94);
-    const t0 = process.hrtime.bigint();
+    const t0 = process.cpuUsage();
     for (let i = 0; i < 3000; i++) scene.update(frames[i & 255], 1 / 94);
-    return Number(process.hrtime.bigint() - t0) / 1000 / 3000;
+    const used = process.cpuUsage(t0);
+    return (used.user + used.system) / 3000; // cpuUsage is in microseconds
   };
-  // Best of several rounds, alternating the two: one pass each let a noisy
-  // neighbour on a shared CI runner land on one side only (74 us against 91
-  // measured there, where a quiet machine reads 42 against 71).
   const ref = refScope({ preset });
   const b = createScopeScene({ preset, core });
+  const ratios = [];
   let js = Infinity;
   let rust = Infinity;
-  for (let round = 0; round < 5; round++) {
-    js = Math.min(js, time(ref));
-    rust = Math.min(rust, time(b));
+  for (let round = 0; round < 7; round++) {
+    // Alternate the order: the second measurement of a round would otherwise
+    // always inherit the first one's warmed cache.
+    let a;
+    let r;
+    if (round % 2 === 0) {
+      a = time(ref);
+      r = time(b);
+    } else {
+      r = time(b);
+      a = time(ref);
+    }
+    js = Math.min(js, a);
+    rust = Math.min(rust, r);
+    ratios.push(r / a);
   }
   b.dispose();
-  console.log(`# scope update, high tier: JavaScript ${js.toFixed(1)} us, Rust ${rust.toFixed(1)} us`);
+  const sorted = [...ratios].sort((x, y) => x - y);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const wins = ratios.filter((ratio) => ratio < 1).length;
+  console.log(
+    `# scope update, high tier: JavaScript ${js.toFixed(1)} us, Rust ${rust.toFixed(1)} us, ` +
+      `Rust faster in ${wins}/${ratios.length} paired rounds, median ${median.toFixed(2)}`,
+  );
+  assert.ok(
+    wins >= 6,
+    `Rust must be the faster of the pair in 6 of 7 rounds — was ${wins} of ${ratios.length} (ratios: ${ratios
+      .map((r) => r.toFixed(2))
+      .join(", ")})`,
+  );
   // 0.8 failed on a shared runner (77 us against 92 = 0.84, a quiet machine reads 0.55): the claim
   // is "faster", a margin tighter than the noise only makes the suite flaky.
-  assert.ok(rust < js * 0.95, `Rust ${rust.toFixed(1)} us against JavaScript ${js.toFixed(1)} us`);
+  assert.ok(median < 0.85, `median pair ratio ${median.toFixed(2)} (Rust ${rust.toFixed(1)} us against JavaScript ${js.toFixed(1)} us)`);
 });
 
 test("scopes do not share state: two on screen trigger independently", () => {

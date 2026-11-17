@@ -2,6 +2,23 @@
 
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
+**This file owns the canvases, not the interface's motion.** A page, a sheet, a menu, a row or the
+player's chrome arrives through [transitions.md](transitions.md) (tokens, the three levels, the eco
+switch and the source lint); what a visualizer, a world or an eco grade does is here.
+
+**A performance claim is measured in CPU time and decided by a COUNT, never by a wall clock.** The
+`vizcore` micro-benchmarks hold the Rust ports to "measurably faster than the JavaScript they replaced".
+`test/vizcore.test.mjs`'s scope test asserted `rust < js * 0.95` on `hrtime` best-of-5, and a shared CI
+runner turned it red once (PR #228: Rust **49.1 µs** against JavaScript **50.7 µs** — 0.97 — on code that
+reads 42 against 71 on a quiet machine): the process had been descheduled, and wall time charged that to
+whichever side was measured in that window. It now times `process.cpuUsage()` (1 µs on Linux; time the
+process did not run costs nothing), alternates which implementation goes first in each of seven paired
+rounds, and asserts TWO things — Rust is the faster of the pair in at least **6 of 7** (a count, which a
+real 0.6× win takes under any load) and the **median** pair ratio is under 0.85 (so a collapse to "1 %
+faster" cannot pass on the count alone). Measured over **10 consecutive runs at loads 9.6 → 18.2** on 16
+cores: 10/10 green, Rust faster **7/7** every time, median **0.59–0.66**; the absolute numbers moved
+54.6 → 96.5 µs (JavaScript) and 32.5 → 57.8 µs (Rust) with the load while the ratio did not move at all.
+
 **Animations** (`webapp/src/lib/viz/`): a mode registry (`off`, `bars`, `pulse`, `scope`, `aurora`,
 `smart` — `modes.js`), a palette whose SOURCE the user picks (cover art / the spectrum itself / fixed
 schemes) — except the player's strip, which is ONE colour read from the app's own theme accent, and

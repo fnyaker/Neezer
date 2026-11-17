@@ -274,7 +274,7 @@ async function open(level, viewport) {
 }
 
 /** A REAL pointer hover on the bench's own `.btn.btn-ghost`, then what is on
- *  the timeline one frame later (a 120 ms background-colour transition is
+ *  the timeline one frame later (a 90 ms background-colour transition is
  *  still running) and three frames after that, still hovered. */
 async function realHover(page) {
   const box = await page.evaluate(() => {
@@ -515,6 +515,33 @@ const BACKGROUND_REQUESTS = [
   /^\/api\/analyses$/,
   /^\/api\/audio\/edges\//,
   /^\/api\/lyrics\//,
+  // The player's listening report (neezer/listening.py, lib/api.js#listen): it
+  // posts when a play has been heard long enough, so its instant depends on
+  // the audio clock, not on the action — measured at 390, `file-vider` and
+  // `piste-survol` reported in one level and not in the other, with nothing
+  // else different.
+  /^\/api\/listen$/,
+  // The queue's own top-up (Player.svelte#ensureUpcoming, lib/actions.js): a
+  // short queue is topped from `/api/radio/next` while something plays, so a
+  // window that lasts a few seconds can catch it or not — measured at 390,
+  // `player-favori` asked for it in REDUCED only.
+  /^\/api\/radio\/next$/,
+  // … and the player's own probes of the track it is starting: the verdict on
+  // the track (`/api/track/<id>/probe`, Player.svelte's playback check), the
+  // prefetch of the NEXT track's bytes (`/api/download`) and the Deezer health
+  // poll (`/api/deezer/status`). A scenario whose act STARTS playback (the
+  // glyph swap of P13) races those three against the window's end: measured at
+  // 1440 on the merged tree, `player-glyphe` asked for them in REDUCED and not
+  // in FULL — the same press, the same track, a probe that landed 40 ms later.
+  // They are what is playing, not what a transition asked for.
+  /^\/api\/track\/[^/]+\/probe$/,
+  /^\/api\/download$/,
+  /^\/api\/deezer\/status$/,
+  // The account payload (lib/api.js#me): the shell refreshes it on boot, on
+  // focus and after a favourite, so it lands inside a window whose click
+  // happened to touch the same state — measured at 390, `player-favori` asked
+  // for it in REDUCED and not in FULL, the heart's own `/api/favorite` in both.
+  /^\/api\/me$/,
 ];
 const isBackground = (path) => BACKGROUND_REQUESTS.some((pattern) => pattern.test(path));
 
