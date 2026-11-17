@@ -851,7 +851,10 @@ committed screenshots. **34 JVM tests**, no emulator (worker rule 7: nothing on 
   `--s2` correction, `#7C5CFF`'s ink measured **4.18:1 on Papier's `--bg` and 3.74:1 on its `--s2`** —
   under AA on two of the three surfaces it paints. `nzAccent` folds over `{bg, s1, s2}`; the walk is
   monotone (a light theme only darkens), and the four probes (`#7C5CFF`, `#FFF176`, `#2F2F2F`,
-  `#808080`, both themes) are held by `ContrastTest`. **The SPA has the same hole** — worth a T-lot.
+  `#808080`, both themes) are held by `ContrastTest`. **The SPA had the same hole**; the T-lot
+  folds `lib/theme.js`/`theme-boot.js` over the same three surfaces, and
+  `webapp/test/accentcontrast.test.mjs` walks the hue circle and fails on the old 4.18/3.74
+  ([webapp.md](webapp.md)).
 - **A fling is not a scroll.** Chasing the viewport's page at 60 fps across 2 000 rows of an 8 000-row
   list is **31 `window()` calls** for rows nobody read. `ListWindow` loads the page under the
   viewport, does not chase a jumped viewport (> `pageSize/8` rows since the last report), fetches only

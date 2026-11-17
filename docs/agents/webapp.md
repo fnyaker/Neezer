@@ -41,12 +41,21 @@ pages, sheets, menus, rows, lists, the player's chrome — is [transitions.md](t
   `lib/theme.js#apply` owns it afterwards; both run the same maths and `test/sillon.test.mjs`
   compares their output so the copies cannot drift. `--ac`/`--btn` are the EXACT chosen surface,
   `--onac`/`--onbtn` are pure black or white (`#0C0C0B` would miss 4.5:1 on a mid grey),
-  and `--ac-text`/`--ac-mark`/`--hrt` are a legible ink variant corrected against the most
-  demanding surface they are drawn on (`--s2` on Encre, `--s1` on Papier), because those tokens
-  are foregrounds (focus ring, hearts, progress). Measured: `#7C5CFF` on Encre gets black text at
-  4.83:1 and a lifted `#8F6AFF` at 4.51:1; `#FFF176` on Papier gets black text at 18.10:1 and a
-  deepened `#736C35` at 5.08:1; a 4 096-colour cube gives a worst label of 4.58:1 and its 8 192
-  theme/ink pairs a worst of 4.50:1. `apply()` clears every inline custom property before a theme
+  and `--ac-text`/`--ac-mark`/`--hrt` are a legible ink variant corrected against EVERY surface
+  they are drawn on — `--bg`, `--s1` AND `--s2` — because those tokens are foregrounds (focus
+  ring, hearts, progress). ONE surface was the hole: correcting against Papier's `--s1` (the
+  easiest for dark ink) left `#7C5CFF` at **4.18:1 on Papier's `--bg` and 3.74:1 on its
+  `--s2`**. The fold (`INK_SURFACES` in `lib/theme.js`, the same list in `theme-boot.js`) is
+  monotone — a light theme only darkens, a dark one only lightens — so the last surface is the
+  strictest and the move stays just enough. Measured: `#7C5CFF` on Encre gets black text at
+  4.83:1 and a lifted `#8F6AFF` at 4.51:1; on Papier its ink is `#654BCE`, 4.79:1 on `--s2`
+  (the old `#7657F2` was the 4.18/3.74); `#FFF176` on Papier gets black text at 18.10:1 and a
+  deepened `#6D6732` at 4.55:1; a 4 096-colour cube gives a worst label of 4.58:1 and its 8 192
+  theme/ink pairs a worst of 4.50:1; `test/accentcontrast.test.mjs` sweeps the whole hue circle
+  (36 hues × 5 saturations × 9 lightnesses, plus 52 greys) on all three surfaces, and the
+  painted pairs in Chromium measure **4.55:1** at worst (desktop, phone, and the full-screen
+  player's 340 px side panel, with a light `#FFF176` and a dark `#101C3A` accent).
+  `apply()` clears every inline custom property before a theme
   switch, so **Pochette keeps `--ac: var(--cover-ac)`** and a custom colour can never freeze the
   sleeve (`--cover-ac` is never touched). The field refuses a non-colour (`aria-invalid`,
   `role=alert`), says when the ink was lifted/darkened (`role=status`), and its controls are
