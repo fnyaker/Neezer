@@ -140,7 +140,7 @@ ever show its own mask. Two things are captured instead, both headless
    `app_process` under the shell uid — no app, no signature, no Gradle:
 
 ```sh
-mobile/brand/device/render-masks.sh --serial emulator-5580 \
+mobile/brand/device/render-masks.sh --serial emulator-5600 \
     --apk mobile/android/app/build/outputs/apk/debug/app-debug.apk \
     --out ~/.cache/neezer-lg1/shots
 ```
