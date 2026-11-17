@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108" role="img" aria-label="La lentille">
+  <!-- A, « la lentille ». Le fond : l'encre. Le disque de citron, et sa
+       lentille posee de biais : la gorge de 5,5 dp est le sillon, l'etiquette
+       de creme est la lumiere. Rien n'est concentrique, rien n'est au centre —
+       c'est la marque de Sillon (le degrade de pochette manquante est centre
+       sur 68 % / 32 %). Les creux sont TRANSPARENTS : la couche monochrome
+       garde exactement la meme geometrie. -->
+  <g id="ground"><rect width="108" height="108" fill="#0c0c0b"/></g>
+  <g id="mark">
+    <path fill="#d2ff3c" fill-rule="evenodd" d="M24.00 54.00A30.00 30.00 0 1 1 84.00 54.00A30.00 30.00 0 1 1 24.00 54.00Z M47.00 45.00A14.00 14.00 0 1 1 75.00 45.00A14.00 14.00 0 1 1 47.00 45.00Z M52.50 45.00A8.50 8.50 0 1 1 69.50 45.00A8.50 8.50 0 1 1 52.50 45.00Z"/>
+    <circle cx="61.0" cy="45.0" r="8.5" fill="#f3f0e8"/>
+  </g>
+</svg>
