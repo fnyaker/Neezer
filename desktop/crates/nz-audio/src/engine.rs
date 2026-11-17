@@ -220,6 +220,13 @@ struct Inner {
     voices: Mutex<Vec<(Arc<VoiceStatus>, JoinHandle<()>)>>,
     /// The spooler threads the network sources started.
     spoolers: Spoolers,
+    /// How far a network body may run ahead of the decoder, in bytes. Seeded
+    /// from [`EngineConfig::read_ahead_bytes`] and changed through
+    /// [`Engine::set_read_ahead_bytes`]: the phone lowers it to 2 MB while the
+    /// screen is on and raises it to 32 MB behind a locked screen, so the radio
+    /// sleeps between bursts instead of trickling (rule 1), and both happen
+    /// WITHOUT rebuilding the engine (which would lose the queue and the clock).
+    read_ahead: AtomicU64,
     event_stop: Arc<AtomicBool>,
     event_thread: Mutex<Option<JoinHandle<()>>>,
     /// The listen party's scheduled PCM (`crate::party`), and its own gain.
@@ -385,6 +392,7 @@ impl Engine {
         );
         let engine = Engine {
             inner: Arc::new(Inner {
+                read_ahead: AtomicU64::new(cfg.read_ahead_bytes),
                 cfg,
                 opener,
                 shared,
@@ -453,6 +461,7 @@ impl Engine {
         );
         let engine = Engine {
             inner: Arc::new(Inner {
+                read_ahead: AtomicU64::new(cfg.read_ahead_bytes),
                 cfg,
                 opener,
                 shared,
@@ -563,6 +572,24 @@ impl Engine {
         inner.spawn_loader(format!("nz-seek-{mark}"), move || {
             seeking.run_seek(mark, &id, quality, target)
         });
+    }
+
+    /// How far a network body may run ahead of the decoder, in bytes. What the
+    /// phone calls when the screen goes off (32 MB: the radio sleeps between
+    /// bursts instead of trickling for four minutes) and comes back on (2 MB: a
+    /// read-ahead must never eat the link the person is using).
+    ///
+    /// It applies to the NEXT fill of a voice: a body already spooling keeps the
+    /// cap it started with, which is what makes the change free — no voice is
+    /// restarted, no decoder is rebuilt, the clock does not move. A prefetched
+    /// next track stays capped at 512 KiB whatever this says (rule 1).
+    pub fn set_read_ahead_bytes(&self, bytes: u64) {
+        self.inner.read_ahead.store(bytes, Ordering::SeqCst);
+    }
+
+    /// The cap in force right now.
+    pub fn read_ahead_bytes(&self) -> u64 {
+        self.inner.read_ahead.load(Ordering::SeqCst)
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -1291,10 +1318,13 @@ fn build_at(
         // A prefetched next track may run far less far ahead than the one being
         // heard: 512 KiB of FLAC is several seconds, and the rest of rule 1 is
         // `nz-api`'s lane.
+        // Read at every open, so a change lands on the next fill without
+        // rebuilding the engine.
+        let cap = inner.read_ahead.load(Ordering::SeqCst);
         let ahead = if lane == Lane::Prefetch {
-            inner.cfg.read_ahead_bytes.min(512 * 1024)
+            cap.min(512 * 1024)
         } else {
-            inner.cfg.read_ahead_bytes
+            cap
         };
         let source = crate::source::HttpSource::new(
             body,
