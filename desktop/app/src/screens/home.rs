@@ -32,6 +32,7 @@ use crate::theme;
 use crate::toast::ToastKind;
 use crate::widgets::card;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::page_scroll::{self, PageScroll};
 use crate::widgets::track_list::{self, Intent, TrackList as List};
 use crate::wiring::events::{self, Sender};
 
@@ -94,6 +95,8 @@ pub struct Screen {
     playing_mood: Option<String>,
     list: List,
     covers: Rc<RefCell<Covers>>,
+    /// The page: its offset, its keys, and the container that draws it.
+    page: PageScroll,
     events: Sender<Msg>,
     _subscriptions: Vec<Subscription>,
 }
@@ -134,6 +137,7 @@ impl Screen {
             playing_mood: None,
             list: List::new(),
             covers: Rc::new(RefCell::new(Covers::new())),
+            page: PageScroll::new(),
             events: tx,
             _subscriptions: vec![cx.observe(&state, |_, _, cx| cx.notify())],
         };
@@ -142,6 +146,8 @@ impl Screen {
         track_list::own(cx, |this: &mut Self, intent, window, cx| {
             this.on_intent(intent, window, cx)
         });
+        let keys = screen.page.own(cx);
+        screen._subscriptions.push(keys);
         screen
     }
 
@@ -415,12 +421,9 @@ impl Screen {
 
 impl Render for Screen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div()
-            .id("home-scroll")
-            .size_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
+        let root = self
+            .page
+            .container("home-scroll")
             .min_w_0()
             .min_h_0()
             .font_family(theme::font(cx))
@@ -436,13 +439,10 @@ impl Render for Screen {
         // A shelf is as wide as the window (see `shelf_count`).
         let shelf = shelf_count(f32::from(window.viewport_size().width));
 
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .gap(rems(1.5))
-            .p(rems(1.5));
+        // `column()` is content-sized on purpose: a `flex_1` page is one
+        // viewport tall, so the scroller above measures nothing to scroll and
+        // the wheel does nothing (the bug this lot fixes). See `page_scroll`.
+        let mut page = page_scroll::column().gap(rems(1.5)).p(rems(1.5));
 
         // -- the hero: who is listening, and what they were doing ------------
         let hello = self
@@ -1004,6 +1004,245 @@ mod tests {
             stub.total(),
             7,
             "six sections plus the login: no fan-out on a screen open"
+        );
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    // -- the page that would not scroll -------------------------------------
+
+    /// A home taller than the window, built the way a real library fills it:
+    /// six releases, twelve artists, eight mixes and a year card.
+    fn tall_home() -> Vec<(&'static str, String)> {
+        let release = |n: usize, title: &str| {
+            serde_json::json!({
+                "deezer_id": format!("400000{n}"),
+                "title": title,
+                "duration": 200,
+                "artist": {"deezer_id": "42", "name": "Kaya Project"},
+                "album": {"deezer_id": format!("900{n}"), "title": title},
+                "release": {"deezer_id": format!("500{n}"), "title": title},
+            })
+        };
+        let titles = [
+            "Lumière soleil",
+            "Soleil",
+            "Storm danse night",
+            "Rêve gold",
+            "Neon heart wild",
+            "Été étoile rain amour",
+        ];
+        let releases: Vec<_> = titles
+            .iter()
+            .enumerate()
+            .map(|(index, title)| release(index + 1, title))
+            .collect();
+        let artists: Vec<_> = (1..=12)
+            .map(|n| {
+                serde_json::json!({
+                    "deezer_id": format!("10{n}"),
+                    "name": format!("Artiste {n}"),
+                    "picture": null,
+                    "tracks": 10 + n,
+                    "plays": 1,
+                })
+            })
+            .collect();
+        let moods: Vec<_> = [
+            "Calme",
+            "Concentration",
+            "Nuit",
+            "Matin",
+            "Route",
+            "Pluie",
+            "Soir",
+            "Vélo",
+            "Travail",
+            "Marcher",
+            "Cuisine",
+            "Dimanche",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            serde_json::json!({
+                "id": format!("mood{index}"),
+                "name": name,
+                "subtitle": "Souffle lent",
+                "ready": true,
+                "tracks": 20,
+                "cover": null,
+            })
+        })
+        .collect();
+        let reco: Vec<_> = (1..=6)
+            .map(|n| {
+                serde_json::json!({
+                    "deezer_id": format!("300000{n}"),
+                    "title": format!("Titre {n}"),
+                    "duration": 200,
+                    "artist": {"deezer_id": "42", "name": "Kaya Project"},
+                    "album": {"deezer_id": "9", "title": "Songs from the Inside"},
+                })
+            })
+            .collect();
+        vec![
+            (
+                "/api/releases",
+                serde_json::json!({
+                "releases": [], "tracks": releases, "unseen": 2, "pending": 0 })
+                .to_string(),
+            ),
+            (
+                "/api/me/artists",
+                serde_json::json!({"artists": artists}).to_string(),
+            ),
+            (
+                "/api/moods",
+                serde_json::json!({"moods": moods}).to_string(),
+            ),
+            (
+                "/api/recommend",
+                serde_json::json!({
+                "level": 0.5, "step": "Voisin", "tracks": reco,
+                "albums": [], "artists": [] })
+                .to_string(),
+            ),
+            (
+                "/api/recap/years",
+                serde_json::json!({
+                "years": [2026, 2025], "latest": 2026, "now_year": 2026,
+                "min_year": 2020, "timezone": "server-local" })
+                .to_string(),
+            ),
+        ]
+    }
+
+    /// The bug: the page could not be scrolled AT ALL, by the wheel or the
+    /// keyboard, and the sections below the fold were unreachable. The scroll
+    /// container measured its direct child's box, and that child was `flex_1`
+    /// (exactly one viewport tall), so the content never overflowed it —
+    /// `max_offset` was 0 while 400 px of the home were clipped away.
+    ///
+    /// Measured with this test: before the fix the range was 0 and a wheel left
+    /// the offset at 0; after it, the 1280x800 window's home has 902 px of
+    /// travel, a wheel notch 78 px, `Page suivante` 640 (0.8 of the window), an
+    /// arrow 64 (4 rem), `Fin` reaches the bottom and `Début` returns to 0. The
+    /// 660 px pane (a 1280 window with the sidebar and the 420 px queue panel
+    /// open) paints a taller home, 2 017 px of travel, and the same keys.
+    #[gpui::test]
+    async fn the_home_scrolls_with_the_wheel_and_the_keys(cx: &mut gpui::TestAppContext) {
+        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px, size};
+
+        let bodies = tall_home();
+        let mut routes: Vec<(&str, &str)> = vec![
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/discover/prefs", PREFS),
+        ];
+        routes.extend(bodies.iter().map(|(path, body)| (*path, body.as_str())));
+        let stub = stub::Stub::start(&routes);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| Screen::new(Route::Home, state, cx)
+        });
+        stub::until(&runtime, cx, "the home's answers", |cx| {
+            screen.read(cx).list.len() == 6
+        });
+
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            })
+        };
+        let offset =
+            |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| screen.read(cx).page.offset().y);
+        let max =
+            |cx: &mut gpui::VisualTestContext| cx.update(|_, cx| screen.read(cx).page.range());
+
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        paint(cx);
+        let range = max(cx);
+        assert!(
+            range > px(100.),
+            "the home is taller than a 1280x800 window, so its page must have a \
+             scroll range; measured {range:?} (0 is the bug this test exists for)"
+        );
+        assert_eq!(offset(cx), px(0.), "a fresh page starts at the top");
+
+        // The wheel, as the X11 backend builds it (`ScrollDelta::Lines`, a
+        // wheel notch is `SCROLL_LINES` and going DOWN is a negative y).
+        cx.simulate_mouse_move(point(px(640.), px(400.)), None, Modifiers::default());
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(640.), px(400.)),
+            delta: ScrollDelta::Lines(point(0., -3.)),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        paint(cx);
+        let after_wheel = offset(cx);
+        assert!(
+            after_wheel < px(-10.),
+            "the wheel scrolls the page; measured {after_wheel:?}"
+        );
+
+        // `Page suivante` / `Page précédente`, `Début` / `Fin`, arrows: the
+        // same keys a person uses, through the real keymap and the screen's own
+        // interceptor.
+        let wheeled = after_wheel;
+        cx.simulate_keystrokes("pagedown");
+        paint(cx);
+        let after_page = offset(cx);
+        assert!(
+            after_page < wheeled - px(200.),
+            "Page suivante moves most of the window; measured {after_page:?}"
+        );
+        cx.simulate_keystrokes("pageup");
+        paint(cx);
+        let back = offset(cx);
+        assert!(
+            back > after_page + px(300.) && back <= px(0.),
+            "Page précédente comes back most of the window; measured {back:?} \
+             from {after_page:?}"
+        );
+        cx.simulate_keystrokes("end");
+        paint(cx);
+        assert_eq!(offset(cx), -range, "Fin reaches the bottom of the page");
+        cx.simulate_keystrokes("home");
+        paint(cx);
+        assert_eq!(offset(cx), px(0.), "Début returns to the top");
+        cx.simulate_keystrokes("down");
+        paint(cx);
+        let one_line = offset(cx);
+        assert!(
+            one_line < px(-10.) && one_line > px(-120.),
+            "an arrow moves a few lines, not a page; measured {one_line:?}"
+        );
+        cx.simulate_keystrokes("up");
+        paint(cx);
+        assert_eq!(offset(cx), px(0.), "the up arrow comes back");
+
+        // The same page at the width a 1280x800 window has once the sidebar and
+        // the 420 px queue panel are open: narrower, so taller, and it scrolls.
+        cx.simulate_resize(size(px(660.), px(800.)));
+        paint(cx);
+        let narrow_range = max(cx);
+        assert!(
+            narrow_range > range,
+            "a 660 px pane paints a taller home; measured {narrow_range:?} vs {range:?}"
+        );
+        cx.simulate_keystrokes("pagedown");
+        paint(cx);
+        assert!(
+            offset(cx) < px(0.),
+            "the keys still scroll the page beside the 420 px panel"
+        );
+
+        println!(
+            "accueil qui défile : plage {range:?} à 1280x800, {narrow_range:?} dans la \
+             colonne de 660 px, molette {wheeled:?}, Page suivante {after_page:?}, \
+             une flèche {one_line:?}"
         );
         runtime.shutdown_background();
         stub.stop();

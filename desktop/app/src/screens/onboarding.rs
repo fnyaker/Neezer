@@ -49,6 +49,7 @@ use crate::state::AppState;
 use crate::theme;
 use crate::widgets::card;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::page_scroll;
 use crate::wiring::events::{self, Sender};
 
 /// How many tiles a page carries (`PAGE_FIRST`/`PAGE_NEXT`).
@@ -972,12 +973,10 @@ impl Render for Screen {
             .text_color(theme::text(cx))
             .key_context("Neezer");
 
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.))
-            .w_full()
+        // As tall as its CONTENT (see `page_scroll`): a `flex_1` page was one
+        // viewport tall, so Bienvenue's second step below the fold could not be
+        // reached at all.
+        let mut page = page_scroll::column()
             .max_w(px(1800.))
             .gap(rems(1.))
             .p(rems(2.));
