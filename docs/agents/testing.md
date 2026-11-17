@@ -100,6 +100,20 @@ the code under it was broken:
 - **Count, don't time.** "The import is fast" is a statement budget (`count_statements` in
   `tests/test_deezer.py`), not `elapsed < 15`: exact, machine-independent, and an N+1 query moves
   it by thousands. The time bound it replaced could not see a re-sync rewriting every row.
+- **Pin the clock a cache is keyed on, and write its day as a literal.** A value cached per
+  (person, day) is compared on a day, and the route resolves that day from the wall clock while a
+  fixture usually captures it once at import: a suite that starts before midnight and reaches the
+  route after it compares two different days, and both symptoms are real — a rebuild inside a
+  statement count, and a different day-seeded draw. `tests/test_moods.py` had exactly that:
+  `DAY = moods.now().date().isoformat()` at module scope, the route calling `moods.catalog(user)`
+  itself. CI run 43983638806 started at 23:57:23 UTC, imported the module on 16 November and
+  failed at 00:00:58 — `Counter({'SELECT': 2})` where 1 was the login's user read and the second
+  was the rebuild, and the ids assertion behind it would have compared yesterday's draw with
+  today's. The fixture now pins the one clock `moods.catalog` reads (`grep 'now()'
+  neezer/moods.py`: one call) to a literal instant, and a guard test (`assertEqual(moods.now(),
+  FROZEN)`) fails the moment that pin is removed — at any hour, where the count only moved once a
+  day. The counts stay exact: a route that rescans moves them to 2 and 5, asserted against that
+  mutation.
 - **Never compute the expectation from the constant under test** (`cleanup.GB`,
   `_MAX_OUTAGE_RETRIES + 1`): write the literal. And keep a test's own timeout below the cap it is
   checking, or "it waited the cap out" passes as "it did not wait".
