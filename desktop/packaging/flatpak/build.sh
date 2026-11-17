@@ -47,6 +47,10 @@ install -m 644 "$NEEZER_ROOT/LICENSE" "$work/inputs/LICENSE"
 install -m 644 "$NEEZER_PACKAGING/flatpak/fr.neezer.Desktop.yaml" "$work/fr.neezer.Desktop.yaml"
 
 mkdir -p "$out"
+# Absolute before the `cd` below: `flatpak build-bundle` runs in the work
+# directory, and a relative `release` would point inside it (measured: "opendir
+# (/tmp/neezer-flatpak.…/release): No such file or directory").
+out="$(cd "$out" && pwd)"
 cd "$work"
 # `--user`: nothing here needs root, and a build must never install into the
 # machine's system installation. `--disable-rofiles-fuse` is the documented

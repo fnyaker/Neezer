@@ -37,6 +37,10 @@ downloads
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...except the RPM spec of the desktop app, which is a source file and not a
+# PyInstaller artefact (`rpmbuild -bb` wants the `.spec` extension, so it cannot
+# be renamed around this rule).
+!desktop/packaging/rpm/neezer-desktop.spec
 
 # Installer logs
 pip-log.txt
