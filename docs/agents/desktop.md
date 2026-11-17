@@ -1321,7 +1321,10 @@ Waves that can run in parallel (disjoint files):
   pins the failure: 1 600 px of travel with `column()`, **0** with `flex_1`): **0 → 902 px** of
   travel on a 1280×800 window, **2 017 px** in the 660 px column a 1280 window keeps with the
   sidebar and the 420 px queue panel open, one wheel notch **78 px**, `Page suivante` **640 px**
-  (0.8 of the window), an arrow **64 px** (4 rem). One
+  (0.8 of the window), an arrow **64 px** (4 rem). Scrolling costs nothing measurable: 40
+  `Page suivante` on a release build under Xvfb give a p95 element-tree build of **0.29 ms**
+  against **0.25 ms** idle (the 160 ms present interval is the software rasterizer, not the app).
+  One
   implementation, `widgets/page_scroll.rs` (`PageScroll::container` for the scroller,
   `column()` for the page, `own()` for the keys): Nouveautés, le Récap, Bienvenue and the
   search results page were built the same way and are fixed with it. The keys are app-level

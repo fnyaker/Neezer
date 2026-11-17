@@ -101,10 +101,15 @@ impl PageScroll {
         self.scroll.set_offset(offset);
     }
 
-    /// The page's keys, for as long as the screen that owns this handle lives.
+    /// The page's keys, for as long as the screen that owns this handle lives:
+    /// the returned [`Subscription`] MUST be kept by the screen (`cx`'s own
+    /// subscriptions would do, a field is clearer), or the interceptor outlives
+    /// the page it scrolls.
+    ///
     /// `↑`/`↓`, `Page préc./suiv.`, `Début`/`Fin` scroll the PAGE — what a
     /// browser does on the SPA — and nothing else: `Ctrl+↑` is the volume and
-    /// `Shift+←` a seek, so only the bare stroke is ours.
+    /// `Shift+←` a seek, so only the bare stroke is ours. A screen that has
+    /// been dropped consumes nothing: the key goes on to whatever is on screen.
     pub fn own<V: Render + 'static>(&self, cx: &mut Context<V>) -> Subscription {
         let mut page = self.clone();
         let weak = cx.weak_entity();
@@ -124,9 +129,13 @@ impl PageScroll {
             };
             let rem = window.rem_size();
             let viewport = window.viewport_size().height;
-            page.scroll(how, rem, viewport);
-            let _ = weak.update(cx, |_, cx| cx.notify());
-            cx.stop_propagation();
+            let handled = weak.update(cx, |_, cx| {
+                page.scroll(how, rem, viewport);
+                cx.notify();
+            });
+            if handled.is_ok() {
+                cx.stop_propagation();
+            }
         })
     }
 }
