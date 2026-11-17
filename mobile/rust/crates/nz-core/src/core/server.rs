@@ -46,15 +46,26 @@ impl Core {
 
     /// The same, over a jar the caller just replaced (`session.rs`'s offline
     /// logout must not build a client on the cookie it just forgot).
+    ///
+    /// **The pin is handed to every client** (SC3's `pinned_leaf_sha256`): a
+    /// chain the platform accepts OR the one leaf the person vouched for passes,
+    /// and another leaf is `ApiError::Certificate { changed: true }` — "le
+    /// certificat a changé" — whichever request asked. MB2 stored the pin and
+    /// MB4 makes it count, because a pin that only the setup screen reads would
+    /// leave every real request walking over a replaced certificate.
     pub(super) fn build_api_with(
         &self,
         origin: &Origin,
         jar: Arc<nz_api::SessionJar>,
     ) -> Result<Arc<Api>, CoreError> {
         let cache: Arc<dyn nz_api::ResponseCache> = Arc::new(self.cache().clone());
+        let pin = self
+            .pinned(origin)
+            .and_then(|sha256| nz_api::parse_fingerprint(&sha256));
         let api = Api::builder(origin.as_str())
             .session(jar)
             .cache(cache)
+            .pinned_leaf_sha256(pin)
             .build()?;
         // A client built while the radio is down starts down: the first request
         // then answers `Offline` from `nz-api`'s own watch too.
@@ -172,6 +183,16 @@ impl Core {
                 Some(sha256.to_owned())
             };
         }
+        drop(slot);
+        // The client that carries every request is rebuilt over the new pin, so
+        // accepting (or clearing) one takes effect in THIS process — a pin that
+        // only counted from the next launch would leave the session the person
+        // just configured on the old verdict.
+        if self.origin().as_ref() == Some(&origin)
+            && let Ok(api) = self.build_api(&origin)
+        {
+            *self.api.write().unwrap_or_else(|err| err.into_inner()) = Some(api);
+        }
         Ok(())
     }
 
@@ -264,6 +285,56 @@ mod tests {
             None,
             "nothing was written for a URL that is not an origin"
         );
+    }
+
+    /// **The pin reaches EVERY request, not only the setup screen** (MB4's
+    /// half of SC3): the client the core hands out carries the stored leaf, and
+    /// a pin accepted in this process is on the client of this process — no
+    /// relaunch. `nz-api`'s `tests/tls.rs`
+    /// (`another_certificate_on_the_same_origin_is_a_change`) proves what that
+    /// client then does with a server whose certificate changed: an ordinary
+    /// `GET` is refused with `ApiError::Certificate { changed: true }`, zero
+    /// application bytes sent, sentence "Le certificat du serveur a changé".
+    #[test]
+    fn the_core_client_carries_the_pinned_leaf() {
+        let pin = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
+        let dir = TempDir::new("pin-client");
+        let core = dir.core("test");
+        // Offline: the origin is stored and a client built, without a socket
+        // (rule 3's own test proves that part) — the state a first launch is in.
+        core.set_network(crate::core::NetworkState::None);
+        let runtime = testing_runtime();
+        let refused = runtime
+            .block_on(core.set_server("https://neezer.example"))
+            .expect_err("no link, no probe");
+        assert_eq!(refused, CoreError::Offline);
+        core.set_network(crate::core::NetworkState::Wifi { metered: false });
+
+        let unpinned = core.api().expect("a client");
+        assert_eq!(
+            unpinned.pinned_fingerprint(),
+            None,
+            "a server nobody pinned keeps the platform's verdict and nothing else"
+        );
+
+        core.pin_certificate("https://neezer.example", pin)
+            .expect("pin");
+        let client = core.api().expect("a client");
+        assert_eq!(
+            client.pinned_fingerprint(),
+            Some(nz_api::hex_fingerprint(
+                &nz_api::parse_fingerprint(pin).expect("a digest")
+            )),
+            "the client the whole app uses carries the pin, in this process"
+        );
+        // The client is rebuilt rather than mutated: the old handle keeps its
+        // own verdict, so nothing can downgrade a request already in flight.
+        assert_eq!(unpinned.pinned_fingerprint(), None);
+
+        // A cleared pin (a renewed certificate, re-saved) takes effect at once.
+        core.pin_certificate("https://neezer.example", "")
+            .expect("clear");
+        assert_eq!(core.api().expect("a client").pinned_fingerprint(), None);
     }
 
     fn testing_runtime() -> tokio::runtime::Runtime {

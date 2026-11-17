@@ -47,6 +47,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.kotlinx.coroutines.android)
+    // `rememberLauncherForActivityResult`: DeezerLoginActivity answers the very
+    // screen that opened it (the Activity Result contract), which is what keeps
+    // an ARL from travelling through the whole app.
+    implementation(libs.androidx.activity.compose)
     // The FileProvider the manifest names is androidx.core's (androidx.core.content.FileProvider).
     implementation(libs.androidx.core.ktx)
 }
