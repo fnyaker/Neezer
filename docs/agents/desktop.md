@@ -3383,7 +3383,8 @@ Waves that can run in parallel (disjoint files):
   ligne aurait cloné 4 000 entrées par ligne et par image, d'où `Rows` (résolu une fois par version)
   et `Watch::get` qui ne relit que si la version a bougé. La version elle-même se lit par
   `snapshot().version`, donc chaque écran paie UN clone par 300 ms quand rien ne bouge (quelques
-  kilo-octets, six écrans) ; un accesseur `version()` dans `nz-offline` le supprimerait. Un écran en `&self` (le menu d'une
+  kilo-octets, six écrans) ; `Offline::events()` (le `watch::Receiver<u64>` que SC4 a ajouté à
+  `nz-offline` en fusionnant) supprime ce clone et sera la prochaine étape de ce `Watch`. Un écran en `&self` (le menu d'une
   émission) ne peut pas appeler `Watch::get` : il lit `self.rows`. `cx.entity().read(cx)` depuis un
   rendu de la même entité PANIQUE (« cannot read … while it is already being updated ») : l'état
   « armé » de « Tout supprimer » se passe en paramètre. Et `cargo fmt --all` REFORMATE les crates
