@@ -773,6 +773,14 @@ khronos-egl 6.0 (dynamic), rustls-platform-verifier 0.7.1.
 - **Two `MAIN/LAUNCHER` filters put two icons in the launcher.** The alias exists so the old app's
   icon keeps working, so `MainActivity` carries NO launcher filter: the alias is the only one
   (`resolve-activity -c LAUNCHER` → `/.SetupActivity`).
+- **`cargo install` is NOT idempotent when `~/.cargo/bin` is cached.** The `apk` job caches that
+  directory, so its second run died on `error: binary cargo-ndk already exists in destination`
+  (exit 101) before compiling anything. The step now asks `cargo ndk --version` first — a workflow's
+  own repeat run is a test, and it caught this one.
+- **`apksigner verify` prints nothing without `--verbose`, and its scheme line carries the scheme's
+  full name**: `Verified using v1 scheme (JAR signing): true`. A check written for `v1 scheme: true`
+  never matches, so a correctly signed APK fails the job. Measured by running the step's own command
+  on the built APK before trusting it.
 - **R8's Kotlin-metadata warning is not a failure.** `assembleRelease` prints "An error occurred when
   parsing kotlin metadata" because the AGP 8.13 R8 predates Kotlin 2.4's metadata; downgrading to
   Kotlin 2.3.21 does NOT remove it (a dependency's metadata triggers it too), so the newest Kotlin
