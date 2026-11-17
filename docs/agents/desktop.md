@@ -6,8 +6,8 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D15a, D16,
-M1, P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D10b, D11, D12, D13, D14a, D14b,
+D15a, D16, M1, P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at
 `AudioReady`, `409` told apart, the `auto` payload, the output list) and the contract follow-up
 (Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding route); the rest
 planned.**
@@ -387,6 +387,97 @@ of its callers.
   "episode_id","code","message"}`, `{"event":"idle"}`. The UI shows running, progress, and each
   failure's cause (rule 2); an interrupted local job resumes at its last chunk after a restart.
 
+## Memory — where the megabytes go (measured 2026-11-17)
+
+The laptop this app runs on has 16 GB and the person watches `htop`. This section is the map:
+what a Neezer window costs, which part of it is the app's data and which part is the
+machine's graphics stack, and what is guarded by a test. Every number is a release build on
+`Xvfb :105 -screen 0 2600x1700x24 -dpi 96` with `GPUI_X11_SCALE_FACTOR=1` (never the person's
+session), against `tools/perf_api.py --serve` (8 000 tracks, 4 000 favourites, 60 playlists,
+`--covers cover.jpg` when sleeves matter — without it every `/api/cover` is a 404 and a screen
+paints placeholders), `/proc/<pid>/status` for RSS and `/proc/<pid>/smaps_rollup` + `smaps`
+for PSS and the per-mapping breakdown. **RSS is not the app's data**: it is what the process
+resident set holds, arenas and driver included. Count bytes when the question is "what does
+the app keep" (`app/src/testmem.rs`).
+
+- **The rule, the socle is not the app.** At the LOGIN screen — no request made, no list
+  parsed — the release binary already sits at **195.8–202.3 MB RSS** here, and `smaps` says
+  where: `libLLVM.so` **48.6 MB** (RADV's shader compiler, PSS 9.8 MB because it is shared),
+  the glibc main arena `[heap]` **46.1 MB**, 181 anonymous malloc/driver mappings **36.9 MB**,
+  the binary's own text and data **29.2 MB**, `libgallium` (llvmpipe/lavapipe) **13.3 MB**.
+  D7's famous **103 MB** is the same app on a real Wayland session with a real GPU: two
+  different machines' graphics stacks, not two versions. **Never compare a number measured
+  under Xvfb with one measured on the panel**, and never compare with the login screen of a
+  different run.
+- **The rule, the bisect — D7 to master, one environment, login then home (RSS):**
+  `a4c51f5` (D7) **197.8 → 199.6 MB**; `1c59508` (#238, the 146-icon superset) **195.8 →
+  197.8**; `3afd1f0` (#241, D8a's browse screens) **198.5 → 203.1**; master (D8b, D13, D9,
+  D14a) **201.5 → 206.3**. The whole walk from D7 to master is **+6.7 MB at home**, of which
+  the icon superset is **−0.2 MB** (it embeds 53 632 more bytes of SVG and rasterises only
+  what it draws). The "182/199/237 MB" of the lot reports are this environment's baseline,
+  not a regression: **the +80–100 MB the plan was hunting was already there before D7**.
+- **The rule, the window's area is paid in buffers.** The same build, same screen: **201.7 MB
+  at 1280×800** and **282.9 / 283.3 MB at 2560×1600** — **+81.6 MB**, twice. A 2560×1600 RGBA
+  surface is 16.4 MB, so that is ~5 of them: wgpu's swapchain plus the render targets GPUI
+  keeps for the window. Nothing the app can share, and nothing to fix: a bigger window IS a
+  bigger framebuffer. It is why every memory criterion is stated with its window size.
+- **The rule, a screen's own share is small and paid once.** 1280×800, master, no covers:
+  login **201.5**, home **206.3** (+4.8), artist **224.7** (+18.4), back to home **221.2**
+  (−3.5), Bibliothèque **222.1**, 4 000 favourites **234.7** (+12.6 for the whole 4 000-row
+  data model plus its windowed list). Of the artist page's +18.4 MB, `smaps` puts +12.0 MB in
+  anonymous mappings, +3.5 MB in `[heap]` and +1.8 MB in the binary's pages — allocator
+  working set, and it does not all come back because glibc keeps arenas. The **live** heap is
+  tiny: `LD_PRELOAD=libjemalloc.so.2` with `stats_print` at a clean quit reports **9 708 144 B
+  allocated** (9.3 MB) at the artist page, against 218 664 960 B of *mapped* arenas. When
+  someone says "Neezer uses 300 MB", 9 MB of it is the app's objects.
+- **The rule, navigation must cost nothing — and it cost 161 KB per screen.** 1 000 round
+  trips between Accueil and Bibliothèque (2 000 screen builds): **204.4 → 526.1 MB,
+  +321.7 MB (+161 KB per screen)** before the fix, **207.5 → 243.8 MB, +36.3 MB (+18 KB)**
+  after it. The cause was the screen's reply channel: `events::Sender` never closed when its
+  last clone dropped, so the drain task GPUI holds for `Receiver::next()` stayed parked for
+  the life of the process, keeping the screen state it had captured. `Sender::drop` now closes
+  the channel, the task answers `None`, and GPUI frees it. **Any new screen gets this for
+  free** because every screen already answers through `events::channel`; a channel created
+  any other way is a bug.
+- **The rule, a sleeve is painted at the size it is SEEN.** GPUI uploads a painted image into
+  one atlas tile **at the image's natural size**, keyed by the image's id, and nothing
+  releases that tile before the window goes away (`gpui_pre`'s `Window::paint_image` /
+  `drop_image`); the decoded copy lives in the App's asset cache, which also never evicts.
+  A 1 000 px sleeve drawn in a 36 px row is therefore **4 MB of decoded heap and 4 MB of
+  atlas for 1 296 useful pixels**, and a 4 000-row list that draws one per row would cost that
+  per distinct sleeve — D9's +291 MB for "a sleeve per queue row" is that arithmetic (its queue
+  still draws glyph rows, so the number was a prediction, not a measurement: this section's own
+  sleeve deltas are the measured +1 to +2 MB of a browse page's few), and it is the number this
+  rule exists to keep off the queue. `nz-cache`'s `Covers::variant` writes a
+  downscaled copy once (the bench's 1 753 091 B JPEG becomes **3 306 B at 128 px**, 4 480 B at
+  384 px) and `cover::Class` decides the size: **`Class::Row` 128 px** for a screen whose
+  sleeves are list rows, `Card` 384 px, `Page` 512 px. Decoded, 1 000² × 4 = 4 000 000 B
+  becomes 128² × 4 = 65 536 B: **61×**. A screen that paints sleeves in rows is built with
+  `Covers::rows()`; one that paints cards keeps `Covers::new()`.
+- **The rule, what is measured is counted, not read from RSS.** `app/src/testmem.rs` counts
+  bytes allocated minus bytes freed **on the test's own thread** (a `#[global_allocator]` that
+  is `#[cfg(test)]` only, so the shipped binary is unchanged). The guard is
+  `app.rs`'s `building_a_screen_a_thousand_times_keeps_nothing`: 2 000 screen builds keep
+  **892 936 B** (446 B each, GPUI's task arena settling later than the test can see), budget
+  **2 MiB** — 2.3× the measured weight and 160× tighter than the 161 KB-per-screen leak it
+  caught. A screen that starts keeping a list, a response or a decoded image fails it at once.
+  `nz-cache`'s `a_sleeve_is_stored_at_the_size_it_is_drawn` pins the resize: 128 px copy,
+  idempotent, no upscaling, `None` when there is no art.
+- **Pitfalls found by measuring**:
+  - **A screenshot on a 2600×1700 software-rendered root can block `import -window root`**;
+    drive a journey from the bench server's own access log (the route a screen asks for) and
+    take pictures outside the measured path.
+  - **`XResizeWindow` races the app's own initial size**: a resize issued before the window is
+    ready is silently lost and the run measures 1280×800 while claiming 2560×1600. Resize
+    after the first frame and assert the size you measured.
+  - **The bench must serve real cover bytes** to measure anything sleeve-shaped
+    (`tools/perf_api.py --covers <jpeg>`): with Deezer unreachable every `/api/cover` is a 404
+    and every screen paints a placeholder, which reads as "sleeves are free".
+  - **This machine is shared.** Other sessions run `pkill Xvfb` and `pkill -f perf_api`: the
+    isolated display is a copy of the binary under another name (`xserv105`) kept alive by a
+    loop, and the bench runs as `bench.py` for the same reason. A run whose X server dies
+    exits 0 and measures a dead process.
+
 ## The lots
 
 Rules for every lot (they are part of each worker prompt below):
@@ -424,7 +515,7 @@ Waves that can run in parallel (disjoint files):
 3. **D2, D3, D4, D6, T2, T3** (D2/D3/D4 need D1; D6 needs D5; T2/T3 need T1 and touch disjoint files).
 4. **D7** alone (it wires everything and creates every screen stub).
 5. **D8a, D8b, D9, D13, D14a, D14b, P1** (each owns its own screen files).
-6. **D10b, D12, D15a, D16** then **T4, D15b** (D11 and D15b are delivered; D10b and T4 remain).
+6. **D10b, D12, D15a, D16** then **T4, D15b** (D10b, D11 and D15b are delivered; T4 remains).
 7. **D17**.
 
 ### D0 — Workspace and CI (delivered 2026-11-16)
@@ -1342,13 +1433,81 @@ Waves that can run in parallel (disjoint files):
     that works here, at `-dpi 96` plus `GPUI_X11_SCALE_FACTOR=1` (without the latter the app sees a
     2560×1600 window as 1280×800 and the layout is measured at half the size).
 
-### D10b — Visualiser UI (bars, oscilloscope)
+### D10b — Visualiser UI (bars, oscilloscope) (delivered 2026-11-17)
 
-- **Files**: `screens/viz.rs`, `app/src/widgets/{bars,scope}.rs`, `screens/settings/viz.rs`.
-- **Acceptance**: in the player and full screen at 240 Hz: ≥ 230 fps, CPU of the whole app with
-  bars on < 12 % of one core (eco mode: 30 fps cap, < 5 %); the analysis thread stops when no viz is
-  visible (assert 0 analyser calls when hidden); settings: palette (cover/theme), intensity, fps cap,
-  scope orientation and colour, eco.
+- **The rule, the page's arithmetic and our quads.** The geometry is `nz-viz`'s (V1, the page's own
+  `rhythm::viz_bars`/`viz_scope`); what this lot owns is the DRAWING: one GPU quad per bar (body,
+  inner core, falling peak) and one per scope column (`Window::paint_quad`, no tessellated path).
+  The per-frame cost it controls is therefore measurable on its own: **p50 111–115 µs, p95 135–136 µs,
+  max 1.2–2.2 ms** for 52 bars at 1 280 × 800 and 512 columns × 2 lanes of scope (release, this
+  machine, `NZ_FRAME_LOG=1`) — **2.7–3.3 % of the 4.17 ms a 240 Hz frame has**, which is the number
+  that says the next panel rate is affordable.
+- **The rule, the cadence is the panel's by default.** `viz.fps` follows `stores.js` (Écran/30/45/60)
+  with one deliberate difference: the desktop's default is the DISPLAY, because the acceptance is
+  240 Hz. At "Écran" each paint asks for the next frame (`request_animation_frame`, GPUI's own frame
+  source); at 30/45/60 — and in eco, which forces 30 whatever the setting — one sleeping pacing task
+  spaces the frames, so the whole window is not re-rendered for nothing. `Animation::with_max_fps` was
+  rejected on purpose: it obeys `reduce_motion` by freezing a repeating animation, and a frozen
+  visualiser is not the feature.
+- **The rule, nothing runs when nothing is visible.** The screen (and the Réglages preview) set
+  `VizService::set_visible` on every paint and hand it back in `Context::on_release`; the analyser
+  thread clears the tap and sleeps 50 ms while hidden, and the widget asks for no frame when the
+  player is paused. Asserted on a real tap: **0 frames analysed over 40 rendered buffers while
+  hidden**, then frames again once a screen asks for it
+  (`the_analyser_does_no_work_when_no_visualiser_is_on_screen`).
+- **The rule, the settings are the SPA's keys, and the panel is the same controls.** `viz.mode`,
+  `viz.palette` (Pochette = `coverpalette.js#analyse` on the decoded sleeve, via GPUI's `RenderImage`
+  — BGRA, downsampled to 64 × 64 before the analysis; Thème = `Palette::from_theme`), `viz.intensity`,
+  `viz.fps`, `viz.eco`, `viz.scope.orientation`, `viz.scope.colour`. One `controls()` function, used by
+  the screen's sheet (420 px) and by the Réglages section. **Deliberate difference**: in the SPA eco
+  turns every animation off; here it keeps the scene at 30 fps with the flat grade (one fill per bar,
+  no halo/cores/breath/peaks), because the lot's acceptance measures a 30 fps eco.
+- **What it is now**: `widgets/bars.rs` (`Bars` entity: `set_prefs`, `set_active`, `frames`,
+  `bar_count`, `Layout::{Strip,Full}`), `widgets/scope.rs` (`Scope`: lanes, graticule, min/max trace,
+  halo+beam, trigger marker, `SCOPE_POINTS = 512`), `screens/viz.rs` (the full-bleed stage, the title
+  card, the control bar that fades after 3 s, the settings sheet, the notices — full-screen for a
+  cause, a quiet line at the bottom for a pause — and the keys `1`/`2`/`c`/`Maj+F` installed ONCE for
+  the process, dispatched to a `WeakEntity` so the screen never takes the focus),
+  `screens/settings/viz.rs` (`Prefs` + load/save, the palette helpers, `Sleeve`, `FrameLog`,
+  `controls`, and the `Section` with a live preview).
+- **Measured** (release, `Xvfb :95`/`:96` at 2 560 × 1 600, `GPUI_X11_SCALE_FACTOR=1`, a real FLAC in
+  the play cache, `NZ_FRAME_LOG=1`, this machine):
+  - the app's own frame log, 1 280 × 800, bars: **fps 24.0 and 27.9** over two runs, `paint_us`
+    p50 **115/111 µs**, p95 **136/135 µs**, max 2.2/1.2 ms. At 2 560 × 1 600: **2.4 fps**, which is
+    the software rasteriser, not the app (see the environment note).
+  - `cargo test -p neezer-desktop`: **12 new tests** (the seven preference/geometry ones, the scene
+    keys, the sheet, the analyser stop, the three-size layout) and the whole suite green; `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+  - the screen was LOOKED AT: Xvfb :96 captures of the WINDOW (never the root: Xvfb keeps the pixels
+    of a destroyed window, and two app instances overlapped on the first attempts) at **2 560 ×
+    1 600** — the bar row, the oscilloscope, and the settings sheet over it — and at **1 280 × 800**
+    (the row with the title card and the control bar) — kept as
+    [barres 2 560](../desktop/d10b/barres-2560x1600.png),
+    [barres 1 280](../desktop/d10b/barres-1280x800.png),
+    [oscilloscope 2 560](../desktop/d10b/oscilloscope-2560x1600.png) and
+    [la feuille](../desktop/d10b/reglages-2560x1600.png). The 420 px panel was opened on the run
+    (the layout assertion covers the three widths); its capture did not survive the harness.
+- **The environment limit, said plainly**: this machine's Xvfb has no DRI3, so Mesa cannot present a
+  Vulkan surface ("No DRI3 support detected - required for presentation") and GPUI paints through a
+  software path. **The 240 Hz / ≥ 230 fps criterion cannot be demonstrated here** — the fps above is
+  the rasteriser's ceiling at 4 Mpx, exactly as D0 recorded for the first frame. The app-side number
+  that can be held is the paint cost (2.7–3.3 % of the 240 Hz budget); the panel number belongs to a
+  real session, D17's pass.
+- **Pitfalls found by building**:
+  - **`Window::paint_quad` paints in WINDOW coordinates.** `canvas`'s prepaint hands an element's
+    `bounds`, and painting `bounds.size`-relative quads (forgetting `bounds.origin`) drew the bar row
+    at the window's corner, *over the sidebar*: seen on the first real run, fixed by adding the
+    origin. A geometry bench cannot see this; only the window can.
+  - **A cancelled decode is not an error.** Pressing play while the restored queue was still loading
+    produced `EngineEvent::Error … « lecture interrompue »` (a toast) — `decode.rs` returns it when
+    its ring is closed by the next voice. The toast belongs to `state.rs` (D7/D9), not to the
+    visualiser, and the follow-up fixed both halves: `decode::fail` says nothing for a voice that
+    was stopped, and a late error for a track that is no longer current is logged, not toasted
+    (`state.rs`, *The rule, a cancelled decode says nothing*).
+  - The settings section needs one dispatch line in `screens/settings/mod.rs`
+    (`SettingsSection::Viz => viz::body(...)`) and the "in the player" strip one `child()` in
+    `screens/now_playing.rs` (D9's file). Both are outside this lot's files; the screen's own sheet
+    carries the same controls, and the widget exposes `Layout::Strip` for the strip.
 
 ### D11 — Podcasts (delivered 2026-11-17)
 
