@@ -1,0 +1,25 @@
+Package: neezer-desktop
+Version: @VERSION@-1
+Architecture: amd64
+Maintainer: the Neezer project <https://github.com/fnyaker/Neezer>
+Installed-Size: @INSTALLED_SIZE@
+Depends: @DEPENDS@, hicolor-icon-theme
+Recommends: pipewire, mesa-vulkan-drivers, fonts-dejavu-core
+Suggests: vulkan-radeon, vulkan-intel, nvidia-driver
+Section: sound
+Priority: optional
+Homepage: https://github.com/fnyaker/Neezer
+Description: Neezer — lecteur de musique et de podcasts pour les bureaux Linux
+ Lecteur de musique et de podcasts pour les bureaux Linux : interface GPUI,
+ lecture gapless et crossfade par PipeWire, MPRIS (les touches multimédia et la
+ barre du bureau pilotent le lecteur), cache hors ligne, et transcription locale
+ des épisodes sur le GPU via Vulkan.
+ .
+ Music and podcast player for Linux desktops: GPUI interface, gapless and
+ crossfaded playback through PipeWire, MPRIS (the media keys and the desktop's
+ player widget drive it), an offline cache, and local podcast transcription on
+ the GPU through Vulkan.
+ .
+ The package installs both binaries: neezer-desktop (the app) and
+ neezer-transcribe (the sidecar it starts, whisper.cpp with the Vulkan backend;
+ it falls back to the CPU and says why when no Vulkan device is usable).

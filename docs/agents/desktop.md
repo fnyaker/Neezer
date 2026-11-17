@@ -7,7 +7,7 @@ player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
 **Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D10b, D11, D12, D13, D14a,
-D14b, D15a, D16, D17, M1, P1, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
+D14b, D15a, D16, D17, M1, P1, P2, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
 trim, saved sound at `AudioReady`, `409` told apart, the `auto` payload, the output list) and the
 contract follow-up (Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding
 route); the rest planned.**
@@ -41,6 +41,7 @@ Every choice below was checked against several sources and then **built together
 | Transcription | [whisper-rs](https://github.com/tazz4843/whisper-rs) (moved to Codeberg), `whisper-rs-sys` 0.15 `build.rs` (read), [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (Vulkan `GGML_VULKAN`, built-in Silero VAD `--vad`), [vad-speech-segments](https://gitea.mueller.network/extern/whisper.cpp/src/branch/master/examples/vad-speech-segments), the server's own `neezer/transcribe/` and `docker/transcribe/worker.py` | `whisper-rs = "0.16.0"`, feature `vulkan`; VAD through whisper-rs's `WhisperVadContext` (Silero GGML) — **not** `FullParams::enable_vad`, which is a no-op there because `WhisperState::full` calls `whisper_full_with_state`, where whisper.cpp does not run VAD; same model ladder and segment rules as the server. |
 | Time stretch (podcast speed) | [signalsmith-stretch](https://crates.io/crates/signalsmith-stretch), [rubberband](https://crates.io/crates/rubberband) | `signalsmith-stretch` (MIT, no system library); the SPA's `playbackRate` keeps pitch, so must we. |
 | Packaging | [ArchWiki Rust package guidelines](https://wiki.archlinux.org/title/Rust_package_guidelines), the `omarchy-app` packaging convention (an Arch package so it shows in the launcher) | `PKGBUILD` with `cargo fetch --locked --target host-tuple` in `prepare()`, `--frozen` build. |
+| Packaging, the other four formats (P2) | [cargo-deb 3.8](https://github.com/kornelski/cargo-deb#readme) (`--no-build`, assets, `depends = "$auto"`), [cargo-generate-rpm 0.21](https://github.com/cat-in-136/cargo-generate-rpm) (packages `target/release` without building), [Debian policy: binary packages](https://www.debian.org/doc/debian-policy/ch-binary.html), [Fedora: RPM `Requires` from sonames](https://rpm-software-management.github.io/rpm/manual/dependencies.html), [AppImage manual packaging](https://docs.appimage.org/packaging-guide/manual.html) and [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) (what it bundles, and `--exclude-library`), [Flatpak sandbox permissions](https://docs.flatpak.org/en/latest/sandbox-permissions.html) and [flatpak-builder manifest](https://docs.flatpak.org/en/latest/flatpak-builder-command-reference.html) | One release build (`binaries` job) packaged four ways by the distribution's OWN tool (`dpkg-deb`, `rpmbuild`, `appimagetool`, `flatpak-builder`); each job installs and starts what it built. `cargo-deb`/`cargo-generate-rpm` were read and not used: both want their metadata in one crate's `Cargo.toml` and the former wants to run `cargo build` itself. |
 
 **Measured on the prototype** (release build, this machine):
 
@@ -115,7 +116,12 @@ desktop/
     nz-transcribe/      # STANDALONE: lib + bin `neezer-transcribe` (whisper, worker protocol)
   app/                  # bin `neezer-desktop`: GPUI shell, screens, keymap, wiring
   tools/dump_fixtures.py
-  packaging/arch/       # PKGBUILD, neezer-desktop.desktop, icons
+  packaging/            # the five packages: see desktop/packaging/README.md
+    arch/               # PKGBUILD, neezer-desktop.desktop, neezer-desktop.svg (shared)
+    deb/ rpm/           # dpkg-deb, rpmbuild: metadata, build.sh, test.sh
+    appimage/           # AppDir + AppRun + appimagetool
+    flatpak/            # fr.neezer.Desktop.yaml, build.sh, test.sh
+    lib.sh              # version, the soname table, Xvfb harness (all formats)
 ```
 
 Path dependencies on the repository's crates, read-only — never fork their code into `desktop/`:
@@ -550,7 +556,7 @@ D0 ─┬─ D1 ─┬─ D2 ─┐
     │     └─ D6 ──┤      ├─ D8b  │
     ├─ M1 ────────┘      ├─ D9 ──┼─ D10b, D11 ─ T4, D15a ─ D15b
     ├─ V1 ───────────────┘       │
-    ├─ T1 ─┬─ T2 ─┐              ├─ D13, D14a, D14b, P1
+    ├─ T1 ─┬─ T2 ─┐              ├─ D13, D14a, D14b, P1, P2
     │      └─ T3 ─┴──────────────┘
     └──────────────────────────────────────── D17 (last)
 ```
@@ -2854,6 +2860,132 @@ Waves that can run in parallel (disjoint files):
     GGML's logging macros. It is a known cosmetic reproducibility gap, not a defect of the
     install.
 
+
+### P2 — Five packages, one build (delivered 2026-11-17)
+
+- **The rule**: every `v*` release ships the desktop app for **five** Linux
+  destinations — Arch, Debian/Ubuntu, Fedora/RHEL, a bare AppImage, a Flatpak
+  bundle — and every one of the four new ones is **installed and started** by the
+  job that built it before it is attached. A package nobody ran is a file, not a
+  package.
+- **The rule, one build**: `release.yaml`'s `binaries` job builds
+  `neezer-desktop` and `neezer-transcribe` once on `ubuntu-24.04` and uploads
+  them; `deb`, `rpm`, `appimage` and `flatpak` download that artefact and package
+  it with the distribution's OWN tool (`dpkg-deb`, `rpmbuild`, `appimagetool`,
+  `flatpak-builder`). The `arch` job keeps building the checkout with `makepkg`
+  (P1): an Arch package that did not come out of `makepkg` is not the package P1
+  described. **Measured**: the four packaging jobs add 3–6 min each to a release
+  run and the build itself is unchanged.
+- **The rule, the sidecar travels with the app.** Every format installs
+  `neezer-transcribe` in the SAME directory as `neezer-desktop` — `/usr/bin`,
+  `/app/bin`, `usr/bin` inside the AppDir — because `wiring/transcribe.rs#program`
+  resolves `current_exe().parent()` before `PATH`. A package that forgets it
+  installs an app whose every episode says « Le binaire neezer-transcribe est
+  introuvable ». `neezer_check_sidecar_installed` asserts it in each test.
+- **The rule, `depends` are read from the binaries, once.** `lib.sh` holds the
+  ten sonames the two binaries may NEED (`readelf -d`) and the Debian package
+  that provides each; `neezer_check_needed` **fails the build of every format** on
+  an unknown one, and the Debian `Depends:` is generated from that same table, so
+  a new library can never be silently shipped. `rpmbuild` derives its own
+  `Requires` from the same sonames, which is why the RPM lists no dependency by
+  hand — `libpipewire-0.3.so.0()(64bit)`, `libvulkan.so.1()(64bit)`, and dnf
+  resolves those to package names on Fedora and RHEL alike.
+- **The rule, the glibc floor is measured, not written.** `neezer_glibc_floor`
+  takes the highest `GLIBC_x.y` from `readelf --version-info` and it lands in
+  `Depends: libc6 (>= …)`. The release builds on Ubuntu 24.04, whose floor is
+  **2.39**: Debian 13 and Ubuntu 24.04 are the oldest systems the `.deb` installs
+  on, and the README says so. A local build on Arch (2.42) produces a package
+  that says 2.42 — the truth about its own binaries.
+
+- **What it is now**: `desktop/packaging/{deb,rpm,appimage,flatpak}/` (a
+  `build.sh` and a `test.sh` each, plus `control.in`, `neezer-desktop.spec`,
+  `AppRun`, `fr.neezer.Desktop.yaml`), `desktop/packaging/lib.sh` (version,
+  soname table, glibc floor, Xvfb harness), `desktop/packaging/version.sh` and
+  `desktop/packaging/README.md`. All four reuse `arch/neezer-desktop.desktop` and
+  `arch/neezer-desktop.svg`: one launcher entry, one icon, five packages.
+  `app/src/main.rs#flatpak_app_id` reads `FLATPAK_ID` for the window's app id, so
+  the sandbox's window matches the launcher entry Flatpak exports.
+- **Flatpak permissions**, each with its reason in the manifest: `wayland` +
+  `fallback-x11` (the window), `pulseaudio` (sound through pipewire-pulse and the
+  ALSA devices), `filesystem=xdg-run/pipewire-0` (cpal's PipeWire host opens that
+  socket directly), `device=dri` (the GPU, for GPUI's surface AND whisper),
+  `share=network` (it is a client), `own-name org.mpris.MediaPlayer2.neezer`
+  (playerctl and the bar's widget), `talk-name org.freedesktop.Notifications`
+  (the opt-in track change). **No filesystem grant**: the app opens no file of
+  the person's — measured, `--socket=pulseaudio` mounts `pulse`, not
+  `pipewire-0`, and nothing else was asked for.
+- **Measured** (this machine, 16 threads, glibc 2.42 on Arch; the two binaries
+  built in a **Ubuntu 24.04 user-space root** — `unshare`/`bwrap`, no docker, no
+  sudo — because Arch's glibc is newer than every current distribution's, so a
+  package built from Arch binaries installs nowhere):
+
+  | Format | File | Size | Installed and started in | First frame |
+  |---|---|---|---|---|
+  | `.deb` | neezer-desktop-1.6.0-x86_64.deb | **22 835 380 B** (21.8 MiB) | Debian 13 (trixie), `apt install ./…` | **125 ms** |
+  | `.rpm` | neezer-desktop-1.6.0-x86_64.rpm | **20 238 109 B** (19.3 MiB) | Fedora 45, `dnf install ./…` | **131 ms** |
+  | `.AppImage` | neezer-desktop-1.6.0-x86_64.AppImage | **32 733 688 B** (31.2 MiB) | this machine, `APPIMAGE_EXTRACT_AND_RUN=1` | **373 ms** |
+  | `.flatpak` | neezer-desktop-1.6.0-x86_64.flatpak | **21 980 488 B** (21.0 MiB) | this machine, `flatpak --user install` | **793 ms** |
+
+  The two binaries are **60 437 392 B** and **38 692 288 B** (99 MB installed;
+  the `.deb`'s `Installed-Size` says 96 860 KiB). All four printed
+  `first_frame_ms` on their own X server (`:172`, `:183`, `:185`, `:192` —
+  `neezer_xvfb_start`, a free number from 140, never the session's display), and
+  every one ran `neezer-transcribe --version` from the installed copy. The
+  Flatpak's sandbox listing showed `pipewire-0`, `pulse`, `wayland-1`, `bus` and
+  `/dev/dri` (`card1`, `renderD128`), and its sidecar found the RADV 780M inside
+  the sandbox: `ggml_vulkan: 0 = AMD Radeon 780M Graphics (RADV PHOENIX)`.
+
+- **Pitfalls found by packaging, not by reading**:
+  - **`actions/upload-artifact`/`download-artifact` do not carry the executable
+    bit**: the four packaging jobs received the two binaries 0644 and every one
+    refused them (measured on #283, all four jobs at once). The four jobs `chmod
+    +x` after the download, and `neezer_check_binaries` now tells "absent" from
+    "not executable" so the next person reads the cause instead of a silence.
+  - **`DISPLAY` is unset on a runner**, so `[ "$DISPLAY" = ":140" ]` under
+    `set -u` aborted the first test with `unbound variable`: the harness reads
+    `${DISPLAY:-}`, because a machine with no display at all is the normal case
+    for a CI job, not an error.
+  - **A GPUI app aborts when fontconfig resolves no font**: `failed to resolve
+    font '.SystemUIFont' or any of the fallbacks` (panicked, exit 134) in a bare
+    Debian container. Any desktop has a font, a `--no-install-recommends`
+    container does not. The `.deb`/`.rpm` now `Recommends` DejaVu and the two
+    tests install one — a package that starts only on a machine that happens to
+    have fonts is a package that does not start.
+  - **`--socket=pulseaudio` does NOT expose `pipewire-0`** (measured inside the
+    sandbox: `pulse` yes, `pipewire-0` no). cpal opens PipeWire's own socket
+    first, so the Flatpak needs `--filesystem=xdg-run/pipewire-0` or it silently
+    runs on its ALSA fallback.
+  - **Debian renamed the same library twice** (`libasound2` →
+    `libasound2t64`, `libpipewire-0.3-0` → `-0t64` on trixie, and `dpkg-shlibdeps`
+    would write the BUILD machine's name into the control file): the `Depends:`
+    line carries the alternative, which installs on both.
+  - **An inherited `WAYLAND_DISPLAY` steals the test's display**: GPUI prefers
+    Wayland whenever the variable is set, and a test run from a Wayland session
+    then reports `failed to connect to Wayland compositor`. `neezer_xvfb_start`
+    unsets it — the same rule as the memory measurements (our own server, never
+    the person's session).
+  - **A Flatpak launcher entry must be named after the app id**, and the window
+    must report that same id: `rename-desktop-file` + `rename-icon` +
+    `copy-icon` in the manifest, `FLATPAK_ID` in `main.rs`, and the one
+    `StartupWMClass` line rewritten in `flatpak/build.sh`. Miss it and the
+    sandboxed window has no launcher to group with.
+  - **`appimagetool`'s `continuous` tag is a moving build**, so `build.sh` pins it
+    by SHA-256 and fails on a different file; bumping the pin is a deliberate
+    act. Its build 370 warns that an SVG `.DirIcon` "is hard to parse, so file
+    managers and thumbnailers cannot be expected to handle it" and will refuse it
+    in a future release, so the AppDir's icon is a PNG: the web app's own
+    committed `webapp/public/icon-512.png`, which `compare -metric AE` puts at
+    **0.19 px** of difference from `neezer-desktop.svg` (the same mark, no
+    rasteriser to install). `flatpak-builder`'s flag for a machine without the
+    FUSE helper is `--disable-rofiles-fuse` (the documentation page shows a newer
+    name that this version rejects).
+  - **`cargo-deb` and `cargo-generate-rpm` were read and not used**: both want
+    their metadata in one crate's `Cargo.toml` (`neezer-desktop` is not the crate
+    that knows about `neezer-transcribe`, and the workspace has nine), and
+    `cargo-deb` wants to run `cargo build` itself (`--no-build` exists but its
+    asset paths are tied to `target/release/` of that one crate). The four
+    packages stay in `desktop/packaging/`, which is where the Arch package
+    already was.
 
 ### D17 — The whole journey, measured (delivered 2026-11-17)
 

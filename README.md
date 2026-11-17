@@ -342,6 +342,31 @@ The APK is built by CI: take the `neezer-apk` artifact from any run, or the file
 publishes and offers the download when it is older. Details, including stable signing keys, are in
 [android/README.md](android/README.md).
 
+## Desktop app
+
+`desktop/` is a native Linux app (Rust, GPUI): the same screens as the web player, gapless and
+crossfaded playback through PipeWire, MPRIS so the media keys and the desktop's player widget drive
+it, an offline cache, and **local podcast transcription on the GPU** through Vulkan
+(`neezer-transcribe`, whisper.cpp — it falls back to the CPU and says why when there is no usable
+Vulkan device). Every release attaches it for five distributions: pick the one line for yours.
+
+| Your distribution | Install the desktop app |
+| --- | --- |
+| Arch, Omarchy | `pacman -U neezer-desktop-1.6.0-x86_64.pkg.tar.zst` |
+| Debian 13+, Ubuntu 24.04+ | `sudo apt install ./neezer-desktop-1.6.0-x86_64.deb` |
+| Fedora, RHEL 9+ | `sudo dnf install ./neezer-desktop-1.6.0-x86_64.rpm` |
+| any other desktop | `chmod +x neezer-desktop-1.6.0-x86_64.AppImage && ./neezer-desktop-1.6.0-x86_64.AppImage` |
+| any other desktop, sandboxed | `flatpak install --user ./neezer-desktop-1.6.0-x86_64.flatpak` then `flatpak run fr.neezer.Desktop` |
+
+Replace `1.6.0` with the version you downloaded (the release is tagged `v1.6.0`). Every package
+installs both binaries — the app and the transcription sidecar it starts — plus the launcher entry
+and the icon, so Neezer shows up in the desktop's own app menu. The AppImage is one file, no install
+and no root; the Flatpak pulls its runtime (`org.freedesktop.Platform` 25.08) from Flathub on the
+first install and grants itself only a display, sound, the GPU, the network and its two D-Bus names.
+
+How each package is built, tested and what it weighs: [desktop/packaging/README.md](desktop/packaging/README.md).
+The app's own note, for work on it: [docs/agents/desktop.md](docs/agents/desktop.md).
+
 ## Running without Docker
 
 Neezer is a Python package (3.10+) with a few runtime tools.
