@@ -1052,6 +1052,10 @@ impl AppState {
                 self.nav.reset(landing);
                 self.start_audio();
                 self.start_offline();
+                // Remote control (lot D15a): the CONTROLLER when this session is
+                // a loan, the HOST otherwise — one call, so a link that was live
+                // before a restart answers again without opening a screen.
+                crate::wiring::remote_host::start(self, cx);
                 self.warm_owner();
                 self.sync_mpris();
             }
@@ -1084,6 +1088,10 @@ impl AppState {
                 self.nav.reset(landing);
                 self.start_audio();
                 self.start_offline();
+                // Remote control (lot D15a): the CONTROLLER when this session is
+                // a loan, the HOST otherwise — one call, so a link that was live
+                // before a restart answers again without opening a screen.
+                crate::wiring::remote_host::start(self, cx);
                 self.warm_owner();
                 self.sync_mpris();
             }

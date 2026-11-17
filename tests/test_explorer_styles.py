@@ -14,6 +14,8 @@ another's. Measured numbers sit next to the assertions.
 
 import os
 import unittest
+from datetime import datetime
+from unittest import mock
 
 from neezer import discover, listening
 from neezer.db import (
@@ -23,10 +25,31 @@ from neezer.managers.user import UserManager
 
 from .test_discover import _Library, count_statements
 
+#: The instant this library was listened to, as a LITERAL and never the wall
+#: clock. ``listening.record`` stamps a play with ``now()``,
+#: ``listening.activation`` fades it by ``(hours + 1) ** -0.5`` and
+#: ``discover._build`` fades a star from its own date, so comparing a star's
+#: weight with a play's at exactly 2.5 (``test_a_star_weighs_more_than_a_play``)
+#: is only exact while the two fall in the same wall-clock second: ``db.now()``
+#: truncates to the second, and one second of gap gives
+#: ``(1 + 1/3600) ** -0.5 = 0.9998611400395998``. Measured on CI run
+#: 43989861452 (master, Python 3.10 job) where setUp and the profile read
+#: crossed a second — ``AssertionError: 1.0 != 0.9998611400395998`` — after the
+#: same test had failed once on run 43988648912. The fixture pins both clocks
+#: the profile reads, so the gap is zero by construction.
+FROZEN = datetime(2026, 11, 17, 12, 0)
+
 
 class _Styles(_Library):
     def setUp(self):
         super().setUp()
+        # Both clocks the taste profile reads: `listening.record`/`history` and
+        # `discover._build`. Pinned to one literal instant so a play and a star
+        # weigh what the assertions say whatever the machine's load (FROZEN).
+        for module in (listening, discover):
+            pin = mock.patch.object(module, "now", lambda: FROZEN)
+            pin.start()
+            self.addCleanup(pin.stop)
         self.bob = UserManager.add("bob", "B0bpass", admin=False)
         self.rows = {}
         self._n = 0
@@ -72,8 +95,11 @@ class _Styles(_Library):
         self.rows["NoVerdict"] = [t]
         listening.record(self.bob, t, 200)
         # An explicit star on a title never played: a real signal, not a guess.
+        # Its date is stamped explicitly too: the profile fades a star from that
+        # date, so a default (the wall clock) would weigh it against the plays
+        # pinned above (FROZEN).
         star = add("StarOnlyTechno", "Techno", 1, 0.9)[0]
-        StarredTrack.create(user=self.bob, starred=star)
+        StarredTrack.create(user=self.bob, starred=star, date=FROZEN)
         # A style only alice ever plays: bob must never see it.
         for t in add("AliceOnly", "Rock", 2, 0.8):
             listening.record(self.user, t, 200)

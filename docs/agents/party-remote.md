@@ -195,3 +195,16 @@ second interface to keep in step with the first, and that is the whole design:
   a dot) and answered 404. Those links still open — the server serves both pages under `/app/`
   too, and where the service worker answers the navigation, `lib/linkrescue.js` (main.js's FIRST
   import, before the router reads the location) turns the path back into its hash route.
+
+**The desktop app is the fourth client of this contract** (`desktop/` D15a,
+[wiring/remote_host.rs](../..//desktop/app/src/wiring/remote_host.rs) and
+`remote_controller.rs`; the plan is in [desktop.md](desktop.md)). It speaks the same routes with
+the same bodies: `POST /api/remote/host/<device>` + `poll?since=&chan=` for the player that is lent,
+`/api/remote/{claim,state,queue,cmd}` for the one that drives, and `PlayerState::apply` on both
+sides because `nz_player::Command`'s serde tags ARE `commands.js`'s op names. Two differences, both
+deliberate: a desktop has no URL to open, so a controller CLAIMS by pasting the link into
+« Piloter un autre lecteur » instead of `#/rc/<token>`; and a loan's transport lives in the
+Contrôle distant screen (with the owner's queue) rather than rebinding the whole app's player
+store, because the desktop's keys and player bar go through one shell action path that a screen
+may not replace. The level's table, the polling cadence, the `ack` rule, the position line and the
+TTL semantics are the SPA's, unchanged.

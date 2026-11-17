@@ -6,10 +6,11 @@ speaks is the web app's ([webapp.md](webapp.md), [server.md](server.md)); the au
 player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
-**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D16, M1,
-P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at `AudioReady`,
-`409` told apart, the `auto` payload, the output list) and the contract follow-up (Lyrics,
-GenreScore, `radio_next`, the podcast archive answer, the onboarding route); the rest planned.**
+**Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D12, D13, D14a, D14b, D15a, D16,
+M1, P1, T1 and V1 delivered, plus the D14a/D8b follow-up (silence trim, saved sound at
+`AudioReady`, `409` told apart, the `auto` payload, the output list) and the contract follow-up
+(Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding route); the rest
+planned.**
 This note is the plan the coding lots follow, in order. Each lot, when it lands, replaces its
 plan paragraph by what was learned (rule, why, number) — a delivered lot is not a changelog.
 
@@ -130,11 +131,18 @@ frame for frame).
 |---|---|---|
 | main (GPUI) | windows, views, input, layout, paint | normal; never blocks: every I/O is a task |
 | `nz-net` (tokio, 2 workers) | every HTTP request, MPRIS (LocalSet on its own thread), cache writes | normal |
-| `nz-decode-{a,b}` | one per voice: read source, decode, resample, push into the voice ring | normal |
+| `nz-load-*`, `nz-preload-*`, `nz-seek-*` | one per load/preload/seek: open a source, probe it, hand the voice over | normal; owned and joined by the engine |
+| `nz-decode-{gen}` | one per voice: read source, decode, resample, push into the voice ring | normal; owned and joined by the engine |
+| `nz-audio-spool` | one per network body: pull it into its spool file, at most `read_ahead` in front of the decoder | normal; owned and joined by the engine |
 | PipeWire callback (cpal) | mix the two voices, DSP, write the device buffer, copy to the tap | real-time: no allocation, no lock, no syscall |
 | `nz-analysis` | tap → `rhythm` analyser → bars/scope state | `nice 5`; runs only while a viz is visible |
 | `nz-bulk` | downloads, cover warming, offline sync | `nice 10`, idle I/O class |
 | `neezer-transcribe` child processes | transcription supervisor + whisper engine | `nice 19`, `SCHED_IDLE`, idle I/O, SIGSTOP-able |
+
+**Every thread that borrows `nz-net` is owned somewhere that joins it** (D13's *Pitfalls*): `nz-bulk`
+by `Offline`, the engine's four families above by `nz_audio::Engine` (reached from the `NetRuntime`
+global's `Drop`), and nothing else uses `Handle::block_on` — a `spawn`ed task is not borrowed, tokio
+drops it at shutdown.
 
 ### Rule 1 on the device: lanes
 
@@ -377,196 +385,6 @@ of its callers.
   "done_ms","duration_ms"}`, `{"event":"done","episode_id","segments"}`, `{"event":"error",
   "episode_id","code","message"}`, `{"event":"idle"}`. The UI shows running, progress, and each
   failure's cause (rule 2); an interrupted local job resumes at its last chunk after a restart.
-
-## Memory: where the megabytes go (measured 2026-11-17)
-
-The person cares about RAM, and every lot reported its own screens only. This is the whole picture,
-measured on the release binary, on an ISOLATED display (`Xvfb :105 -screen 0 2600x1700x24 -dpi 96`,
-`GPUI_X11_SCALE_FACTOR=1`, `WAYLAND_DISPLAY` unset — never the person's session), against
-`tools/perf_api.py --serve` (8 000 tracks, 4 000 favourites, 60 playlists): one fresh XDG directory
-per run, the journey driven through the real window with keys and clicks, and at each checkpoint
-`VmRSS` + `smaps_rollup`'s `Pss` + the RSS/PSS of every mapping, grouped by kind.
-
-**The first thing to know: the environment is 197 MB before the app has any data.** At the LOGIN
-screen — no request, no list, no sleeve — the process already holds, by mapping:
-
-| Where | RSS | PSS |
-|---|---|---|
-| `libLLVM.so.23` (RADV's shader compiler) | 48.6 MB | 9.8 MB |
-| `[heap]` (glibc main arena) | 46.1 MB | 46.1 MB |
-| anonymous mmaps (arenas, driver buffers) | 36.9 MB | 36.9 MB |
-| the binary's own text + data | 29.2 MB | 29.2 MB |
-| `libgallium` (llvmpipe/lavapipe rasteriser) | 13.3 MB | 3.8 MB |
-| `libvulkan_radeon`, libc, mesa shader cache, … | ~12 MB | ~4 MB |
-| **total** | **195.8 MB** | **131.7 MB** |
-
-So a D7-era "103 MB" on the real GPU (RADV, native Wayland) and "197 MB" under Xvfb with the
-software rasteriser are **not comparable**: under Xvfb this machine keeps LLVM and gallium resident
-for every process, and no lot of this plan caused it. Everything below is therefore measured in ONE
-environment, and split into "the shell of the environment" (identical for every revision) and "the
-app's own growth".
-
-**What the app's live heap actually is**: the same release build run with `LD_PRELOAD=libjemalloc`
-on the artist page reports `Allocated: 9 708 144 B` (9.7 MB live), `active: 13.8 MB`, `mapped:
-218.7 MB`, `retained: 101.7 MB`. Nine megabytes of objects sit inside 218 MB of mapped arenas that
-the allocator keeps for reuse: the app's data is NOT where the RSS goes, which is why every lot's
-own "+11 to +17 MB" was a peak of a *churn*, not a stock.
-
-**The bisect, one environment, 1280×800, RSS (RSS/PSS at each step in the session's results):**
-
-| Revision | login | after login, Accueil |
-|---|---|---|
-| `a4c51f5` D7 shell | 197.8 MB | 199.6 MB |
-| `1c59508` #238 icon superset | 195.8 MB | 197.8 MB |
-| `3afd1f0` #241 D8a browse | 198.5 MB | 203.1 MB |
-| `dc4ad9e` master (D8b, D9, D13, D14a) | 201.5 MB | 206.3 MB |
-
-**+6.7 MB from D7 to master at the home screen**, and the icon superset costs nothing measurable
-(1 000 B of SVG sprite per glyph actually drawn). The 182–237 MB the lots reported is the
-environment plus the screens' churn, not a common regression of their models.
-
-**Where the remaining growth comes from, each measured separately (master, 1280×800):**
-
-| Step | RSS | PSS | What it is |
-|---|---|---|---|
-| login | 201.5 | 144.7 | the shell, the theme, the runtime |
-| Accueil | 206.3 | 149.1 | +4.8: six requests' data, the shelves' cards, the first glyphs |
-| page artiste | 224.7 | 166.7 | +18.4: the discography grid, the top-titles list, more glyph sizes |
-| retour à l'Accueil | 221.2 | 163.2 | −3.5 only: the rest is the allocator's high-water, not live data |
-| Bibliothèque (60 playlists) | 222.1 | 164.2 | +0.9 |
-| Favoris, 4 000 rows | 234.7 | 176.7 | +12.6: the row model (D8a measured 13.9 MB for 4 000 rows) |
-| **1 000 round trips** Accueil↔Bibliothèque | **526.1** | 469.9 | **+321.7 MB**: the leak, below |
-| the same, with this PR | **243.8** | 176.7 | **+36.3 MB** |
-
-**The window's size is worth more than any screen.** The same login screen: **201.7 MB at
-1280×800, 282.9 and 283.3 MB at 2560×1600** — +82 MB, twice. A 2560×1600 RGBA surface is 16.4 MB,
-and the swapchain plus the render targets make five of them. Nothing in the app can avoid it (the
-person chose the window); what it means is that a report of "237 MB at 2560×1600" is ~80 MB of
-driver surfaces before the first screen paints.
-
-**The leak: one screen per navigation, kept for the life of the process.** A screen owns a
-`wiring::events::channel` and one foreground task draining it. `Sender` set no `closed` flag when
-dropped, so nothing ever woke that task: GPUI kept the parked future — and the screen state it had
-captured — for ever. Measured end to end, 1 000 round trips between Accueil and Bibliothèque:
-**+321.7 MB (+161 KB per screen built)**. `Sender`'s `Drop` now closes the channel when the LAST
-sender goes (a worker holding a clone keeps it open, as it must), the drain loop ends, and the same
-1 000 round trips cost **+36.3 MB (+18 KB)**, which is the arena's own high-water and stops growing
-after the first hundred. Guarded by `app/src/app.rs`'s
-`building_a_screen_a_thousand_times_keeps_nothing` (2 000 builds, 892 936 B measured, 2 MiB budget,
-**counted bytes**, never `VmRSS` — see the pitfall in *D14a*).
-
-**A sleeve costs what it is DECODED at, not what it is drawn at.** `Window::paint_image` uploads an
-image into one atlas tile at its NATURAL size, keyed by the image's id, and nothing removes that
-tile but `Window::drop_image` (`gpui-pre-0.3.9/src/window.rs`, `paint_image`/`drop_image`); `img(path)`
-additionally keeps the DECODED copy in the App's asset cache for ever (`asset_cache.rs`, no
-eviction — `ImageSource::remove_asset` is the only way out). A 1 000 px sleeve is therefore 4 MB of
-decoded heap **and** 4 MB of atlas for a 36 px row. That is the +291 MB D9 predicted for a queue
-that draws a sleeve per row, and it is why the queue and Bibliothèque still draw placeholders
-(`screens/library.rs#sleeve`). The device-side half of `lib/coverqueue.js` now exists:
-`nz-cache`'s `Covers::variant(url, px)` writes a downscaled copy once (**3 306 B** for the bench's
-1 753 091 B 1 000 px JPEG at 128 px, 4 480 B at 384 px) and `widgets/cover.rs`'s `Class` picks it
-per screen — `Row` (128 px) for the list screens, `Card` (384) and `Page` (512) elsewhere — so a row
-paints 65 536 decoded bytes instead of 4 000 000. Measured today the browse screens pay only
-+1 to +2 MB (few sleeves land inside a visit), so the remaining work is the *lists* that still draw
-placeholders, one file per lot (D8b's `library.rs`/`playlist.rs`, D9's `queue.rs`).
-
-**What to measure, and how.** `tools/perf_api.py --covers <jpeg>` gives every album a real
-`cover.jpg`, without which `/api/cover` answers 404 and no sleeve path is measurable at all. Read
-`Pss` and the per-mapping breakdown, never one `VmRSS` number: RSS counts shared library pages (a
-48 MB LLVM nobody in the app asked for), file-backed fonts, and the allocator's high-water. A guard
-on a screen's weight counts BYTES (`app/src/testmem.rs`), and a guard on a journey counts the same
-bytes across N builds.
-
-## Memory — where the megabytes go (measured 2026-11-17)
-
-The laptop this app runs on has 16 GB and the person watches `htop`. This section is the map:
-what a Neezer window costs, which part of it is the app's data and which part is the
-machine's graphics stack, and what is guarded by a test. Every number is a release build on
-`Xvfb :105 -screen 0 2600x1700x24 -dpi 96` with `GPUI_X11_SCALE_FACTOR=1` (never the person's
-session), against `tools/perf_api.py --serve` (8 000 tracks, 4 000 favourites, 60 playlists,
-`--covers cover.jpg` when sleeves matter — without it every `/api/cover` is a 404 and a screen
-paints placeholders), `/proc/<pid>/status` for RSS and `/proc/<pid>/smaps_rollup` + `smaps`
-for PSS and the per-mapping breakdown. **RSS is not the app's data**: it is what the process
-resident set holds, arenas and driver included. Count bytes when the question is "what does
-the app keep" (`app/src/testmem.rs`).
-
-- **The rule, the socle is not the app.** At the LOGIN screen — no request made, no list
-  parsed — the release binary already sits at **195.8–202.3 MB RSS** here, and `smaps` says
-  where: `libLLVM.so` **48.6 MB** (RADV's shader compiler, PSS 9.8 MB because it is shared),
-  the glibc main arena `[heap]` **46.1 MB**, 181 anonymous malloc/driver mappings **36.9 MB**,
-  the binary's own text and data **29.2 MB**, `libgallium` (llvmpipe/lavapipe) **13.3 MB**.
-  D7's famous **103 MB** is the same app on a real Wayland session with a real GPU: two
-  different machines' graphics stacks, not two versions. **Never compare a number measured
-  under Xvfb with one measured on the panel**, and never compare with the login screen of a
-  different run.
-- **The rule, the bisect — D7 to master, one environment, login then home (RSS):**
-  `a4c51f5` (D7) **197.8 → 199.6 MB**; `1c59508` (#238, the 146-icon superset) **195.8 →
-  197.8**; `3afd1f0` (#241, D8a's browse screens) **198.5 → 203.1**; master (D8b, D13, D9,
-  D14a) **201.5 → 206.3**. The whole walk from D7 to master is **+6.7 MB at home**, of which
-  the icon superset is **−0.2 MB** (it embeds 53 632 more bytes of SVG and rasterises only
-  what it draws). The "182/199/237 MB" of the lot reports are this environment's baseline,
-  not a regression: **the +80–100 MB the plan was hunting was already there before D7**.
-- **The rule, the window's area is paid in buffers.** The same build, same screen: **201.7 MB
-  at 1280×800** and **282.9 / 283.3 MB at 2560×1600** — **+81.6 MB**, twice. A 2560×1600 RGBA
-  surface is 16.4 MB, so that is ~5 of them: wgpu's swapchain plus the render targets GPUI
-  keeps for the window. Nothing the app can share, and nothing to fix: a bigger window IS a
-  bigger framebuffer. It is why every memory criterion is stated with its window size.
-- **The rule, a screen's own share is small and paid once.** 1280×800, master, no covers:
-  login **201.5**, home **206.3** (+4.8), artist **224.7** (+18.4), back to home **221.2**
-  (−3.5), Bibliothèque **222.1**, 4 000 favourites **234.7** (+12.6 for the whole 4 000-row
-  data model plus its windowed list). Of the artist page's +18.4 MB, `smaps` puts +12.0 MB in
-  anonymous mappings, +3.5 MB in `[heap]` and +1.8 MB in the binary's pages — allocator
-  working set, and it does not all come back because glibc keeps arenas. The **live** heap is
-  tiny: `LD_PRELOAD=libjemalloc.so.2` with `stats_print` at a clean quit reports **9 708 144 B
-  allocated** (9.3 MB) at the artist page, against 218 664 960 B of *mapped* arenas. When
-  someone says "Neezer uses 300 MB", 9 MB of it is the app's objects.
-- **The rule, navigation must cost nothing — and it cost 161 KB per screen.** 1 000 round
-  trips between Accueil and Bibliothèque (2 000 screen builds): **204.4 → 526.1 MB,
-  +321.7 MB (+161 KB per screen)** before the fix, **207.5 → 243.8 MB, +36.3 MB (+18 KB)**
-  after it. The cause was the screen's reply channel: `events::Sender` never closed when its
-  last clone dropped, so the drain task GPUI holds for `Receiver::next()` stayed parked for
-  the life of the process, keeping the screen state it had captured. `Sender::drop` now closes
-  the channel, the task answers `None`, and GPUI frees it. **Any new screen gets this for
-  free** because every screen already answers through `events::channel`; a channel created
-  any other way is a bug.
-- **The rule, a sleeve is painted at the size it is SEEN.** GPUI uploads a painted image into
-  one atlas tile **at the image's natural size**, keyed by the image's id, and nothing
-  releases that tile before the window goes away (`gpui_pre`'s `Window::paint_image` /
-  `drop_image`); the decoded copy lives in the App's asset cache, which also never evicts.
-  A 1 000 px sleeve drawn in a 36 px row is therefore **4 MB of decoded heap and 4 MB of
-  atlas for 1 296 useful pixels**, and a 4 000-row list that draws one per row would cost that
-  per distinct sleeve — D9's +291 MB for "a sleeve per queue row" is that arithmetic (its queue
-  still draws glyph rows, so the number was a prediction, not a measurement: this section's own
-  sleeve deltas are the measured +1 to +2 MB of a browse page's few), and it is the number this
-  rule exists to keep off the queue. `nz-cache`'s `Covers::variant` writes a
-  downscaled copy once (the bench's 1 753 091 B JPEG becomes **3 306 B at 128 px**, 4 480 B at
-  384 px) and `cover::Class` decides the size: **`Class::Row` 128 px** for a screen whose
-  sleeves are list rows, `Card` 384 px, `Page` 512 px. Decoded, 1 000² × 4 = 4 000 000 B
-  becomes 128² × 4 = 65 536 B: **61×**. A screen that paints sleeves in rows is built with
-  `Covers::rows()`; one that paints cards keeps `Covers::new()`.
-- **The rule, what is measured is counted, not read from RSS.** `app/src/testmem.rs` counts
-  bytes allocated minus bytes freed **on the test's own thread** (a `#[global_allocator]` that
-  is `#[cfg(test)]` only, so the shipped binary is unchanged). The guard is
-  `app.rs`'s `building_a_screen_a_thousand_times_keeps_nothing`: 2 000 screen builds keep
-  **892 936 B** (446 B each, GPUI's task arena settling later than the test can see), budget
-  **2 MiB** — 2.3× the measured weight and 160× tighter than the 161 KB-per-screen leak it
-  caught. A screen that starts keeping a list, a response or a decoded image fails it at once.
-  `nz-cache`'s `a_sleeve_is_stored_at_the_size_it_is_drawn` pins the resize: 128 px copy,
-  idempotent, no upscaling, `None` when there is no art.
-- **Pitfalls found by measuring**:
-  - **A screenshot on a 2600×1700 software-rendered root can block `import -window root`**;
-    drive a journey from the bench server's own access log (the route a screen asks for) and
-    take pictures outside the measured path.
-  - **`XResizeWindow` races the app's own initial size**: a resize issued before the window is
-    ready is silently lost and the run measures 1280×800 while claiming 2560×1600. Resize
-    after the first frame and assert the size you measured.
-  - **The bench must serve real cover bytes** to measure anything sleeve-shaped
-    (`tools/perf_api.py --covers <jpeg>`): with Deezer unreachable every `/api/cover` is a 404
-    and every screen paints a placeholder, which reads as "sleeves are free".
-  - **This machine is shared.** Other sessions run `pkill Xvfb` and `pkill -f perf_api`: the
-    isolated display is a copy of the binary under another name (`xserv105`) kept alive by a
-    loop, and the bench runs as `bench.py` for the same reason. A run whose X server dies
-    exits 0 and measures a dead process.
 
 ## The lots
 
@@ -1243,8 +1061,11 @@ Waves that can run in parallel (disjoint files):
   runtime in a GPUI `Global` (`NetRuntime`) and one event channel carries every worker's
   [`AppEvent`] to the shell; the shell drains it in a foreground task, so no worker touches
   GPUI state. That global also OWNS the threads that borrow the runtime: its `Drop` joins the
-  offline worker before the runtime goes, because a `Handle::block_on` on a shutting-down runtime
-  panics its thread (see D13's *Pitfalls*).
+  offline worker AND the audio engine's threads (loaders, decode voices, spoolers) before the
+  runtime goes, because a `Handle::block_on` on a shutting-down runtime panics its thread (see
+  D13's *Pitfalls*). The engine is reached through a registry of weak handles
+  (`wiring::engine::attach` / `shutdown_process`), since gpui drops the shell's state — the
+  engine's other owner — before the globals.
 - **The rule, the keyboard is the mouse**: every control dispatches the action the keymap
   binds (`cx.listener` → `window.dispatch_action`), and the action handler is the shell's one
   transport path (`PlayerState::apply`). The single-letter/space bindings live in
@@ -1500,87 +1321,109 @@ Waves that can run in parallel (disjoint files):
     that works here, at `-dpi 96` plus `GPUI_X11_SCALE_FACTOR=1` (without the latter the app sees a
     2560×1600 window as 1280×800 and the layout is measured at half the size).
 
-### D10b — Visualiser UI (bars, oscilloscope) (delivered 2026-11-17)
+### D10b — Visualiser UI (bars, oscilloscope)
 
-- **The rule, the page's arithmetic and our quads.** The geometry is `nz-viz`'s (V1, the page's own
-  `rhythm::viz_bars`/`viz_scope`); what this lot owns is the DRAWING: one GPU quad per bar (body,
-  inner core, falling peak) and one per scope column (`Window::paint_quad`, no tessellated path).
-  The per-frame cost it controls is therefore measurable on its own: **p50 111–115 µs, p95 135–136 µs,
-  max 1.2–2.2 ms** for 52 bars at 1 280 × 800 and 512 columns × 2 lanes of scope (release, this
-  machine, `NZ_FRAME_LOG=1`) — **2.7–3.3 % of the 4.17 ms a 240 Hz frame has**, which is the number
-  that says the next panel rate is affordable.
-- **The rule, the cadence is the panel's by default.** `viz.fps` follows `stores.js` (Écran/30/45/60)
-  with one deliberate difference: the desktop's default is the DISPLAY, because the acceptance is
-  240 Hz. At "Écran" each paint asks for the next frame (`request_animation_frame`, GPUI's own frame
-  source); at 30/45/60 — and in eco, which forces 30 whatever the setting — one sleeping pacing task
-  spaces the frames, so the whole window is not re-rendered for nothing. `Animation::with_max_fps` was
-  rejected on purpose: it obeys `reduce_motion` by freezing a repeating animation, and a frozen
-  visualiser is not the feature.
-- **The rule, nothing runs when nothing is visible.** The screen (and the Réglages preview) set
-  `VizService::set_visible` on every paint and hand it back in `Context::on_release`; the analyser
-  thread clears the tap and sleeps 50 ms while hidden, and the widget asks for no frame when the
-  player is paused. Asserted on a real tap: **0 frames analysed over 40 rendered buffers while
-  hidden**, then frames again once a screen asks for it
-  (`the_analyser_does_no_work_when_no_visualiser_is_on_screen`).
-- **The rule, the settings are the SPA's keys, and the panel is the same controls.** `viz.mode`,
-  `viz.palette` (Pochette = `coverpalette.js#analyse` on the decoded sleeve, via GPUI's `RenderImage`
-  — BGRA, downsampled to 64 × 64 before the analysis; Thème = `Palette::from_theme`), `viz.intensity`,
-  `viz.fps`, `viz.eco`, `viz.scope.orientation`, `viz.scope.colour`. One `controls()` function, used by
-  the screen's sheet (420 px) and by the Réglages section. **Deliberate difference**: in the SPA eco
-  turns every animation off; here it keeps the scene at 30 fps with the flat grade (one fill per bar,
-  no halo/cores/breath/peaks), because the lot's acceptance measures a 30 fps eco.
-- **What it is now**: `widgets/bars.rs` (`Bars` entity: `set_prefs`, `set_active`, `frames`,
-  `bar_count`, `Layout::{Strip,Full}`), `widgets/scope.rs` (`Scope`: lanes, graticule, min/max trace,
-  halo+beam, trigger marker, `SCOPE_POINTS = 512`), `screens/viz.rs` (the full-bleed stage, the title
-  card, the control bar that fades after 3 s, the settings sheet, the notices — full-screen for a
-  cause, a quiet line at the bottom for a pause — and the keys `1`/`2`/`c`/`Maj+F` installed ONCE for
-  the process, dispatched to a `WeakEntity` so the screen never takes the focus),
-  `screens/settings/viz.rs` (`Prefs` + load/save, the palette helpers, `Sleeve`, `FrameLog`,
-  `controls`, and the `Section` with a live preview).
-- **Measured** (release, `Xvfb :95`/`:96` at 2 560 × 1 600, `GPUI_X11_SCALE_FACTOR=1`, a real FLAC in
-  the play cache, `NZ_FRAME_LOG=1`, this machine):
-  - the app's own frame log, 1 280 × 800, bars: **fps 24.0 and 27.9** over two runs, `paint_us`
-    p50 **115/111 µs**, p95 **136/135 µs**, max 2.2/1.2 ms. At 2 560 × 1 600: **2.4 fps**, which is
-    the software rasteriser, not the app (see the environment note).
-  - `cargo test -p neezer-desktop`: **12 new tests** (the seven preference/geometry ones, the scene
-    keys, the sheet, the analyser stop, the three-size layout) and the whole suite green; `cargo fmt
-    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
-  - the screen was LOOKED AT: Xvfb :96 captures of the WINDOW (never the root: Xvfb keeps the pixels
-    of a destroyed window, and two app instances overlapped on the first attempts) at **2 560 ×
-    1 600** — the bar row, the oscilloscope, and the settings sheet over it — and at **1 280 × 800**
-    (the row with the title card and the control bar) — kept as
-    [barres 2 560](../desktop/d10b/barres-2560x1600.png),
-    [barres 1 280](../desktop/d10b/barres-1280x800.png),
-    [oscilloscope 2 560](../desktop/d10b/oscilloscope-2560x1600.png) and
-    [la feuille](../desktop/d10b/reglages-2560x1600.png). The 420 px panel was opened on the run
-    (the layout assertion covers the three widths); its capture did not survive the harness.
-- **The environment limit, said plainly**: this machine's Xvfb has no DRI3, so Mesa cannot present a
-  Vulkan surface ("No DRI3 support detected - required for presentation") and GPUI paints through a
-  software path. **The 240 Hz / ≥ 230 fps criterion cannot be demonstrated here** — the fps above is
-  the rasteriser's ceiling at 4 Mpx, exactly as D0 recorded for the first frame. The app-side number
-  that can be held is the paint cost (2.7–3.3 % of the 240 Hz budget); the panel number belongs to a
-  real session, D17's pass.
-- **Pitfalls found by building**:
-  - **`Window::paint_quad` paints in WINDOW coordinates.** `canvas`'s prepaint hands an element's
-    `bounds`, and painting `bounds.size`-relative quads (forgetting `bounds.origin`) drew the bar row
-    at the window's corner, *over the sidebar*: seen on the first real run, fixed by adding the
-    origin. A geometry bench cannot see this; only the window can.
-  - **A cancelled decode is not an error.** Pressing play while the restored queue was still loading
-    produced `EngineEvent::Error … « lecture interrompue »` (a toast) — `decode.rs` returns it when
-    its ring is closed by the next voice. The toast belongs to `state.rs` (D7/D9), not to the
-    visualiser; observed, not fixed here.
-  - The settings section needs one dispatch line in `screens/settings/mod.rs`
-    (`SettingsSection::Viz => viz::body(...)`) and the "in the player" strip one `child()` in
-    `screens/now_playing.rs` (D9's file). Both are outside this lot's files; the screen's own sheet
-    carries the same controls, and the widget exposes `Layout::Strip` for the strip.
+- **Files**: `screens/viz.rs`, `app/src/widgets/{bars,scope}.rs`, `screens/settings/viz.rs`.
+- **Acceptance**: in the player and full screen at 240 Hz: ≥ 230 fps, CPU of the whole app with
+  bars on < 12 % of one core (eco mode: 30 fps cap, < 5 %); the analysis thread stops when no viz is
+  visible (assert 0 analyser calls when hidden); settings: palette (cover/theme), intensity, fps cap,
+  scope orientation and colour, eco.
 
-### D11 — Podcasts
+### D11 — Podcasts (delivered 2026-11-17)
 
 - **Files**: `screens/{podcasts,show}.rs`, `app/src/widgets/{episode_panel,chapters,markers,
-  transcript_panel}.rs`.
-- **Acceptance**: progress synced as in *Streams* (pause, 30 s, quit, offline queue); speed per show
-  remembered (`podcast.speeds`); transcript panel follows playback and searches; server
-  transcription start/stop with its state; episode list paged by cursor (no unbounded fetch).
+  transcript_panel}.rs`, captures under `docs/desktop/d11/`.
+- **The rule, the episode list is the page's content**: the head never takes more than 45 % of the
+  page, and it FOLDS the admin block before it reaches that cap. At 1280×800 the page is 656 px and
+  the cap 295 px; the full hero (236) + actions (44) + the transcription card (220) + the transcript
+  search (40) is 540 px, so the card used to be cut through a switch exactly where the list started
+  — the complaint that opened this lot. `head_fit(page_height)` decides both: a compact hero
+  (96 px sleeve, no description, 1.5 rem title) under 900 px of page, and the admin block as ONE
+  summary row (« Réglages de l'émission · Archivage auto désactivé · 1 sur 8 transcrits ») that the
+  person opens, until the head with it fits the cap (a page of 1200 px, i.e. a 1344 px window). The
+  opened block scrolls inside the head (measured on the bench: the wheel moves its card into view
+  while the list keeps 4 rows).
+- **The rule, a page is a cursor, never a fetch per episode**: `GET /api/podcast/<id>?limit=50`
+  paints the first page and nothing per row: **4 API requests** for the whole screen (the page, the
+  show's markers in one read, the transcription settings for an admin, and the one-time
+  `/podcast/progress` merge) against the bench, and « Charger plus » is the only thing that sends
+  the cursor back (asserted on the stub's queries: `limit=50`, then `limit=50&cursor=…`, and 0
+  requests under `/podcast/episode/` before a panel opens). The list is windowed: a page of 50
+  builds the ~13 rows the window shows.
+- **The rule, the panel is a column beside the list, and its body is the scroller**: every wrapper
+  is a FLEX container. A plain block with `flex_1` gives its child no definite height, so the
+  virtual list's `h_full` resolved to 0 and the episodes painted NOTHING beside an open panel while
+  the panel's own body ran under the player bar instead of scrolling (both seen at 1280 and 2560;
+  `the_episode_list_survives_the_panel_beside_it` is the regression test). Under 1040 px of content
+  the panel replaces the list with « Retour à la liste »; on any width its ✕ folds it (a mouse has
+  no Échap).
+- **The rule, progress is written on pause, every 30 s, at quit, and once the link is back**: one
+  keeper for the process (`attach_keeper`, started by the first podcasts/show screen), a position
+  under `PROGRESS_MIN = 8 s` is a mis-tap and never written, the last 15 s are the server's own
+  « finished », and the device's copy (`podcast.progress.<owner>`) paints before the server's merge. The
+  speed is per show (`podcast.speeds`, the `channel_id`, else the album's Deezer id) and is applied
+  by D9's watcher, so an episode started from another screen still gets its show's rate.
+- **The rule, the transcript panel follows and searches where it is**: `follow_to` re-arms on the
+  playing episode's frame only (a pause leaves the reader where they scrolled, `pause_follow`
+  /`resume_follow`), a page of 200 lines is read once and re-read when the playhead leaves it, a
+  poll is ONE request with `limit=1` and only while a job is running, and a search folds accents
+  (`fold_text`) before it highlights. The server job is started, stopped and relaunched from the
+  panel with each failure's own French cause (`engine_crashed`, `too_long`, `queue_full`,
+  `already_running` read as a job, not an error).
+- **T4's slot, ready and empty**: `transcript_panel::LocalTranscript` / `LocalSource` /
+  `set_local_source` / `local_for` are the seam. When the server answers `status: "none"` and a
+  reader is installed, the panel shows the machine's sidecar with a « transcrite sur cet appareil »
+  badge and searches it in memory (`Search::locally`); `nz-transcribe` is untouched — T4 fills the
+  reader and nothing else.
+- **Measured** (this machine: 16 threads, Rust 1.99.1; the debug binary on a private `Xvfb :118`
+  with `-dpi 96` + `GPUI_X11_SCALE_FACTOR=1`, a private `dbus-run-session`, its own XDG dirs and
+  `tools/perf_api.py --serve --podcasts --tracks 8000`; RSS from `/proc/<pid>/status`):
+  - `cargo test --workspace`: **every crate green**; `cargo test -p neezer-desktop` is **344 tests,
+    0 failed** (7 of them the heavy benches their parent runs in a child process). `cargo fmt
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean. **35 of those tests
+    are this lot's** (11 `screens::show`, 3 `screens::podcasts`, 5 `chapters`, 4 `episode_panel`,
+    3 `markers`, 9 `transcript_panel`).
+  - **requests**: podcasts **1** (`/api/podcasts`) + the keeper's one-time `/podcast/progress`;
+    show **4** (page, markers, transcription settings, progress); a panel opens with 2 more
+    (chapters, transcript), a transcript search 1, a page change 1.
+  - **RSS**: **261 008 kB** on Podcasts, **261 912 kB** on the show (+904), **267 368 kB** with the
+    episode panel open and its transcript page (+5 456), **270 580 kB** with the 420 px queue panel
+    too (+3 212), **357 956 kB** at 2560×1600 (the window's own surfaces). `testmem`: the screen's
+    model for the worst realistic case — 50 episodes, a 200-line transcript page and the 100 hits
+    of a show search — is **98 877 B**: nothing per row beyond the model.
+  - **a frame** of the 50-episode show, windowed, at the default window: **14.2 ms median in a
+    debug build** (the release budget is 4.2 ms for 240 Hz; D13 quotes the release number, this lot
+    had no release build to hand — the assertion is the loose debug bound).
+  - **looked at**, 7 captures in `docs/desktop/d11/`: podcasts at both sizes, the show (compact head,
+    folded admin block), the panel beside the list, the panel with the 420 px queue panel (the
+    narrow « Retour à la liste » branch), and 2560×1600 with and without the queue panel. Both
+    screens cap their content column at 1800 px, so a 2560 px window is margins rather than a
+    two-metre episode row. The pass fixed three things no test saw: the list blank beside an open
+    panel, the panel's body overflowing under the player bar, and a switch cut in half above the
+    first episode.
+- **What it is now**: `screens/podcasts.rs` (the subscriptions in one read, a 300 ms debounced
+  catalogue search whose cards SUBSCRIBE, a pasted Deezer link, `j`/`k`/`Début`/`Fin`/`Entrée`
+  through `track_list::own`), `screens/show.rs` (`PAGE = 50` + cursor, `head_fit`, the keeper and
+  its `Watch` state machine, chapters/markers/transcripts, the batch transcription card, the speed
+  menu, the 64 px windowed rows, `Exit`/Échap interceptors), `widgets/episode_panel.rs` (stacked
+  chapters → transcript → description → facts, `Act::{Seek,LoadChapters,RetryChapters,AddMarker,
+  DeleteMarker,ToggleDescription,ToggleAllChapters,Transcript,Close}`), `widgets/chapters.rs`
+  (normalise/sort/dedupe, the playhead's chapter, the inline cap), `widgets/markers.rs` (one read
+  per show, optimistic add/remove reconciled with the server's answer), `widgets/transcript_panel.rs`
+  (pages, follow, search, the job's state card, T4's local branch).
+- **Pitfalls found by building**: (1) a GPUI flex item with `flex_1` inside a BLOCK parent has no
+  definite height — `h_full`/`flex_1` under it collapse to 0 (the blank list) or grow to content
+  (the panel running under the player bar); make every wrapper on the path a flex container. (2)
+  The window's own single-instance and MPRIS names are per SESSION BUS: a second isolated bench
+  without `dbus-run-session` reads itself as a second instance, calls `Raise` on the other worker's
+  app and quits — the symptom was an app that disappeared between two clicks. (3) Under Xvfb with no
+  window manager the app-level key bindings (`q`, `g p`) did not fire while text into a focused
+  field did; the suite's journey tests are what prove the keyboard, the bench drives the mouse.
+- **A contract that is wrong (not this lot's)**: `nz-api`'s `set_podcast_auto_archive` returns
+  `Result<(), ApiError>` through `send_none` and DROPS the body, while
+  `POST /api/podcast/<id>/auto_archive` answers `{…channel, "queued": n}` (the SPA's toast counts
+  those episodes). Reported to the API owner; the screen's documented workaround is one re-read of
+  the page (`self.load`) plus « Archivage des épisodes manquants lancé » — the count is not claimed.
 
 ### D12 — Discovery (delivered 2026-11-17)
 
@@ -1791,8 +1634,42 @@ Waves that can run in parallel (disjoint files):
     **220 µs**, leaves **1 row `active`** and its `.part`, the run has **0 failures** and the
     process records **0 panics**; the 200-track share bench still measures 28.1 % drop with the cap
     at 127 545 B/s, so nothing got cheaper by accident. The same order is owed by every other thread
-    that borrows the runtime: `wiring/engine.rs`'s loader is the next one, and it has no stop
-    protocol yet.
+    that borrows the runtime, and the AUDIO ENGINE owed it next (`desktop/app/src/wiring/engine.rs`
+    and `desktop/crates/nz-audio`): see the bullet below.
+
+  - **The engine owns its threads too — a loader, a decode voice, a spooler is JOINED, never
+    abandoned to the runtime.** `StreamOpener` drives `nz-api` with `Handle::block_on` from four
+    families of thread that the engine spawns (load `nz-load-*`, preload `nz-preload-*`, seek
+    `nz-seek-*`, decode `nz-decode-*`, spool `nz-audio-spool`), and none of them was joined: closing
+    the window during a track, or while the next one preloaded, dropped the runtime under them.
+    Measured before the fix, with the app's own drop order, on the same test
+    (`closing_the_app_mid_track_stops_the_engine_without_a_panic`, child process, panic hook
+    installed): `thread 'nz-preload-next' panicked at tokio-1.54.1/src/runtime/time/entry.rs:534` —
+    « A Tokio 1.x context was found, but it is being shutdown. » — parked where a Prefetch request
+    waits on its lane's `timeout_at`. The rule and the shape:
+
+    - the ENGINE owns what it spawns (`loaders`, `voices` with their stop flags, `spoolers`), and
+      `Engine::shutdown` stops the opener first (a `tokio::sync::watch` raced by every `block_on`,
+      `select!`), then the voices, then joins the loaders, the decode voices and the spoolers, then
+      the event bridge. Idempotent; `Inner::drop` calls it as the last resort;
+    - a join SKIPS the caller's own thread: the last owner of the engine can be a loader, and
+      `join` on yourself is `EDEADLK` (measured — the probe's first failure was that panic);
+    - a spooler a SEEK superseded is `abandon`ed, not joined: it may be inside a socket read of
+      bytes nobody wants, and joining it hung `seek_in_a_finished_network_file_uses_a_byte_range`
+      for ever (measured);
+    - the runtime's owner reaches the engine through a process-wide registry of WEAK handles
+      (`wiring::engine::attach` / `shutdown_process`), because gpui drops the shell's state before
+      the globals — the engine's only strong owner is gone by then. `spawn_audio` also stops the
+      previous engine first, so a sign-in during a track never leaves a player on the old session;
+    - no `catch_unwind` anywhere: the panic was a lifetime, and a swallowed panic is how it reached
+      master's log with a green suite.
+
+    Measured after the fix (same bench, 120 kB/s link, a 60 s FLAC): the close returns in
+    **0.50–0.76 ms**, records **0 panics**, and the process has **0 engine threads** left when it
+    returns — the assertion `left_at_close.is_empty()` is the decisive one, since it is what the old
+    code could not satisfy. The same run proves the two bodies in flight never became play-cache
+    entries, so an interrupted stream is not a track. Gapless, seek and crossfade are untouched:
+    `cargo test -p nz-audio` (54 unit + 7 dsp + 4 network tests) is green, byte-range seek included.
 
 ### D14a — Réglages (user sections) — delivered 2026-11-17
 
@@ -2065,18 +1942,98 @@ Waves that can run in parallel (disjoint files):
     time is printed only when it is `HH:MM` digits (`date_fr`/`datetime_fr`,
     pinned by a test with `éééé`).
 
-### D15a — Remote control
+### D15a — Remote control (delivered 2026-11-17)
 
-- **Files**: `app/src/wiring/remote_host.rs`, `app/src/wiring/remote_controller.rs`,
-  `screens/remote.rs`.
-- **Contract**: host = `POST /api/remote/host/<device>` (state + `qv`) and
-  `GET /api/remote/host/<device>/poll?since=` (polling, never a held connection), commands applied
-  through `PlayerState::apply` ([party-remote.md](party-remote.md)); controller = claim a link
-  (`POST /api/remote/claim`), then the app runs with no audio engine and every `Command` sent;
-  links list/cut; the owner's chip "Contrôlé par N appareils".
-- **Acceptance**: a controller (the SPA in Chromium) drives the desktop: command to sound < 1.2 s on
-  loopback (poll period), and the desktop drives the SPA; the level's limits respected (server
-  enforces, UI hides).
+- **The rule, a command IS a player-store call**: `remote.py#OPS` and `commands.js` are the same
+  vocabulary as `nz_player::Command`'s serde tags, so the desktop DESERIALIZES a wire command into
+  the state machine's own type and applies it through `AppState::command` — the one transport path a
+  click, a key and MPRIS already take. The owner's hand is never taken: their taps work as always
+  and the last action wins. A `set` command is the one op that is not a player command; it takes the
+  `kv` path Réglages uses, for the five settings this build can honour (`player.quality`,
+  `podcast.speeds`, `offline.quality`, `offline.onlyDownloaded`, `cache.limit` — `viz.*`, `fx.*`,
+  `fade.*` are D10b's and D14a's keys, and the server only accepts a key the player PUBLISHED).
+- **The rule, two loops and one foreground tick**: the network task polls
+  `GET /api/remote/host/<device>/poll?since=&chan=` every 700 ms while somebody drives and 1.5 s
+  otherwise, publishes `POST /api/remote/host/<device>` when the shape changed or every 15 s
+  (heartbeat), and stops the moment the server says no link is left; the GPUI tick (120 ms while a
+  link is live, 2 s otherwise) applies what arrived and hands back the state to publish. The split is
+  not optional: applying touches `PlayerState` and the engine, and a `tokio::time` deadline polled
+  from the GPUI executor panics (D9 measured it). The queue is sent only when a POINTER FINGERPRINT
+  (`queue_fingerprint`: `seq` + the order of the row `Arc`s) moved, so a 120 ms tick never clones
+  5 000 rows.
+- **The rule, nothing at all until this device has been lent**: `remote.hosted` in `kv` is written
+  the first time a link is made here; a launch that finds it false starts NO request and NO task
+  (not even the tick's timer), and a launch that finds it true asks `GET /api/remote/links` and
+  resumes.
+  Measured: without it, D8a's own "a screen open fans nothing out" test read **8 requests instead of
+  7** at login (PR #236's discipline), and a desktop that never used remote control paid a request
+  per launch for a feature nobody used.
+- **The rule, rule 1 by lane**: every request here is `Lane::User`. It is the one lane that never
+  waits and that never holds the single `Prefetch` slot the next track's audio needs; `Bulk` would
+  put a tap behind a whole download body (1 s of quiet plus one slot shared with `nz-dl`), which is
+  how a remote control would start slowing the music down. The payloads are debounced and coalesced,
+  the queue goes only on a change, and both loops STOP (not slow down) when nothing is lent.
+- **The rule, a loan keeps nothing**: on a session whose `/api/me` carries `remote`, `start` drops the
+  audio engine, sets `Api::set_caching(false)` and `adopt`s the owner's state by REBUILDING the
+  player from a `Snapshot` while DROPPING every effect (`adopt_effects`) — no load, no listen report,
+  no queue written to this device. The controller applies a tap locally at once and holds that view
+  until the owner's player has RUN it (`ack`, 2.5 s at most), so a tap never flickers back; the
+  position runs on the owner's published line `{p, t}` with the clock skew measured as the round
+  trip's midpoint.
+- **What it is now**: `wiring/remote_host.rs` (`device_id`/`device_name`, `HostStatus`,
+  `Published`, `Session` — `poll_path`/`publish_body`/`absorb_poll`/`absorb_publish`, `Pending`,
+  `decode_pending`, `queue_fingerprint`, the service with `ensure`/`start`/`stop`/`resume`/`tick`,
+  `settings_snapshot`/`apply_setting`, `link_url`, `expiry_label`, `LinkRow`, and the session's
+  entry `start`); `wiring/remote_controller.rs` (`Grant`, `op_level` (the UI's hiding, the server's
+  `POLICY` being the enforcement), `Status`/`Phase`, `Anchor`, `skew_from`, `Read`, `parse_queue`,
+  `adopt`, `token_from_input`, and the service's `command`/`tick`/`run`); `screens/remote.rs` (the
+  owner's sheet: four levels with their blurbs, four durations, the « Pour » label, the invite with
+  its URL, the live links with their expiry and connected count, « Couper » per link and « Tout
+  couper » armed once; plus the claim form and the loan's panel with its transport and queue). The
+  chip « Contrôlé par … / Couper » is `app.rs`'s (it must be on every route, never over the
+  transport), the sidebar's « Contrôle distant » row is its way in, and `state.rs` gained the one call
+  `remote_host::start` in `on_restored`/`on_logged_in` — the three files this lot touched outside its
+  own, with `neezer-50`'s blessing; `screens/remote.rs` is reached from that row and by the
+  `RemoteClaim` action D7 declared and nothing handled.
+- **Measured** (this machine, Rust 1.99.1; the real server is `webapp/test/remote/server.py`, four
+  WAV tracks, the fixture the SPA's own `test/remote/run.mjs` drives):
+  - **command → sound: best 6–15 ms, worst 710–718 ms** over three taps phased across the poll cadence
+    (the owner's loop polls every 700 ms), both under the lot's 1.2 s; the 120 ms foreground tick
+    brings the app's own worst case to ~840 ms. The command is applied to a real `PlayerState` and
+    the asserted effect is `Effect::Load { autoplay: true }` — that is the sound.
+  - `cargo test -p neezer-desktop`: **25 tests of this area** (15 host, 10 controller) plus the
+    screen's 4, 0 failed; the e2e also proves the ack (`ack` = the seq the player ran), the restart
+    (`need_queue: true` on a new launch's publish, then false), and the cut (the controller's next
+    read is `401 remote ended`).
+  - the app, on a private `Xvfb :137` at 2560×1600 (screenshots kept with the session): the owner's
+    sheet renders, the link made through the API is listed with « Expire dans 1 h », the live line
+    and the chip say « Contrôlé par Le salon · Lecture seule » as soon as a controller reads, and
+    `q` opens the 420 px queue panel OVER that screen — the screen takes no focus (D8b's rule), so
+    the shell's bindings keep working. RSS 244 MB at 2560×1600 on this screen.
+  - **resume after a real restart**: a launch seeded with `remote.hosted` and a live link answered
+    `/api/remote/state` with `online: true` and a published state WITHOUT anybody opening the
+    screen — the SPA's `initRemoteHost` at boot, proven on the app's own store.
+- **Not done, and why**: no screenshot of the LOAN panel on this machine. A controller app needs a
+  claimed cookie in its own store; the second instance kept coming up on the login screen while the
+  first held the display, and GPUI under Xvfb has no DRI3 here (the window sometimes never
+  appears — D8a hit the same wall and CI runs the window under lavapipe). The loan's logic is
+  covered by the protocol test (a real client claims and drives), by `adopt`'s own test (it changes
+  the player and executes NO effect) and by the level table's.
+- **Pitfalls found by building**:
+  - **`need_queue` is not "the channel is empty", it is "the last publish left the queue out"**: the
+    server adopts the `qv` of a publish that CARRIES the queue, so a first publish with it answers
+    `need_queue: false`. The test asserted the opposite and was wrong — a restart's cue is a publish
+    WITHOUT the queue.
+  - **A `MutexGuard` across an `.await` makes the future non-`Send`**, so `nz-net` refuses it: the
+    loop's error branch has to scope its status update in a block.
+  - **`virtual_list` takes `Rc<Vec<Size<Pixels>>>`, `gpui_kit::base::VirtualListScrollHandle`, and
+    it hands back `Entry`s, not `Arc<Entry>`** — the queue screen's own types, not the player's.
+  - **`use_keyed_state`'s initialiser returns the STATE, not an `Entity`** (`cx.new` there yields
+    `Entity<Entity<InputState>>`), and `Button` has no `debug_selector` (D8b's note): a control a
+    test must find is wrapped in a `Div`.
+  - **`pkill -f "server.py"` kills the shell that runs it** when the pattern is in its own command
+    line (measured twice, with 143s): keep the server in the foreground of a background shell and
+    hold its stdin with `sleep`.
 
 ### D15b — Listen party
 

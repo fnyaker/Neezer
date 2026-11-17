@@ -224,7 +224,7 @@ impl Screen {
             fallback_in_flight: false,
             passages_in_flight: false,
             list: List::new(),
-            covers: Rc::new(RefCell::new(Covers::rows())),
+            covers: Rc::new(RefCell::new(Covers::new())),
             menu: Menu::new(),
             menu_keys: None,
             events: tx,

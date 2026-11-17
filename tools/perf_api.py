@@ -1009,34 +1009,6 @@ def make_archived(app, clusters=40):
         similar.drop_index()
 
 
-def seed_covers(app, jpeg_path):
-    """Give every album a REAL ``cover.jpg``, so the client's sleeve path is measurable.
-
-    The bench's rows carry a Deezer ``ALB_PICTURE`` but no file, and Deezer is
-    off: ``/api/cover/<album>`` therefore answers 404 and every screen draws its
-    placeholder. A client's decoded-image cache, its atlas tiles and its
-    eviction can only be measured against real bytes, so this writes one real
-    JPEG as every album's folder cover (``library.save_album_cover``, the same
-    path the archiver uses) and reports how many albums got one.
-    """
-    from neezer.db import Album, Folder
-    from neezer.deezer import library
-
-    with open(jpeg_path, "rb") as fh:
-        data = fh.read()
-    written = 0
-    with app.app_context():
-        for album in Album.select():
-            first = album.tracks.first()
-            if first is None or first.folder is None:
-                continue
-            folder = Folder[first.folder]
-            if library.save_album_cover(folder, data):
-                written += 1
-    print(f"  {written} albums carry a real cover.jpg ({len(data)} B)", file=sys.stderr)
-    return written
-
-
 def main():
     stale = sweep_orphans()
     if stale:
@@ -1053,13 +1025,6 @@ def main():
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--serve", action="store_true", help="keep serving on a port afterwards")
     ap.add_argument("--port", type=int, default=0)
-    ap.add_argument(
-        "--covers",
-        metavar="JPEG",
-        help="give every album this real JPEG as its cover.jpg, so the client's "
-        "decoded-sleeve cache and GPU atlas are measured against real bytes "
-        "instead of placeholders (the bench otherwise 404s every /api/cover)",
-    )
     ap.add_argument(
         "--audio",
         help="a WAV file archived as the first 12 tracks (ids[\"ids\"]), so /api/stream "
@@ -1176,8 +1141,6 @@ def main():
         _db.execute_sql("PRAGMA synchronous=OFF")
     print(f"populating ({args.tracks} tracks)...", file=sys.stderr)
     ids = populate(app, args.tracks, args.playlists, args.favorites, args.big_playlist, recap=args.recap)
-    if args.covers:
-        seed_covers(app, args.covers)
     if args.audio:
         from neezer.db import Track
         from neezer.deezer import ids as dzids
