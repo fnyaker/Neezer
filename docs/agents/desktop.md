@@ -2964,10 +2964,18 @@ Waves that can run in parallel (disjoint files):
 
   | Format | File | Size | Installed and started in | First frame |
   |---|---|---|---|---|
-  | `.deb` | neezer-desktop-1.6.0-x86_64.deb | **22 835 380 B** (21.8 MiB) | Debian 13 (trixie), `apt install ./…` | **125 ms** |
-  | `.rpm` | neezer-desktop-1.6.0-x86_64.rpm | **20 238 109 B** (19.3 MiB) | Fedora 45, `dnf install ./…` | **131 ms** |
-  | `.AppImage` | neezer-desktop-1.6.0-x86_64.AppImage | **32 733 688 B** (31.2 MiB) | this machine, `APPIMAGE_EXTRACT_AND_RUN=1` | **373 ms** |
-  | `.flatpak` | neezer-desktop-1.6.0-x86_64.flatpak | **21 980 488 B** (21.0 MiB) | this machine, `flatpak --user install` | **793 ms** |
+  | `.deb` | neezer-desktop-1.6.0-x86_64.deb | **22 831 992 B** (21.8 MiB) | Debian 13 (trixie), `apt install ./…` | **82 ms** |
+  | `.rpm` | neezer-desktop-1.6.0-x86_64.rpm | **20 238 549 B** (19.3 MiB) | Fedora 45, `dnf install ./…` | **136 ms** |
+  | `.AppImage` | neezer-desktop-1.6.0-x86_64.AppImage | **32 750 072 B** (31.2 MiB) | this machine, `APPIMAGE_EXTRACT_AND_RUN=1` | **128 ms** |
+  | `.flatpak` | neezer-desktop-1.6.0-x86_64.flatpak | **21 972 128 B** (21.0 MiB) | this machine, `flatpak --user install` | painted |
+  | `.pkg.tar.zst` (Arch, P1) | neezer-desktop-1.6.0-1-x86_64.pkg.tar.zst | **34 498 908 B** (32.9 MiB) | `pacman -U` | — |
+
+  These are the five files **attached to the release v1.6.0** by the replay
+  (`workflow_dispatch -f tag=v1.6.0`, run 44159184701, tag left untouched at
+  `a1d71917`), downloaded again from the release and installed a second time on
+  their own X server: the `.deb` on Debian 13, the `.rpm` on Fedora 45, the
+  AppImage here, the Flatpak with `flatpak --user`. A local build gives the same
+  file within a few hundred bytes (timestamps inside the archive).
 
   The two binaries are **60 437 392 B** and **38 692 288 B** (99 MB installed;
   the `.deb`'s `Installed-Size` says 96 860 KiB). All four printed
