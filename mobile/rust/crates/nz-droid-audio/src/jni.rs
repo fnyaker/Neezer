@@ -7,11 +7,13 @@
 //! `nscore` checked NewStringUTF 167 and NewDirectByteBuffer 229 against) — and
 //! every other argument is a primitive.
 //!
-//! Kotlin declares them `@JvmStatic private external fun`, on
-//! `fr.neezer.mobile.playback.AudioTrackPull`, hence the mangled names. A handle
-//! is a `Box<PullSession>` turned into a `jlong`; **0 is "none"** and every entry
-//! point answers a no-op (`-1` for a render) instead of crashing, so a Kotlin
-//! object closed twice, or used after a close, cannot take the process down.
+//! Kotlin declares them `private external fun` on
+//! `fr.neezer.mobile.playback.AudioTrackPull`, hence the mangled names; they are
+//! INSTANCE methods, so the second argument is the Kotlin object, not its class
+//! (which is why it is unused). A handle is a `Box<PullSession>` turned into a
+//! `jlong`; **0 is "none"** and every entry point answers a no-op (`-1` for a
+//! render) instead of crashing, so a Kotlin object closed twice, or used after a
+//! close, cannot take the process down.
 
 use core::ffi::c_void;
 
@@ -19,7 +21,6 @@ use crate::CHANNELS;
 use crate::track::{close_handle, session_mut};
 
 type JEnv = *mut *const *const c_void;
-type JClass = *mut c_void;
 type JObject = *mut c_void;
 
 const GET_DIRECT_BUFFER_ADDRESS: usize = 230;
@@ -57,7 +58,7 @@ unsafe fn direct_capacity(env: JEnv, buffer: JObject) -> i64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nativeRender(
     env: JEnv,
-    _class: JClass,
+    _this: JObject,
     handle: i64,
     buffer: JObject,
     frames: i32,
@@ -95,7 +96,7 @@ pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nati
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nativeSetLatency(
     _env: JEnv,
-    _class: JClass,
+    _this: JObject,
     handle: i64,
     frames: i64,
 ) {
@@ -113,7 +114,7 @@ pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nati
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nativeUnderruns(
     _env: JEnv,
-    _class: JClass,
+    _this: JObject,
     handle: i64,
     total: i64,
 ) {
@@ -131,7 +132,7 @@ pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nati
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_fr_neezer_mobile_playback_AudioTrackPull_nativeClose(
     _env: JEnv,
-    _class: JClass,
+    _this: JObject,
     handle: i64,
 ) {
     // SAFETY: the handle contract is the Kotlin object's.
