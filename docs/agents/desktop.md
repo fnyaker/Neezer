@@ -446,14 +446,17 @@ the app keep" (`app/src/testmem.rs`).
   A 1 000 px sleeve drawn in a 36 px row is therefore **4 MB of decoded heap and 4 MB of
   atlas for 1 296 useful pixels**, and a 4 000-row list that draws one per row would cost that
   per distinct sleeve — D9's +291 MB for "a sleeve per queue row" is that arithmetic (its queue
-  still draws glyph rows, so the number was a prediction, not a measurement: this section's own
-  sleeve deltas are the measured +1 to +2 MB of a browse page's few), and it is the number this
+  drew glyph rows, so the number was a prediction, not a measurement), and it is the number this
   rule exists to keep off the queue. `nz-cache`'s `Covers::variant` writes a
   downscaled copy once (the bench's 1 753 091 B JPEG becomes **3 306 B at 128 px**, 4 480 B at
   384 px) and `cover::Class` decides the size: **`Class::Row` 128 px** for a screen whose
   sleeves are list rows, `Card` 384 px, `Page` 512 px. Decoded, 1 000² × 4 = 4 000 000 B
   becomes 128² × 4 = 65 536 B: **61×**. A screen that paints sleeves in rows is built with
-  `Covers::rows()`; one that paints cards keeps `Covers::new()`.
+  `Covers::rows()`; one that paints cards keeps `Covers::new()`. **Every list in the app now
+  paints them** — the Bibliothèque (Favoris, playlist cards, album grid), a playlist's rows and
+  banner, the queue and the 420 px panel — and the atlas tile is dropped when the row leaves
+  (next bullet): the queue's 32 px rows and the library's 36 px rows cost **65 536 B decoded and
+  65 536 B of atlas each, held for one screenful**.
 - **The rule, what is measured is counted, not read from RSS.** `app/src/testmem.rs` counts
   bytes allocated minus bytes freed **on the test's own thread** (a `#[global_allocator]` that
   is `#[cfg(test)]` only, so the shipped binary is unchanged). The guard is
@@ -463,6 +466,39 @@ the app keep" (`app/src/testmem.rs`).
   caught. A screen that starts keeping a list, a response or a decoded image fails it at once.
   `nz-cache`'s `a_sleeve_is_stored_at_the_size_it_is_drawn` pins the resize: 128 px copy,
   idempotent, no upscaling, `None` when there is no art.
+- **The rule, a sleeve is freed when the screen stops showing it — and the screen is what says
+  so.** `cover::Sleeves` (one process-wide cache) keeps the decoded `Arc<RenderImage>` and drops
+  the atlas tile with it, which `Window::drop_image` is the only way to do. What decides "shown"
+  is the screen's own declaration (`Covers::show`), REPLACED by each frame's paint and published
+  on the next render (`Covers::begin_frame`); an image no screen declares is freed after
+  `IDLE_FOR` (2 s), the whole cache is bounded at `DECODED_BUDGET` (64 MB, `coverqueue.js`'s
+  cap), and what is over the budget goes least-recently-declared first — a screenful, never the
+  list. **Neither the paint nor the virtual list's closure is a witness**: `paint_image` uploads
+  by image id, so an evicted image re-uploaded by a later paint would be invisible to us, and
+  `v_list` calls its closure TWICE per frame — once for ONE row (measuring), once for the
+  viewport — and the measuring row is really painted. A union of the two kept that first row's
+  sleeve and atlas tile for the life of the process (20 images for 19 rows, found by the
+  journey test); `a_measuring_pass_row_is_not_what_the_screen_shows` pins it.
+  **Measured** (release, `Xvfb :214` 2600×1700 `-dpi 96`, `GPUI_X11_SCALE_FACTOR=1`,
+  `perf_api --serve --covers` with a real 1 000 px JPEG on 1 333 albums, 8 000 tracks,
+  4 000 favourites, 1280×800) — Bibliothèque, 4 000-row favourites, then 1 000 `PageDown`:
+  | | Bibliothèque (60 playlists) | Favoris 4 000 | +1 000 défilements |
+  |---|---|---|---|
+  | before (master's rows drew placeholders) | 213.5 / 155.9 | 230.1 / 172.5 | 230.7 / 173.1 |
+  | **with the sleeves** | **240.6 / 182.9** | **251.7 / 194.0** | **259.8 / 202.2** |
+  The +21 to +27 MB is paid by the FIRST image the app ever paints, not by a screen: the same
+  build on the Artistes tab (no sleeve at all) reads 250.9 / 193.2, and "1 000 défilements" over
+  four full traversals went 263.3 → 263.3 → 263.3 MB (+8.1 MB once, then flat). The decoded stock
+  is **20 images = 1 310 720 B** (counted, `Sleeves::resident`), and
+  `a_thousand_renders_over_four_thousand_rows_keep_one_screenful` holds it there for 1 000
+  frames over 4 000 rows. RSS is not the app's data: at 2560×1600 the same screen is 327.7 /
+  264.1 and **349.2 / 285.6** with the 420 px queue panel open (D7's +81.6 MB of window buffers
+  is most of it).
+- **The rule, one decode per screenful and no decode for what is below the fold.** A visible row
+  asks for exactly one sleeve (`want`, at most `MAX_IN_FLIGHT` = 8 requests in flight), the file
+  it gets is the 128 px copy (`Covers::rows`), and the journey test counts it: 18 visible rows
+  → 18 requests, 18 decoded images of 65 536 B, **0 requests** for a row 100 below the fold, and
+  a sleeve already on disk is never re-asked.
 - **Pitfalls found by measuring**:
   - **A screenshot on a 2600×1700 software-rendered root can block `import -window root`**;
     drive a journey from the bench server's own access log (the route a screen asks for) and
@@ -470,6 +506,12 @@ the app keep" (`app/src/testmem.rs`).
   - **`XResizeWindow` races the app's own initial size**: a resize issued before the window is
     ready is silently lost and the run measures 1280×800 while claiming 2560×1600. Resize
     after the first frame and assert the size you measured.
+  - **An unmanaged Xvfb delivers no keyboard until the window is focused**: there is no window
+    manager to give it the focus, so `XSetInputFocus` on the biggest ROOT CHILD (the app's
+    window — an input-method helper is also a named child, and it is 1×1) must come before the
+    first key, or every `g l` is a no-op. A resize MOVES the window to 0,0 and the app stops
+    receiving clicks on this build: take the 2560×1600 pictures with the navigation already
+    done, and keep the clicks before the resize.
   - **The bench must serve real cover bytes** to measure anything sleeve-shaped
     (`tools/perf_api.py --covers <jpeg>`): with Deezer unreachable every `/api/cover` is a 404
     and every screen paints a placeholder, which reads as "sleeves are free".
@@ -1405,10 +1447,11 @@ Waves that can run in parallel (disjoint files):
     1280×800, **214 MB** with the queue (**+8 MB**), **212 MB** with the 420 px panel. The shell's
     own 2560 baseline is the bulk of it (D7 measured 103 MB at 1280 on a build without D14a's
     Réglages); the screens' own share is the queue, the lyrics and one decoded sleeve.
-  - **A sleeve per queue row costs +291 MB** (mechanical: each 1 000 px JPEG decoded for a 32 px
-    slot, twenty rows visible). Until the plan's decoded-image LRU (64 MB, `coverqueue.js`) lands with
-    D8a's cover widget, the queue draws one glyph per row like the player bar — that is why the
-    screenshots show glyphs in the queue and a real sleeve in the player.
+  - **A sleeve per queue row WOULD cost +291 MB** (mechanical: each 1 000 px JPEG decoded for a
+    32 px slot, twenty rows visible) — which is why D9 drew one glyph per row. The lot that
+    brought the lists their sleeves keeps the arithmetic off the queue instead: a row paints the
+    128 px copy (`Covers::rows`), 65 536 B decoded and 65 536 B of atlas, freed when the row
+    leaves (see *Memory*, below).
   - `cargo test --workspace`: **128 app tests** (the D9 ones: 6 lyrics, 6 sleep, 3 speed, 1 quality,
     4 queue, 4 now-playing, 4 MPRIS wiring) and every crate green; `cargo fmt --check` and
     `cargo clippy --workspace --all-targets -- -D warnings` clean. `cargo test --release` fails in
