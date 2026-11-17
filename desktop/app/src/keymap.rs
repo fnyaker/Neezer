@@ -174,6 +174,14 @@ pub const SHORTCUTS: &[Shortcut] = &[
         label: "Écarter le titre",
     },
     Shortcut {
+        keys: "t",
+        label: "Télécharger le titre ou la collection",
+    },
+    Shortcut {
+        keys: "Maj+T",
+        label: "Retirer, annuler ou réessayer le téléchargement",
+    },
+    Shortcut {
         keys: "q",
         label: "Panneau de la file",
     },
@@ -262,6 +270,12 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-f10", RowContextMenu, c),
         KeyBinding::new("l", LikeHere, c),
         KeyBinding::new("d", DislikeHere, c),
+        // Offline downloads (D18): `t` asks for the focused row (or the page's
+        // collection when it has no row), `Maj+T` takes it back, cancels it or
+        // asks again — the same two verbs the row's menu and the page's button
+        // dispatch.
+        KeyBinding::new("t", DownloadSelection, c),
+        KeyBinding::new("shift-t", RemoveDownload, c),
         // Login: Tab is gpui-omarchy's focus_scope; Enter submits from any
         // field (the login screen handles it in its own `Input` context too).
         KeyBinding::new("enter", SubmitLogin, c),
@@ -399,6 +413,8 @@ mod tests {
             "Menu",
             "l",
             "d",
+            "t",
+            "Maj+T",
             "q",
             "f",
             "v",

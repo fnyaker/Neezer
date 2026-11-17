@@ -34,6 +34,7 @@ use gpui_omarchy::{ButtonVariant, IconName, button, icon};
 use nz_api::ApiError;
 use nz_model::{Album, AlbumList, ArtistPage, Discography, PersonCredits, Track, TrackList};
 
+use crate::actions::{DownloadSelection, RemoveDownload};
 use crate::nav::{CreditKind, Route};
 use crate::state::AppState;
 use crate::theme;
@@ -41,8 +42,10 @@ use crate::toast::ToastKind;
 use crate::widgets::card::{self, Phase};
 use crate::widgets::context_menu::{self, Item, Menu};
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::{self, Watch};
 use crate::widgets::track_list::{self, Intent, Subtitle, TrackList as List};
 use crate::wiring::events::{self, Sender};
+use gpui_kit::SharedString;
 
 /// Which half of the artist page is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -83,6 +86,8 @@ pub struct Screen {
     credit_list: List,
     credits: Option<PersonCredits>,
     covers: Rc<RefCell<Covers>>,
+    /// The downloads worker, as this screen reads it (lot D18).
+    downloads: Watch,
     menu: Menu,
     /// The keystroke interceptor that owns the keyboard while a menu is open.
     menu_keys: Option<Subscription>,
@@ -124,6 +129,7 @@ impl Screen {
             credit_list: List::new().subtitle(Subtitle::Roles),
             credits: None,
             covers: Rc::new(RefCell::new(Covers::new())),
+            downloads: Watch::attach(&state, cx),
             menu: Menu::new(),
             menu_keys: None,
             events: tx,
@@ -131,6 +137,7 @@ impl Screen {
         };
         screen.apply_page(cx);
         screen.drain(rx, cx);
+        screen.bind_download(cx);
         screen.load(cx);
         track_list::own(cx, |this: &mut Self, intent, window, cx| {
             this.on_intent(intent, window, cx)
@@ -476,7 +483,15 @@ impl Screen {
             return;
         };
         self.list.select(index);
-        let items = context_menu::track_items(has_album, has_artist);
+        let download = self
+            .list
+            .row(index)
+            .map(|track| {
+                download_control::track(self.downloads.get(), &download_control::key(track), false)
+            })
+            .map(|state| context_menu::Download::from(&state))
+            .unwrap_or_default();
+        let items = context_menu::track_items(has_album, has_artist, download);
         let top = track_list::row_top(index, self.list.scroll_y(), items.len());
         self.menu.open_at(top, items);
         // The interceptor is app-level (GPUI has no per-entity keystroke
@@ -546,6 +561,66 @@ impl Screen {
         }
     }
 
+    // --- downloads (lot D18) ------------------------------------------------
+
+    /// One row's download, from its menu or from `t` / `Maj+T`: the same verb
+    /// whichever hand asked (`download_control::row_verb`).
+    fn row_download(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            self.state.update(cx, |state, cx| {
+                state.toasts.push(
+                    ToastKind::Error,
+                    "Les téléchargements ne sont pas disponibles sans stockage local.",
+                );
+                cx.notify();
+            });
+            return;
+        };
+        let Some(track) = self.list.row(index) else {
+            return;
+        };
+        let key = download_control::key(track);
+        let title = track.title.clone();
+        if let Some(message) =
+            download_control::row_verb(&service, self.downloads.get(), &key, &title, false)
+        {
+            self.state.update(cx, |state, cx| {
+                state
+                    .toasts
+                    .push(ToastKind::Info, SharedString::from(message));
+                cx.notify();
+            });
+        }
+    }
+
+    /// `t` asks for the focused row, `Maj+T` takes it back (or asks again): one
+    /// handler, because the row's own state decides which verb applies.
+    fn bind_download(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let for_ask = weak.clone();
+        gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
+            for_ask
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx)
+                        && let Some(index) = this.list.selected()
+                    {
+                        this.row_download(index, cx);
+                    }
+                })
+                .ok();
+        });
+        gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx)
+                    && let Some(index) = this.list.selected()
+                {
+                    this.row_download(index, cx);
+                }
+            })
+            .ok();
+        });
+    }
+
     fn pick(&mut self, item: Item, cx: &mut Context<Self>) {
         self.menu.close();
         self.menu_keys = None;
@@ -563,6 +638,11 @@ impl Screen {
             }
             Item::Like => self.row_verdict(true, cx),
             Item::Dislike => self.row_verdict(false, cx),
+            Item::Download | Item::RetryDownload | Item::CancelDownload | Item::RemoveDownload => {
+                if let Some(index) = index {
+                    self.row_download(index, cx);
+                }
+            }
             Item::Credits => {
                 if let Some(id) = index
                     .and_then(|index| self.list.row(index))

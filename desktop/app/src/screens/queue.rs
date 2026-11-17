@@ -41,21 +41,25 @@ use std::rc::Rc;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Pixels, Render, ScrollStrategy, Size, StatefulInteractiveElement,
-    Styled, Subscription, Window, div, px, rems,
+    App, AppContext as _, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Pixels, Render, ScrollStrategy, Size,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon, virtual_list};
 use nz_player::{Command, Entry};
 
 use crate::actions::{
-    ListFirst, ListLast, ListNext, ListPageDown, ListPageUp, ListPrevious, PlayFromHere,
+    DownloadSelection, ListFirst, ListLast, ListNext, ListPageDown, ListPageUp, ListPrevious,
+    PlayFromHere, RemoveDownload,
 };
 use crate::nav::Route;
 use crate::state::AppState;
 use crate::theme;
+use crate::toast::ToastKind;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::{self, Rows, State as DownloadState, Watch};
 use crate::wiring::events::Sender;
+use crate::wiring::offline::Choice;
 
 /// One queue row's height, as `QueueList.svelte` (`.qitem { height: 56px }`).
 pub const ROW_HEIGHT: f32 = 56.;
@@ -120,6 +124,11 @@ pub struct Screen {
     took_focus: bool,
     /// The rows' sleeves: a 128 px copy per row, decoded for what is visible.
     covers: Rc<RefCell<Covers>>,
+    /// The downloads worker, as the queue reads it (lot D18): the whole queue is
+    /// a set, and a row carries its own state.
+    downloads: Watch,
+    rows: Rc<Rows>,
+    rows_version: u64,
     events: Sender<Msg>,
     _subscription: Subscription,
 }
@@ -132,6 +141,7 @@ impl Screen {
         });
         let focus = cx.focus_handle();
         let (events, answers) = crate::wiring::events::channel::<Msg>();
+        let downloads = Watch::attach(&state, cx);
         let mut this = Self {
             route,
             state,
@@ -143,6 +153,9 @@ impl Screen {
             rendered_rows: 0,
             took_focus: false,
             covers: Rc::new(RefCell::new(Covers::rows())),
+            downloads,
+            rows: Rc::new(Rows::default()),
+            rows_version: u64::MAX,
             events,
             _subscription: subscription,
         };
@@ -152,6 +165,7 @@ impl Screen {
         cx.on_release(|this, cx| this.covers.borrow_mut().release(cx))
             .detach();
         this.sync(cx);
+        this.bind_download(cx);
         this
     }
 
@@ -296,6 +310,20 @@ impl Screen {
 
     /// Vider : `player.clearUpcoming`, which also switches autoplay off so a
     /// radio cannot refill a queue the person just cleared.
+    /// One sentence in the shell's stack (the queue has no `notice` of its own).
+    fn notice(
+        &mut self,
+        kind: crate::toast::ToastKind,
+        message: impl Into<gpui_kit::SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let message = message.into();
+        self.state.update(cx, |state, cx| {
+            state.toasts.push(kind, message);
+            cx.notify();
+        });
+    }
+
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.command(Command::clear_upcoming(), cx);
         self.state.update(cx, |state, cx| {
@@ -331,6 +359,134 @@ impl Screen {
         }
         let target = (self.selected as i64 + delta).clamp(0, len as i64 - 1);
         self.select(target as usize, cx);
+    }
+
+    // --- downloads (lot D18) ------------------------------------------------
+
+    /// The queue's own set: every row that can be played, in order.
+    fn download_keys(&self, cx: &App) -> Vec<String> {
+        self.state
+            .read(cx)
+            .player
+            .queue()
+            .iter()
+            .filter(|entry| entry.is_playable())
+            .filter_map(|entry| entry.reference().map(str::to_owned))
+            .collect()
+    }
+
+    fn download_state(&mut self, cx: &App) -> DownloadState {
+        let keys = self.download_keys(cx);
+        download_control::collection(self.downloads.get(), "queue", "now", &keys)
+    }
+
+    fn bind_download(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let for_download = weak.clone();
+        gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
+            for_download
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx) {
+                        this.download(cx);
+                    }
+                })
+                .ok();
+        });
+        gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx) {
+                    this.drop_download(cx);
+                }
+            })
+            .ok();
+        });
+    }
+
+    /// « Télécharger la file » : what is playing and what comes next, before a
+    /// flight. The worker queues it on the Bulk lane, behind the sound (rule 1).
+    fn download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        match self.download_state(cx) {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            DownloadState::Idle => {
+                let choices: Vec<_> = self
+                    .state
+                    .read(cx)
+                    .player
+                    .queue()
+                    .iter()
+                    .filter(|entry| entry.is_playable())
+                    .filter_map(|entry| {
+                        entry
+                            .reference()
+                            .map(|id| Choice::new(id.to_owned(), entry.title.clone()))
+                    })
+                    .collect();
+                if choices.is_empty() {
+                    self.notice(ToastKind::Error, "La file est vide.", cx);
+                    return;
+                }
+                let count = choices.len();
+                service.choose("queue", "now", "File d'attente", choices);
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "{count} titre{} en file de téléchargement",
+                        if count > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {}
+        }
+        cx.notify();
+    }
+
+    fn drop_download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        match self.download_state(cx) {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {
+                service.drop_set("queue", "now");
+                self.notice(ToastKind::Info, "Téléchargement de la file retiré", cx);
+            }
+            DownloadState::Idle => {
+                self.notice(
+                    ToastKind::Info,
+                    "La file n'est pas téléchargée sur cet appareil.",
+                    cx,
+                );
+            }
+        }
+        cx.notify();
     }
 
     /// The row's own controls, drawn for what is ahead of the playhead only.
@@ -452,6 +608,22 @@ impl Render for Screen {
                 state.player.len(),
             )
         };
+        // The downloads control: the whole queue is one set, and a row carries
+        // its own state. The rows are resolved once per published version.
+        let download_state = {
+            let keys: Vec<String> = entries
+                .iter()
+                .filter(|entry| entry.is_playable())
+                .filter_map(|entry| entry.reference().map(str::to_owned))
+                .collect();
+            download_control::collection(self.downloads.get(), "queue", "now", &keys)
+        };
+        let version = self.downloads.get().version;
+        if version != self.rows_version {
+            let done = matches!(download_state, DownloadState::Done { .. });
+            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows_version = version;
+        }
         let total: u64 = entries.iter().map(|entry| entry.duration as u64).sum();
         let upcoming = (len as i64 - index - 1).max(0);
 
@@ -496,12 +668,22 @@ impl Render for Screen {
                             }),
                     ),
             );
+        let mut tools = div().flex().items_center().gap(rems(0.25));
+        if len > 0 {
+            tools = tools.children(download_control::control(
+                "queue-download",
+                &download_state,
+                self.downloads.available(),
+                cx,
+            ));
+        }
         if len > 0 && upcoming > 0 {
-            header = header.child(
+            tools = tools.child(
                 button("queue-clear", "Vider", ButtonVariant::Secondary, cx)
                     .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
             );
         }
+        header = header.child(tools);
 
         let root = div()
             .id("queue-screen")
@@ -748,6 +930,12 @@ impl Screen {
                 .text_color(theme::secondary(cx))
                 .child(crate::player_bar::clock(entry.duration as f64)),
         );
+        // The row's own download state: a glyph, or nothing at all.
+        if let Some(reference) = entry.reference()
+            && let Some(chip) = download_control::chip(&self.rows.state(reference), cx)
+        {
+            row = row.child(chip);
+        }
         row.child(self.row_controls(index, len, is_selected, cx))
     }
 }
@@ -785,6 +973,66 @@ mod tests {
         assert_eq!(plural(2), "s");
         assert_eq!(plural(4_000), "s");
         assert_eq!(ROW_HEIGHT, 56.0, "the one number the windowing depends on");
+    }
+
+    /// **The panel's queue stays inert for `t` / `Maj+T` while the route is
+    /// another screen.**
+    ///
+    /// The 420 px panel is a SECOND `queue::Screen` (`app.rs#toggle_queue`)
+    /// mounted beside the route's screen, and GPUI runs EVERY listener
+    /// registered for an action — so without the guard `t` on the library would
+    /// queue the favourites AND the whole queue. The screen acts only when the
+    /// route is its own; this test is what keeps that.
+    #[gpui::test]
+    async fn the_panel_queue_does_not_download_behind_another_screen(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = temp_dir("panel-guard");
+        let state = small_queue(cx, &dir);
+        let cache =
+            nz_cache::Cache::open_with_cache_dir(temp_dir("panel-store"), temp_dir("panel-cache"))
+                .expect("a store");
+        let offline = crate::wiring::offline::Offline::start(cache);
+        let (host, cx) = cx.add_window_view({
+            let state = state.clone();
+            let offline = offline.clone();
+            move |_window, cx| {
+                let screen = cx.new(|cx| Screen::new(Route::Queue, state, cx));
+                screen.update(cx, |screen, cx| {
+                    screen.downloads = download_control::Watch::with_service(Some(offline), cx);
+                    screen.bind_download(cx);
+                });
+                Host { screen }
+            }
+        });
+        // The route is the library: the panel is a bystander.
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| {
+                state.nav.replace(Route::Library {
+                    tab: crate::nav::LibraryTab::Favorites,
+                });
+            })
+        });
+        cx.update(|window, cx| window.dispatch_action(Box::new(DownloadSelection), cx));
+        cx.run_until_parked();
+        assert!(
+            offline.snapshot().note.is_none(),
+            "the panel queued work while another screen was in front: {:?}",
+            offline.snapshot().note
+        );
+
+        // The route IS the queue: now it acts.
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(Route::Queue));
+        });
+        cx.update(|window, cx| window.dispatch_action(Box::new(DownloadSelection), cx));
+        cx.run_until_parked();
+        let note = offline.snapshot().note.unwrap_or_default();
+        assert!(
+            note.contains("ajouté aux téléchargements"),
+            "the queue's own screen answers « t »: {note}"
+        );
+        drop(host);
     }
 
     /// A host view so the window has something to draw: the acceptance is about

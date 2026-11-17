@@ -7,7 +7,7 @@ player's ([playback.md](playback.md)); remote control and the listen party are
 [party-remote.md](party-remote.md); the native player it parallels is [android.md](android.md).
 
 **Status (2026-11-17): D0, D1, D2, D3, D4, D5, D6, D7, D8a, D8b, D9, D10b, D11, D12, D13, D14a,
-D14b, D15a, D16, D17, M1, P1, P2, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
+D14b, D15a, D16, D17, D18, M1, P1, P2, T1, T2, T3, T4 and V1 delivered, plus the D14a/D8b follow-up (silence
 trim, saved sound at `AudioReady`, `409` told apart, the `auto` payload, the output list) and the
 contract follow-up (Lyrics, GenreScore, `radio_next`, the podcast archive answer, the onboarding
 route), plus the v1.6.1 scroll follow-up (the shared list's scroll handle, a page's tail bounded,
@@ -295,6 +295,7 @@ mouse action has a key:
 | `Enter`, `Shift+Enter`, `a` | play from here, play next, add to queue |
 | `Menu`, `Shift+F10` | the row's context menu (`trackmenu.js`'s keys) |
 | `l`, `d` | like, dislike the focused or playing track |
+| `t`, `Maj+T` | download the focused row, or the page's collection / take it back, cancel it or retry (D18) |
 | `q`, `f`, `v` | queue panel, full-screen player, visualiser |
 | `Ctrl+=` `Ctrl+-` `Ctrl+0` | zoom (rem size, gpui-omarchy) |
 | `Ctrl+Q` | quit |
@@ -329,7 +330,7 @@ same endpoints (`webapp/src/lib/api.js` lists them all; the server's routes are 
 | Discovery: flow, track/artist/genre radio, discovery slider, mute artist, releases + shelves + settings, recap (years, story, share), history, moods, playlist recommendations | `routes/Releases`, `ReleaseShelf`, `Recap`, `History`, `DiscoverySlider`, `lib/flow.js`, `lib/genrestation.js` | `/flow*`, `/radio*`, `/releases*`, `/recap*`, `/history`, `/moods*`, `/discover/*` |
 | Podcasts: subscriptions, search/subscribe by URL, show, episodes (cursor), progress, auto-archive, markers, chapters, transcript panel + search, start/stop server transcription | `routes/Podcasts`, `Show`, `PodcastCard`, `PodcastEpisodePanel`, `ChapterList`, `ChapterSheet`, `TranscriptPanel`, `lib/podcastProgress.js` | `/podcasts`, `/podcast/*`, `/search/podcasts`, `/podcast/episode/*/{transcript,transcribe,markers,chapters}` |
 | Genre studio + genre tree + explorer styles | `routes/Genres`, `GenreLibrary`, `GenreTree`, `GenreTagSheet`, `GenreBulkSheet`, `GenreExtractor`, `ExplorerStyles`, `webapp/trainer` | `/genre/*`, `/explorer*`, `/analysis*` |
-| Offline: downloads per playlist/album/show, play cache, offline browsing, network indicator | `lib/offline.js`, `lib/playcache.js`, `lib/apicache.js`, `NetworkIndicator`; Android `OfflineStore.kt` | `/stream/*`, `/cover/*`, `/download*` |
+| Offline: « Télécharger » on an album, a playlist, the favourites, a podcast, a show, a row's menu and the queue, with its five states; downloads per playlist/album/show, play cache, offline browsing, network indicator | `lib/offline.js`, `lib/playcache.js`, `lib/apicache.js`, `NetworkIndicator`, `lib/trackmenu.js`; Android `OfflineStore.kt`; Réglages → Téléchargements (`screens/settings/downloads.rs`) | `/stream/*`, `/cover/*`, `/download*` |
 | Remote control (be controlled, control another player) | `lib/remote/*`, `RemoteSheet`, `RemoteHostChip`, `RemoteBanner`, `routes/RemoteClaim` | `/remote/*` |
 | Listen party (host and guest) | `lib/party/*`, `PartySheet`, `routes/Party` | `/party/*` |
 | Réglages: Lecture & son, Apparence, Animations, Téléchargements, Découverte, Sources (order, accounts, Deezer ARL, YouTube, access grants, groups), Compte (export services), Utilisateurs (admin), Serveur (archive, rules, cleanup, storage, quotas, migrate, analysis, credits/enrich/similar backfills, automatch, transcription + workers), Assistance (diagnostic log) | `routes/Settings`, `*Settings.svelte`, `AdminUsers`, `MyAccounts`, `SourceOrder`, `AccessSettings`, `ServicesSettings`, `TranscribeSettings`, `JobFailures` | `/settings`, `/sources`, `/access*`, `/groups*`, `/me/accounts*`, `/services*`, `/admin/*`, `/archive/*`, `/storage`, `/analysis/*`, `/transcribe/*`, `/automatch*`, `/youtube/*` |
@@ -3288,6 +3289,108 @@ Waves that can run in parallel (disjoint files):
   - **Under Xvfb the present rate is the software renderer's** (lavapipe: 10–30 fps whatever the app
     draws). The frame numbers below are the app's own frame-build time and the X server's delivered
     interval; the panel's rate comes from `frame_bench.sh`, run by the person on their display.
+
+### D18 — Les téléchargements dans les écrans (livré 2026-11-17)
+
+- **Le besoin** : rien ne se téléchargeait depuis les écrans. D13 avait livré le worker, la page
+  Réglages → Téléchargements et le badge, et `screens/show.rs` son bouton « Tout télécharger » ;
+  partout ailleurs la seule action « Télécharger » était l'ARCHIVAGE serveur (`POST /api/download`),
+  qui n'a rien à voir avec l'hors-ligne. La parité manquait donc à l'endroit où le geste se fait :
+  l'album, la playlist, les favoris, l'émission, le menu d'une ligne et la file.
+- **La règle, UNE dérivation pour tous les écrans** : `widgets/download_control.rs` porte les cinq
+  états (`Idle`, `Queued{done,total}`, `Running{done,total,bytes,size}`, `Done{tracks}`,
+  `Failed{cause,failed,done}`), leurs libellés français, leur phrase d'action
+  (Télécharger / Annuler / Réessayer / Retirer), le chip d'une ligne et le `Watch` (le snapshot lu
+  une fois par version publiée, redessiné seulement quand `version` bouge, 300 ms). Aucun écran ne
+  re-dérive un état : album, playlist, favoris, émission, file et le menu d'une ligne appellent les
+  mêmes fonctions, donc le même mot ne peut pas dire deux choses.
+- **La règle, l'état vient du SNAPSHOT — et il ne MENT pas.** Lire `is_downloaded` par ligne serait
+  une requête SQLite sur le thread GPUI (`nz-cache` : une connexion derrière un mutex, donc une
+  lecture d'écran peut attendre la transaction d'écriture du worker et figer une image). L'état
+  vient donc de `Snapshot` : les échecs sont par titre, le titre en vol est publié, et un titre
+  téléchargé seul est un « ensemble » de un (D13). Ce que le snapshot ne peut pas PROUVER n'est pas
+  inventé : une ligne d'une collection téléchargée PARTIELLEMENT lit « Télécharger », et c'est le
+  contrôle de la collection qui dit `12 / 40`. Sans coût : le store ignore un titre déjà publié
+  (`add_set`'s `ON CONFLICT DO NOTHING`), donc ré-appuyer ne redemande rien.
+- **La règle, une playlist téléchargée reste COMPLÈTE** : `screens/playlist.rs` re-`choose` son
+  ensemble à chaque ouverture quand il compte moins de titres que la page (`sync_download_set`) —
+  le worker ne relie que les nouveaux, donc une playlist de 4 000 titres qui en gagne un coûte UN
+  téléchargement et ZÉRO requête pour les 3 999 autres. Aucune autre app ne le fait : la SPA
+  télécharge des titres, pas des listes, donc un ajout après coup y est oublié.
+- **La règle, une action atterrit sur l'écran que la ROUTE nomme.** Le panneau 420 px est un
+  SECOND `queue::Screen` monté à côté de l'écran de la route (`app.rs#toggle_queue`), et GPUI
+  exécute TOUS les écouteurs enregistrés pour une action : sans garde, `t` sur la bibliothèque
+  panneau ouvert met en file les favoris ET toute la file. Chaque écran n'agit donc que si
+  `download_control::is_front` (la route est la sienne) — `the_panel_queue_does_not_download_behind_another_screen`
+  le tient, et les boutons du panneau continuent de marcher (un clic atteint SON contrôle).
+- **La règle, le clavier et la souris sont le même chemin** : `t` (`DownloadSelection`) et `Maj+T`
+  (`RemoveDownload`) sont liés une fois (`keymap.rs`) et chaque écran les enregistre sur l'app avec
+  une poignée faible (D8b : un écran ne prend pas le focus). Le bouton du contrôle, l'entrée du
+  menu et la touche finissent dans le MÊME gestionnaire ; `download_control::row_verb` est
+  l'unique implémentation du verbe d'une ligne, donc une ligne téléchargée propose « Retirer » et
+  pas « Télécharger ».
+- **La règle, supprimer se demande deux fois** : « Tout supprimer » (Réglages → Téléchargements)
+  arme le bouton au premier clic et supprime au second, avec le compte de ce qu'il a retiré. Un
+  téléchargement est permanent ; c'est le seul contrôle destructeur de l'app.
+- **Mesuré** (cette machine, 16 threads, Rust 1.99.1 ; `cargo test --workspace` :
+  **449 tests de l'app, 0 échec**, 11 `#[ignore]` lancés par leur parent, toutes les autres crates
+  vertes ; `cargo fmt --check` et `cargo clippy --workspace --all-targets -- -D warnings` propres) :
+  - **requêtes par collection** : un album de 3 titres coûte **3 requêtes `/api/stream/<id>`**
+    (une par titre, chacune une fois), et une SECONDE demande du même album **0** — mesuré sur une
+    vraie socket (`stub` du banc, `downloading_an_album_costs_one_request_per_title_and_nothing_the_second_time`).
+  - **lecture pendant 200 téléchargements** (les bancs de D13, relancés avec ce lot) : le flux qui
+    joue lit **798 949 B/s seul, 565 297 B/s pendant 200 téléchargements (29,2 % de baisse, budget
+    30 %)**, le seau est armé à **127 745 B/s**, et **6,00 s d'audio rendues avec 0 sous-alimentation**
+    pendant que **200/200 titres** arrivent (`a_two_hundred_track_download_keeps_the_playing_streams_share`,
+    `a_two_hundred_track_download_while_a_track_plays_has_no_underrun`) — le lot n'ajoute AUCUN
+    accès réseau : il ajoute un état lu dans un mutex.
+  - **clic → son** : **1,1 ms de médiane, 1,1 ms de maximum**, en local comme par le réseau
+    (`nz-audio` : `click_to_first_sample_from_a_local_file_is_under_50_ms`,
+    `click_to_first_sample_over_the_network_is_under_250_ms`) — le worker est un thread `nice 10`
+    et la voie Bulk, donc un titre lancé démarre sans l'attendre.
+  - **mémoire comptée** (`app/src/testmem.rs`, pas de RSS) : un écran paie **un `Rows` par version
+    publiée**, soit **271 B** pour une collection de 4 000 titres (1 en vol, 2 échecs), et **235 706 B**
+    pour le pire cas que le snapshot exprime — 4 000 titres choisis UN PAR UN
+    (`a_four_thousand_row_list_keeps_a_few_kilobytes_and_not_its_rows`). Un `Watch` ou un `Rows`
+    vide ne coûte rien : aucun écran sans téléchargement ne change.
+  - **états du bouton** : les cinq états sont testés en GPUI (`the_album_download_control_walks_its_five_states`),
+    chaque état portant son libellé, son verbe et sa CAUSE ; `t` et `Maj+T` sont testés sans souris
+    (`t_and_maj_t_queue_and_take_back_the_album`) et le menu d'une ligne via `row_verb`.
+- **Regardé, pas seulement asserté** : neuf captures dans `docs/desktop/d18/`, sur MON Xvfb
+  (`:171`, `-dpi 96`, `GPUI_X11_SCALE_FACTOR=1`, jamais l'affichage de la personne), avec le banc
+  `tools/perf_api.py --serve` et un magasin amorcé (40 titres « Téléchargé », ou 38 + 2 échecs) :
+  l'album et la playlist à 1280×800 et dans le panneau 420 px, les favoris à 2560×1600, l'état
+  « Téléchargé · 40 » + « Retirer » + un chip par ligne, l'état « 2 échecs · 38 sur l'appareil ·
+  HTTP 404 : … », et Réglages → Téléchargements aux deux tailles. **Trois défauts trouvés par les
+  captures, qu'aucun test ne voyait** : (1) le contrôle poussait « Exporter » hors de la fenêtre à
+  660 px — les barres d'outils de la bibliothèque, de la playlist et de l'album passent en
+  `flex_wrap()` ; (2) **Réglages → Téléchargements affichait encore « Bientôt »** : D13 avait livré
+  l'écran mais D14a a refactoré la page en `delegated` APRÈS, et la section n'a jamais eu son bras
+  — elle l'a maintenant, et `the_downloads_section_is_its_screen_and_not_the_stub` le tient ;
+  (3) la carte d'un podcast n'avait qu'un glyphe orphelin en bas — il est sur la ligne des
+  épisodes.
+- **Ce que c'est maintenant** : `widgets/download_control.rs` (`State`, `label`/`detail`/`action`/
+  `short`/`fraction`/`busy`/`on_device`/`glyph`, `set`, `collection`, `track`, `Rows`, `key`,
+  `row_verb`, `chip`, `control`, `Watch`), `widgets/context_menu.rs` (`Item::Download`,
+  `RetryDownload`, `CancelDownload`, `RemoveDownload` et le vocabulaire `Download`), les six écrans
+  (album, playlist, bibliothèque/favoris, émission, podcasts, file) et `screens/settings/downloads.rs`
+  (« Tout supprimer », l'emplacement des fichiers, les libellés de collection Favoris et File).
+- **Différence assumée avec la SPA** : le menu d'une ligne n'a pas de sous-menu « Télécharger en… » ;
+  la qualité est celle de Réglages → Téléchargements (ou du contrôle de la page), comme le worker la
+  range. Le bouton d'ARCHIVAGE garde son mot séparé (« Archiver », contre « Télécharger » pour
+  l'hors-ligne) là où la SPA écrit « Télécharger » pour les deux avec un titre qui les distingue.
+- **Pitfalls trouvés en construisant** : `Offline::snapshot()` CLONE (sets, labels) — l'appeler par
+  ligne aurait cloné 4 000 entrées par ligne et par image, d'où `Rows` (résolu une fois par version)
+  et `Watch::get` qui ne relit que si la version a bougé. La version elle-même se lit par
+  `snapshot().version`, donc chaque écran paie UN clone par 300 ms quand rien ne bouge (quelques
+  kilo-octets, six écrans) ; `Offline::events()` (le `watch::Receiver<u64>` que SC4 a ajouté à
+  `nz-offline` en fusionnant) supprime ce clone et sera la prochaine étape de ce `Watch`. Un écran en `&self` (le menu d'une
+  émission) ne peut pas appeler `Watch::get` : il lit `self.rows`. `cx.entity().read(cx)` depuis un
+  rendu de la même entité PANIQUE (« cannot read … while it is already being updated ») : l'état
+  « armé » de « Tout supprimer » se passe en paramètre. Et `cargo fmt --all` REFORMATE les crates
+  partagées du dépôt (`webapp/rhythm`, `appcore`, `nscore`, `trainer`, `measure`) dont les octets
+  exacts sont dans le hash du `rhythm.wasm` committé : c'est `cargo fmt --check` (sans `--all`) que
+  la CI lance, et `git checkout -- webapp/ android/` rattrape le `--all` d'un agent.
 
 ## Worker prompt template
 

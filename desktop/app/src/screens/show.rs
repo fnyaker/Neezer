@@ -55,7 +55,7 @@ use nz_player::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::actions::{StartTranscription, StopTranscription};
+use crate::actions::{DownloadSelection, RemoveDownload, StartTranscription, StopTranscription};
 use crate::nav::Route;
 use crate::state::AppState;
 use crate::theme;
@@ -63,6 +63,9 @@ use crate::toast::ToastKind;
 use crate::widgets::card::{self, Phase};
 use crate::widgets::chapters::Chapters;
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::{
+    self, Rows, State as DownloadState, Watch as DownloadWatch,
+};
 use crate::widgets::episode_panel::{self, Act, EpisodePanel, Resume};
 use crate::widgets::markers::{self, Markers};
 use crate::widgets::speed;
@@ -250,6 +253,21 @@ impl RowItem {
         RowItem::Details,
     ];
 
+    /// The download entry is the ONE row whose verb depends on where the
+    /// episode stands (lot D18): ask for it, stop it, take it back, ask again.
+    fn label_for(self, download: &download_control::State) -> &'static str {
+        match self {
+            RowItem::Download => match download {
+                download_control::State::Idle => "Télécharger sur cet appareil",
+                download_control::State::Queued { .. }
+                | download_control::State::Running { .. } => "Annuler le téléchargement",
+                download_control::State::Failed { .. } => "Réessayer le téléchargement",
+                download_control::State::Done { .. } => "Retirer le téléchargement",
+            },
+            other => other.label(),
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             RowItem::Play => "Lire l'épisode",
@@ -282,6 +300,11 @@ pub struct Screen {
     route: Route,
     state: Entity<AppState>,
     id: String,
+    /// The downloads worker, as this page reads it (lot D18): one state for the
+    /// show's own download, one per episode.
+    downloads: DownloadWatch,
+    rows: Rc<Rows>,
+    rows_version: u64,
     page: Phase<PodcastPage>,
     /// Page one plus every "Charger plus".
     episodes: Vec<Episode>,
@@ -362,10 +385,14 @@ impl Screen {
             episodes.len()
         ]);
         let (tx, rx) = events::channel::<Msg>();
+        let downloads = DownloadWatch::attach(&state, cx);
         let mut screen = Self {
             route,
             state: state.clone(),
             id,
+            downloads,
+            rows: Rc::new(Rows::default()),
+            rows_version: u64::MAX,
             page,
             episodes,
             next,
@@ -421,6 +448,7 @@ impl Screen {
             this.on_intent(intent, window, cx)
         });
         screen.drain(rx, cx);
+        screen.bind_download(cx);
         screen.load(cx);
         if screen.is_admin(cx) {
             screen.load_transcribe_settings(cx);
@@ -1896,6 +1924,81 @@ impl Screen {
         }
     }
 
+    // --- downloads (lot D18) ------------------------------------------------
+
+    /// The keys of the episodes this page holds (page one plus « Charger
+    /// plus »): what the show's download chooses.
+    fn download_keys(&self) -> Vec<String> {
+        self.episodes
+            .iter()
+            .map(episode_panel::key)
+            .filter(|key| !key.is_empty())
+            .collect()
+    }
+
+    /// The show's own download: one set for the episodes loaded here.
+    fn show_download_state(&mut self) -> DownloadState {
+        let keys = self.download_keys();
+        download_control::collection(self.downloads.get(), "show", &self.id, &keys)
+    }
+
+    fn bind_download(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let for_download = weak.clone();
+        gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
+            for_download
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx) {
+                        this.download_all(cx);
+                    }
+                })
+                .ok();
+        });
+        gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx) {
+                    this.drop_show_download(cx);
+                }
+            })
+            .ok();
+        });
+    }
+
+    /// « Retirer » for the whole show: the set goes, files and all (a track
+    /// another set wants stays, the store's own rule).
+    fn drop_show_download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        match self.show_download_state() {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} épisode{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {
+                service.drop_set("show", &self.id);
+                self.notice(ToastKind::Info, "Téléchargement de l'émission retiré", cx);
+            }
+            DownloadState::Idle => {
+                self.notice(
+                    ToastKind::Info,
+                    "Cette émission n'est pas téléchargée sur cet appareil.",
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
     fn download(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(episode) = self.episodes.get(index).cloned() else {
             return;
@@ -1911,19 +2014,33 @@ impl Screen {
         let key = episode_panel::key(&episode);
         let title = episode.title.clone();
         // One episode is a set of one: the worker dedupes it, the downloads
-        // screen lists it and can remove it like a playlist's.
-        let choice = crate::wiring::offline::Choice::new(key.clone(), title.clone());
-        service.choose("show", &key, &title, vec![choice]);
-        self.notice(
-            ToastKind::Info,
-            format!("« {title} » ajouté aux téléchargements"),
-            cx,
-        );
+        // screen lists it and can remove it like a playlist's. The verb is the
+        // episode's own state, so a second press takes it back.
+        if let Some(message) =
+            download_control::row_verb(&service, self.downloads.get(), &key, &title, false)
+        {
+            self.notice(ToastKind::Info, message, cx);
+        }
         cx.notify();
     }
 
     fn download_all(&mut self, cx: &mut Context<Self>) {
         if self.download_busy || self.episodes.is_empty() {
+            return;
+        }
+        if let DownloadState::Failed { failed, .. } = self.show_download_state() {
+            if let Some(service) = self.downloads.service().cloned() {
+                service.retry_failures();
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} épisode{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            cx.notify();
             return;
         }
         let Some(service) = crate::wiring::offline::attach(self.state.read(cx)) else {
@@ -2167,7 +2284,8 @@ impl Screen {
             .into_any_element()
     }
 
-    fn actions(&self, show: &PodcastShow, cx: &mut Context<Self>) -> AnyElement {
+    fn actions(&mut self, show: &PodcastShow, cx: &mut Context<Self>) -> AnyElement {
+        let download_state = self.show_download_state();
         let is_admin = self.is_admin(cx);
         let rate = self.speed(cx);
         let mut row = div()
@@ -2188,15 +2306,14 @@ impl Screen {
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.play_all(cx))),
             )
-            .child(
-                button(
-                    "show-download-all",
-                    "Tout télécharger",
-                    ButtonVariant::Outline,
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.download_all(cx))),
-            )
+            // No session or no store: the control is absent rather than a door
+            // that does not open (rule 2).
+            .children(download_control::control(
+                "show-download",
+                &download_state,
+                self.downloads.available(),
+                cx,
+            ))
             .child({
                 let open = self.speed_open;
                 div()
@@ -3036,6 +3153,12 @@ impl Screen {
     }
 
     fn row(&mut self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+        let chip = self
+            .episodes
+            .get(index)
+            .map(episode_panel::key)
+            .map(|key| self.rows.state(&key))
+            .and_then(|state| download_control::chip(&state, cx));
         let Some(episode) = self.episodes.get(index).cloned() else {
             return div().into_any_element();
         };
@@ -3202,6 +3325,7 @@ impl Screen {
                             .child(chips),
                     ),
             )
+            .children(chip)
             .child(
                 icon_button(
                     "row-menu",
@@ -3239,6 +3363,13 @@ impl Screen {
             .border_color(theme::border(cx))
             .bg(theme::chrome(cx))
             .shadow_lg();
+        // The episode's own state, from the rows resolved for this version (a
+        // `&self` view cannot re-read the worker).
+        let download = self
+            .episodes
+            .get(menu.index)
+            .map(|episode| self.rows.state(&episode_panel::key(episode)))
+            .unwrap_or(download_control::State::Idle);
         for (at, item) in RowItem::ALL.iter().enumerate() {
             let selected = at == menu.cursor;
             let held = *item;
@@ -3265,7 +3396,7 @@ impl Screen {
                         this.pick_row(held, cx);
                     }))
                     .child(icon(item.glyph()).size(rems(0.75)))
-                    .child(item.label()),
+                    .child(item.label_for(&download)),
             );
         }
         panel.into_any_element()
@@ -3479,6 +3610,16 @@ impl Screen {
             }
         }
         self.covers_for(urls, cx);
+
+        // The downloads rows for this published version: one chip per episode,
+        // and the state the row menu reads.
+        let download_state = self.show_download_state();
+        let version = self.downloads.get().version;
+        if version != self.rows_version {
+            let done = matches!(download_state, DownloadState::Done { .. });
+            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows_version = version;
+        }
 
         let fit = head_fit(page_height(window));
         let settings_open = self.settings_open.unwrap_or(fit.settings);

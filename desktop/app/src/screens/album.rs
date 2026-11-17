@@ -30,6 +30,7 @@ use gpui_omarchy::{ButtonVariant, IconName, button, icon};
 use nz_api::ApiError;
 use nz_model::{AlbumPage, Track, TrackList};
 
+use crate::actions::{DownloadSelection, RemoveDownload};
 use crate::nav::{CreditKind, Route};
 use crate::state::AppState;
 use crate::theme;
@@ -37,8 +38,10 @@ use crate::toast::ToastKind;
 use crate::widgets::card::{self, Phase};
 use crate::widgets::context_menu::{self, Item, Menu};
 use crate::widgets::cover::{self, Covers, Kind};
+use crate::widgets::download_control::{self, Rows, State as DownloadState, Watch};
 use crate::widgets::track_list::{self, Intent, TrackList as List};
 use crate::wiring::events::{self, Sender};
+use crate::wiring::offline::Choice;
 
 /// What a background thread tells this screen. One channel per screen (the
 /// shell's [`crate::state::AppEvent`] is the shell's): the screen drains it in a
@@ -66,6 +69,11 @@ pub struct Screen {
     star_busy: bool,
     list: List,
     covers: Rc<RefCell<Covers>>,
+    /// The downloads worker, as this page reads it (lot D18): one snapshot
+    /// version, and the rows resolved from it once per version.
+    downloads: Watch,
+    rows: Rc<Rows>,
+    rows_version: u64,
     menu: Menu,
     /// The keystroke interceptor that owns the keyboard while a menu is open.
     menu_keys: Option<Subscription>,
@@ -100,6 +108,9 @@ impl Screen {
             star_busy: false,
             list: List::new().numbered(true).show_cover(false),
             covers: Rc::new(RefCell::new(Covers::new())),
+            downloads: Watch::attach(&state, cx),
+            rows: Rc::new(Rows::default()),
+            rows_version: u64::MAX,
             menu: Menu::new(),
             menu_keys: None,
             events: tx,
@@ -107,10 +118,25 @@ impl Screen {
         };
         screen.apply_page(cx);
         screen.drain(rx, cx);
+        screen.bind_download(cx);
         screen.load(cx);
         track_list::own(cx, |this: &mut Self, intent, window, cx| {
             this.on_intent(intent, window, cx)
         });
+        screen
+    }
+
+    /// The same screen around a downloads service the caller holds: a test
+    /// drives the five states of the « Télécharger » control without starting
+    /// the process's worker.
+    pub fn with_downloads(
+        route: Route,
+        state: Entity<AppState>,
+        offline: Option<crate::wiring::offline::Offline>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut screen = Self::new(route, state, cx);
+        screen.downloads = download_control::Watch::with_service(offline, cx);
         screen
     }
 
@@ -353,6 +379,191 @@ impl Screen {
         }
     }
 
+    // --- downloads (lot D18) ------------------------------------------------
+
+    /// The ids of this page's tracks, in the order the list holds them: what a
+    /// download chooses, and what tells a failure of THIS album from another's.
+    fn track_keys(&self) -> Vec<String> {
+        self.list
+            .rows()
+            .iter()
+            .map(download_control::key)
+            .filter(|key| !key.is_empty())
+            .collect()
+    }
+
+    /// Where this album stands: idle, queued, running, downloaded or failed.
+    fn download_state(&mut self) -> DownloadState {
+        let keys = self.track_keys();
+        let snapshot = self.downloads.get();
+        download_control::collection(snapshot, "album", &self.id, &keys)
+    }
+
+    /// The two verbs the control and the keymap share: `t` asks for the album,
+    /// `Maj+T` takes it back (or retries what failed).
+    fn bind_download(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let for_download = weak.clone();
+        gpui_kit::App::on_action(cx, move |_: &DownloadSelection, cx: &mut gpui_kit::App| {
+            for_download
+                .update(cx, |this, cx| {
+                    if download_control::is_front(&this.state, &this.route, cx) {
+                        this.download(cx);
+                    }
+                })
+                .ok();
+        });
+        gpui_kit::App::on_action(cx, move |_: &RemoveDownload, cx: &mut gpui_kit::App| {
+            weak.update(cx, |this, cx| {
+                if download_control::is_front(&this.state, &this.route, cx) {
+                    this.drop_download(cx);
+                }
+            })
+            .ok();
+        });
+    }
+
+    /// « Télécharger » : the whole album goes to the worker's queue, on the Bulk
+    /// lane, behind whatever the person is listening to (rule 1 — the worker's
+    /// own gates, not this screen's).
+    fn download(&mut self, cx: &mut Context<Self>) {
+        let title = self
+            .page
+            .ready()
+            .map(|page| page.album.title.clone())
+            .unwrap_or_default();
+        let Some(service) = self.downloads.service().cloned() else {
+            self.notice(
+                ToastKind::Error,
+                "Les téléchargements ne sont pas disponibles sans stockage local.",
+                cx,
+            );
+            return;
+        };
+        match self.download_state() {
+            DownloadState::Failed { failed, .. } => {
+                // A failed row keeps its cause until the person asks again; the
+                // worker retries every one of them (the settings page's button).
+                service.retry_failures();
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            DownloadState::Idle => {
+                let choices: Vec<_> = self
+                    .list
+                    .rows()
+                    .iter()
+                    .filter(|track| !download_control::key(track).is_empty())
+                    .map(|track| Choice::new(download_control::key(track), track.title.clone()))
+                    .collect();
+                if choices.is_empty() {
+                    self.notice(
+                        ToastKind::Error,
+                        "Aucun titre de cet album n'est dans la bibliothèque.",
+                        cx,
+                    );
+                    return;
+                }
+                let count = choices.len();
+                service.choose("album", &self.id, &title, choices);
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "{count} titre{} en file de téléchargement",
+                        if count > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            // Already asked: the control's button reads « Annuler / Retirer »,
+            // which dispatches the other action. Nothing to do here.
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {}
+        }
+        cx.notify();
+    }
+
+    /// « Retirer » : the album's download goes, files and all. The store keeps a
+    /// track another set still wants (`DownloadStore::remove_set`), so removing
+    /// an album never empties a playlist's download.
+    fn drop_download(&mut self, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        match self.download_state() {
+            DownloadState::Failed { failed, .. } => {
+                service.retry_failures();
+                self.notice(
+                    ToastKind::Info,
+                    format!(
+                        "Nouvelle tentative pour {failed} titre{}",
+                        if failed > 1 { "s" } else { "" }
+                    ),
+                    cx,
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {
+                service.drop_set("album", &self.id);
+                self.notice(ToastKind::Info, "Téléchargement de l'album retiré", cx);
+            }
+            DownloadState::Idle => {
+                self.notice(
+                    ToastKind::Info,
+                    "Cet album n'est pas téléchargé sur cet appareil.",
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// One row's download, from its menu (the SPA's own per-track entry).
+    fn row_download(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(service) = self.downloads.service().cloned() else {
+            return;
+        };
+        let Some(track) = self.list.row(index).cloned() else {
+            return;
+        };
+        let key = download_control::key(&track);
+        if key.is_empty() {
+            return;
+        }
+        let downloaded = matches!(self.download_state(), DownloadState::Done { .. });
+        let state = download_control::track(self.downloads.get(), &key, downloaded);
+        match state {
+            DownloadState::Idle | DownloadState::Failed { .. } => {
+                let choice = Choice::new(key.clone(), track.title.clone());
+                service.choose_track(choice);
+                self.notice(
+                    ToastKind::Info,
+                    format!("« {} » ajouté aux téléchargements", track.title),
+                    cx,
+                );
+            }
+            DownloadState::Queued { .. }
+            | DownloadState::Running { .. }
+            | DownloadState::Done { .. } => {
+                service.drop_track(&key);
+                self.notice(
+                    ToastKind::Info,
+                    format!("« {} » retiré des téléchargements", track.title),
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
     fn open_menu(&mut self, at: Option<usize>, cx: &mut Context<Self>) {
         if self.menu.is_open() {
             self.menu.close();
@@ -375,7 +586,20 @@ impl Screen {
         // An album's own rows have no album to open: the entry would be a door to
         // the page the person is already on.
         let _ = has_album;
-        let items = context_menu::track_items(false, has_artist);
+        let downloaded = matches!(self.download_state(), DownloadState::Done { .. });
+        let download = self
+            .list
+            .row(index)
+            .map(|track| {
+                download_control::track(
+                    self.downloads.get(),
+                    &download_control::key(track),
+                    downloaded,
+                )
+            })
+            .map(|state| context_menu::Download::from(&state))
+            .unwrap_or_default();
+        let items = context_menu::track_items(false, has_artist, download);
         let top = track_list::row_top(index, self.list.scroll_y(), items.len());
         self.menu.open_at(top, items);
         // The interceptor is app-level (GPUI has no per-entity keystroke
@@ -462,6 +686,11 @@ impl Screen {
             }
             Item::Like => self.row_verdict(true, cx),
             Item::Dislike => self.row_verdict(false, cx),
+            Item::Download | Item::RetryDownload | Item::CancelDownload | Item::RemoveDownload => {
+                if let Some(index) = index {
+                    self.row_download(index, cx);
+                }
+            }
             Item::Credits => {
                 if let Some(id) = index
                     .and_then(|index| self.list.row(index))
@@ -621,8 +850,26 @@ impl Screen {
                     }),
             );
 
+        // The downloads control: one state for the page, one chip per row. The
+        // rows are resolved ONCE per published version, not once per row.
+        let keys = self.track_keys();
+        let download_state = {
+            let snapshot = self.downloads.get();
+            download_control::collection(snapshot, "album", &self.id, &keys)
+        };
+        let version = self.downloads.get().version;
+        if version != self.rows_version {
+            let done = matches!(download_state, DownloadState::Done { .. });
+            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows_version = version;
+        }
+        let rows_for_chips = Rc::clone(&self.rows);
+
+        // It wraps: the download control is a second row when the window is
+        // narrow (the 420 px panel leaves 660 px of content).
         let actions = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(rems(0.5))
             .px(rems(1.))
@@ -664,7 +911,13 @@ impl Screen {
                     }))
                     .child(icon(IconName::Star).size(rems(0.875)))
                     .child(if starred { "Suivi" } else { "Suivre" }),
-            );
+            )
+            .children(download_control::control(
+                "album-download",
+                &download_state,
+                self.downloads.available(),
+                cx,
+            ));
 
         let mut body = div()
             .flex()
@@ -685,7 +938,9 @@ impl Screen {
                 window,
                 cx,
                 |this: &mut Self, intent, window, cx| this.on_intent(intent, window, cx),
-                |_, _, _, _| None,
+                move |_, _, track, cx| {
+                    download_control::chip(&rows_for_chips.state(&download_control::key(track)), cx)
+                },
                 |this: &mut Self, item, cx| this.pick(item, cx),
                 |this: &mut Self, cx| {
                     this.menu.close();
@@ -812,6 +1067,7 @@ mod tests {
     use super::*;
     use crate::widgets::card::stub;
     use gpui_kit::AppContext as _;
+    use nz_cache::DownloadSet;
 
     const ME: &str =
         r#"{"user":{"id":"u1","name":"bench","admin":false,"access":{},"sources":[]}}"#;
@@ -834,6 +1090,312 @@ mod tests {
                 "library":{library},"tracks":[{}]}}"#,
             rows.join(",")
         )
+    }
+
+    /// The « Télécharger » control of an album walks the five states the plan
+    /// names, from the SNAPSHOT the worker publishes — never from a SQLite read
+    /// on the GPUI thread (`nz-cache`'s access rule).
+    ///
+    /// Every number here is a state the person reads: the verb when nothing was
+    /// asked, the queue's count, the run's count, the download, and a failure
+    /// WITH ITS CAUSE (rule 2).
+    #[gpui::test]
+    async fn the_album_download_control_walks_its_five_states(cx: &mut gpui::TestAppContext) {
+        let body = album_body(3, true);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/album/9", body.as_str()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let cache = nz_cache::Cache::open_with_cache_dir(
+            temp_dir("album-download"),
+            temp_dir("album-download-cache"),
+        )
+        .expect("a store");
+        let offline = crate::wiring::offline::Offline::start(cache);
+        let route = Route::Album { id: "9".into() };
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            let route = route.clone();
+            let offline = offline.clone();
+            move |_window, cx| Screen::with_downloads(route, state, Some(offline), cx)
+        });
+        stub::until(&runtime, cx, "the album's answer", |cx| {
+            screen.read(cx).page.ready().is_some()
+        });
+
+        // 1. Nothing asked.
+        assert_eq!(
+            cx.update(|_, cx| screen.update(cx, |screen, _| screen.download_state())),
+            download_control::State::Idle,
+            "an album nobody asked for offers the verb"
+        );
+        // The control is ON the page: a draw records its box, so a state the
+        // person cannot see would fail here.
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("album-download").is_some(),
+            "the « Télécharger » control is drawn"
+        );
+
+        // 2. Queued: the store knows the album as a set of three titles.
+        offline.publish_for_test(|snapshot| {
+            snapshot.version = 2;
+            snapshot.sets = vec![DownloadSet {
+                kind: "album".to_owned(),
+                ident: "9".to_owned(),
+                title: "Songs from the Inside".to_owned(),
+                added_at: 0,
+                tracks: 3,
+                done: 1,
+            }];
+            snapshot.progress.done = 1;
+        });
+        assert_eq!(
+            cx.update(|_, cx| screen.update(cx, |screen, _| screen.download_state())),
+            download_control::State::Queued { done: 1, total: 3 },
+            "a set waiting its turn reads « en file »"
+        );
+
+        // 3. Running: the worker names the track it is writing.
+        offline.publish_for_test(|snapshot| {
+            snapshot.version = 3;
+            snapshot.running = Some(crate::wiring::offline::Running {
+                track: "row-1".to_owned(),
+                title: "Titre 1".to_owned(),
+                quality: nz_api::Quality::Opus320,
+                bytes: 4096,
+                total: Some(8192),
+            });
+        });
+        assert!(matches!(
+            cx.update(|_, cx| screen.update(cx, |screen, _| screen.download_state())),
+            download_control::State::Running {
+                done: 1,
+                total: 3,
+                ..
+            }
+        ));
+
+        // 4. Downloaded: all three, and the control offers « Retirer ».
+        offline.publish_for_test(|snapshot| {
+            snapshot.version = 4;
+            snapshot.running = None;
+            snapshot.sets[0].done = 3;
+            snapshot.progress.done = 3;
+        });
+        let done = cx.update(|_, cx| screen.update(cx, |screen, _| screen.download_state()));
+        assert_eq!(done, download_control::State::Done { tracks: 3 });
+        assert_eq!(done.action(), "Retirer");
+        assert_eq!(done.label(), "Téléchargé · 3 titres");
+
+        // 5. A failure carries its cause, and offers to ask again.
+        offline.publish_for_test(|snapshot| {
+            snapshot.version = 5;
+            snapshot.sets[0].done = 2;
+            snapshot.progress.done = 2;
+            snapshot.failures = vec![crate::wiring::offline::Failure {
+                track: "row-2".to_owned(),
+                title: "Titre 2".to_owned(),
+                cause: "HTTP 404 : introuvable".to_owned(),
+            }];
+        });
+        let failed = cx.update(|_, cx| screen.update(cx, |screen, _| screen.download_state()));
+        assert!(matches!(
+            &failed,
+            download_control::State::Failed { failed: 1, .. }
+        ));
+        assert_eq!(failed.action(), "Réessayer");
+        assert!(
+            failed.label().contains("HTTP 404"),
+            "the screen prints the CAUSE, never a bare count: {}",
+            failed.label()
+        );
+
+        // A row of a collection that only PARTLY landed reads its own state (a
+        // failure, when it failed), and a row with nothing to say draws nothing.
+        // The rows are resolved by a paint, so draw the new version first.
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let rows = cx.update(|_, cx| screen.update(cx, |screen, _| Rc::clone(&screen.rows)));
+        assert!(matches!(
+            rows.state("row-2"),
+            download_control::State::Failed { .. }
+        ));
+    }
+
+    /// `t` and `Maj+T` are the control's two verbs without the mouse: `t` puts
+    /// the album in the worker's queue, `Maj+T` takes it back — the same
+    /// handlers the button and the row menu run.
+    #[gpui::test]
+    async fn t_and_maj_t_queue_and_take_back_the_album(cx: &mut gpui::TestAppContext) {
+        let body = album_body(3, true);
+        let stub = stub::Stub::start(&[
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/album/9", body.as_str()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let cache = nz_cache::Cache::open_with_cache_dir(
+            temp_dir("album-keys"),
+            temp_dir("album-keys-cache"),
+        )
+        .expect("a store");
+        let offline = crate::wiring::offline::Offline::start(cache);
+        let route = Route::Album { id: "9".into() };
+        let (_screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            let route = route.clone();
+            let offline = offline.clone();
+            move |_window, cx| Screen::with_downloads(route, state, Some(offline), cx)
+        });
+        // The screen is in front, as the shell leaves it (`is_front`): a panel
+        // mounted beside it is what the guard keeps out.
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(route.clone()));
+        });
+        stub::until(&runtime, cx, "the album's answer", |_| true);
+
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(DownloadSelection), cx);
+        });
+        cx.run_until_parked();
+        let note = offline.snapshot().note.unwrap_or_default();
+        assert!(
+            note.contains("ajouté aux téléchargements"),
+            "« t » asks for the album: {note}"
+        );
+
+        // The worker publishes the set it took; `Maj+T` then has something to
+        // take back, and the screen says so (rule 2: an action answers).
+        offline.publish_for_test(|snapshot| {
+            snapshot.version = 7;
+            snapshot.sets = vec![DownloadSet {
+                kind: "album".to_owned(),
+                ident: "9".to_owned(),
+                title: "Songs from the Inside".to_owned(),
+                added_at: 0,
+                tracks: 3,
+                done: 0,
+            }];
+        });
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(RemoveDownload), cx);
+        });
+        cx.run_until_parked();
+        let said: Vec<String> = cx.update(|_, cx| {
+            state
+                .read(cx)
+                .toasts
+                .items()
+                .iter()
+                .map(|toast| toast.message.to_string())
+                .collect()
+        });
+        assert!(
+            said.iter().any(|message| message.contains("retiré")),
+            "« Maj+T » takes the album back and says it: {said:?}"
+        );
+    }
+
+    /// **One request per title, and NONE for a title already on the device.**
+    ///
+    /// The count the acceptance asks for, measured against a real socket: the
+    /// worker asks `/api/stream/<id>` once for each of the album's three titles,
+    /// publishes the files, and a SECOND « Télécharger » (the one that keeps a
+    /// playlist complete when it gains a title) costs zero requests — the store
+    /// links only what is new (`DownloadStore::add_set`'s `ON CONFLICT`).
+    #[gpui::test]
+    async fn downloading_an_album_costs_one_request_per_title_and_nothing_the_second_time(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let body = album_body(3, true);
+        let audio = b"OggS-fake-opus-body".to_vec();
+        let stub = stub::Stub::start_bytes(&[
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+            ("/api/album/9", body.into_bytes()),
+            ("/api/stream/row-0", audio.clone()),
+            ("/api/stream/row-1", audio.clone()),
+            ("/api/stream/row-2", audio),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let dir = temp_dir("album-requests");
+        let cache = nz_cache::Cache::open_with_cache_dir(&dir, dir.join("cache")).expect("a store");
+        let offline = crate::wiring::offline::Offline::start(cache);
+        let api = cx.update(|cx| state.read(cx).api.clone().expect("a client"));
+        offline.configure(api, runtime.handle().clone());
+        let route = Route::Album { id: "9".into() };
+        let (_screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            let route = route.clone();
+            let offline = offline.clone();
+            move |_window, cx| Screen::with_downloads(route, state, Some(offline), cx)
+        });
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(route.clone()));
+        });
+        stub::until(&runtime, cx, "the album's answer", |_| true);
+
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(DownloadSelection), cx);
+        });
+        stub::until(&runtime, cx, "three downloads", |_| {
+            offline.snapshot().progress.done == 3
+        });
+        let asked: usize = ["row-0", "row-1", "row-2"]
+            .iter()
+            .map(|id| stub.count(&format!("/api/stream/{id}")))
+            .sum();
+        assert_eq!(
+            asked,
+            3,
+            "one request per title: {:?}",
+            stub.hits()
+                .iter()
+                .map(|hit| hit.path.clone())
+                .collect::<Vec<_>>()
+        );
+        for id in ["row-0", "row-1", "row-2"] {
+            assert_eq!(
+                stub.count(&format!("/api/stream/{id}")),
+                1,
+                "{id} asked once"
+            );
+        }
+
+        // The same album asked again (a playlist that gained a title does this
+        // on every open): the worker finds nothing pending and asks NOTHING.
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(DownloadSelection), cx);
+        });
+        cx.run_until_parked();
+        for id in ["row-0", "row-1", "row-2"] {
+            assert_eq!(
+                stub.count(&format!("/api/stream/{id}")),
+                1,
+                "{id} is on the device: no second request"
+            );
+        }
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "neezer-d18-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
     }
 
     /// The album page paints the copy this device already has BEFORE the first

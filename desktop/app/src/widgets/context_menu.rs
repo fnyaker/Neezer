@@ -22,6 +22,7 @@ use gpui_omarchy::{IconName, icon, keycaps};
 
 use crate::theme;
 use crate::widgets::cover::Kind;
+use crate::widgets::download_control;
 
 /// One entry of the menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,15 @@ pub enum Item {
     GoArtist,
     /// A card's own action: open the album / artist / playlist it names.
     Open,
+    /// Put this track on the device (the fifth thing a row menu offers, after
+    /// `lib/trackmenu.js`'s « Télécharger »).
+    Download,
+    /// The same, for a track that gave up: ask again.
+    RetryDownload,
+    /// Stop a download that is waiting or being written.
+    CancelDownload,
+    /// Take a downloaded track back off the device.
+    RemoveDownload,
 }
 
 impl Item {
@@ -52,6 +62,10 @@ impl Item {
             Item::GoAlbum => "Aller à l'album",
             Item::GoArtist => "Aller à l'artiste",
             Item::Open => "Ouvrir",
+            Item::Download => "Télécharger",
+            Item::RetryDownload => "Réessayer le téléchargement",
+            Item::CancelDownload => "Annuler le téléchargement",
+            Item::RemoveDownload => "Retirer le téléchargement",
         }
     }
 
@@ -67,6 +81,10 @@ impl Item {
             Item::GoAlbum => IconName::Disc3,
             Item::GoArtist => IconName::Music,
             Item::Open => IconName::ChevronRight,
+            Item::Download => IconName::Download,
+            Item::RetryDownload => IconName::RefreshCw,
+            Item::CancelDownload => IconName::Close,
+            Item::RemoveDownload => IconName::Trash,
         }
     }
 
@@ -79,14 +97,66 @@ impl Item {
             Item::Queue => Some("a"),
             Item::Like => Some("l"),
             Item::Dislike => Some("d"),
+            Item::Download => Some("t"),
+            Item::RetryDownload => Some("Maj+T"),
+            Item::CancelDownload => Some("Maj+T"),
+            Item::RemoveDownload => Some("Maj+T"),
             _ => None,
+        }
+    }
+}
+
+/// What a row's download state lets its menu offer.
+///
+/// It is the menu's own vocabulary, not [`download_control::State`]: a menu has
+/// one row per verb, so the five states collapse to the four things a person can
+/// DO about them. The cause a failure carries is printed by the page's control
+/// and by Réglages → Téléchargements, where there is room for a sentence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Download {
+    /// Nothing on the device: the menu offers « Télécharger ».
+    #[default]
+    Idle,
+    /// Waiting or being written: the menu offers « Annuler ».
+    Busy,
+    /// It gave up: the menu offers « Réessayer ».
+    Failed,
+    /// On the device: the menu offers « Retirer ».
+    Done,
+}
+
+impl From<&download_control::State> for Download {
+    fn from(state: &download_control::State) -> Self {
+        match state {
+            download_control::State::Idle => Download::Idle,
+            download_control::State::Queued { .. } | download_control::State::Running { .. } => {
+                Download::Busy
+            }
+            download_control::State::Failed { .. } => Download::Failed,
+            download_control::State::Done { .. } => Download::Done,
+        }
+    }
+}
+
+impl Download {
+    fn item(self) -> Item {
+        match self {
+            Download::Idle => Item::Download,
+            Download::Busy => Item::CancelDownload,
+            Download::Failed => Item::RetryDownload,
+            Download::Done => Item::RemoveDownload,
         }
     }
 }
 
 /// The items a track row offers, in the web app's order
 /// (`lib/trackmenu.js#buildTrackMenu`), minus the sheets D8b owns.
-pub fn track_items(has_album: bool, has_artist: bool) -> Vec<Item> {
+///
+/// `download` is the fifth group: the SPA's « Télécharger » / « Retirer le
+/// téléchargement ». A caller that cannot tell a row's state passes
+/// [`Download::Idle`] — the menu then offers the verb, which the store makes a
+/// no-op for a track it already published.
+pub fn track_items(has_album: bool, has_artist: bool, download: Download) -> Vec<Item> {
     let mut items = vec![Item::Play, Item::PlayNext, Item::Queue];
     items.push(Item::Radio);
     items.push(Item::Like);
@@ -98,6 +168,7 @@ pub fn track_items(has_album: bool, has_artist: bool) -> Vec<Item> {
     if has_artist {
         items.push(Item::GoArtist);
     }
+    items.push(download.item());
     items
 }
 

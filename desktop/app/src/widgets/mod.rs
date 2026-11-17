@@ -11,6 +11,7 @@ pub mod context_menu;
 pub mod cover;
 pub mod discovery_slider;
 pub mod download_badge;
+pub mod download_control;
 pub mod episode_panel;
 pub mod flow;
 pub mod folder_tree;
