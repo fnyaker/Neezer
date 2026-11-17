@@ -1735,6 +1735,7 @@ Rust 1.99.1, NDK 30.0.16248370, `CARGO_BUILD_JOBS=4`):
 | API 26 pull (Rust) | `droid-probe 60` | **60 s, 0 underruns**, position 59.000 s (wall 60.079, latency 500 ms), monotonic, reopen at 29.250 s → 29.250 s |
 | API 26 pull (Kotlin, real `AudioTrack` + real JNI) | `app_process` harness over the crate's cdylib | **60 s, 0 underruns**, 24 000-frame buffer (the platform logs `Client defaulted notificationFrames to 12000 for frameCount 24000`), latency 24 000 frames, position 60.338 s, monotonic |
 | API 26 route change | same, `reopen()` at 30.3 s | 0 device xruns, position 30.265 → 30.265 s, **1 mixer starvation in one run of three** (see the pull-block rule) |
+| `libnz_ffi.so` arm64-v8a | `mobile/rust/build-android.sh` (release, stripped) | **9 200 696 B**, of which this lot **+35 584 B** (the library was already 9 165 112 B on master: the 9 MB ceiling in *Measures* is MQ2's to reopen); the four JNI symbols are in its `.dynsym` (`nm -D`) |
 | API 35 AAudio | `droid-probe 60` | **0 xruns, 0 mixer starvations**, buffer **24 000 frames = 500 ms**, latency 24 000 frames, granted mode **none** (PowerSaving refused), position 59.750 s (wall 60.007: the reopen itself is 257 ms with no stream), monotonic, real reopen at 29.5 s → `opens=2`, audio continued |
 
 **Deliberate deviations from the plan paragraph.**
