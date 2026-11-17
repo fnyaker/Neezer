@@ -718,6 +718,13 @@ mod tests {
         // cannot pass: it returned with the loader, the voice and the spooler
         // still running.
         let left_at_close = engine_threads();
+        // The kernel's task entry can outlive `pthread_join` by a moment (a
+        // 2-core CI runner still listed `nz-audio-events` right after the close),
+        // so this one is bounded and event-based — while the pre-fix code does
+        // not come near it: its loader and spooler only end when the runtime
+        // dies, which happens after this check.
+        let joined = left_at_close.is_empty()
+            || wait_for(Duration::from_millis(50), || engine_threads().is_empty());
         // Only now may the runtime go: nothing of the engine can be inside it.
         drop(runtime);
         // A thread that survived the close would hit a shutdown runtime HERE,
@@ -736,7 +743,7 @@ mod tests {
             "no thread may panic while the app closes: {recorded:?}"
         );
         assert!(
-            left_at_close.is_empty(),
+            joined,
             "the close JOINS the engine's threads before it returns: {left_at_close:?}"
         );
         assert!(
