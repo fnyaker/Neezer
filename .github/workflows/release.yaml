@@ -278,8 +278,15 @@ jobs:
         run: apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || '' }}
+        # NO `ref:` on purpose: the RECIPES come from the commit this workflow
+        # runs at (`github.sha`), never from the tag. A release replay on an
+        # older tag (workflow_dispatch -f tag=v1.6.0) must still be packaged by
+        # the recipes that ran: v1.6.0 predates
+        # `desktop/packaging/{deb,rpm,appimage,flatpak}` and all four jobs died
+        # on `version.sh: No such file or directory` (run 44150836135). What
+        # comes from the TAG: the version (`TAG` above) and the binaries (the
+        # `binaries` job, which does build the tagged tree). A tag that carries
+        # the recipes behaves identically, because then `github.sha` IS the tag.
       - name: The binaries every package is built from
         uses: actions/download-artifact@v4
         with:
@@ -340,8 +347,15 @@ jobs:
         run: dnf install -y git ca-certificates >/dev/null
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || '' }}
+        # NO `ref:` on purpose: the RECIPES come from the commit this workflow
+        # runs at (`github.sha`), never from the tag. A release replay on an
+        # older tag (workflow_dispatch -f tag=v1.6.0) must still be packaged by
+        # the recipes that ran: v1.6.0 predates
+        # `desktop/packaging/{deb,rpm,appimage,flatpak}` and all four jobs died
+        # on `version.sh: No such file or directory` (run 44150836135). What
+        # comes from the TAG: the version (`TAG` above) and the binaries (the
+        # `binaries` job, which does build the tagged tree). A tag that carries
+        # the recipes behaves identically, because then `github.sha` IS the tag.
       - name: The binaries every package is built from
         uses: actions/download-artifact@v4
         with:
@@ -392,8 +406,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || '' }}
+        # NO `ref:` on purpose: the RECIPES come from the commit this workflow
+        # runs at (`github.sha`), never from the tag. A release replay on an
+        # older tag (workflow_dispatch -f tag=v1.6.0) must still be packaged by
+        # the recipes that ran: v1.6.0 predates
+        # `desktop/packaging/{deb,rpm,appimage,flatpak}` and all four jobs died
+        # on `version.sh: No such file or directory` (run 44150836135). What
+        # comes from the TAG: the version (`TAG` above) and the binaries (the
+        # `binaries` job, which does build the tagged tree). A tag that carries
+        # the recipes behaves identically, because then `github.sha` IS the tag.
       - name: The binaries every package is built from
         uses: actions/download-artifact@v4
         with:
@@ -454,8 +475,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || '' }}
+        # NO `ref:` on purpose: the RECIPES come from the commit this workflow
+        # runs at (`github.sha`), never from the tag. A release replay on an
+        # older tag (workflow_dispatch -f tag=v1.6.0) must still be packaged by
+        # the recipes that ran: v1.6.0 predates
+        # `desktop/packaging/{deb,rpm,appimage,flatpak}` and all four jobs died
+        # on `version.sh: No such file or directory` (run 44150836135). What
+        # comes from the TAG: the version (`TAG` above) and the binaries (the
+        # `binaries` job, which does build the tagged tree). A tag that carries
+        # the recipes behaves identically, because then `github.sha` IS the tag.
       - name: The binaries every package is built from
         uses: actions/download-artifact@v4
         with:
