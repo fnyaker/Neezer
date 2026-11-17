@@ -1,0 +1,111 @@
+# Flatpak manifest for the Neezer desktop app.
+#
+# Built by `build.sh`, which stages the release binaries and the shared launcher
+# entry/icon under `inputs/` next to a copy of this file and runs
+# `flatpak-builder`. The bundle it produces
+# (`neezer-desktop-<ver>-x86_64.flatpak`) is what a release ships; a person
+# installs it with `flatpak install --user ./neezer-desktop-<ver>-x86_64.flatpak`.
+#
+# Why `org.freedesktop.Platform` and not `org.gnome.Platform`: the app is GPUI,
+# not GTK — it needs X11/Wayland, Vulkan, PipeWire and fontconfig, and nothing
+# from GNOME. The freedesktop runtime is the smallest one that has them, and its
+# `GL.default` extension is where the person's Vulkan ICDs and Mesa come from
+# (`--device=dri` below is what grants access to the GPU).
+#
+# The app id is the app's own identity, `fr.neezer.Desktop`: it is the name the
+# app already takes on the session bus for its single instance
+# (`app/src/wiring/instance.rs#NAME`) and the domain the project uses. Flatpak
+# lets an app own its own app id without asking, but NOT
+# `org.mpris.MediaPlayer2.<something else>`, hence the explicit `--own-name`
+# below.
+app-id: fr.neezer.Desktop
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: neezer-desktop
+
+# The exported desktop file and icon are named after the app id, which is what
+# the compositor matches a window against (GPUI sets the window's app_id to
+# `$FLATPAK_ID` when it runs in a sandbox, `app/src/main.rs`). `copy-icon` keeps
+# the old icon name so the `.desktop`'s `Icon=neezer-desktop` still resolves.
+rename-desktop-file: neezer-desktop.desktop
+rename-icon: neezer-desktop
+copy-icon: true
+
+# No AppStream compose: the manifest ships no metainfo file (the bundle is
+# attached to a GitHub release, not published to a repository), and the compose
+# step would fail on what it cannot find.
+appstream-compose: false
+
+# Permissions, each with the reason it is here and nothing else:
+#
+#   wayland + fallback-x11  the window. The app renders through GPUI's Wayland
+#                           surface on Hyprland and falls back to X11 only when
+#                           there is no compositor (the documented
+#                           `--socket=fallback-x11` pairing).
+#   pulseaudio              sound, through pipewire-pulse: the socket every
+#                           desktop exposes for playback, and the ALSA devices
+#                           in /dev/snd with it, so no `--device=all`.
+#   filesystem xdg-run/pipewire-0
+#                           PipeWire's OWN socket. `--socket=pulseaudio` mounts
+#                           `$XDG_RUNTIME_DIR/pulse` and not `pipewire-0`
+#                           (measured: the sandbox listing shows `pulse`,
+#                           `wayland-1`, `bus`, nothing else), and cpal's first
+#                           host on Linux opens `pipewire-0` directly
+#                           (docs/agents/desktop.md, D5) — without this the app
+#                           only ever reaches its ALSA fallback.
+#   dri                     the GPU: GPUI's Vulkan surface AND the whisper
+#                           Vulkan backend in `neezer-transcribe`
+#                           (docs/agents/desktop.md, T2: 44.9x real time on the
+#                           GPU against 13.9x on the CPU).
+#   network                 it is a client: every screen, every stream and every
+#                           cover is an HTTP request to the person's server.
+#   own-name MPRIS          `playerctl`/the desktop's player widget drive the
+#                           app through `org.mpris.MediaPlayer2.neezer`; Flatpak
+#                           only grants `org.mpris.MediaPlayer2.<app-id>` by
+#                           default, and the name is the app's contract with
+#                           `nz-mpris` and the SPA/Android app.
+#   talk-name Notifications the opt-in "track changed" desktop notification
+#                           (the app never asks for more of the bus).
+#
+# Deliberately absent: any `--filesystem`. The app opens no file of the person's
+# — music comes from the server over HTTP, covers and audio live in
+# `$XDG_CACHE_HOME/neezer`, downloads in `$XDG_DATA_HOME/neezer/offline`, the
+# session and the models in the app's own directories, all of which Flatpak
+# persists in `~/.var/app/fr.neezer.Desktop` with no permission at all. A music
+# folder grant would be a permission nothing uses.
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0
+  - --device=dri
+  - --share=network
+  - --own-name=org.mpris.MediaPlayer2.neezer
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: neezer-desktop
+    buildsystem: simple
+    build-commands:
+      # Both binaries go to /app/bin: `neezer-transcribe` BESIDE the app, which
+      # is where the app looks for its sidecar (`wiring/transcribe.rs#program`
+      # resolves `current_exe().parent()` before PATH).
+      # A `type: file` source is copied into the module's own source directory
+      # under its basename, so `inputs/x` arrives as `x`.
+      - install -Dm755 neezer-desktop /app/bin/neezer-desktop
+      - install -Dm755 neezer-transcribe /app/bin/neezer-transcribe
+      - install -Dm644 neezer-desktop.desktop /app/share/applications/neezer-desktop.desktop
+      - install -Dm644 neezer-desktop.svg /app/share/icons/hicolor/scalable/apps/neezer-desktop.svg
+      - install -Dm644 LICENSE /app/share/licenses/fr.neezer.Desktop/LICENSE
+    sources:
+      - type: file
+        path: inputs/neezer-desktop
+      - type: file
+        path: inputs/neezer-transcribe
+      - type: file
+        path: inputs/neezer-desktop.desktop
+      - type: file
+        path: inputs/neezer-desktop.svg
+      - type: file
+        path: inputs/LICENSE

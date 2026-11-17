@@ -10,6 +10,11 @@ name: Release
 #                         the Omarchy desktop app as an Arch package: `pacman -U`
 #                         it and the launcher entry, the icon and both binaries
 #                         (`neezer-desktop`, `neezer-transcribe`) are installed
+#   - neezer-desktop-<ver>-x86_64.deb / .rpm / .AppImage / .flatpak
+#                         the same app for the other Linux desktops, built from
+#                         ONE release build of the two binaries (the `binaries`
+#                         job) and each installed and started by its own job
+#                         before it is attached (desktop/packaging/README.md)
 #
 # The Android APK is attached to the same release by android.yaml, from the
 # same tag. Whichever workflow gets there first creates the release; the others
@@ -182,3 +187,294 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           files: desktop/packaging/arch/neezer-desktop-[0-9]*.pkg.tar.zst
+
+  # ---- ONE release build, four packages ----------------------------------
+  # `deb`, `rpm`, `appimage` and `flatpak` below are packaging jobs: they
+  # download THIS artefact instead of compiling the workspace again (the Arch
+  # job builds its own on purpose: `makepkg` on an Arch system, P1). The
+  # binaries are built on ubuntu-24.04 because that is the oldest glibc the
+  # stack builds against in practice: the deb declares the floor it measured
+  # (`libc6 (>= 2.39)`), and Debian 13 / Ubuntu 24.04 are the oldest systems it
+  # installs on.
+  binaries:
+    name: Desktop binaries (shared by the four packages)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || '' }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      # The system dependency list is the same one desktop.yaml uses (a fresh
+      # Ubuntu has none of what GPUI, cpal's PipeWire host and whisper.cpp's
+      # Vulkan backend need). Kept in one place per workflow, not shared: a
+      # package that stops building here must be readable on its own.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev glslc \
+            libasound2-dev libpipewire-0.3-dev libdbus-1-dev \
+            libfontconfig-dev libfreetype-dev libglib2.0-dev libzstd-dev libssl-dev
+      # whisper.cpp's CMake build needs the Vulkan HEADERS, not only the loader
+      # (docs/agents/desktop.md, "Pitfalls found by building"): CMake's
+      # FindVulkan reads VULKAN_SDK, and it must be set before the FIRST build.
+      - name: Vulkan headers for whisper.cpp
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \
+            https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.333.tar.gz
+          mkdir -p "$RUNNER_TEMP/vk"
+          tar xzf "$RUNNER_TEMP/vk.tar.gz" -C "$RUNNER_TEMP/vk" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/vk/lib"
+          ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
+            "$RUNNER_TEMP/vk/lib/libvulkan.so"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Build the two binaries
+        run: cargo build --release --locked --workspace
+      - name: Binary sizes
+        run: du -h target/release/neezer-desktop target/release/neezer-transcribe
+      - name: Upload the binaries every package installs
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-desktop-binaries-x86_64
+          path: |
+            desktop/target/release/neezer-desktop
+            desktop/target/release/neezer-transcribe
+          if-no-files-found: error
+          retention-days: 7
+
+  # The .deb is built AND installed in the distribution it targets: `apt-get
+  # install ./file.deb` resolves the control file's `Depends:` from the archive,
+  # so a dependency the package forgets is a job that fails here rather than an
+  # app that does not start on a person's laptop. Then the window paints on a
+  # display of the job's own (Xvfb) and the sidecar reports its Vulkan device.
+  deb:
+    name: Debian package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: binaries
+    container:
+      image: debian:trixie
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Install git (actions/checkout needs it)
+        run: apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || '' }}
+      - name: The binaries every package is built from
+        uses: actions/download-artifact@v4
+        with:
+          name: neezer-desktop-binaries-x86_64
+          path: binaries
+      # `readelf` (binutils) is what lib.sh reads the binaries' NEEDED sonames
+      # and their glibc floor with; `dpkg-deb` is part of dpkg, already here.
+      - name: Build tooling
+        run: apt-get install -y --no-install-recommends binutils >/dev/null
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          version="$(desktop/packaging/version.sh)"
+          NEEZER_DESKTOP_VERSION="$version" NEEZER_BINARY_DIR="$PWD/binaries" \
+            desktop/packaging/deb/build.sh release
+      - name: Install it and start the app (Xvfb, our own display)
+        run: |
+          set -euo pipefail
+          desktop/packaging/deb/test.sh release/neezer-desktop-*-x86_64.deb
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-desktop-deb-x86_64
+          path: release/neezer-desktop-*-x86_64.deb
+          if-no-files-found: error
+          retention-days: 7
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: release/neezer-desktop-*-x86_64.deb
+
+  # Same shape in Fedora: `dnf install ./file.rpm` resolves the soname Requires
+  # rpmbuild generated from the two binaries (libpipewire-0.3.so.0()(64bit),
+  # libvulkan.so.1()(64bit), …), which is the RPM world's way of not listing
+  # dependencies by hand.
+  rpm:
+    name: RPM package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: binaries
+    container:
+      image: fedora:latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Install git (actions/checkout needs it)
+        run: dnf install -y git ca-certificates >/dev/null
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || '' }}
+      - name: The binaries every package is built from
+        uses: actions/download-artifact@v4
+        with:
+          name: neezer-desktop-binaries-x86_64
+          path: binaries
+      - name: Build tooling
+        run: dnf install -y rpm-build binutils >/dev/null
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          version="$(desktop/packaging/version.sh)"
+          NEEZER_DESKTOP_VERSION="$version" NEEZER_BINARY_DIR="$PWD/binaries" \
+            desktop/packaging/rpm/build.sh release
+      - name: Install it and start the app (Xvfb, our own display)
+        run: |
+          set -euo pipefail
+          desktop/packaging/rpm/test.sh release/neezer-desktop-*-x86_64.rpm
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-desktop-rpm-x86_64
+          path: release/neezer-desktop-*-x86_64.rpm
+          if-no-files-found: error
+          retention-days: 7
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: release/neezer-desktop-*-x86_64.rpm
+
+  # The AppImage runs on the runner itself: the file it produces is the file a
+  # person double-clicks, so the job downloads it, starts it, and asks the
+  # sidecar inside it for its version.
+  appimage:
+    name: AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: binaries
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || '' }}
+      - name: The binaries every package is built from
+        uses: actions/download-artifact@v4
+        with:
+          name: neezer-desktop-binaries-x86_64
+          path: binaries
+      # What the AppImage expects to find on the host, because it bundles none of
+      # it: the graphics stack, PipeWire/ALSA, the Vulkan loader and a Vulkan
+      # device (lavapipe on a runner), plus Xvfb for a display of our own.
+      - name: The desktop the AppImage relies on
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils libxcb1 libxkbcommon0 libxkbcommon-x11-0 \
+            libpipewire-0.3-0t64 libasound2t64 libvulkan1 mesa-vulkan-drivers \
+            xvfb xauth
+      - name: Build the AppImage
+        run: |
+          set -euo pipefail
+          version="$(desktop/packaging/version.sh)"
+          mkdir -p release
+          NEEZER_DESKTOP_VERSION="$version" NEEZER_BINARY_DIR="$PWD/binaries" \
+            desktop/packaging/appimage/build.sh release
+      - name: Run it (its own display, then the sidecar inside it)
+        run: |
+          set -euo pipefail
+          desktop/packaging/appimage/test.sh release/neezer-desktop-*-x86_64.AppImage
+      - name: Upload the AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-desktop-appimage-x86_64
+          path: release/neezer-desktop-*-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 7
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: release/neezer-desktop-*-x86_64.AppImage
+
+  # The Flatpak job is the one that does NOT run in a container: flatpak-builder
+  # builds inside bubblewrap, and nesting that needs `--privileged`, which a
+  # container job cannot have. On the runner's own kernel it is an ordinary
+  # unprivileged build.
+  flatpak:
+    name: Flatpak bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: binaries
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || '' }}
+      - name: The binaries every package is built from
+        uses: actions/download-artifact@v4
+        with:
+          name: neezer-desktop-binaries-x86_64
+          path: binaries
+      - name: flatpak and the runtime it is built against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder xvfb xauth binutils
+          flatpak --user remote-add --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+          # The manifest pins org.freedesktop.Platform//25.08 (flatpak/).
+          flatpak --user install -y --noninteractive flathub \
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+      - name: Build the bundle
+        run: |
+          set -euo pipefail
+          version="$(desktop/packaging/version.sh)"
+          mkdir -p release
+          NEEZER_DESKTOP_VERSION="$version" NEEZER_BINARY_DIR="$PWD/binaries" \
+            desktop/packaging/flatpak/build.sh release
+      - name: Install it for a user and start it (Xvfb, our own display)
+        run: |
+          set -euo pipefail
+          NEEZER_FLATPAK_UNINSTALL=1 \
+            desktop/packaging/flatpak/test.sh release/neezer-desktop-*-x86_64.flatpak
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-desktop-flatpak-x86_64
+          path: release/neezer-desktop-*-x86_64.flatpak
+          if-no-files-found: error
+          retention-days: 7
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: release/neezer-desktop-*-x86_64.flatpak

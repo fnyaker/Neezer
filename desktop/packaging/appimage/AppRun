@@ -1,0 +1,22 @@
+#!/bin/sh
+# The AppImage's entry point (docs.appimage.org, *Manual packaging*: the AppDir
+# needs an `AppRun`, appimagetool execs it). It resolves its own payload: the
+# AppImage is mounted read-only under /tmp/.mount_neezer* and nothing may
+# hardcode an install path.
+set -eu
+
+if [ -n "${APPDIR:-}" ]; then
+  here="$APPDIR"
+else
+  here="$(dirname "$(readlink -f "$0")")"
+fi
+
+# `neezer-transcribe` is beside the app (`wiring/transcribe.rs#program` looks
+# there first), so both the PATH and the sibling lookup agree.
+PATH="$here/usr/bin:$PATH"
+export PATH
+
+# Nothing is bundled in usr/lib on purpose (see build.sh): the graphics stack
+# (libxcb, libxkbcommon), PipeWire/ALSA, and the Vulkan loader and its ICDs are
+# the HOST's, which is the only copy that can talk to the person's GPU.
+exec "$here/usr/bin/neezer-desktop" "$@"

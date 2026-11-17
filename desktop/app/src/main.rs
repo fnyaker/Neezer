@@ -148,6 +148,14 @@ impl Args {
     }
 }
 
+/// The window's app id: `neezer-desktop` on a normal install (the `StartupWMClass`
+/// of `desktop/packaging/arch/neezer-desktop.desktop`), and the sandbox's own app
+/// id when Flatpak runs it — the export names the launcher entry
+/// `<app-id>.desktop`, and the compositor matches the window by that string.
+fn flatpak_app_id() -> String {
+    std::env::var("FLATPAK_ID").unwrap_or_else(|_| "neezer-desktop".to_owned())
+}
+
 fn window_options(cx: &gpui_kit::App, chosen: Option<(f32, f32)>) -> WindowOptions {
     let (width, height) = chosen.unwrap_or((1280., 800.));
     let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
@@ -159,7 +167,13 @@ fn window_options(cx: &gpui_kit::App, chosen: Option<(f32, f32)>) -> WindowOptio
         }),
         // Wayland's app id and X11's WM_CLASS: what Hyprland's rules, the
         // launcher and packaging's StartupWMClass look for.
-        app_id: Some("neezer-desktop".into()),
+        //
+        // Inside a sandbox it must be the sandbox's app id instead, or the
+        // compositor has nothing to match the window against: Flatpak exports a
+        // launcher entry named `<app-id>.desktop`, and the release bundle's app
+        // id is `fr.neezer.Desktop` (`desktop/packaging/flatpak/`). The same
+        // value is what that package's `StartupWMClass` names.
+        app_id: Some(flatpak_app_id()),
         ..Default::default()
     }
 }
