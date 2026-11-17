@@ -35,48 +35,14 @@ use crate::theme;
 /// list's first screenful without ever being a fan-out (rule 3).
 pub const MAX_IN_FLIGHT: usize = 8;
 
-/// The size class a screen draws its sleeves at.
-///
-/// The FILE the app paints is a copy at this size (`nz-cache`'s
-/// `Covers::variant`), because GPUI uploads a painted image into an atlas tile
-/// at its NATURAL size and never drops that tile on its own: a 1 000 px sleeve
-/// in a 36 px row is 4 MB of decoded heap and 4 MB of atlas for 1 296 useful
-/// pixels. Measured on the 4 000-row favourites list at 2560×1600 (see
-/// docs/agents/desktop.md, *Memory*).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Class {
-    /// A row's thumbnail (2.25 rem ≈ 36 px), the hot path of a long list.
-    Row,
-    /// A page's cards and shelves (≤ 220 px).
-    #[default]
-    Card,
-    /// A page's own sleeve (the artist/album header), ≤ 340 px.
-    Page,
-}
-
-impl Class {
-    /// The longest side of the file this class paints, in physical pixels:
-    /// about 3.5× the logical box, so a HiDPI panel still has real pixels to
-    /// sample (a 36 px row reads a 128 px file).
-    pub fn px(self) -> u32 {
-        match self {
-            Class::Row => 128,
-            Class::Card => 384,
-            Class::Page => 512,
-        }
-    }
-}
-
 /// What one screen's sleeves are, and which of them are in flight.
 ///
 /// Held by the screen (not global) so a closed screen makes no more requests,
 /// and so two screens never fight over the same in-flight map.
 #[derive(Default)]
 pub struct Covers {
-    /// Relative path → the file the device has, at this screen's [`Class`].
+    /// Relative path → the file the device has.
     files: HashMap<String, PathBuf>,
-    /// The size this screen draws its sleeves at.
-    class: Class,
     /// Asked and refused: no second request this visit (a dead sleeve is not a
     /// retry storm), and the row keeps its placeholder.
     refused: HashSet<String>,
@@ -84,24 +50,8 @@ pub struct Covers {
 }
 
 impl Covers {
-    /// A screen whose sleeves are cards or a page header.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// A screen that draws its sleeves in LIST ROWS: the file it paints is the
-    /// small one (`Class::Row`), which is what keeps a 4 000-row list's decoded
-    /// images and atlas tiles at a row's size instead of a sleeve's.
-    pub fn rows() -> Self {
-        Self {
-            class: Class::Row,
-            ..Self::default()
-        }
-    }
-
-    /// The size class this screen paints at.
-    pub fn class(&self) -> Class {
-        self.class
     }
 
     /// The file the device already holds for `url`, if this screen knows it.
@@ -140,7 +90,6 @@ impl Covers {
         self.inflight.insert(url.to_owned());
         let path = format!("/cover/{}", url.trim_start_matches("/api/cover/"));
         let key = url.to_owned();
-        let px = self.class.px();
         state.runtime.spawn(async move {
             // The file may already be there from an earlier visit (`nz-cache`
             // keeps sleeves): one SQLite read on the network thread, no request.
@@ -163,9 +112,6 @@ impl Covers {
                     }
                 },
             };
-            // Decode and resize ONCE, at the size this screen draws (`Class`):
-            // a row reads a 128 px file instead of the archived 1 000 px one.
-            let answer = answer.and_then(|_| cache.covers().variant(&key, px));
             done(answer);
         });
     }

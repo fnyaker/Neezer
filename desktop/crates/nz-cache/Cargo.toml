@@ -12,9 +12,6 @@ publish.workspace = true
 
 [dependencies]
 rusqlite = { workspace = true }
-# A sleeve is decoded and resized once, at the size the app draws it: the
-# decoded file is what GPUI uploads into its atlas (`covers::variant`).
-image = { workspace = true }
 directories = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

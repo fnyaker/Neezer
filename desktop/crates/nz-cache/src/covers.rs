@@ -24,10 +24,6 @@ use crate::{Cache, Result, now_ms, url_digest};
 /// The default cap of the cover directory (docs/agents/desktop.md, *Caches*).
 pub const DEFAULT_CAP_BYTES: i64 = 300 * 1024 * 1024;
 
-/// The quality of a downscaled sleeve (`Covers::variant`): 82 keeps a 128 px
-/// cover under ~6 KB while staying visually clean on the 240 Hz panel.
-const VARIANT_QUALITY: u8 = 82;
-
 /// The cover-art store.
 pub struct Covers<'a> {
     cache: &'a Cache,
@@ -54,48 +50,6 @@ impl<'a> Covers<'a> {
     /// preload need (reading art is not the person choosing it).
     pub fn file(&self, url: &str) -> Option<PathBuf> {
         self.lookup(url, false).ok().flatten()
-    }
-
-    /// A copy of `url`'s art at most `max_px` on its longest side, written once
-    /// next to the original (`<digest>@<px>.jpg`).
-    ///
-    /// **Why the size the picture is DRAWN at, not the size it was archived
-    /// at.** GPUI uploads a painted image into one atlas tile at the image's
-    /// natural size and keys the tile by the image's own id, so a 1 000 px
-    /// sleeve drawn in a 36 px row costs 4 MB of atlas and 4 MB of decoded heap
-    /// to show 1 296 useful pixels — and nothing releases the tile until the
-    /// window is gone (`gpui`'s `Window::paint_image` / `drop_image`). Measured
-    /// on the 4 000-row favourites list at 2560×1600: a sleeve per visible row
-    /// is +94 MB of RSS for 1 000 px art, +18 MB for 128 px art (the same
-    /// rows). The SPA has the same rule in `lib/coverqueue.js`; this is its
-    /// device-side half.
-    ///
-    /// `None` when there is no art for `url`, or when the file cannot be
-    /// decoded: the caller then paints the original, which is a wrong size but
-    /// a right picture (a sleeve is never a reason to show a gap).
-    pub fn variant(&self, url: &str, max_px: u32) -> Option<PathBuf> {
-        let original = self.file(url)?;
-        let max_px = max_px.clamp(16, 2048);
-        let dir = self.cache.covers_dir();
-        let digest = url_digest(url);
-        let variant = dir.join(format!("{digest}@{max_px}.jpg"));
-        if variant.is_file() {
-            return Some(variant);
-        }
-        let decoded = image::open(&original).ok()?;
-        if decoded.width() <= max_px && decoded.height() <= max_px {
-            return Some(original);
-        }
-        let small = decoded.thumbnail(max_px, max_px).to_rgb8();
-        // Published only once whole, like every other file this crate writes.
-        let temporary = dir.join(format!("{digest}@{max_px}.part"));
-        let mut file = std::io::BufWriter::new(fs::File::create(&temporary).ok()?);
-        let mut encoder =
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, VARIANT_QUALITY);
-        encoder.encode_image(&small).ok()?;
-        std::io::Write::flush(&mut file).ok()?;
-        fs::rename(&temporary, &variant).ok()?;
-        Some(variant)
     }
 
     /// Stores `bytes` for `url` (replacing what was there, in any format).
@@ -456,74 +410,5 @@ mod tests {
         assert_eq!(covers.len()?, 0);
         assert_eq!(covers.total_bytes()?, 0);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod variant_tests {
-    use super::*;
-
-    /// A JPEG the size of a real sleeve, encoded by the same crate the app
-    /// decodes with (no test fixture to drift).
-    fn sleeve(size: u32) -> Vec<u8> {
-        let picture = image::RgbImage::from_fn(size, size, |x, y| {
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
-        });
-        let mut bytes = Vec::new();
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90);
-        encoder.encode_image(&picture).expect("encode");
-        bytes
-    }
-
-    #[test]
-    fn a_sleeve_is_stored_at_the_size_it_is_drawn() {
-        // Measured on this file's own 1 000×1 000 JPEG (146 534 B): the 128 px
-        // copy is 8 074 B, and the bytes GPUI uploads into its atlas are the
-        // DECODED ones — 4 000 000 B (1 000²×4) become 65 536 B (128²×4), a
-        // factor of 61 on both the decoded heap and the atlas tile.
-        let dir = std::env::temp_dir().join(format!(
-            "neezer-variant-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cache = Cache::open_with_cache_dir(&dir, &dir).expect("cache");
-        let covers = cache.covers();
-        let original = sleeve(1_000);
-        covers.put("/api/cover/one", &original).expect("put");
-
-        let row = covers
-            .variant("/api/cover/one", 128)
-            .expect("a 128 px copy");
-        let decoded = image::open(&row).expect("decode");
-        assert_eq!((decoded.width(), decoded.height()), (128, 128));
-        let written = std::fs::metadata(&row).unwrap().len();
-        assert!(
-            written < original.len() as u64 / 10,
-            "a 128 px copy must be a fraction of the sleeve, it is {written} B of {}",
-            original.len()
-        );
-        let pixels = 128u64 * 128;
-        assert!(
-            pixels * 4 < 1_000 * 1_000 * 4 / 50,
-            "the decoded image a row paints is 61× smaller, not {pixels} px"
-        );
-
-        // Idempotent: the second visit reuses the file instead of re-encoding.
-        let again = covers.variant("/api/cover/one", 128).expect("cached");
-        assert_eq!(again, row);
-
-        // A sleeve smaller than the class stays as it is (no upscaling, no loss).
-        let small = covers
-            .variant("/api/cover/one", 2_048)
-            .expect("the original");
-        assert_eq!(small, covers.file("/api/cover/one").unwrap());
-
-        // Nothing stored: no file, and the caller paints its placeholder.
-        assert!(covers.variant("/api/cover/absent", 128).is_none());
-        std::fs::remove_dir_all(dir).ok();
     }
 }

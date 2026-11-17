@@ -10,7 +10,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
@@ -18,9 +18,6 @@ struct Inner<T> {
     queue: Mutex<VecDeque<T>>,
     waker: Mutex<Option<Waker>>,
     closed: AtomicBool,
-    /// How many [`Sender`]s exist. The LAST one to drop closes the channel, so
-    /// the receiver's task can end instead of parking for ever (see `Drop`).
-    senders: AtomicUsize,
 }
 
 /// The sending half; clone it into every worker.
@@ -30,26 +27,8 @@ pub struct Sender<T> {
 
 impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
-        self.inner.senders.fetch_add(1, Ordering::Relaxed);
         Self {
             inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-/// Dropping the last sender closes the channel.
-///
-/// A screen owns one `Sender` and one drain task awaiting `Receiver::next()`.
-/// Without this, the task was woken by nothing after the screen was replaced:
-/// GPUI kept it — and everything the future captured — for the life of the
-/// process, one screen's worth per navigation (measured: ~2 KiB per `Screen`,
-/// `screens/settings/mod.rs`'s heap test; 1 000 visits to a screen that builds
-/// one per visit grew the app by ~2 MiB). Closing on the last drop lets
-/// `next()` answer `None`, the loop ends, and the task is freed.
-impl<T> Drop for Sender<T> {
-    fn drop(&mut self) {
-        if self.inner.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.close();
         }
     }
 }
@@ -148,7 +127,6 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         queue: Mutex::new(VecDeque::new()),
         waker: Mutex::new(None),
         closed: AtomicBool::new(false),
-        senders: AtomicUsize::new(1),
     });
     (
         Sender {
@@ -184,45 +162,6 @@ mod tests {
         tx.send(7);
         assert_eq!(counter.0.load(Ordering::SeqCst), 1);
         assert_eq!(next.as_mut().poll(&mut context), Poll::Ready(Some(7)));
-    }
-
-    #[test]
-    fn dropping_the_last_sender_ends_the_receive() {
-        // What a screen's drain task relies on: the screen is gone, so nothing
-        // will ever send again, and the pending `next()` must resolve `None`.
-        let (tx, rx) = channel::<u8>();
-        let counter = Arc::new(CountingWaker(AtomicUsize::new(0)));
-        let waker = Waker::from(Arc::clone(&counter));
-        let mut context = Context::from_waker(&waker);
-        let mut next = Box::pin(rx.next());
-        assert!(matches!(next.as_mut().poll(&mut context), Poll::Pending));
-        drop(tx);
-        assert_eq!(
-            counter.0.load(Ordering::SeqCst),
-            1,
-            "the drop wakes the receiver"
-        );
-        assert_eq!(next.as_mut().poll(&mut context), Poll::Ready(None));
-    }
-
-    #[test]
-    fn a_clone_keeps_the_channel_open_until_the_last_one_goes() {
-        // A worker holding a clone must not close the screen's channel.
-        let (tx, rx) = channel::<u8>();
-        let worker = tx.clone();
-        drop(tx);
-        let counter = Arc::new(CountingWaker(AtomicUsize::new(0)));
-        let waker = Waker::from(counter);
-        let mut context = Context::from_waker(&waker);
-        assert!(matches!(
-            Box::pin(rx.next()).as_mut().poll(&mut context),
-            Poll::Pending
-        ));
-        drop(worker);
-        assert_eq!(
-            Box::pin(rx.next()).as_mut().poll(&mut context),
-            Poll::Ready(None)
-        );
     }
 
     #[test]
