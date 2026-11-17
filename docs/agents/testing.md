@@ -100,20 +100,20 @@ the code under it was broken:
 - **Count, don't time.** "The import is fast" is a statement budget (`count_statements` in
   `tests/test_deezer.py`), not `elapsed < 15`: exact, machine-independent, and an N+1 query moves
   it by thousands. The time bound it replaced could not see a re-sync rewriting every row.
-- **Pin the clock a cache is keyed on, and write its day as a literal.** A value cached per
-  (person, day) is compared on a day, and the route resolves that day from the wall clock while a
-  fixture usually captures it once at import: a suite that starts before midnight and reaches the
-  route after it compares two different days, and both symptoms are real — a rebuild inside a
-  statement count, and a different day-seeded draw. `tests/test_moods.py` had exactly that:
-  `DAY = moods.now().date().isoformat()` at module scope, the route calling `moods.catalog(user)`
-  itself. CI run 43983638806 started at 23:57:23 UTC, imported the module on 16 November and
-  failed at 00:00:58 — `Counter({'SELECT': 2})` where 1 was the login's user read and the second
-  was the rebuild, and the ids assertion behind it would have compared yesterday's draw with
-  today's. The fixture now pins the one clock `moods.catalog` reads (`grep 'now()'
-  neezer/moods.py`: one call) to a literal instant, and a guard test (`assertEqual(moods.now(),
-  FROZEN)`) fails the moment that pin is removed — at any hour, where the count only moved once a
-  day. The counts stay exact: a route that rescans moves them to 2 and 5, asserted against that
-  mutation.
+- **Pin the clock a value is derived from — a cache key's day, a decaying weight's age — and write
+  that instant as a literal.** Both flavours bit on the night of 2026-11-16. `tests/test_moods.py`
+  cached its catalog per (person, day) while `DAY = moods.now().date().isoformat()` was read once at
+  import and the route resolved "today" itself: CI run 43983638806 started at 23:57:23 UTC,
+  imported the module on 16 November and failed at 00:00:58 with `Counter({'SELECT': 2})` — one
+  login read plus the rebuild — and the ids assertion behind it would have compared yesterday's
+  day-seeded draw with today's. `tests/test_explorer_styles.py` compared a star's weight with a
+  play's at exactly 2.5 while `listening.activation` fades a play by `(hours + 1) ** -0.5`: one
+  second of `setUp` spent on a loaded runner gives `(1 + 1/3600) ** -0.5 = 0.9998611400395998`.
+  Both fixtures now pin every clock the value reads (and stamp the star's date, whose model default
+  is the wall clock) to one literal instant, so the gap is zero by construction; a guard test
+  (`assertEqual(moods.now(), FROZEN)`) fails the moment a pin is removed — at any hour, where the
+  count only moved once a day. The counts stay exact: a route that rescans moves them to 2 and 5,
+  asserted against that mutation.
 - **Never compute the expectation from the constant under test** (`cleanup.GB`,
   `_MAX_OUTAGE_RETRIES + 1`): write the literal. And keep a test's own timeout below the cap it is
   checking, or "it waited the cap out" passes as "it did not wait".
