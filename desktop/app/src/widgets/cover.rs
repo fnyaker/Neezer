@@ -36,9 +36,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    App, Asset as _, Global, ImageSource, ImgResourceLoader, IntoElement, ObjectFit,
-    ParentElement, Pixels, RenderImage, Resource, SharedString, Styled, StyledImage as _, Window,
-    img, px,
+    App, Asset as _, Global, ImageSource, ImgResourceLoader, IntoElement, ObjectFit, ParentElement,
+    Pixels, RenderImage, Resource, SharedString, Styled, StyledImage as _, Window, img, px,
 };
 use gpui_omarchy::{IconName, icon};
 use nz_api::Lane;
@@ -249,31 +248,33 @@ impl Covers {
         self.refused.clear();
     }
 
-    /// The frame is starting: settle what the LAST frame showed.
+    /// What this screen shows, declared by the paint that builds it: the files
+    /// of the rows, cards or page header it is about to draw.
     ///
-    /// One screen's paint can run its list closure more than once (a virtual
-    /// list measures, then builds), so what a screen shows is the UNION of the
-    /// frame's calls (`show`), and this is where the previous union is retired:
-    /// the sleeves that left the window are forgotten, the pixels and atlas
-    /// tiles of the ones nothing shows any more are freed, and the cache is
-    /// brought back inside [`DECODED_BUDGET`].
-    pub fn begin_frame(&mut self, window: &mut Window, cx: &mut App) {
+    /// A virtual list calls its closure more than once per paint — a measuring
+    /// pass with ONE row, then the viewport — and those extra rows are really
+    /// painted, so "what was painted" is not "what is on screen". The screen's
+    /// own last range is: the declaration REPLACES this cache's previous one
+    /// and is published by [`Covers::begin_frame`] on the next render, which is
+    /// why the measuring pass cannot keep a sleeve alive.
+    ///
+    /// Costs nothing for a file already decoded; the first time it starts the
+    /// background decode of the 128 px copy (a JPEG is ~0.2 ms on the executor,
+    /// never on the paint thread).
+    pub fn show(&mut self, shown: impl IntoIterator<Item = PathBuf>, cx: &mut App) {
         let holder = self.holder;
-        // A sleeve whose decode never landed leaves GPUI's own asset entry
-        // behind (`img(path)` fills it while this cache has nothing yet), and
-        // that cache never evicts: it is cancelled here instead of being found
-        // again in a minute's RSS.
-        for path in cx.default_global::<Sleeves>().retire(holder) {
-            if cx.default_global::<Sleeves>().cancel(&path) {
-                cx.remove_asset::<ImgResourceLoader>(&Resource::Path(path.into()));
-            }
-        }
-        let freed = cx.default_global::<Sleeves>().evict();
-        if std::env::var_os("NZ_COVER_DEBUG").is_some() {
-            let resident = cx.default_global::<Sleeves>().resident();
-            eprintln!("DBG begin_frame holder={holder} freed={} resident={resident:?}", freed.len());
-        }
-        for (path, image) in freed {
+        cx.default_global::<Sleeves>()
+            .show(holder, shown.into_iter().collect());
+        self.decode(cx);
+    }
+
+    /// The frame is starting: publish what the last paint declared, decode what
+    /// is new, and free the pixels and atlas tiles of every sleeve no screen
+    /// shows any more.
+    pub fn begin_frame(&mut self, window: &mut Window, cx: &mut App) {
+        cx.default_global::<Sleeves>().publish(self.holder);
+        self.decode(cx);
+        for (path, image) in cx.default_global::<Sleeves>().evict() {
             // `Some(window)` because during a paint the window is taken OUT of
             // `App::windows`: without it the tile of the window being drawn is
             // the one left behind.
@@ -282,17 +283,10 @@ impl Covers {
         }
     }
 
-    /// A sleeve this screen is showing in the frame being built: the file of a
-    /// row or a card it just built.
-    ///
-    /// Costs nothing for a file already decoded; the first time it starts the
-    /// background decode of the 128 px copy (a JPEG is ~0.2 ms on the
-    /// background executor, one per file per visit — never on the paint thread).
-    /// The image is never evicted while a screen shows it.
-    pub fn show(&mut self, shown: impl IntoIterator<Item = PathBuf>, cx: &mut App) {
+    /// Start one background decode per file this cache declared and does not
+    /// hold yet.
+    fn decode(&mut self, cx: &mut App) {
         let holder = self.holder;
-        let shown: HashSet<PathBuf> = shown.into_iter().collect();
-        cx.default_global::<Sleeves>().show(holder, shown);
         for path in cx.default_global::<Sleeves>().claim(holder) {
             let decode = ImgResourceLoader::load(Resource::Path(path.clone().into()), cx);
             cx.spawn(async move |cx| match decode.await {
@@ -342,38 +336,32 @@ pub enum Look {
     Unknown,
 }
 
-/// One screen's shown sleeves: the last frame's union and the one being built.
-#[derive(Default, Clone)]
-struct Shows {
-    previous: HashSet<PathBuf>,
-    current: HashSet<PathBuf>,
-}
-
-impl Shows {
-    fn holds(&self, path: &Path) -> bool {
-        self.previous.contains(path) || self.current.contains(path)
-    }
-}
-
+/// One decoded sleeve.
 struct Painted {
     image: Arc<RenderImage>,
     /// What the decoded pixels hold: every frame's buffer, BGRA.
     bytes: usize,
-    /// The last paint that showed it: what the LRU orders on.
+    /// When a screen last declared it: what the idle sweep orders on.
     used: Instant,
 }
 
 #[derive(Default)]
 struct Inner {
     painted: HashMap<PathBuf, Painted>,
-    /// What each cache showed: the frame just painted (`previous`) and the one
-    /// being built (`current`). An image in either is never evicted.
-    showing: HashMap<u64, Shows>,
+    /// What each cache declared it shows, as of its last published frame. An
+    /// image in one of these is never evicted.
+    showing: HashMap<u64, HashSet<PathBuf>>,
+    /// What the paint being built declared: the NEXT frame's `showing`. A
+    /// virtual list overwrites it once per pass, so the viewport — declared
+    /// last — is what survives.
+    pending: HashMap<u64, HashSet<PathBuf>>,
     /// Decodes on the background executor, so one paint never asks twice.
     decoding: HashSet<PathBuf>,
     /// Files this process could not decode: never retried, the placeholder is
     /// the answer (a corrupt cover must not be a decode loop).
     broken: HashSet<PathBuf>,
+    /// When the last sweep ran, so the LRU does not walk the map every frame.
+    swept: Option<Instant>,
     bytes: usize,
 }
 
@@ -407,13 +395,13 @@ impl Sleeves {
         }
     }
 
-    /// What to paint for `path` now, bumping its recency. A pure map read: the
-    /// paint path never decodes, allocates or touches SQLite.
+    /// What to paint for `path` now. A pure map read: the paint path never
+    /// decodes, allocates or touches SQLite, and it does NOT decide what stays
+    /// in memory — the screen's own declaration does (`Covers::show`), because
+    /// a virtual list paints one measuring row the viewport never shows.
     pub fn lookup(&self, path: &Path) -> Look {
-        let mut inner = self.inner.borrow_mut();
-        let now = Instant::now();
-        if let Some(item) = inner.painted.get_mut(path) {
-            item.used = now;
+        let inner = self.inner.borrow();
+        if let Some(item) = inner.painted.get(path) {
             return Look::Ready(item.image.clone());
         }
         if inner.decoding.contains(path) {
@@ -425,23 +413,10 @@ impl Sleeves {
         Look::Unknown
     }
 
-    /// For a test's diagnosis: the painted files and each holder's two sets.
-    pub fn debug_state(&self) -> (Vec<PathBuf>, Vec<(u64, Vec<PathBuf>, Vec<PathBuf>)>) {
-        let inner = self.inner.borrow();
-        (
-            inner.painted.keys().cloned().collect(),
-            inner
-                .showing
-                .iter()
-                .map(|(holder, shows)| {
-                    (
-                        *holder,
-                        shows.previous.iter().cloned().collect(),
-                        shows.current.iter().cloned().collect(),
-                    )
-                })
-                .collect(),
-        )
+    /// Whether this cache still holds `path`'s decoded pixels. The question a
+    /// screen's test asks about a row that left the window.
+    pub fn holds(&self, path: &Path) -> bool {
+        self.inner.borrow().painted.contains_key(path)
     }
 
     /// The decoded bytes held, and how many images (the number a test asserts).
@@ -450,44 +425,40 @@ impl Sleeves {
         (inner.bytes, inner.painted.len())
     }
 
-    /// Retire the frame that was just painted and return what it showed that no
-    /// other screen does: the caller cancels the decodes of those still in
-    /// flight, then `evict` frees what nothing shows.
-    fn retire(&self, holder: u64) -> Vec<PathBuf> {
-        let mut inner = self.inner.borrow_mut();
-        let done = {
-            let shows = inner.showing.entry(holder).or_default();
-            std::mem::take(&mut shows.current)
-        };
-        let left: Vec<PathBuf> = done
-            .iter()
-            .filter(|path| {
-                !inner
-                    .showing
-                    .iter()
-                    .any(|(other, shows)| *other != holder && shows.holds(path))
-            })
-            .cloned()
-            .collect();
-        if let Some(shows) = inner.showing.get_mut(&holder) {
-            shows.previous = done;
-        }
-        left
-    }
-
-    /// Union in what a paint call built this frame.
+    /// Declare what this cache shows, replacing the declaration of the paint
+    /// being built.
     fn show(&self, holder: u64, shown: HashSet<PathBuf>) {
-        let mut inner = self.inner.borrow_mut();
-        let shows = inner.showing.entry(holder).or_default();
-        shows.current.extend(shown);
+        self.inner.borrow_mut().pending.insert(holder, shown);
     }
 
+    /// The frame boundary: this screen's declaration becomes what it shows, and
+    /// every image in it is as fresh as now.
+    fn publish(&self, holder: u64) {
+        let mut inner = self.inner.borrow_mut();
+        let Some(pending) = inner.pending.get(&holder).cloned() else {
+            return;
+        };
+        inner.pending.insert(holder, HashSet::new());
+        let now = Instant::now();
+        for path in &pending {
+            if let Some(item) = inner.painted.get_mut(path) {
+                item.used = now;
+            }
+        }
+        inner.showing.insert(holder, pending);
+    }
+
+    /// The files this cache declared — this frame's or the published one — that
+    /// are not decoded yet: one decode each.
     fn claim(&self, holder: u64) -> Vec<PathBuf> {
         let mut inner = self.inner.borrow_mut();
-        let Some(shows) = inner.showing.get(&holder).cloned() else {
-            return Vec::new();
-        };
-        let shown: HashSet<PathBuf> = shows.previous.into_iter().chain(shows.current).collect();
+        let mut shown: HashSet<PathBuf> = HashSet::new();
+        if let Some(published) = inner.showing.get(&holder) {
+            shown.extend(published.iter().cloned());
+        }
+        if let Some(pending) = inner.pending.get(&holder) {
+            shown.extend(pending.iter().cloned());
+        }
         let Inner {
             painted,
             decoding,
@@ -513,7 +484,12 @@ impl Sleeves {
     fn land(&self, path: &Path, image: Arc<RenderImage>) -> bool {
         let mut inner = self.inner.borrow_mut();
         inner.decoding.remove(path);
-        if !inner.showing.values().any(|shows| shows.holds(path)) {
+        if !inner
+            .showing
+            .values()
+            .chain(inner.pending.values())
+            .any(|shown| shown.contains(path))
+        {
             return false;
         }
         let now = Instant::now();
@@ -539,25 +515,25 @@ impl Sleeves {
         inner.broken.insert(path.to_path_buf());
     }
 
-    /// Stop waiting for `path`. `true` when a decode was still running, so its
-    /// GPUI asset entry must go with it.
-    fn cancel(&self, path: &Path) -> bool {
-        let mut inner = self.inner.borrow_mut();
-        inner.decoding.remove(path)
-    }
-
-    /// The least recently used images no screen shows, until the budget holds.
-    /// Everything, when `holder`'s screen is going away.
+    /// The least recently declared images no screen shows, until the budget
+    /// holds. Everything, when `holder`'s screen is going away.
     fn release(&self, holder: u64) -> Vec<(PathBuf, Arc<RenderImage>)> {
         let mut inner = self.inner.borrow_mut();
         inner.showing.remove(&holder);
+        inner.pending.remove(&holder);
         // Its in-flight decodes are not this cache's to wait for: they land,
         // find no screen showing them, and are dropped by `land`.
         let mut freed = Vec::new();
         let idle: Vec<PathBuf> = inner
             .painted
             .keys()
-            .filter(|path| !inner.showing.values().any(|shows| shows.holds(path)))
+            .filter(|path| {
+                !inner
+                    .showing
+                    .values()
+                    .chain(inner.pending.values())
+                    .any(|shown| shown.contains(*path))
+            })
             .cloned()
             .collect();
         for path in idle {
@@ -573,12 +549,31 @@ impl Sleeves {
         let mut inner = self.inner.borrow_mut();
         let mut freed = Vec::new();
         let now = Instant::now();
-        // A sleeve no screen shows any more, and has not for `idle`: out.
+        // Once per `idle`, or at once when the budget is over: walking a
+        // thousand images on every frame of a 240 Hz scroll is work nobody
+        // asked for, and the rule it enforces is timed in seconds anyway.
+        if inner.bytes <= self.budget
+            && inner
+                .swept
+                .is_some_and(|swept| now.saturating_duration_since(swept) < self.idle)
+        {
+            return freed;
+        }
+        inner.swept = Some(now);
+        // A sleeve no screen has declared for `idle`: out. The screen's own
+        // render is what keeps an image alive, so a row inside the window
+        // refreshes it every frame and a row that left stops — the virtual
+        // list's measuring pass (which paints one row) cannot keep a sleeve
+        // alive, and neither can a transient frame that declares none.
         let idle: Vec<PathBuf> = inner
             .painted
             .iter()
             .filter(|(path, item)| {
-                !inner.showing.values().any(|shows| shows.holds(path))
+                !inner
+                    .showing
+                    .values()
+                    .chain(inner.pending.values())
+                    .any(|shown| shown.contains(*path))
                     && now.saturating_duration_since(item.used) >= self.idle
             })
             .map(|(path, _)| path.clone())
@@ -589,16 +584,21 @@ impl Sleeves {
                 freed.push((path, item.image));
             }
         }
-        // Then the budget, least recently used first.
+        // Then the budget, least recently declared first. What a screen shows
+        // wins over the budget: it is a screenful, not the list.
         while inner.bytes > self.budget {
             let victim = inner
                 .painted
                 .iter()
-                .filter(|(path, _)| !inner.showing.values().any(|shows| shows.holds(path)))
+                .filter(|(path, _)| {
+                    !inner
+                        .showing
+                        .values()
+                        .chain(inner.pending.values())
+                        .any(|shown| shown.contains(*path))
+                })
                 .min_by_key(|(_, item)| item.used)
                 .map(|(path, _)| path.clone());
-            // Everything left is on screen: a visible row wins over the budget
-            // (it is twenty-five images, not the list).
             let Some(victim) = victim else { break };
             if let Some(item) = inner.painted.remove(&victim) {
                 inner.bytes = inner.bytes.saturating_sub(item.bytes);
@@ -612,9 +612,9 @@ impl Sleeves {
 /// The bytes one decoded image holds, every frame included.
 fn decoded_bytes(image: &RenderImage) -> usize {
     (0..image.frame_count())
-        .filter_map(|frame| {
+        .map(|frame| {
             let size = image.size(frame);
-            Some(size.width.0.max(0) as usize * size.height.0.max(0) as usize * 4)
+            size.width.0.max(0) as usize * size.height.0.max(0) as usize * 4
         })
         .sum()
 }
@@ -680,35 +680,29 @@ pub fn view(
     } else {
         tile.rounded_none()
     };
-    match file {
-        Some(file) => {
-            let look = cx
-                .try_global::<Sleeves>()
-                .map(|sleeves| sleeves.lookup(file))
-                .unwrap_or(Look::Unknown);
-            let source = match look {
-                Look::Ready(image) => Some(ImageSource::Render(image)),
-                Look::Unknown => Some(ImageSource::from(file.clone())),
-                // The decode is in flight: the placeholder box holds the frame
-                // rather than asking GPUI's loader for a second decode of the
-                // same file (two tiles, twice the bytes, for one row).
-                Look::Loading | Look::Failed => None,
-            };
-            if let Some(source) = source {
-                // The radius goes on the image too: a rounded parent clips its
-                // background but not necessarily a child's own drawing (measured
-                // on an artist tile: the sleeve stayed a square).
-                let mut picture = img(source)
-                    .object_fit(ObjectFit::Cover)
-                    .w(size)
-                    .h(size);
-                if round {
-                    picture = picture.rounded_full();
-                }
-                return tile.child(picture);
+    if let Some(file) = file {
+        let look = cx
+            .try_global::<Sleeves>()
+            .map(|sleeves| sleeves.lookup(file))
+            .unwrap_or(Look::Unknown);
+        let source = match look {
+            Look::Ready(image) => Some(ImageSource::Render(image)),
+            Look::Unknown => Some(ImageSource::from(file.clone())),
+            // The decode is in flight: the placeholder box holds the frame
+            // rather than asking GPUI's loader for a second decode of the
+            // same file (two tiles, twice the bytes, for one row).
+            Look::Loading | Look::Failed => None,
+        };
+        if let Some(source) = source {
+            // The radius goes on the image too: a rounded parent clips its
+            // background but not necessarily a child's own drawing (measured
+            // on an artist tile: the sleeve stayed a square).
+            let mut picture = img(source).object_fit(ObjectFit::Cover).w(size).h(size);
+            if round {
+                picture = picture.rounded_full();
             }
+            return tile.child(picture);
         }
-        None => {}
     }
     let initial = label
         .trim()
@@ -750,11 +744,40 @@ mod tests {
         PathBuf::from(format!("/tmp/{name}.jpg"))
     }
 
-    /// One paint: what the screen shows, then the frame boundary that retires
-    /// it (`Covers::begin_frame`'s two halves, which the tests drive by hand).
+    /// One render: the paint declares what it shows, then the frame after
+    /// publishes it — exactly what `Covers::show` and `Covers::begin_frame` do.
     fn frame(sleeves: &Sleeves, holder: u64, shown: &[&PathBuf]) {
         sleeves.show(holder, shown.iter().map(|path| (*path).clone()).collect());
-        sleeves.retire(holder);
+        sleeves.publish(holder);
+    }
+
+    /// The rule the measuring pass taught: a virtual list declares ONE row to
+    /// measure its height, then the viewport it really paints. The viewport is
+    /// what the frame published, so a sleeve only the measuring pass named is
+    /// freed like any other row that left — it is NOT "on screen".
+    #[test]
+    fn a_measuring_pass_row_is_not_what_the_screen_shows() {
+        let screen = 1u64;
+        let sleeves = Sleeves::with_rules(DECODED_BUDGET, Duration::ZERO);
+        let (measured, a, b) = (path("measured"), path("a"), path("b"));
+
+        // One frame: the measuring pass, then the viewport.
+        frame(&sleeves, screen, &[&measured]);
+        assert!(sleeves.land(&measured, image(128)));
+        sleeves.show(screen, HashSet::from([a.clone(), b.clone()]));
+        assert!(sleeves.land(&a, image(128)));
+        assert!(sleeves.land(&b, image(128)));
+        sleeves.publish(screen);
+
+        let freed = sleeves.evict();
+        assert_eq!(freed.len(), 1);
+        assert_eq!(
+            freed[0].0, measured,
+            "the row the measuring pass named, not the viewport's"
+        );
+        assert_eq!(sleeves.resident(), (2 * 65_536, 2));
+        assert!(matches!(sleeves.lookup(&a), Look::Ready(_)));
+        assert!(matches!(sleeves.lookup(&b), Look::Ready(_)));
     }
 
     /// The rule: the decoded cache is bounded in BYTES, least recently used

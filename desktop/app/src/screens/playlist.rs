@@ -38,7 +38,7 @@ use serde_json::json;
 use crate::actions::*;
 use crate::nav::Route;
 use crate::screens::library::{
-    Loaded, SortKey, artist_line, format_duration, project, reference_of, sleeve, track_cells,
+    Loaded, SortKey, artist_line, format_duration, project, reference_of, track_cells,
 };
 use crate::state::{AppState, entry_from_track};
 use crate::theme;
@@ -202,7 +202,7 @@ impl Screen {
                 let for_message = url.clone();
                 let tx = self.events.clone();
                 covers.want(snapshot, &for_request, move |file| {
-                    let _ = tx.send(Msg::Cover(for_message, file));
+                    tx.send(Msg::Cover(for_message, file));
                 });
             }
         }
@@ -226,7 +226,7 @@ impl Screen {
             let for_message = url.clone();
             let tx = self.events.clone();
             banner.want(snapshot, &for_request, move |file| {
-                let _ = tx.send(Msg::Cover(for_message, file));
+                tx.send(Msg::Cover(for_message, file));
             });
         }
         let files: Vec<PathBuf> = url
@@ -1424,7 +1424,7 @@ impl Render for Screen {
     #[allow(refining_impl_trait)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_fields(window, cx);
-        // What the last frame showed and this one does not is freed here, its
+        // What the last paint declared and this one does not is freed here, its
         // atlas tile with it.
         self.covers.borrow_mut().begin_frame(window, cx);
         self.banner.borrow_mut().begin_frame(window, cx);
@@ -1883,9 +1883,39 @@ impl Render for Screen {
                     recs = recs.child(note_line("Pas de suggestion pour l'instant.", cx))
                 }
                 Loaded::Ready(list) => {
+                    // The strip's own sleeves: the same 128 px copy and the
+                    // same holder as the rows (`Covers::rows`), unioned into
+                    // this frame's shown set — twelve rows, so the strip costs
+                    // twelve row-sized decodes, not twelve 1 000 px ones.
+                    let mut rec_covers: Vec<String> = Vec::new();
+                    {
+                        let snapshot = self.state.read(cx);
+                        let mut covers = self.covers.borrow_mut();
+                        for track in list.iter().take(12) {
+                            if let Some(url) = track.album.cover.clone() {
+                                let for_request = url.clone();
+                                let for_message = url.clone();
+                                let tx = self.events.clone();
+                                covers.want(snapshot, &for_request, move |file| {
+                                    tx.send(Msg::Cover(for_message, file));
+                                });
+                                rec_covers.push(url);
+                            }
+                        }
+                    }
+                    let files: Vec<PathBuf> = rec_covers
+                        .iter()
+                        .filter_map(|url| cover::file_in(&self.covers, url))
+                        .collect();
+                    self.covers.borrow_mut().show(files, cx);
                     let mut rows = div().flex().flex_col().gap(rems(0.125));
                     for track in list.iter().take(12) {
                         let target = track.clone();
+                        let rec_file = track
+                            .album
+                            .cover
+                            .as_deref()
+                            .and_then(|url| cover::file_in(&self.covers, url));
                         rows = rows.child(
                             div()
                                 .flex()
@@ -1893,7 +1923,14 @@ impl Render for Screen {
                                 .gap(rems(0.5))
                                 .h(px(44.))
                                 .px(rems(0.5))
-                                .child(sleeve(track.album.cover.as_deref(), &track.title, 32., cx))
+                                .child(cover::view(
+                                    rec_file.as_ref(),
+                                    track.album.cover.as_deref(),
+                                    &track.title,
+                                    Kind::Album,
+                                    px(32.),
+                                    cx,
+                                ))
                                 .child(
                                     div()
                                         .flex()

@@ -131,8 +131,9 @@ impl Screen {
         .detach();
     }
 
-    /// The sleeves of the rows in `range`, and only those: the visible rows are
-    /// asked for first, a row outside the window costs nothing.
+    /// The sleeves of the rows in `range`, and only those: the rows in the
+    /// window are declared to the cache (so they are never evicted), a row
+    /// outside it costs nothing.
     fn show_covers(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) {
         let urls: Vec<String> = {
             let state = self.state.read(cx);
@@ -149,7 +150,7 @@ impl Screen {
                 let for_message = url.clone();
                 let tx = self.events.clone();
                 covers.want(snapshot, &for_request, move |file| {
-                    let _ = tx.send(Msg::Cover(for_message, file));
+                    tx.send(Msg::Cover(for_message, file));
                 });
             }
         }
@@ -632,7 +633,11 @@ impl Screen {
         row = row.child(cover::view(
             cover_file.as_ref(),
             entry.cover.as_deref(),
-            entry.album.as_ref().map(|album| album.title.as_str()).unwrap_or(&entry.title),
+            entry
+                .album
+                .as_ref()
+                .map(|album| album.title.as_str())
+                .unwrap_or(&entry.title),
             Kind::Album,
             px(32.),
             cx,
