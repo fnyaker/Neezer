@@ -2061,9 +2061,16 @@ Waves that can run in parallel (disjoint files):
 
 - **Files**: `app/src/wiring/party_host.rs`, `app/src/wiring/party_guest.rs`, `screens/party.rs`.
 - **Contract**: host publishes the anchor `{t, p}` from the OUTPUT clock (cpal timestamps — better
-  than the browser's), the next-track announcement and `gap`; guest plays `/party/<id>/chunk/<track>
-  /<k>` (6 s Opus chunks) scheduled on the device clock with `appcore`'s `sync.rs` estimators and
-  the correction rule of `party-remote.md`.
+  than the browser's), the next-track announcement and `gap` — that body is `nz_model::PartyPublish`
+  and the route is `Api::party_publish`; the guest polls `Api::party_state` (`GET /api/party/<id>`,
+  `nz_model::PartyState`, whose clock is a FLOAT) and plays `/party/<id>/chunk/<track>/<k>` (6 s Opus
+  chunks) scheduled on the device clock with `appcore`'s `sync.rs` estimators and the correction rule
+  of `party-remote.md`.
+- **The rule, a hosted party survives a restart**: at the session's start (`on_restored` and
+  `on_logged_in`, where `start_audio`/`start_offline` already are) the app asks `GET /api/party/mine`
+  and resumes hosting when one exists — the SPA's `maybeResumeHosting`; a party whose host process
+  died keeps its link and its guests instead of going silent. Not delivered yet: this lot's own
+  service does not exist on `master`, so the contract above is what waits for it.
 - **Acceptance**: the repository's party bench (`webapp/test/party/run.mjs`) with the desktop as
   host and as guest: offset ≤ 5 ms median, ≤ 15 ms p95.
 
