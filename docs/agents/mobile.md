@@ -1003,50 +1003,76 @@ enforced on the handshake — MB4 shows it); MB3b's queue bytes in `memory()` (0
 `Prefetch` lane feeding on `is_foreground()`; MB5b's first screen consuming `NzBridge.sessions`;
 `mobile/tools/emu.sh` (MQ1) — this lot ran the documented flags by hand on port 5590.
 
-### SC1 — Extract `nz-analysis` (wave 1)
+### SC1 — Extract `nz-analysis` (delivered 2026-11-17)
 
 **Goal.** Move the desktop's analysis wiring (tap → `rhythm` → frames, 0 GPUI) into the shared
-crate, unchanged in behaviour. **Depends on**: SC0. **Exclusive files**: `desktop/crates/nz-analysis/**`,
-`desktop/app/src/wiring/analysis.rs` (becomes `pub use nz_analysis::*;` plus any GPUI glue).
-**Contract.** The public items `wiring/analysis.rs` exposes today keep their names and signatures
-in `nz_analysis`; its tests move with it. No new dependency (SC0 declared them).
-**Acceptance.** Desktop CI fully green with the same test count (before/after numbers in the PR);
-`cargo ndk -t arm64-v8a -P 26 check -p nz-analysis` passes; `git diff --stat` = the two paths.
-**Pitfalls.** The analysis runs only while a view is visible — keep that gate where it is.
+crate, unchanged in behaviour. **Depends on**: SC0. **Exclusive files**: `desktop/crates/nz-analysis/**`
+and `desktop/app/src/wiring/analysis.rs` (now `pub use nz_analysis::*;` plus one GPUI adapter);
+`desktop/Cargo.lock` moved by one line (see the dependency bullet).
 
-```text
-Tu es le worker du lot SC1 du plan mobile Neezer. Lis CLAUDE.md, docs/agents/mobile.md (« Reuse »,
-« Worker rules », « SC1 »), docs/agents/desktop.md (D10b, D16, « Threads »), docs/agents/rhythm.md.
-Objectif : déplacer desktop/app/src/wiring/analysis.rs (et ses tests) dans desktop/crates/nz-analysis
-sans changer son comportement ni ses signatures publiques ; le fichier du desktop devient une
-ré-exportation. Aucune nouvelle dépendance.
-Fichiers à toi seul : desktop/crates/nz-analysis/** et desktop/app/src/wiring/analysis.rs.
-Acceptation : CI desktop verte avec le même nombre de tests (avant/après dans la PR) ;
-`cargo ndk -t arm64-v8a -P 26 check -p nz-analysis` passe.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc1, PR « refactor(desktop): SC1 extract nz-analysis », CI verte, rebase +
-diff --stat, merge, section SC1 réécrite, `ao report --done`.
-```
+- **What it is now.** `nz-analysis` = `src/lib.rs` (the crate doc, `pub mod events;`, `mod analysis;`,
+  `pub use analysis::*;`), `src/analysis.rs` (2 273 lines: the desktop file, verbatim) and
+  `src/events.rs` (166 lines: the channel). The desktop's `wiring/analysis.rs` went from 2 268 lines
+  to 46: the glob re-export and `training::families`. `genres.rs` — the only caller — was **not
+  touched** (0 lines): `analysis::Event`, `Control`, `Runner`, `training::{prepare, start, payload,
+  families, …}` all resolve through the re-export, and the receiver it awaits is the crate's own.
+- **Proven unchanged, not asserted**: `diff` of the moved file against `origin/master` is **3 hunks**
+  — the two `use crate::wiring::events` → `use crate::events`, and `families`' second argument (next
+  bullet). Nothing else moved, no signature changed, no behaviour changed.
+- **The one signature that could not move**: `training::families(labels, &Tree)`. `Tree` is a
+  `gpui_kit` widget (`app/src/widgets/genre_tree.rs`), and this crate compiles for Android, so the
+  CRATE takes the lookup (`families(labels, family_of: impl Fn(&str) -> Option<String>)`) and the
+  SHELL keeps `families(labels, &Tree)` with the exact old signature as a five-line adapter. The
+  mapping loop stays in the crate; only the read of a GPUI type stays with the GPUI app.
+- **The channel**: the crate may not depend on the app, so it carries the shell's channel
+  (`app/src/wiring/events.rs`) **verbatim, minus its two tests** — the shell keeps those, so the
+  workspace test count does not move and the source stays covered. A shared `nz-events` crate would
+  end the duplication and needs a workspace-level manifest, which no extraction lot may edit
+  (*Worker rules* 3): it is a follow-up, not this lot's. `src/events.rs`'s doc says so.
+- **The dependency SC0 missed**: `symphonia-adapter-libopus`. SC0 derived each crate's manifest from
+  the `use` lines of the file it would receive, and `decode()` registers the decoder **fully
+  qualified** (`registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>()`), which
+  no `use` line shows — so an archived Opus (the YouTube fallback) would have stopped decoding. It is
+  a workspace pin already in the lock: `desktop/Cargo.lock` gains **one dependency line** inside the
+  `nz-analysis` entry, **0 package, 0 version**, and `--locked` still passes. The manifest's own
+  comment says why. `mobile/rust` depends on the crate by path, so its OWN lock records the same
+  list: `mobile/rust/Cargo.lock` gains the same one line (the package was already there through
+  `nz-audio`), and both workflows' `--locked` are green again.
+- **Measured on this machine** (NDK `30.0.16248370`, cargo-ndk 4.1.2, `CARGO_BUILD_JOBS=4`, debug):
+  - **Test count, before → after: 447 → 447.** Before: `cargo test -p neezer-desktop -- --list` =
+    **447**, of which **11** `wiring::analysis` and `cargo test -p nz-analysis -- --list` = **0**.
+    After: neezer-desktop = **436**, nz-analysis = **11** (the same 11 names: `analysis::tests::*` ×5,
+    `analysis::training::tests::*` ×4, `analysis::acceptance::*` ×1, …). `cargo test -p nz-analysis`
+    → **11 passed in 0.50 s** (the acceptance bench prints why it skipped, as it always did).
+  - `cargo clippy -p neezer-desktop --all-targets --locked -- -D warnings` → **Finished in 1 m 52 s**,
+    0 warning; `cargo clippy -p nz-analysis --all-targets -- -D warnings` → **8.03 s**.
+  - `cargo ndk -t arm64-v8a -P 26 check -p nz-analysis` → **Finished in 34.32 s** (first build for
+    `aarch64-linux-android`, `opusic-sys`'s CMake included), and
+    `cargo tree -p nz-analysis -e normal --locked | grep -cE 'gpui|cpal|zbus|whisper'` → **0**.
+- **Pitfalls found by moving**:
+  - The re-export and the adapter live in the SAME name space: `pub use nz_analysis::*;` re-exports
+    the crate's `training` module, and the shell needs its own `pub mod training`. A local item does
+    shadow a glob-imported name, so this compiles and clippy `-D warnings` is clean (checked on a
+    two-crate repro before writing it) — but nobody should add a second same-named item there.
+  - `measure` and `trainer` are now **unused dependencies of `desktop/app/Cargo.toml`** (0 `measure::`
+    / `trainer::` occurrences left in `app/src`). Removing them is a one-line-each edit of a SHARED
+    manifest, so it belongs to whoever owns that file next, not to this lot; the binary is unaffected
+    (they are linked through `nz-analysis`).
+  - `nz-audio` is only used by the crate's acceptance bench and stays a normal dependency (SC0 put it
+    there). It compiles for Android without cpal, so the Android check stays green; moving it to
+    `[dev-dependencies]` would trim the mobile graph and is a manifest edit this lot may still make
+    later in its OWN file.
+- **Files**: `desktop/crates/nz-analysis/Cargo.toml` (the Opus adapter pin + why), `src/lib.rs`,
+  `src/analysis.rs` (the moved file), `src/events.rs` (the channel), `desktop/app/src/wiring/analysis.rs`
+  (re-export + `training::families`), `desktop/Cargo.lock` and `mobile/rust/Cargo.lock` (+1 line
+  each).
+- **The lesson the mobile workflow taught**: a shared crate's manifest change is NOT local. The
+  first push was red in `mobile` only — `Rust (fmt, clippy, tests)` and `APK`, both with
+  `cannot update the lock file mobile/rust/Cargo.lock because --locked was passed` — because
+  `mobile/rust` links `desktop/crates/nz-analysis` by path and freezes that crate's dependency list
+  in its own lock. Any lot that adds, removes or moves a dependency of a shared crate must
+  regenerate BOTH locks in the same PR (`cargo metadata --offline` in `mobile/rust` is enough, no
+  build), or the desktop job goes green while the phone's goes red.
 
 ### SC2 — `nz-audio`: external sink, `cpal` feature, output latency (delivered 2026-11-17)
 

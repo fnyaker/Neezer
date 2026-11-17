@@ -4571,6 +4571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+ "symphonia-adapter-libopus",
  "tokio",
  "tracing",
  "trainer",
