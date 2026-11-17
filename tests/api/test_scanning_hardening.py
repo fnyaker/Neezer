@@ -2,11 +2,14 @@
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""Regressions for the CodeQL/Semgrep fixes that cover real risks.
+"""Regressions for the code-scanning work in the Subsonic API.
 
-Both tests fail on the code they replace: one because a CR/LF in the submitted
-user name reached the log record verbatim, the other because a folder row whose
+The cover-art test fails on the code it replaces: a folder row whose
 ``cover_art`` column held a relative path served a file outside the folder.
+The log test pins the mechanism behind the false-positive CodeQL log-injection
+alerts: the failed-login line goes through the package logger, where
+``neezer/logsafe.py`` escapes line breaks (a ``print`` or a hand-written file
+would not be covered).
 """
 
 import logging
@@ -25,6 +28,14 @@ from ..testbase import TestBase
 
 
 class AuthFailureLogTestCase(TestBase):
+    """The failed-login line goes through the package logger.
+
+    ``neezer/logsafe.py`` (installed by ``web.create_application``) escapes line
+    breaks in the arguments of every record this package logs, so a user name
+    cannot start a line of its own. This pins the call site: an f-string in the
+    message, a ``print`` or a hand-written file would bypass the factory.
+    """
+
     __with_api__ = True
 
     def test_user_name_cannot_forge_a_log_line(self):
@@ -54,7 +65,7 @@ class AuthFailureLogTestCase(TestBase):
         # Exactly one line, and the attempt is still readable as evidence.
         self.assertNotIn("\n", line)
         self.assertNotIn("\r", line)
-        self.assertIn("eve?ERROR admin logged in from 10.0.0.1?FAILED", line)
+        self.assertIn("eve\\nERROR admin logged in from 10.0.0.1\\rFAILED", line)
 
 
 class CoverArtPathTestCase(ApiTestBase):

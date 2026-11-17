@@ -1036,7 +1036,8 @@ config, so a title or a path is one argument and never a command (the only clien
 `int` bitrate, a `[a-z0-9]{1,8}` format and a float offset). The Subsonic token `md5(password + salt)`
 and Last.fm's `api_sig` are md5 **by wire protocol**, and the SHA1 branch only verifies a pre-argon2
 hash that the same successful login rewrites to argon2: those three digest choices are what keeps an
-old client and an old database working (rule 7). A failed login goes through `api._loggable` (control
-characters replaced, 64 chars), so a user name cannot forge a second log entry. `/getCoverArt` treats
-`Folder.cover_art` as a file NAME (`basename`) and resolves the result through `_local_file`, so a
-hand-edited or restored row cannot read outside the library.
+old client and an old database working (rule 7). A failed login goes through the package logger, so
+`logsafe.py` keeps a user name on one line (the CodeQL log-injection alerts are false positives for
+that reason: never format such a value into the message with an f-string, which bypasses it).
+`/getCoverArt` treats `Folder.cover_art` as a file NAME (`basename`) and resolves the result through
+`_local_file`, so a hand-edited or restored row cannot read outside the library.
