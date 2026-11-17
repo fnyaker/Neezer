@@ -1419,11 +1419,13 @@ Waves that can run in parallel (disjoint files):
   app and quits — the symptom was an app that disappeared between two clicks. (3) Under Xvfb with no
   window manager the app-level key bindings (`q`, `g p`) did not fire while text into a focused
   field did; the suite's journey tests are what prove the keyboard, the bench drives the mouse.
-- **A contract that is wrong (not this lot's)**: `nz-api`'s `set_podcast_auto_archive` returns
-  `Result<(), ApiError>` through `send_none` and DROPS the body, while
-  `POST /api/podcast/<id>/auto_archive` answers `{…channel, "queued": n}` (the SPA's toast counts
-  those episodes). Reported to the API owner; the screen's documented workaround is one re-read of
-  the page (`self.load`) plus « Archivage des épisodes manquants lancé » — the count is not claimed.
+- **The rule, the switch counts what it queued** (the contract was fixed by the follow-up):
+  `POST /api/podcast/<id>/auto_archive` answers `{…channel, "queued": n}` (`archive_show`), and
+  `Api::set_podcast_auto_archive` returns that body typed (`PodcastAutoArchive { queued, show }`).
+  The screen says « Archivage activé : N épisodes en file » — 0 says there was nothing to queue —
+  arms its poll only when something went in, and takes the switch's own value from the answer:
+  no second read of the page. The workaround it replaces was `self.load(cx)` plus a generic
+  « Archivage lancé », because `send_none` used to drop the count.
 
 ### D12 — Discovery (delivered 2026-11-17)
 
