@@ -60,11 +60,14 @@ class AuthFailureLogTestCase(TestBase):
 class CoverArtPathTestCase(ApiTestBase):
     def setUp(self):
         super().setUp()
-        self.music = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.music, True)
-        self.outside = os.path.join(os.path.dirname(self.music), ".cover-outside.jpg")
+        # One unique parent per test: other sessions run this suite on the same
+        # machine, so nothing may share a fixed name under /tmp.
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.music = os.path.join(self.root, "music")
+        os.mkdir(self.music)
+        self.outside = os.path.join(self.root, "outside.jpg")
         Image.new("RGB", (8, 8), (12, 34, 56)).save(self.outside, "JPEG")
-        self.addCleanup(os.remove, self.outside)
 
     def _cover_query(self, folder):
         return {
@@ -79,7 +82,7 @@ class CoverArtPathTestCase(ApiTestBase):
             name="Root",
             path=self.music,
             root=True,
-            cover_art="../.cover-outside.jpg",
+            cover_art="../outside.jpg",
         )
         # A relative cover_art used to be joined as-is: this answered with a
         # real image that lives outside the library.
