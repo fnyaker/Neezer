@@ -984,7 +984,14 @@ def make_archived(app, clusters=40):
             rows.append((t, plays, last, base - datetime.timedelta(days=r.randint(0, 300))))
             loud = (c % 10) / 9 * 0.8 + r.random() * 0.2  # the energy's measures
             analyses.append({"track": t.id, "bpm": 80 + (c % 12) * 10 + r.random() * 3,
-                             "bpm_confidence": 0.8, "style": styles[c % len(styles)],
+                             "bpm_confidence": 0.8, "bpm_source": "bench",
+                             "style": styles[c % len(styles)],
+                             # The Récap's style card counts a title only when
+                             # its verdict is SURE (`recap._genres` drops a
+                             # style under STYLE_MIN_CONF): without this column
+                             # an archived library read as 0 % measured, and
+                             # `--archived --recap` failed its own check.
+                             "style_confidence": 0.9,
                              "data": json.dumps({"lufs": -20 + 14 * loud, "lra": 14 - 10 * loud,
                                                  "centroid": 1200 + 2500 * loud,
                                                  "fluxPeak": 0.2 + 0.7 * loud,
@@ -996,8 +1003,26 @@ def make_archived(app, clusters=40):
             for t, plays, last, created in rows:
                 Track.update(last_modification=1700000000, play_count=plays, last_play=last,
                              created=created).where(Track.id == t.id).execute()
-            for i in range(0, len(analyses), 500):
-                TrackAnalysis.insert_many(analyses[i:i + 500]).execute()
+            # The listening seed (``--recap``) already measured the 300 titles
+            # its own events play, and a row per track is UNIQUE. Those rows are
+            # UPDATED in place: an INSERT OR REPLACE deletes the row first, and
+            # the cascade took the title's embedding with it — measured, that
+            # dropped the recap's style coverage from 1.00 to 0.00.
+            existing = {
+                row.track_id
+                for row in TrackAnalysis.select(TrackAnalysis.track).where(
+                    TrackAnalysis.track.in_([row["track"] for row in analyses])
+                )
+            }
+            fresh = [row for row in analyses if row["track"] not in existing]
+            for row in analyses:
+                if row["track"] in existing:
+                    fields = {key: value for key, value in row.items() if key != "track"}
+                    TrackAnalysis.update(**fields).where(
+                        TrackAnalysis.track == row["track"]
+                    ).execute()
+            for i in range(0, len(fresh), 500):
+                TrackAnalysis.insert_many(fresh[i:i + 500]).execute()
         print(f"  archived + measured + vectors in {time.time() - t0:.1f}s", file=sys.stderr)
         t0 = time.time()
         snap = similar.rebuild_job().run()
