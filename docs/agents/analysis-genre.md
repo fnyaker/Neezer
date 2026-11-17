@@ -558,7 +558,10 @@ carries, to another host. `ownUrl` returns `origin + pathname + search`, not the
 slash, so the result cannot become `//host` or `user@host`, and that shape is also the one CodeQL's
 `js/client-side-request-forgery` accepts (an origin comparison alone is not a sanitizer for that query — keeping `href`
 here reopens the alert). `webapp/test/clientanalysis.test.mjs` pins the refusal on a foreign host and on
-`http://localhost:1@evil.test/` (a URL that reads as ours and means another host).
+`http://localhost:1@evil.test/` (a URL that reads as ours and means another host). `loadMeasure`
+takes the core's BYTES and `loadMeasureAt` is the only thing that fetches it, so a file a test (or
+a page) holds never reaches a network call — that split is what closes CodeQL
+`js/file-access-to-http` on the old one-argument form.
 `measure.wasm` is NOT committed (gitignored): `.github/workflows/webapp.yaml` and the Dockerfile build it from `webapp/measure`; locally run `node measure/build.mjs`.
 Tests: `webapp/test/clientanalysis.test.mjs` (real wasm on a 150 BPM kick, mock server for the blocks, runner ledger/stop/409).
 

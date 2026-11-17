@@ -387,7 +387,7 @@ console.log("\n-- 1440x900: the show's inline chapters, the 100-chapter sheet, t
 console.log("\n-- 390x844: the under panel, its tabs, the segment and its close");
 {
   const ctx = await newContext({ width: 390, height: 844 }, true);
-  await loginVia(ctx, seed.listeners[0].name, seed.listeners[0].password);
+  await loginVia(ctx, seed.listeners[0].name); // the bench fixture password, not in the payload
   const page = await ctx.newPage();
   const st = track(page, seed.show);
   await openShow(page);

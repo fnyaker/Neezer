@@ -2,20 +2,31 @@
 // spectral descriptors and loudness, the beat tracker and the low band. The numbers are
 // the server's (docs/agents/analysis-genre.md, "Analysis on the client PC"): the server
 // only gates and decides them. Pure functions of what is passed in, so it runs in a
-// Worker and in node alike.
+// Worker and in node alike — except `loadMeasureAt`, which is the one place this module
+// fetches its own core.
 
 import { ownUrl } from "./ownurl.js";
 
 const TEMPO_RATE = 44100;
 const TEMPO_CHUNK = TEMPO_RATE * 10;
 
-export async function loadMeasure(wasm) {
-  const raw = typeof wasm !== "string" && (wasm instanceof ArrayBuffer || ArrayBuffer.isView(wasm));
-  // A string is our own bundle's core: confined to this origin, so a Worker message
-  // can never choose the host it comes from.
-  const bytes = raw ? wasm : await (await fetch(ownUrl(wasm))).arrayBuffer();
+/**
+ * The core, instantiated from its bytes: a test reads the file, the Worker fetches it. Bytes
+ * only, so nothing a page or a test holds as a FILE ever reaches a network call.
+ * @param {ArrayBuffer|ArrayBufferView} bytes
+ */
+export async function loadMeasure(bytes) {
   const { instance } = await WebAssembly.instantiate(bytes, {});
   return instance.exports;
+}
+
+/**
+ * The core fetched from `url` — our own bundle's wasm, confined to this origin, so a Worker
+ * message can never choose the host it comes from.
+ * @param {string} url
+ */
+export async function loadMeasureAt(url) {
+  return loadMeasure(await (await fetch(ownUrl(url))).arrayBuffer());
 }
 
 const view = (x, ptr, n) => new Float32Array(x.memory.buffer, ptr, n);

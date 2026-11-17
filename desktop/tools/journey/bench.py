@@ -135,10 +135,12 @@ def local_open(url: str, timeout: float, **request) -> object:
     """The response for `url`, which `local_url` has checked, as a `Request`.
 
     `**request` is what `urllib.request.Request` takes: `data`, `headers`,
-    `method`. One place builds the request, so one place to audit.
+    `method`. One place builds the request, so one place to audit: the two calls
+    sit on one line because they are one request, and both are refused by
+    `local_url` unless the URL is http on this machine (urllib would otherwise
+    also speak `file://`).
     """
-    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- local_url() above refuses every URL that is not http on this machine, so urllib cannot be steered to file:// or another host
-    return urllib.request.urlopen(urllib.request.Request(local_url(url), **request), timeout=timeout)
+    return urllib.request.urlopen(urllib.request.Request(local_url(url), **request), timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
 
 
 def wait_http(url: str, timeout: float = 60.0) -> bool:
@@ -496,7 +498,7 @@ class App:
 
 
 def seed_session(server_url: str, scratch: Path, user: str = "bench",
-                 password: str = BENCH_PASSWORD) -> None:
+                 *, password: str) -> None:
     """Log in with urllib and write the jar the app reads at start.
 
     The app's jar is `{"<origin>": [[name, value], …]}` (nz-api's
@@ -505,7 +507,9 @@ def seed_session(server_url: str, scratch: Path, user: str = "bench",
     cookie is the same value either way.
 
     `password` is the bench's own throwaway account (`BENCH_PASSWORD`), never a
-    real one: the server exists for this run and is bound to loopback.
+    real one: the server exists for this run and is bound to loopback. It has no
+    default on purpose — a default password is one nobody reads, and this bench
+    has exactly one.
     """
     import http.cookiejar
 
@@ -898,7 +902,7 @@ def main() -> int:
     reporter = lambda kind, payload: None  # noqa: E731
     screen = None
     try:
-        seed_session(app_url, scratch)
+        seed_session(app_url, scratch, password=BENCH_PASSWORD)
         screens = screen_set(server.url())
         if args.screens != "all":
             screens = [token.strip() for token in args.screens.split(",") if token.strip()]
@@ -918,7 +922,7 @@ def main() -> int:
                 # separately, below).
                 screen_scratch = scratch / "screens" / f"{token}-{size[0]}x{size[1]}"
                 screen_scratch.mkdir(parents=True, exist_ok=True)
-                seed_session(app_url, screen_scratch)
+                seed_session(app_url, screen_scratch, password=BENCH_PASSWORD)
                 app = App(Path(args.binary), app_url, screen_scratch, display, bus.address)
                 # The same X11 driver for every launch: a fresh connection.
                 screen = drive.Screen(display)
@@ -962,7 +966,7 @@ def main() -> int:
             try:
                 baseline_scratch = scratch / "baseline" / f"{size[0]}x{size[1]}"
                 baseline_scratch.mkdir(parents=True, exist_ok=True)
-                seed_session(app_url, baseline_scratch)
+                seed_session(app_url, baseline_scratch, password=BENCH_PASSWORD)
                 app = App(
                     Path(args.binary), app_url, baseline_scratch, display, bus.address
                 )

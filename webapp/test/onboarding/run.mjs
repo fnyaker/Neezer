@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +47,9 @@ const server = await startServer([
   DIST,
 ]);
 const seed = server.ids && server.ids.onboarding;
+// The invitee chooses their own password: the server seeds the token, not a credential, so the
+// bench makes one up per run instead of reading one out of the payload.
+const INVITE_PASSWORD = randomUUID();
 if (!seed || !seed.tokens || seed.tokens.length < 2) {
   console.log("skip: tools/perf_api.py --onboarding did not seed invitation tokens");
   server.stop();
@@ -140,8 +144,8 @@ async function runFlow({ width, height, phone, token, name }) {
     `${tag}: the short password says its cause`
   );
 
-  await page.locator("#invite-password").fill(seed.password);
-  await page.locator("#invite-confirm").fill(seed.password);
+  await page.locator("#invite-password").fill(INVITE_PASSWORD);
+  await page.locator("#invite-confirm").fill(INVITE_PASSWORD);
   await page.locator(".submit").click();
   await page.waitForFunction(() => location.hash === "#/onboarding/artists", null, { timeout: 30000 });
   await page.waitForSelector("button.tile", { timeout: 30000 });
@@ -370,8 +374,8 @@ if (!emptySeed || !emptySeed.tokens || !emptySeed.tokens.length) {
   await page.goto(empty.base + "/app/#/invite/" + encodeURIComponent(emptySeed.tokens[0].token));
   await page.waitForSelector("#invite-name", { timeout: 30000 });
   await page.locator("#invite-name").fill("sansartiste");
-  await page.locator("#invite-password").fill(emptySeed.password);
-  await page.locator("#invite-confirm").fill(emptySeed.password);
+  await page.locator("#invite-password").fill(INVITE_PASSWORD);
+  await page.locator("#invite-confirm").fill(INVITE_PASSWORD);
   await page.locator(".submit").click();
   await page.waitForFunction(() => location.hash === "#/onboarding/artists", null, { timeout: 30000 });
   await page.waitForFunction(
