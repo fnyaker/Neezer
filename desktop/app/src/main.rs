@@ -25,6 +25,7 @@ use gpui_kit::{AppContext as _, Bounds, KeyBinding, WindowBounds, WindowOptions,
 // every other lint to `-D warnings`.
 mod actions;
 mod app;
+mod bench;
 mod keymap;
 mod load_failed;
 mod login;
@@ -59,30 +60,85 @@ neezer-desktop — le lecteur Neezer pour Omarchy.
 USAGE:
     neezer-desktop
     neezer-desktop --self-test-quit-after-first-frame
+    neezer-desktop --window-size 2560x1600 [--route ÉCRAN] [--frame-log F]
+                   [--bench-events F] [--bench-status F]
 
 OPTIONS:
     --self-test-quit-after-first-frame
         Ouvre la fenêtre, affiche `first_frame_ms=<n>` après la première image
         peinte, puis quitte. Utilisé par la CI (sous Xvfb) et par les mesures.
+    --window-size LARGEURxHAUTEUR
+        La taille de la fenêtre au lancement (par défaut 1280x800). Toutes les
+        mesures de mémoire de docs/agents/desktop.md sont données avec la leur :
+        redimensionner une fenêtre vivante court après la taille initiale de
+        GPUI, la choisir au lancement est la seule mesure fiable.
+    --frame-log F
+        Écrit une ligne par image peinte (temps écoulé, durée de construction),
+        lue par desktop/tools/journey/frame_stats.py.
+    --route ÉCRAN
+        Ouvre cet écran plutôt que l'accueil, une fois la session restaurée :
+        `home`, `library:favorites`, `artist:<id>`, `playlist:<id>`,
+        `settings:serveur`… (la forme exacte est `Route::spec`). Utilisé par le
+        banc de mesure, qui photographie et compte chaque écran sans cliquer.
+    --bench-events F
+        Écrit les événements mesurés (chargement d'un titre, premier échantillon,
+        sous-alimentation, flux complet) en JSON, une ligne chacun.
+    --bench-status F
+        Écrit un état JSON toutes les 10 s (sous-alimentations, position, file,
+        RSS) : ce qu'une heure de lecture laisse derrière elle.
     -h, --help
         Affiche cette aide.
 ";
 
 /// What the command line asked for. The app has no other option: everything is
 /// in Réglages.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq)]
 struct Args {
     self_test_quit_after_first_frame: bool,
+    window_size: Option<(f32, f32)>,
+    frame_log: Option<std::path::PathBuf>,
+    bench_events: Option<std::path::PathBuf>,
+    bench_status: Option<std::path::PathBuf>,
+    start_route: Option<String>,
     help: bool,
 }
 
 impl Args {
     fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
         let mut parsed = Self::default();
-        for arg in args {
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--self-test-quit-after-first-frame" => {
                     parsed.self_test_quit_after_first_frame = true
+                }
+                "--window-size" => {
+                    let value = args.next().ok_or("--window-size attend WxH")?;
+                    parsed.window_size = Some(
+                        bench::parse_size(&value)
+                            .ok_or_else(|| format!("taille invalide : {value}"))?,
+                    );
+                }
+                "--frame-log" => {
+                    parsed.frame_log =
+                        Some(args.next().ok_or("--frame-log attend un fichier")?.into())
+                }
+                "--bench-events" => {
+                    parsed.bench_events = Some(
+                        args.next()
+                            .ok_or("--bench-events attend un fichier")?
+                            .into(),
+                    )
+                }
+                "--bench-status" => {
+                    parsed.bench_status = Some(
+                        args.next()
+                            .ok_or("--bench-status attend un fichier")?
+                            .into(),
+                    )
+                }
+                "--route" => {
+                    parsed.start_route = Some(args.next().ok_or("--route attend un écran")?)
                 }
                 "-h" | "--help" => parsed.help = true,
                 other => return Err(format!("argument inconnu : {other}")),
@@ -92,8 +148,9 @@ impl Args {
     }
 }
 
-fn window_options(cx: &gpui_kit::App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+fn window_options(cx: &gpui_kit::App, chosen: Option<(f32, f32)>) -> WindowOptions {
+    let (width, height) = chosen.unwrap_or((1280., 800.));
+    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(gpui_kit::TitlebarOptions {
@@ -510,13 +567,31 @@ fn main() -> ExitCode {
         }
     });
 
+    let start_route = match args.start_route.as_deref() {
+        Some(spec) => match nav::Route::parse_spec(spec) {
+            Some(route) => Some(route),
+            None => {
+                eprintln!("neezer-desktop : écran inconnu : {spec}\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
     let config = AppConfig {
         server: std::env::var("NEEZER_SERVER")
             .ok()
             .filter(|value| !value.trim().is_empty()),
+        start_route,
         ..AppConfig::default()
     };
     let self_test = args.self_test_quit_after_first_frame;
+    // The measurement sinks, before anything can paint or load.
+    bench::init(
+        args.frame_log.clone(),
+        args.bench_events.clone(),
+        args.bench_status.clone(),
+    );
+    let window_size = args.window_size;
     let runtime_handle = runtime.handle().clone();
 
     gpui_kit::application()
@@ -536,7 +611,7 @@ fn main() -> ExitCode {
             let tx = events_tx.clone();
             let rt = runtime_handle.clone();
             let window = cx
-                .open_window(window_options(cx), move |window, cx| {
+                .open_window(window_options(cx, window_size), move |window, cx| {
                     if self_test {
                         // `on_next_frame` runs just after the frame currently
                         // being drawn is handed to the compositor: the number
@@ -645,5 +720,31 @@ mod tests {
             Args::default()
         );
         assert!(Args::parse(["--nope".to_owned()]).is_err());
+    }
+
+    /// D17's measurement flags: a window size, a route token, and the three
+    /// logs. `--window-size` is refused when it is not `WxH`, and `--route`
+    /// stays a string here (the app parses it as `Route::spec`).
+    #[test]
+    fn the_bench_flags_are_parsed_and_a_bad_size_is_refused() {
+        let args = Args::parse([
+            "--window-size".to_owned(),
+            "2560x1600".to_owned(),
+            "--route".to_owned(),
+            "library:favorites".to_owned(),
+            "--frame-log".to_owned(),
+            "/tmp/f.log".to_owned(),
+            "--bench-events".to_owned(),
+            "/tmp/e.jsonl".to_owned(),
+            "--bench-status".to_owned(),
+            "/tmp/s.jsonl".to_owned(),
+        ])
+        .expect("parse");
+        assert_eq!(args.window_size, Some((2560., 1600.)));
+        assert_eq!(args.start_route.as_deref(), Some("library:favorites"));
+        assert!(args.frame_log.is_some() && args.bench_events.is_some());
+        assert!(args.bench_status.is_some());
+        assert!(Args::parse(["--window-size".to_owned(), "huit".to_owned()]).is_err());
+        assert!(Args::parse(["--window-size".to_owned()]).is_err());
     }
 }

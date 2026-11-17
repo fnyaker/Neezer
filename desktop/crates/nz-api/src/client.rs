@@ -463,6 +463,36 @@ impl Api {
             .await
     }
 
+    /// Whether the SERVER has this route at all: what an older server is
+    /// missing (`crate::features`).
+    ///
+    /// `Some(true)` — a registered route (200, or 405 when the route exists for
+    /// another method); `Some(false)` — the server answered 404 for it;
+    /// `None` — the question could not be asked (offline, a 5xx, a decode
+    /// failure), and a feature must never be hidden on a doubt.
+    ///
+    /// One `OPTIONS` on the `Prefetch` lane: the app asks this at login, once
+    /// per feature, and never on a screen's opening path.
+    pub async fn has_route(&self, path: &str) -> Option<bool> {
+        match self
+            .fetch_want(
+                Want::Bytes,
+                Lane::Prefetch,
+                Method::OPTIONS,
+                path,
+                None,
+                false,
+            )
+            .await
+        {
+            Ok(_) => Some(true),
+            Err(ApiError::Http { status: 405, .. }) => Some(true),
+            Err(ApiError::Http { status: 404, .. }) => Some(false),
+            Err(ApiError::Unauthorized) => Some(true),
+            Err(_) => None,
+        }
+    }
+
     /// One file served by the API, written to disk as it arrives.
     ///
     /// `GET /api/export/<kind>/<id>?fmt=`, `GET /api/services/list/…` and the

@@ -145,6 +145,13 @@ impl Covers {
         Self::with_class(Class::Row)
     }
 
+    /// A screen whose sleeve IS the page: the now-playing stage draws one at up
+    /// to 340 px, so it paints the 512 px copy (`Class::Page`) rather than the
+    /// archived 1 000 px file — the same rule as a row, one size class up.
+    pub fn pages() -> Self {
+        Self::with_class(Class::Page)
+    }
+
     fn with_class(class: Class) -> Self {
         Self {
             files: HashMap::new(),
@@ -912,8 +919,17 @@ mod tests {
         assert_eq!(Class::Row.px(), 128);
         assert_eq!(Class::Card.px(), 384);
         assert_eq!(Class::Page.px(), 512);
-        // 1 000² × 4 = 4 000 000 B decoded against 128² × 4 = 65 536 B: the
+        // 1_000² × 4 = 4 000 000 B decoded against 128² × 4 = 65 536 B: the
         // factor is 61, and it is the same factor on the atlas tile.
         assert_eq!(1_000u64 * 1_000 * 4 / (128 * 128 * 4), 61);
+    }
+
+    /// The three constructors name the three sizes a screen can need; a screen
+    /// that picks the wrong one pays 4 MB where it needed 1 MB.
+    #[test]
+    fn each_constructor_names_its_size_class() {
+        assert_eq!(Covers::rows().class(), Class::Row);
+        assert_eq!(Covers::new().class(), Class::Card);
+        assert_eq!(Covers::pages().class(), Class::Page);
     }
 }

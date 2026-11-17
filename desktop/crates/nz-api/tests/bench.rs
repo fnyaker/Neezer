@@ -272,6 +272,37 @@ async fn login_me_and_401_round_trip_against_the_bench() {
     );
 }
 
+/// **A route the server has, and one it does not** — D17's "an older server
+/// without a route hides the feature".
+///
+/// `OPTIONS` on a registered route answers 200 (or 405 for another method); an
+/// unknown one answers 404. Measured against the real bench: `/genre/status`
+/// and `/playlist-folders` are `Some(true)` (the second through the 405 of its
+/// `POST`-only route), `/no-such-route-at-all` is `Some(false)`, and the probe
+/// costs one request each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_optional_route_is_told_apart_from_a_missing_one() {
+    use nz_api::features::Feature;
+
+    let bench = Bench::start();
+    let api = client(&bench);
+    api.login("bench", "Bench1").await.expect("a real login");
+
+    for feature in Feature::ALL {
+        let path = feature.probe();
+        assert_eq!(
+            api.has_route(path).await,
+            Some(true),
+            "{feature:?}: {path} exists on this server"
+        );
+    }
+    assert_eq!(
+        api.has_route("/no-such-route-at-all").await,
+        Some(false),
+        "a route no server has is what an older server answers for a new feature"
+    );
+}
+
 /// **Two `409`s the server means differently, told apart by its own header.**
 ///
 /// `neezer/webui` answers `409 + Retry-After` when a file is not on disk yet

@@ -33,6 +33,7 @@ gpui::actions!(
         GoPodcasts,
         GoReleases,
         GoNowPlaying,
+        GoQueue,
         GoSettings,
         // --- transport -----------------------------------------------------
         PlayPause,
