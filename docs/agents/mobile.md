@@ -630,66 +630,42 @@ when it lands.
 Every lot ends with a complete prompt for its worker. Each one carries the same
 rules block (the *Worker rules* in French, for the worker); copy a prompt whole, never trimmed.
 
-### SC0 — Shared-crate stubs (wave 0a)
+### SC0 — Shared-crate stubs (delivered 2026-11-17)
 
-**Goal.** Create the four empty shared crates the extraction lots fill, so that no later lot edits
-a shared manifest. **Depends on**: nothing.
-**Exclusive files**: `desktop/crates/{nz-analysis,nz-offline,nz-remote,nz-party}/{Cargo.toml,src/lib.rs}`,
-`desktop/app/Cargo.toml` (four path dependencies), `desktop/Cargo.lock`.
-**Contract.** Each `Cargo.toml` uses `version.workspace = true`, `edition.workspace = true` and only
-`{ workspace = true }` dependencies, listing everything its extraction will need (read the `use`
-lines of the wiring files): `nz-analysis` → `rhythm` (path `../../../webapp/rhythm`), `nz-audio` (path, **`default-features = false`**
-— SC2 makes `cpal` a default feature, and a shared crate that re-enabled it would drag cpal into the
-Android build through feature unification),
-`serde`, `tracing`; `nz-offline` → `nz-api`, `nz-cache`, `nz-model`, `tokio`, `serde`, `serde_json`,
-`thiserror`, `tracing`; `nz-remote` → `nz-api`, `nz-cache`, `nz-model`, `nz-player`, `tokio`, `serde`,
-`serde_json`, `tracing`; `nz-party` → `nz-api`, `nz-model`, `nz-audio` (`default-features = false`), `appcore` (path
-`../../../webapp/appcore`), `tokio`, `serde`, `serde_json`, `tracing`. **No GPUI, no cpal, no zbus,
-no whisper** in any of them. `lib.rs` = a module doc naming the wiring file it will receive and the
-lot (SC1/SC4/SC5/SC6), `#![forbid(unsafe_code)]` where the wiring file has none.
-**Acceptance.** Desktop CI fully green; `cargo tree -p <crate> -e normal | grep -E 'gpui|cpal|zbus|whisper'`
-empty for the four; `cargo ndk -t arm64-v8a -P 26 check -p <crate>` passes for each (NDK at
-`~/.local/share/android-sdk/ndk/30.0.16248370`) — the proof they stay Android-clean.
-**Pitfalls.** `appcore`/`rhythm` are path crates outside the workspace; adding a dependency the
-lock does not have yet is the ONE moment `desktop/Cargo.lock` changes — the extraction lots must not.
-
-```text
-Tu es le worker du lot SC0 du plan mobile Neezer. Lis CLAUDE.md, puis docs/agents/mobile.md
-(sections « Reuse, crate by crate », « Worker rules » et « SC0 »), puis docs/agents/desktop.md
-(« Workspace », « Threads »).
-Objectif : créer les quatre crates partagées VIDES desktop/crates/nz-analysis, nz-offline, nz-remote,
-nz-party (Cargo.toml + src/lib.rs avec la doc du module), les ajouter en dépendance de chemin dans
-desktop/app/Cargo.toml, mettre à jour desktop/Cargo.lock. Liste les dépendances de chacune en lisant
-les `use` de desktop/app/src/wiring/{analysis,offline,remote_host,remote_controller,party_host,party_guest}.rs,
-uniquement en `{ workspace = true }` ou en chemin, jamais gpui/cpal/zbus/whisper.
-Fichiers à toi seul : ceux de la section SC0 ; aucun autre.
-Acceptation : CI desktop entièrement verte ; `cargo tree` sans gpui/cpal/zbus/whisper pour les quatre ;
-`cargo ndk -t arm64-v8a -P 26 check -p <crate>` passe pour chacune ; chiffres et commandes dans la PR.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc0, PR « chore(desktop): SC0 shared crate stubs for the mobile core »,
-CI verte, rebase + diff --stat limité à tes fichiers, merge, section SC0 de mobile.md réécrite avec
-ce qui a été appris, `ao report --done`.
-```
+- **The rule**: the four shared crates exist BEFORE the lots that fill them, so no extraction lot ever
+  edits a manifest. `desktop/Cargo.toml` already globs `members = ["app", "crates/*"]`, so SC0 adds
+  `nz-analysis`, `nz-offline`, `nz-remote` and `nz-party` without touching that shared file: each is a
+  `Cargo.toml` (workspace pins only) plus a `src/lib.rs` whose module doc names the wiring file it will
+  receive and the lot (SC1/SC4/SC5/SC6). `desktop/app/Cargo.toml` declares the four as path
+  dependencies, and `desktop/Cargo.lock` gains exactly **four package entries, +71 lines**, with no
+  other package moved.
+- **The rule a measurement taught**: a crate's dependency list comes from the `use` lines of the file
+  it will receive, never from this note's prose. `analysis.rs` is the client-side whole-track analysis
+  (`measure`, `trainer`, symphonia, rubato, `nz-api`/`nz-model`, a tokio `Handle`, `nz-audio` in its
+  acceptance bench), **not** the "tap → `rhythm` → frames" sentence of *Reuse, crate by crate*;
+  `nz-remote` and `nz-party` both name `reqwest::Method`, so `reqwest` is theirs; `nz-party` also
+  carries `nz-cache`, `nz-player`, symphonia and rubato (the guest's prefetch decodes and resamples);
+  `nz-offline` takes `nz-audio` as a **dev-dependency only** (its moved playback tests run a real
+  engine; the library never opens a device). The entries an empty crate does not use yet are
+  deliberate: the extraction lot trims one in its OWN manifest if it turns out unneeded.
+- **The Android guard**: every crate that uses `nz-audio` asks for it with `default-features = false`.
+  With SC2's `default = ["cpal"]` that keeps PipeWire/ALSA out through feature unification; asking for
+  defaults would put cpal's Android `HostId` back in the graph. Measured on the merged SC2 base:
+  `cargo tree -p <crate> -e normal --locked | grep -E 'gpui|cpal|zbus|whisper'` → **0 lines for each
+  of the four**, and `cargo ndk -t arm64-v8a -P 26 check -p <crate>` → **Finished** for each
+  (NDK 30.0.16248370, `CARGO_BUILD_JOBS=4`; 6.25 s, 4.24 s, 0.24 s and 0.22 s on a warm
+  `target/aarch64-linux-android`; the combined four-package build was 46.34 s).
+- **The sequencing lesson**: before SC2, `cargo ndk … -p nz-audio` failed with **4 × E0599**
+  (`cpal::HostId::PipeWire`/`Alsa`) and `cpal` was an unconditional normal dependency, so
+  `nz-analysis` and `nz-party` could not pass the tree or the Android check at all. A stub lot whose
+  crate depends on another crate's platform work is measured AFTER that work: SC0 merged after SC2
+  (PR #285), not beside it, even though the wave table lists them together.
+- **`unsafe`**: `#![forbid(unsafe_code)]` only where the wiring file has none (`nz-remote`,
+  `nz-party`). `nz-analysis` and `nz-offline` cannot take it: their files lower their own thread's
+  priority through hand-written `setpriority`/`nice` bindings.
+- **CI**: `cargo fmt`, `cargo clippy --workspace --all-targets --locked -D warnings`, `cargo test +
+  window` and `release binaries` green on the SC0 head; the four crates add no test, so the workspace
+  test count is unchanged.
 
 ### MB0 — Skeleton: Cargo, Gradle, UniFFI, cargo-ndk, CI (wave 0b)
 
