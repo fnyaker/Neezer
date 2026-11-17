@@ -27,6 +27,13 @@ android {
         compose = true
         buildConfig = false
     }
+
+    // `org.json` is a JVM test coordinate only (see the dependency block): the
+    // catalog is MB0's and shared by every lot, so the one coordinate this
+    // module's tests need is written below and not in the catalog (worker rule 3).
+    lint {
+        disable += "UseTomlInstead"
+    }
 }
 
 kotlin {
@@ -47,6 +54,17 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.kotlinx.coroutines.android)
+    // `rememberLauncherForActivityResult`: DeezerLoginActivity answers the very
+    // screen that opened it (the Activity Result contract), which is what keeps
+    // an ARL from travelling through the whole app.
+    implementation(libs.androidx.activity.compose)
     // The FileProvider the manifest names is androidx.core's (androidx.core.content.FileProvider).
     implementation(libs.androidx.core.ktx)
+    // `org.json` on the JVM tests too: the migration's page payload and the old
+    // app's sidecars are read with the platform's own parser.
+    testImplementation(libs.junit)
+    // `org.json` is Android's own class and the unit-test stub returns nothing:
+    // the migration's page payload and the old sidecars are read with it, so the
+    // JVM tests get the real parser (the same API, the same behaviour).
+    testImplementation("org.json:json:20260814")
 }

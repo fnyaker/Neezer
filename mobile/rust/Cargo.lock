@@ -1576,6 +1576,7 @@ dependencies = [
  "nz-viz",
  "paranoid-android",
  "rhythm",
+ "rustls",
  "rustls-platform-verifier",
  "serde",
  "serde_json",

@@ -105,6 +105,56 @@ impl SessionJar {
         self.persist();
     }
 
+    /// Takes a cookie the person's browser already holds (lot MB4's migration
+    /// from the old WebView app, `CookieManager.getCookie(origin)`).
+    ///
+    /// `url` must be the CONFIGURED server's own origin — the caller checks
+    /// that, and this crate cannot know it — so a cookie lifted from one host
+    /// can never be handed to another. `cookie_header` is what
+    /// `CookieManager.getCookie` answers, `a=1; b=2`; each pair goes through the
+    /// very validation a `Set-Cookie` does, the file is written like any other
+    /// change, and NOTHING is logged: it is a session credential.
+    ///
+    /// Returns how many cookies were kept (0 for an unreadable URL or header).
+    pub fn seed(&self, url: &str, cookie_header: &str) -> usize {
+        let Ok(base) = Url::parse(url) else {
+            return 0;
+        };
+        let origin = origin_of(&base);
+        // Bound what a caller (or a hostile `CookieManager` answer) can inject:
+        // `store`'s own per-cookie rules, applied to a whole header at once.
+        let mut kept = 0usize;
+        for part in cookie_header.split(';') {
+            let pair = part.trim();
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
+            let name = name.trim();
+            let value = value.trim();
+            if name.is_empty()
+                || name.len() > 64
+                || !name.bytes().all(is_cookie_name_byte)
+                || value.is_empty()
+                || value.len() > MAX_COOKIE_BYTES
+            {
+                continue;
+            }
+            let mut cookies = self.held();
+            let held = cookies.entry(origin.clone()).or_default();
+            if held.len() >= MAX_COOKIES_PER_ORIGIN && !held.iter().any(|(held, _)| held == name) {
+                continue;
+            }
+            held.retain(|(held_name, _)| held_name != name);
+            held.push((name.to_owned(), value.to_owned()));
+            drop(cookies);
+            kept += 1;
+        }
+        if kept > 0 {
+            self.persist();
+        }
+        kept
+    }
+
     /// How many cookies are held for this origin (a test and a diagnostic read
     /// this; nothing else needs to know).
     pub fn len(&self, base: &Url) -> usize {
@@ -396,6 +446,69 @@ mod tests {
         jar.set_cookies(&mut headers, &base);
         let printed = format!("{jar:?}");
         assert!(printed.contains("1 cookie(s)"), "{printed}");
+        assert!(!printed.contains("super-secret"), "{printed}");
+    }
+
+    /// The migration's graine (lot MB4): a cookie lifted from the old app's
+    /// WebView jar is usable by the NEXT request, without a relaunch, and it is
+    /// scoped to the URL it was lifted for. A hostile or empty header stores
+    /// nothing, and nothing is ever printed.
+    #[test]
+    fn a_seeded_cookie_is_used_at_once_and_stays_on_its_own_origin() {
+        let path = temp_path();
+        let base = url("https://neezer.example");
+        {
+            let jar = SessionJar::at(&path);
+            assert_eq!(
+                CookieStore::cookies(&jar, &base),
+                None,
+                "a fresh jar holds nothing"
+            );
+            assert_eq!(jar.seed(base.as_str(), "session=abc123; other=1"), 2);
+            // Read back through the very interface a request goes through: no
+            // relaunch, no second load.
+            assert_eq!(
+                CookieStore::cookies(&jar, &base).unwrap().to_str().unwrap(),
+                "session=abc123; other=1"
+            );
+            // Never to another host, and never to another port of this one.
+            assert!(CookieStore::cookies(&jar, &url("https://other.example")).is_none());
+            assert!(CookieStore::cookies(&jar, &url("https://neezer.example:8443")).is_none());
+        }
+        // Persisted like every other change.
+        let jar = SessionJar::at(&path);
+        assert_eq!(
+            CookieStore::cookies(&jar, &base).unwrap().to_str().unwrap(),
+            "session=abc123; other=1"
+        );
+
+        // Hostile input: no name, an empty value, a name outside the cookie
+        // alphabet, an unreadable URL — nothing is stored, nothing panics.
+        assert_eq!(jar.seed(base.as_str(), ""), 0);
+        assert_eq!(jar.seed(base.as_str(), "=v; a=; b@d=1"), 0);
+        assert_eq!(jar.seed("pas une adresse", "session=x"), 0);
+        assert_eq!(
+            CookieStore::cookies(&jar, &base).unwrap().to_str().unwrap(),
+            "session=abc123; other=1",
+            "a refused header changed nothing"
+        );
+
+        // The same name overwrites, as a browser's cookie jar does.
+        assert_eq!(jar.seed(base.as_str(), "session=zzz"), 1);
+        assert_eq!(
+            CookieStore::cookies(&jar, &base).unwrap().to_str().unwrap(),
+            "other=1; session=zzz"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A seeded value never reaches the diagnostic journal.
+    #[test]
+    fn a_seeded_cookie_is_never_printed() {
+        let jar = SessionJar::in_memory();
+        let base = url("https://neezer.example");
+        jar.seed(base.as_str(), "session=super-secret");
+        let printed = format!("{jar:?}");
         assert!(!printed.contains("super-secret"), "{printed}");
     }
 }

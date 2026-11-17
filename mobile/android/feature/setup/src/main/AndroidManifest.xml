@@ -19,6 +19,17 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- The one-shot migration from the old WebView app (lot MB4). A
+             provider is the only component Android starts without a screen: the
+             framework calls it AFTER Application.onCreate, so `NzBridge` has
+             already built the core, and `onCreate` only starts a coroutine.
+             exported=false: nothing outside this app can reach it, and it owns
+             no data (its query/insert throw). -->
+        <provider
+            android:name="fr.neezer.mobile.feature.setup.SetupMigrationProvider"
+            android:authorities="${applicationId}.setup-migration"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
