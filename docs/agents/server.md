@@ -971,7 +971,10 @@ the blueprint is also imported straight into a WSGI stack that never runs `neeze
 ignores the words after). `# nosemgrep: <rule-id> -- why` must carry the **rule id**: the
 `# nosemgrep: a plain-text playlist, not an HTML page` in `frontend/playlist.py` silenced nothing
 and its alert stayed open; a template uses `{# nosemgrep: <rule-id> -- why #}`. A false positive gets
-the id and the true reason, never a blanket file. `db.PathMixin`'s path hash stays
+the id and the true reason, never a blanket file. Bandit's `nosec` removes its finding from the SARIF
+outright; Semgrep still emits it with `suppressions: accepted`, which GitHub code scanning lists as an
+**open** alert — so the alert itself is dismissed one by one (`dismissed_reason: false positive`, the
+same reason as the inline comment), never in bulk and never by disabling a rule. `db.PathMixin`'s path hash stays
 `sha1(..., usedforsecurity=False)` — it is a unique-index KEY, not a signature, and every row of
 every existing database already holds those 20 bytes, so a SHA-256 switch would fail to find them
 all and duplicate the library. The same scanners call `0o700` on the daemon's socket directory
