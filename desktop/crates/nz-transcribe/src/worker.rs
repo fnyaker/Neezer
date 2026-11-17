@@ -18,11 +18,16 @@
 use std::fmt;
 use std::path::Path;
 
+#[cfg(feature = "worker")]
 use reqwest::{Method, StatusCode};
+#[cfg(feature = "worker")]
 use serde::Serialize;
+#[cfg(feature = "worker")]
 use serde_json::Value;
+#[cfg(feature = "worker")]
 use tokio::time::sleep;
 
+#[cfg(feature = "worker")]
 use crate::protocol::{
     AUDIO_TIMEOUT_SECONDS, Beat, CLAIM, CONNECT_TIMEOUT_SECONDS, ChunkBody, ChunkReply, Claim,
     CompleteBody, CompleteReply, FailBody, LEASE_HEADER, MAX_AUDIO_BYTES, MAX_AUDIO_REQUESTS,
@@ -98,6 +103,7 @@ fn xdg_dir(variable: &str, fallback: &str) -> std::path::PathBuf {
 }
 
 /// The `User-Agent` of every request, as `worker.Client` sends it.
+#[cfg(feature = "worker")]
 fn user_agent() -> String {
     format!("neezer-transcriber/{PROTOCOL}")
 }
@@ -258,6 +264,7 @@ impl Failure {
 /// The defaults are `worker.py`'s; the tests shrink them, so a backoff test
 /// proves the SHAPE (a bounded, growing wait) without spending fifteen seconds
 /// asleep.
+#[cfg(feature = "worker")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Retry {
     /// Attempts per request, the first included.
@@ -270,6 +277,7 @@ pub struct Retry {
     pub retry_after_cap: f64,
 }
 
+#[cfg(feature = "worker")]
 impl Default for Retry {
     fn default() -> Retry {
         Retry {
@@ -281,6 +289,7 @@ impl Default for Retry {
     }
 }
 
+#[cfg(feature = "worker")]
 impl Retry {
     /// The wait before the next attempt.
     pub fn delay(&self, attempt: u32, retry_after: Option<&str>) -> std::time::Duration {
@@ -297,6 +306,7 @@ impl Retry {
 }
 
 /// The server's worker routes, as a typed client.
+#[cfg(feature = "worker")]
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -305,6 +315,7 @@ pub struct Client {
     retry: Retry,
 }
 
+#[cfg(feature = "worker")]
 impl fmt::Debug for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -316,6 +327,7 @@ impl fmt::Debug for Client {
     }
 }
 
+#[cfg(feature = "worker")]
 impl Client {
     /// A client for `base` (an `http(s)` origin, no path) with `token`.
     pub fn new(base: &str, token: Token) -> Result<Client, Failure> {
@@ -772,6 +784,7 @@ impl Client {
     }
 }
 
+#[cfg(feature = "worker")]
 /// `worker.Client.url`: an `http(s)` origin, no credentials, no query.
 fn normalize_base(raw: &str) -> Result<String, Failure> {
     let trimmed = raw.trim().trim_end_matches('/');
@@ -805,6 +818,7 @@ fn normalize_base(raw: &str) -> Result<String, Failure> {
 /// `done_ms` is `POST …/complete`'s `409 incomplete` payload: the server says
 /// where its transcript stops, and the supervisor continues from there rather
 /// than from its own idea of the position.
+#[cfg(feature = "worker")]
 async fn read_error(response: reqwest::Response) -> (String, String, Option<i64>) {
     let status = response.status().as_u16();
     match response.bytes().await {
@@ -828,6 +842,7 @@ async fn read_error(response: reqwest::Response) -> (String, String, Option<i64>
     }
 }
 
+#[cfg(feature = "worker")]
 /// `Content-Range: bytes <from>-<to>/<len|*>`, if the header is one.
 fn content_range(headers: &reqwest::header::HeaderMap) -> (Option<u64>, Option<u64>, Option<u64>) {
     let raw = headers
@@ -852,6 +867,7 @@ fn content_range(headers: &reqwest::header::HeaderMap) -> (Option<u64>, Option<u
 
 /// Write the body of `response` into `dest`, counting the bytes it actually
 /// received.
+#[cfg(feature = "worker")]
 async fn write_body(
     mut response: reqwest::Response,
     dest: &Path,
@@ -891,6 +907,7 @@ async fn write_body(
     Ok(written)
 }
 
+#[cfg(feature = "worker")]
 /// A one-line rendering of a transport error, without its URL.
 fn short(error: &reqwest::Error) -> String {
     let mut text = error.to_string();
@@ -900,13 +917,14 @@ fn short(error: &reqwest::Error) -> String {
     text
 }
 
+#[cfg(feature = "worker")]
 /// Serialize a request body.
 fn to_value<T: Serialize>(body: &T) -> Result<Value, Failure> {
     serde_json::to_value(body)
         .map_err(|error| Failure::Config(format!("corps JSON impossible ({error})")))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "worker"))]
 mod tests {
     use std::path::PathBuf;
 

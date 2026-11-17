@@ -45,6 +45,7 @@ use nz_model::{EpisodeTranscript, TranscriptSegment};
 
 use crate::state::AppState;
 use crate::theme;
+use crate::wiring::transcribe;
 use crate::widgets::card::encode;
 use crate::widgets::track_list::duration_label;
 
@@ -298,6 +299,12 @@ pub struct Panel {
     scroll: gpui_kit::base::VirtualListScrollHandle,
     /// The panel is showing a page it read; `at` is where the playhead was.
     scrolled_to: Option<usize>,
+    /// A 500 ms repaint loop is running while a local job makes progress.
+    watching: bool,
+    /// The resume point of an interrupted local job, and the episode it is for:
+    /// a tiny file read once per episode, never per paint.
+    resume: Option<crate::wiring::transcribe::Partial>,
+    resume_for: String,
     sizes: Rc<Vec<Size<Pixels>>>,
     sizes_for: usize,
 }
@@ -336,6 +343,9 @@ impl Panel {
             confirm: None,
             scroll: gpui_kit::base::VirtualListScrollHandle::new(),
             scrolled_to: None,
+            watching: false,
+            resume: None,
+            resume_for: String::new(),
             sizes: Rc::new(Vec::new()),
             sizes_for: usize::MAX,
         }
@@ -527,13 +537,20 @@ impl Panel {
 
     // -- the playhead -------------------------------------------------------
 
-    /// Has a page at all?
+    /// Has a page at all? A local transcript is a whole transcript, so the panel
+    /// is loaded the moment it is shown (no server page to ask for).
     pub fn loaded(&self) -> bool {
-        !self.segments.is_empty() || self.status == "ready"
+        !self.segments.is_empty() || self.status == "ready" || self.is_local()
     }
 
     /// Does the page on screen hold `seconds`?
+    ///
+    /// A local transcript is WHOLE on this machine: it covers the episode, and
+    /// no page has to be read for a playhead that left a 200-line window.
     pub fn covers(&self, seconds: f64) -> bool {
+        if self.is_local() {
+            return true;
+        }
         match (self.segments.first(), self.segments.last()) {
             (Some(first), Some(last)) => {
                 let step = if self.segments.len() > 1 {
@@ -547,8 +564,12 @@ impl Panel {
         }
     }
 
-    /// The line under `seconds`, or `None` before the first one.
+    /// The line under `seconds`, or `None` before the first one. The LOCAL
+    /// transcript is the one on screen, so it is the one the playhead follows.
     pub fn at(&self, seconds: f64) -> Option<usize> {
+        if self.local.is_some() && self.segments.is_empty() {
+            return segment_at(&self.local.as_ref()?.segments, seconds);
+        }
         segment_at(&self.segments, seconds)
     }
 
@@ -572,6 +593,37 @@ impl Panel {
     pub fn resume_follow(&mut self) {
         self.follow = true;
         self.scrolled_to = None;
+    }
+
+    /// Adopt this machine's sidecar when the panel has no text and one exists:
+    /// the case that matters is a local job that just finished while the panel
+    /// was open (the server still answers `status: "none"`).
+    pub fn refresh_local(&mut self) {
+        if self.local.is_some() || !self.segments.is_empty() {
+            return;
+        }
+        let Some(local) = local_for(&self.episode) else {
+            return;
+        };
+        if local.segments.is_empty() {
+            return;
+        }
+        self.local = Some(local);
+        self.status = "local".to_owned();
+        self.failed = None;
+        self.scrolled_to = None;
+    }
+
+    /// The resume point of an interrupted local job, read once per episode.
+    pub fn resume_point(&mut self) -> Option<&crate::wiring::transcribe::Partial> {
+        if self.resume_for != self.episode {
+            self.resume_for = self.episode.clone();
+            self.resume = crate::wiring::transcribe::partial_of(
+                &nz_transcribe::worker::transcripts_dir(),
+                &self.episode,
+            );
+        }
+        self.resume.as_ref()
     }
 
     /// The text to show, and where it came from: the server's page or the
@@ -871,6 +923,21 @@ pub fn view<V: Render>(
     ask: impl Fn(&mut V, Ask, &mut Context<V>) + Clone + 'static,
 ) -> AnyElement {
     panel.rebuild_sizes();
+    // This machine's reader and this machine's job: installed and sampled once
+    // per paint, never a SQLite read per row (rule 4).
+    let transcription = transcribe::ensure(&state.read(cx)).snapshot();
+    panel.refresh_local();
+    let local_job = transcription
+        .job
+        .as_ref()
+        .filter(|job| job.episode == panel.episode)
+        .cloned();
+    if local_job.is_some() {
+        watch_local_job(panel, cx);
+    } else {
+        panel.watching = false;
+    }
+    let resume = panel.resume_point().map(|partial| partial.done_ms);
     let online = state.read(cx).online;
     let mut column = div()
         .id("transcript-panel")
@@ -879,6 +946,17 @@ pub fn view<V: Render>(
         .w_full()
         .min_w_0()
         .gap(rems(0.5));
+
+    if let Some(card) = local_block(
+        panel,
+        &transcription,
+        local_job.as_ref(),
+        resume,
+        state,
+        cx,
+    ) {
+        column = column.child(card);
+    }
 
     if let Some(card) = status_card(panel, is_admin, online, cx, ask.clone()) {
         column = column.child(card);
@@ -974,6 +1052,250 @@ pub fn view<V: Render>(
 /// at the widget level — the screen decides whether the episode is playing.
 fn other_pane_open() -> bool {
     true
+}
+
+/// The local job's card, above the server's: a running job with its phase, its
+/// progress and the reason it is paused (rule 2), or the one button that starts
+/// one, or the sentence that says why it cannot.
+fn local_block<V: Render>(
+    panel: &Panel,
+    transcription: &transcribe::Snapshot,
+    job: Option<&transcribe::Job>,
+    resume_ms: Option<i64>,
+    state: &Entity<AppState>,
+    cx: &mut Context<V>,
+) -> Option<AnyElement> {
+    if let Some(job) = job {
+        let (title, percent, detail) = match &job.phase {
+            transcribe::Phase::Audio { done, total } => {
+                let percent = match total {
+                    Some(total) if *total > 0 => {
+                        Some((*done as f64 / *total as f64 * 100.0).round() as u32)
+                    }
+                    _ => None,
+                };
+                (
+                    "Téléchargement de l’audio pour la transcription".to_owned(),
+                    percent,
+                    format!("{} reçus (Opus 128)", transcribe::bytes_label(*done)),
+                )
+            }
+            transcribe::Phase::Transcribing => (
+                "Transcription sur cet appareil".to_owned(),
+                job.percent(),
+                job.progress_label(),
+            ),
+            transcribe::Phase::Finishing => (
+                "Écriture de la transcription".to_owned(),
+                Some(100),
+                "Le texte et les sous-titres sont écrits sur le disque.".to_owned(),
+            ),
+        };
+        let service = transcribe::service();
+        let mut card = div()
+            .id("transcript-local-job")
+            .debug_selector(|| "transcript-local-job".to_owned())
+            .flex()
+            .flex_col()
+            .gap(rems(0.375))
+            .p(rems(0.625))
+            .border_1()
+            .border_color(theme::border(cx))
+            .bg(theme::chrome(cx))
+            .w_full()
+            .min_w_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.375))
+                    .child(icon(IconName::Cpu).size(rems(1.)).text_color(theme::accent(cx)))
+                    .child(
+                        div()
+                            .text_size(rems(0.75))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(SharedString::from(title)),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        button(
+                            "transcript-local-stop",
+                            "Arrêter",
+                            ButtonVariant::Secondary,
+                            cx,
+                        )
+                        .on_click(cx.listener(move |_, _, _, _| service.stop_local())),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.5))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .h(rems(0.1875))
+                            .bg(theme::border(cx))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .h_full()
+                                    .w(gpui_kit::relative(
+                                        percent.map(|p| p as f32 / 100.0).unwrap_or(0.0),
+                                    ))
+                                    .bg(theme::accent(cx)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(rems(0.6875))
+                            .font_family(theme::mono(cx))
+                            .text_color(theme::secondary(cx))
+                            .child(SharedString::from(detail)),
+                    ),
+            );
+        if let Some(paused) = job.paused {
+            card = card.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(rems(0.25))
+                    .text_size(rems(0.6875))
+                    .text_color(theme::warning(cx))
+                    .child(icon(IconName::Pause).size(rems(0.75)))
+                    .child(SharedString::from(paused.label_fr())),
+            );
+        }
+        return Some(card.into_any_element());
+    }
+
+    // No text from the server and none on this machine: offer the machine's own
+    // engine. A panel showing a server transcript has nothing to add here.
+    if panel.is_local() || panel.status != "none" {
+        return None;
+    }
+    let has_model = transcription.models.iter().any(|row| row.chosen);
+    let busy_elsewhere = transcription.job.as_ref().filter(|job| job.episode != panel.episode);
+    let mut card = div()
+        .id("transcript-local")
+        .debug_selector(|| "transcript-local".to_owned())
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(rems(0.375))
+        .p(rems(0.625))
+        .border_1()
+        .border_color(theme::border(cx))
+        .bg(theme::chrome(cx))
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(rems(0.375))
+                .child(icon(IconName::Cpu).size(rems(1.)).text_color(theme::secondary(cx)))
+                .child(
+                    div()
+                        .text_size(rems(0.75))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(if resume_ms.is_some() {
+                            "Reprendre la transcription sur cet appareil"
+                        } else {
+                            "Transcrire sur cet appareil"
+                        }),
+                ),
+        );
+    if let Some(job) = busy_elsewhere {
+        return Some(
+            card.child(
+                div()
+                    .text_size(rems(0.6875))
+                    .text_color(theme::secondary(cx))
+                    .child(SharedString::from(format!(
+                        "Une transcription est déjà en cours pour un autre épisode ({}).                          Elle doit finir ou être arrêtée avant de lancer celle-ci.",
+                        job.episode.chars().take(8).collect::<String>()
+                    ))),
+            )
+            .into_any_element(),
+        );
+    }
+    if !has_model {
+        return Some(
+            card.child(
+                div()
+                    .text_size(rems(0.6875))
+                    .text_color(theme::secondary(cx))
+                    .child("Aucun modèle installé : ouvrez Réglages → Transcription locale pour en télécharger un. Rien n’est envoyé à un tiers, et aucun son ne quitte cet ordinateur."),
+            )
+            .into_any_element(),
+        );
+    }
+    if let Some(done) = resume_ms {
+        card = card.child(
+            div()
+                .text_size(rems(0.6875))
+                .text_color(theme::secondary(cx))
+                .child(SharedString::from(format!(
+                    "Un travail interrompu s’est arrêté à {} min : il repart de là, pas du début.",
+                    done / 60_000
+                ))),
+        );
+    } else {
+        card = card.child(
+            div()
+                .text_size(rems(0.6875))
+                .text_color(theme::secondary(cx))
+                .child("Le texte est produit sur cet ordinateur, par le GPU quand il est utilisable. Rien n’est envoyé à un tiers ; la transcription cède la machine à la lecture."),
+        );
+    }
+    let episode = panel.episode.clone();
+    let state = state.clone();
+    card = card.child(
+        button(
+            "transcript-local-start",
+            if resume_ms.is_some() { "Reprendre" } else { "Transcrire cet épisode" },
+            ButtonVariant::Primary,
+            cx,
+        )
+        .on_click(cx.listener(move |_, _, _, cx| {
+            let service = transcribe::ensure(&state.read(cx));
+            service.start_local(&episode, None);
+        })),
+    );
+    Some(card.into_any_element())
+}
+
+/// While a local job makes progress the panel repaints itself: the screen's own
+/// playhead tick only runs while the episode plays, and a download or a chunk
+/// has to move without one (rule 2). One loop per panel, ended with it.
+fn watch_local_job<V: Render>(panel: &mut Panel, cx: &mut Context<V>) {
+    if panel.watching {
+        return;
+    }
+    panel.watching = true;
+    let episode = panel.episode.clone();
+    cx.spawn(async move |this, cx| {
+        loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            let running = transcribe::service()
+                .snapshot()
+                .job
+                .as_ref()
+                .is_some_and(|job| job.episode == episode);
+            let alive = this.update(cx, |_, cx| cx.notify());
+            if alive.is_err() || !running {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 fn local_badge(panel: &Panel, cx: &App) -> AnyElement {

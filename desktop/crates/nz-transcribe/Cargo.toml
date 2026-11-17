@@ -1,6 +1,6 @@
 # Local transcription: a lib AND a standalone binary (`neezer-transcribe`), so
 # the engine can run, be paused (SIGSTOP) and be tested without the app.
-# Owned by T1, T2 and T3 (docs/agents/desktop.md).
+# Owned by lots T1, T2, T3 and T4 (docs/agents/desktop.md).
 #
 # T1 declares every dependency, including the ones only T2 and T3 use: the later
 # lots own engine/audio/models and worker/protocol/supervisor, not this file, and
@@ -12,6 +12,14 @@
 # prove the Vulkan toolchain (headers + glslc + loader) is really there, which
 # is the one system dependency that fails late and expensively on a fresh
 # machine.
+#
+# T4 split the dependencies into two features, because the GPUI app reads this
+# crate's vocabulary (segments, sidecar, model pins, token path, control words)
+# and must NOT map whisper.cpp, Vulkan or the audio decoders into its address
+# space: they cost the model's memory for a settings card. `neezer-desktop`
+# therefore depends on this crate with `default-features = false`, and only the
+# `neezer-transcribe` binary enables both features. The measurements (release
+# binary size and RSS, `nm`/`strings` showing no ggml symbol) are in T4's PR.
 
 [package]
 name = "nz-transcribe"
@@ -29,17 +37,34 @@ path = "src/lib.rs"
 [[bin]]
 name = "neezer-transcribe"
 path = "src/main.rs"
+# The binary IS the engine: it needs whisper.cpp and the worker protocol, even
+# though `cargo build -p neezer-desktop` deliberately compiles neither.
+required-features = ["engine", "worker"]
+
+[features]
+# The binary and the suite: the GPU stack, the decoder and the server protocol.
+default = ["engine", "worker"]
+# whisper.cpp on Vulkan, and the in-process audio decoder (`engine`, `audio`).
+engine = [
+    "dep:whisper-rs",
+    "dep:symphonia",
+    "dep:symphonia-adapter-libopus",
+    "dep:rubato",
+    "dep:hound",
+]
+# The server's worker routes, the supervisor and its control channel.
+worker = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
 # --- the engine (T2): whisper.cpp on Vulkan, audio decoded in-process ------
-whisper-rs = { workspace = true, features = ["vulkan"] }
-symphonia = { workspace = true }
-symphonia-adapter-libopus = { workspace = true }
-rubato = { workspace = true }
-hound = { workspace = true }
+whisper-rs = { workspace = true, features = ["vulkan"], optional = true }
+symphonia = { workspace = true, optional = true }
+symphonia-adapter-libopus = { workspace = true, optional = true }
+rubato = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
 # --- the server's worker protocol (T3), and the token on disk --------------
-reqwest = { workspace = true }
-tokio = { workspace = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 directories = { workspace = true }
 # --- what every lot needs --------------------------------------------------
 serde = { workspace = true }

@@ -16,7 +16,7 @@ use std::io::{self, BufRead, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{Backend, FallbackCause};
+use crate::backend::{Backend, FallbackCause};
 use crate::segments::Segment;
 
 /// App → supervisor: stop the engine child, keep the job and its lease.
@@ -191,7 +191,7 @@ mod tests {
         Command, DONE, ENGINE, ERROR, Event, IDLE, LOCAL, PAUSE, PROGRESS, RESUME, STOP,
         read_command, write_event,
     };
-    use crate::engine::{Backend, FallbackCause};
+    use crate::backend::{Backend, FallbackCause};
     use crate::segments::Segment;
 
     /// Four commands in, five events out, and no two share a name: a supervisor

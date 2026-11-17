@@ -17,6 +17,8 @@
 //!
 //! The numbers are written next to the assertions and repeated in the PR.
 
+#![cfg(feature = "engine")]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Instant;
