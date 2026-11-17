@@ -19,9 +19,15 @@
 // the same keys afterwards and owns the rest of the session.
 (function () {
   var BG = { encre: "#0C0C0B", papier: "#F3F0E8", pochette: "#0F0E10" };
-  // The ink is corrected against the most demanding surface it is drawn on
-  // (Encre's --s2, Papier's --s1), exactly as lib/theme.js#INK_BG does.
-  var INK_BG = { encre: "#1E1E1B", papier: "#FBF9F4", pochette: "#0F0E10" };
+  // EVERY surface --ac-text/--ac-mark/--hrt are drawn on: the page, a card and
+  // a chip. Correcting the ink against one of them left #7C5CFF at 4.18:1 on
+  // Papier's --bg and 3.74:1 on its --s2, so the fold walks all three exactly
+  // as lib/theme.js#INK_SURFACES does (the drift test compares them).
+  var INK_SURFACES = {
+    encre: ["#0C0C0B", "#151513", "#1E1E1B"],
+    papier: ["#F3F0E8", "#FBF9F4", "#E8E4D9"],
+    pochette: ["#0F0E10", "#18171A", "#222024"],
+  };
   var CUSTOM = ["--ac", "--btn", "--hrt", "--onac", "--onbtn", "--ac-text", "--ac-mark"];
   var MIN = 4.5;
 
@@ -110,7 +116,13 @@
     if (!surface || !BG[theme] || theme === "pochette") return null;
     var rgb = rgbOf(surface);
     var on = ratio(rgb, [0, 0, 0]) >= ratio(rgb, [255, 255, 255]) ? "#000000" : "#FFFFFF";
-    return { surface: surface, on: on, ink: hexOf(inkFor(rgb, INK_BG[theme]).rgb) };
+    // Fold the ink over every surface it is drawn on, in the same order as
+    // lib/theme.js#accentVars: each step moves it the same way, and the last
+    // surface is the strictest.
+    var ink = rgb;
+    var surfaces = INK_SURFACES[theme];
+    for (var i = 0; i < surfaces.length; i++) ink = inkFor(ink, surfaces[i]).rgb;
+    return { surface: surface, on: on, ink: hexOf(ink) };
   }
 
   function stored(key) {

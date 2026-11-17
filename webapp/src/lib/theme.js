@@ -62,12 +62,18 @@ export const THEME_ACCENT = {
 // The colour the browser paints its own chrome with (Android's status bar, the
 // address bar): the theme's page background, never the accent.
 const BACKGROUND = { encre: "#0C0C0B", papier: "#F3F0E8", pochette: "#0F0E10" };
-// The surface the accent INK has to survive. --ac-text/--ac-mark/--hrt are
-// drawn on the page AND on the raised cards/chips, so the ink is corrected
-// against the most demanding one: Encre's lightest surface (--s2) and Papier's
-// lightest (--s1). Using --bg alone let a mid violet pass at 4.50:1 on the page
-// and fall to 3.7:1 on a card.
-const INK_BG = { encre: "#1E1E1B", papier: "#FBF9F4", pochette: "#0F0E10" };
+// EVERY surface the accent INK is drawn on: --ac-text/--ac-mark/--hrt are
+// foregrounds, and they paint on the page (--bg), a card (--s1) and a chip
+// (--s2). Correcting the ink against one of them is what left #7C5CFF at
+// 4.18:1 on Papier's --bg and 3.74:1 on its --s2 — under AA on two of the
+// three. Folding over all three cannot over-correct: inkFor only darkens on a
+// light theme and only lightens on a dark one, so the walk is monotone and the
+// last answer is the strictest.
+export const INK_SURFACES = {
+  encre: ["#0C0C0B", "#151513", "#1E1E1B"],
+  papier: ["#F3F0E8", "#FBF9F4", "#E8E4D9"],
+  pochette: ["#0F0E10", "#18171A", "#222024"],
+};
 
 const KEY = "ui.theme";
 // The last accent Pochette painted, kept so the reload's first frame already
@@ -186,23 +192,37 @@ export function accentVars(raw, name = DEFAULT_THEME) {
   const surface = normalizeAccent(raw);
   if (!surface) return null;
   const theme = BACKGROUND[name] ? name : DEFAULT_THEME;
-  // The ink is corrected against the most demanding surface it is drawn on,
-  // not the page background (see INK_BG).
-  const background = INK_BG[theme];
+  // The ink is corrected against EVERY surface it is drawn on, not just the
+  // page's ground (see INK_SURFACES).
+  const surfaces = INK_SURFACES[theme];
   const rgb = fromHex(surface);
   // Pure black or pure white, whichever wins: the midpoint of the WCAG range
   // still gives 4.58:1 to one of them, so text on the surface can never be
   // illegible (a near-black #0C0C0B would miss 4.5 on a mid grey).
   const on = contrast(rgb, [0, 0, 0]) >= contrast(rgb, [255, 255, 255]) ? BLACK : WHITE;
-  const ink = inkFor(rgb, background);
+  // One fold per surface, starting from the previous answer: each step moves
+  // the ink in the same direction, and the last surface is the strictest.
+  let ink = rgb;
+  let adjusted = false;
+  for (const background of surfaces) {
+    const step = inkFor(ink, background);
+    ink = step.rgb;
+    adjusted = adjusted || step.adjusted;
+  }
+  // The theme, not one surface, decides which way the ink moves: Encre and
+  // Pochette are dark (the ink was lifted), Papier is light (it was deepened).
+  const dark = luminance(fromHex(surfaces[0])) < 0.5;
   return {
     surface,
     on,
-    ink: toHex(ink.rgb),
-    background,
-    adjusted: ink.adjusted,
-    tooDark: ink.adjusted && luminance(fromHex(background)) < 0.5,
-    tooLight: ink.adjusted && luminance(fromHex(background)) > 0.5,
+    ink: toHex(ink),
+    surfaces,
+    // The strictest surface — the last one folded over. Kept for the screens
+    // that explain the correction.
+    background: surfaces[surfaces.length - 1],
+    adjusted,
+    tooDark: adjusted && dark,
+    tooLight: adjusted && !dark,
   };
 }
 

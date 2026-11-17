@@ -76,7 +76,7 @@ globalThis.localStorage = {
 
 const themeLib = await import("../src/lib/theme.js");
 
-const themeBg = { encre: "#1E1E1B", papier: "#FBF9F4" }; // INK_BG: --s2 / --s1
+const themeBg = { encre: "#1E1E1B", papier: "#E8E4D9" }; // the strictest surface folded: --s2
 const CUSTOM_SAMPLES = [
   ["#FFF176", "clair"],
   ["#7C5CFF", "moyen"],
