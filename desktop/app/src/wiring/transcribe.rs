@@ -450,13 +450,22 @@ impl Settings {
 
     /// The model file a job runs, or `None` when nothing usable is installed.
     pub fn model_path(&self) -> Option<PathBuf> {
-        let dir = models::default_dir();
-        let configured = match &self.model {
-            Some(name) => dir.join(name),
-            None => dir.join(models::TURBO_Q8),
-        };
-        models::choose(&configured, models::free_memory_bytes())
+        model_in(&models::default_dir(), self, models::free_memory_bytes())
     }
+}
+
+/// [`Settings::model_path`] against a directory: the person's own choice is
+/// AUTHORITATIVE (a small model chosen on purpose must not be replaced by the
+/// ladder's biggest), and nothing chosen means the ladder's best for this
+/// machine's memory — the server's `choose_model`.
+pub fn model_in(dir: &Path, settings: &Settings, free: Option<u64>) -> Option<PathBuf> {
+    if let Some(name) = &settings.model {
+        let chosen = dir.join(name);
+        if models::is_valid(&chosen) {
+            return Some(chosen);
+        }
+    }
+    models::choose(&dir.join(models::TURBO_Q8), free)
 }
 
 // --- rule 1: the governor ----------------------------------------------------
@@ -742,6 +751,8 @@ struct Shared {
     server: Mutex<Option<String>>,
     /// The probe's last answer, for [`PROBE_TTL`].
     probed_at: Mutex<Option<Instant>>,
+    /// When the worker rows were last read, so a paint does not ask the server.
+    worker_checked: Mutex<Option<Instant>>,
     /// The stderr file of the child, read back when it dies silently.
     stderr: Mutex<Option<PathBuf>>,
     /// A deliberate stop: the reader must not report it as a crash.
@@ -917,13 +928,19 @@ impl Service {
         {
             return program;
         }
-        let beside = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|dir| dir.join("neezer-transcribe")));
-        match beside {
-            Some(path) if path.is_file() => path,
-            _ => PathBuf::from("neezer-transcribe"),
+        // `cargo build --workspace` puts both binaries in `target/<profile>/`;
+        // a test binary lives one level deeper (`target/debug/deps/`), so both
+        // places are looked at before giving up on `PATH`.
+        if let Ok(current) = std::env::current_exe()
+            && let Some(dir) = current.parent()
+        {
+            for candidate in [dir.join("neezer-transcribe"), dir.join("../neezer-transcribe")] {
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
         }
+        PathBuf::from("neezer-transcribe")
     }
 
     #[cfg(test)]
@@ -949,6 +966,7 @@ impl Service {
                 program: Mutex::new(None),
                 server: Mutex::new(None),
                 probed_at: Mutex::new(None),
+                worker_checked: Mutex::new(None),
                 stderr: Mutex::new(None),
                 stopping: AtomicBool::new(false),
                 stop: AtomicBool::new(false),
@@ -1002,8 +1020,9 @@ impl Service {
         let dir = models::default_dir();
         let free = models::free_memory_bytes();
         let settings = self.shared.lock().settings.clone();
-        let recommended = models::choose(&dir.join(models::TURBO_Q8), free)
-            .and_then(|path| models::name(&path));
+        let recommended = models::ladder(free)
+            .first()
+            .map(|name| (*name).to_owned());
         let chosen = settings.model_path().and_then(|path| models::name(&path));
         let rows: Vec<ModelRow> = models::FILES
             .iter()
@@ -1211,7 +1230,7 @@ impl Service {
             }
             return;
         }
-        if snapshot.settings.model_path().is_none() {
+        let Some(model) = snapshot.settings.model_path() else {
             let dir = models::default_dir();
             self.shared.publish(|snapshot| {
                 snapshot.failures.push(Failure {
@@ -1226,7 +1245,7 @@ impl Service {
                 Snapshot::trim_failures(&mut snapshot.failures);
             });
             return;
-        }
+        };
         self.shared.publish(|snapshot| {
             snapshot.note = None;
             snapshot.job = Some(Job {
@@ -1276,7 +1295,7 @@ impl Service {
             let Some(service) = service else {
                 return;
             };
-            service.start_supervisor(&episode, &file, &shared);
+            service.start_supervisor(&episode, &file, &shared, &model);
         });
     }
 
@@ -1295,11 +1314,8 @@ impl Service {
     }
 
     /// Ensure the supervisor child is running, then ask it for this episode.
-    fn start_supervisor(&self, episode: &str, audio: &Path, shared: &Shared) {
+    fn start_supervisor(&self, episode: &str, audio: &Path, shared: &Shared, model: &Path) {
         let settings = shared.lock().settings.clone();
-        let Some(model) = settings.model_path() else {
-            return;
-        };
         let program = self.program();
         let stderr_path = work_dir().join("supervisor.err");
         let worker_mode = if worker_file_present() {
@@ -1307,7 +1323,7 @@ impl Service {
         } else {
             None
         };
-        if !self.ensure_child(&program, &model, &settings, worker_mode.as_deref(), &stderr_path) {
+        if !self.ensure_child(&program, model, &settings, worker_mode.as_deref(), &stderr_path) {
             return;
         }
         self.send(Control::Local {
@@ -1752,6 +1768,19 @@ impl Service {
 
     /// Ask the server for this PC's worker row (the lease it holds, its state).
     pub fn refresh_worker(&self) {
+        if self
+            .shared
+            .worker_checked
+            .lock()
+            .ok()
+            .and_then(|at| *at)
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+        {
+            return;
+        }
+        if let Ok(mut at) = self.shared.worker_checked.lock() {
+            *at = Some(Instant::now());
+        }
         let Some(api) = self.shared.api.lock().ok().and_then(|api| api.clone()) else {
             return;
         };
@@ -1792,12 +1821,14 @@ impl Service {
             let Ok(fresh) = api.get::<List>(Lane::User, "/transcribe/workers").await else {
                 return;
             };
-            let mine = fresh
-                .value
-                .workers
-                .into_iter()
-                .find(|row| token.is_some() && row.kind == "client" && row.revoked.is_none())
-                .or_else(|| None);
+            let known = shared.lock().worker.id.clone();
+            let mine = fresh.value.workers.into_iter().find(|row| {
+                token.is_some()
+                    && row.kind == "client"
+                    && row.revoked.is_none()
+                    && (known.as_deref() == Some(row.id.as_str())
+                        || row.name.trim() == our_name.trim())
+            });
             let Some(row) = mine else {
                 return;
             };
@@ -1907,6 +1938,7 @@ impl Service {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.shared.stop.store(true, Ordering::SeqCst);
         self.send(Control::Stop);
         *self.shared.stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if let Some(mut child) = self
@@ -2384,18 +2416,52 @@ mod tests {
             governor.step(start + Duration::from_millis(850), healthy, &settings),
             None
         );
-        healthy.position_s = 3.9;
+        healthy.position_s = 3.15;
         assert_eq!(
-            governor.step(start + Duration::from_millis(4_150), healthy, &settings),
+            governor.step(start + Duration::from_millis(3_400), healthy, &settings),
             None,
-            "three seconds of quiet have not passed since the first healthy sample"
+            "2.85 s of quiet is not the three seconds the hysteresis asks for"
         );
-        healthy.position_s = 4.2;
+        healthy.position_s = 3.35;
         assert_eq!(
-            governor.step(start + Duration::from_millis(4_450), healthy, &settings),
-            Some(Control::Resume)
+            governor.step(start + Duration::from_millis(3_600), healthy, &settings),
+            Some(Control::Resume),
+            "3.05 s of quiet since the first healthy sample"
         );
         assert_eq!(governor.paused, None);
+    }
+
+    /// A model the person chose is the one used, even when a "better" rung of the
+    /// ladder is on disk; with nothing chosen, the ladder decides.
+    #[test]
+    fn the_chosen_model_is_authoritative() {
+        let dir = scratch("choice");
+        let model = |name: &str, bytes: u64| {
+            let path = dir.join(name);
+            let mut content = vec![0u8; bytes as usize];
+            content[..4].copy_from_slice(b"ggml");
+            std::fs::write(&path, content).expect("write");
+            path
+        };
+        let tiny = model(models::TINY, models::MIN_MODEL_BYTES);
+        let small = model(models::SMALL, models::MIN_MODEL_BYTES);
+        let settings = Settings {
+            model: Some(models::TINY.to_owned()),
+            ..Settings::default()
+        };
+        assert_eq!(
+            model_in(&dir, &settings, Some(32_000_000_000)),
+            Some(tiny),
+            "an explicit choice must not be replaced by the ladder"
+        );
+        let automatic = Settings::default();
+        assert_eq!(
+            model_in(&dir, &automatic, Some(32_000_000_000)),
+            Some(small),
+            "without a choice the ladder's best installed rung wins"
+        );
+        assert_eq!(model_in(&dir, &Settings::default(), None), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A model download is held to the crate's pin by its size, then its digest,
@@ -2701,7 +2767,9 @@ mod tests {
                  echo '{{\"event\":\"progress\",\"episode_id\":\"{episode}\",\"done_ms\":600000,\"duration_ms\":1200000}}'\n\
                  echo '{{\"event\":\"done\",\"episode_id\":\"{episode}\",\"segments\":[{{\"start_ms\":0,\"end_ms\":1500,\"text\":\"Bonjour.\"}}]}}'\n\
                  echo \"$line\" > {}/command.txt\n\
+                 echo $$ > {}/pid.txt\n\
                  sleep 0.2\n",
+                dir.display(),
                 dir.display()
             ),
         )
@@ -2730,11 +2798,6 @@ mod tests {
             None,
             &dir.join("stderr.log")
         ));
-        service.send(Control::Local {
-            episode_id: episode.to_owned(),
-            audio: audio.display().to_string(),
-            language: Some("fr".to_owned()),
-        });
         service.shared.publish(|snapshot| {
             snapshot.job = Some(Job {
                 episode: episode.to_owned(),
@@ -2746,6 +2809,11 @@ mod tests {
                 paused: None,
                 title: None,
             });
+        });
+        service.send(Control::Local {
+            episode_id: episode.to_owned(),
+            audio: audio.display().to_string(),
+            language: Some("fr".to_owned()),
         });
         // Wait for the reader thread's events (an event, never a clock).
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -2763,6 +2831,257 @@ mod tests {
         }
         service.shutdown();
         assert!(!transcript.exists());
+        // The child is killed and the two threads that talk to it are joined:
+        // `shutdown` returning is the assertion (a join is what it does), and
+        // the pid is gone from /proc.
+        let pid = std::fs::read_to_string(dir.join("pid.txt")).unwrap_or_default();
+        let pid: u32 = pid.trim().parse().unwrap_or(0);
+        assert!(pid > 0, "the fake supervisor wrote its pid");
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "the supervisor child outlived shutdown"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
+    /// A local opener for the offline engine: the file is already on this
+    /// machine, so the engine's `local()` seam answers and no body is opened.
+    struct LocalOpener(PathBuf);
+
+    impl nz_audio::StreamOpener for LocalOpener {
+        fn open(
+            &self,
+            _id: &str,
+            _quality: nz_audio::Quality,
+            _start: Option<f64>,
+            _from_byte: Option<u64>,
+            _lane: nz_audio::Lane,
+        ) -> Result<Box<dyn nz_audio::ByteStream>, nz_audio::SourceError> {
+            Err(nz_audio::SourceError::Message(
+                "fichier local dans ce banc".to_owned(),
+            ))
+        }
+
+        fn ready(
+            &self,
+            _id: &str,
+            _quality: nz_audio::Quality,
+        ) -> Result<nz_audio::StreamReady, nz_audio::SourceError> {
+            Ok(nz_audio::StreamReady::default())
+        }
+
+        fn local(&self, _id: &str, _quality: nz_audio::Quality) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// The two files a real measurement needs, from the environment (CI sets
+    /// them for the engine's own tests; a laptop names its own).
+    fn fixtures() -> Option<(PathBuf, PathBuf)> {
+        let model = std::env::var_os("NZ_WHISPER_MODEL").map(PathBuf::from)?;
+        let audio = std::env::var_os("NZ_WHISPER_AUDIO").map(PathBuf::from)?;
+        (model.is_file() && audio.is_file()).then_some((model, audio))
+    }
+
+    /// A speech file long enough for a throughput number: `jfk.wav` repeated
+    /// with ffmpeg (the sample is eleven seconds).
+    fn long_speech(dir: &Path, source: &Path, repeats: u32) -> PathBuf {
+        let out = dir.join("long.wav");
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-stream_loop"])
+            .arg(repeats.to_string())
+            .arg("-i")
+            .arg(source)
+            .args(["-c", "copy"])
+            .arg(&out)
+            .status()
+            .expect("ffmpeg is installed");
+        assert!(status.success(), "ffmpeg -stream_loop failed");
+        out
+    }
+
+    /// The same speech through `neezer-transcribe file`, on Vulkan and on the
+    /// CPU, best of two warm runs; prints the real-time factor of each and
+    /// asserts the GPU is the faster one.
+    ///
+    /// Ignored by default: 176 s of speech costs ~3 s on Vulkan and ~14 s on the
+    /// CPU here, which is a measurement, not a check a suite should pay on every
+    /// run. `NZ_WHISPER_MODEL=… NZ_WHISPER_AUDIO=… cargo test -p neezer-desktop
+    /// vulkan_is_faster -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "mesure locale : un modèle et un audio réels"]
+    fn vulkan_is_faster_than_the_cpu_on_the_same_audio() {
+        let Some((model, source)) = fixtures() else {
+            eprintln!("NZ_WHISPER_MODEL/NZ_WHISPER_AUDIO absent : mesure de vitesse sautée");
+            return;
+        };
+        let service = service();
+        let program = service.program();
+        if !program.is_file() {
+            eprintln!("{} absent : mesure de vitesse sautée", program.display());
+            return;
+        }
+        let dir = scratch("speed");
+        let audio = long_speech(&dir, &source, 15);
+        let probe = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+            .arg(&audio)
+            .output()
+            .expect("ffprobe");
+        let seconds: f64 = String::from_utf8_lossy(&probe.stdout)
+            .trim()
+            .parse()
+            .expect("duration");
+
+        let run = |cpu: bool, tag: &str| -> f64 {
+            let out = dir.join(format!("{tag}.json"));
+            let mut command = std::process::Command::new(&program);
+            command
+                .arg("file")
+                .arg(&audio)
+                .args(["--model"])
+                .arg(&model)
+                .args(["--out"])
+                .arg(&out);
+            if cpu {
+                command.arg("--cpu");
+            }
+            let started = Instant::now();
+            let output = command.output().expect("spawn neezer-transcribe");
+            assert!(
+                output.status.success(),
+                "{tag}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            started.elapsed().as_secs_f64()
+        };
+        // Warm both paths once (page cache, shader cache) then time them.
+        let _ = run(false, "vulkan-warm");
+        let _ = run(true, "cpu-warm");
+        let vulkan = run(false, "vulkan").min(run(false, "vulkan-2"));
+        let cpu = run(true, "cpu").min(run(true, "cpu-2"));
+        let (v_factor, c_factor) = (seconds / vulkan, seconds / cpu);
+        println!(
+            "Vulkan {v_factor:.1}× temps réel ({vulkan:.2} s) · CPU {c_factor:.1}× \
+             ({cpu:.2} s) sur {seconds:.0} s — facteur {:.1}×",
+            v_factor / c_factor
+        );
+        assert!(
+            vulkan < cpu,
+            "Vulkan ({vulkan:.2} s) doit battre le CPU ({cpu:.2} s) sur le même audio"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Rule 1, measured: a real transcription on this machine while the engine
+    /// renders a real track in real time cannot cut the sound. The engine is the
+    /// app's own (offline sink, so the bench is the mixer, not a sound card) and
+    /// the transcription is the app's service driving the real binary.
+    ///
+    /// Ignored by default, like the speed bench:
+    /// `NZ_WHISPER_MODEL=… NZ_WHISPER_AUDIO=… cargo test -p neezer-desktop
+    /// a_local_transcription_does_not_cut -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "mesure locale : lecture réelle + transcription réelle"]
+    fn a_local_transcription_does_not_cut_the_playback() {
+        let Some((model, source)) = fixtures() else {
+            eprintln!("NZ_WHISPER_MODEL/NZ_WHISPER_AUDIO absent : mesure d'underrun sautée");
+            return;
+        };
+        let service = Arc::new(Service::new());
+        let program = service.program();
+        if !program.is_file() {
+            eprintln!("{} absent : mesure d'underrun sautée", program.display());
+            return;
+        }
+        service.set_program(program);
+        service.start_monitor();
+        let dir = scratch("underrun");
+        // Thirty seconds of tone to play, and the real speech to transcribe:
+        // two files, because a transcription of the track being heard would be
+        // the same decoder twice.
+        let track = dir.join("track.flac");
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=0.5*cos(2*PI*220*t):s=48000:d=30:c=stereo",
+                "-c:a",
+                "flac",
+            ])
+            .arg(&track)
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success());
+        let speech = long_speech(&dir, &source, 15);
+
+        let mut config = nz_audio::EngineConfig::default();
+        config.spool_dir = dir.join("spool");
+        let (engine, mut sink) = nz_audio::Engine::new_offline(
+            config,
+            Arc::new(LocalOpener(track.clone())),
+        );
+        engine.set_volume(0.0);
+        engine.load("track", nz_audio::Quality::Flac, None);
+        engine.play();
+
+        let episode = "11111111-2222-3333-4444-555555555555";
+        // The CPU is the worst case for rule 1 (it contends with the decoder for
+        // cores), so the measurement runs the slower path: a GPU job would only
+        // make the window easier.
+        service.shared.publish(|snapshot| {
+            snapshot.settings.cpu = true;
+            snapshot.job = Some(Job {
+                episode: episode.to_owned(),
+                phase: Phase::Transcribing,
+                done_ms: 0,
+                duration_ms: 0,
+                backend: None,
+                device: None,
+                paused: None,
+                title: None,
+            });
+        });
+        service.start_supervisor(episode, &speech, &service.shared, &model);
+
+        let frames = 480usize;
+        let mut buffer = vec![0f32; frames * 2];
+        let started = Instant::now();
+        let window = Duration::from_secs(10);
+        let (mut active, mut samples) = (0u32, 0u32);
+        while started.elapsed() < window {
+            sink.render(&mut buffer);
+            samples += 1;
+            if service.snapshot().job.is_some() {
+                active += 1;
+            }
+            let due = started
+                + Duration::from_millis((started.elapsed().as_millis() as u64 / 10 + 1) * 10);
+            let now = Instant::now();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+        }
+        let underruns = engine.underruns();
+        let done = service.snapshot();
+        println!(
+            "10 s de lecture, transcription active sur {active}/{samples} échantillons : \
+             {underruns} underrun(s), terminée = {}, {} ms transcrites",
+            done.last_done.as_deref() == Some(episode),
+            done.job.as_ref().map(|job| job.done_ms).unwrap_or(0)
+        );
+        assert_eq!(underruns, 0, "la transcription a coupé la lecture");
+        assert!(
+            active > 0,
+            "the transcription must have run while the track played: {done:?}"
+        );
+        engine.shutdown();
+        service.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

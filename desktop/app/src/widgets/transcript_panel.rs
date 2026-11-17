@@ -599,7 +599,10 @@ impl Panel {
     /// the case that matters is a local job that just finished while the panel
     /// was open (the server still answers `status: "none"`).
     pub fn refresh_local(&mut self) {
-        if self.local.is_some() || !self.segments.is_empty() {
+        if self.local.is_some()
+            || !self.segments.is_empty()
+            || !matches!(self.status.as_str(), "none" | "local")
+        {
             return;
         }
         let Some(local) = local_for(&self.episode) else {
@@ -958,7 +961,11 @@ pub fn view<V: Render>(
         column = column.child(card);
     }
 
-    if let Some(card) = status_card(panel, is_admin, online, cx, ask.clone()) {
+    // The server's card is about the SERVER's job; while this machine works on
+    // the same episode it would say "Aucune transcription" under a moving bar.
+    if local_job.is_none()
+        && let Some(card) = status_card(panel, is_admin, online, cx, ask.clone())
+    {
         column = column.child(card);
     }
 
@@ -1152,6 +1159,8 @@ fn local_block<V: Render>(
                     )
                     .child(
                         div()
+                            .flex_shrink_0()
+                            .max_w(rems(14.))
                             .text_size(rems(0.6875))
                             .font_family(theme::mono(cx))
                             .text_color(theme::secondary(cx))
@@ -1167,7 +1176,12 @@ fn local_block<V: Render>(
                     .text_size(rems(0.6875))
                     .text_color(theme::warning(cx))
                     .child(icon(IconName::Pause).size(rems(0.75)))
-                    .child(SharedString::from(paused.label_fr())),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(SharedString::from(paused.label_fr())),
+                    ),
             );
         }
         return Some(card.into_any_element());
@@ -2228,6 +2242,38 @@ mod tests {
         ready.status = "ready".into();
         panel.apply(ready, Tone::Poll);
         assert!(panel.poll().is_none(), "the job is over");
+    }
+
+    /// A local transcript is a whole transcript: the playhead follows its lines,
+    /// every position is covered (no server page to ask for) and the text is
+    /// searched where it is.
+    #[test]
+    fn a_local_transcript_follows_the_playhead_and_covers_the_episode() {
+        let mut panel = Panel::new("e1", Some(true), 3_600);
+        panel.local = Some(LocalTranscript {
+            engine: Some("whisper.cpp".into()),
+            model: Some("ggml-base.bin".into()),
+            language: Some("fr".into()),
+            segments: vec![segment(0.0, "Bonjour"), segment(12.0, "le monde")],
+            created: None,
+        });
+        panel.status = "local".into();
+        assert!(panel.is_local());
+        assert!(panel.loaded());
+        assert!(panel.covers(2_000.0), "the whole episode is on this machine");
+        assert!(panel.follow_to(12.5));
+        assert_eq!(panel.active, Some(1));
+        assert_eq!(panel.at(0.5), Some(0));
+        // A search runs over the local lines, accents folded.
+        assert!(
+            panel
+                .search
+                .locally(&panel.lines().to_vec(), "monde", true)
+                .is_some()
+        );
+        assert_eq!(panel.search.hits.len(), 1);
+        assert_eq!(panel.search.hits[0].text, "le monde");
+        assert!(panel.search.local);
     }
 
     /// Following stops at a search or a scroll and comes back on demand: the pane

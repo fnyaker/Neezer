@@ -89,6 +89,9 @@ pub fn body(screen: &mut Screen, _window: &mut Window, cx: &mut Context<Screen>)
         column = column.child(failures_card(&snapshot, &service, cx));
     }
     if screen.is_admin(cx) {
+        if snapshot.worker.enrolled {
+            service.refresh_worker();
+        }
         column = column.child(worker_card(&snapshot, &service, cx));
     }
     column.into_any_element()
@@ -170,7 +173,11 @@ fn engine_card(
                         ButtonVariant::Secondary,
                         cx,
                     )
-                    .on_click(cx.listener(move |_, _, _, _| service.probe(true)))
+                    .on_click(cx.listener(move |_, _, _, _| {
+                        service.probe(true);
+                        service.publish_models();
+                        service.refresh_worker();
+                    }))
                 }),
         );
     if let Some(device) = match engine {
@@ -231,12 +238,13 @@ fn models_card(
         .iter()
         .find(|row| row.chosen)
         .map(|row| row.name.to_owned());
-    for row in &snapshot.models {
+    for row in snapshot.models.iter().filter(|row| !is_vad(row.name)) {
         card = card.child(model_row(row, &chosen, snapshot, service, cx));
     }
     card.child(hint(
-        "Le VAD (détection de voix) est optionnel : whisper reste plus rapide sans lui sur \
-         une machine sans GPU, et il est téléchargé avec le modèle que vous choisissez.",
+        "La détection de voix (VAD) n'est ni proposée ni utilisée : sur un processeur elle \
+         coûte plus de temps qu'elle n'en fait gagner (98× la durée de l'audio, mesuré au \
+         lot T2), et le moteur reste donc sur son découpage habituel.",
         cx,
     ))
     .into_any_element()
@@ -410,6 +418,14 @@ fn model_row(
     line.into_any_element()
 }
 
+/// The VAD files are pinned by the crate for completeness but are not offered:
+/// whisper.cpp's own VAD path is CPU-only and unbatched, and T2 measured it at
+/// 98× the cost of the audio it removes (rule 1). A button that downloads a file
+/// nothing uses would be a button that does nothing (rule 2).
+fn is_vad(name: &str) -> bool {
+    name == nz_transcribe::models::VAD || name == nz_transcribe::models::VAD_FOR_TESTS
+}
+
 fn state_chip(label: &str, on: bool, cx: &mut Context<Screen>) -> AnyElement {
     div()
         .flex()
@@ -558,7 +574,25 @@ fn preferences_card(
     card = card.child(priorities);
     for (id, label, explanation) in PRIORITIES {
         if settings.priority.id() == id {
-            card = card.child(value_line(label, explanation, cx));
+            card = card.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(rems(0.375))
+                    .text_size(rems(0.75))
+                    .child(
+                        div()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(theme::secondary(cx))
+                            .child(explanation),
+                    ),
+            );
         }
     }
     card.child(hint(
@@ -653,8 +687,10 @@ fn job_card(
     }
     let service = service.clone();
     card = card.child(
-        button("transcribe-stop-job", "Arrêter", ButtonVariant::Secondary, cx)
-            .on_click(cx.listener(move |_, _, _, _| service.stop_local())),
+        div().flex().justify_start().child(
+            button("transcribe-stop-job", "Arrêter", ButtonVariant::Secondary, cx)
+                .on_click(cx.listener(move |_, _, _, _| service.stop_local())),
+        ),
     );
     Some(
         card.child(hint(
@@ -743,7 +779,7 @@ fn worker_card(
         },
         cx,
     ));
-    if !worker.name.is_empty() {
+    if worker.enrolled && !worker.name.is_empty() {
         card = card.child(value_line("Nom sur le serveur", worker.name.clone(), cx));
     }
     if worker.enrolled {
@@ -792,13 +828,15 @@ fn worker_card(
     if worker.enrolled {
         let service = service.clone();
         card = card.child(
-            button(
-                "transcribe-revoke",
-                if enrolling { "Révocation…" } else { "Révoquer cet ordinateur" },
-                ButtonVariant::Danger,
-                cx,
-            )
-            .on_click(cx.listener(move |_, _, _, _| service.revoke())),
+            div().flex().justify_start().child(
+                button(
+                    "transcribe-revoke",
+                    if enrolling { "Révocation…" } else { "Révoquer cet ordinateur" },
+                    ButtonVariant::Danger,
+                    cx,
+                )
+                .on_click(cx.listener(move |_, _, _, _| service.revoke())),
+            ),
         );
     } else {
         let name = transcribe::hostname();
@@ -806,13 +844,15 @@ fn worker_card(
         card = card
             .child(value_line("Nom proposé", name.clone(), cx))
             .child(
-                button(
-                    "transcribe-enrol",
-                    if enrolling { "Enrôlement…" } else { "Enrôler cet ordinateur" },
-                    ButtonVariant::Primary,
-                    cx,
-                )
-                .on_click(cx.listener(move |_, _, _, _| service.enrol(&name))),
+                div().flex().justify_start().child(
+                    button(
+                        "transcribe-enrol",
+                        if enrolling { "Enrôlement…" } else { "Enrôler cet ordinateur" },
+                        ButtonVariant::Primary,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |_, _, _, _| service.enrol(&name))),
+                ),
             );
     }
     card.into_any_element()
