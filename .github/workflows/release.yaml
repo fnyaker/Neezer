@@ -450,9 +450,14 @@ jobs:
             flatpak flatpak-builder xvfb xauth binutils
           flatpak --user remote-add --if-not-exists flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
-          # The manifest pins org.freedesktop.Platform//25.08 (flatpak/).
+          # The manifest pins org.freedesktop.Platform//25.08 (flatpak/), and
+          # `GL.default` is the extension that carries Mesa: the Vulkan ICDs the
+          # app's GPU surface and whisper's backend need on a runner with no
+          # driver of its own. Installed explicitly, never left to whatever
+          # `flatpak install` decides to bring along.
           flatpak --user install -y --noninteractive flathub \
-            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 \
+            org.freedesktop.Platform.GL.default//25.08
       - name: Build the bundle
         run: |
           set -euo pipefail
