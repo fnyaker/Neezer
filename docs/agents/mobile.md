@@ -1101,8 +1101,9 @@ the cpal-less fallback).
 ### SC3 — `nz-api`: certificate pin (TOFU), probe, counters (delivered 2026-11-17)
 
 **Goal.** `Ssl.kt`'s trust model and per-screen counting, in the shared client.
-**Exclusive files**: `desktop/crates/nz-api/**` — plus three lines of `desktop/Cargo.lock` (the
-crate's own dependency list; **no new package**, see below) and this section.
+**Exclusive files**: `desktop/crates/nz-api/**` — plus three lines of `desktop/Cargo.lock` and three
+of `mobile/rust/Cargo.lock` (those crates' own dependency lists; **no new package**, see below) and
+this section.
 
 - **The pin is opt-in, and that is what keeps the desktop byte-for-byte itself.** A client that never
   calls `ApiBuilder::pinned_leaf_sha256` is built exactly as before: no custom verifier, reqwest's own
@@ -1168,6 +1169,12 @@ crate's own dependency list; **no new package**, see below) and this section.
   crate owns the config. A preconfigured config is used AS IT IS: reqwest sets `alpn_protocols` only on
   the configs it builds itself, so the file must set `["h2", "http/1.1"]` or every request silently
   drops to HTTP/1.1.
+- **A shared crate that gains a dependency changes BOTH lockfiles.** `desktop/Cargo.lock` and
+  `mobile/rust/Cargo.lock` each record `nz-api`'s dependency list, and both CI workflows build with
+  `--locked`: the mobile `Rust (fmt, clippy, tests)` and `APK` jobs failed with "cannot update the
+  lock file … because `--locked` was passed" until `mobile/rust/Cargo.lock` was refreshed
+  (`cargo metadata --offline` in `mobile/rust`: the same **three lines**, no other package moved).
+  A shared-crate lot must refresh the lockfile of EVERY workspace that depends on it, not just its own.
 - **`aws-lc-rs` with DEFAULT features adds a package.** `aws-lc-rs = "1"` turned on `ring-io` and
   `ring-sig-verify`, which pulled **`untrusted 0.7.1`** into `desktop/Cargo.lock` (measured in the
   lockfile diff: a new `[[package]]` and an `untrusted 0.9.0` rename in two other entries). Repeating
