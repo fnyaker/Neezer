@@ -396,7 +396,9 @@ console.log("\n-- a member: no category, no admin request, a bare 403");
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.route(/dzcdn\.net|api\.deezer\.com|lrclib/, (r) => r.abort());
-  await loginVia(ctx, seed.member, seed.member_password);
+  // Every seeded account takes the bench's one published fixture password, which the
+  // server never has to send (tools/perf_api.py, BENCH_PASSWORD).
+  await loginVia(ctx, seed.member, "Bench1");
   const page = await ctx.newPage();
   const requests = trackAdmin(page);
   await page.goto(server.base + "/app/#/settings/users");

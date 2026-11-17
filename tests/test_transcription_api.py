@@ -90,12 +90,14 @@ LIMITERS = (
 )
 
 
-def write_file(path, data, mode=None):
+def write_file(path, data, executable=False):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as handle:
         handle.write(data)
-    if mode is not None:
-        os.chmod(path, mode)
+    if executable:
+        # Owner only: these are fake binaries the test itself runs, so the group and
+        # the world never need them (CodeQL py/overly-permissive-file).
+        os.chmod(path, 0o700)
     return path
 
 
@@ -148,12 +150,12 @@ class TranscriptionApiTestCase(unittest.TestCase):
         self.whisper = write_file(
             os.path.join(self.bin_dir, "whisper-cli"),
             FAKE_WHISPER.format(python=sys.executable).encode(),
-            0o755,
+            executable=True,
         )
         self.ffmpeg = write_file(
             os.path.join(self.bin_dir, "ffmpeg"),
             FAKE_FFMPEG.format(python=sys.executable).encode(),
-            0o755,
+            executable=True,
         )
         self.model = write_file(
             os.path.join(self.model_dir, "ggml-small.bin"),

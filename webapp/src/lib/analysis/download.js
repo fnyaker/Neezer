@@ -3,6 +3,8 @@
 // are background to a share of its threads and refuses the excess (503 + Retry-After): that is
 // waited out here, never fought (CLAUDE.md, rule 1).
 
+import { ownUrl } from "./ownurl.js";
+
 export const BLOCK = 4 * 1024 * 1024;
 const MAX_TRIES = 6;
 
@@ -22,6 +24,8 @@ function parseRange(h) {
  * @param opts { fetch, block, maxBytes, signal, onProgress(done, total) }
  */
 export async function fetchBlocks(url, opts = {}) {
+  // Our own server or nothing: a stream URL from a payload never names another host.
+  const target = ownUrl(url);
   const doFetch = opts.fetch || ((u, init) => fetch(u, init));
   const block = opts.block || BLOCK;
   const maxBytes = opts.maxBytes || 600 * 1024 * 1024;
@@ -35,7 +39,7 @@ export async function fetchBlocks(url, opts = {}) {
       opts.signal?.throwIfAborted?.();
       let res;
       try {
-        res = await doFetch(url, {
+        res = await doFetch(target, {
           credentials: "include",
           signal: opts.signal,
           headers: { Range: `bytes=${at}-${end}`, "X-NS-Background": "1" },

@@ -1,6 +1,6 @@
 // The measuring thread: one wasm instance, one job at a time, so the page never runs the FFT
 // nor the network. Jobs: "measure" (spectral, loudness, tempo) and "embed" (the extractor).
-import { loadMeasure, measureTrack } from "./measure.js";
+import { loadMeasureAt, measureTrack } from "./measure.js";
 import { embedSamples, encodeVector } from "./embed.js";
 
 let core = null;
@@ -22,7 +22,7 @@ async function session(job) {
 self.onmessage = async (ev) => {
   const { id, wasm, kind, job } = ev.data;
   try {
-    core ||= await loadMeasure(wasm);
+    core ||= await loadMeasureAt(wasm);
     if (kind === "embed") {
       const n = await session(job);
       const vec = await embedSamples(core, n.session, n.ort, job.samples);

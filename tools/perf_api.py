@@ -58,6 +58,12 @@ OWNER_FILE = "owner"
 # between its `mkdtemp` and its own owner file looks unowned for an instant.
 OWNER_GRACE = 60.0
 
+# The password of every account this bench seeds, and the only one it publishes: the benches
+# type it themselves (`webapp/test/harness.mjs`, `admin/run.mjs`, `podcast/run.mjs`). It belongs
+# to a throwaway library on loopback, so it is a fixture and not a secret — but it never travels
+# in the READY payload, which is a pipe and a CI log keeps what a pipe carried.
+BENCH_PASSWORD = "Bench1"
+
 
 def _pid_alive(pid):
     """Whether ``pid`` is a living process — a zombie is not one.
@@ -539,7 +545,6 @@ def seed_onboarding(app, tracks):
 
         return {
             "tokens": tokens,
-            "password": "MotDePasseSolide123",
             "known_artist": known.name if known is not None else None,
             "artists": Artist.select().count(),
         }
@@ -576,11 +581,14 @@ def seed_provider_account(app):
 def seed_admin(app, users, invite_count):
     """The accounts and pending invitations Réglages → Utilisateurs lists.
 
-    One argon2 hash is computed and reused: the bench never logs in as the
-    seeded members, it only reads and mutates them. ``membre`` is the non-admin
-    session, ``desactive_moi`` the active row a PATCH disables,
-    ``deja_desactive`` the disabled row the filter keeps, ``supprime_moi`` the
-    row a DELETE removes.
+    One argon2 hash is computed and reused. ``membre`` is the non-admin session
+    the admin bench logs in as, ``desactive_moi`` the active row a PATCH
+    disables, ``deja_desactive`` the disabled row the filter keeps,
+    ``supprime_moi`` the row a DELETE removes. Every seeded account takes
+    ``BENCH_PASSWORD``, the bench's own published fixture: a credential the
+    benches must type never travels in the READY payload, which is a pipe and a
+    CI log keeps what a pipe carried (CodeQL
+    py/clear-text-logging-sensitive-data).
     """
     import datetime as _dt
 
@@ -588,9 +596,8 @@ def seed_admin(app, users, invite_count):
     from neezer.db import User, now
     from neezer.managers.user import UserManager, encrypt_password
 
-    password = "MembreSolide1!"
-    crypt, salt = UserManager._hash_fields(password)
-    clear = encrypt_password(password)
+    crypt, salt = UserManager._hash_fields(BENCH_PASSWORD)
+    clear = encrypt_password(BENCH_PASSWORD)
     base = now()
 
     def add(name, admin=False, disabled=False, minutes=0, mail=None):
@@ -626,7 +633,6 @@ def seed_admin(app, users, invite_count):
             invites.append({"id": row.id, "note": row.note})
         return {
             "member": "membre",
-            "member_password": password,
             "delete": "supprime_moi",
             "disable": "desactive_moi",
             "disabled": "deja_desactive",
@@ -792,8 +798,8 @@ def seed_podcasts(app):
         listeners = []
         for i in range(3):
             name = f"podcast{i + 1}"
-            UserManager.add(name, "Podcast1!")
-            listeners.append({"name": name, "password": "Podcast1!"})
+            UserManager.add(name, BENCH_PASSWORD)
+            listeners.append({"name": name})
         archive = app.config["DEEZER"]["archive_dir"]
         folder = os.path.join(archive, PODCAST_DIR_NAME, "banc")
         os.makedirs(folder, exist_ok=True)
@@ -1193,7 +1199,7 @@ def main():
         except Exception:  # the version route is not what a bench measures
             pass
     with app.app_context():
-        UserManager.add("bench", "Bench1", admin=True)
+        UserManager.add("bench", BENCH_PASSWORD, admin=True)
         from neezer.db import db as _db
 
         # One transaction for the whole fill: SQLite commits one statement at a
@@ -1241,7 +1247,7 @@ def main():
     close_connection()
 
     client = app.test_client()
-    rv = client.post("/api/login", json={"username": "bench", "password": "Bench1"})
+    rv = client.post("/api/login", json={"username": "bench", "password": BENCH_PASSWORD})
     assert rv.status_code == 200, rv.data
 
     routes = [

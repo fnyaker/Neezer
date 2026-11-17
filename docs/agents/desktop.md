@@ -2848,6 +2848,13 @@ Waves that can run in parallel (disjoint files):
   `desktop/tools/journey/{throttle,drive,bench,checks,soak,frame_stats}.py` and `frame_bench.sh`;
   their README states the method. **A benchmark that cannot be re-taken by the next person is not a
   measurement.**
+- **The rule, the bench talks to its own machine.** Every URL `desktop/tools/journey/bench.py` asks
+  is `perf_api.py` or its proxy, both bound to loopback, so `local_url` refuses anything that is not
+  `http` on `127.0.0.1`/`localhost`/`::1` before urllib sees it (urllib also speaks `file://`, and a
+  URL that came back in a response must not turn the bench into a file reader), and `local_open` is
+  the one place that builds a request — one line to audit, its `# nosemgrep` naming that guard. The
+  login password is `BENCH_PASSWORD`, the throwaway account `perf_api.py` seeds for this run and
+  nothing else.
 - **The rule, a screen is reached by a path.** D17's first audit answered one question for every
   variant of `Route`: *can someone who has never seen this screen open it?* One could not —
   `Route::Queue` existed, the `q` panel drew the same screen, and **nothing in the app ever pushed

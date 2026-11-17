@@ -11,7 +11,7 @@
 //  - a flat curve with a loud, heavily normalized master never warns at all,
 //    however hard the safety limiter works;
 //  - switching the equalizer off hides it at once.
-import { loadPlaywright, startServer, login, checker, installSessionPrefix } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, installSessionPrefix, deezerHost, pathOn } from "../harness.mjs";
 
 const RATE = 48000;
 const LOUD_SECONDS = 6;
@@ -86,8 +86,8 @@ const song = (id, gain = null, duration = LEN) => ({
 
 async function open({ bands, bass = 0, normalize = "off", gain = null, tracks = 1, body = wav, duration = LEN }) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => r.abort());
-  await ctx.route(/\/api\/stream\//, (r) =>
+  await ctx.route(deezerHost, (r) => r.abort());
+  await ctx.route(pathOn("/api/stream/"), (r) =>
     r.fulfill({ status: 200, body, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
   await ctx.addInitScript(installSessionPrefix);
