@@ -12,10 +12,10 @@
 //!   and each failure's CAUSE), and the monitor thread that pauses the engine
 //!   when the audio or the interface needs the machine.
 //! - **Models are a click, then a checksum.** Nothing downloads by itself: the
-//!   screen asks for one pinned file, [`Api::download_to`] streams it on
-//!   `Lane::Bulk` (so it yields to playback exactly like a download does), and
-//!   [`crate::wiring::transcribe::ModelCheck`] holds the file to `nz-transcribe`'s
-//!   pinned size and SHA-256 before the engine may use it.
+//!   screen asks for one pinned file, [`Api::download_url_to`] streams it from
+//!   the pinned host on `Lane::Bulk` (so it yields to playback exactly like a
+//!   download does), and [`crate::wiring::transcribe::ModelCheck`] holds the file
+//!   to `nz-transcribe`'s pinned size and SHA-256 before the engine may use it.
 //! - **The audio is fetched once, on the Bulk lane.** A local job needs a file
 //!   on this machine; an offline episode is used as it is, anything else is
 //!   streamed to `$XDG_CACHE_HOME/neezer/transcribe/<episode>.opus` at
@@ -629,6 +629,13 @@ pub fn work_dir() -> PathBuf {
 
 /// `https://huggingface.co/…/<name>` for a pinned file, or `None` for a name
 /// this build does not pin (a file a person put there by hand is not fetched).
+///
+/// The join is one slash: the bases END with `/` and the name has no leading
+/// one. A DOUBLED slash still resolves (measured: `200`, Hugging Face folds it),
+/// but a MISSING one is a `404` (`…/resolve/mainggml-tiny.bin`), and the table's
+/// `the_download_urls_are_well_formed` test pins the shape either way — the
+/// failure that matters is not the slash, it is which client the URL is handed
+/// to (`download_url_to`, never `download_to`).
 pub fn download_url(name: &str) -> Option<String> {
     let entry = models::file(name)?;
     let base = if entry.name == models::VAD || entry.name == models::VAD_FOR_TESTS {
@@ -637,6 +644,49 @@ pub fn download_url(name: &str) -> Option<String> {
         MODELS_BASE
     };
     Some(format!("{base}{}", entry.name))
+}
+
+/// The repository (`host/path`) a pinned file comes from, for a sentence that
+/// names the place the person could look at themselves.
+pub fn download_host(name: &str) -> &'static str {
+    let entry = models::file(name);
+    if entry.is_some_and(|entry| entry.name == models::VAD || entry.name == models::VAD_FOR_TESTS) {
+        "huggingface.co/ggml-org/whisper-vad"
+    } else {
+        "huggingface.co/ggerganov/whisper.cpp"
+    }
+}
+
+/// The French sentence a FAILED transfer of `name` shows (rule 2: the cause, not
+/// a count).
+///
+/// The two cases the person can act on are told apart on purpose:
+///
+/// - a `404`/`410` means the file is gone or renamed UPSTREAM — nothing about
+///   this server, this account or this track, and retrying the same URL from the
+///   same build cannot work until the app is updated;
+/// - `Offline` means the link or the host is down, so « Réessayer » later is the
+///   answer, and the person's own neezer server is explicitly not in cause (a
+///   model host being unreachable is never a verdict about the library).
+pub fn download_failure_fr(name: &str, error: &ApiError) -> String {
+    match error {
+        ApiError::Http { status, .. } if matches!(*status, 404 | 410) => format!(
+            "Le serveur des modèles ne trouve plus {name} (HTTP {status}) : le fichier a été \
+             renommé ou retiré de {}. Rien n’a été installé. Réessayez plus tard : une mise à \
+             jour de l’application corrigera le lien, ou choisissez un autre modèle.",
+            download_host(name)
+        ),
+        ApiError::Offline => format!(
+            "Le serveur des modèles ({}) est injoignable : {name} n’a pas été téléchargé. \
+             Vérifiez la connexion, puis « Réessayer » — votre serveur Neezer n’est pas en cause.",
+            download_host(name)
+        ),
+        other => format!(
+            "Le téléchargement de {name} depuis {} a échoué : {}",
+            download_host(name),
+            other.cause_fr()
+        ),
+    }
 }
 
 /// What checking a downloaded model says.
@@ -1559,11 +1609,21 @@ impl Service {
                 });
             };
             let answer = api
-                .download_to(Lane::Bulk, &url, &destination, progress, &cancel)
+                .download_url_to(Lane::Bulk, &url, &destination, progress, &cancel)
                 .await;
             if let Err(error) = answer {
-                let cause = error.cause_fr().to_owned();
-                if !cancel.load(Ordering::Relaxed) {
+                let cancelled = cancel.load(Ordering::Relaxed);
+                // Which file, which host, and what to do about it (rule 2): a
+                // 404 from the pinned host is not a neezer HTTP failure.
+                let cause = if cancelled {
+                    format!(
+                        "Téléchargement de {} annulé : rien n’a été installé.",
+                        entry.name
+                    )
+                } else {
+                    download_failure_fr(entry.name, &error)
+                };
+                if !cancelled {
                     let _ = std::fs::remove_file(&destination);
                 }
                 shared.publish(|snapshot| {
@@ -2576,24 +2636,184 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The pinned files are the only ones we fetch, from the two hosts the
-    /// hashes came from.
+    /// Every pinned row has a well-formed URL: https, the right repository, ONE
+    /// slash at the join, and the pinned name last. The download that v1.6.0
+    /// shipped had correct names and hashes and still 404'd, because the URL was
+    /// handed to `Api::download_to`, which builds `{base}/api{path}`; this pins
+    /// the URL itself, and the ignored test below pins that the hosts answer.
     #[test]
-    fn the_download_urls_are_the_pinned_hosts() {
+    fn the_download_urls_are_well_formed() {
         for entry in models::FILES {
             let url = download_url(entry.name).expect("every pinned file has a URL");
-            assert!(url.ends_with(entry.name), "{url}");
-            if entry.name == models::VAD {
-                assert!(url.starts_with(VAD_BASE), "{url}");
+            let parsed = reqwest::Url::parse(&url).unwrap_or_else(|error| panic!("{url}: {error}"));
+            assert_eq!(parsed.scheme(), "https", "{url}");
+            assert_eq!(parsed.host_str(), Some("huggingface.co"), "{url}");
+            let repository = if entry.name == models::VAD || entry.name == models::VAD_FOR_TESTS {
+                "/ggml-org/whisper-vad/resolve/main/"
             } else {
-                assert!(url.starts_with(MODELS_BASE), "{url}");
-            }
+                "/ggerganov/whisper.cpp/resolve/main/"
+            };
+            assert_eq!(
+                parsed.path(),
+                format!("{repository}{}", entry.name),
+                "{url}"
+            );
+            assert_eq!(parsed.query(), None, "a pinned URL carries no query: {url}");
+            assert!(
+                !url.contains("//ggml"),
+                "one slash at the join, not two: {url}"
+            );
+            assert!(url.ends_with(entry.name), "{url}");
+            // The table's own digest format, next to its URL: 64 lower-case hex.
+            assert_eq!(entry.sha256.len(), 64, "{}", entry.name);
+            assert!(
+                entry
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "{}: {}",
+                entry.name,
+                entry.sha256
+            );
         }
         assert_eq!(download_url("ggml-nope.bin"), None);
         // The settings screen may also download `ggml-tiny`/`ggml-base`: both
         // are pinned, so both are reachable.
         assert!(download_url(models::TINY).is_some());
         assert!(download_url(models::BASE).is_some());
+    }
+
+    /// The real hosts still serve every pinned file. Ignored by default (a suite
+    /// that needs the internet is not a suite); `desktop.yaml` runs it, and by
+    /// hand: `cargo test -p neezer-desktop the_pinned_hosts_still_serve --
+    /// --ignored --nocapture`.
+    ///
+    /// A `HEAD` is enough and costs no model: the redirect chain is followed (Hug
+    /// Face answers `302` to its CDN), the final answer must be `200`, and the
+    /// CDN's `Content-Length` must be the pinned byte count — which is what
+    /// catches a file re-uploaded under the same name, the other way a download
+    /// starts failing after a release.
+    #[tokio::test]
+    #[ignore = "réseau : HEAD sur chaque URL épinglée"]
+    async fn the_pinned_hosts_still_serve_every_pinned_file() {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .user_agent(concat!("neezer-desktop/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("client");
+        for entry in models::FILES {
+            let url = download_url(entry.name).expect("a pinned URL");
+            let response = client
+                .head(&url)
+                .send()
+                .await
+                .unwrap_or_else(|error| panic!("{url}: {error}"));
+            let status = response.status();
+            println!("{} → {status}", entry.name);
+            assert_eq!(status, reqwest::StatusCode::OK, "{url} answered {status}");
+            if let Some(length) = response.content_length() {
+                assert_eq!(
+                    length, entry.bytes,
+                    "{url}: the host serves {length} bytes, the crate pins {}",
+                    entry.bytes
+                );
+            }
+        }
+    }
+
+    /// The production path, end to end, against the real hosts: the URL the
+    /// screen builds, the download the app runs (redirects followed, no session
+    /// sent), then the crate's pinned size and SHA-256. Ignored by default (78 MB
+    /// over the network); `desktop.yaml` proves the URLs answer with a `HEAD`,
+    /// this proves a real body lands and hashes to the pin:
+    ///
+    /// ```text
+    /// cargo test -p neezer-desktop a_real_model_and_the_vad_model --
+    ///     --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "réseau : 78 Mo de téléchargement réel (ggml-tiny + VAD)"]
+    async fn a_real_model_and_the_vad_model_download_and_hash() {
+        let api = Api::new("http://127.0.0.1:1").expect("a client that is never asked");
+        let dir = worker::cache_dir().join("model-proof");
+        std::fs::create_dir_all(&dir).expect("a cache directory");
+        for name in [models::TINY, models::VAD] {
+            let url = download_url(name).expect("a pinned URL");
+            let destination = dir.join(name);
+            let report = api
+                .download_url_to(
+                    Lane::Bulk,
+                    &url,
+                    &destination,
+                    |_, _| {},
+                    &AtomicBool::new(false),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{url}: {}", download_failure_fr(name, &error)));
+            let check = check_model(name, &destination);
+            println!(
+                "{name} : {} octets reçus de {url}, SHA-256 vérifié = {}",
+                report.bytes,
+                check == ModelCheck::Pinned
+            );
+            assert_eq!(check, ModelCheck::Pinned, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed transfer says which file, which host, and what to do about it —
+    /// a 404 is upstream (the file moved), a dead link is not a verdict about the
+    /// neezer server (rule 2, and "a provider failure is never a verdict").
+    #[test]
+    fn a_failed_transfer_says_why_in_french() {
+        let missing = download_failure_fr(
+            models::BASE,
+            &ApiError::Http {
+                status: 404,
+                message: "Entry not found".to_owned(),
+                code: None,
+            },
+        );
+        assert!(missing.contains(models::BASE), "{missing}");
+        assert!(missing.contains("HTTP 404"), "{missing}");
+        assert!(
+            missing.contains("huggingface.co/ggerganov/whisper.cpp"),
+            "{missing}"
+        );
+        assert!(missing.contains("Rien n’a été installé"), "{missing}");
+
+        let vad_missing = download_failure_fr(
+            models::VAD,
+            &ApiError::Http {
+                status: 410,
+                message: String::new(),
+                code: None,
+            },
+        );
+        assert!(
+            vad_missing.contains("huggingface.co/ggml-org/whisper-vad"),
+            "{vad_missing}"
+        );
+
+        let offline = download_failure_fr(models::TINY, &ApiError::Offline);
+        assert!(offline.contains(models::TINY), "{offline}");
+        assert!(offline.contains("injoignable"), "{offline}");
+        assert!(
+            offline.contains("votre serveur Neezer n’est pas en cause"),
+            "{offline}"
+        );
+
+        let other = download_failure_fr(
+            models::SMALL,
+            &ApiError::Http {
+                status: 503,
+                message: "trop de monde".to_owned(),
+                code: None,
+            },
+        );
+        assert!(other.contains(models::SMALL), "{other}");
+        assert!(other.contains("503"), "{other}");
     }
 
     /// The child's command line carries the model, the language and the CPU

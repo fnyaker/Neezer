@@ -50,6 +50,14 @@ pub struct DownloadReport {
     pub content_type: Option<String>,
 }
 
+/// Where a download speaks: the client, and whether the endpoint is this
+/// server's own route (`true`, which is what `X-NS-Background` and the session
+/// classification apply to) or a pinned third-party host (`false`).
+struct Target<'a> {
+    http: &'a reqwest::Client,
+    api: bool,
+}
+
 /// An IO failure, said in the words a screen can print.
 fn write_error(error: std::io::Error) -> ApiError {
     ApiError::Http {
@@ -57,6 +65,47 @@ fn write_error(error: std::io::Error) -> ApiError {
         message: format!("écriture impossible : {error}"),
         code: Some("io".to_owned()),
     }
+}
+
+/// A refusal from a pinned third-party host, kept plain: its status, and at most
+/// 200 characters of its body (`Api::download_url_to`). Nothing in it is read as
+/// a neezer sentence: no `X-NS-Error`, no session, and a `404` here means "the
+/// file moved", never "the route is missing".
+fn external_error(status: u16, body: &str) -> ApiError {
+    let text = body.trim();
+    let message = if text.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        text.chars().take(200).collect::<String>()
+    };
+    ApiError::Http {
+        status,
+        message,
+        code: None,
+    }
+}
+
+/// The client every pinned-host download uses ([`Api::download_url_to`]).
+///
+/// Two properties are structural, not cosmetic:
+///
+/// - **no `cookie_provider`**: there is no jar in this client, so no `Cookie`
+///   and no `Authorization` header can be sent to a third party — before a
+///   redirect or after one, on any hop;
+/// - **`https_only`**: a plaintext request is refused, and so is a redirect that
+///   would downgrade to plaintext. The explicit scheme check in
+///   [`Api::download_url_to`] is the first refusal, this one is the second.
+///
+/// `https_only` is a parameter only so the tests can drive a loopback HTTP
+/// server: no production caller passes `false` (there is exactly one call site,
+/// with `true`).
+fn pinned_client(https_only: bool) -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .https_only(https_only)
+        .build()
 }
 
 /// How long a connection may take to establish (`docs/agents/desktop.md`).
@@ -179,6 +228,10 @@ pub struct Api {
     base: String,
     base_url: reqwest::Url,
     http: reqwest::Client,
+    /// The client of [`Api::download_url_to`]: no cookie jar (a session must not
+    /// leave this server), redirects followed (a pinned host answers `302` to its
+    /// CDN), same `User-Agent`.
+    external: reqwest::Client,
     jar: Arc<SessionJar>,
     gates: Arc<Gates>,
     cache: Arc<dyn ResponseCache>,
@@ -515,12 +568,118 @@ impl Api {
         lane: Lane,
         path: &str,
         destination: &Path,
+        on_progress: F,
+        cancel: &AtomicBool,
+    ) -> Result<DownloadReport, ApiError>
+    where
+        F: FnMut(u64, Option<u64>) + Send,
+    {
+        self.download_from(
+            Target {
+                http: &self.http,
+                api: true,
+            },
+            self.url(path),
+            lane,
+            destination,
+            on_progress,
+            cancel,
+        )
+        .await
+    }
+
+    /// One file from an ABSOLUTE `https` URL — a pinned third-party host, not an
+    /// API path — written to disk as it arrives.
+    ///
+    /// [`download_to`](Api::download_to) builds `{base}/api{path}`: handing it
+    /// the absolute model URL asked the neezer SERVER for
+    /// `/apihttps://huggingface.co/…`, which is a 404 on every whisper model
+    /// download in Réglages → Transcription locale (v1.6.0's bug, fixed in
+    /// v1.6.1). This entry point takes the URL as it is, and differs from the API
+    /// one in three ways that matter for a host nobody here administers:
+    ///
+    /// - **`https` only.** A `http`, `file`, `ftp` or relative address is refused
+    ///   before a byte moves: plaintext would let anything on the path rewrite a
+    ///   model body (the pinned SHA-256 would catch it, but only after 874 MB),
+    ///   and `file://` would read the person's disk. A URL carrying credentials
+    ///   is refused too, so none can reach a log line.
+    /// - it uses its own client, which carries NO cookie jar and sends no
+    ///   `X-NS-Background` header: a neezer session never leaves the server it
+    ///   belongs to (not on the first hop, not after a redirect), and a server
+    ///   header means nothing to a CDN;
+    /// - it follows the redirects such a host answers with (Hugging Face: `302`
+    ///   to its own CDN, with a signed URL). A body is only accepted at the end
+    ///   of that chain, a chain longer than ten hops is refused by the client
+    ///   instead of looping, and [`pinned_client`]'s `https_only` refuses a hop
+    ///   that would downgrade to plaintext.
+    ///
+    /// The lane, the Bulk token bucket and the stall watchdog are the same ones
+    /// [`download_to`](Api::download_to) uses, so a model transfer still waits
+    /// for what the person is doing (rule 1). A caller only passes a URL from
+    /// its own compile-time table: this is not a proxy for a URL a provider or a
+    /// server handed us (that would be an SSRF).
+    pub async fn download_url_to<F>(
+        &self,
+        lane: Lane,
+        url: &str,
+        destination: &Path,
+        on_progress: F,
+        cancel: &AtomicBool,
+    ) -> Result<DownloadReport, ApiError>
+    where
+        F: FnMut(u64, Option<u64>) + Send,
+    {
+        let parsed = reqwest::Url::parse(url).map_err(|error| ApiError::Http {
+            status: 0,
+            message: format!("adresse du fichier invalide ({url}) : {error}"),
+            code: Some("bad_url".to_owned()),
+        })?;
+        if parsed.scheme() != "https" {
+            return Err(ApiError::Http {
+                status: 0,
+                message: format!(
+                    "adresse du fichier refusée ({url}) : HTTPS seulement, jamais {}",
+                    parsed.scheme()
+                ),
+                code: Some("insecure_url".to_owned()),
+            });
+        }
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(ApiError::Http {
+                status: 0,
+                message: "adresse du fichier refusée : identifiants dans l’URL".to_owned(),
+                code: Some("credentialed_url".to_owned()),
+            });
+        }
+        self.download_from(
+            Target {
+                http: &self.external,
+                api: false,
+            },
+            parsed.to_string(),
+            lane,
+            destination,
+            on_progress,
+            cancel,
+        )
+        .await
+    }
+
+    /// The body of both download entry points: one URL, one `.part` file, one
+    /// verified rename.
+    async fn download_from<F>(
+        &self,
+        target: Target<'_>,
+        endpoint: String,
+        lane: Lane,
+        destination: &Path,
         mut on_progress: F,
         cancel: &AtomicBool,
     ) -> Result<DownloadReport, ApiError>
     where
         F: FnMut(u64, Option<u64>) + Send,
     {
+        let Target { http, api } = target;
         let partial = destination.with_extension(format!(
             "{}.part",
             destination
@@ -534,19 +693,22 @@ impl Api {
             return Err(write_error(error));
         }
         let guard = self.gates.acquire(lane).await;
-        let mut request = self
-            .http
-            .request(Method::GET, self.url(path))
+        let mut request = http
+            .request(Method::GET, endpoint)
             // A compressed body would be written compressed under the file's
             // name and the byte count would lie.
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .header(reqwest::header::ACCEPT, "*/*");
-        if guard.lane().is_background() {
+        if api && guard.lane().is_background() {
             request = request.header(BACKGROUND_HEADER, "1");
         }
         let response = request.send().await.map_err(|err| {
             if is_network_failure(&err) {
-                self.note_unreachable();
+                // A pinned host that does not answer says nothing about THIS
+                // server: the app stays online when a model host is down.
+                if api {
+                    self.note_unreachable();
+                }
                 ApiError::Offline
             } else {
                 ApiError::Http {
@@ -556,12 +718,21 @@ impl Api {
                 }
             }
         })?;
-        self.note_reachable();
+        if api {
+            self.note_reachable();
+        }
         let status = response.status().as_u16();
         let headers = response.headers().clone();
         if !(200..300).contains(&status) {
             let text = response.text().await.unwrap_or_default();
-            return Err(self.classify(status, &headers, &text, lane));
+            return Err(if api {
+                self.classify(status, &headers, &text, lane)
+            } else {
+                // Never `classify` here: a third-party `401` is not a neezer
+                // session ending, and clearing the jar over it would log the
+                // person out of their own server.
+                external_error(status, &text)
+            });
         }
         let content_type = header_text(&headers, reqwest::header::CONTENT_TYPE);
         let length = header_text(&headers, reqwest::header::CONTENT_LENGTH)
@@ -592,7 +763,9 @@ impl Api {
                 Ok(Err(_)) | Err(_) => {
                     drop(file);
                     let _ = std::fs::remove_file(&partial);
-                    self.note_unreachable();
+                    if api {
+                        self.note_unreachable();
+                    }
                     return Err(ApiError::Offline);
                 }
             };
@@ -992,6 +1165,15 @@ impl ApiBuilder {
                 message: format!("client HTTP impossible : {err}"),
                 code: None,
             })?;
+        // The model hosts' client: the same timeouts, NO cookie jar (a neezer
+        // session never leaves the server it belongs to), the redirects spelled
+        // out, and `https_only` so a redirect cannot downgrade the transfer to
+        // plaintext either.
+        let external = pinned_client(true).map_err(|err| ApiError::Http {
+            status: 0,
+            message: format!("client HTTP impossible : {err}"),
+            code: None,
+        })?;
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() as u64)
@@ -1001,6 +1183,7 @@ impl ApiBuilder {
             base,
             base_url,
             http,
+            external,
             jar,
             gates: Arc::new(Gates::new()),
             cache: self.cache.unwrap_or_else(|| Arc::new(NoCache)),
@@ -1119,5 +1302,343 @@ mod tests {
         assert_eq!(api.owner().as_deref(), Some("u1"));
         // The Bulk cap follows the stream, never a client's own idea of urgency.
         assert_eq!(bulk_cap_from_stream(Some(800_000)), Some(200_000));
+    }
+
+    // --- `download_url_to`: v1.6.0's model downloads were 404s ----------------
+    //
+    // A loopback server cannot serve HTTPS (that would need a certificate
+    // fixture and a second crypto provider), so the wire tests drive
+    // `download_from` with `pinned_client(false)` — the PRODUCTION pinned client
+    // with only `https_only` off — and the refusals `download_url_to` itself
+    // enforces are asserted on their own. `pinned_client(true)` is what
+    // `ApiBuilder::build` installs, and one test below proves it refuses
+    // plaintext.
+
+    /// One answer of the throwaway server below, plus what the client sent.
+    struct Hop {
+        status: u16,
+        location: Option<&'static str>,
+        body: Vec<u8>,
+    }
+
+    /// One request the server saw: its target, and its headers lower-cased.
+    struct Seen {
+        target: String,
+        headers: String,
+    }
+
+    impl Seen {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}:")))
+                .map(str::trim)
+        }
+    }
+
+    /// A local HTTP server that answers `script` in order, one connection per
+    /// answer (`Connection: close`), and sends back every request it saw. No port
+    /// is assumed and nothing leaves the loopback.
+    fn local_server(
+        script: Vec<Hop>,
+    ) -> (
+        String,
+        std::sync::mpsc::Receiver<Seen>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let address = listener.local_addr().expect("address");
+        let (sender, seen) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            for hop in script {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => head.push(byte[0]),
+                    }
+                }
+                let text = String::from_utf8_lossy(&head).into_owned();
+                let target = text
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                let _ = sender.send(Seen {
+                    target,
+                    headers: text.to_lowercase(),
+                });
+                let mut answer = format!(
+                    "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    hop.status,
+                    hop.body.len()
+                );
+                if let Some(location) = hop.location {
+                    answer.push_str(&format!("Location: {location}\r\n"));
+                }
+                answer.push_str("\r\n");
+                let _ = stream.write_all(answer.as_bytes());
+                let _ = stream.write_all(&hop.body);
+            }
+        });
+        (format!("http://{address}"), seen, handle)
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nz-api-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// `download_from` with the pinned client on a loopback (plaintext) server.
+    async fn pinned_get(
+        api: &Api,
+        url: &str,
+        destination: &Path,
+    ) -> Result<DownloadReport, ApiError> {
+        api.download_from(
+            Target {
+                http: &pinned_client(false).expect("the test client"),
+                api: false,
+            },
+            url.to_owned(),
+            Lane::User,
+            destination,
+            |_, _| {},
+            &AtomicBool::new(false),
+        )
+        .await
+    }
+
+    /// v1.6.0's bug, pinned: `download_to` builds `{base}/api{path}`, so a caller
+    /// that handed it an absolute URL asked the NEZER SERVER for
+    /// `/apihttps://huggingface.co/…` — a 404 on every whisper model in Réglages
+    /// → Transcription locale. The pinned path asks the URL as it is, and follows
+    /// the `302` the host answers with (that is how Hugging Face serves these
+    /// files).
+    #[tokio::test]
+    async fn an_absolute_url_is_requested_as_it_is_and_its_redirect_is_followed() {
+        let body = b"ggml-tiny model bytes".to_vec();
+        let (base, seen, server) = local_server(vec![
+            Hop {
+                status: 302,
+                location: Some("/cdn/ggml-tiny.bin?sig=1"),
+                body: Vec::new(),
+            },
+            Hop {
+                status: 200,
+                location: None,
+                body: body.clone(),
+            },
+        ]);
+        let api = Api::new(&base).expect("a client");
+        let dir = scratch("download");
+        let destination = dir.join("ggml-tiny.bin");
+        let url = format!("{base}/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin");
+        let report = pinned_get(&api, &url, &destination)
+            .await
+            .expect("the redirect chain is followed to the body");
+        assert_eq!(report.bytes, body.len() as u64);
+        assert_eq!(std::fs::read(&destination).expect("the file"), body);
+        assert_eq!(
+            seen.recv().expect("the first request").target,
+            "/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+            "the URL is used as it is: prefixed with /api it was a 404 on the neezer server"
+        );
+        assert_eq!(
+            seen.recv().expect("the redirected request").target,
+            "/cdn/ggml-tiny.bin?sig=1"
+        );
+        server.join().expect("the server thread");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Guardrail**: no Neezer session reaches a pinned host, before or after a
+    /// redirect. The jar holds a cookie for the very origin being downloaded
+    /// from, and the pinned client still sends none — while the API client, with
+    /// the same jar and the same URL, does: the positive control that proves this
+    /// test would catch a regression.
+    #[tokio::test]
+    async fn no_session_reaches_a_pinned_host_even_after_a_redirect() {
+        use reqwest::cookie::CookieStore;
+
+        let body = b"model bytes".to_vec();
+        let (base, seen, server) = local_server(vec![
+            Hop {
+                status: 302,
+                location: Some("/cdn/model.bin"),
+                body: Vec::new(),
+            },
+            Hop {
+                status: 200,
+                location: None,
+                body: body.clone(),
+            },
+            // The control: the API client asking the same origin.
+            Hop {
+                status: 200,
+                location: None,
+                body: Vec::new(),
+            },
+        ]);
+        let jar = Arc::new(SessionJar::in_memory());
+        let api = Api::builder(&base)
+            .session(Arc::clone(&jar))
+            .build()
+            .expect("a client");
+        // The session cookie the server would have set, for THIS origin.
+        let value = reqwest::header::HeaderValue::from_static("session=topsecret; Path=/");
+        let mut headers = std::iter::once(&value);
+        let origin = reqwest::Url::parse(&base).expect("origin");
+        jar.set_cookies(&mut headers, &origin);
+        assert_eq!(
+            CookieStore::cookies(&*jar, &origin)
+                .expect("a cookie")
+                .to_str()
+                .expect("ascii"),
+            "session=topsecret"
+        );
+
+        let dir = scratch("nocookie");
+        let destination = dir.join("model.bin");
+        pinned_get(&api, &format!("{base}/model.bin"), &destination)
+            .await
+            .expect("a complete download");
+        for hop in ["the first hop", "the redirected hop"] {
+            let request = seen.recv().expect(hop);
+            assert!(
+                request.header("cookie").is_none(),
+                "{hop} carried a session cookie: {:?}",
+                request.headers
+            );
+            assert!(
+                request.header("authorization").is_none(),
+                "{hop} carried an authorization header"
+            );
+            assert!(
+                request.header("x-ns-background").is_none(),
+                "{hop} carried a neezer server header to a third party"
+            );
+        }
+        // The control: the SAME jar, through the API's own client, does send it —
+        // so the assertions above are about the pinned client, not about a jar
+        // that never held a cookie.
+        api.http
+            .get(format!("{base}/control"))
+            .send()
+            .await
+            .expect("the control request");
+        let control = seen.recv().expect("the control request");
+        assert_eq!(
+            control.header("cookie"),
+            Some("session=topsecret"),
+            "the control proves the cookie would be visible if it were sent"
+        );
+        server.join().expect("the server thread");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Guardrail**: HTTPS only, and nothing that is not a plain pinned URL. A
+    /// `http`, `file`, `ftp` or relative address, or one carrying credentials, is
+    /// refused before a byte moves; the production client refuses plaintext on
+    /// its own too, so a redirect cannot downgrade either.
+    #[tokio::test]
+    async fn a_pinned_url_must_be_https_and_free_of_credentials() {
+        let api = Api::new("http://127.0.0.1:1").expect("a client");
+        let dir = scratch("schemes");
+        for bad in [
+            "http://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+            "file:///etc/passwd",
+            "ftp://huggingface.co/x.bin",
+            "/ggerganov/x.bin",
+            "https://user:secret@huggingface.co/x.bin",
+            "not a url",
+        ] {
+            let refused = api
+                .download_url_to(
+                    Lane::User,
+                    bad,
+                    &dir.join("x.bin"),
+                    |_, _| {},
+                    &AtomicBool::new(false),
+                )
+                .await;
+            assert!(refused.is_err(), "{bad} must be refused");
+            assert!(
+                !dir.join("x.bin").exists() && !dir.join("x.bin.part").exists(),
+                "{bad} wrote a file"
+            );
+        }
+        // The client the production path uses refuses plaintext by itself.
+        let client = pinned_client(true).expect("the pinned client");
+        let plain = client.get("http://127.0.0.1:1/x.bin").send().await;
+        assert!(
+            plain.is_err(),
+            "`https_only` must refuse a plaintext request"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refused model host says its status and leaves nothing behind — and a
+    /// third-party status is never the neezer session's: a `401` from a model
+    /// host must not clear the cookie jar and log the person out.
+    #[tokio::test]
+    async fn a_pinned_host_refusal_is_a_plain_status_and_keeps_the_session() {
+        let (base, _seen, server) = local_server(vec![
+            Hop {
+                status: 404,
+                location: None,
+                body: b"Entry not found".to_vec(),
+            },
+            Hop {
+                status: 401,
+                location: None,
+                body: b"unauthorized".to_vec(),
+            },
+        ]);
+        let api = Api::new(&base).expect("a client");
+        api.set_owner(Some("u1".to_owned()));
+        let dir = scratch("refused");
+        let destination = dir.join("ggml-gone.bin");
+        let error = pinned_get(&api, &format!("{base}/ggml-gone.bin"), &destination)
+            .await
+            .expect_err("404");
+        match error {
+            ApiError::Http {
+                status, message, ..
+            } => {
+                assert_eq!(status, 404);
+                assert!(message.contains("Entry not found"), "{message}");
+            }
+            other => panic!("a third-party 404 is a plain HTTP failure: {other:?}"),
+        }
+        assert!(
+            !destination.exists() && !dir.join("ggml-gone.bin.part").exists(),
+            "a refused download writes nothing"
+        );
+        let unauthorized = pinned_get(&api, &format!("{base}/x.bin"), &dir.join("x.bin"))
+            .await
+            .expect_err("401");
+        assert!(
+            matches!(unauthorized, ApiError::Http { status: 401, .. }),
+            "{unauthorized:?}"
+        );
+        assert_eq!(
+            api.owner().as_deref(),
+            Some("u1"),
+            "the session is untouched"
+        );
+        assert!(api.is_online(), "a third-party failure is not our server");
+        server.join().expect("the server thread");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
