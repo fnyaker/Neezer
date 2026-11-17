@@ -21,7 +21,7 @@ for the catalog and none on the second read.
 import json
 import os
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest import mock
 
 from neezer import discover, energy, moods
@@ -30,7 +30,19 @@ from neezer.db import Album, Artist, Track, TrackAnalysis, User
 from .test_deezer import count_statements
 from .test_detach_a import _AppCase
 
-DAY = moods.now().date().isoformat()
+#: The instant every catalog in this file is built for, as a LITERAL and never
+#: the wall clock. ``moods.catalog`` keys its cache on (person, day) and resolves
+#: "today" itself, while the fixture builds for ``DAY``; a suite that starts
+#: before midnight and reaches a route after it then compares two different
+#: days. Measured on CI run 43983638806: the job started at 23:57:23 UTC,
+#: ``DAY`` was read at import (16 November), and
+#: ``test_the_warm_routes_never_scan_the_library_again`` ran at 00:00:58 — the
+#: route resolved 17 November, rebuilt the catalog and paid one extra SELECT
+#: (``Counter({'SELECT': 2})``) plus a different day-seeded draw. The fixture
+#: therefore pins the one clock below, so the whole file runs on one day
+#: whatever the hour.
+FROZEN = datetime(2026, 11, 17, 12, 0)
+DAY = FROZEN.date().isoformat()
 
 
 def measures(*, loud, centroid, flux):
@@ -51,6 +63,14 @@ class _Library(_AppCase):
     def setUp(self):
         super().setUp()
         from neezer.deezer import library
+
+        # `moods.catalog` is keyed on (person, day) and reads "today" itself,
+        # while the fixture builds for DAY. Pin that one clock so both sides of
+        # every assertion below are the same day, even when the suite runs
+        # across midnight (FROZEN says why).
+        clock = mock.patch.object(moods, "now", lambda: FROZEN)
+        clock.start()
+        self.addCleanup(clock.stop)
 
         self.root = library.get_root_folder(self.archive)
         self.user = User.get(User.name == "alice")
@@ -363,6 +383,13 @@ class RoutesTestCase(_Library):
         self.assertIsNot(first, second)
         self.assertNotIn(self.rows["calme"][0].id, second.mix_ids("calme", 40))
 
+    def test_the_fixture_runs_on_one_pinned_day(self):
+        # What keeps the fixture's DAY and the routes' own clock on the same
+        # day (FROZEN says why): without the pin, `moods.now()` is the wall
+        # clock and the literals below stop being today — the state CI run
+        # 43983638806 was in at 00:00:58, one day later than its import.
+        self.assertEqual(moods.now(), FROZEN)
+
     def test_the_warm_routes_never_scan_the_library_again(self):
         # The catalog is built by setUp. A home visit is the login's user read
         # and nothing else; a mood page is that plus the sound-neighbour pairs
@@ -370,6 +397,12 @@ class RoutesTestCase(_Library):
         # row and never a second pass over track_analysis.
         with count_statements() as cards:
             self.assertEqual(self.client.get("/api/moods").status_code, 200)
+        # The count means "the route found setUp's catalog": it is the same
+        # object, so no build of any kind hid inside the window (a rebuild is
+        # what CI run 43983638806 paid — Counter({'SELECT': 2}) at 00:00:58,
+        # the day having turned between the module's import and this request).
+        # Asserted first because it names the cause; the count stays exact.
+        self.assertIs(moods.catalog(self.user), self.catalog)
         self.assertEqual(sum(cards.values()), 1, cards)
         with count_statements() as detail:
             rv = self.client.get("/api/moods/energie?limit=40")
