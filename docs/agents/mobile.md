@@ -1375,51 +1375,77 @@ SPA's keys and the four-rung picker), `state` (the published `Snapshot`) and
   `wiring/offline.rs` as the worker's home: this lot could not edit another
   lot's section, so that line is the follow-up when desktop.md is next touched.
 
-### SC5 — Extract `nz-remote` (wave 1)
+### SC5 — Extract `nz-remote` (delivered 2026-11-18)
 
-**Goal.** Remote control (be controlled / control) shared. **Depends on**: SC0.
-**Exclusive files**: `desktop/crates/nz-remote/**`, `desktop/app/src/wiring/remote_host.rs`,
-`desktop/app/src/wiring/remote_controller.rs`.
-**Contract.** The protocol state machines (poll `since/chan`, acks, levels, the position line,
-command application through `nz_player::Command`) move; GPUI updates stay as adapters. Polling,
-never a held connection ([party-remote.md](party-remote.md)). Every thread/task it starts is owned
-and joined.
-**Acceptance.** Desktop CI green, same test count; Android check; a crate test runs a host and a
-controller against perf_api: a `pause` reaches the host and is acked; commands are NOT queued across
-an outage (party-remote.md's rule).
+**What landed.** `desktop/crates/nz-remote` owns both sides of remote control, and the two
+desktop files went from **3 458 to 493 lines**: a `pub use nz_remote::host::*` /
+`nz_remote::controller::*` (so every screen's `crate::wiring::remote_host::{…}` and
+`…::remote_controller::{…}` path is unchanged) plus the app-shaped half — `tick`, `apply_setting`,
+`snapshot_of`, `start`, `spawn_tick`, `cut_everything` on the host side, and a `Controller`
+newtype with the three methods whose signature is `AppState` on the other. Two modules, one per
+side, and that is deliberate: the two have their own `RETRY_MAX` (15 s for a lent player, 8 s for
+a loan), their own `TICK`, and a screen imports one side's names. `host` carries the wire session
+(poll `since`/`chan`, publish, `ack`, reset), `Pending`/`Command` decoding, the levels and their
+French labels, `HostStatus`, `Published`, the queue fingerprint, the poll loop and the mirrored
+settings; `controller` carries `Read`/`Anchor`/`skew_from`, `Grant`/`op_level`, the outbox, the
+read loop, `adopt` and the token a pasted link yields. No `Cargo.toml` and **no `Cargo.lock`
+changed** (SC0's manifest already named every dependency, and the crate uses nothing else), so
+`desktop/` and `mobile/rust/` locks are untouched by this lot.
 
-```text
-Tu es le worker du lot SC5 du plan mobile Neezer. Lis CLAUDE.md, docs/agents/mobile.md (« Reuse »,
-« Worker rules », « SC5 »), docs/agents/party-remote.md, docs/agents/desktop.md (D15a).
-Objectif : extraire la logique sans GPUI de desktop/app/src/wiring/remote_host.rs et remote_controller.rs
-dans desktop/crates/nz-remote ; les fichiers desktop deviennent des adaptateurs GPUI ; comportement inchangé.
-Fichiers à toi seul : desktop/crates/nz-remote/** et ces deux fichiers.
-Acceptation : CI desktop verte, même nombre de tests ; check Android arm64 ; test hôte + télécommande
-contre perf_api (pause transmise et acquittée, pas de file de commandes pendant une coupure).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc5, PR « refactor(desktop): SC5 extract nz-remote », CI verte, rebase +
-diff --stat, merge, section SC5 réécrite, `ao report --done`.
-```
+- **The rule, the tick stays the app's, and the queue hand-over is ONE call.** Applying a
+  command touches `PlayerState` AND the engine (the desktop's GPUI thread, Android's main
+  looper), so the crate only queues what arrived: `drain_pending` → the app applies through its
+  own transport path → `note_applied(ran)` → `hand_over_queue(seq, queue)` + `publish_state`.
+  The queue's fingerprint and the rows it produces are computed in one call, because a 120 ms
+  tick must not clone a 5 000-row queue whose fingerprint did not move, and the rows and the
+  state that describes them must never be published out of step (rule 4). Measured: unchanged
+  hand-over at 0 cloned rows for an unmoved queue.
+- **The rule, `apply_setting` splits at the `kv`.** The crate writes the store key (so a
+  controller's `set` and the person's own Réglages land in one place) and returns
+  `Changed::{Quality(&'static str), Stored(String)}`; the app owns the engine's rung and the
+  toast that says it applies at the next track. The test now drives EVERY `MIRRORED` key through
+  a real store and reads it back (`mirrored_value`), so "published" and "applicable" cannot drift
+  into two lists.
+- **The rule, a crate that seams on a whole app state exposes DECISIONS, not effects.**
+  `submit` (the level's refusal, the optimistic apply, the outbox) / `take_read` (adopt-or-hold,
+  the rows) / `follow_line` (the playhead between reads) / `flush` / `read_once` all take an
+  `&mut PlayerState` and a clock, and return what changed. The shell keeps a `Controller` newtype
+  because `screens/remote.rs` calls `controller.command(state, command, cx)`: a foreign type
+  cannot grow the shell's methods and remote.rs is not this lot's file, so the newtype delegates
+  11 one-liners to the crate and adds the three `AppState` ones. `RemoteHost` needed no newtype
+  at all (its only `cx` method was `tick`, called from this file): `tick(&host, …)` is a free
+  function there.
+- **The rule, the acceptance is driven, never slept.** The lot's two tests walk the real server
+  (`webapp/test/remote/server.py`) one step at a time, each step started by the previous answer:
+  **11 requests** for a `pause` that reaches the host and is acked (login, link, poll, publish,
+  claim, `POST /remote/cmd`, poll → the command, publish → `ack: 1`, state, queue, state where the
+  controller reads it), and an outage proven with a CLOSED PORT for the refused POST — after it,
+  **0 requests** carry the dropped pause when the link comes back (a second flush sends nothing
+  and the owner's poll has no command). The moved D15a bench still measures
+  **4.67 ms best / 708.9 ms worst** from a tap to the owner's `Effect::Load` against the lot's
+  1 200 ms, unchanged, with the 700 ms poll period as the worst case.
+- **The rule, test support is `#[cfg(test)]` here, unlike `nz-offline`.** SC4 had to publish its
+  `testing` module because `wiring::engine`'s benches reuse its server; nothing outside this
+  crate drives a remote link, so the bench (server, scratch store, runtime) stays private.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, NDK 30.0.16248370):
+  `cargo test -p nz-remote`: **25 tests**; the two files had **22** and all of them are here
+  except `adopting_the_owner_state_sounds_nothing_and_keeps_nothing`, which stays in the app
+  because it builds an `AppState` — so **26** where there were 22, the 4 new being the two
+  acceptance tests, the queue hand-over and the refused-command rule. `cargo test -p
+  neezer-desktop`: **408 passed, 0 failed, 8 ignored**. `cargo ndk -t arm64-v8a -P 26 check -p
+  nz-remote` → Finished (29.7 s), `cargo clippy --workspace --all-targets --locked -D warnings`
+  and `cargo fmt --check` clean.
+- **Pitfalls, two pre-existing quirks found and NOT changed** (the extraction may not move
+  behaviour, so MB19 owns them): (a) `run` leaves `looping = true` when the grant ends on an
+  error, so a cut ends the loop but a re-claim in the same process spawns no new one; (b) a
+  controller that sets `offline.quality = FLAC` sees `OPUS_320` on its next read, because
+  `Quality::Flac.wire()` is the ABSENCE of `q=` and `offline_quality_wire` falls back to its
+  default — writing "FLAC" is the case that does not round-trip, the Opus rungs do. And the
+  app-level test that times out only under load (`screens::album::tests`, `widgets/card.rs`:
+  "timed out waiting for three downloads" when the whole workspace runs beside the heavy
+  crates, 1.08 s alone) belongs to the album screen's own lot, not to this one.
+- **Follow-up.** `desktop.md` D15a still names `wiring/remote_host.rs` as the protocol's home (as
+  SC4 found for its own file): a lot that may edit that note updates the line.
 
 ### SC6 — Extract `nz-party` (delivered 2026-11-18)
 
