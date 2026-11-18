@@ -19,6 +19,7 @@
     toasts,
   } from "../lib/stores.js";
   import { api } from "../lib/api.js";
+  import { lanFeature } from "../lib/lan.js";
   import { fadeIn, rise } from "../lib/motion.js";
   import { listDownloads, removeTrack, clearAll } from "../lib/offline.js";
   import { clearPlayCache, enforce } from "../lib/playcache.js";
@@ -45,6 +46,7 @@
   import ServicesSettings from "../components/ServicesSettings.svelte";
   import DiscoverySlider from "../components/DiscoverySlider.svelte";
   import DislikedTracks from "../components/DislikedTracks.svelte";
+  import LanSettings from "../components/LanSettings.svelte";
 
 
   const QUALITIES = [
@@ -80,6 +82,18 @@
   // from "read", the sound from "full". This device's own storage is not
   // shown there at all — it is not the one playing.
   const ADMIN = () => !REMOTE && CAN_ADMIN && $user?.admin;
+  // « Appareils et amis » exists only where the server has the LAN routes: an
+  // older server answers 404 on /api/lan/status and the category is not drawn
+  // at all, exactly as an app does not start its LAN node there (rule 7). The
+  // probe is memoised by lib/lan.js, so it costs one request per page load and
+  // none per visit. A remote-control session never sees it: every LAN route is
+  // NEVER for a lent link, so the screen would only collect 403s.
+  let lanHere = false;
+  onMount(async () => {
+    if (REMOTE) return;
+    const probe = await lanFeature();
+    lanHere = !!probe?.supported;
+  });
   $: SECTIONS = [
     ...(CAN_KEEP ? [{ id: "playback", label: "Lecture & son", icon: "speaker", hint: "Sortie audio, volume, égaliseur, transitions" }] : []),
     // The theme is THIS device's preference (`ui.theme`, lib/theme.js), so it
@@ -90,6 +104,9 @@
     ...(REMOTE ? [] : [{ id: "downloads", label: "Téléchargements", icon: "download", hint: "Qualité, hors-ligne, préchargement" }]),
     { id: "discovery", label: "Découverte", icon: "compass", hint: "Flow, titres que vous n'aimez pas, nouveautés" },
     ...(REMOTE ? [] : [{ id: "sources", label: "Sources", icon: "link", hint: "Ordre des sources, vos comptes, et qui peut s'en servir" }]),
+    ...(REMOTE || !lanHere
+      ? []
+      : [{ id: "lan", label: "Appareils et amis", icon: "monitor", hint: "Vos appareils inscrits, vos amis de confiance, ce qu'ils voient" }]),
     { id: "account", label: REMOTE ? "Contrôle" : "Compte", icon: "user", hint: REMOTE ? "Le lecteur que vous pilotez" : "Votre compte, l'export vers d'autres services" },
     ...($user?.admin && ADMIN() ? [{ id: "users", label: "Utilisateurs", icon: "users", hint: "Comptes, rôles et invitations" }] : []),
     ...($user?.admin && ADMIN() ? [{ id: "server", label: "Serveur", icon: "archive", hint: "Archive, nettoyage, stockage, quotas" }] : []),
@@ -107,7 +124,7 @@
   const IN_GROUP = {
     listen: ["playback", "appearance", "viz"],
     library: ["downloads", "discovery"],
-    accounts: ["sources", "account", "users", "server", "help"],
+    accounts: ["sources", "lan", "account", "users", "server", "help"],
   };
 
   // -- the menu's own filter -------------------------------------------------
@@ -745,6 +762,10 @@
   <SourceOrder />
   <MyAccounts />
   <AccessSettings />
+{/if}
+
+{#if tab === "lan"}
+  <LanSettings />
 {/if}
 
 {#if tab === "downloads"}
