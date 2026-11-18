@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ids::UserId;
+
 /// `GET /api/lan/status` — what the feature probe reads, and the first request
 /// of an enrolment (it carries the caller's subject and the server's keys).
 ///
@@ -156,8 +158,11 @@ pub struct LanFriends {
 /// One trusted friend and the scope of the share.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LanFriend {
+    /// The ACCOUNT's id: a UUID string, like every other account id the API
+    /// sends (`AdminUser.id`, `UserId`). It is what the routes address a friend
+    /// by; the LAN's own opaque `subject` is a separate field and never this.
     #[serde(default)]
-    pub user_id: u32,
+    pub user_id: UserId,
     #[serde(default)]
     pub name: String,
     /// Everything I have locally, rather than the playlists below.
@@ -226,18 +231,31 @@ mod tests {
 
     /// The friends payload carries both directions, and a `trusted_by` entry
     /// has no scope at all — that is what the defaults are for.
+    ///
+    /// `user_id` is the ACCOUNT's UUID, not a number: Neezer's accounts are
+    /// UUIDs everywhere (`AdminUser.id`), and a `u32` here would have made serde
+    /// reject the server's own answer.
     #[test]
     fn the_two_directions_of_trust_parse() {
         let friends: LanFriends = serde_json::from_str(
-            r#"{"shares_to":[{"user_id":2,"name":"Alice","all":false,
+            r#"{"shares_to":[{"user_id":"160a4e34-6f4a-4d3b-9b1e-2d1a4c8f7e01",
+                              "subject":"00112233445566778899aabbccddeeff",
+                              "name":"Alice","all":false,
                               "playlists":[{"id":"p1","title":"Route"}]}],
-                "trusted_by":[{"user_id":3,"name":"Bob"}]}"#,
+                "trusted_by":[{"user_id":"160a4e34-6f4a-4d3b-9b1e-2d1a4c8f7e02","name":"Bob"}]}"#,
         )
         .expect("the friends answer");
         assert_eq!(friends.shares_to.len(), 1);
         assert_eq!(friends.shares_to[0].playlists[0].title, "Route");
         assert!(!friends.shares_to[0].all);
-        assert_eq!(friends.trusted_by[0].user_id, 3);
+        assert_eq!(
+            friends.shares_to[0].user_id.as_str(),
+            "160a4e34-6f4a-4d3b-9b1e-2d1a4c8f7e01"
+        );
+        assert_eq!(
+            friends.trusted_by[0].user_id.as_str(),
+            "160a4e34-6f4a-4d3b-9b1e-2d1a4c8f7e02"
+        );
         assert!(friends.trusted_by[0].playlists.is_empty());
         assert!(!friends.trusted_by[0].all);
     }

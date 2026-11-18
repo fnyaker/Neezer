@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS user (
     disabled BOOLEAN NOT NULL DEFAULT 0,
     last_login DATETIME,
     onboarding_step VARCHAR(16) NOT NULL DEFAULT 'done',
+    lan_serial INTEGER NOT NULL DEFAULT 0,
     listenbrainz_session CHAR(36),
     listenbrainz_status BOOLEAN NOT NULL,
     lastfm_session CHAR(32),
@@ -697,3 +698,35 @@ CREATE TABLE IF NOT EXISTS discovery (
     payload TEXT
 );
 CREATE INDEX IF NOT EXISTS index_discovery_state ON discovery(state);
+
+CREATE TABLE IF NOT EXISTS lan_device (
+    id CHAR(24) PRIMARY KEY,
+    user_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    pubkey CHAR(64) NOT NULL UNIQUE,
+    name VARCHAR(64) NOT NULL,
+    platform VARCHAR(16) NOT NULL,
+    created DATETIME NOT NULL,
+    last_seen DATETIME NOT NULL,
+    not_after DATETIME NOT NULL,
+    revoked DATETIME
+);
+CREATE INDEX IF NOT EXISTS index_lan_device_user ON lan_device(user_id);
+CREATE TABLE IF NOT EXISTS lan_device_key (
+    pubkey CHAR(64) PRIMARY KEY,
+    device_id CHAR(24) NOT NULL REFERENCES lan_device ON DELETE CASCADE,
+    not_after DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS index_lan_device_key_device ON lan_device_key(device_id);
+CREATE TABLE IF NOT EXISTS lan_friend (
+    owner_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    friend_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    share_all BOOLEAN NOT NULL DEFAULT FALSE,
+    created DATETIME NOT NULL,
+    PRIMARY KEY (owner_id, friend_id)
+);
+CREATE TABLE IF NOT EXISTS lan_friend_playlist (
+    owner_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    friend_id CHAR(36) NOT NULL REFERENCES user ON DELETE CASCADE,
+    playlist_id CHAR(36) NOT NULL REFERENCES playlist ON DELETE CASCADE,
+    PRIMARY KEY (owner_id, friend_id, playlist_id)
+);

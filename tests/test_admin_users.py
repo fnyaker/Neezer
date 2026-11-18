@@ -615,10 +615,17 @@ class AdminUsersTestCase(unittest.TestCase):
         # over every table that names a user (including the transcription
         # worker lease). Deletion is rare; nothing here is per-row except the
         # uploads, which are one UPDATE, and its own audit row.
+        #
+        # 65 since schema 20261124: the LAN lot adds four tables that name an
+        # account — lan_device (user), lan_friend (owner AND friend),
+        # lan_friend_playlist (owner AND friend) — and Peewee's recursive delete
+        # emits one DELETE for each of those five relations, exactly like the
+        # podcast and transcript tables above. Measured: 58 -> 65 (+7), nothing
+        # per-row.
         with count_statements() as counts:
             response = self._delete("bob")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 58, dict(counts))
+        self.assertEqual(sum(counts.values()), 65, dict(counts))
 
     # -- the legacy /user routes use the same guards --------------------------
 

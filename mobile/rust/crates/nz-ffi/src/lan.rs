@@ -144,7 +144,9 @@ pub struct LanPlaylistFfi {
 /// One trusted friend and what they may see.
 #[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq)]
 pub struct LanFriendFfi {
-    pub user_id: u32,
+    /// The ACCOUNT's id: a UUID string, like every other account id the app
+    /// holds. The LAN's own opaque `subject` is a separate field, never this.
+    pub user_id: String,
     pub name: String,
     /// Everything I have locally.
     pub all: bool,
@@ -280,7 +282,7 @@ impl LanApi {
     /// What one friend may fetch: everything, or the listed playlists.
     pub async fn set_friend_scope(
         &self,
-        user_id: u32,
+        user_id: String,
         all: bool,
         playlists: Vec<String>,
     ) -> Result<(), NzError> {
@@ -289,7 +291,7 @@ impl LanApi {
     }
 
     /// Stops sharing with one friend; their devices stop at their next roster sync.
-    pub async fn remove_friend(&self, user_id: u32) -> Result<(), NzError> {
+    pub async fn remove_friend(&self, user_id: String) -> Result<(), NzError> {
         let _ = user_id;
         Err(unsupported("remove_friend"))
     }

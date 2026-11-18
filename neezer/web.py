@@ -444,6 +444,12 @@ def create_application(config=None):
 
         app.register_blueprint(invites_api, url_prefix="/api")
 
+        # The LAN nodes' trust chain: enrolment, roster, devices, friends and
+        # the two admin settings (docs/agents/lan-nodes.md, LN1).
+        from .webui.lan import lan_api
+
+        app.register_blueprint(lan_api, url_prefix="/api")
+
         # The chapters an archived episode carries in its own file: its own
         # blueprint, read-only, registered under the same /api prefix.
         from .webui.podcast_chapters import chapters_api

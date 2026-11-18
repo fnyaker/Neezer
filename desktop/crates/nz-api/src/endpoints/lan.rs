@@ -22,6 +22,7 @@
 
 use crate::client::Api;
 use crate::error::ApiError;
+use nz_model::UserId;
 use nz_model::lan::{
     LanDevice, LanEnrollAnswer, LanEnrollRequest, LanFriend, LanFriends, LanRosterAnswer, LanScope,
     LanServerSettings, LanStatus,
@@ -108,7 +109,7 @@ impl Api {
     /// local files, or the listed playlists (`User`).
     pub async fn lan_set_friend(
         &self,
-        user_id: u32,
+        user_id: &UserId,
         scope: &LanScope,
     ) -> Result<LanFriend, ApiError> {
         let _ = (user_id, scope);
@@ -117,7 +118,7 @@ impl Api {
 
     /// `DELETE /api/lan/friends/<user_id>` — stop sharing with that friend
     /// (`User`).
-    pub async fn lan_remove_friend(&self, user_id: u32) -> Result<(), ApiError> {
+    pub async fn lan_remove_friend(&self, user_id: &UserId) -> Result<(), ApiError> {
         let _ = user_id;
         Err(absent())
     }
