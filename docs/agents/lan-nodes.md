@@ -1937,56 +1937,172 @@ immediately; `git status` was clean of them before the real commit):
 `prefer`. The opener takes `Urgency::Play`/`Prefetch` and never sees a gate; the downloader
 takes `Urgency::Bulk`, the app's ONE `Gates` (`Api::gates()`), and passes its `stop` watch.
 
-### LN10 — The `Lan` service (wave 4, effort max)
+### LN10 — The `Lan` service (delivered 2026-11-18)
 
-- **Objective**: one handle, `Lan`, runs everything: its own runtime, enrolment and renewal,
-  discovery, dialling and accepting, authentication, gossip on connect, inventory sync, serving,
-  activity gating (battery), the snapshot and events the screens read, counted memory, and a
-  shutdown that joins every thread.
-- **Files**: LN10 row. **Contracts**: `service.rs` in *Contracts*.
-- **Depends on**: LN3, LN6, LN7, LN9.
-- **Acceptance**: two `Lan`s in one test (loopback, `ExternalDiscovery`) with a mock server for
-  enrolment: both enrol, find each other on `found`, connect once, exchange `Hello`, gossip a newer
-  revocation list (the revoked third device is then refused by BOTH), replicate inventories, and the
-  snapshot shows the peer with name, relation and RTT; `set_active(all false)` closes connections and
-  stops discovery within 60 s of paused clock and **0 packets** are sent afterwards (counter);
-  `enabled = false` stops everything; `Feature::Lan` absent → `LanState::Unsupported`, nothing
-  started; a credential renewal swaps the identity without dropping live transfers;
-  `Lan::shutdown()` joins the `nz-lan` runtime, the hashing thread and the discovery daemon (asserted
-  by thread names), and a runtime that borrows nothing else panics nowhere; `memory()` = index +
-  peers + buffers, flat (≤ 1 %) over 10 000 simulated inventory deltas; the snapshot is a clone, read
-  without touching SQLite.
-- **Pitfalls**: the order at shutdown (engine → offline → `Lan` → `nz-net`) is the APP's job — the
-  service must make it possible (a `shutdown` that does not wait on anything the engine holds);
-  refused nodes back off 10 min per instance; reconnect last-known addresses on `network_changed`.
-- **Prompt**:
+**What landed.** `service.rs` — the one handle the apps hold — and `tests/service.rs`, 13 tests
+written from this note's *Acceptance* list rather than from the implementation: two (or five) REAL
+nodes on loopback with `DiscoveryKind::External`, a fake server that signs LN1's contract with the
+note's LAN seed, and fake peers that speak LN6's transport and answer LN4's `Inventory` pages.
 
-  > Tu implémentes le lot **LN10 — The `Lan` service** du plan « nœuds LAN » (effort max : cycle de
-  > vie, authentification et bavardage). But : un seul objet `Lan` qui fait tout tourner — son propre
-  > runtime (`nz-lan`, joint à l'arrêt), inscription et renouvellement, découverte, connexions,
-  > authentification, bavardage à la connexion, synchronisation des inventaires, service des
-  > requêtes, mise en sommeil selon l'activité (batterie : rien ne part écran éteint sans lecture ni
-  > téléchargement), l'instantané et les événements que lisent les écrans, la mémoire comptée. Lis
-  > *Architecture* en entier, *Contracts*, *Rule 1 on the LAN*, *Rules 2 and 3* et la section LN10 de
-  > `docs/agents/lan-nodes.md`. Fichiers exclusifs : la ligne LN10. Critères : la liste *Acceptance*
-  > de LN10.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **Lifecycle.** `Lan::start` probes `Feature::Lan` **first**, with a throw-away current-thread
+  runtime (it owns no thread): a `404` answers `Err(Unsupported)` and leaves no directory, no
+  socket, no thread. Otherwise: `nz-cache`'s settings, `lan.sqlite`, the index (one `refresh`), the
+  serve budget, the trust state, then the runtime — one worker, threads named `nz-lan`, **niced +5**
+  (`libc::setpriority`).
+- **The driver** is one `tokio::select!` over the app's commands, its children's reports, the
+  activity flags, the discovery feed, the index's version and four timers. Nothing awaited inside it
+  can block it: enrolment/renewal is a child task, the accept loop is a child task (a handshake must
+  never be cancelled by another event), and each authenticated peer gets two children — a serve loop
+  and a control loop.
+- **Enrolment and renewal.** The cached credential first (`load_cached`, **0 requests**: the trip
+  works with the server unreachable), then — only when a credential is already held — one
+  **conditional** roster sync (`ETag`, `304`, 0 bytes), then `ensure_enrolled`. A renewal rotates
+  the key and the endpoint's identity **before** the snapshot says so (`set_identity`), so no screen
+  and no peer ever sees a credential this node does not serve yet. `Unsupported`/`Disabled` stop the
+  node and say which; any other failure keeps the cached identity, fills `key_error` in French, and
+  retries on the next daily tick or on `enroll_now`.
+- **Discovery, dialling, gossip, replication.** The feed is created once and started/stopped with
+  the activity; a `Found` dials (bounded table, one dial per instance per [`MIN_REDIAL`], ten
+  minutes after a refusal); an authenticated connection is admitted once per device, remembers its
+  address (`peer_addr`, the reconnect path), offers the trust this node holds, announces the
+  inventory version and then replicates the peer's. A peer whose inventory moves is re-synced on its
+  `InventoryChanged`.
+- **Serving** goes through LN4's `Server::handle`, so the serve budget and the `Bulk` lane are the
+  same mechanism. With « Partager mes sons » off the node answers the frames of a node that **has
+  nothing** — an empty `InventoryFull`/`Sets`, `Meta` with no rows, `NotFound` for a fetch — never a
+  refusal that would tell a friend more than an absent file.
+- **Battery.** `set_active` feeds three counted flags; when none is on, `SLEEP_GRACE` (60 s) later
+  the connections close with code 0 (never `CLOSE_REFUSED`: a phone whose screen went off must not
+  cost a peer ten minutes of silence) and the discovery stops. Nothing is dialled, announced or
+  synced afterwards; `enroll_now` still works (an HTTP round trip is not a LAN packet).
+- **`enabled = false`** closes the socket too (the port is free again) and stops the hashing
+  worker; turning it back on re-reads the cached credential, binds, announces and dials the known
+  addresses.
+- **`shutdown()`** stops the hashing worker (its own thread and runtime), closes the endpoint (which
+  closes every connection and joins quinn's only task), stops the discovery (which joins its
+  daemon), aborts and drains its children, and joins the runtime's thread. It is idempotent, and a
+  `Node` in a test shuts down on `Drop` so a failing test cannot leak threads into the census.
+- **The snapshot** is one short mutex plus the counted replicas: `state` (derived: `Connected(n)`
+  from the peer list), `key_until`, `key_error`, the peers with name/relation/platform/RTT/tracks,
+  the transfers in flight, the last French failures, the port and its fallback.
+- **Rule 1** everywhere: the enrolment (`Prefetch`/`Bulk`), the LAN inventory sync (`Bulk`, the SAME
+  `Gates` as a download) and the responder's `Bulk` serves all yield to what the person just did;
+  serving, hashing and the runtime are niced (+5, +10).
+
+**Additions to LN0's surface** (each additive, each with its reason):
+
+1. **`Lan::wire() -> WireCounts`** (`packets_out`, `packets_in`, `bytes_out`, `bytes_in`, `dials`)
+   — quinn's OWN per-connection counters, sampled on the runtime (never in `snapshot()`:
+   `Connection::stats` locks the connection). It is the battery measure the note asks for ("0 LAN
+   packets": a counter, not `tcpdump`), and a Réglages line may print it.
+2. **`Lan::set_sleep_grace(Duration)`** — a test cannot pause the clock of a runtime it does not
+   own, so the 60 s of grace would make every run pay a minute. The app keeps `SLEEP_GRACE`.
+3. **`Lan::settings()` answers the EFFECTIVE settings**: `LanConfig.port` overrides the stored one
+   for the session (`0` = any, which is what a test needs), without rewriting the person's setting.
+4. **`Lan::start` inside a runtime skips the probe** (`has_route` is async and blocking there
+   would panic): the driver asks as its first act, and a `404` then answers
+   `LanState::Unsupported` and stops everything. Both halves are tested.
+
+**Where a divergence is deliberate:**
+
+- **The gossip offers with an UNKNOWN peer** (`serial 0`, no roster serial): `PeerInfo` does not
+  carry the peer's revocation serial (LN6's shape, and this lot does not own that file). The cost is
+  at most one revocation list and one roster per connection — the receiver keeps the maximum and
+  ignores what is not newer (`gossip::accept` answers `Ok(false)`) — and it is bounded by the
+  connection's own lifetime, not by a timer.
+- **`transfers` holds the serves this node answers** (track, peer, urgency, the bytes written when
+  it ends); LN11's downloader registers its own with a total. The registry is capped at 32 rows so a
+  peer's 64 streams cannot make this device keep 64.
+- **`sets()` answers `Vec::new()`**: the sets replica is `sets.rs`'s (LN11). The peer list's `sets`
+  column reads `Peers::views()`, which is 0 until then — one source of truth, not two.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, debug unless said
+otherwise, 2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| the lot's file | **13 tests**, 45.5 s | `cargo test -p nz-lan --test service` |
+| the crate after it | **101 unit + 19 cred + 5 discovery + 23 enroll + 11 fetch + 19 serve + 13 service + 20 transport**, all green | `cargo test -p nz-lan` |
+| two nodes, first login | **2 status + 2 enrol + 0 roster** requests; **1** dial for the pair; `Hello` names both; B replicates A's 2 tracks | `two_nodes_enrol_find_each_other_and_replicate_their_inventories` |
+| the pair's traffic | **8–10 datagrams out, 6 in, 5 834 B out**, RTT **0–1 ms** | same (`Lan::wire`) |
+| asleep | A **9 datagrams / 5 895 B**, B **15 / 8 708** — and **0 new** after `set_active(all false)`, across a `found`, a `network_changed` and an `enroll_now` | `a_paused_node_closes_everything_and_sends_nothing` |
+| the connections close | **at once** (asserted with a **5 s** net, well under quinn's 30 s idle timeout) | same |
+| `enabled = false` | state `Off`, peers 0, the UDP port is **bindable again**, `wire()` frozen; back on → **1 dial** of the stored address → 1 peer | `switching_the_feature_off_stops_everything` |
+| a server without the feature | `Err(Unsupported)`, **1** request (the `OPTIONS` probe), **no** directory, **0** thread | `a_server_without_the_feature_starts_nothing` |
+| a server that loses it | `LanState::Unsupported`, peers 0, `wire()` frozen | `a_server_that_loses_the_feature_stops_the_node` |
+| a renewal | key rotated, device row kept (**2** rows for 3 enrolments), B still on the OLD key (**1** peer), **the live connection still serves** (B gains a track, A's replica grows), and a third device authenticates with the NEW key | `a_renewal_swaps_the_identity_and_keeps_the_live_connection` |
+| gossip | A learns serial 8 from the server, B's `lan.sqlite` ends with **serial 8 + the tablet's key**, and BOTH refuse the tablet (C's own peer count stays 0) | `a_revoked_device_is_refused_by_both_peers_through_gossip` |
+| the ten-minute silence | 3 repeats of both addresses → **0** extra dial (a never-seen address queued behind them is dialled: the marker) | same |
+| « Partager mes sons » off | an `Inventory` answers **0 items, version 0**, a `Fetch` answers `NotFound`, and no request fails | `a_device_that_shares_nothing_answers_an_empty_inventory` |
+| shutdown | **0** `nz-lan` and **0** `nz-lan-hash` threads after it, twice called, and the node still answers `snapshot`/`decide` | `shutdown_joins_every_thread` |
+| memory, 4 peers × 8 000 tracks | **1 537 949 B counted = 48.1 B/item** (the replica is 48 B/item; the service's own counters add < 64 KB) | `four_peer_inventories_fit_the_memory_cap` |
+| memory over 10 000 deltas | **384 841 → 384 841 B (0.00 %)**, 10 000 deltas APPLIED in 6.1 s | `the_memory_is_flat_over_ten_thousand_inventory_deltas` |
+| the snapshot | **482–974 ns** per call with a peer connected; `decide` **1.18–1.57 µs**; **0** requests for 1 000 taps | `the_snapshot_and_a_tap_never_touch_sqlite_or_the_network` |
+| rule 1 | the person **0.79–1.19 ms**; the node's background request after **1.0018 s**; a peer's first inventory after **1.0019 s** (the SAME `BULK_QUIET`) | `a_bulk_lan_request_yields_to_the_persons_request` |
+| lints, Android shape | `clippy -D warnings --all-targets` clean with and without `mdns`; `mobile/rust` `cargo check --workspace --locked` clean; **neither `Cargo.lock` moved** | the CI commands |
+
+**10 mutants, one per property, each run once and each RED** (`target/ln10-mutants/mutants.py`,
+restored and `touch`ed after each — LN2's lesson): « Partager mes sons » ignored → the empty-frame
+test; no gossip on connect → B's store stays serial 7; the dial table always says yes → the
+backoff unit test; a renewal that keeps the old identity → the third device sees the old key;
+falling asleep that keeps the connections → the peers-gone assertion; a server without the feature
+that starts anyway → the `Err(Unsupported)` test; `shutdown` that leaks the hasher
+(`mem::forget`) → the thread census; the LAN sync without the `Bulk` lane → the rule 1 timing;
+`memory()` without the replicas → the memory cap; `enabled = false` that keeps the socket → the
+bind-the-port assertion.
+
+**Rules a measurement taught.**
+
+- **`publish` only wakes when the VIEW changed, so everything outside it needs `touch()`.** The peer
+  list, a replica, a renewal that lands on the same second and a refused connection all live outside
+  the view's fields: the first version published `|_| {}` (a no-op) and a test waited its **whole
+  40 s deadline** while the state was already correct, and a screen would have kept a device that
+  had gone. `touch()` is the version bump without a view change.
+- **`fail()` keeps ONE line per cause, so a repeated failure is not an event.** The second refusal
+  of the same peer changes nothing in the view: an attempted connection therefore `touch()`es on its
+  own (it is what a peer list redraws for).
+- **A `Bulk` lane held at CONNECTION scope starves every other peer.** Taken once before the control
+  loop's `while`, the guard lived for the connection's life and 2 of 4 replicas never arrived
+  (measured: 40 s, `tracks: 0`). The lane is taken around the `sync_inventory` await and nowhere
+  else.
+- **A re-dial after a close is a handshake loop unless it is fenced.** With the duplicate rule
+  collapsing a pair, the loser's close triggered a dial, whose duplicate close triggered another:
+  RTT grew to 1.2 s, no inventory ever finished, and `memory()` fell to its floor. Fixed by dialling
+  only when the DEVICE has no connection left, and by a per-instance floor (`MIN_REDIAL`, 2 s)
+  beside the ten-minute backoff.
+- **A renewal must not re-dial.** Doing so gives the peer a second device row — the rotated key IS
+  a new identity — so B saw 2 peers where the note promises 1. The endpoint swaps its identity;
+  nothing re-connects.
+- **A connection closed by the sleep arrives AFTER the map was drained.** `Closed` was matched
+  against `conns`, the sleep had already emptied it, and the peer's replica stayed for ever. The
+  message removes the replica even when the connection is no longer in the map.
+- **quinn's idle timeout can pass for work the node did.** A mutant that removed the close on sleep
+  still passed a 40 s bound: the connection died at 30 s by itself. The bound for "it happened
+  because the node did it" is 5 s — far under `IDLE_TIMEOUT` — and the same reasoning applies to
+  the "closed the socket" assertion (bind the port).
+- **Real packet counts are quinn's, and they belong off the UI thread.** `Connection::stats()` gives
+  `udp_tx`/`udp_rx` datagrams and bytes per connection; sampling it in `snapshot()` would lock the
+  connection on the UI thread, so the driver samples it (on admit, on close and on a 1 s tick while a
+  peer exists) into atomics.
+- **A test that counts threads must own the process.** `/proc/self/task` is process-wide: 13 tests
+  in one binary would count each other's runtimes. One mutex serialises the file (and a `Drop` on
+  the test's `Node` shuts the node down when a test panics, or the failed test's threads poison the
+  census of the next one).
+- **The 60 s of grace cannot be paused from outside.** `tokio::time::pause` affects the runtime it is
+  set on, and the node owns its own: hence `set_sleep_grace`, and the *unit* test that spells
+  `SLEEP_GRACE == 60 s` (LN7's rule: a test must not take its boundary from the constant it tests).
+- **A `/proc` scan must skip the entry it cannot read.** `thread_by_name` returned `None` for the
+  WHOLE scan when one entry vanished between `read_dir` and the read of its `comm`, and under 101
+  parallel tests that is a thread of another test exiting in exactly that window: measured **2
+  failures in 8 runs on `master`**, 0/3 in series, 0/5 alone. The lookup now skips what it cannot
+  read and waits — bounded, 10 s — for the name to appear (a `spawn` returns before the child has
+  set it), so a thread that never takes its name still fails, with the name in the message. Fixed in
+  this lot's PR because LN4 was delivered and nobody else writes `hashing.rs`: **0 failures in 50
+  parallel runs** after, and the same test fails in 10.0 s when the worker's name is changed.
+- **A fake server's credential window must move for a renewal to be observable.** `key_until` is the
+  only screen-shaped trace of a new credential, and a renewal that lands in the same second leaves
+  it unchanged: the fake issues `at + days + n` for the n-th credential of a device, which is what a
+  real `now + 30 days` is one second later.
 
 ### LN11 — Adapters: opener, downloader, sets, covers and metadata (wave 5, effort high)
 
