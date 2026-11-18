@@ -248,6 +248,13 @@ impl Screens {
 pub struct NzCore {
     core: Arc<Core>,
     screens: Arc<Screens>,
+    /// The ONE player of the process (MB3c's measurement). `player()` used to
+    /// build a fresh `PlayerApi` per call, and a `PlayerApi` owns a `Player`, an
+    /// engine and the engine's sink: the media service opened AAudio on ITS
+    /// instance while the caller's queue lived in another — 40 stream requests
+    /// served, `position()` still 0, nothing audible. "Built once, by
+    /// `NzCore::player()`" (MB3b) is a promise this field keeps.
+    player: std::sync::OnceLock<Arc<PlayerApi>>,
 }
 
 impl NzCore {
@@ -269,6 +276,7 @@ impl NzCore {
                 core: Arc::clone(&core),
             }),
             core,
+            player: std::sync::OnceLock::new(),
         }))
     }
 
@@ -357,7 +365,14 @@ impl NzCore {
         // built over it. `PlayerApi::open` is infallible by contract — a runtime
         // that cannot start answers empty values with `error` set, never a
         // panic on a click.
-        PlayerApi::open(Arc::clone(&self.core))
+        //
+        // ONE per process (MB3c): `PlayerApi` owns the `Player`, its engine and
+        // the engine's ONE sink, and the media service, the screens and the
+        // tests must all speak to the same one.
+        Arc::clone(
+            self.player
+                .get_or_init(|| PlayerApi::open(Arc::clone(&self.core))),
+        )
     }
 
     pub fn offline(&self) -> Arc<OfflineApi> {
@@ -397,6 +412,13 @@ impl NzCore {
     /// Joins every thread that borrows the runtime, then stops it. Android kills
     /// the process instead, so nothing correct may depend on this running.
     pub fn shutdown(&self) {
+        // The player is this core's child: its worker, event and net threads
+        // borrow the engine and a runtime of their own, and none of them may
+        // outlive the process' exit path (worker rule 5). It is only shut down if
+        // somebody ever asked for it — `OnceLock::get` does not build one.
+        if let Some(player) = self.player.get() {
+            player.shutdown();
+        }
         self.core.shutdown();
     }
 }
@@ -479,6 +501,100 @@ mod tests {
             device_name: "test".into(),
         };
         (dir, config)
+    }
+
+    /// This process's live "nz-player" threads, as thread ids (Linux `/proc`).
+    ///
+    /// A SET OF IDS and not a count: `cargo test` runs this crate's tests in one
+    /// process, so another test's player is alive at the same time. A test owns
+    /// exactly the ids that appeared when IT built its player, and those are the
+    /// only ones it may expect to disappear.
+    fn player_thread_ids() -> std::collections::BTreeSet<u64> {
+        std::fs::read_dir("/proc/self/task")
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|entry| {
+                        let name = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+                        name.trim_start()
+                            .starts_with("nz-player")
+                            .then(|| entry.file_name().to_string_lossy().parse().ok())?
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `player()` answers the SAME player on every call.
+    ///
+    /// Why it matters beyond a test: a `PlayerApi` owns a `Player`, an engine and
+    /// the engine's ONE sink. Before MB3c's measurement, each call built a new
+    /// one, so the media service opened AAudio on ITS instance while the caller's
+    /// queue lived in another: 40 streams were fetched and `position()` stayed at
+    /// 0 — the sound of a phone that says "Lecture".
+    #[test]
+    fn the_player_is_one_per_core() {
+        let core = NzCore::new(config("one-player").1).expect("the core");
+        let first = core.player();
+        for _ in 0..20 {
+            assert!(
+                Arc::ptr_eq(&first, &core.player()),
+                "player() handed out a new instance"
+            );
+        }
+        // `PlayerApi::open` is the ONLY thing that builds a `Player` (and with it
+        // an engine and the engine's one sink), so `ptr_eq` over 21 calls IS the
+        // "one engine" proof — a second one would come with a second `Arc`.
+        core.shutdown();
+    }
+
+    /// A command sent through one handle is visible in the other's snapshot, and
+    /// `shutdown()` really joins the one engine (no "nz-player" thread left).
+    #[test]
+    fn one_player_sees_one_queue_and_shutdown_joins_it() {
+        let before = player_thread_ids();
+        let (_dir, config) = config("shared-queue");
+        let core = NzCore::new(config).expect("the core");
+        let sender = core.player();
+        let reader = core.player();
+        // The threads this test's player brought: the ones that may go.
+        let mine: std::collections::BTreeSet<u64> =
+            player_thread_ids().difference(&before).copied().collect();
+        assert!(!mine.is_empty(), "the player started no thread");
+        assert!(Arc::ptr_eq(&sender, &reader));
+
+        let rows: Vec<crate::player::TrackRef> = (0..3)
+            .map(|index| crate::player::TrackRef {
+                key: format!("k{index}"),
+                id: format!("id{index}"),
+                title: format!("Titre {index}"),
+                ..Default::default()
+            })
+            .collect();
+        sender.command(
+            crate::player::PlayerCommand::PlayQueue {
+                tracks: rows,
+                start: 0,
+                context: None,
+            },
+            0,
+        );
+        assert_eq!(reader.snapshot().len, 3, "the other handle sees the queue");
+
+        core.shutdown();
+        // Only THIS player's threads: `cargo test` shares the process with the
+        // other tests, whose players are theirs.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut alive = mine.clone();
+        while !alive.is_empty() && std::time::Instant::now() < deadline {
+            let now = player_thread_ids();
+            alive.retain(|id| now.contains(id));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            alive.is_empty(),
+            "shutdown left engine threads running: {alive:?}"
+        );
     }
 
     /// The skeleton's own proof, kept: the object graph builds, answers its

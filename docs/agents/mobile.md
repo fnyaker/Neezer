@@ -109,6 +109,12 @@ never committed; Rust 1.99.1):
   data directory (where the migration reads from). A new id would be a second app and lose
   everything (rule 7).
 - AAudio on API 26 can crash after close (Oboe #40): the AudioTrack fallback there.
+- **`NzCore::player()` is ONE player per process, and that is a measured rule.** It used to build a
+  fresh `PlayerApi` per call, and a `PlayerApi` owns a `Player`, an engine and the engine's one sink: the
+  media service opened AAudio on ITS instance while the caller's queue lived in another — 40
+  `GET /api/stream` served, `position()` still 0, `bufferMs=0`, and a person looking at "Lecture" over
+  silence. `NzCore` keeps `OnceLock<Arc<PlayerApi>>`, and `NzCore::shutdown()` shuts that player down
+  before the core (its worker, event and net threads are joined — worker rule 5).
 - **A C++ dependency that links the SHARED libc++ makes the whole app unloadable.** `signalsmith-stretch`
   (inside `nz-audio`) is C++, and the `cc` crate's Android default is `c++_shared`: `libnz_ffi.so` then
   carries `NEEDED libc++_shared.so`, no APK ships that file, and the app dies at `System.loadLibrary`
