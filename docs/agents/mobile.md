@@ -4442,13 +4442,32 @@ not a screen.
   test is not evidence of a regression when the same commit passes in its own
   crate.
 
-**Measured.** `cargo test -p nz-core auto::` = **10 tests, all green** (the counts
-above, the 100-row cap from a 120-row answer, the 15-minute expiry aged through
-the copy's mtime instead of a sleep, hostile ids refused, the play plans);
-`cargo test -p nz-ffi` = **2 new** (the root's five rows and a French cause
-crossing the boundary); `:playback:testDebugUnitTest` = **5 new** (ids, kinds,
-"is this a node?", paging); `clippy -D warnings` and `cargo fmt --check` clean on
-both crates.
+- **Two fields of `OutputStats` are on different clocks, so their difference is
+  meaningless.** `lastTapNs` is Kotlin's `System.nanoTime()` (since boot) and
+  `lastFirstAudibleNs` is `Player::now_ms()` (milliseconds since the PLAYER
+  started), so MB3b's "tap → sound" subtraction answered **−1 757 852,8 ms** on a
+  real car tap — measured here, and why this lot reports tap → LECTURE (the
+  controller's `isPlaying`, an event) instead. The fix belongs to MQ2, which owns
+  *Measures* and the tap → sound target.
+
+**Measured** (emulator API 35 x86_64, `-no-window -no-audio`, its own port, a
+bench on `10.0.2.2` serving the library routes and a 440 Hz FLAC tone per title):
+
+- `cargo test -p nz-core auto::` = **10 tests, all green** (the counts above, the
+  100-row cap from a 120-row answer, the 15-minute expiry aged through the copy's
+  mtime instead of a sleep, hostile ids refused, the play plans);
+  `cargo test -p nz-ffi` = **2 new** (the root's five rows and a French cause
+  crossing the boundary); `:playback:testDebugUnitTest` = **5 new** (ids, kinds,
+  "is this a node?", paging); `clippy -D warnings` and `cargo fmt --check` clean on
+  both crates.
+- **The device, through Media3's `MediaBrowser`** (`AutoBrowseTest`, two tests,
+  green): the root answers its five sections with **0 requests**; « Récents »
+  costs **1 request cold and 0 warm** (read from `NzCore::stats`' `auto` tag); 200
+  favourites cross as **100 rows**; the 6 playlists come own-first; the 120-title
+  playlist browses as **100 rows**; the car's play button queues **exactly those
+  100 rows** and starts in **65 ms** (title tap: **58 ms**), with **0 underruns,
+  0 rebuffers** and the HAL's **500 ms** buffer; playing what was browsed costs
+  **0 tree requests**, and so does tapping one title.
 
 **Files.** `mobile/rust/crates/nz-core/src/auto/**` (mod, wire, store, testing,
 tests), `mobile/rust/crates/nz-ffi/src/auto.rs`,

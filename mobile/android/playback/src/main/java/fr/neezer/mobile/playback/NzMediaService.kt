@@ -334,17 +334,12 @@ class NzMediaService : MediaLibraryService() {
             if (node != null && AutoLibrary.isContainer(node)) {
                 return AutoLibrary.play(node)
             }
-            if (
-                mediaItems.isNotEmpty() &&
-                    mediaItems.all { AutoLibrary.isTreeItem(it.mediaId) } &&
-                    startIndex in 0 until mediaItems.size
-            ) {
+            if (mediaItems.isNotEmpty() && mediaItems.all { AutoLibrary.isTreeItem(it.mediaId) }) {
+                // `setMediaItem` arrives with `C.INDEX_UNSET` (-1): the one item
+                // it named IS the first one.
+                val start = startIndex.coerceIn(0, mediaItems.size - 1)
                 return Futures.immediateFuture(
-                    MediaSession.MediaItemsWithStartPosition(
-                        mediaItems,
-                        startIndex,
-                        startPositionMs,
-                    ),
+                    MediaSession.MediaItemsWithStartPosition(mediaItems, start, startPositionMs),
                 )
             }
             return super.onSetMediaItems(session, browser, mediaItems, startIndex, startPositionMs)

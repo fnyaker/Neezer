@@ -62,21 +62,11 @@ object AutoItems {
      */
     private fun extrasOf(item: AutoItem): Bundle =
         Bundle().apply {
-            if (item.kind != AutoKind.TRACK) {
-                putBoolean(EXTRA_CONTAINER, true)
-                return@apply
-            }
+            if (item.kind != AutoKind.TRACK) return@apply
             putString(NzPlayer.EXTRA_ID, item.id)
             item.albumId?.let { putString(NzPlayer.EXTRA_ALBUM_ID, it) }
             putInt(NzPlayer.EXTRA_DURATION_S, item.durationS.toInt())
             putBoolean(NzPlayer.EXTRA_LIKED, item.liked)
             putBoolean(NzPlayer.EXTRA_EPISODE, false)
         }
-
-    /**
-     * The bundle key that says "this item names a NODE, not a title". It never
-     * leaves this module: the player ignores it, and `AutoLibrary` reads the
-     * media id itself.
-     */
-    private const val EXTRA_CONTAINER = "nz.auto.container"
 }

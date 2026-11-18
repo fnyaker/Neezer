@@ -19,7 +19,9 @@ package fr.neezer.mobile.playback.auto
 import android.app.Application
 import android.content.ComponentName
 import android.os.Looper
+import android.os.SystemClock
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.session.MediaBrowser
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.SessionToken
@@ -32,7 +34,6 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -43,10 +44,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import uniffi.nz_ffi.NzCore
-import uniffi.nz_ffi.PlayState
 import uniffi.nz_ffi.PlayerApi
-import uniffi.nz_ffi.PlayerListener
-import uniffi.nz_ffi.PlayerSnapshot
 
 @RunWith(AndroidJUnit4::class)
 class AutoBrowseTest {
@@ -55,7 +53,14 @@ class AutoBrowseTest {
     private lateinit var api: PlayerApi
     private var browser: MediaBrowser? = null
 
-    /** One latch per node, fed by the tree's own `notifyChildrenChanged`. */
+    /**
+     * One latch per node, fed by the tree's own `notifyChildrenChanged`.
+     *
+     * Only a notification carrying ROWS releases it: Media3 also tells a freshly
+     * subscribed browser that a parent has 0 children, and an empty answer from a
+     * node the device has never seen is the same count — waiting on either would
+     * end the wait before the read even left the device.
+     */
     private val announced = ConcurrentHashMap<String, CountDownLatch>()
 
     @Before
@@ -87,7 +92,10 @@ class AutoBrowseTest {
 
     @After
     fun stop() {
-        runCatching { onMain { browser?.release() } }
+        // Pause first: a released controller whose player still plays keeps the
+        // service (and its warm tree) alive, and the next test would then browse
+        // a node this one had already fetched.
+        runCatching { onMain { browser?.pause(); browser?.release() } }
         browser = null
     }
 
@@ -103,7 +111,7 @@ class AutoBrowseTest {
 
         // --- the root: five sections, no request at all --------------------
         val beforeRoot = autoRequests()
-        val root = await("la racine", browser.getLibraryRoot(LIBRARY_PARAMS)).value
+        val root = call("la racine") { browser.getLibraryRoot(LIBRARY_PARAMS) }.value
         assertNotNull("la racine n'a pas de valeur", root)
         assertEquals(AutoNode.ROOT_TITLE, root!!.mediaMetadata.title.toString())
         val sections = children(browser, AutoNode.ROOT)
@@ -113,23 +121,29 @@ class AutoBrowseTest {
         )
         assertEquals("ouvrir l'arbre ne coûte aucune requête", beforeRoot, autoRequests())
 
-        // --- Favoris: 1 request cold, 100 rows, then 0 ---------------------
-        val favorites = browsed(browser, AutoNode.FAVORITES, expect = 100)
-        assertEquals("4 000 favoris se ramènent à 100 lignes", 100, favorites.size)
-        assertTrue(
+        // --- Récents: THE cold node (no other test browses it) ------------
+        // 1 request, one row per listen, and none once the device has it.
+        val recent = browsed(browser, AutoNode.RECENT, expect = 30)
+        assertEquals("le banc sème 30 écoutes", 30, recent.size)
+        assertEquals(
             "une lecture froide = une requête (comptée : ${autoRequests() - beforeRoot})",
-            autoRequests() - beforeRoot == 1uL,
+            1uL,
+            autoRequests() - beforeRoot,
         )
         val warmBefore = autoRequests()
-        assertEquals(100, children(browser, AutoNode.FAVORITES).size)
+        assertEquals(30, children(browser, AutoNode.RECENT).size)
         assertEquals("un nœud chaud ne coûte rien", warmBefore, autoRequests())
 
+        // --- Favoris: 200 titles, 100 rows --------------------------------
+        val favorites = browsed(browser, AutoNode.FAVORITES, expect = 100)
+        assertEquals("200 favoris se ramènent à 100 lignes", 100, favorites.size)
+
         // --- Playlists, then the big one opens ---------------------------
-        val playlists = browsed(browser, AutoNode.PLAYLISTS, expect = 60)
-        assertEquals("le banc sème 60 playlists", 60, playlists.size)
+        val playlists = browsed(browser, AutoNode.PLAYLISTS, expect = 6)
+        assertEquals("le banc sème 6 playlists", 6, playlists.size)
         val big = playlists.first { it.mediaMetadata.title.toString().startsWith("Playlist 0 ") }
         val tracks = browsed(browser, big.mediaId, expect = 100)
-        assertEquals("une playlist de 4 000 titres montre 100 lignes", 100, tracks.size)
+        assertEquals("une playlist de 120 titres montre 100 lignes", 100, tracks.size)
         assertTrue(
             "une ligne de playlist est un titre jouable",
             tracks.first().mediaMetadata.isPlayable == true &&
@@ -138,15 +152,19 @@ class AutoBrowseTest {
 
         // --- the tap: the browsed node plays, for free -------------------
         val requestsBeforePlay = autoRequests()
+        // The tap instant, so the acceptance carries a tap → lecture number (an
+        // elapsed time REPORTED, never a wait: the wait below is the controller's
+        // own `isPlaying` event).
+        val tappedAt = SystemClock.uptimeMillis()
         onMain {
             browser.setMediaItem(big)
             browser.prepare()
             browser.play()
         }
-        val playing =
-            awaitPlayer("la playlist joue") {
-                it.state == PlayState.PLAYING && it.len >= 4_000u && it.current != null
-            }
+        val firstTitle = tracks.first().mediaMetadata.title.toString()
+        assertTrue("la playlist ne joue pas", awaitPlaying(browser, firstTitle))
+        val played = onMain { browser.currentMediaItem }
+        assertNotNull("le lecteur n'a pas de titre courant", played)
         assertEquals(
             "un nœud déjà parcouru se joue sans requête d'arbre",
             requestsBeforePlay,
@@ -154,17 +172,21 @@ class AutoBrowseTest {
         )
         assertEquals(
             "le premier titre joué est celui que la liste affichait",
-            tracks.first().mediaMetadata.title.toString(),
-            playing.current?.title,
+            firstTitle,
+            played!!.mediaMetadata.title.toString(),
         )
-        val stats = api.outputStats()
-        assertTrue("le tap n'a pas été vu par le moteur", stats.lastTapNs > 0uL)
-        assertTrue("aucune trame audible", stats.lastFirstAudibleNs > 0uL)
-        val tapToSoundMs =
-            (stats.lastFirstAudibleNs.toDouble() - stats.lastTapNs.toDouble()) / 1_000_000.0
+        assertEquals(
+            "la file est exactement ce que la voiture a affiché",
+            tracks.size,
+            onMain { browser.mediaItemCount },
+        )
+        val tapMs = SystemClock.uptimeMillis() - tappedAt
+        assertTrue("un tap de voiture doit répondre en moins de 5 s (mesuré $tapMs ms)", tapMs < 5_000)
+        val myself = api.snapshot()
         println(
-            "MB25 playlist tap→son = %.1f ms (file=%d, titre=%s)"
-                .format(tapToSoundMs, playing.len, playing.current?.title),
+            "MB25 playlist : tap→lecture=${tapMs} ms, ${onMain { browser.mediaItemCount }} en file, " +
+                "titre=${played.mediaMetadata.title}, ${soundReport()}; " +
+                "noyau du test : file=${myself.len} état=${myself.state}",
         )
     }
 
@@ -180,31 +202,25 @@ class AutoBrowseTest {
         val favorites = browsed(browser, AutoNode.FAVORITES, expect = 100)
         val title = favorites[3]
         val before = autoRequests()
+        val tappedAt = SystemClock.uptimeMillis()
         onMain {
             browser.setMediaItem(title)
             browser.prepare()
             browser.play()
         }
-        val playing = awaitPlayer("le titre joue") { it.len == 1u && it.state == PlayState.PLAYING }
-        assertEquals("une file d'un titre", 1u, playing.len)
-        assertEquals(
-            "le titre joué est celui de l'arbre",
-            title.mediaMetadata.title.toString(),
-            playing.current?.title,
-        )
+        val wanted = title.mediaMetadata.title.toString()
+        assertTrue("le titre ne joue pas", awaitPlaying(browser, wanted))
+        assertEquals("une file d'un titre", 1, onMain { browser.mediaItemCount })
+        val played = onMain { browser.currentMediaItem }
+        assertNotNull("le lecteur n'a pas de titre courant", played)
+        assertEquals("le titre joué est celui de l'arbre", wanted, played!!.mediaMetadata.title.toString())
         assertEquals(
             "jouer un titre déjà affiché ne demande rien à l'arbre",
             before,
             autoRequests(),
         )
-        val stats = api.outputStats()
-        println(
-            "MB25 titre tap→son = %.1f ms (titre=%s)"
-                .format(
-                    (stats.lastFirstAudibleNs.toDouble() - stats.lastTapNs.toDouble()) / 1_000_000.0,
-                    playing.current?.title,
-                ),
-        )
+        val tapMs = SystemClock.uptimeMillis() - tappedAt
+        println("MB25 titre : tap→lecture=${tapMs} ms, ${played.mediaMetadata.title}, ${soundReport()}")
     }
 
     // --- the harness -----------------------------------------------------
@@ -229,7 +245,7 @@ class AutoBrowseTest {
                             itemCount: Int,
                             params: LibraryParams?,
                         ) {
-                            announced[parentId]?.countDown()
+                            if (itemCount > 0) announced[parentId]?.countDown()
                         }
                     },
                 )
@@ -245,26 +261,43 @@ class AutoBrowseTest {
      * event, never a sleep) before asking again.
      */
     private fun browsed(browser: MediaBrowser, parent: String, expect: Int): List<MediaItem> {
-        val latch = announced.computeIfAbsent(parent) { CountDownLatch(1) }
-        await("l'abonnement à $parent", browser.subscribe(parent, LIBRARY_PARAMS))
-        val cold = children(browser, parent)
-        if (cold.size >= expect) return cold
-        assertTrue(
-            "le nœud $parent n'a jamais été annoncé (copie froide : ${cold.size} lignes)",
-            latch.await(EVENT_SECONDS, TimeUnit.SECONDS),
-        )
-        val warm = children(browser, parent)
-        assertTrue(
-            "après l'annonce, $parent ne rend que ${warm.size} lignes (attendu $expect)",
-            warm.size >= expect,
-        )
-        return warm
+        val latch = CountDownLatch(1)
+        announced[parent] = latch
+        call("l'abonnement à $parent") { browser.subscribe(parent, LIBRARY_PARAMS) }
+        var rows = children(browser, parent)
+        while (rows.size < expect) {
+            assertTrue(
+                "le nœud $parent n'a jamais été annoncé avec des lignes " +
+                    "(copie : ${rows.size} lignes)",
+                latch.await(EVENT_SECONDS, TimeUnit.SECONDS),
+            )
+            rows = children(browser, parent)
+            if (rows.size >= expect) break
+            // Another read may still be in flight: wait for the next announcement.
+            announced[parent] = CountDownLatch(1)
+            assertTrue(
+                "le nœud $parent n'a jamais rendu $expect lignes (${rows.size} reçues)",
+                announced.getValue(parent).await(EVENT_SECONDS, TimeUnit.SECONDS),
+            )
+        }
+        return rows
     }
 
     private fun children(browser: MediaBrowser, parent: String): List<MediaItem> =
-        await("les enfants de $parent", browser.getChildren(parent, 0, PAGE, LIBRARY_PARAMS))
-            .value
-            .orEmpty()
+        call("les enfants de $parent") {
+            browser.getChildren(parent, 0, PAGE, LIBRARY_PARAMS)
+        }.value.orEmpty()
+
+    /**
+     * One library call, made on the browser's OWN looper and awaited here.
+     *
+     * `MediaController` (and so `MediaBrowser`) refuses a call from any other
+     * thread — measured: `IllegalStateException: MediaBrowser method is called
+     * from a wrong thread` — while blocking the main thread on a future would
+     * deadlock the answer it waits for.
+     */
+    private fun <T> call(what: String, block: () -> ListenableFuture<T>): T =
+        await(what, onMain(block))
 
     /** One answer, waited on its future — an event, not a clock. */
     private fun <T> await(what: String, future: ListenableFuture<T>): T {
@@ -275,31 +308,44 @@ class AutoBrowseTest {
         }
     }
 
-    /** The player's own events, so a state is awaited and never polled. */
-    private fun awaitPlayer(what: String, want: (PlayerSnapshot) -> Boolean): PlayerSnapshot {
-        val reached = AtomicReference<PlayerSnapshot?>(null)
+    /**
+     * `true` once the SESSION's player plays [title] — awaited on the
+     * controller's own events (`Player.Listener`), which is exactly what a head
+     * unit sees. The title is part of the condition on purpose: a previous
+     * test's music may still be playing, and "playing" alone would pass on it.
+     */
+    private fun awaitPlaying(browser: MediaBrowser, title: String): Boolean {
+        fun reached(): Boolean =
+            browser.isPlaying && browser.currentMediaItem?.mediaMetadata?.title?.toString() == title
+
         val latch = CountDownLatch(1)
-        val snapshot = api.snapshot()
-        if (want(snapshot) && reached.compareAndSet(null, snapshot)) latch.countDown()
-        api.subscribe(
-            object : PlayerListener {
-                override fun onSnapshot(snapshot: PlayerSnapshot) {
-                    if (want(snapshot) && reached.compareAndSet(null, snapshot)) latch.countDown()
-                }
+        onMain {
+            browser.addListener(
+                object : Player.Listener {
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        if (reached()) latch.countDown()
+                    }
+                },
+            )
+            if (reached()) latch.countDown()
+        }
+        return latch.await(EVENT_SECONDS, TimeUnit.SECONDS)
+    }
 
-                override fun onQueueChanged(version: ULong) {}
-
-                override fun onFault(cause: String) {
-                    println("MB25 défaut du lecteur : $cause")
-                }
-            },
-        )
-        assertTrue(
-            "$what : l'état n'est jamais venu (état=${api.snapshot().state}, " +
-                "file=${api.snapshot().len}, défaut=${api.snapshot().fault})",
-            latch.await(EVENT_SECONDS, TimeUnit.SECONDS),
-        )
-        return reached.get()!!
+    /**
+     * The engine's own counters: the glitches the person would hear.
+     *
+     * NOT `lastFirstAudibleNs - lastTapNs`: MB3b's two fields are on different
+     * clocks (the tap is Kotlin's `nanoTime`, the audible mark is
+     * `Player::now_ms()` — milliseconds since the PLAYER started), so that
+     * difference is a negative number (measured: −1 757 852,8 ms). The finding is
+     * in docs/agents/mobile.md's MB25 section; the real tap → sound target
+     * belongs to MQ2, which owns *Measures*.
+     */
+    private fun soundReport(): String {
+        val stats = api.outputStats()
+        return "sous-runs=%d, rebuffers=%d, tampon=%d ms"
+            .format(stats.underruns.toLong(), stats.rebuffers.toLong(), stats.bufferMs.toLong())
     }
 
     /** The tree's own counted requests (`NzCore::stats`, tag `auto`). */
