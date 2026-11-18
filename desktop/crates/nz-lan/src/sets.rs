@@ -201,7 +201,15 @@ impl Replica {
         // The `Sets` version is what a delta would need; a replica is re-read
         // whole (`Sets` is 64 sets a page and moves rarely), so it is logged and
         // not kept.
-        let (version, sets) = pages(conn).await?;
+        //
+        // `NotFound` is a peer that SHARES nothing — the frame an older node or a
+        // device whose « Partager mes sons » is off can answer — never a failure to
+        // show: its sets are empty.
+        let (version, sets) = match pages(conn).await {
+            Ok(answer) => answer,
+            Err(LanError::NotFound) => (0, Vec::new()),
+            Err(error) => return Err(error),
+        };
         let bytes: usize = sets.iter().map(counted).sum();
         let mut state = self.lock();
         let others: usize = state

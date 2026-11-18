@@ -2158,7 +2158,7 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
 | a peer that stalls mid-track | takeover at **exactly 65 536 B** (one 64 KiB chunk), the spool byte-identical to the file | `... a_stalled_peer_hands -- --nocapture` |
 | a 50-track playlist from one peer | **50/50** files, **0** opens of the server, labels and pinned sleeve present; **35.5 s** through the worker (the Bulk gate) | `... a_fifty_track_playlist -- --nocapture` |
 | the same, server unreachable | **50/50** from the peer, list from its `Sets`, **0** server opens | `... the_same_playlist_downloads -- --nocapture` |
-| a set replica | **3 924** counted bytes for 50 tracks (**78 B/track**, commitment map included) | playlist test |
+| a set replica, with its inventory | **3 924** counted bytes for 50 tracks (**78 B/track**: 1 524 for the sets, 2 400 for the inventory) | playlist test |
 | rule 1 | first sample **7.7 ms idle → 6.7 ms** while downloading from a peer AND serving another; **0** underruns | `... playing_while_downloading -- --nocapture` |
 | the lot's file | **8 tests**, ~154 s | `cargo test -p nz-lan --test integration` |
 | the crate | **108 unit + 19 cred + 5 discovery + 23 enroll + 11 fetch + 19 serve + 13 service + 20 transport**, green | `cargo test -p nz-lan` |
@@ -2191,6 +2191,13 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
 - **A `Sets` answer is paginated and versioned, but a replica is re-read whole.** 64 sets a page and
   a set that moves rarely do not justify a delta protocol `proto.rs` does not have; the version is
   logged, not kept.
+- **The connect burst is ONE `Bulk` window, sets first.** Two `acquire`s would make the second sync
+  wait the quiet window again (a peer's files twice as long to become usable), and inventory first
+  let LN10's own measurement — 1 000 snapshots and taps with "0 request" counted on the peer — start
+  in a window where the sets request had not landed yet: measured in CI, **3 requests instead of 2**,
+  and `the_snapshot_and_a_tap_never_touch_sqlite_or_the_network` went red without a line changed in
+  it. The sets are replicated first so that a caller which waits for the inventory already has them;
+  the LN10 suite is green untouched, three runs in a row.
 - **`nz-offline`'s worker stops entirely when `Api::is_online()` is false** (`service::run`'s first
   gate: `WorkerState::Offline`, `IDLE_POLL`). A peer-served playlist on a trip therefore cannot be
   queued while the app KNOWS it is offline: the adapter path works (proved above, 50/50 with the

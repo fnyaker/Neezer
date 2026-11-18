@@ -2402,31 +2402,22 @@ async fn control_loop(
             version: shared.index.sets_version(),
         })
         .await;
-    // The replica first, so a tap that lands now already sees the peer's files —
-    // and on the SAME Bulk lane as a download, so a 480 KB inventory yields to what
-    // the person is doing (rule 1 on the LAN, requester side) instead of competing
-    // with it.
-    // The lane is taken for the SYNC, never for the connection: held across the
-    // loop below it would keep every other peer's replica out for ever.
-    let outcome = {
+    // The connect burst: the peer's download sets, then its inventory, inside ONE
+    // `Bulk` window. One window because both are the same background work (rule 1:
+    // a 480 KB inventory and a sets page yield to what the person is doing), and
+    // because a second `acquire` would make the second sync wait the quiet window
+    // again — a peer's files would take twice as long to become usable.
+    //
+    // The sets go FIRST on purpose: a caller that waits for the inventory to arrive
+    // (a tap, and LN10's own measurement of "a tap sends no request") then already
+    // has the sets, so no request can land in the window it starts measuring once
+    // the inventory is visible.
+    {
         let gates = shared.api.gates();
         let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
-        shared.peers.sync_inventory(&peer).await
-    };
-    match outcome {
-        Ok(()) => shared.touch(),
-        Err(LanError::PeerGone) => {}
-        Err(error) => {
-            let _ = internal.send(Internal::Note(
-                "Inventaire d'un appareil".to_owned(),
-                Box::new(error),
-            ));
-        }
+        replicate_sets(&shared, &internal, &conn).await;
+        replicate_inventory(&shared, &internal, &peer).await;
     }
-    // Then the peer's download sets, on the SAME Bulk lane and for the same
-    // reason: « Sur vos appareils » and a playlist download read a replica, never
-    // the network, and this sync yields to what the person is doing (LN11).
-    sync_sets(&shared, &internal, &conn).await;
     while let Some(frame) = conn.next_control().await {
         match frame {
             proto::Control::Revocations { .. } | proto::Control::Roster { .. } => {
@@ -2437,24 +2428,14 @@ async fn control_loop(
                 }
             }
             proto::Control::InventoryChanged { .. } => {
-                let outcome = {
-                    let gates = shared.api.gates();
-                    let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
-                    shared.peers.sync_inventory(&peer).await
-                };
-                match outcome {
-                    Ok(()) => shared.touch(),
-                    Err(LanError::PeerGone) => {}
-                    Err(error) => {
-                        let _ = internal.send(Internal::Note(
-                            "Inventaire d'un appareil".to_owned(),
-                            Box::new(error),
-                        ));
-                    }
-                }
+                let gates = shared.api.gates();
+                let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
+                replicate_inventory(&shared, &internal, &peer).await;
             }
             proto::Control::SetsChanged { .. } => {
-                sync_sets(&shared, &internal, &conn).await;
+                let gates = shared.api.gates();
+                let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
+                replicate_sets(&shared, &internal, &conn).await;
             }
             proto::Control::Bye => {
                 conn.close(0);
@@ -2466,21 +2447,38 @@ async fn control_loop(
     let _ = internal.send(Internal::Closed { peer, connection });
 }
 
-/// Replicates one peer's download sets, on this node's own `Bulk` lane.
+/// Replicates one peer's inventory. The caller holds the `Bulk` lane: this is
+/// background work for this device (rule 1) and yields to what the person does.
+async fn replicate_inventory(
+    shared: &Arc<Shared>,
+    internal: &mpsc::UnboundedSender<Internal>,
+    peer: &DevicePub,
+) {
+    match shared.peers.sync_inventory(peer).await {
+        Ok(()) => shared.touch(),
+        Err(LanError::PeerGone) => {}
+        Err(error) => {
+            let _ = internal.send(Internal::Note(
+                "Inventaire d'un appareil".to_owned(),
+                Box::new(error),
+            ));
+        }
+    }
+}
+
+/// Replicates one peer's download sets. The caller holds the `Bulk` lane, for the
+/// same reason as the inventory.
 ///
-/// One sync at a time and per connection; a failure is a line for the screen and
-/// never a verdict about the peer (the sets replica keeps what it had).
-async fn sync_sets(
+/// A failure is a line for the screen and never a verdict about the peer (the
+/// replica keeps what it had). A peer that answers `NotFound` shares nothing (an
+/// older node, or one whose « Partager mes sons » never reached this frame): its
+/// sets are empty, not an error.
+async fn replicate_sets(
     shared: &Arc<Shared>,
     internal: &mpsc::UnboundedSender<Internal>,
     conn: &PeerConn,
 ) {
-    let outcome = {
-        let gates = shared.api.gates();
-        let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
-        shared.sets.sync(conn).await
-    };
-    match outcome {
+    match shared.sets.sync(conn).await {
         Ok(()) => shared.touch(),
         Err(LanError::PeerGone) => {}
         Err(error) => {

@@ -1853,19 +1853,29 @@ async fn a_fifty_track_playlist_comes_from_the_peer_that_has_it_complete() {
     b.lan.found(IpAddr::from([127, 0, 0, 1]), a.port());
     peers_are(&b, 1).await;
     peer_set_complete(&b.lan, "900", 50).await;
+    // The connect burst replicates the sets FIRST, then the inventory (one Bulk
+    // window): the size of a set comes from the inventory, so wait for it.
+    until("l'inventaire d'A répliqué", &b.lan, || {
+        b.lan
+            .snapshot()
+            .peers
+            .first()
+            .is_some_and(|peer| peer.tracks == 50)
+    })
+    .await;
+    until("la taille de l'ensemble", &b.lan, || {
+        b.lan.sets().iter().any(|row| row.bytes > 0)
+    })
+    .await;
     let memory_after = b.lan.memory();
     println!(
-        "réplique d'un ensemble de 50 titres : {} octets comptés",
+        "réplique d'un ensemble de 50 titres + son inventaire : {} octets comptés",
         memory_after - memory_before
     );
     assert!(
-        memory_after - memory_before <= 50 * 64 + 1_024,
+        memory_after - memory_before <= 50 * (64 + 48) + 2_048,
         "un ensemble de 50 titres coûte {} octets comptés",
         memory_after - memory_before
-    );
-    assert!(
-        b.lan.sets().iter().any(|row| row.bytes > 0),
-        "la taille d'un ensemble vient de l'inventaire répliqué"
     );
 
     let inner = Arc::new(DeniedDownloads {
