@@ -57,11 +57,20 @@ import uniffi.nz_ffi.LibraryArtist
 import uniffi.nz_ffi.TrackRow
 import uniffi.nz_ffi.UploadUsageData
 
-/** What the library screen is called in the accessibility tree (device tests). */
-const val LIBRARY_MARKER = "Bibliothèque"
+/**
+ * What the library screen is called in the accessibility tree.
+ *
+ * A MARKER, not the visible title: `mobile/tools/ci-emulator.sh` proves the shell's
+ * doors by a text only that screen draws, and the bottom bar already says
+ * « Bibliothèque » on every tab — MB5 met the same collision on the home and
+ * named its marker « Accueil Neezer ». Present in every state (the head, the
+ * skeletons, a failure with no server), so the smoke can never mistake a
+ * half-painted screen for an opened one.
+ */
+const val LIBRARY_MARKER = "Bibliothèque Neezer"
 
-/** What the history screen is called in the accessibility tree. */
-const val HISTORY_MARKER = "Historique"
+/** The same marker for the history route and the library's history leaf. */
+const val HISTORY_MARKER = "Historique Neezer"
 
 /** How many rows past the viewport are reported to the window (MB1's margin). */
 internal const val WINDOW_OVERSCAN = 24
