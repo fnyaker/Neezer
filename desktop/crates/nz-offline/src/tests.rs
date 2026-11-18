@@ -823,3 +823,112 @@ fn a_publication_wakes_a_waiter_with_its_version() {
     assert_eq!(seen.settings.quality, Quality::Opus128);
     service.shutdown();
 }
+
+/// A fetcher that NAMES its source: the LAN's shape, where a peer can serve the
+/// queue with no server at all (`docs/agents/lan-nodes.md`, LN11's addendum).
+struct WithSource {
+    has_source: bool,
+    fetched: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Downloader for WithSource {
+    fn reachable(&self) -> bool {
+        self.has_source
+    }
+
+    fn fetch(
+        &self,
+        _track: &TrackId,
+        _quality: Quality,
+        part: &std::path::Path,
+        _stop: &Stop,
+        progress: &mut dyn Progress,
+    ) -> Result<Fetched, Outcome> {
+        self.fetched
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::fs::write(part, vec![0x22u8; 1024])
+            .map_err(|error| Outcome::Failed(format!("écriture : {error}")))?;
+        progress.total(Some(1024));
+        progress.written(1024);
+        Ok(Fetched {
+            bytes: 1024,
+            quality: Quality::Flac,
+        })
+    }
+}
+
+/// **A fetcher that has no source keeps the queue offline even with the link up.**
+///
+/// The gate asks the FETCHER, not `Api::is_online()`: a fetcher with nowhere to
+/// fetch from must not spin, and must not be asked (0 calls).
+#[test]
+fn a_fetcher_with_no_source_keeps_the_queue_offline() {
+    let scratch = Scratch::new("no-source");
+    let store = scratch.store();
+    let server = TestServer::start(Link::new(None), body_map(&["n1"], 1024));
+    let api = api_for(&server, &store, &scratch);
+    assert!(
+        api.is_online(),
+        "le lien est bon : c'est la SOURCE qui manque"
+    );
+    let downloaded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let service = Offline::start(store.clone());
+    service.configure_with(
+        api,
+        Arc::new(WithSource {
+            has_source: false,
+            fetched: Arc::clone(&downloaded),
+        }),
+    );
+    service.choose("playlist", "p1", "Sans source", choices(&["n1"]));
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            service.snapshot().state == WorkerState::Offline
+        }),
+        "the state names the missing source: {:?}",
+        service.snapshot().state
+    );
+    assert_eq!(
+        downloaded.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "un fetcher sans source ne doit pas être appelé"
+    );
+    service.shutdown();
+}
+
+/// **A fetcher that HAS a source runs with the server unreachable**: this is the
+/// trip without data, and the LAN is the source.
+///
+/// Measured: 1 track fetched, 1 published file, state never `Offline`.
+#[test]
+fn a_fetcher_that_has_a_source_runs_with_the_server_unreachable() {
+    let scratch = Scratch::new("lan-source");
+    let store = scratch.store();
+    let server = TestServer::start(Link::new(None), body_map(&["n1"], 1024));
+    let api = api_for(&server, &store, &scratch);
+    api.set_online(false);
+    let downloaded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let service = Offline::start(store.clone());
+    service.configure_with(
+        api,
+        Arc::new(WithSource {
+            has_source: true,
+            fetched: Arc::clone(&downloaded),
+        }),
+    );
+    service.choose("playlist", "p1", "Depuis un pair", choices(&["n1"]));
+    assert!(
+        wait_for(Duration::from_secs(20), || {
+            service.snapshot().progress.done == 1
+        }),
+        "le pair a servi la file : {:?}",
+        service.snapshot()
+    );
+    assert_eq!(downloaded.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_ne!(
+        service.snapshot().state,
+        WorkerState::Offline,
+        "un fetcher avec une source ne se déclare pas hors ligne"
+    );
+    service.shutdown();
+}

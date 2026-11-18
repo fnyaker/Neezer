@@ -2198,11 +2198,9 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
   and `the_snapshot_and_a_tap_never_touch_sqlite_or_the_network` went red without a line changed in
   it. The sets are replicated first so that a caller which waits for the inventory already has them;
   the LN10 suite is green untouched, three runs in a row.
-- **`nz-offline`'s worker stops entirely when `Api::is_online()` is false** (`service::run`'s first
-  gate: `WorkerState::Offline`, `IDLE_POLL`). A peer-served playlist on a trip therefore cannot be
-  queued while the app KNOWS it is offline: the adapter path works (proved above, 50/50 with the
-  server unreachable) but the queue does not reach it. That file is not this lot's; the report names
-  it, and LN12/LN15 must decide whether the worker tries the peer before declaring itself offline.
+- **`nz-offline`'s worker used to stop entirely when `Api::is_online()` was false**, so a
+  peer-served playlist on a trip could not be QUEUED while the app knew it was offline. Fixed in the
+  addendum below: the gate now asks the fetcher, and a peer with files is a source.
 
 **Corrections to this plan, each proved by the code or a measurement:**
 
@@ -2224,6 +2222,31 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
 4. **The playlist's labels live in `nz-offline`'s kv, not in its snapshot.** `Snapshot::labels` only
    carries `kind == "track"` rows, so a playlist's titles are asserted on `LABELS_KEY` — which is also
    where the peer's `Meta` answer reads them on the next import.
+
+#### Addendum (2026-11-18): the downloads worker's source
+
+**What landed.** `nz_offline::Downloader::reachable() -> bool`, with a default of `true` and two
+overrides: `ApiDownloader` answers the server's own `is_online()` (exactly what the worker asked
+itself before), and `PeerFirstDownloader` answers « the server is reachable **or** a connected peer
+holds at least one file ». `service::run`'s gate asks the FETCHER instead of the `Api`, so a queue
+runs on a trip without data and the rows nobody has fall back to the server's own `Offline` outcome —
+a « later », never a verdict (rule 3, unchanged).
+
+**What a later lot can rely on.** An `ApiDownloader` behaves exactly as before (its own test
+`a_dead_link_keeps_the_work_queued` stays green untouched); a custom platform fetcher keeps the
+default and is not asked to know about the network; a LAN fetcher says when a peer can serve.
+
+**Measured** (`desktop/`, debug, 2026-11-18): a playlist of **50** tracks queued with the server
+unreachable and one peer holding it complete → **50/50 published**, the inner fetcher called **0**
+times, the worker **never** `Offline`
+(`cargo test -p nz-lan --test integration the_same_playlist_downloads -- --nocapture`); with no server
+AND no peer → state `Offline`, **0** download, **0** call (`… a_worker_with_no_source_stays_offline`);
+the fetcher's own verdict is what decides, whatever the link says
+(`cargo test -p nz-offline --lib a_fetcher`).
+
+**Rule.** The worker's gate asks the thing that KNOWS. `Api::is_online()` was a good enough proxy
+while the server was the only source; the moment a peer can serve, asking the link becomes the bug —
+it pauses the queue for a source that is up.
 
 ### LN12 — Desktop wiring and screens (wave 6, effort high)
 

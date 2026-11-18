@@ -1933,14 +1933,9 @@ fn assert_playlist_labels_and_cover(cache: &nz_cache::Cache, tracks: &[String], 
     );
 }
 
-/// **The same playlist downloads with the server unreachable**, the track list
-/// coming from the peer's `Sets`: the adapter path, track by track, with the
-/// fetcher the worker would use.
-///
-/// It does not go through `nz-offline`'s queue on purpose: its worker pauses
-/// entirely while `Api::is_online()` is false (`service::run`'s first gate), which
-/// is the one thing this lot could not change from its own files. The note's LN11
-/// section records it, and the report to the orchestrator names it.
+/// **The same playlist downloads with the server unreachable**, queued in the
+/// real `nz-offline` worker: the track list comes from the peer's `Sets`, and the
+/// worker's gate asks the FETCHER whether it has a source (`Downloader::reachable`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_same_playlist_downloads_with_the_server_unreachable() {
     let _one = only_one();
@@ -1966,22 +1961,24 @@ async fn the_same_playlist_downloads_with_the_server_unreachable() {
     b.lan.found(IpAddr::from([127, 0, 0, 1]), a.port());
     peers_are(&b, 1).await;
     peer_set_complete(&b.lan, "900", 50).await;
+    until("l'inventaire d'A répliqué", &b.lan, || {
+        b.lan
+            .snapshot()
+            .peers
+            .first()
+            .is_some_and(|peer| peer.tracks == 50)
+    })
+    .await;
 
-    // The trip: no server. The list still comes from the peer's `Sets`.
+    // The trip: no server. The LAN is the only source, and the worker must run.
     b_api.set_online(false);
-    let offline = Offline::start(b.cache.clone());
     let inner = Arc::new(DeniedDownloads {
         calls: Opens::default(),
     });
-    let downloader = PeerFirstDownloader::new(inner.clone(), b.lan.clone());
+    let offline = Offline::start(b.cache.clone());
     offline.configure_with(
         Arc::clone(&b_api),
-        Arc::new(PeerFirstDownloader::new(
-            Arc::new(DeniedDownloads {
-                calls: Opens::default(),
-            }),
-            b.lan.clone(),
-        )),
+        Arc::new(PeerFirstDownloader::new(inner.clone(), b.lan.clone())),
     );
     let key = PeerSetKey {
         peer: only_peer(&b.lan),
@@ -1992,24 +1989,18 @@ async fn the_same_playlist_downloads_with_the_server_unreachable() {
         download_peer_sets(&b.lan, &offline, &[key]).expect("la liste part du pair"),
         1
     );
+    offline_until(&offline, "les 50 titres hors ligne", || {
+        offline.snapshot().progress.done == 50
+    })
+    .await;
+    assert_ne!(
+        offline.snapshot().state,
+        nz_offline::WorkerState::Offline,
+        "un pair qui a le lot est une source"
+    );
+    assert_eq!(inner.calls.count(), 0, "le serveur était injoignable");
 
     let owner = b_api.owner().expect("un compte");
-    let stop = Stop::new();
-    for track in &tracks {
-        let id = nz_model::TrackId::new(track.clone());
-        let part = b
-            .cache
-            .downloads()
-            .reserve(&owner, &id, nz_model::Quality::Flac)
-            .expect("reserve");
-        let fetched = downloader
-            .fetch(&id, nz_model::Quality::Flac, &part, &stop, &mut Silent)
-            .unwrap_or_else(|error| panic!("« {track} » : {error:?}"));
-        b.cache
-            .downloads()
-            .complete_as(&owner, &id, fetched.bytes, fetched.quality)
-            .expect("publie");
-    }
     for track in &tracks {
         assert!(
             b.cache
@@ -2020,8 +2011,42 @@ async fn the_same_playlist_downloads_with_the_server_unreachable() {
             "« {track} » n'est pas téléchargé hors ligne"
         );
     }
-    assert_eq!(inner.calls.count(), 0, "le serveur était injoignable");
     assert_playlist_labels_and_cover(&b.cache, &tracks, cover);
+    offline.shutdown();
+}
+
+/// **With no server AND no peer, the worker stays offline and asks nobody**: the
+/// behaviour every existing server-only download keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_with_no_source_stays_offline() {
+    let _one = only_one();
+    let fixture = Fixture::new("ln11-no-source");
+    let fake = Fake::start();
+    let b_api = api_for(&fake, &fixture.root.join("b-api"));
+    let b = start_node(&fixture, "b", "Téléphone", &b_api, &[]);
+    enrolled(&b).await;
+    b_api.set_online(false);
+
+    let inner = Arc::new(DeniedDownloads {
+        calls: Opens::default(),
+    });
+    let offline = Offline::start(b.cache.clone());
+    offline.configure_with(
+        Arc::clone(&b_api),
+        Arc::new(PeerFirstDownloader::new(inner.clone(), b.lan.clone())),
+    );
+    offline.add_set(
+        "track",
+        "30000001",
+        "Titre",
+        vec![nz_offline::Choice::new("30000001", "Titre")],
+    );
+    offline_until(&offline, "l'état hors ligne", || {
+        offline.snapshot().state == nz_offline::WorkerState::Offline
+    })
+    .await;
+    assert_eq!(offline.snapshot().progress.done, 0);
+    assert_eq!(inner.calls.count(), 0, "personne ne doit être appelé");
     offline.shutdown();
 }
 
