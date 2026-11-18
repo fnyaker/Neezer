@@ -437,6 +437,94 @@ class NowPlayingDeviceTest {
         throw AssertionError("the player never reached the expected state ($lastState)")
     }
 
+    /**
+     * **Un titre téléchargé joue sans réseau**, par cette file et ce lecteur.
+     *
+     * The SPA's own acceptance, and MB15's: the title is downloaded from the bench
+     * with MB15's real API (`offlineAttach` then `addSet`), the link is cut AT THE
+     * CORE (`setNetwork(None)` — what airplane mode does), and the player must
+     * still render samples — without asking the bench anything.
+     *
+     * It needs the one-line fix of PR #350 (`offline_attach` had no
+     * `async_runtime = "tokio"`, so the bind answered "there is no reactor
+     * running" on every device and no download could exist).
+     */
+    @Test
+    fun aDownloadedTrackPlaysWithNoNetwork() {
+        val bench = Bench.start()
+        val core = install(bench)
+        val player = core.player()
+        player.startOutput(Build.VERSION.SDK_INT.toUInt())
+
+        // 1. The download, through MB15's own API, waiting for ITS event.
+        val done = CountDownLatch(1)
+        val offline = runBlocking {
+            uniffi.nz_ffi.offlineAttach(core)
+            core.offline()
+        }
+        offline.subscribe(object : uniffi.nz_ffi.OfflineListener {
+            override fun onProgress(state: uniffi.nz_ffi.OfflineState) {
+                if (state.sets.any { it.done > 0u && it.done >= it.total && !it.running }) {
+                    done.countDown()
+                }
+            }
+
+            override fun onFailure(key: String, cause: String) {
+                println("MEASURE offline failure: $key — $cause")
+            }
+        })
+        runBlocking {
+            offline.addSet(
+                kind = "track",
+                id = KEY,
+                quality = "flac",
+                title = "Titre",
+                artist = "Artiste",
+            )
+        }
+        assertTrue("the download finished (its own event)", done.await(120, TimeUnit.SECONDS))
+        assertTrue("the store knows the title", offline.isDownloaded(KEY))
+
+        // 2. Airplane mode, at the core.
+        core.setNetwork(uniffi.nz_ffi.NetworkState.None)
+        bench.forget()
+
+        // 3. The tap: the downloaded title must SOUND, and ask nothing.
+        player.command(
+            PlayerCommand.PlayQueue(
+                tracks = listOf(
+                    TrackRef(
+                        key = KEY,
+                        id = KEY,
+                        title = "Titre",
+                        artists = "Artiste",
+                        album = "Album",
+                        albumId = "501",
+                        artistId = null,
+                        cover = null,
+                        durationS = 10u,
+                        episode = false,
+                        liked = false,
+                    ),
+                ),
+                start = 0u,
+                context = PlayContext("queue", "bench"),
+            ),
+            android.os.SystemClock.elapsedRealtimeNanos().toULong(),
+        )
+        player.command(PlayerCommand.Play, android.os.SystemClock.elapsedRealtimeNanos().toULong())
+        awaitPlayer(30_000) { player.position().positionS > 0.2 }
+        val stats = player.outputStats()
+        println(
+            "MEASURE mb11 offline play: position=${player.position().positionS}s " +
+                "requests=${bench.routes} underruns=${stats.underruns}",
+        )
+        assertTrue("the downloaded title played with no link", player.position().positionS > 0.2)
+        assertTrue("and asked the network nothing: ${bench.routes}", bench.routes.isEmpty())
+        assertEquals("no underrun from the disk", 0uL, stats.underruns)
+        bench.close()
+    }
+
     // -- the plumbing ---------------------------------------------------------
 
     /** The core over the bench, once per process (a phone installs one). */
