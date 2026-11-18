@@ -1304,7 +1304,7 @@ mod tests {
         what: &str,
         mut done: impl FnMut(&AppState) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             // The test thread is the network thread: driving the runtime here
             // means every wake (the HTTP answer, the event channel) happens on
@@ -1778,7 +1778,7 @@ mod mouse {
         state: &Entity<AppState>,
         mut done: impl FnMut(&AppState) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(Duration::from_millis(1)).await;

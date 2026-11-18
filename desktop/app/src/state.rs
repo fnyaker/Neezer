@@ -2125,7 +2125,7 @@ mod tests {
 
         // Pump the network, the UI and the sink until the engine holds the next
         // track's bounds.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         let mut buffer = vec![0.0f32; 960];
         loop {
             runtime.block_on(async {
@@ -2185,7 +2185,7 @@ mod tests {
         // The mixer consumes its commands only while it renders, so the sink is
         // pumped here too: a paused device would leave the install command
         // queued and the voice would never be built.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         let mut started = false;
         while !started {
             while let Ok(event) = events.try_recv() {
@@ -2205,7 +2205,7 @@ mod tests {
         engine.play();
         let start_position = engine.position();
         let mut peak = 0.0f32;
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         let mut played = start_position;
         while played - start_position < 0.2 {
             sink.render(&mut buffer);

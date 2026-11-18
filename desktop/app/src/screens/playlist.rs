@@ -2514,7 +2514,7 @@ mod journey {
         what: &str,
         mut done: impl FnMut(&mut gpui::TestAppContext) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -2819,7 +2819,7 @@ mod sheets_journey {
         what: &str,
         mut done: impl FnMut(&mut gpui::TestAppContext) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(Duration::from_millis(1)).await;

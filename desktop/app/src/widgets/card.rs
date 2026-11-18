@@ -704,7 +704,7 @@ pub mod stub {
         // The session must be the one the screen asks with: a screen built before
         // the login would request with no owner and its answer would not be kept
         // for the device (the cache is keyed by account).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -728,7 +728,7 @@ pub mod stub {
         what: &str,
         mut done: impl FnMut(&gpui_kit::App) -> bool,
     ) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;

@@ -2413,7 +2413,7 @@ mod tests {
                 },
             );
             host.load("host", Quality::Flac, None);
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + crate::testwait::WAIT;
             while Instant::now() < deadline {
                 if matches!(host_events.try_recv(), Ok(EngineEvent::Started { .. })) {
                     break;

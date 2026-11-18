@@ -5123,7 +5123,7 @@ mod journey {
         what: &str,
         done: impl Fn() -> bool,
     ) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         while !done() {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -5141,7 +5141,7 @@ mod journey {
         view: &gpui_kit::Entity<Screen>,
         done: impl Fn(&Screen) -> bool,
     ) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         while !cx.update(|_, cx| done(view.read(cx))) {
             assert!(
                 std::time::Instant::now() < deadline,

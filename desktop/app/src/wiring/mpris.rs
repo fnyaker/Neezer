@@ -239,7 +239,7 @@ mod tests {
                 &mut |seconds| published_for_thread.lock().unwrap().push(seconds),
             );
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         while published.lock().unwrap().len() < 20 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -351,7 +351,7 @@ mod tests {
     }
 
     fn next_handle(runtime: &tokio::runtime::Runtime, events: &Receiver<AppEvent>) -> MprisHandle {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             let next = runtime.block_on(async {
                 tokio::time::timeout(Duration::from_millis(50), events.next()).await
@@ -496,12 +496,13 @@ mod tests {
     }
 
     /// Poll `read` until it answers, so the assertions wait on an event instead
-    /// of a fixed sleep. 5 s is a hang, not a duration.
+    /// of a fixed sleep; [`crate::testwait::WAIT`] is a hang guard, not a
+    /// duration the machine has to beat.
     fn wait_for<T>(
         runtime: &tokio::runtime::Runtime,
         mut read: impl FnMut() -> Option<T>,
     ) -> Option<T> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             if let Some(value) = read() {
                 return Some(value);
@@ -519,7 +520,7 @@ mod tests {
         runtime: &tokio::runtime::Runtime,
         events: &Receiver<AppEvent>,
     ) -> MprisCommand {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             let next = runtime.block_on(async {
                 tokio::time::timeout(Duration::from_millis(50), events.next()).await
