@@ -17,6 +17,7 @@
 pub mod actions;
 pub mod admin;
 pub mod audiofx;
+pub mod auto;
 pub mod core;
 pub mod discovery;
 pub mod entity;
