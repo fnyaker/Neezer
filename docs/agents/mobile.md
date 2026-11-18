@@ -1441,8 +1441,8 @@ ONE line each.
   (`state.update(cx, PartyHost::start)`), and that screen belongs to another lot,
   so the name and the signature had to survive. An inherent `impl` can only be
   written in the crate that DEFINES the type, so the app cannot extend
-  `nz_party::host::Host`; `party_host.rs` therefore keeps a six-field-free
-  wrapper — `PartyHost { host: Host }`, `Clone` — that forwards `status()`/`id()`/
+  `nz_party::host::Host`; `party_host.rs` therefore keeps a one-field newtype —
+  `PartyHost { host: Host }`, `Clone` — that forwards `status()`/`id()`/
   `running()` and owns exactly the GPUI seams (`start`, `resume_at_launch`,
   `begin`, `resume_under`, `end`, `snapshot`, `spawn_tick`). A free function
   would have compiled and cost an edit to `screens/party.rs`.
