@@ -119,8 +119,14 @@ impl Store {
     /// and that a file this build cannot read is left untouched.
     pub fn open(dir: &Path) -> Result<Store, LanError> {
         std::fs::create_dir_all(dir).map_err(|error| LanError::Disk(error.to_string()))?;
+        // The directory holds a credential and a roster: another account on this
+        // machine must not read them, even though impersonating this device also
+        // needs `device.key` (0600, LN2). Best effort — a filesystem without unix
+        // modes (Android's app-private storage, a FAT card) is already private.
+        restrict(dir, 0o700);
         let path = dir.join(DB_FILE);
         let conn = Connection::open(&path).map_err(|error| LanError::Disk(error.to_string()))?;
+        restrict(&path, 0o600);
         conn.busy_timeout(BUSY_TIMEOUT)
             .map_err(|error| LanError::Disk(error.to_string()))?;
         // WAL: the hashing worker writes a tag while a peer's `Fetch` reads one.
@@ -443,6 +449,20 @@ pub(crate) fn key_of(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// Gives a path `mode`, on unix only, and never fails: the caller is already
+/// private on the platforms that have no modes.
+fn restrict(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+    }
+}
+
 fn lock(inner: &Inner) -> MutexGuard<'_, Connection> {
     // A panic in another thread must not turn every later read into a panic: the
     // connection is a file handle, and SQLite's own state is not in Rust memory.
@@ -610,6 +630,31 @@ mod tests {
         );
         // The repair path is idempotent: the same three tables, no v2.
         assert_eq!(version_at(&dir), Some(SCHEMA_VERSION));
+        drop(store);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The file and its directory are private: the credential and the roster are
+    /// in there, and another account on this machine has no business reading them.
+    #[cfg(unix)]
+    #[test]
+    fn the_database_and_its_directory_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("modes");
+        let store = Store::open(&dir).expect("open");
+        let db = dir.join(DB_FILE);
+        let file = std::fs::metadata(&db)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let parent = std::fs::metadata(&dir)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file, 0o600, "lan.sqlite is the person's");
+        assert_eq!(parent, 0o700, "and so is its directory");
         drop(store);
         std::fs::remove_dir_all(&dir).ok();
     }

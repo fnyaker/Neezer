@@ -1230,7 +1230,8 @@ this file's header, not to this lot.
   and `tests/serve.rs`. It changes no shared type and no manifest, so neither `Cargo.lock` moved.
 - **What landed.** `lan.sqlite` (WAL, `PRAGMA user_version`, idempotent v1 + the boot repair path that
   replays it when a table is missing, a newer file refused with its version in the cause) holding
-  `file_tag`/`peer_addr`/`trust`; the in-memory inventory with a version, a 64-change delta ring and a
+  `file_tag`/`peer_addr`/`trust`, the directory `0700` and the file `0600` because a credential lives
+  in it); the in-memory inventory with a version, a 64-change delta ring and a
   per-track quality bitmask; the `nz-lan-hash` worker; `Scope::for_peer`/`from_share`/`allows`; the
   responder with its serve budget and its single `NotFound` constructor; and 18 acceptance tests that
   build no `Incoming` (LN4's tests drive `Server::answer`, LN6's transport feeds the same function).
@@ -1289,7 +1290,7 @@ this file's header, not to this lot.
   | inventory memory | **48 B/item**, 384 KB for 8 000 tracks (cap 64 B) | same run (`Index::memory`) |
   | hashing throughput | **1 778 MB/s** on 64 MiB (release, SHA-NI) | `cargo test -p nz-lan --release --test serve hashing_reaches -- --nocapture` |
   | hashing niceness | **+10** on `nz-lan-hash`, read back from `/proc/self/task/<tid>/stat` | `cargo test -p nz-lan --lib the_worker_hashes` |
-  | the crate's tests | **69 passed** (51 unit + 18 acceptance) | `cargo test -p nz-lan` |
+  | the crate's tests | **70 passed** (52 unit + 18 acceptance) | `cargo test -p nz-lan` |
   | a `Bulk` serve that waits for the person | ~1.1 s per test run (the gate's 1 s quiet) | `cargo test -p nz-lan --test serve a_bulk_serve_waits` |
   | the refusal's size | `{"t":"NotFound"}`, 18 bytes, for absent AND unshared | `cargo test -p nz-lan --test serve an_out_of_scope_request` |
   | `clippy -D warnings` on the crate | clean, `--all-targets` | `cargo clippy -p nz-lan --all-targets -- -D warnings` |
