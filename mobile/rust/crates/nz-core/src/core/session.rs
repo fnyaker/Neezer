@@ -145,7 +145,12 @@ impl Core {
     /// Stores the person and tells the shell, only when it really changed:
     /// every `/me` answers the same body, and a push per request would be the
     /// old app's tick again.
-    fn set_me(&self, me: Option<Me>) {
+    ///
+    /// `pub(crate)` for MB5b's redeemed invitation: the server answers the new
+    /// account's own `user` (no `/me` to ask), so the invite flow adopts that
+    /// session here instead of paying a second request. One line, named in the
+    /// lot's section of `docs/agents/mobile.md`.
+    pub(crate) fn set_me(&self, me: Option<Me>) {
         let changed = {
             let mut slot = self.me.write().unwrap_or_else(|err| err.into_inner());
             let same_person = slot.as_ref().map(|current| current.user.id.clone())
