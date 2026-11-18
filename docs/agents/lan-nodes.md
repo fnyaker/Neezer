@@ -1490,58 +1490,113 @@ destructure it unchanged, and every other `ByteStream` (`ApiByteStream`, `Measur
   and may re-fetch from the peer. Nothing lies on disk; a later lot can cheapen that second play by
   asking `local()` at the tolerated qualities `decide` already ranks.
 
-### LN6 — Transport and authentication (wave 2, effort max)
+### LN6 — Transport and authentication (delivered 2026-11-18)
 
-- **Objective**: two nodes open one QUIC connection, prove their device keys bound to that very
-  connection, authorise each other (own / friend / refuse) and then carry requests, bodies and
-  control messages — and a stranger learns nothing.
-- **Files**: LN6 row. **Contracts**: `transport.rs` (LN0), *Transport and authentication*,
-  `Control`/`Request`/`Response` framing (`codec.rs`: `u32` BE length, ≤ 1 MiB, JSON).
-- **Depends on**: LN2.
-- **Acceptance** (in-process, loopback; mutants run once each against deliberately broken code):
-  own↔own authenticates and exchanges `Hello`; friend↔owner only when the owner's roster shares to
-  the friend; **refused without a byte of identity**: a stranger initiator (count the bytes the
-  responder writes on the control stream: 0 before close), unknown `kid`, expired, revoked, a proof
-  signed over another connection's exporter (replay), a responder proof replayed as initiator
-  (reflection), a different `proto` major (`0x11`); the responder closes after 2 s or 2 KiB without a
-  valid `Auth` (paused clock); 0-RTT disabled (a client offering early data gets none accepted:
-  assert quinn's `accepted_0rtt()` false); TLS 1.2 refused; duplicate connections collapse to one
-  (lower `device_pub` wins); a 1 MiB + 1 frame closes the connection and allocates ≤ 1 MiB; handshake
-  + proofs p95 ≤ 15 ms (release, 100 runs, printed); `Endpoint::close` and drop join every task (no
-  task outlives the runtime: a test drops the runtime after `close` and sees no panic); port 45910
-  busy → ephemeral port and `port_fallback() == true`.
-- **Pitfalls**: use `builder_with_provider(aws_lc_rs)` everywhere; keep the handshake signature
-  check in the "accept any certificate" verifiers (`verify_tls13_signature`); the exporter label and
-  context exactly as written (both sides compute their own); `quinn` `RecvStream::read_exact` is
-  async; never log a proof or a credential.
-- **Prompt**:
+**What landed.** `codec.rs`, `auth.rs` and `transport.rs` filled, and `tests/transport.rs` — 21 tests
+written from this note's *Acceptance* list rather than from the implementation: two real `Endpoint`s
+on loopback, each with its own key written on disk under `CARGO_TARGET_TMPDIR` (never `/tmp`) and its
+own credential signed by a test server key, plus a **raw quinn client** for every hostile case (TLS is
+not the identity, so an attacker's test has to get through it). `nz-lan` gains one dev-dependency
+(`tokio` with `test-util`, for the paused clock); **neither `Cargo.lock` changes**, because that
+package and version were already in both.
 
-  > Tu implémentes le lot **LN6 — Transport and authentication** du plan « nœuds LAN » (effort max :
-  > transport et authentification). But : QUIC (quinn 0.11.12, TLS 1.3 seul, 0-RTT désactivé,
-  > certificat éphémère) entre deux nœuds, preuve de la clé d'appareil SIGNÉE SUR L'EXPORTEUR TLS DE
-  > CETTE CONNEXION (anti-rejeu, anti-MITM), autorisation propre / ami / refus — l'initiateur se
-  > prouve d'abord et un inconnu ne reçoit aucun octet d'identité —, puis requêtes, corps et messages
-  > de contrôle. Le prototype de la note (mesures, pièges) est ton point de départ. Lis *Transport and
-  > authentication*, *Protocol messages*, *Threat model*, *Pitfalls found by building* et la section
-  > LN6 de `docs/agents/lan-nodes.md`. Fichiers exclusifs : la ligne LN6. Critères : la liste
-  > *Acceptance* de LN6, chaque mutant lancé une fois contre le code cassé exprès.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**What a later lot can rely on.**
+
+- `Endpoint::bind(rt, port, id, trust, hello)` builds the ephemeral Ed25519 certificate, both TLS
+  configurations and a **dual-stack** UDP socket; a taken preferred port becomes an ephemeral one and
+  `port_fallback()` says so. `set_identity` swaps a renewed key; a live connection keeps the identity
+  it authenticated with.
+- `connect` answers only once **both** proofs and **both** `Hello`s are done. `PeerConn::info()` then
+  carries `subject`, `device_pub`, `relation`, `scope`, `hello` and `addr` (a v4-mapped IPv6 peer is
+  stored as the IPv4 a router shows).
+- `accept()` answers the connection that survives **even when the pair already had one**, `Err(Refused)`
+  for a stranger, `Err(Proto)` for a major this build cannot speak, `None` once the endpoint is closed.
+- `PeerConn`: `request` → `Reply`/`Body::chunk` (≤ 64 KiB whatever the caller asks, clamped by the
+  announced length), `next_incoming` → `Incoming::respond` (the head's announced length is enforced),
+  `send_control`/`next_control`, `rtt`, `dialled_by_us`, `close(code)`, and `connection()` — the last
+  one only for the tests and a log.
+- **Three** application close codes: `0x10` refused (`auth::CLOSE_REFUSED`), `0x11` wrong major
+  (`auth::CLOSE_WRONG_MAJOR`), and `0x12` **duplicate** (`transport::CLOSE_DUPLICATE`, new). A
+  duplicate is not a refusal: a refusal means "do not dial me again for ten minutes", and the pair is
+  already connected.
+- `PeerInfo.scope` is the **empty friend scope** when I dialled a peer that shares with me but to whom
+  I share nothing: `Scope` has no third variant, and an empty `Friend` answers `NotFound` to every
+  request — the answer an absent file gets (T7).
+- `codec::frame_body_len(header, cap)` is the pure "check before allocate" decision;
+  `codec::MAX_CHUNK_BYTES` is 64 KiB. `Incoming` and `Body` own their stream, so a caller never sees a
+  `quinn` type.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, 2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| LN6's suite | **21 tests**, 5.2 s | `cargo test -p nz-lan --test transport` |
+| handshake + both proofs, loopback, 100 runs | **p50 3.28 ms, p95 3.97 ms, max 5.49 ms** (debug) · **p50 0.63 ms, p95 1.00 ms, max 1.38 ms** (release) | `cargo test -p nz-lan [--release] --test transport the_handshake_and_both_proofs_are_fast -- --nocapture` |
+| a stranger's answer | **0 bytes**, one code, empty reason | `a_stranger_gets_no_identity_byte` |
+| one refusal, five causes | 5 causes → **1 code (`0x10`), 0 bytes each** | `every_refusal_is_the_same_code_and_no_identity_byte` |
+| the pre-auth budget | refused at **exactly 2 s** of virtual time, and on a header over **2 KiB** (0 s spent) | `the_responder_closes_two_seconds_without_a_valid_auth`, `the_responder_refuses_more_than_two_kib_before_auth` |
+| an over-cap frame | 1 MiB + 1 refused; the decision costs the **same** for 1 MiB + 1, 8 MiB and 4 GiB | `an_over_cap_frame_allocates_nothing_and_stays_under_a_mebibyte` |
+| 0-RTT | `max_early_data_size = 0`, `enable_early_data = false`, a greedy client resumes nothing | `early_data_is_never_accepted` |
+| TLS 1.2 | refused, `PeerIncompatible(Tls12NotOfferedOrEnabled)`; the TLS 1.3 control completes | `tls12_cannot_establish_a_session` |
+| duplicates | **1** connection per pair on both sides; the lower `device_pub`'s dial survives, proven by a control frame | `a_duplicate_pair_collapses_to_the_lower_key_dial` |
+| the connection cap | **16** held, the 17th refused, the table does not grow | `the_connection_cap_is_sixteen` |
+| tasks | **0** `tokio::spawn` in the three files; `close` joins quinn's driver and `accept` then answers at once | `the_transport_spawns_no_task_of_its_own`, `closing_the_endpoint_joins_the_only_task` |
+| the port fallback | taken port → ephemeral, `port_fallback() == true` | `a_busy_preferred_port_falls_back_to_an_ephemeral_one` |
+| both locks | **unchanged** | `git diff --stat -- desktop/Cargo.lock mobile/rust/Cargo.lock` (empty) |
+
+**17 deliberate mutants**, one per security property, each run once against the broken code and then
+against the restored file (restore **and touch**: without the touch cargo keeps the mutant's verdict —
+LN2's lesson). **17 killed, 0 survived**, every control green: cap-before-allocation, no cap at all, a
+`Hello` written before the proof, one code per cause, the wrong role in the proof (reflection
+accepted), a constant exporter (replay accepted), an initiator that accepts any responder, a responder
+authorising from `trusted_by`, a 60 s pre-auth deadline, a 1 MiB pre-auth budget, 0-RTT enabled, TLS
+1.2 accepted, the duplicate rule inverted, 18 connections, `close` not closing, `close` not joining,
+and an empty `Hello`.
+
+**Rules a measurement taught.**
+
+- **A raw quinn client cannot finish a handshake unless the responder's `accept()` is polled.** Six
+  hostile tests timed out at `CONNECT_DEADLINE` (5 s each) until every one started its dial *inside*
+  the same `join!` as the accept. A test that dials and then accepts deadlocks, and the symptom looks
+  like a transport bug.
+- **`accept()` must answer the connection the pair already had.** "A new one only" made the duplicate
+  test wait for ever: one side's incoming loses the race, the caller is never told, and the peer it
+  dialled never appears. The survivor IS the event.
+- **The connection cap has to be checked before the `AuthOk` is written.** Checked only at insert
+  time, the seventeenth peer completed its own half and held a connection the responder had already
+  closed (measured: `connect` answered `Ok`).
+- **A refusal cannot be observed from the other side of the connection.** When the responder leaks a
+  frame and closes in the same breath, QUIC drops what was queued — the peer counts 0 bytes either
+  way. The property is therefore asserted **on the source**: inside `accept_one` the first
+  `codec::write_frame` comes after `auth::verify_peer`
+  (`a_responder_writes_nothing_before_it_verified_the_peer`), and that scan is what killed the mutant.
+- **`start_paused` advances the clock on its own when the runtime idles**, so "not finished yet" is
+  not an assertion: it drifts to the next timer. The pre-auth deadline is asserted on *where the
+  virtual clock lands* — exactly `PREAUTH_DEADLINE` — and the over-2 KiB refusal on **zero** virtual
+  time spent, which is what tells a header-only refusal from one that waited for the body.
+- **The note's auth message is 59 bytes, not 58**: `b"neezer-lan/1 auth\0"` is 18 bytes (17 characters
+  plus the NUL), so 18 + 9 + 32. LN2's `auth_message` is the implementation and its vector is what LN1
+  signs; the prose was off by one, not the code.
+- **"Allocates nothing" is really "allocates nothing proportional".** Refusing a frame builds an
+  80-byte error sentence, so the honest assertion is that the cost is *identical* for 1 MiB + 1, 8 MiB
+  and 4 GiB (`assert_eq` of the three deltas), never that it is zero.
+- **TLS 1.2 is refused by the server before any certificate work**, and the client reports
+  `PeerIncompatible(Tls12NotOfferedOrEnabled)` — not an alert, which is what "TLS 1.2 refused" invites
+  you to assert. The TLS 1.3 control (both configurations, pumped through two in-memory buffers) is
+  what proves the failure is the version.
+- **quinn 0.11.12 has no public `accepted_0rtt()`** (it lives on `quinn_proto::Connection`): the 0-RTT
+  property is asserted on the three public things that decide it — the server's
+  `max_early_data_size == 0`, the client's `enable_early_data == false`, and a client that asks for
+  early data never getting a session accepted.
+- **A dual-stack listener needs five `unsafe` calls.** `std` can neither create-then-bind a socket with
+  `IPV6_V6ONLY = 0` nor turn the option off after `bind`, and `socket2` is not a dependency here; the
+  five `libc` blocks live in `dual_stack` alone, each with its SAFETY comment, and a source scan keeps
+  them there (and fails if the count moves).
+- **Every test needs a bound, and so does every test command.** A mutant that removes `close`'s work
+  left `endpoint.accept()` waiting for a connection that could never come: the test hung for 41
+  minutes at 0 % CPU instead of failing. `bounded(...)` (a 60 s net, with the test's name in the
+  panic) now wraps every test body, and the mutant campaign's `cargo test` runs are wrapped in a
+  180 s `timeout`.
 
 ### LN7 — Enrolment and trust sync (wave 2, effort max)
 

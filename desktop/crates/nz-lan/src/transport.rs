@@ -358,11 +358,11 @@ impl Endpoint {
                 return Err(LanError::Refused);
             }
         };
-        let authorised = match auth::verify_peer(&answer, Side::Initiator, &trust, &conn, auth::now_seconds())
-        {
-            Ok(authorised) => authorised,
-            Err(cause) => return Err(refuse(&conn, &cause)),
-        };
+        let authorised =
+            match auth::verify_peer(&answer, Side::Initiator, &trust, &conn, auth::now_seconds()) {
+                Ok(authorised) => authorised,
+                Err(cause) => return Err(refuse(&conn, &cause)),
+            };
 
         // Names at last, and only now: they travel inside an authenticated
         // connection and nowhere else.
@@ -394,14 +394,7 @@ impl Endpoint {
             hello: Some(peer_hello),
             addr: normalise(conn.remote_address()),
         };
-        let peer = PeerConn::new(
-            conn,
-            info,
-            send,
-            recv,
-            Arc::downgrade(&self.table),
-            true,
-        );
+        let peer = PeerConn::new(conn, info, send, recv, Arc::downgrade(&self.table), true);
         match self.table.admit(peer, id.key.public()) {
             Ok(admitted) => Ok(admitted.conn),
             Err(error) => Err(error),
@@ -420,8 +413,10 @@ impl Endpoint {
             let incoming = inner.accept().await?;
             let addr = incoming.remote_address();
             match self.accept_one(incoming, addr).await {
-                Ok(Some(admitted)) if admitted.fresh => return Some(Ok(admitted.conn)),
-                Ok(Some(_)) => continue,
+                // The survivor, whether this connection is the one the pair keeps or
+                // the one it already had: a peer that dials while we dial it must not
+                // leave this caller waiting for a connection that exists.
+                Ok(Some(admitted)) => return Some(Ok(admitted.conn)),
                 Ok(None) => continue,
                 Err(error) => return Some(Err(error)),
             }
@@ -448,6 +443,15 @@ impl Endpoint {
             }
             Err(_) => return Err(LanError::PeerGone),
         };
+
+        // Sixteen peers is already more than a household; the seventeenth is
+        // refused before this device writes a byte, so a stranger cannot make the
+        // table grow and cannot tell "full" from "refused".
+        if self.table.len() >= MAX_CONNECTIONS {
+            debug!(%addr, "a LAN peer was refused: the connection table is full");
+            conn.close(VarInt::from_u32(auth::CLOSE_REFUSED), b"");
+            return Err(LanError::Busy { retry_in_ms: 2_000 });
+        }
 
         // One stream, 2 KiB, 2 s. Nothing at all is written before this passes,
         // which is what makes a stranger learn nothing (T2).
@@ -508,14 +512,7 @@ impl Endpoint {
             hello: Some(peer_hello),
             addr: normalise(addr),
         };
-        let peer = PeerConn::new(
-            conn,
-            info,
-            send,
-            recv,
-            Arc::downgrade(&self.table),
-            false,
-        );
+        let peer = PeerConn::new(conn, info, send, recv, Arc::downgrade(&self.table), false);
         Ok(Some(self.table.admit(peer, id.key.public())?))
     }
 
@@ -548,9 +545,11 @@ impl Endpoint {
     }
 }
 
-/// One admitted connection, and whether it is the new one.
+/// One admitted connection, and whether it is the new one (the other case is the
+/// connection the pair already had, which the caller gets instead of a refusal).
 struct Admitted {
     conn: PeerConn,
+    #[allow(dead_code)]
     fresh: bool,
 }
 
@@ -588,9 +587,7 @@ impl ConnTable {
                 if live.len() >= MAX_CONNECTIONS {
                     drop(live);
                     candidate.close(auth::CLOSE_REFUSED);
-                    return Err(LanError::Busy {
-                        retry_in_ms: 2_000,
-                    });
+                    return Err(LanError::Busy { retry_in_ms: 2_000 });
                 }
                 live.insert(
                     peer,
@@ -650,8 +647,7 @@ impl ConnTable {
     fn close_all(&self, code: u32) {
         let drained: Vec<PeerConn> = {
             let mut live = self.lock();
-            let drained = live.drain().map(|(_, entry)| entry.conn).collect();
-            drained
+            live.drain().map(|(_, entry)| entry.conn).collect()
         };
         for conn in drained {
             conn.close(code);
@@ -756,12 +752,11 @@ impl PeerConn {
             debug!(%error, "a LAN request stream closed before its frame was sent");
             LanError::PeerGone
         })?;
-        let head = match codec::read_frame::<proto::Response>(&mut recv, codec::MAX_FRAME_BYTES)
-            .await?
-        {
-            Some(head) => head,
-            None => return Err(LanError::PeerGone),
-        };
+        let head =
+            match codec::read_frame::<proto::Response>(&mut recv, codec::MAX_FRAME_BYTES).await? {
+                Some(head) => head,
+                None => return Err(LanError::PeerGone),
+            };
         let body = match &head {
             proto::Response::FetchOk { len, .. } => Some(Body {
                 recv,
@@ -940,9 +935,10 @@ impl Incoming {
                 if announced.is_some_and(|len| written >= len) {
                     break;
                 }
-                let read = body.read(&mut chunk).await.map_err(|error| {
-                    LanError::BadFile(format!("lecture du corps : {error}"))
-                })?;
+                let read = body
+                    .read(&mut chunk)
+                    .await
+                    .map_err(|error| LanError::BadFile(format!("lecture du corps : {error}")))?;
                 if read == 0 {
                     break;
                 }
@@ -1104,8 +1100,13 @@ pub fn client_tls_config(id: &Identity) -> Result<rustls::ClientConfig, LanError
 /// It is NOT the identity — the exporter-bound proof is — so it is created at
 /// start and thrown away with the process: nothing about this machine, its user or
 /// its device survives it (T1).
-fn ephemeral_certificate() -> Result<(rustls::pki_types::CertificateDer<'static>, rustls::pki_types::PrivateKeyDer<'static>), LanError>
-{
+fn ephemeral_certificate() -> Result<
+    (
+        rustls::pki_types::CertificateDer<'static>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    ),
+    LanError,
+> {
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519)
         .map_err(|error| LanError::Internal(format!("clé éphémère : {error}")))?;
     let params = rcgen::CertificateParams::new(Vec::<String>::new())
@@ -1259,10 +1260,7 @@ fn bind_socket(port: u16) -> std::io::Result<std::net::UdpSocket> {
         Ok(socket) => Ok(socket),
         Err(dual_error) => {
             debug!(%dual_error, port, "no dual-stack socket, binding IPv4 only");
-            std::net::UdpSocket::bind(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                port,
-            ))
+            std::net::UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port))
         }
     }
 }
@@ -1374,9 +1372,24 @@ mod tests {
         assert_eq!(normalise(v6), v6);
     }
 
+    /// The code of a module, without its tests and without its comments: what a
+    /// source scan must look at (the scan's own patterns live in the tests, and would
+    /// otherwise find themselves).
+    fn production_code(source: &str) -> String {
+        source
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(source)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// No task of this crate's own: the module never spawns, so nothing can outlive
-    /// the runtime `Endpoint::close` joined quinn's driver on. A source scan, the
-    /// way `cred.rs` keeps its zero-`unsafe` promise.
+    /// the runtime quinn's driver borrows, and `close` is the ONE place that joins it
+    /// (`wait_idle`). A source scan, the way `cred.rs` keeps its zero-`unsafe`
+    /// promise — the behaviour is `closing_the_endpoint_joins_the_only_task`.
     #[test]
     fn the_transport_spawns_no_task_of_its_own() {
         for source in [
@@ -1384,32 +1397,85 @@ mod tests {
             include_str!("codec.rs"),
             include_str!("auth.rs"),
         ] {
-            let code = source
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let code = production_code(source);
             assert!(
                 !code.contains("tokio::spawn"),
                 "the transport must not spawn a task: `close` joins quinn's driver only"
             );
         }
+        let code = production_code(include_str!("transport.rs"));
+        assert!(
+            code.contains("wait_idle"),
+            "`close` joins quinn's driver task with `wait_idle`"
+        );
     }
 
-    /// The one `unsafe` this file needs is the dual-stack socket option, and the
-    /// module's shape tests say so: three blocks, no more, all in `dual_stack`.
+    /// **A responder writes no frame before it verified the peer.**
+    ///
+    /// The peer cannot observe this from the other side — a connection closed in the
+    /// same breath drops what was queued, so a leaked `Hello` never reaches the
+    /// attacker — which is exactly why the property is asserted on the source: inside
+    /// `accept_one`, the first `codec::write_frame` comes AFTER `auth::verify_peer`,
+    /// and a mutant that writes anything before it is caught here rather than by luck.
+    #[test]
+    fn a_responder_writes_nothing_before_it_verified_the_peer() {
+        let code = production_code(include_str!("transport.rs"));
+        let responder = code
+            .split("async fn accept_one")
+            .nth(1)
+            .expect("le répondeur a une fonction accept_one")
+            .split("pub fn set_identity")
+            .next()
+            .expect("accept_one précède set_identity");
+        let verify = responder
+            .find("auth::verify_peer")
+            .expect("accept_one vérifie la preuve");
+        let first_write = responder
+            .find("codec::write_frame")
+            .expect("accept_one finit par écrire");
+        assert!(
+            verify < first_write,
+            "aucune trame n'est écrite avant la preuve du pair (T2)"
+        );
+        // And the read before it is the capped, deadlined one: 2 KiB, 2 s.
+        let preauth = responder
+            .find("auth::PREAUTH_DEADLINE")
+            .expect("le budget de pré-authentification est là");
+        let cap = responder
+            .find("auth::PREAUTH_MAX_BYTES")
+            .expect("le plafond de pré-authentification est là");
+        assert!(
+            preauth < verify && cap < verify,
+            "le budget précède la preuve"
+        );
+    }
+
+    /// The only `unsafe` this file needs is the dual-stack socket, and every block
+    /// lives in `dual_stack`, each with its SAFETY comment.
     #[test]
     fn the_only_unsafe_is_the_dual_stack_socket() {
-        let source = include_str!("transport.rs");
-        let blocks = source.matches("unsafe {").count();
-        assert_eq!(blocks, 4, "quatre blocs unsafe, tous dans dual_stack");
-        let socket = source
+        let code = production_code(include_str!("transport.rs"));
+        let blocks = code.matches("unsafe {").count();
+        assert_eq!(blocks, 5, "cinq blocs unsafe, tous dans dual_stack");
+        let before_socket = code
             .split("fn dual_stack")
             .next()
             .expect("le fichier a un début");
         assert!(
-            !socket.contains("unsafe {"),
-            "aucun unsafe hors de dual_stack"
+            !before_socket.contains("unsafe {"),
+            "aucun unsafe avant dual_stack"
+        );
+        let after_socket = code
+            .split("fn dual_stack")
+            .nth(1)
+            .expect("le fichier a dual_stack")
+            .split("fn bind_socket")
+            .next()
+            .expect("dual_stack est suivi de bind_socket");
+        assert_eq!(
+            after_socket.matches("unsafe {").count(),
+            5,
+            "les cinq blocs sont dans dual_stack"
         );
     }
 }

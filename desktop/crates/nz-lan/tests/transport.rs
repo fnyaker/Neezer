@@ -170,8 +170,7 @@ fn to_hex(bytes: &[u8]) -> String {
 /// Standard base64 with padding, encoded here so a broken encoder in the crate
 /// cannot agree with itself.
 fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let first = chunk[0] as u32;
@@ -339,7 +338,11 @@ fn roster(subject: Subject, shares_to: &[Share], trusted_by: &[(Subject, &str)])
     Roster::decode_verify(envelope.as_bytes(), &lan_keys()).expect("un roster signé valide")
 }
 
-fn trust(subject: Subject, roster: Option<Roster>, revocations: Option<Revocations>) -> SharedTrust {
+fn trust(
+    subject: Subject,
+    roster: Option<Roster>,
+    revocations: Option<Revocations>,
+) -> SharedTrust {
     let mut state = TrustState {
         subject,
         keys: lan_keys(),
@@ -391,69 +394,93 @@ fn answer_pings(conn: PeerConn) -> tokio::task::JoinHandle<usize> {
     })
 }
 
+/// A generous bound around a test's body: a deadlock must FAIL, with its name, rather
+/// than hold the test harness for ever (it is not the assertion, it is the net under
+/// it). Sixty seconds is orders of magnitude above what any of these should take: the
+/// whole file, 21 tests, runs in about five.
+async fn bounded<F: std::future::Future>(name: &str, body: F) -> F::Output {
+    match tokio::time::timeout(Duration::from_secs(60), body).await {
+        Ok(value) => value,
+        Err(_) => {
+            panic!("{name} : la borne de 60 s est atteinte, la fermeture pend (interblocage ?)")
+        }
+    }
+}
+
 // --- 1. Own devices ----------------------------------------------------------
 
 /// Two devices of one person authenticate, each verifies the other's proof over THIS
 /// connection, both exchange `Hello`, and a request crosses on its own stream.
 #[tokio::test]
 async fn own_devices_authenticate_and_exchange_hello() {
-    let subject = subject_of(0x11);
-    let a = device("own-a", subject, (now() - 60, now() + 86_400));
-    let b = device("own-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "PC");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "Téléphone");
+    bounded("own_devices_authenticate_and_exchange_hello", async {
+        let subject = subject_of(0x11);
+        let a = device("own-a", subject, (now() - 60, now() + 86_400));
+        let b = device("own-b", subject, (now() - 60, now() + 86_400));
+        let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "PC");
+        let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "Téléphone");
 
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("l'initiateur s'authentifie");
-    let accepted = accepted
-        .expect("le répondeur accepte")
-        .expect("le répondeur s'authentifie");
+        let (client, accepted) = tokio::join!(
+            endpoint_a.connect(address(&endpoint_b)),
+            endpoint_b.accept()
+        );
+        let client = client.expect("l'initiateur s'authentifie");
+        let accepted = accepted
+            .expect("le répondeur accepte")
+            .expect("le répondeur s'authentifie");
 
-    // Both sides are the same subject, and each learned the other's key from the
-    // credential it verified — never from the TLS certificate.
-    assert_eq!(client.info().subject, subject);
-    assert_eq!(accepted.info().subject, subject);
-    assert_eq!(client.info().device_pub, b.key.public());
-    assert_eq!(accepted.info().device_pub, a.key.public());
-    assert_eq!(client.info().relation, Relation::Own);
-    assert_eq!(accepted.info().relation, Relation::Own);
-    assert_eq!(client.info().scope, Scope::Own);
-    assert_eq!(accepted.info().scope, Scope::Own);
+        // Both sides are the same subject, and each learned the other's key from the
+        // credential it verified — never from the TLS certificate.
+        assert_eq!(client.info().subject, subject);
+        assert_eq!(accepted.info().subject, subject);
+        assert_eq!(client.info().device_pub, b.key.public());
+        assert_eq!(accepted.info().device_pub, a.key.public());
+        assert_eq!(client.info().relation, Relation::Own);
+        assert_eq!(accepted.info().relation, Relation::Own);
+        assert_eq!(client.info().scope, Scope::Own);
+        assert_eq!(accepted.info().scope, Scope::Own);
 
-    // Names crossed inside the authenticated connection, and only there.
-    assert_eq!(
-        client.info().hello.as_ref().map(|hello| hello.name.as_str()),
-        Some("Téléphone")
-    );
-    assert_eq!(
-        accepted.info().hello.as_ref().map(|hello| hello.name.as_str()),
-        Some("PC")
-    );
+        // Names crossed inside the authenticated connection, and only there.
+        assert_eq!(
+            client
+                .info()
+                .hello
+                .as_ref()
+                .map(|hello| hello.name.as_str()),
+            Some("Téléphone")
+        );
+        assert_eq!(
+            accepted
+                .info()
+                .hello
+                .as_ref()
+                .map(|hello| hello.name.as_str()),
+            Some("PC")
+        );
 
-    // The dialler knows it dialled; the responder knows it was dialled.
-    assert!(client.dialled_by_us());
-    assert!(!accepted.dialled_by_us());
-    assert_eq!(endpoint_a.connections(), 1);
-    assert_eq!(endpoint_b.connections(), 1);
+        // The dialler knows it dialled; the responder knows it was dialled.
+        assert!(client.dialled_by_us());
+        assert!(!accepted.dialled_by_us());
+        assert_eq!(endpoint_a.connections(), 1);
+        assert_eq!(endpoint_b.connections(), 1);
 
-    // One request, one stream, one answer.
-    let answering = answer_pings(accepted);
-    let reply = client.request(Request::Ping).await.expect("un Ping");
-    assert_eq!(reply.head, Response::Pong);
-    assert!(reply.body.is_none());
+        // One request, one stream, one answer.
+        let answering = answer_pings(accepted);
+        let reply = client.request(Request::Ping).await.expect("un Ping");
+        assert_eq!(reply.head, Response::Pong);
+        assert!(reply.body.is_none());
 
-    client.close(0);
-    assert_eq!(
-        endpoint_a.connections(),
-        0,
-        "une connexion fermée est oubliée"
-    );
-    endpoint_a.close().await;
-    endpoint_b.close().await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), answering).await;
+        client.close(0);
+        assert_eq!(
+            endpoint_a.connections(),
+            0,
+            "une connexion fermée est oubliée"
+        );
+        endpoint_a.close().await;
+        endpoint_b.close().await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), answering).await;
+    })
+    .await;
 }
 
 // --- 2. Friends --------------------------------------------------------------
@@ -463,115 +490,131 @@ async fn own_devices_authenticate_and_exchange_hello() {
 /// `trusted_by`, so a friend who shares nothing may serve nothing.
 #[tokio::test]
 async fn a_friend_is_authorised_by_the_roster_that_shares_to_them() {
-    let owner_subject = subject_of(0x21);
-    let friend_subject = subject_of(0x22);
-    let owner = device("friend-owner", owner_subject, (now() - 60, now() + 86_400));
-    let friend = device("friend-guest", friend_subject, (now() - 60, now() + 86_400));
+    bounded(
+        "a_friend_is_authorised_by_the_roster_that_shares_to_them",
+        async {
+            let owner_subject = subject_of(0x21);
+            let friend_subject = subject_of(0x22);
+            let owner = device("friend-owner", owner_subject, (now() - 60, now() + 86_400));
+            let friend = device("friend-guest", friend_subject, (now() - 60, now() + 86_400));
 
-    let owner_roster = roster(
-        owner_subject,
-        &[Share {
-            subject: friend_subject,
-            all: false,
-            tracks: vec!["3135556", "3135557"],
-        }],
-        &[(friend_subject, "Camille")],
-    );
-    let friend_roster = roster(friend_subject, &[], &[(owner_subject, "Alex")]);
+            let owner_roster = roster(
+                owner_subject,
+                &[Share {
+                    subject: friend_subject,
+                    all: false,
+                    tracks: vec!["3135556", "3135557"],
+                }],
+                &[(friend_subject, "Camille")],
+            );
+            let friend_roster = roster(friend_subject, &[], &[(owner_subject, "Alex")]);
 
-    let endpoint_owner = node(
-        Arc::clone(&owner),
-        trust(owner_subject, Some(owner_roster), None),
-        "PC",
-    );
-    let endpoint_friend = node(
-        Arc::clone(&friend),
-        trust(friend_subject, Some(friend_roster), None),
-        "Téléphone",
-    );
+            let endpoint_owner = node(
+                Arc::clone(&owner),
+                trust(owner_subject, Some(owner_roster), None),
+                "PC",
+            );
+            let endpoint_friend = node(
+                Arc::clone(&friend),
+                trust(friend_subject, Some(friend_roster), None),
+                "Téléphone",
+            );
 
-    let (client, accepted) = tokio::join!(
-        endpoint_friend.connect(address(&endpoint_owner)),
-        endpoint_owner.accept()
-    );
-    let client = client.expect("l'ami s'authentifie auprès du propriétaire");
-    let accepted = accepted
-        .expect("le propriétaire accepte")
-        .expect("le propriétaire s'authentifie");
+            let (client, accepted) = tokio::join!(
+                endpoint_friend.connect(address(&endpoint_owner)),
+                endpoint_owner.accept()
+            );
+            let client = client.expect("l'ami s'authentifie auprès du propriétaire");
+            let accepted = accepted
+                .expect("le propriétaire accepte")
+                .expect("le propriétaire s'authentifie");
 
-    // The owner serves the two shared tracks and nothing else.
-    match &accepted.info().scope {
-        Scope::Friend { all, .. } => {
-            assert!(!all, "un partage de playlist n'est pas « tout »");
-            assert_eq!(accepted.info().scope.shared_tracks(), 2);
-            assert!(accepted.info().scope.allows("3135556"));
-            assert!(accepted.info().scope.allows("3135557"));
-            assert!(!accepted.info().scope.allows("999"));
-        }
-        other => panic!("le propriétaire devait voir un ami, pas {other:?}"),
-    }
-    assert_eq!(
-        accepted.info().relation,
-        Relation::Friend {
-            name: "Camille".to_owned()
-        }
-    );
+            // The owner serves the two shared tracks and nothing else.
+            match &accepted.info().scope {
+                Scope::Friend { all, .. } => {
+                    assert!(!all, "un partage de playlist n'est pas « tout »");
+                    assert_eq!(accepted.info().scope.shared_tracks(), 2);
+                    assert!(accepted.info().scope.allows("3135556"));
+                    assert!(accepted.info().scope.allows("3135557"));
+                    assert!(!accepted.info().scope.allows("999"));
+                }
+                other => panic!("le propriétaire devait voir un ami, pas {other:?}"),
+            }
+            assert_eq!(
+                accepted.info().relation,
+                Relation::Friend {
+                    name: "Camille".to_owned()
+                }
+            );
 
-    // The friend may ask (its roster lists the owner in `trusted_by`), and it shares
-    // nothing back: it may serve nothing, and every request it receives is answered
-    // like an absent file rather than with a refusal.
-    assert_eq!(
-        client.info().relation,
-        Relation::Friend {
-            name: "Alex".to_owned()
-        }
-    );
-    assert_eq!(client.info().scope.shared_tracks(), 0);
-    assert!(!client.info().scope.allows("3135556"));
+            // The friend may ask (its roster lists the owner in `trusted_by`), and it shares
+            // nothing back: it may serve nothing, and every request it receives is answered
+            // like an absent file rather than with a refusal.
+            assert_eq!(
+                client.info().relation,
+                Relation::Friend {
+                    name: "Alex".to_owned()
+                }
+            );
+            assert_eq!(client.info().scope.shared_tracks(), 0);
+            assert!(!client.info().scope.allows("3135556"));
 
-    endpoint_friend.close().await;
-    endpoint_owner.close().await;
+            endpoint_friend.close().await;
+            endpoint_owner.close().await;
+        },
+    )
+    .await;
 }
 
 /// The owner's roster does not share with the friend: the owner closes before
 /// writing a byte, and the connection never exists.
 #[tokio::test]
 async fn a_roster_that_does_not_share_refuses_the_connection() {
-    let owner_subject = subject_of(0x23);
-    let friend_subject = subject_of(0x24);
-    let owner = device("noshare-owner", owner_subject, (now() - 60, now() + 86_400));
-    let friend = device("noshare-guest", friend_subject, (now() - 60, now() + 86_400));
-    let owner_roster = roster(owner_subject, &[], &[(friend_subject, "Camille")]);
-    let friend_roster = roster(friend_subject, &[], &[(owner_subject, "Alex")]);
+    bounded(
+        "a_roster_that_does_not_share_refuses_the_connection",
+        async {
+            let owner_subject = subject_of(0x23);
+            let friend_subject = subject_of(0x24);
+            let owner = device("noshare-owner", owner_subject, (now() - 60, now() + 86_400));
+            let friend = device(
+                "noshare-guest",
+                friend_subject,
+                (now() - 60, now() + 86_400),
+            );
+            let owner_roster = roster(owner_subject, &[], &[(friend_subject, "Camille")]);
+            let friend_roster = roster(friend_subject, &[], &[(owner_subject, "Alex")]);
 
-    let endpoint_owner = node(
-        Arc::clone(&owner),
-        trust(owner_subject, Some(owner_roster), None),
-        "PC",
-    );
-    let endpoint_friend = node(
-        Arc::clone(&friend),
-        trust(friend_subject, Some(friend_roster), None),
-        "Téléphone",
-    );
+            let endpoint_owner = node(
+                Arc::clone(&owner),
+                trust(owner_subject, Some(owner_roster), None),
+                "PC",
+            );
+            let endpoint_friend = node(
+                Arc::clone(&friend),
+                trust(friend_subject, Some(friend_roster), None),
+                "Téléphone",
+            );
 
-    let (client, accepted) = tokio::join!(
-        endpoint_friend.connect(address(&endpoint_owner)),
-        endpoint_owner.accept()
-    );
-    assert_eq!(
-        client.err(),
-        Some(LanError::Refused),
-        "l'initiateur est refusé"
-    );
-    match accepted {
-        Some(Err(LanError::Refused)) => {}
-        other => panic!("le répondeur devait refuser, pas {other:?}"),
-    }
-    assert_eq!(endpoint_owner.connections(), 0);
+            let (client, accepted) = tokio::join!(
+                endpoint_friend.connect(address(&endpoint_owner)),
+                endpoint_owner.accept()
+            );
+            assert_eq!(
+                client.err(),
+                Some(LanError::Refused),
+                "l'initiateur est refusé"
+            );
+            match accepted {
+                Some(Err(LanError::Refused)) => {}
+                other => panic!("le répondeur devait refuser, pas {other:?}"),
+            }
+            assert_eq!(endpoint_owner.connections(), 0);
 
-    endpoint_friend.close().await;
-    endpoint_owner.close().await;
+            endpoint_friend.close().await;
+            endpoint_owner.close().await;
+        },
+    )
+    .await;
 }
 
 /// The initiator refuses a responder its own roster does not list in `trusted_by`,
@@ -579,46 +622,60 @@ async fn a_roster_that_does_not_share_refuses_the_connection() {
 /// authorised separately.
 #[tokio::test]
 async fn the_initiator_drops_a_responder_its_roster_does_not_trust() {
-    let owner_subject = subject_of(0x25);
-    let friend_subject = subject_of(0x26);
-    let owner = device("untrusted-owner", owner_subject, (now() - 60, now() + 86_400));
-    let friend = device("untrusted-guest", friend_subject, (now() - 60, now() + 86_400));
-    // The owner shares with the friend, but the friend's roster does not list the
-    // owner in `trusted_by`: the friend did not consent to asking it.
-    let owner_roster = roster(
-        owner_subject,
-        &[Share {
-            subject: friend_subject,
-            all: true,
-            tracks: Vec::new(),
-        }],
-        &[],
-    );
-    let friend_roster = roster(friend_subject, &[], &[]);
+    bounded(
+        "the_initiator_drops_a_responder_its_roster_does_not_trust",
+        async {
+            let owner_subject = subject_of(0x25);
+            let friend_subject = subject_of(0x26);
+            let owner = device(
+                "untrusted-owner",
+                owner_subject,
+                (now() - 60, now() + 86_400),
+            );
+            let friend = device(
+                "untrusted-guest",
+                friend_subject,
+                (now() - 60, now() + 86_400),
+            );
+            // The owner shares with the friend, but the friend's roster does not list the
+            // owner in `trusted_by`: the friend did not consent to asking it.
+            let owner_roster = roster(
+                owner_subject,
+                &[Share {
+                    subject: friend_subject,
+                    all: true,
+                    tracks: Vec::new(),
+                }],
+                &[],
+            );
+            let friend_roster = roster(friend_subject, &[], &[]);
 
-    let endpoint_owner = node(
-        Arc::clone(&owner),
-        trust(owner_subject, Some(owner_roster), None),
-        "PC",
-    );
-    let endpoint_friend = node(
-        Arc::clone(&friend),
-        trust(friend_subject, Some(friend_roster), None),
-        "Téléphone",
-    );
+            let endpoint_owner = node(
+                Arc::clone(&owner),
+                trust(owner_subject, Some(owner_roster), None),
+                "PC",
+            );
+            let endpoint_friend = node(
+                Arc::clone(&friend),
+                trust(friend_subject, Some(friend_roster), None),
+                "Téléphone",
+            );
 
-    let (client, _accepted) = tokio::join!(
-        endpoint_friend.connect(address(&endpoint_owner)),
-        endpoint_owner.accept()
-    );
-    assert_eq!(
-        client.err(),
-        Some(LanError::Refused),
-        "l'initiateur jette un répondeur que son roster ne lui confie pas"
-    );
+            let (client, _accepted) = tokio::join!(
+                endpoint_friend.connect(address(&endpoint_owner)),
+                endpoint_owner.accept()
+            );
+            assert_eq!(
+                client.err(),
+                Some(LanError::Refused),
+                "l'initiateur jette un répondeur que son roster ne lui confie pas"
+            );
 
-    endpoint_friend.close().await;
-    endpoint_owner.close().await;
+            endpoint_friend.close().await;
+            endpoint_owner.close().await;
+        },
+    )
+    .await;
 }
 
 // --- 3. A stranger learns nothing, and every refusal is one code --------------
@@ -642,18 +699,25 @@ struct RawClient {
 
 impl RawClient {
     async fn dial(address: SocketAddr, id: &Identity) -> RawClient {
+        let (endpoint, connecting) = RawClient::start(address, id);
+        let conn = connecting.await.expect("une poignée de main brute");
+        RawClient { endpoint, conn }
+    }
+
+    /// The dial, before its handshake completes: the responder only progresses a
+    /// handshake while its `accept()` is polled, so a raw test MUST start the dial
+    /// and the accept in the same `join!`.
+    fn start(address: SocketAddr, id: &Identity) -> (quinn::Endpoint, quinn::Connecting) {
         let tls = transport::client_tls_config(id).expect("la configuration TLS client");
         let mut endpoint = quinn::Endpoint::client(SocketAddr::from(([127, 0, 0, 1], 0)))
             .expect("un endpoint client brut");
         endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(tls).expect("client QUIC"),
         )));
-        let conn = endpoint
+        let connecting = endpoint
             .connect(address, "neezer-lan")
-            .expect("un dial brut")
-            .await
-            .expect("une poignée de main brute");
-        RawClient { endpoint, conn }
+            .expect("un dial brut");
+        (endpoint, connecting)
     }
 
     /// Opens the control stream and sends one frame on it.
@@ -704,38 +768,72 @@ async fn close_of(conn: &quinn::Connection) -> (u32, String) {
 /// **0 bytes** and closes with the one refusal code.
 #[tokio::test]
 async fn a_stranger_gets_no_identity_byte() {
-    let owner_subject = subject_of(0x31);
-    let stranger_subject = subject_of(0x32);
-    let owner = device("stranger-owner", owner_subject, (now() - 60, now() + 86_400));
-    let stranger = device("stranger-guest", stranger_subject, (now() - 60, now() + 86_400));
-    let owner_roster = roster(owner_subject, &[], &[]);
-    let endpoint = node(
-        Arc::clone(&owner),
-        trust(owner_subject, Some(owner_roster), None),
-        "PC",
-    );
+    bounded("a_stranger_gets_no_identity_byte", async {
+        let owner_subject = subject_of(0x31);
+        let stranger_subject = subject_of(0x32);
+        let owner = device(
+            "stranger-owner",
+            owner_subject,
+            (now() - 60, now() + 86_400),
+        );
+        let stranger = device(
+            "stranger-guest",
+            stranger_subject,
+            (now() - 60, now() + 86_400),
+        );
+        let owner_roster = roster(owner_subject, &[], &[]);
+        let endpoint = node(
+            Arc::clone(&owner),
+            trust(owner_subject, Some(owner_roster), None),
+            "PC",
+        );
 
-    let client = RawClient::dial(address(&endpoint), &stranger).await;
-    let exporter = auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
-    let proof = stranger.key.sign(&auth_message(Role::Initiator, &exporter));
-    let frame = auth_control(&stranger.cred, &proof, 1, 0);
+        // The dial and the accept run together: the responder only progresses a
+        // handshake while its `accept()` is polled.
+        let (accepted, (client, written)) = tokio::join!(endpoint.accept(), async {
+            let client = RawClient::dial(address(&endpoint), &stranger).await;
+            let exporter = auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
+            let proof = stranger.key.sign(&auth_message(Role::Initiator, &exporter));
+            let frame = auth_control(&stranger.cred, &proof, 1, 0);
+            let (_send, recv) = client.send(&frame).await;
+            let written = client.bytes_written(recv).await;
+            (client, written)
+        });
+        assert_eq!(written, 0, "un inconnu ne reçoit aucun octet d'identité");
+        assert_eq!(
+            accepted.map(|result| result.err()),
+            Some(Some(LanError::Refused)),
+            "le répondeur refuse"
+        );
+        let (code, reason) = close_of(&client.conn).await;
+        assert_eq!(code, auth::CLOSE_REFUSED);
+        assert_eq!(reason, "", "la raison d'un refus est vide");
 
-    let (accepted, written) = tokio::join!(endpoint.accept(), async {
-        let (_send, recv) = client.send(&frame).await;
-        client.bytes_written(recv).await
+        client.shutdown().await;
+        endpoint.close().await;
+    })
+    .await;
+}
+
+/// The exporter of a DIFFERENT session, both ends raw: what an attacker records on
+/// one connection and replays on another.
+async fn exporter_of_another_session(id: &Identity) -> [u8; 32] {
+    let (server, address) = raw_server(id).await;
+    let accepting = tokio::spawn(async move {
+        let conn = server
+            .accept()
+            .await
+            .expect("une connexion")
+            .await
+            .expect("TLS");
+        let _ = conn.closed().await;
+        server
     });
-    assert_eq!(written, 0, "un inconnu ne reçoit aucun octet d'identité");
-    assert_eq!(
-        accepted.map(|result| result.err()),
-        Some(Some(LanError::Refused)),
-        "le répondeur refuse"
-    );
-    let (code, reason) = close_of(&client.conn).await;
-    assert_eq!(code, auth::CLOSE_REFUSED);
-    assert_eq!(reason, "", "la raison d'un refus est vide");
-
+    let client = RawClient::dial(address, id).await;
+    let exporter = auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
     client.shutdown().await;
-    endpoint.close().await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), accepting).await;
+    exporter
 }
 
 /// Unknown `kid`, expired credential, revoked device, a proof signed over ANOTHER
@@ -743,138 +841,165 @@ async fn a_stranger_gets_no_identity_byte() {
 /// initiator's (a reflection): five causes, **one** close code, **zero** bytes.
 #[tokio::test]
 async fn every_refusal_is_the_same_code_and_no_identity_byte() {
-    let owner_subject = subject_of(0x41);
-    let owner = device("refusal-owner", owner_subject, (now() - 60, now() + 86_400));
-    let expired = device("refusal-expired", owner_subject, (now() - 172_800, now() - 86_400));
-    let revoked_device = device("refusal-revoked", owner_subject, (now() - 60, now() + 86_400));
-    let valid = device("refusal-valid", owner_subject, (now() - 60, now() + 86_400));
-    // Signed by a server key this node does not know: the credential is intact and
-    // was issued by somebody else.
-    let unknown_kid = {
-        let key = device_key("refusal-unknown-kid");
-        let mut body = Vec::new();
-        body.extend_from_slice(b"NZLC");
-        body.push(1);
-        body.extend_from_slice(&[0xEE; 8]);
-        body.extend_from_slice(&owner_subject.0);
-        body.extend_from_slice(&[0x01; 12]);
-        body.extend_from_slice(&key.public());
-        body.extend_from_slice(&(now() - 60).to_be_bytes());
-        body.extend_from_slice(&(now() + 86_400).to_be_bytes());
-        body.push(0b11);
-        let mut signed = body;
-        let signature = sign(b"neezer-lan/1 credential\0", &signed.clone());
-        signed.extend_from_slice(&signature);
-        let cred = Credential::decode(&signed).expect("une attestation bien formée");
-        Arc::new(Identity { key, cred })
-    };
-    let revoked_list = revocations(9, &[revoked_device.key.public()]);
-
-    struct Case {
-        name: &'static str,
-        device: Arc<Identity>,
-        trust: SharedTrust,
-    }
-    let cases = vec![
-        Case {
-            name: "kid inconnu",
-            device: unknown_kid,
-            trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
-        },
-        Case {
-            name: "attestation expirée",
-            device: expired,
-            trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
-        },
-        Case {
-            name: "appareil révoqué",
-            device: revoked_device,
-            trust: trust(
+    bounded(
+        "every_refusal_is_the_same_code_and_no_identity_byte",
+        async {
+            let owner_subject = subject_of(0x41);
+            let owner = device("refusal-owner", owner_subject, (now() - 60, now() + 86_400));
+            let expired = device(
+                "refusal-expired",
                 owner_subject,
-                Some(roster(owner_subject, &[], &[])),
-                Some(revoked_list),
-            ),
-        },
-        Case {
-            name: "preuve rejouée d'une autre connexion",
-            device: Arc::clone(&valid),
-            trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
-        },
-        Case {
-            name: "preuve de répondeur rejouée en initiateur",
-            device: Arc::clone(&valid),
-            trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
-        },
-    ];
+                (now() - 172_800, now() - 86_400),
+            );
+            let revoked_device = device(
+                "refusal-revoked",
+                owner_subject,
+                (now() - 60, now() + 86_400),
+            );
+            let valid = device("refusal-valid", owner_subject, (now() - 60, now() + 86_400));
+            // Signed by a server key this node does not know: the credential is intact and
+            // was issued by somebody else.
+            let unknown_kid = {
+                let key = device_key("refusal-unknown-kid");
+                let mut body = Vec::new();
+                body.extend_from_slice(b"NZLC");
+                body.push(1);
+                body.extend_from_slice(&[0xEE; 8]);
+                body.extend_from_slice(&owner_subject.0);
+                body.extend_from_slice(&[0x01; 12]);
+                body.extend_from_slice(&key.public());
+                body.extend_from_slice(&(now() - 60).to_be_bytes());
+                body.extend_from_slice(&(now() + 86_400).to_be_bytes());
+                body.push(0b11);
+                let mut signed = body;
+                let signature = sign(b"neezer-lan/1 credential\0", &signed.clone());
+                signed.extend_from_slice(&signature);
+                let cred = Credential::decode(&signed).expect("une attestation bien formée");
+                Arc::new(Identity { key, cred })
+            };
+            let revoked_list = revocations(9, &[revoked_device.key.public()]);
 
-    for case in cases {
-        let endpoint = node(Arc::clone(&owner), case.trust, "PC");
-        let client = RawClient::dial(address(&endpoint), &case.device).await;
-        let frame = match case.name {
-            // A proof over a DIFFERENT connection's exporter: recorded on one
-            // session, useless on the next.
-            "preuve rejouée d'une autre connexion" => {
-                let first = RawClient::dial(address(&endpoint), &case.device).await;
-                let other = auth::exporter(&first.conn, Role::Initiator).expect("l'exporteur");
-                let proof = case.device.key.sign(&auth_message(Role::Initiator, &other));
-                first.shutdown().await;
-                auth_control(&case.device.cred, &proof, 1, 0)
+            struct Case {
+                name: &'static str,
+                device: Arc<Identity>,
+                trust: SharedTrust,
             }
-            // The role in the signed message and the context of the exporter are both
-            // the responder's, and the responder checks the initiator's.
-            "preuve de répondeur rejouée en initiateur" => {
-                let other = auth::exporter(&client.conn, Role::Responder).expect("l'exporteur");
-                let proof = case.device.key.sign(&auth_message(Role::Responder, &other));
-                auth_control(&case.device.cred, &proof, 1, 0)
-            }
-            _ => {
-                let mine = auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
-                let proof = case.device.key.sign(&auth_message(Role::Initiator, &mine));
-                auth_control(&case.device.cred, &proof, 1, 0)
-            }
-        };
+            let cases = vec![
+                Case {
+                    name: "kid inconnu",
+                    device: unknown_kid,
+                    trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
+                },
+                Case {
+                    name: "attestation expirée",
+                    device: expired,
+                    trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
+                },
+                Case {
+                    name: "appareil révoqué",
+                    device: revoked_device,
+                    trust: trust(
+                        owner_subject,
+                        Some(roster(owner_subject, &[], &[])),
+                        Some(revoked_list),
+                    ),
+                },
+                Case {
+                    name: "preuve rejouée d'une autre connexion",
+                    device: Arc::clone(&valid),
+                    trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
+                },
+                Case {
+                    name: "preuve de répondeur rejouée en initiateur",
+                    device: Arc::clone(&valid),
+                    trust: trust(owner_subject, Some(roster(owner_subject, &[], &[])), None),
+                },
+            ];
 
-        let (accepted, written) = tokio::join!(endpoint.accept(), async {
-            let (_send, recv) = client.send(&frame).await;
-            client.bytes_written(recv).await
-        });
-        assert_eq!(written, 0, "{} : aucune fuite d'identité", case.name);
-        match accepted {
-            Some(Err(LanError::Refused)) => {}
-            other => panic!("{} : le répondeur devait refuser, pas {other:?}", case.name),
-        }
-        let (code, reason) = close_of(&client.conn).await;
-        assert_eq!(code, auth::CLOSE_REFUSED, "{} : un seul code", case.name);
-        assert_eq!(reason, "", "{} : aucune raison sur le fil", case.name);
-        client.shutdown().await;
-        endpoint.close().await;
-    }
+            for case in cases {
+                let endpoint = node(Arc::clone(&owner), case.trust, "PC");
+                let name = case.name;
+                let (accepted, (client, written)) = tokio::join!(endpoint.accept(), async {
+                    let client = RawClient::dial(address(&endpoint), &case.device).await;
+                    let frame = match name {
+                        // A proof over a DIFFERENT connection's exporter: recorded on one
+                        // session, useless on the next.
+                        "preuve rejouée d'une autre connexion" => {
+                            let other = exporter_of_another_session(&case.device).await;
+                            let proof =
+                                case.device.key.sign(&auth_message(Role::Initiator, &other));
+                            auth_control(&case.device.cred, &proof, 1, 0)
+                        }
+                        // The role in the signed message and the context of the exporter are
+                        // both the responder's, and the responder checks the initiator's.
+                        "preuve de répondeur rejouée en initiateur" => {
+                            let other =
+                                auth::exporter(&client.conn, Role::Responder).expect("l'exporteur");
+                            let proof =
+                                case.device.key.sign(&auth_message(Role::Responder, &other));
+                            auth_control(&case.device.cred, &proof, 1, 0)
+                        }
+                        _ => {
+                            let mine =
+                                auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
+                            let proof = case.device.key.sign(&auth_message(Role::Initiator, &mine));
+                            auth_control(&case.device.cred, &proof, 1, 0)
+                        }
+                    };
+                    let (_send, recv) = client.send(&frame).await;
+                    let written = client.bytes_written(recv).await;
+                    (client, written)
+                });
+                assert_eq!(written, 0, "{name} : aucune fuite d'identité");
+                match accepted {
+                    Some(Err(LanError::Refused)) => {}
+                    other => panic!("{name} : le répondeur devait refuser, pas {other:?}"),
+                }
+                let (code, reason) = close_of(&client.conn).await;
+                assert_eq!(code, auth::CLOSE_REFUSED, "{name} : un seul code");
+                assert_eq!(reason, "", "{name} : aucune raison sur le fil");
+                client.shutdown().await;
+                endpoint.close().await;
+            }
+        },
+    )
+    .await;
 }
 
 /// A protocol major this build cannot speak is the ONE refusal with its own code: a
 /// version mismatch, not a security event — the screens say « mettez à jour l'app ».
 #[tokio::test]
 async fn a_wrong_protocol_major_is_told_apart() {
-    let subject = subject_of(0x51);
-    let mine = device("major-own", subject, (now() - 60, now() + 86_400));
-    let endpoint = node(Arc::clone(&mine), trust(subject, None, None), "PC");
+    bounded("a_wrong_protocol_major_is_told_apart", async {
+        let subject = subject_of(0x51);
+        let mine = device("major-own", subject, (now() - 60, now() + 86_400));
+        let endpoint = node(Arc::clone(&mine), trust(subject, None, None), "PC");
 
-    let client = RawClient::dial(address(&endpoint), &mine).await;
-    let exporter = auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
-    let proof = mine.key.sign(&auth_message(Role::Initiator, &exporter));
-    let frame = auth_control(&mine.cred, &proof, 2, 0);
-    let (_send, recv) = client.send(&frame).await;
-    let (code, reason) = close_of(&client.conn).await;
-    assert_eq!(code, auth::CLOSE_WRONG_MAJOR);
-    assert_eq!(reason, "");
-    assert_eq!(
-        client.bytes_written(recv).await,
-        0,
-        "le contrôle de version ne coûte aucun octet d'identité"
-    );
+        let (accepted, (client, written)) = tokio::join!(endpoint.accept(), async {
+            let client = RawClient::dial(address(&endpoint), &mine).await;
+            let exporter = auth::exporter(&client.conn, Role::Initiator).expect("l'exporteur");
+            let proof = mine.key.sign(&auth_message(Role::Initiator, &exporter));
+            let frame = auth_control(&mine.cred, &proof, 2, 0);
+            let (_send, recv) = client.send(&frame).await;
+            let written = client.bytes_written(recv).await;
+            (client, written)
+        });
+        assert_eq!(
+            written, 0,
+            "le contrôle de version ne coûte aucun octet d'identité"
+        );
+        assert!(
+            matches!(accepted, Some(Err(LanError::Proto(_)))),
+            "le répondeur dit « version », pas « refusé » : {accepted:?}"
+        );
+        let (code, reason) = close_of(&client.conn).await;
+        assert_eq!(code, auth::CLOSE_WRONG_MAJOR);
+        assert_eq!(reason, "");
 
-    client.shutdown().await;
-    endpoint.close().await;
+        client.shutdown().await;
+        endpoint.close().await;
+    })
+    .await;
 }
 
 // --- 4. The pre-authentication budget, on a paused clock ---------------------
@@ -882,68 +1007,95 @@ async fn a_wrong_protocol_major_is_told_apart() {
 /// A peer that completes the TLS handshake and then says nothing is closed after
 /// exactly [`auth::PREAUTH_DEADLINE`], with the refusal code and no byte written.
 ///
-/// The clock is tokio's **paused** one: the test advances two seconds instead of
-/// sleeping them, so it asserts the deadline rather than this machine's load. One
-/// second in, the door is still open — that is what makes the two-second assertion
-/// about the deadline and not about "eventually".
+/// The clock is tokio's **paused** one, and the assertion is the instant the refusal
+/// lands on: exactly two seconds of virtual time. A `start_paused` runtime advances
+/// its own clock to the next timer as soon as it has nothing to run, so "not yet
+/// finished" is not a reliable assertion — where the clock LANDS is, and a deadline
+/// of one minute would land at one minute.
 #[tokio::test(start_paused = true)]
 async fn the_responder_closes_two_seconds_without_a_valid_auth() {
     let subject = subject_of(0x61);
     let mine = device("silent-own", subject, (now() - 60, now() + 86_400));
-    let endpoint = node(Arc::clone(&mine), trust(subject, None, None), "PC");
+    let endpoint = Arc::new(node(Arc::clone(&mine), trust(subject, None, None), "PC"));
+    let started = tokio::time::Instant::now();
 
-    let client = RawClient::dial(address(&endpoint), &mine).await;
-    // A stream with no frame on it: exactly what a slow or hostile peer sends.
-    let (_send, recv) = client.conn.open_bi().await.expect("un flux muet");
+    // The silent peer runs in its own task and signals the instant its stream is
+    // open, so the deadline is measured from a real event, never from a sleep.
+    let (ready, opened) = tokio::sync::oneshot::channel();
+    let address = address(&endpoint);
+    let silent = tokio::spawn(async move {
+        let client = RawClient::dial(address, &mine).await;
+        let (send, recv) = client.conn.open_bi().await.expect("un flux muet");
+        let _ = ready.send(());
+        (client, send, recv)
+    });
+    let accepting = tokio::spawn({
+        let endpoint = Arc::clone(&endpoint);
+        async move { endpoint.accept().await.map(|result| result.err()) }
+    });
+    opened.await.expect("le pair silencieux tient son flux");
 
-    let accepting = tokio::spawn(async move { endpoint.accept().await.map(|result| result.err()) });
-    tokio::task::yield_now().await;
-    assert!(
-        !accepting.is_finished(),
-        "le répondeur attend, il n'a pas déjà rendu la main"
-    );
-    tokio::time::advance(Duration::from_secs(1)).await;
-    tokio::task::yield_now().await;
-    assert!(
-        !accepting.is_finished(),
-        "à une seconde, la porte est encore ouverte"
-    );
-    tokio::time::advance(Duration::from_secs(1)).await;
     let refused = accepting.await.expect("la tâche du répondeur");
+    let waited = started.elapsed();
+    assert_eq!(
+        waited,
+        auth::PREAUTH_DEADLINE,
+        "le refus tombe exactement au budget, pas ailleurs"
+    );
     assert_eq!(
         refused,
         Some(Some(LanError::Refused)),
         "à deux secondes, le répondeur refuse"
     );
 
+    let (client, _send, recv) = silent.await.expect("la tâche du pair muet");
     let (code, reason) = close_of(&client.conn).await;
     assert_eq!(code, auth::CLOSE_REFUSED);
     assert_eq!(reason, "");
     assert_eq!(client.bytes_written(recv).await, 0);
     client.shutdown().await;
+    endpoint.close().await;
 }
 
 /// The other half of the budget: a peer that announces more than 2 KiB before
-/// authenticating is refused, and nothing is allocated for the announced size.
-#[tokio::test]
+/// authenticating is refused **on the header**, without the body being read and
+/// without the pre-authentication deadline being spent at all.
+///
+/// The assertion is the paused clock again: a refusal that waited for the body would
+/// have to run into the 2 s deadline, and the virtual clock would land there.
+#[tokio::test(start_paused = true)]
 async fn the_responder_refuses_more_than_two_kib_before_auth() {
     let subject = subject_of(0x62);
     let mine = device("big-own", subject, (now() - 60, now() + 86_400));
-    let endpoint = node(Arc::clone(&mine), trust(subject, None, None), "PC");
+    let endpoint = Arc::new(node(Arc::clone(&mine), trust(subject, None, None), "PC"));
+    let started = tokio::time::Instant::now();
 
-    let client = RawClient::dial(address(&endpoint), &mine).await;
-    let (mut send, recv) = client.conn.open_bi().await.expect("un flux");
-    // A frame whose JSON body is over the 2 KiB pre-auth budget: the header alone
-    // proves it, so the responder never reads the body.
-    let oversized = auth_control(&mine.cred, &[0u8; 64], 1, 0);
-    let json = serde_json::to_vec(&oversized).expect("json");
-    assert!(json.len() > auth::PREAUTH_MAX_BYTES - codec::FRAME_HEADER_BYTES);
-    send.write_all(&(json.len() as u32).to_be_bytes())
-        .await
-        .expect("l'en-tête");
-    let _ = send.write_all(&json).await;
-
-    let (accepted, written) = tokio::join!(endpoint.accept(), client.bytes_written(recv));
+    let (accepted, (client, written)) = tokio::join!(endpoint.accept(), async {
+        let client = RawClient::dial(address(&endpoint), &mine).await;
+        let (mut send, recv) = client.conn.open_bi().await.expect("un flux");
+        // An `Auth` whose announced body is over the 2 KiB pre-auth budget: the header
+        // alone proves it, so the responder never reads the body. The padding is in the
+        // base64 field, which is what a hostile peer would grow.
+        let oversized = Control::Auth {
+            cred: base64(mine.cred.raw()),
+            proof: "A".repeat(auth::PREAUTH_MAX_BYTES),
+            revocation_serial: 0,
+            proto: 1,
+        };
+        let json = serde_json::to_vec(&oversized).expect("json");
+        assert!(json.len() > auth::PREAUTH_MAX_BYTES - codec::FRAME_HEADER_BYTES);
+        send.write_all(&(json.len() as u32).to_be_bytes())
+            .await
+            .expect("l'en-tête");
+        // …and NOTHING of the body: the cap is a decision on the four header bytes.
+        let written = client.bytes_written(recv).await;
+        (client, written)
+    });
+    assert_eq!(
+        started.elapsed(),
+        Duration::ZERO,
+        "le plafond refuse sur l'en-tête, sans dépenser le budget de 2 s"
+    );
     assert_eq!(written, 0, "aucun octet écrit avant l'authentification");
     assert_eq!(
         accepted.map(|result| result.err()),
@@ -962,67 +1114,76 @@ async fn the_responder_refuses_more_than_two_kib_before_auth() {
 /// nothing accepted.
 #[tokio::test]
 async fn early_data_is_never_accepted() {
-    let subject = subject_of(0x71);
-    let mine = device("rtt-own", subject, (now() - 60, now() + 86_400));
+    bounded("early_data_is_never_accepted", async {
+        let subject = subject_of(0x71);
+        let mine = device("rtt-own", subject, (now() - 60, now() + 86_400));
 
-    // The two configurations the transport really builds.
-    let server_tls = transport::server_tls_config(&mine).expect("le TLS serveur");
-    assert_eq!(server_tls.max_early_data_size, 0, "RFC 9001 §9.2");
-    assert!(!server_tls.send_half_rtt_data, "aucune donnée en demi-RTT");
-    let client_tls = transport::client_tls_config(&mine).expect("le TLS client");
-    assert!(!client_tls.enable_early_data, "le client n'offre jamais 0-RTT");
+        // The two configurations the transport really builds.
+        let server_tls = transport::server_tls_config(&mine).expect("le TLS serveur");
+        assert_eq!(server_tls.max_early_data_size, 0, "RFC 9001 §9.2");
+        assert!(!server_tls.send_half_rtt_data, "aucune donnée en demi-RTT");
+        let client_tls = transport::client_tls_config(&mine).expect("le TLS client");
+        assert!(
+            !client_tls.enable_early_data,
+            "le client n'offre jamais 0-RTT"
+        );
 
-    // A raw server that speaks no `nz-lan` handshake at all: this test is about TLS,
-    // so nothing here may close the connection for a missing `Auth`.
-    let (server, address) = raw_server(&mine).await;
-    let echoing = tokio::spawn(async move {
-        let conn = server.accept().await.expect("une connexion").await.expect("TLS");
-        // One round trip, so the client certainly processed its session ticket.
-        let (mut send, mut recv) = conn.accept_bi().await.expect("un flux");
-        let mut byte = [0u8; 1];
-        recv.read_exact(&mut byte).await.expect("un octet");
-        send.write_all(&byte).await.expect("l'écho");
+        // A raw server that speaks no `nz-lan` handshake at all: this test is about TLS,
+        // so nothing here may close the connection for a missing `Auth`.
+        let (server, address) = raw_server(&mine).await;
+        let echoing = tokio::spawn(async move {
+            let conn = server
+                .accept()
+                .await
+                .expect("une connexion")
+                .await
+                .expect("TLS");
+            // One round trip, so the client certainly processed its session ticket.
+            let (mut send, mut recv) = conn.accept_bi().await.expect("un flux");
+            let mut byte = [0u8; 1];
+            recv.read_exact(&mut byte).await.expect("un octet");
+            send.write_all(&byte).await.expect("l'écho");
+            send.finish().ok();
+            // Keep the connection open until the client is done with it.
+            let _ = conn.closed().await;
+            server
+        });
+
+        // A client that DOES ask for early data, twice: the second dial has a ticket and
+        // still gets no 0-RTT, because the server never advertises any.
+        let mut greedy = transport::client_tls_config(&mine).expect("le TLS client");
+        greedy.enable_early_data = true;
+        let mut raw =
+            quinn::Endpoint::client(SocketAddr::from(([127, 0, 0, 1], 0))).expect("un client");
+        raw.set_default_client_config(quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(greedy).expect("client QUIC"),
+        )));
+        let first = raw
+            .connect(address, "neezer-lan")
+            .expect("un dial")
+            .await
+            .expect("une poignée de main");
+        let (mut send, mut recv) = first.open_bi().await.expect("un flux");
+        send.write_all(b"x").await.expect("un octet");
         send.finish().ok();
-        // Keep the connection open until the client is done with it.
-        let _ = conn.closed().await;
-        server
-    });
+        let mut echo = [0u8; 1];
+        recv.read_exact(&mut echo).await.expect("l'écho");
+        assert_eq!(&echo, b"x");
+        first.close(0u32.into(), b"");
 
-    // A client that DOES ask for early data, twice: the second dial has a ticket and
-    // still gets no 0-RTT, because the server never advertises any.
-    let mut greedy = transport::client_tls_config(&mine).expect("le TLS client");
-    greedy.enable_early_data = true;
-    let mut raw = quinn::Endpoint::client(SocketAddr::from(([127, 0, 0, 1], 0))).expect("un client");
-    raw.set_default_client_config(quinn::ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(greedy).expect("client QUIC"),
-    )));
-    let first = raw
-        .connect(address, "neezer-lan")
-        .expect("un dial")
-        .await
-        .expect("une poignée de main");
-    let (mut send, mut recv) = first.open_bi().await.expect("un flux");
-    send.write_all(b"x").await.expect("un octet");
-    send.finish().ok();
-    let mut echo = [0u8; 1];
-    recv.read_exact(&mut echo).await.expect("l'écho");
-    assert_eq!(&echo, b"x");
-    first.close(0u32.into(), b"");
-
-    let second = raw
-        .connect(address, "neezer-lan")
-        .expect("un dial");
-    match second.into_0rtt() {
-        Ok((_conn, accepted)) => assert!(
-            !accepted.await,
-            "le serveur n'accepte jamais de 0-RTT, même proposé"
-        ),
-        // The other honest outcome: with `max_early_data_size = 0` there is nothing to
-        // resume early, and quinn refuses to start 0-RTT at all.
-        Err(_) => {}
-    }
-    raw.close(0u32.into(), b"");
-    let _ = tokio::time::timeout(Duration::from_secs(5), echoing).await;
+        let second = raw.connect(address, "neezer-lan").expect("un dial");
+        // The other honest outcome is `Err`: with `max_early_data_size = 0` there is
+        // nothing to resume early, and quinn refuses to start 0-RTT at all.
+        if let Ok((_conn, accepted)) = second.into_0rtt() {
+            assert!(
+                !accepted.await,
+                "le serveur n'accepte jamais de 0-RTT, même proposé"
+            );
+        }
+        raw.close(0u32.into(), b"");
+        let _ = tokio::time::timeout(Duration::from_secs(5), echoing).await;
+    })
+    .await;
 }
 
 /// A session cannot be established with TLS 1.2: the server offers TLS 1.3 only, and
@@ -1030,32 +1191,38 @@ async fn early_data_is_never_accepted() {
 /// configurations — completes, so the failure is the version and nothing else.
 #[tokio::test]
 async fn tls12_cannot_establish_a_session() {
-    let subject = subject_of(0x72);
-    let a = device("tls-a", subject, (now() - 60, now() + 86_400));
-    let b = device("tls-b", subject, (now() - 60, now() + 86_400));
+    bounded("tls12_cannot_establish_a_session", async {
+        let subject = subject_of(0x72);
+        let a = device("tls-a", subject, (now() - 60, now() + 86_400));
+        let b = device("tls-b", subject, (now() - 60, now() + 86_400));
 
-    // Control: TLS 1.3 with both of the crate's configurations.
-    let server_config = transport::server_tls_config(&a).expect("le TLS serveur");
-    let client_config = transport::client_tls_config(&b).expect("le TLS client");
-    pump_handshake(server_config, client_config).expect("TLS 1.3 doit aboutir");
+        // Control: TLS 1.3 with both of the crate's configurations.
+        let server_config = transport::server_tls_config(&a).expect("le TLS serveur");
+        let client_config = transport::client_tls_config(&b).expect("le TLS client");
+        pump_handshake(server_config, client_config).expect("TLS 1.3 doit aboutir");
 
-    // A client that offers only TLS 1.2. Its own verifier (an empty root store) is
-    // irrelevant: the versions have to agree before a certificate is looked at.
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let mut legacy = rustls::ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS12])
-        .expect("une configuration TLS 1.2")
-        .with_root_certificates(rustls::RootCertStore::empty())
-        .with_no_client_auth();
-    // Same ALPN, so the version is the ONLY thing that differs.
-    legacy.alpn_protocols = vec![transport::ALPN.to_vec()];
-    let server_config = transport::server_tls_config(&a).expect("le TLS serveur");
-    let error = pump_handshake(server_config, legacy).expect_err("TLS 1.2 ne doit pas aboutir");
-    let message = error;
-    assert!(
-        message.contains("Alert") || message.contains("ProtocolVersion"),
-        "l'échec doit venir de la version, pas d'autre chose : {message}"
-    );
+        // A client that offers only TLS 1.2. Its own verifier (an empty root store) is
+        // irrelevant: the versions have to agree before a certificate is looked at.
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let mut legacy = rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS12])
+            .expect("une configuration TLS 1.2")
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        // Same ALPN, so the version is the ONLY thing that differs.
+        legacy.alpn_protocols = vec![transport::ALPN.to_vec()];
+        let server_config = transport::server_tls_config(&a).expect("le TLS serveur");
+        let error = pump_handshake(server_config, legacy).expect_err("TLS 1.2 ne doit pas aboutir");
+        let message = error;
+        assert!(
+            message.contains("Tls12NotOffered")
+                || message.contains("Alert")
+                || message.contains("ProtocolVersion"),
+            "l'échec doit venir de la version, pas d'autre chose : {message}"
+        );
+        println!("TLS 1.2 refused by the server: {message}");
+    })
+    .await;
 }
 
 /// Pumps a rustls handshake through two in-memory buffers and answers the first error
@@ -1064,8 +1231,8 @@ fn pump_handshake(
     server: rustls::ServerConfig,
     client: rustls::ClientConfig,
 ) -> Result<(), String> {
-    let mut server = rustls::ServerConnection::new(Arc::new(server))
-        .map_err(|error| format!("{error:?}"))?;
+    let mut server =
+        rustls::ServerConnection::new(Arc::new(server)).map_err(|error| format!("{error:?}"))?;
     let mut client = rustls::ClientConnection::new(
         Arc::new(client),
         rustls::pki_types::ServerName::try_from("neezer-lan").expect("un nom"),
@@ -1074,21 +1241,37 @@ fn pump_handshake(
     for _ in 0..32 {
         let mut to_server = Vec::new();
         while client.wants_write() {
-            client.write_tls(&mut to_server).map_err(|error| format!("{error:?}"))?;
+            client
+                .write_tls(&mut to_server)
+                .map_err(|error| format!("{error:?}"))?;
         }
         if !to_server.is_empty() {
             let mut cursor = std::io::Cursor::new(to_server);
-            while server.read_tls(&mut cursor).map_err(|error| format!("{error:?}"))? > 0 {}
-            server.process_new_packets().map_err(|error| format!("{error:?}"))?;
+            while server
+                .read_tls(&mut cursor)
+                .map_err(|error| format!("{error:?}"))?
+                > 0
+            {}
+            server
+                .process_new_packets()
+                .map_err(|error| format!("{error:?}"))?;
         }
         let mut to_client = Vec::new();
         while server.wants_write() {
-            server.write_tls(&mut to_client).map_err(|error| format!("{error:?}"))?;
+            server
+                .write_tls(&mut to_client)
+                .map_err(|error| format!("{error:?}"))?;
         }
         if !to_client.is_empty() {
             let mut cursor = std::io::Cursor::new(to_client);
-            while client.read_tls(&mut cursor).map_err(|error| format!("{error:?}"))? > 0 {}
-            client.process_new_packets().map_err(|error| format!("{error:?}"))?;
+            while client
+                .read_tls(&mut cursor)
+                .map_err(|error| format!("{error:?}"))?
+                > 0
+            {}
+            client
+                .process_new_packets()
+                .map_err(|error| format!("{error:?}"))?;
         }
         if !client.is_handshaking() && !server.is_handshaking() {
             return Ok(());
@@ -1106,68 +1289,74 @@ fn pump_handshake(
 /// the lower key's own `PeerConn`.
 #[tokio::test]
 async fn a_duplicate_pair_collapses_to_the_lower_key_dial() {
-    let subject = subject_of(0x81);
-    let a = device_with_rank("dup-a", subject, true);
-    let b = device_with_rank("dup-b", subject, false);
-    assert!(
-        a.key.public() < b.key.public(),
-        "le test a choisi les clés pour que A soit la plus petite"
-    );
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+    bounded("a_duplicate_pair_collapses_to_the_lower_key_dial", async {
+        let subject = subject_of(0x81);
+        let a = device_with_rank("dup-a", subject, true);
+        let b = device_with_rank("dup-b", subject, false);
+        assert!(
+            a.key.public() < b.key.public(),
+            "le test a choisi les clés pour que A soit la plus petite"
+        );
+        let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+        let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
 
-    let (from_a, from_b) = tokio::join!(
-        async {
-            let (client, accepted) = tokio::join!(
-                endpoint_a.connect(address(&endpoint_b)),
-                endpoint_b.accept()
-            );
-            (client, accepted)
-        },
-        async {
-            let (client, accepted) = tokio::join!(
-                endpoint_b.connect(address(&endpoint_a)),
-                endpoint_a.accept()
-            );
-            (client, accepted)
-        }
-    );
-    let a_dial = from_a.0.expect("A joint B");
-    let b_incoming = from_a.1.expect("B accepte A").expect("B s'authentifie");
-    let b_dial = from_b.0.expect("B joint A");
-    let _a_incoming = from_b.1;
+        let (from_a, from_b) = tokio::join!(
+            async {
+                let (client, accepted) = tokio::join!(
+                    endpoint_a.connect(address(&endpoint_b)),
+                    endpoint_b.accept()
+                );
+                (client, accepted)
+            },
+            async {
+                let (client, accepted) = tokio::join!(
+                    endpoint_b.connect(address(&endpoint_a)),
+                    endpoint_a.accept()
+                );
+                (client, accepted)
+            }
+        );
+        let a_dial = from_a.0.expect("A joint B");
+        let b_incoming = from_a.1.expect("B accepte A").expect("B s'authentifie");
+        let b_dial = from_b.0.expect("B joint A");
+        let _a_incoming = from_b.1;
 
-    // One connection per pair on each side, and the survivor is A's dial.
-    assert_eq!(endpoint_a.connections(), 1, "une seule connexion par paire");
-    assert_eq!(endpoint_b.connections(), 1, "une seule connexion par paire");
-    assert!(
-        a_dial.dialled_by_us(),
-        "A garde la connexion qu'il a composée"
-    );
-    let b_survivor = if b_incoming.dialled_by_us() {
-        b_incoming
-    } else {
-        b_dial
-    };
-    assert!(
-        !b_survivor.dialled_by_us(),
-        "B garde la connexion composée par la plus petite clé"
-    );
+        // One connection per pair on each side, and the survivor is A's dial.
+        assert_eq!(endpoint_a.connections(), 1, "une seule connexion par paire");
+        assert_eq!(endpoint_b.connections(), 1, "une seule connexion par paire");
 
-    // The proof that both sides kept the SAME connection: a control frame written on
-    // B's survivor arrives on A's own dialled `PeerConn`.
-    b_survivor
-        .send_control(Control::InventoryChanged { version: 7 })
-        .await
-        .expect("une trame de contrôle");
-    let received = tokio::time::timeout(Duration::from_secs(5), a_dial.next_control())
-        .await
-        .expect("la trame arrive")
-        .expect("le flux de contrôle est ouvert");
-    assert_eq!(received, Control::InventoryChanged { version: 7 });
+        // The rule, proven by which handle still writes: at B the survivor is the
+        // connection A dialled (B was dialled), and B's own dial was closed with the
+        // duplicate code. A control frame written on the survivor arrives on A's dialled
+        // `PeerConn`, which is what proves both sides kept the SAME connection.
+        assert!(
+            b_incoming
+                .send_control(Control::InventoryChanged { version: 7 })
+                .await
+                .is_ok(),
+            "B garde la connexion que la plus petite clé a composée"
+        );
+        assert!(
+            b_dial
+                .send_control(Control::InventoryChanged { version: 8 })
+                .await
+                .is_err(),
+            "B abandonne la connexion qu'il a composée lui-même"
+        );
+        let received = tokio::time::timeout(Duration::from_secs(5), a_dial.next_control())
+            .await
+            .expect("la trame arrive")
+            .expect("le flux de contrôle est ouvert");
+        assert_eq!(received, Control::InventoryChanged { version: 7 });
+        assert!(
+            a_dial.dialled_by_us(),
+            "A garde la connexion qu'il a composée"
+        );
 
-    endpoint_a.close().await;
-    endpoint_b.close().await;
+        endpoint_a.close().await;
+        endpoint_b.close().await;
+    })
+    .await;
 }
 
 // --- 7. Frames, bodies and control ------------------------------------------
@@ -1176,165 +1365,180 @@ async fn a_duplicate_pair_collapses_to_the_lower_key_dial() {
 /// announced length is what the requester is held to.
 #[tokio::test]
 async fn a_request_and_its_body_cross_a_stream() {
-    let subject = subject_of(0x91);
-    let a = device("body-a", subject, (now() - 60, now() + 86_400));
-    let b = device("body-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+    bounded("a_request_and_its_body_cross_a_stream", async {
+        let subject = subject_of(0x91);
+        let a = device("body-a", subject, (now() - 60, now() + 86_400));
+        let b = device("body-b", subject, (now() - 60, now() + 86_400));
+        let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+        let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
 
-    // 200 KiB, so the body is four chunks of at most 64 KiB.
-    let payload: Vec<u8> = (0..200 * 1024).map(|index| (index % 251) as u8).collect();
-    let announced = payload.len() as u64;
+        // 200 KiB, so the body is four chunks of at most 64 KiB.
+        let payload: Vec<u8> = (0..200 * 1024).map(|index| (index % 251) as u8).collect();
+        let announced = payload.len() as u64;
 
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("authentifié");
-    let accepted = accepted.expect("accepté").expect("authentifié");
-
-    let body = payload.clone();
-    let answering = tokio::spawn(async move {
-        let incoming = accepted.next_incoming().await.expect("une requête");
-        assert!(matches!(incoming.request, Request::Fetch { .. }));
-        incoming
-            .respond(
-                Response::FetchOk {
-                    len: announced,
-                    tag: None,
-                    quality: proto::WireQuality::Flac,
-                },
-                Some(Box::new(std::io::Cursor::new(body))),
-            )
-            .await
-    });
-
-    let reply = client
-        .request(Request::Fetch {
-            track: "3135556".to_owned(),
-            quality: proto::WireQuality::Flac,
-            from: 0,
-            expect: None,
-            urgency: proto::Urgency::Play,
-        })
-        .await
-        .expect("une réponse");
-    assert_eq!(
-        reply.head,
-        Response::FetchOk {
-            len: announced,
-            tag: None,
-            quality: proto::WireQuality::Flac,
-        }
-    );
-    let mut body = reply.body.expect("un corps annoncé");
-    assert_eq!(body.remaining(), announced);
-    let mut received = Vec::new();
-    let mut chunks = 0;
-    while let Some(chunk) = body.chunk(usize::MAX).await.expect("un morceau") {
-        assert!(
-            chunk.len() <= codec::MAX_CHUNK_BYTES,
-            "un morceau ne dépasse jamais 64 KiB, même demandé plus grand"
+        let (client, accepted) = tokio::join!(
+            endpoint_a.connect(address(&endpoint_b)),
+            endpoint_b.accept()
         );
-        chunks += 1;
-        received.extend_from_slice(&chunk);
-    }
-    assert_eq!(received, payload);
-    assert_eq!(chunks, 4, "200 KiB en quatre morceaux de 64 KiB au plus");
-    assert_eq!(body.remaining(), 0);
-    assert_eq!(
-        answering
-            .await
-            .expect("la tâche du répondeur")
-            .expect("la réponse écrite"),
-        announced
-    );
+        let client = client.expect("authentifié");
+        let accepted = accepted.expect("accepté").expect("authentifié");
 
-    endpoint_a.close().await;
-    endpoint_b.close().await;
+        let body = payload.clone();
+        let answering = tokio::spawn(async move {
+            let incoming = accepted.next_incoming().await.expect("une requête");
+            assert!(matches!(incoming.request, Request::Fetch { .. }));
+            incoming
+                .respond(
+                    Response::FetchOk {
+                        len: announced,
+                        tag: None,
+                        quality: proto::WireQuality::Flac,
+                    },
+                    Some(Box::new(std::io::Cursor::new(body))),
+                )
+                .await
+        });
+
+        let reply = client
+            .request(Request::Fetch {
+                track: "3135556".to_owned(),
+                quality: proto::WireQuality::Flac,
+                from: 0,
+                expect: None,
+                urgency: proto::Urgency::Play,
+            })
+            .await
+            .expect("une réponse");
+        assert_eq!(
+            reply.head,
+            Response::FetchOk {
+                len: announced,
+                tag: None,
+                quality: proto::WireQuality::Flac,
+            }
+        );
+        let mut body = reply.body.expect("un corps annoncé");
+        assert_eq!(body.remaining(), announced);
+        let mut received = Vec::new();
+        let mut chunks = 0;
+        while let Some(chunk) = body.chunk(usize::MAX).await.expect("un morceau") {
+            assert!(
+                chunk.len() <= codec::MAX_CHUNK_BYTES,
+                "un morceau ne dépasse jamais 64 KiB, même demandé plus grand"
+            );
+            chunks += 1;
+            received.extend_from_slice(&chunk);
+        }
+        assert_eq!(received, payload);
+        assert_eq!(chunks, 4, "200 KiB en quatre morceaux de 64 KiB au plus");
+        assert_eq!(body.remaining(), 0);
+        assert_eq!(
+            answering
+                .await
+                .expect("la tâche du répondeur")
+                .expect("la réponse écrite"),
+            announced
+        );
+
+        endpoint_a.close().await;
+        endpoint_b.close().await;
+    })
+    .await;
 }
 
 /// An unknown tag is answered `Error { code: "unknown" }` and the connection lives on
 /// (rule 7: a newer peer talking to an older one).
 #[tokio::test]
 async fn an_unknown_frame_is_answered_and_the_connection_lives() {
-    let subject = subject_of(0x92);
-    let a = device("unknown-a", subject, (now() - 60, now() + 86_400));
-    let b = device("unknown-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("authentifié");
-    let accepted = accepted.expect("accepté").expect("authentifié");
-    let answering = answer_pings(accepted);
+    bounded(
+        "an_unknown_frame_is_answered_and_the_connection_lives",
+        async {
+            let subject = subject_of(0x92);
+            let a = device("unknown-a", subject, (now() - 60, now() + 86_400));
+            let b = device("unknown-b", subject, (now() - 60, now() + 86_400));
+            let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+            let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+            let (client, accepted) = tokio::join!(
+                endpoint_a.connect(address(&endpoint_b)),
+                endpoint_b.accept()
+            );
+            let client = client.expect("authentifié");
+            let accepted = accepted.expect("accepté").expect("authentifié");
+            let answering = answer_pings(accepted);
 
-    // A frame from a future version of this protocol, on its own stream.
-    let (mut send, mut recv) = client.connection().open_bi().await.expect("un flux");
-    let unknown = br#"{"t":"Futur","champ":1}"#;
-    send.write_all(&(unknown.len() as u32).to_be_bytes())
-        .await
-        .expect("l'en-tête");
-    send.write_all(unknown).await.expect("la trame");
-    let answer: Response = codec::read_frame(&mut recv, MAX_FRAME_BYTES)
-        .await
-        .expect("une réponse")
-        .expect("une trame");
-    assert_eq!(
-        answer,
-        Response::Error {
-            code: "unknown".to_owned()
-        }
-    );
+            // A frame from a future version of this protocol, on its own stream.
+            let (mut send, mut recv) = client.connection().open_bi().await.expect("un flux");
+            let unknown = br#"{"t":"Futur","champ":1}"#;
+            send.write_all(&(unknown.len() as u32).to_be_bytes())
+                .await
+                .expect("l'en-tête");
+            send.write_all(unknown).await.expect("la trame");
+            let answer: Response = codec::read_frame(&mut recv, MAX_FRAME_BYTES)
+                .await
+                .expect("une réponse")
+                .expect("une trame");
+            assert_eq!(
+                answer,
+                Response::Error {
+                    code: "unknown".to_owned()
+                }
+            );
 
-    // …and the connection still answers a request it does understand.
-    let reply = client.request(Request::Ping).await.expect("un Ping");
-    assert_eq!(reply.head, Response::Pong);
-    let _ = tokio::time::timeout(Duration::from_secs(5), answering).await;
+            // …and the connection still answers a request it does understand.
+            let reply = client.request(Request::Ping).await.expect("un Ping");
+            assert_eq!(reply.head, Response::Pong);
+            let _ = tokio::time::timeout(Duration::from_secs(5), answering).await;
 
-    endpoint_a.close().await;
-    endpoint_b.close().await;
+            endpoint_a.close().await;
+            endpoint_b.close().await;
+        },
+    )
+    .await;
 }
 
 /// The control stream carries gossip after `Hello`, and its end is a clean `None`,
 /// not an error: that is how `Bye` and a closed connection arrive.
 #[tokio::test]
 async fn the_control_stream_carries_gossip_and_ends_cleanly() {
-    let subject = subject_of(0x93);
-    let a = device("control-a", subject, (now() - 60, now() + 86_400));
-    let b = device("control-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("authentifié");
-    let accepted = accepted.expect("accepté").expect("authentifié");
+    bounded(
+        "the_control_stream_carries_gossip_and_ends_cleanly",
+        async {
+            let subject = subject_of(0x93);
+            let a = device("control-a", subject, (now() - 60, now() + 86_400));
+            let b = device("control-b", subject, (now() - 60, now() + 86_400));
+            let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+            let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+            let (client, accepted) = tokio::join!(
+                endpoint_a.connect(address(&endpoint_b)),
+                endpoint_b.accept()
+            );
+            let client = client.expect("authentifié");
+            let accepted = accepted.expect("accepté").expect("authentifié");
 
-    accepted
-        .send_control(Control::SetsChanged { version: 12 })
-        .await
-        .expect("une trame de contrôle");
-    accepted
-        .send_control(Control::Bye)
-        .await
-        .expect("un au revoir");
-    assert_eq!(
-        client.next_control().await,
-        Some(Control::SetsChanged { version: 12 })
-    );
-    assert_eq!(client.next_control().await, Some(Control::Bye));
+            accepted
+                .send_control(Control::SetsChanged { version: 12 })
+                .await
+                .expect("une trame de contrôle");
+            accepted
+                .send_control(Control::Bye)
+                .await
+                .expect("un au revoir");
+            assert_eq!(
+                client.next_control().await,
+                Some(Control::SetsChanged { version: 12 })
+            );
+            assert_eq!(client.next_control().await, Some(Control::Bye));
 
-    // The responder's side of the stream is still open; closing the connection ends
-    // it, and the reader says so with `None` rather than an error.
-    client.close(0);
-    assert_eq!(client.next_control().await, None);
+            // The responder's side of the stream is still open; closing the connection ends
+            // it, and the reader says so with `None` rather than an error.
+            client.close(0);
+            assert_eq!(client.next_control().await, None);
 
-    endpoint_a.close().await;
-    endpoint_b.close().await;
+            endpoint_a.close().await;
+            endpoint_b.close().await;
+        },
+    )
+    .await;
 }
 
 // --- 8. Caps -----------------------------------------------------------------
@@ -1343,36 +1547,42 @@ async fn the_control_stream_carries_gossip_and_ends_cleanly() {
 /// is T9, and the connection goes rather than the stream.
 #[tokio::test]
 async fn an_over_cap_frame_closes_the_connection_and_allocates_nothing() {
-    let subject = subject_of(0xa1);
-    let a = device("cap-a", subject, (now() - 60, now() + 86_400));
-    let b = device("cap-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("authentifié");
-    let accepted = accepted.expect("accepté").expect("authentifié");
+    bounded(
+        "an_over_cap_frame_closes_the_connection_and_allocates_nothing",
+        async {
+            let subject = subject_of(0xa1);
+            let a = device("cap-a", subject, (now() - 60, now() + 86_400));
+            let b = device("cap-b", subject, (now() - 60, now() + 86_400));
+            let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+            let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+            let (client, accepted) = tokio::join!(
+                endpoint_a.connect(address(&endpoint_b)),
+                endpoint_b.accept()
+            );
+            let client = client.expect("authentifié");
+            let accepted = accepted.expect("accepté").expect("authentifié");
 
-    // The responder reads the peer's requests; the over-cap header arrives on its
-    // first stream and the connection goes with it.
-    let answering = tokio::spawn(async move { accepted.next_incoming().await.is_none() });
-    let (mut send, _recv) = client.connection().open_bi().await.expect("un flux");
-    send.write_all(&((MAX_FRAME_BYTES + 1) as u32).to_be_bytes())
-        .await
-        .expect("l'en-tête dit un octet de trop");
-    assert!(answering.await.expect("le répondeur rend la main"));
-    let (code, reason) = close_of(&client.connection()).await;
-    assert_eq!(
-        code,
-        auth::CLOSE_REFUSED,
-        "une taille hostile ferme la connexion"
-    );
-    assert_eq!(reason, "");
+            // The responder reads the peer's requests; the over-cap header arrives on its
+            // first stream and the connection goes with it.
+            let answering = tokio::spawn(async move { accepted.next_incoming().await.is_none() });
+            let (mut send, _recv) = client.connection().open_bi().await.expect("un flux");
+            send.write_all(&((MAX_FRAME_BYTES + 1) as u32).to_be_bytes())
+                .await
+                .expect("l'en-tête dit un octet de trop");
+            assert!(answering.await.expect("le répondeur rend la main"));
+            let (code, reason) = close_of(client.connection()).await;
+            assert_eq!(
+                code,
+                auth::CLOSE_REFUSED,
+                "une taille hostile ferme la connexion"
+            );
+            assert_eq!(reason, "");
 
-    endpoint_a.close().await;
-    endpoint_b.close().await;
+            endpoint_a.close().await;
+            endpoint_b.close().await;
+        },
+    )
+    .await;
 }
 
 /// The two halves of "a 1 MiB + 1 frame closes the connection and allocates ≤ 1 MiB":
@@ -1380,56 +1590,79 @@ async fn an_over_cap_frame_closes_the_connection_and_allocates_nothing() {
 /// exchange that closes the connection stays under the mebibyte the note allows.
 #[tokio::test]
 async fn an_over_cap_frame_allocates_nothing_and_stays_under_a_mebibyte() {
-    // 1. The decision alone: a `u32` that announces 4 GiB costs four bytes of
-    //    arithmetic and no allocation at all.
-    for announced in [MAX_FRAME_BYTES + 1, u32::MAX as usize] {
-        let header = (announced as u32).to_be_bytes();
-        let (refused, allocated) = counted(|| codec::frame_body_len(header, MAX_FRAME_BYTES));
-        assert!(refused.is_err(), "{announced} octets sont refusés");
-        assert_eq!(allocated, 0, "refuser une taille n'alloue rien du tout");
-    }
-    // …and a frame at the cap is accepted by the same function, so the cap is a
-    // boundary and not a blanket refusal.
-    let (accepted, allocated) = counted(|| {
-        codec::frame_body_len((MAX_FRAME_BYTES as u32).to_be_bytes(), MAX_FRAME_BYTES)
-    });
-    assert_eq!(accepted.expect("un mébioctet passe"), MAX_FRAME_BYTES);
-    assert_eq!(allocated, 0);
+    bounded(
+        "an_over_cap_frame_allocates_nothing_and_stays_under_a_mebibyte",
+        async {
+            // 1. The decision alone: the refusal's cost does NOT grow with the announced
+            //    size. A mebibyte too many and four gigabytes cost the same handful of bytes
+            //    (the error's own short sentence), where an implementation that allocated
+            //    first would show two very different numbers.
+            let mut deltas = Vec::new();
+            for announced in [MAX_FRAME_BYTES + 1, 8 * MAX_FRAME_BYTES, u32::MAX as usize] {
+                let header = (announced as u32).to_be_bytes();
+                let (refused, allocated) =
+                    counted(|| codec::frame_body_len(header, MAX_FRAME_BYTES));
+                assert!(refused.is_err(), "{announced} octets sont refusés");
+                deltas.push(allocated);
+            }
+            assert_eq!(
+                deltas[0], deltas[2],
+                "refuser 4 GiB ne coûte pas plus que refuser 1 MiB + 1 : {deltas:?}"
+            );
+            assert!(
+                deltas.iter().all(|delta| *delta < 512),
+                "la décision n'alloue que sa phrase d'erreur : {deltas:?}"
+            );
+            // …and a frame at the cap is accepted by the same function, so the cap is a
+            // boundary and not a blanket refusal.
+            let (accepted, allocated) = counted(|| {
+                codec::frame_body_len((MAX_FRAME_BYTES as u32).to_be_bytes(), MAX_FRAME_BYTES)
+            });
+            assert_eq!(accepted.expect("un mébioctet passe"), MAX_FRAME_BYTES);
+            assert_eq!(allocated, 0);
 
-    // 2. End to end: the responder reads the over-cap header, refuses, and closes the
-    //    connection — having allocated less than the mebibyte the note allows.
-    let subject = subject_of(0xa1);
-    let a = device("cap-a", subject, (now() - 60, now() + 86_400));
-    let b = device("cap-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("authentifié");
-    let accepted = accepted.expect("accepté").expect("authentifié");
+            // 2. End to end: the responder reads the over-cap header, refuses, and closes the
+            //    connection — having allocated less than the mebibyte the note allows.
+            let subject = subject_of(0xa1);
+            let a = device("cap-a", subject, (now() - 60, now() + 86_400));
+            let b = device("cap-b", subject, (now() - 60, now() + 86_400));
+            let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+            let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+            let (client, accepted) = tokio::join!(
+                endpoint_a.connect(address(&endpoint_b)),
+                endpoint_b.accept()
+            );
+            let client = client.expect("authentifié");
+            let accepted = accepted.expect("accepté").expect("authentifié");
 
-    let (mut send, _recv) = client.connection().open_bi().await.expect("un flux");
-    send.write_all(&((MAX_FRAME_BYTES + 1) as u32).to_be_bytes())
-        .await
-        .expect("l'en-tête dit un octet de trop");
-    let (closed, allocated) = counted_async(async { accepted.next_incoming().await.is_none() }).await;
-    assert!(
-        closed,
-        "le répondeur cesse d'accepter des flux et ferme la connexion"
-    );
-    println!("over-cap frame refused, {allocated} bytes allocated end to end");
-    assert!(
-        allocated <= MAX_FRAME_BYTES,
-        "l'échange reste sous le mébioctet : {allocated}"
-    );
-    let (code, reason) = close_of(&client.connection()).await;
-    assert_eq!(code, auth::CLOSE_REFUSED, "une taille hostile ferme la connexion");
-    assert_eq!(reason, "");
+            let (mut send, _recv) = client.connection().open_bi().await.expect("un flux");
+            send.write_all(&((MAX_FRAME_BYTES + 1) as u32).to_be_bytes())
+                .await
+                .expect("l'en-tête dit un octet de trop");
+            let (closed, allocated) =
+                counted_async(async { accepted.next_incoming().await.is_none() }).await;
+            assert!(
+                closed,
+                "le répondeur cesse d'accepter des flux et ferme la connexion"
+            );
+            println!("over-cap frame refused, {allocated} bytes allocated end to end");
+            assert!(
+                allocated <= MAX_FRAME_BYTES,
+                "l'échange reste sous le mébioctet : {allocated}"
+            );
+            let (code, reason) = close_of(client.connection()).await;
+            assert_eq!(
+                code,
+                auth::CLOSE_REFUSED,
+                "une taille hostile ferme la connexion"
+            );
+            assert_eq!(reason, "");
 
-    endpoint_a.close().await;
-    endpoint_b.close().await;
+            endpoint_a.close().await;
+            endpoint_b.close().await;
+        },
+    )
+    .await;
 }
 
 /// A raw quinn server built from the crate's TLS configuration, for the tests that
@@ -1457,6 +1690,7 @@ async fn raw_server(id: &Identity) -> (quinn::Endpoint, SocketAddr) {
 /// prints the same two numbers, so a regression is visible there too.
 #[tokio::test]
 async fn the_handshake_and_both_proofs_are_fast() {
+    bounded("the_handshake_and_both_proofs_are_fast", async {
     let subject = subject_of(0xb1);
     let a = device("bench-a", subject, (now() - 60, now() + 86_400));
     let b = device("bench-b", subject, (now() - 60, now() + 86_400));
@@ -1480,7 +1714,11 @@ async fn the_handshake_and_both_proofs_are_fast() {
     let p95 = samples[(RUNS * 95) / 100];
     println!(
         "handshake + both proofs, {RUNS} runs, {} build: p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms",
-        if cfg!(debug_assertions) { "debug" } else { "release" },
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         p50.as_secs_f64() * 1e3,
         p95.as_secs_f64() * 1e3,
         samples[RUNS - 1].as_secs_f64() * 1e3,
@@ -1500,6 +1738,8 @@ async fn the_handshake_and_both_proofs_are_fast() {
 
     endpoint_a.close().await;
     endpoint_b.close().await;
+    })
+    .await;
 }
 
 /// `close` joins the crate's only task — quinn's endpoint driver — and the runtime
@@ -1507,37 +1747,40 @@ async fn the_handshake_and_both_proofs_are_fast() {
 /// `None`, and a fresh runtime still runs.
 #[tokio::test]
 async fn closing_the_endpoint_joins_the_only_task() {
-    let subject = subject_of(0xb2);
-    let a = device("close-a", subject, (now() - 60, now() + 86_400));
-    let b = device("close-b", subject, (now() - 60, now() + 86_400));
-    let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-    let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
-    let (client, accepted) = tokio::join!(
-        endpoint_a.connect(address(&endpoint_b)),
-        endpoint_b.accept()
-    );
-    let client = client.expect("authentifié");
-    let _accepted = accepted.expect("accepté").expect("authentifié");
+    bounded("closing_the_endpoint_joins_the_only_task", async {
+        let subject = subject_of(0xb2);
+        let a = device("close-a", subject, (now() - 60, now() + 86_400));
+        let b = device("close-b", subject, (now() - 60, now() + 86_400));
+        let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
+        let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
+        let (client, accepted) = tokio::join!(
+            endpoint_a.connect(address(&endpoint_b)),
+            endpoint_b.accept()
+        );
+        let client = client.expect("authentifié");
+        let _accepted = accepted.expect("accepté").expect("authentifié");
 
-    let started = Instant::now();
-    endpoint_a.close().await;
-    endpoint_b.close().await;
-    let took = started.elapsed();
-    assert!(
-        took < transport::SHUTDOWN_DEADLINE,
-        "la fermeture joint le pilote quinn sans attendre la limite : {took:?}"
-    );
-    assert_eq!(endpoint_a.connections(), 0, "plus aucune connexion");
-    // A closed endpoint refuses every operation, and `accept` answers `None` without
-    // waiting: the driver task is gone.
-    assert!(endpoint_a.accept().await.is_none());
-    assert!(matches!(
-        endpoint_a.connect(address(&endpoint_b)).await,
-        Err(LanError::PeerGone) | Err(LanError::Internal(_))
-    ));
-    drop(client);
-    // The runtime keeps running: nothing was left to abort.
-    tokio::task::yield_now().await;
+        let started = Instant::now();
+        endpoint_a.close().await;
+        endpoint_b.close().await;
+        let took = started.elapsed();
+        assert!(
+            took < transport::SHUTDOWN_DEADLINE,
+            "la fermeture joint le pilote quinn sans attendre la limite : {took:?}"
+        );
+        assert_eq!(endpoint_a.connections(), 0, "plus aucune connexion");
+        // A closed endpoint refuses every operation, and `accept` answers `None` without
+        // waiting: the driver task is gone.
+        assert!(endpoint_a.accept().await.is_none());
+        assert!(matches!(
+            endpoint_a.connect(address(&endpoint_b)).await,
+            Err(LanError::PeerGone) | Err(LanError::Internal(_))
+        ));
+        drop(client);
+        // The runtime keeps running: nothing was left to abort.
+        tokio::task::yield_now().await;
+    })
+    .await;
 }
 
 /// A preferred port that is taken makes the node bind an ephemeral one, and it says
@@ -1545,69 +1788,88 @@ async fn closing_the_endpoint_joins_the_only_task() {
 /// the bug this flag prevents.
 #[tokio::test]
 async fn a_busy_preferred_port_falls_back_to_an_ephemeral_one() {
-    // Take the note's default port; if this machine already has it, take any port —
-    // what is asserted is the fallback, not the number.
-    let guard = std::net::UdpSocket::bind(("0.0.0.0", DEFAULT_PORT))
-        .or_else(|_| std::net::UdpSocket::bind(("0.0.0.0", 0)))
-        .expect("un port occupé");
-    let busy = guard.local_addr().expect("l'adresse du garde").port();
+    bounded(
+        "a_busy_preferred_port_falls_back_to_an_ephemeral_one",
+        async {
+            // Take the note's default port; if this machine already has it, take any port —
+            // what is asserted is the fallback, not the number.
+            let guard = std::net::UdpSocket::bind(("0.0.0.0", DEFAULT_PORT))
+                .or_else(|_| std::net::UdpSocket::bind(("0.0.0.0", 0)))
+                .expect("un port occupé");
+            let busy = guard.local_addr().expect("l'adresse du garde").port();
 
-    let subject = subject_of(0xb3);
-    let a = device("port-a", subject, (now() - 60, now() + 86_400));
-    let handle = tokio::runtime::Handle::current();
-    let endpoint = Endpoint::bind(&handle, busy, Arc::clone(&a), trust(subject, None, None), hello("A"))
-        .expect("un endpoint lié malgré le port occupé");
-    assert!(endpoint.port_fallback(), "le repli est signalé");
-    assert_ne!(endpoint.port(), busy, "le port occupé n'est pas réutilisé");
-    assert_ne!(endpoint.port(), 0);
-    endpoint.close().await;
-    drop(guard);
+            let subject = subject_of(0xb3);
+            let a = device("port-a", subject, (now() - 60, now() + 86_400));
+            let handle = tokio::runtime::Handle::current();
+            let endpoint = Endpoint::bind(
+                &handle,
+                busy,
+                Arc::clone(&a),
+                trust(subject, None, None),
+                hello("A"),
+            )
+            .expect("un endpoint lié malgré le port occupé");
+            assert!(endpoint.port_fallback(), "le repli est signalé");
+            assert_ne!(endpoint.port(), busy, "le port occupé n'est pas réutilisé");
+            assert_ne!(endpoint.port(), 0);
+            endpoint.close().await;
+            drop(guard);
+        },
+    )
+    .await;
 }
 
 /// Sixteen is the cap: the seventeenth peer is refused rather than queued behind a
 /// table that would grow with every stranger on the Wi-Fi (T9).
 #[tokio::test]
 async fn the_connection_cap_is_sixteen() {
-    let subject = subject_of(0xb4);
-    let owner = device("cap-owner", subject, (now() - 60, now() + 86_400));
-    let endpoint = node(Arc::clone(&owner), trust(subject, None, None), "PC");
+    bounded("the_connection_cap_is_sixteen", async {
+        let subject = subject_of(0xb4);
+        let owner = device("cap-owner", subject, (now() - 60, now() + 86_400));
+        let endpoint = node(Arc::clone(&owner), trust(subject, None, None), "PC");
 
-    let mut held = Vec::new();
-    let mut peers = Vec::new();
-    for index in 0..16 {
-        let peer = device(
-            &format!("cap-peer-{index}"),
-            subject,
-            (now() - 60, now() + 86_400),
-        );
-        let other = node(Arc::clone(&peer), trust(subject, None, None), "peer");
+        let mut held = Vec::new();
+        let mut peers = Vec::new();
+        for index in 0..16 {
+            let peer = device(
+                &format!("cap-peer-{index}"),
+                subject,
+                (now() - 60, now() + 86_400),
+            );
+            let other = node(Arc::clone(&peer), trust(subject, None, None), "peer");
+            let (client, accepted) =
+                tokio::join!(other.connect(address(&endpoint)), endpoint.accept());
+            held.push(client.expect("une connexion de plus"));
+            accepted.expect("accepté").expect("authentifié");
+            // The dialler's endpoint must stay alive, or its connection goes with it.
+            peers.push(other);
+        }
+        assert_eq!(endpoint.connections(), 16, "seize connexions tenues");
+
+        let seventeenth = device("cap-peer-16", subject, (now() - 60, now() + 86_400));
+        let other = node(Arc::clone(&seventeenth), trust(subject, None, None), "peer");
         let (client, accepted) = tokio::join!(other.connect(address(&endpoint)), endpoint.accept());
-        held.push(client.expect("une connexion de plus"));
-        accepted.expect("accepté").expect("authentifié");
-        // The dialler's endpoint must stay alive, or its connection goes with it.
-        peers.push(other);
-    }
-    assert_eq!(endpoint.connections(), 16, "seize connexions tenues");
+        assert!(
+            matches!(client, Err(LanError::Refused) | Err(LanError::PeerGone)),
+            "le dix-septième est refusé, pas mis en attente"
+        );
+        assert!(
+            matches!(
+                accepted,
+                Some(Err(LanError::Refused)) | Some(Err(LanError::Busy { .. }))
+            ),
+            "le répondeur refuse la dix-septième"
+        );
+        assert_eq!(endpoint.connections(), 16, "la table n'a pas grandi");
 
-    let seventeenth = device("cap-peer-16", subject, (now() - 60, now() + 86_400));
-    let other = node(Arc::clone(&seventeenth), trust(subject, None, None), "peer");
-    let (client, accepted) = tokio::join!(other.connect(address(&endpoint)), endpoint.accept());
-    assert!(
-        matches!(client, Err(LanError::Refused) | Err(LanError::PeerGone)),
-        "le dix-septième est refusé, pas mis en attente"
-    );
-    assert!(
-        matches!(accepted, Some(Err(LanError::Refused)) | Some(Err(LanError::Busy { .. }))),
-        "le répondeur refuse la dix-septième"
-    );
-    assert_eq!(endpoint.connections(), 16, "la table n'a pas grandi");
-
-    for conn in held {
-        conn.close(0);
-    }
-    endpoint.close().await;
-    other.close().await;
-    for peer in peers {
-        peer.close().await;
-    }
+        for conn in held {
+            conn.close(0);
+        }
+        endpoint.close().await;
+        other.close().await;
+        for peer in peers {
+            peer.close().await;
+        }
+    })
+    .await;
 }

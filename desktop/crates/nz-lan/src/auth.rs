@@ -289,19 +289,13 @@ pub fn verify_peer(
         (
             Side::Responder,
             proto::Control::Auth {
-                cred,
-                proof,
-                proto,
-                ..
+                cred, proof, proto, ..
             },
         )
         | (
             Side::Initiator,
             proto::Control::AuthOk {
-                cred,
-                proof,
-                proto,
-                ..
+                cred, proof, proto, ..
             },
         ) => (cred, proof, *proto),
         (Side::Responder, other) => {
@@ -340,8 +334,8 @@ pub fn verify_peer(
 
     // The proof is over THIS connection, in the role the peer claims, with the
     // public key the (verified) credential names.
-    let signature = base64_decode(proof)
-        .ok_or_else(|| AuthError::Malformed("preuve non base64".to_owned()))?;
+    let signature =
+        base64_decode(proof).ok_or_else(|| AuthError::Malformed("preuve non base64".to_owned()))?;
     verify_proof(&cred.device_pub, conn, side.peer_role(), &signature)
         .map_err(|_| AuthError::Proof)?;
 
@@ -459,15 +453,21 @@ mod tests {
     }
 
     /// One exporter label, 32 bytes, and the two roles spelled exactly as the
-    /// signed message spells them: the label and the contexts are the whole
-    /// channel binding.
+    /// signed message spells them: the label and the contexts are the whole channel
+    /// binding.
+    ///
+    /// The message is 59 bytes, not the 58 the note's prose counts: the domain it
+    /// writes as "17 of domain" is `neezer-lan/1 auth\0`, which is **18** bytes once
+    /// its NUL terminator is counted (17 characters + 1). LN2's `cred.rs` is the
+    /// implementation, and its vector is what LN1 signs against, so the number that
+    /// matters is 18 + 9 + 32 = 59 — the prose is off by one, not the code.
     #[test]
     fn the_exporter_label_and_the_two_contexts_are_the_notes() {
         assert_eq!(EXPORTER_LABEL, b"EXPORTER-neezer-lan/1");
         assert_eq!(EXPORTER_BYTES, 32);
         assert_eq!(Role::Initiator.as_bytes(), b"initiator");
         assert_eq!(Role::Responder.as_bytes(), b"responder");
-        assert_eq!(auth_message(Role::Initiator, &[0xAA; 32]).len(), 58);
+        assert_eq!(auth_message(Role::Initiator, &[0xAA; 32]).len(), 59);
     }
 
     /// Every refusal has a close code, and exactly one of them is not
@@ -509,10 +509,13 @@ mod tests {
     fn the_two_sides_sign_and_check_opposite_roles() {
         for side in [Side::Initiator, Side::Responder] {
             assert_ne!(side.role(), side.peer_role(), "{side:?}");
-            assert_eq!(side.role(), match side {
-                Side::Initiator => Role::Initiator,
-                Side::Responder => Role::Responder,
-            });
+            assert_eq!(
+                side.role(),
+                match side {
+                    Side::Initiator => Role::Initiator,
+                    Side::Responder => Role::Responder,
+                }
+            );
         }
     }
 }

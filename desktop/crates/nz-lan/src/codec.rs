@@ -154,6 +154,6 @@ mod tests {
     fn the_header_and_the_chunk_are_the_documented_sizes() {
         assert_eq!(FRAME_HEADER_BYTES, 4);
         assert_eq!(MAX_CHUNK_BYTES, 65_536);
-        assert!(MAX_CHUNK_BYTES < MAX_FRAME_BYTES);
+        const { assert!(MAX_CHUNK_BYTES < MAX_FRAME_BYTES) };
     }
 }
