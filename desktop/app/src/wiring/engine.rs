@@ -558,6 +558,47 @@ mod tests {
         }
     }
 
+    /// **LN5, the app's half** (`docs/agents/lan-nodes.md`, *Shared-crate
+    /// changes*): the play cache is published under the quality the ENGINE
+    /// reported, not the one the bar asked for.
+    ///
+    /// A peer that holds only the FLAC answers an Opus 320 request with FLAC —
+    /// `nz-audio`'s `StreamComplete` then carries `Flac` instead of `Opus320`
+    /// (`the_completion_event_carries_the_quality_the_body_really_served`), and
+    /// this is the one function that turns that event into a cache row. Caching
+    /// those bytes under `OPUS_320` would make the engine believe it holds a
+    /// transcode it never had, and `local()` would answer for a rung whose file
+    /// does not exist.
+    ///
+    /// Measured: a 4 096-byte spool announced as `Flac` is in the play cache
+    /// under `FLAC` and nowhere under `OPUS_320`, and the spool file was moved.
+    #[test]
+    fn a_spool_announced_as_flac_is_cached_under_flac() {
+        let scratch = Scratch::new("publish-spool");
+        let cache = scratch.store();
+        let spool = scratch.dir().join("stream-spool");
+        std::fs::write(&spool, vec![3u8; 4096]).expect("the spool");
+
+        publish_spool(&cache, "3135556", Quality::Flac, &spool, 4096);
+
+        let track = nz_model::TrackId::new("3135556");
+        let cached = cache
+            .play_cache()
+            .lookup(&track, nz_api::Quality::Flac)
+            .expect("the play cache");
+        println!("cache de lecture : {cached:?}");
+        assert!(cached.is_some(), "the bytes really were FLAC");
+        assert_eq!(
+            cache
+                .play_cache()
+                .lookup(&track, nz_api::Quality::Opus320)
+                .expect("the play cache"),
+            None,
+            "no entry may claim a transcode that never existed"
+        );
+        assert!(!spool.exists(), "the spool was renamed into the cache");
+    }
+
     /// The engine's own threads, by the names `nz-audio` gives them: every one
     /// of them may borrow the network runtime, so the close must leave none.
     fn engine_threads() -> Vec<String> {
