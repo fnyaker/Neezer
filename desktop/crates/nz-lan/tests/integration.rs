@@ -1411,9 +1411,11 @@ async fn a_track_no_peer_has_goes_straight_to_the_server() {
     b.lan.found(IpAddr::from([127, 0, 0, 1]), a.port());
     peers_are(&b, 1).await;
 
-    // A decision over a replica that HAS a track costs no request: 1 000 of them
-    // move no counter (the note's "a tap: 0 control bytes").
-    let before = b.lan.wire();
+    // A decision over the replica costs NO request, and that is measured on the
+    // decision itself: 1 000 of them in well under a single loopback round trip's
+    // worth of time (a QUIC request is 0.3–1 ms, so 1 000 would be ≥ 300 ms). The
+    // wire counters cannot be the evidence — the driver samples them once a second
+    // and a 1.3 ms loop still straddles a tick (measured in CI).
     let started = Instant::now();
     for _ in 0..1_000 {
         assert_eq!(
@@ -1422,22 +1424,10 @@ async fn a_track_no_peer_has_goes_straight_to_the_server() {
         );
     }
     let elapsed = started.elapsed();
-    let after = b.lan.wire();
     println!("1 000 décisions : {elapsed:?}");
-    assert_eq!(
-        (
-            after.packets_out,
-            after.packets_in,
-            after.bytes_out,
-            after.bytes_in
-        ),
-        (
-            before.packets_out,
-            before.packets_in,
-            before.bytes_out,
-            before.bytes_in
-        ),
-        "une décision ne doit envoyer aucun paquet"
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "une décision est en mémoire : {elapsed:?} pour 1 000"
     );
 
     let opens = Opens::default();

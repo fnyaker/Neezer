@@ -2153,7 +2153,7 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
 |---|---|---|
 | tap → first audible frame from a peer | **4.3–10.9 ms** (loopback) | `cargo test -p nz-lan --test integration a_track_only_the_peer_has -- --nocapture` |
 | a track no peer has | **1.11 ms** from `load` to the inner opener's first byte, **1** open, **0** LAN datagrams | `... a_track_no_peer_has -- --nocapture` |
-| a decision over a replica | **1.32 µs** (1 000 calls = 1.32 ms), **0** packets | same |
+| a decision over a replica | **1.32 µs** (1 000 calls = 1.32 ms, under the 100 ms a single request's worth would need), **0** request | same |
 | `ready()` | **7.0 µs** per call (10 000 = 69.8 ms), so **0** requests (one round trip would be ≥ 3 s) | `... a_seek_reopens_the_same_peer -- --nocapture` |
 | a peer that stalls mid-track | takeover at **exactly 65 536 B** (one 64 KiB chunk), the spool byte-identical to the file | `... a_stalled_peer_hands -- --nocapture` |
 | a 50-track playlist from one peer | **50/50** files, **0** opens of the server, labels and pinned sleeve present; **35.5 s** through the worker (the Bulk gate) | `... a_fifty_track_playlist -- --nocapture` |
@@ -2183,7 +2183,8 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
   playback makes the READING grow by itself (measured in CI: 9 → 21 packets for a track nobody
   has). The tests prove it with what cannot lie: the inner opener's **open count**, the quality the
   event carries, and the spool compared byte for byte with the peer's file; the zero-request
-  property is asserted on 1 000 decisions inside one sampling window.
+  property is asserted on the COST of 1 000 decisions (1.3 ms — a single loopback request is
+  0.3–1 ms, so 1 000 would be ≥ 300 ms), never on the sampled counters.
 - **Stickiness is only observable where a fresh decision would differ.** Two peers with the same
   rung would make the assertion pass without the sticky map. The test gives A the FLAC and C the
   Opus 128, opens at FLAC (A), then seeks asking Opus 128 — where `decide` answers C — and asserts the
