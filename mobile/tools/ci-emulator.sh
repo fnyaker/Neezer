@@ -20,7 +20,8 @@
 #
 # What it measures and prints (a CI log is the only place these numbers are ever
 # read): boot seconds, the shell's first screen, the doors opened / expected,
-# routes reached through an app link, and the instrumented-test modules found.
+# routes reached through an app link, the instrumented-test modules found, and
+# whether the native library was handed over or built here.
 
 set -euo pipefail
 
@@ -45,6 +46,32 @@ serial="emulator-$port"
 adb_dev() { "$(nz_adb)" -s "$serial" "$@"; }
 note() { printf 'ci-emulator.sh: %s\n' "$*" >&2; }
 step() { printf '\n=== %s\n' "$*"; }
+
+# Are the native library and the generated Kotlin bindings ALREADY here?
+#
+# `mobile/rust/build-android.sh` produces exactly two things `:bridge` needs:
+# `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` for the three ABIs the app ships,
+# and the UniFFI Kotlin under `bridge/build/generated/uniffi`. The workflow's
+# `apk` job builds them and hands them over as an artifact; without this test
+# this job rebuilt the whole stack from cold inside the instrumented step —
+# measured on run 44368850444: 12 min 30 s of cargo (18:48:36 → 19:01:03) while
+# the emulator's four vCPUs waited, after installing the NDK and cargo-ndk a
+# second time.
+#
+# A machine that has not run that job keeps the old path: the artifacts are
+# absent, so `prepare_android_build` runs and Gradle's own `:bridge:buildRust`
+# builds them, exactly as before. Nothing is skipped that was ever required —
+# the SAME instrumented tasks run either way.
+native_artifacts_present() {
+    local abi generated
+    generated="$(nz_android_project)/bridge/build/generated/uniffi"
+    [[ -d "$generated" ]] || return 1
+    [[ -n "$(find "$generated" -name '*.kt' -print -quit 2>/dev/null)" ]] || return 1
+    for abi in arm64-v8a armeabi-v7a x86_64; do
+        [[ -f "$(nz_android_project)/bridge/src/main/jniLibs/$abi/libnz_ffi.so" ]] || return 1
+    done
+    return 0
+}
 
 # Everything is stopped through emu.sh, even when a check fails: a runner that
 # keeps a 3 GB qemu alive for its next job is a slow runner.
@@ -108,7 +135,11 @@ if [[ -z "$apk" ]]; then
 fi
 if [[ -z "$apk" || ! -f "$apk" ]]; then
     note "no APK built yet: assembling the release one (the workflow hands it over as an artifact)"
-    nz_gradle_android :app:assembleRelease >/dev/null
+    if native_artifacts_present; then
+        nz_gradle_android :app:assembleRelease -PskipRust >/dev/null
+    else
+        nz_gradle_android :app:assembleRelease >/dev/null
+    fi
     apk="$(nz_android_project)/app/build/outputs/apk/release/app-release.apk"
 fi
 [[ -f "$apk" ]] || {
@@ -367,10 +398,12 @@ if (( doors_failed > 0 )); then
 fi
 
 # The instrumented step builds the DEBUG app, which links the Rust library: it
-# needs the NDK, cargo-ndk and the three Rust targets. The workflow's `apk` job
-# installs them for its own build; this job would otherwise die at
-# `:bridge:buildRust` with "cargo ndk: not found", long after the emulator booted
-# — the worst moment to learn it. Idempotent, and it says what it installs.
+# needs the NDK, cargo-ndk and the three Rust targets — UNLESS the workflow's
+# `apk` job handed the library and the bindings over (`native_artifacts_present`),
+# in which case `-PskipRust` makes `:bridge` reuse them and this function is not
+# called at all. A machine without them (a lot checking its own screen) still
+# gets the whole toolchain installed here, idempotently, with a line saying what
+# it installs.
 prepare_android_build() {
     local sdk ndk_version="${NDK_VERSION:-30.0.16248370}"
     sdk="$(nz_sdk_root)"
@@ -416,7 +449,14 @@ if (( ${#test_modules[@]} == 0 )); then
     printf 'instrumented_modules=0 (no module has src/androidTest yet)\n'
 else
     printf 'instrumented_modules=%s (%s)\n' "${#test_modules[@]}" "${test_modules[*]}"
-    prepare_android_build
+    gradle_args=()
+    if native_artifacts_present; then
+        printf 'native=prebuilt (libnz_ffi.so and the UniFFI Kotlin came with the workflow artifact: -PskipRust)\n'
+        gradle_args+=("-PskipRust")
+    else
+        printf 'native=built here (no prebuilt libnz_ffi.so + bindings: the NDK, cargo-ndk and cargo run)\n'
+        prepare_android_build
+    fi
 
     # The APK the workflow handed over is the RELEASE build, whose versionCode is
     # `2 000 000 + the apk job's run number` (2 000 037 on the run that found
@@ -433,7 +473,7 @@ else
     done
     # Only OUR device: a connected task otherwise installs and runs on every
     # emulator adb sees, including another lot's.
-    ANDROID_SERIAL="$serial" nz_gradle_android "${tasks[@]}"
+    ANDROID_SERIAL="$serial" nz_gradle_android "${tasks[@]}" "${gradle_args[@]}"
 fi
 
 step "done"
