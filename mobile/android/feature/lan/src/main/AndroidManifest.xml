@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :feature/lan's own manifest (lot LN14, docs/agents/lan-nodes.md, *Discovery*).
+
+  The merge puts these three declarations into the app, so nothing here needs
+  `:app`'s file — the same rule every feature module follows.
+
+  * NEARBY_WIFI_DEVICES — the local-network permission of Android 13–16, asked
+    for at the moment the person turns the exchange ON (with the reason on
+    screen), never at start-up.
+  * ACCESS_LOCAL_NETWORK — what Android 17 (API 37) enforces instead; declared
+    now (this build targets 35, where it is ignored and access is implicitly
+    granted) so the day the target moves the app already asks. The string is
+    spelled out because `Manifest.permission` has no such constant before API 37.
+  * The provider that wires the node at process start (see LanInitProvider).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The multicast lock the browse holds. `:app` declares it too (LN0); the
+         duplicate is what makes this module's own instrumented test APK able to
+         take the lock — measured: a library test APK merges ONLY its module's
+         manifest, and `acquire()` answered SecurityException without this. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+
+    <!-- `usesCleartextTraffic`: the app's own manifest sets it (a home server can be
+         `http://192.168.1.10`, and `nz-api` narrows http to the configured origin in
+         code). Repeating it here is what lets THIS module's instrumented test APK
+         reach the bench server at `10.0.2.2` — a library test APK merges only its
+         module's manifest, and cleartext is refused by default from API 28. -->
+    <application android:usesCleartextTraffic="true">
+        <provider
+            android:name="fr.neezer.mobile.feature.lan.LanInitProvider"
+            android:authorities="fr.neezer.mobile.feature.lan.init"
+            android:exported="false"
+            android:multiprocess="false"
+            android:directBootAware="false" />
+    </application>
+</manifest>

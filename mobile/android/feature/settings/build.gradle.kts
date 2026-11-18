@@ -60,6 +60,10 @@ dependencies {
     implementation(project(":feature:audiofx"))
     implementation(project(":feature:admin"))
     implementation(project(":feature:offline"))
+    // LN14's « Appareils à proximité »: MB16's extension point ("one entry to
+    // that table plus one branch that calls its own composable"), so the module
+    // that owns the screen is a dependency of the module that hosts it.
+    implementation(project(":feature:lan"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)

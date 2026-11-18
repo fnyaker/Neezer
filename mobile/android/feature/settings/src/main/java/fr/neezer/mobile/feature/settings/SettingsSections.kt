@@ -382,7 +382,12 @@ internal fun VizSection(model: SettingsModel, state: SettingsModel.State) {
  */
 @Composable
 internal fun DownloadsSection(@Suppress("UNUSED_PARAMETER") model: SettingsModel, @Suppress("UNUSED_PARAMETER") state: SettingsModel.State) {
-    fr.neezer.mobile.feature.offline.OfflineSettingsSection()
+    // LN14's « Sur vos appareils » is the offline page's second tab: the tab
+    // strip and its content live in MB15's module, the content is LN14's own
+    // section (one writer per screen, and no copy of the peers' list here).
+    fr.neezer.mobile.feature.offline.OfflineSettingsSection(
+        peerSets = { fr.neezer.mobile.feature.lan.PeerSetsSection() },
+    )
 }
 
 /** « Découverte » : the level, and the titles the person does not like. */

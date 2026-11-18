@@ -40,6 +40,7 @@ val SETTING_CATEGORIES: List<SettingCategory> = listOf(
     SettingCategory("viz", "Animations", NzGlyph.Sparkles, "Ce qui s'anime pendant la lecture", SettingGroup.Listen),
     SettingCategory("downloads", "Téléchargements", NzGlyph.Download, "Qualité, hors-ligne, préchargement", SettingGroup.Library),
     SettingCategory("discovery", "Découverte", NzGlyph.Compass, "Flow, titres que vous n'aimez pas, nouveautés", SettingGroup.Library),
+    SettingCategory("lan", "Appareils à proximité", NzGlyph.People, "Échange entre vos appareils et vos amis sur ce Wi-Fi", SettingGroup.Accounts),
     SettingCategory("sources", "Sources", NzGlyph.Link, "Ordre des sources, vos comptes, et qui peut s'en servir", SettingGroup.Accounts),
     SettingCategory("account", "Compte", NzGlyph.User, "Votre compte, l'export vers d'autres services", SettingGroup.Accounts),
     SettingCategory("help", "Assistance", NzGlyph.Info, "Recharger l'application, journal de diagnostic", SettingGroup.Accounts),

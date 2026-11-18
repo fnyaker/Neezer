@@ -369,6 +369,8 @@ private fun SettingsPane(
                     "viz" -> VizSection(model, state)
                     "downloads" -> DownloadsSection(model, state)
                     "discovery" -> DiscoverySection(model, state)
+                    // LN14's own screen, hosted (MB16's extension point).
+                    "lan" -> fr.neezer.mobile.feature.lan.LanSettingsSection()
                     "sources" -> SourcesSection(model, state)
                     "account" -> AccountSection(model, state)
                     "help" -> HelpSection(model, state)
@@ -412,6 +414,7 @@ internal fun SettingsSection(
                 "viz" -> VizSection(model, model.state)
                 "downloads" -> DownloadsSection(model, model.state)
                 "discovery" -> DiscoverySection(model, model.state)
+                "lan" -> fr.neezer.mobile.feature.lan.LanSettingsSection()
                 "sources" -> SourcesSection(model, model.state)
                 "account" -> AccountSection(model, model.state)
                 "help" -> HelpSection(model, model.state)
