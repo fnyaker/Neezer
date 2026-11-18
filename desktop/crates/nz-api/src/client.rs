@@ -456,6 +456,17 @@ impl Api {
             .set_bulk_cap(bulk_cap_from_stream(stream_bytes_per_s));
     }
 
+    /// The gates of rule 1, shared with whoever else spends this device's link.
+    ///
+    /// `nz-lan` takes them for a `Bulk` transfer between two devices
+    /// (`docs/agents/lan-nodes.md`, *Rule 1 on the LAN*): a playlist pulled from
+    /// a peer waits behind the tapped track exactly like a download from the
+    /// server does, and the two never both hold the one Bulk slot. ONE
+    /// mechanism, so a second throttle cannot pace the same link differently.
+    pub fn gates(&self) -> Arc<Gates> {
+        Arc::clone(&self.gates)
+    }
+
     /// `false` while a remote-control loan drives somebody else's library: what
     /// this device reads then must not enter its own offline copy
     /// (`lib/apicache.js`, the `REMOTE` guard).

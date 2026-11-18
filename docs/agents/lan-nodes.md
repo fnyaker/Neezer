@@ -8,9 +8,11 @@ rules apply here. Other areas: [docs/agents/](./). The apps that become nodes ar
 groups and access are [providers.md](providers.md); the existing pairing-by-link (remote control,
 party, public playlist) is [party-remote.md](party-remote.md).
 
-**Status (2026-11-18): planned.** Nothing of this exists in code yet. This note is the plan the
-coding lots follow, in order (*The lots*). Each lot, when it lands, replaces its plan paragraph by
-what was learned (rule, why, number) — a delivered lot is not a changelog.
+**Status (2026-11-18): LN0 delivered, the rest planned.** LN0 landed every contract and every stub
+(`nz-lan`, `Feature::Lan`, `Api::gates()`, the `nz-model` payloads, the Android module and routes) with
+no behaviour; nothing else of this exists in code yet. This note is the plan the coding lots follow, in
+order (*The lots*). Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
+number) — a delivered lot is not a changelog.
 
 ## The need
 
@@ -860,7 +862,7 @@ their wave.
 | Lot | Exclusive files |
 |---|---|
 | LN0 | `desktop/crates/nz-lan/**` (all stubs: `Cargo.toml`, `src/*.rs`), `desktop/Cargo.toml` (`[workspace.dependencies]` pins only), `desktop/Cargo.lock`, `desktop/crates/nz-api/src/{features.rs,client.rs (only `gates()`)}`, `desktop/crates/nz-api/src/endpoints/{mod.rs (one line),lan.rs}`, `desktop/crates/nz-model/src/{lib.rs (one line),lan.rs}`, `mobile/rust/Cargo.toml`, `mobile/rust/Cargo.lock`, `mobile/rust/crates/{nz-core,nz-ffi}/Cargo.toml`, `mobile/rust/crates/nz-core/src/{lib.rs (one line),lan/mod.rs}`, `mobile/rust/crates/nz-ffi/src/{lib.rs (one line),lan.rs}`, `mobile/android/settings.gradle.kts` (one include), `mobile/android/app/build.gradle.kts` (one dependency), `mobile/android/app/src/main/AndroidManifest.xml` (one permission), `mobile/android/app/src/main/java/fr/neezer/mobile/app/NavGraph.kt` (two routes), `mobile/android/feature/lan/**` (stub module), `CLAUDE.md` + `AGENTS.md` (only if a count changes) |
-| LN1 | `neezer/lan.py` (new: LAN key, subject, credential/roster/revocation encoding), `neezer/webui/lan.py` (new: routes, `LAN_POLICY`), `neezer/db.py` (models + `SCHEMA_VERSION`), `neezer/schema/{sqlite,postgres,mysql}.sql`, `neezer/schema/migration/{sqlite,postgres,mysql}/<date>.sql`, `neezer/web.py` (one registration), `tests/test_lan_*.py`, `docs/api` entry if the routes are listed there |
+| LN1 | `desktop/crates/nz-api/tests/bench.rs` (delete `PENDING_SERVER_ROUTES`' `Feature::Lan`, see *Acceptance*), `neezer/lan.py` (new: LAN key, subject, credential/roster/revocation encoding), `neezer/webui/lan.py` (new: routes, `LAN_POLICY`), `neezer/db.py` (models + `SCHEMA_VERSION`), `neezer/schema/{sqlite,postgres,mysql}.sql`, `neezer/schema/migration/{sqlite,postgres,mysql}/<date>.sql`, `neezer/web.py` (one registration), `tests/test_lan_*.py`, `docs/api` entry if the routes are listed there |
 | LN2 | `desktop/crates/nz-lan/src/{cred.rs,keys.rs}`, `desktop/crates/nz-lan/tests/cred.rs` |
 | LN3 | `desktop/crates/nz-lan/src/{discovery.rs,discovery_mdns.rs}`, `desktop/crates/nz-lan/tools/netns.sh`, `desktop/crates/nz-lan/tests/discovery.rs`, `.github/workflows/desktop.yaml` (one step: the AppArmor sysctl + the netns test) |
 | LN4 | `desktop/crates/nz-lan/src/{store.rs,index.rs,hashing.rs,scope.rs,serve.rs}`, `desktop/crates/nz-lan/tests/serve.rs` |
@@ -883,134 +885,105 @@ Every lot also rewrites ITS OWN section below (and only that section) when it la
 Each lot ends with a complete prompt for its worker. Copy a prompt whole, never trimmed: it carries
 the rules block.
 
-### LN0 — Contracts and stubs (wave 0, effort high)
+### LN0 — Contracts and stubs (delivered 2026-11-18)
 
-- **Objective**: every declaration a later lot compiles against exists, in its final shape, before
-  any lot starts — so no later lot edits a manifest, a `lib.rs`, a shared type or a Gradle file.
-  Bodies return `Err(LanError::Unsupported)`, empty collections or `None`; nothing calls `nz-lan`
-  yet; both apps behave exactly as before.
-- **Files**: the LN0 row of *File ownership*.
-- **Contracts written, final**: everything in *Contracts*, plus the transport surface LN6 fills:
+**What landed.** Every declaration a later lot compiles against, in its FINAL shape, with no
+behaviour: a body answers `Err(LanError::Unsupported)`, an empty collection or `None`, and nothing in
+either app calls the crate yet (the desktop opens the same screens, the phone the same tabs).
 
-  ```rust
-  // nz-lan/src/proto.rs — also the control stream (the auth stream stays open as control)
-  #[derive(Serialize, Deserialize)] #[serde(tag = "t")]
-  pub enum Control {
-      Auth { cred: String /* base64 154 B */, proof: String /* base64 64 B */, revocation_serial: u64, proto: u32 },
-      AuthOk { cred: String, proof: String, revocation_serial: u64, proto: u32 },
-      Hello { name: String, platform: String, app_version: String, inventory_version: u64, sets_version: u64 },
-      Revocations { blob: String }, Roster { blob: String },
-      InventoryChanged { version: u64 }, SetsChanged { version: u64 }, Bye,
-  }
-  // nz-lan/src/transport.rs
-  pub struct Identity { pub key: DeviceKey, pub cred: Credential }
-  pub struct TrustState { pub subject: Subject, pub keys: TrustKeys,
-                          pub revocations: HashMap<Kid, Revocations>, pub roster: Option<Roster> }
-  pub type SharedTrust = Arc<std::sync::RwLock<TrustState>>;
-  pub struct PeerInfo { pub device_pub: DevicePub, pub subject: Subject, pub relation: Relation,
-                        pub scope: Scope, pub hello: Option<proto::Hello>, pub addr: SocketAddr }
-  pub struct Endpoint { /* quinn::Endpoint + state */ }
-  impl Endpoint {
-      pub fn bind(rt: &tokio::runtime::Handle, port: u16, id: Arc<Identity>, trust: SharedTrust,
-                  hello: proto::Hello) -> Result<Endpoint, LanError>;
-      pub fn port(&self) -> u16;  pub fn port_fallback(&self) -> bool;
-      pub async fn connect(&self, addr: SocketAddr) -> Result<PeerConn, LanError>;
-      pub async fn accept(&self) -> Option<Result<PeerConn, LanError>>;
-      pub fn set_identity(&self, id: Arc<Identity>);
-      pub async fn close(&self);
-  }
-  #[derive(Clone)] pub struct PeerConn { /* quinn::Connection + control stream */ }
-  impl PeerConn {
-      pub fn info(&self) -> &PeerInfo;
-      pub async fn request(&self, req: proto::Request) -> Result<Reply, LanError>;
-      pub async fn next_incoming(&self) -> Option<Incoming>;
-      pub async fn send_control(&self, c: proto::Control) -> Result<(), LanError>;
-      pub async fn next_control(&self) -> Option<proto::Control>;
-      pub fn rtt(&self) -> std::time::Duration;  pub fn close(&self, code: u32);
-  }
-  pub struct Reply { pub head: proto::Response, pub body: Option<Body> }
-  pub struct Body { /* quinn::RecvStream + remaining */ }
-  impl Body { pub async fn chunk(&mut self, max: usize) -> Result<Option<Vec<u8>>, LanError>; pub fn remaining(&self) -> u64; }
-  pub struct Incoming { pub request: proto::Request /* + send stream */ }
-  impl Incoming { pub async fn respond(self, head: proto::Response,
-                      body: Option<Box<dyn tokio::io::AsyncRead + Unpin + Send>>) -> Result<u64, LanError>; }
-  ```
+- `desktop/crates/nz-lan`: the crate, its manifest, and one module per line of *Architecture* — 26
+  Rust files (`lib.rs` + 25 modules), `proto.rs` complete (the six `Request`s, the ten `Response`s,
+  the `Item`/`Copy`/`ItemKey`/
+  `FileTag`/`SetInfo`/`TrackMeta`/`Hello` records, `Control`, `WireQuality`, `Urgency`), the
+  transport surface LN6 fills (`Identity`, `TrustState`, `Endpoint`, `PeerConn`, `Reply`, `Body`,
+  `Incoming`), and the signatures of `cred`, `keys`, `store`, `index`, `hashing`, `scope`, `serve`,
+  `peers`, `decide`, `fetch`, `enroll`, `gossip`, `settings`, `service`, `opener`, `downloader`,
+  `sets`, `import` exactly as their lots name them.
+- `nz-api`: `Feature::Lan` (probe `/lan/status`, absent « L'échange entre appareils proches »),
+  `Api::gates()` (the ONE throttle the LAN shares with the server), and `endpoints/lan.rs`'s twelve
+  methods answering the `404` an absent route answers — the very failure `has_route` reads as "no
+  such feature".
+- `nz-model`: `src/lan.rs`, the eleven payloads of LN1's routes, every field `serde(default)`, and
+  `Quality`'s `Ord` (see the first correction below).
+- Mobile: `nz-lan` as a path dependency with `default-features = false` (workspace + `nz-core` +
+  `nz-ffi`), the empty `nz-core::lan`, `LanApi`/`LanListener`/the quota of screen-shaped records and
+  `NzCore::lan()` in `nz-ffi/src/lan.rs`, the empty `:feature:lan` Gradle module with its two entry
+  composables, the two routes (`Routes.Lan`, `Routes.PeerSets`), and
+  `CHANGE_WIFI_MULTICAST_STATE`.
 
-  and the signatures of `store`, `index`, `hashing`, `scope`, `serve`, `peers`, `decide`, `fetch`,
-  `enroll`, `gossip`, `settings`, `sets`, `import` exactly as each lot below names them. The
-  `nz-api` endpoints (`endpoints/lan.rs`, stubs returning `ApiError::Unsupported`-equivalent —
-  use the existing variant the crate has for an absent route):
+**What a later lot can rely on.** It fills BODIES in its own files. It never edits a `Cargo.toml`, a
+`lib.rs`, `proto.rs`, `types.rs`, the manifest, `NavGraph.kt` or a Gradle file; if a contract turns out
+wrong, it stops and asks instead of forking a parallel type. `mdns` is the crate's only feature and
+gates `mdns-sd` alone, so `--no-default-features` is what the phone builds.
 
-  ```rust
-  impl Api {
-      pub async fn lan_status(&self) -> Result<LanStatus, ApiError>;                       // Prefetch
-      pub async fn lan_enroll(&self, r: &LanEnrollRequest) -> Result<LanEnrollAnswer, ApiError>; // Bulk
-      pub async fn lan_roster(&self, etag: Option<&str>) -> Result<Option<LanRosterAnswer>, ApiError>; // Bulk; None = 304
-      pub async fn lan_devices(&self) -> Result<Vec<LanDevice>, ApiError>;                 // User
-      pub async fn lan_revoke(&self, id: &str) -> Result<(), ApiError>;                    // User
-      pub async fn lan_rename(&self, id: &str, name: &str) -> Result<LanDevice, ApiError>; // User
-      pub async fn lan_friends(&self) -> Result<LanFriends, ApiError>;                     // User
-      pub async fn lan_add_friend(&self, name: &str) -> Result<LanFriend, ApiError>;       // User
-      pub async fn lan_set_friend(&self, user_id: u32, scope: &LanScope) -> Result<LanFriend, ApiError>;
-      pub async fn lan_remove_friend(&self, user_id: u32) -> Result<(), ApiError>;
-      pub async fn lan_settings(&self) -> Result<LanServerSettings, ApiError>;            // admin
-      pub async fn lan_set_settings(&self, s: &LanServerSettings) -> Result<LanServerSettings, ApiError>;
-  }
-  // nz-model/src/lan.rs: LanStatus{enabled, subject, keys: Vec<LanKey{kid, pub_key, until}>, credential_days,
-  //   revocation_serial}, LanEnrollRequest{pubkey, name, platform, at, proof, device_id: Option<String>},
-  //   LanEnrollAnswer{device_id, credential, roster: LanSigned, revocations}, LanRosterAnswer{roster, revocations, etag},
-  //   LanSigned{body, sig}, LanDevice, LanFriends{shares_to, trusted_by}, LanFriend, LanScope{all, playlists},
-  //   LanServerSettings{enabled, credential_days} — all serde(default), tolerant like the rest of nz-model.
-  ```
-- **Dependencies pinned** in `desktop/Cargo.toml` `[workspace.dependencies]`: `quinn = { version =
-  "=0.11.12", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs", "log"] }`,
-  `rcgen = { version = "0.14", default-features = false, features = ["crypto", "aws_lc_rs"] }`,
-  `mdns-sd = "0.17"`; `nz-lan` reuses the `rustls`/`aws-lc-rs` declarations `nz-api` uses (same
-  versions and features, so the locks gain no second copy), `rusqlite`, `tokio` (`net`), `serde`,
-  `serde_json`, `symphonia`, `thiserror`, `tracing`, `libc`; `nz-audio` with `default-features = false`.
-  `mobile/rust/Cargo.toml` gains `nz-lan = { path = "../../desktop/crates/nz-lan", default-features = false }`.
-- **Depends on**: nothing.
-- **Acceptance**: `cargo test --workspace --locked` green in `desktop/` and `mobile/rust/`;
-  `cargo ndk -t arm64-v8a -P 26 check -p nz-lan --no-default-features` → Finished;
-  `cargo tree -p nz-lan --no-default-features -e normal | grep -E 'gpui|cpal|zbus|whisper|mdns'` →
-  0 lines; `cargo tree -p nz-lan -e normal | grep -c '^.*rustls v'` shows ONE rustls version;
-  the two `Cargo.lock` diffs list only the packages added (count them in the PR: rcgen, mdns-sd and
-  their dependencies; quinn/quinn-proto/quinn-udp must NOT appear as additions); the Android app
-  builds (`mobile.yaml` green) with the stub `feature/lan` module; the desktop app is unchanged
-  (no new screen, no new setting). `nz-api`'s feature test covers `Feature::Lan` (one probe, unique).
-- **Pitfalls**: the `ring` feature anywhere on rustls (see *Pitfalls found by building*); mdns-sd
-  must be `optional = true` behind `mdns`, or the mobile lock grows for nothing; one `impl NzCore`
-  block per file is how UniFFI accepts `lan()` without editing `core.rs`.
-- **Prompt**:
+**Where the contract lives now.** In the code, and the code is what a later lot reads after this
+note: `nz-lan/src/proto.rs` (every frame), `types.rs` (identity, tolerance, source, error),
+`cred.rs`/`keys.rs` (the trust chain), `transport.rs` (the surface LN6 fills),
+`service.rs` (`Lan`, its snapshot and its settings), `nz-api/src/endpoints/lan.rs` (the twelve methods
+and the lane of each), `nz-model/src/lan.rs` (the payloads) and `nz-ffi/src/lan.rs` (the FFI). The
+signatures below this note's *Contracts* section are therefore a map, not a second copy: a divergence
+would be the bug.
 
-  > Tu implémentes le lot **LN0 — Contracts and stubs** du plan « nœuds LAN » de Neezer (effort high).
-  > But : créer, dans leur forme FINALE, toutes les déclarations dont les lots LN1 à LN15 dépendent
-  > (crate `desktop/crates/nz-lan` avec tous ses modules en stubs, types et trames de `proto.rs`
-  > définitifs, `Feature::Lan`, `Api::gates()`, `endpoints/lan.rs` et `nz-model/src/lan.rs` en stubs,
-  > la dépendance côté `mobile/rust`, le module Gradle `feature/lan` vide, les deux routes de
-  > `NavGraph.kt`, la permission `CHANGE_WIFI_MULTICAST_STATE`), sans aucun comportement : les corps
-  > renvoient `Err(LanError::Unsupported)`, vide ou `None`, et rien n'appelle encore `nz-lan`.
-  > Lis la section LN0 et *Contracts* de `docs/agents/lan-nodes.md` et recopie les signatures à la
-  > lettre ; les pins de dépendances sont ceux de la section LN0 (fournisseur rustls `aws-lc-rs`
-  > UNIQUEMENT, jamais `ring`). Fichiers exclusifs : la ligne LN0 de *File ownership*.
-  > Critères : la liste *Acceptance* de LN0, chaque nombre écrit dans la PR avec sa commande.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, 2026-11-18):
+
+| Measure | Value | Command |
+|---|---|---|
+| crates added to the desktop lock | **19 entries** = `nz-lan` + `rcgen` + `mdns-sd` and their dependencies; `quinn`/`quinn-proto`/`quinn-udp` appear **0** times as additions | `git diff desktop/Cargo.lock \| grep -cE '^\+name = '` |
+| crates added to the mobile lock | **15 entries** = `nz-lan` + `rcgen` and its dependencies; **no** `mdns-sd`, `flume`, `if-addrs`, `socket-pktinfo` | same, on `mobile/rust/Cargo.lock` |
+| distinct rustls versions | **1** (`0.23.46`, on 8 tree lines) | `cargo tree -p nz-lan -e normal --prefix none \| awk '$1=="rustls"{print $2}' \| sort -u` |
+| TLS providers | **1** (`aws-lc-rs 1.19.0`); `ring` is in the lock, never in the graph | `cargo tree -p nz-lan -e normal \| grep -oE '(ring\|aws-lc-rs) v[0-9.]+' \| sort -u` |
+| forbidden crates in the Android shape | **0 lines** (`gpui`, `cpal`, `zbus`, `whisper`, `mdns`) | `cargo tree -p nz-lan --no-default-features -e normal \| grep -cE 'gpui\|cpal\|zbus\|whisper\|mdns'` |
+| the crate's own tests | **41 passed** | `cargo test -p nz-lan` |
+| `nz-model`'s tests | **37 passed** (33 unit + 4 fixtures) | `cargo test -p nz-model` |
+| `nz-api`'s bench | **6 passed**, and its log shows `OPTIONS /api/lan/status → 404`, `/api/genre/status → 200`, unknown route `→ 404` | `cargo test -p nz-api --test bench` |
+| a feature probe's cost | **1 request**, **0-byte body** for a registered route (~700 B of headers), **207 bytes** of JSON for the 404 | `curl -s -o /dev/null -w '%{size_download}' -X OPTIONS http://127.0.0.1:<port>/api/lan/status` on `tools/perf_api.py --serve` |
+| clippy | green, `-D warnings`, on `nz-lan` (desktop) and `--workspace --all-targets --locked` on `mobile/rust` | the CI command of each workflow |
+
+The `cargo ndk -t arm64-v8a -P 26 check -p nz-lan --no-default-features` step of the plan was NOT run
+on the author's machine (no Android SDK/NDK, no Gradle): the Android compile of `nz-lan` is proven by
+`mobile.yaml`'s APK job instead, which builds `nz-ffi` → `nz-core` → `nz-lan` for **three** ABIs
+(`mobile/rust/build-android.sh`).
+
+**Rules a measurement taught.**
+
+- **The plan's rustls check counted lines, not versions.** `grep -c 'rustls v'` on `cargo tree`'s
+  output answers **11**, because `cargo tree` repeats a shared dependency once per path AND because
+  `hyper-rustls`/`tokio-rustls` match the same pattern. The fact the note is really after is "one
+  rustls VERSION", and it needs `--prefix none` + an exact `$1 == "rustls"` (1 line: `0.23.46`).
+  A count of matching lines is not a count of versions.
+- **`nz-audio` has its OWN `Quality` and `Lane`**, not `nz_api`'s. `StreamOpener`'s methods take
+  `nz_audio::Quality` (four rungs) and `nz_audio::Lane`, while `nz_api::Quality` is the server's six.
+  `PeerFirstOpener` therefore converts at its boundary and never swaps one enum for the other; that
+  conversion is LN11's, and LN5's `ByteStream::quality()` is where it surfaces.
+- **A listener is `#[uniffi::export(callback_interface)]`**, not `export(with_foreign)`: on uniffi
+  0.32.2 the latter gives `Box<dyn LanListener>` no `TypeId` (**2 × E0277**), and the crate's three
+  other listeners are declared the first way. One spelling for one pattern.
+- **A stub must be unconstructible-or-honest.** `Lan::start` answers `Unsupported`, so no `Lan` exists
+  before LN10 and `PeerFirstOpener`/`PeerFirstDownloader` cannot be built: their tests prove the SHAPE
+  (`one StreamOpener`/`Downloader`, `Send + Sync`) and say so, rather than inventing a fake node.
+  Likewise `Store::open` and `DeviceKey::load_or_create` refuse and write **nothing** (asserted: the
+  temp directory stays empty), so a lot that forgot to fill one cannot leave a half-made database or an
+  all-zero key on somebody's phone.
+- **`serde(default)` is on every field of a wire frame and of a payload**, so a newer peer and a newer
+  server each parse on the other side (rule 7); `proto::Urgency` travels lowercase, `WireQuality` with
+  the server's own `FLAC`/`OPUS_320` spelling.
+
+**Two corrections to this plan, accepted before the lot merged** (the note is the contract, so it is
+corrected here with the number that proved it):
+
+1. **`Tolerance(pub BTreeSet<nz_api::Quality>)` did not compile**: `nz_model::Quality` had no `Ord`
+   (its derive was `Debug, Clone, Copy, Default, PartialEq, Eq, Hash`). `PartialOrd, Ord` were added
+   **and the declaration order was made the quality order** (`Opus64 < Opus128 < Opus192 < Opus256 <
+   Opus320 < Flac`), so `Tolerance::best_of` — "the best tolerated copy a peer has" — is
+   `Quality`'s own `max()` and not a second ranking table that could disagree with it.
+   `nz-model`'s test `the_declaration_order_is_the_quality_order` holds the two together, and
+   `Tolerance::best_of` is the method `decide.rs` ranks candidates with.
+2. **`Feature::Lan` would have turned the desktop CI red until LN1**: `nz-api`'s bench requires
+   `Some(true)` for every `Feature::ALL` against the real server, and `/lan/status` does not exist
+   before LN1. The bench now names the one exemption in `PENDING_SERVER_ROUTES = &[Feature::Lan]`
+   (asserting a definite `Some(false)` for it, not a weaker "any answer"), keeps the explicit pair
+   `/genre/status` = `Some(true)` / an unknown route = `Some(false)`, and **LN1 removes `Lan` from
+   that list** — see LN1's acceptance, which carries the step.
 
 ### LN1 — Server: schema, LAN key, routes (wave 1, effort max)
 
@@ -1044,6 +1017,10 @@ the rules block.
   - the LAN key is encrypted at rest (a `Meta` dump does not contain the seed) and survives a
     restart; a changed secret creates a new key and old credentials are refused at renewal only;
   - admin settings are in `Meta` and change `credential_days` of the NEXT credential;
+  - `OPTIONS /api/lan/status` answers `200`, and `desktop/crates/nz-api/tests/bench.rs`'s
+    `PENDING_SERVER_ROUTES` no longer names `Feature::Lan` (it is deleted, not shortened): the bench
+    then requires `Some(true)` for every `Feature::ALL` again, which is the state LN0 could not reach
+    without this route (`docs/agents/lan-nodes.md`, LN0's second correction);
   - `security.yaml`'s Bandit/Semgrep: no new finding (no `nosec` without a justification).
 - **Pitfalls**: PostgreSQL has no `REPLACE` and quotes `user`; a migration script is split on `;`
   after its `--` lines are dropped (`db.split_sql_script`); keep the migration idempotent

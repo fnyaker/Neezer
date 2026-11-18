@@ -32,6 +32,7 @@ pub mod entity;
 pub mod errors;
 pub mod genres;
 pub mod home;
+pub mod lan;
 pub mod library;
 pub mod links;
 pub mod lists;

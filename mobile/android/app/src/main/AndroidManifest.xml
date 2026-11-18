@@ -18,6 +18,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- LAN nodes: browsing `_neezer-lan._udp` with `NsdManager` needs the
+         multicast lock, and the lock needs this permission. It is held ONLY while
+         browsing (API 26–32 and un-updated API 33 do not take it for us; the
+         system only does from API 33 with a foreground service of importance
+         >= FOREGROUND_SERVICE), and released in every path — a lock left held is
+         a battery drain, not a leak (docs/agents/lan-nodes.md, "Android
+         discovery"). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- Playback that outlives the screen -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

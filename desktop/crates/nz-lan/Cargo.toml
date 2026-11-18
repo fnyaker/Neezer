@@ -1,0 +1,72 @@
+# The LAN exchange between the native apps: discovery, mutual authentication by
+# device key, the inventory a peer exposes (within its scope), and the transfers
+# themselves (docs/agents/lan-nodes.md).
+#
+# A member of the desktop workspace (the `crates/*` glob picks it up) AND a path
+# dependency of `mobile/rust`: it compiles for Android, so no GPUI, no cpal
+# (`nz-audio` is asked with `default-features = false`) and no `mdns-sd` unless
+# the `mdns` feature is on — the phone browses through the platform's NSD daemon
+# and feeds `Discovery::External` instead.
+#
+# **LN0 wrote these manifests and this crate's whole shape; the bodies are the
+# later lots'.** The dependency list comes from what those bodies use, exactly
+# as the note's LN0 block names it: the TLS stack is `rustls` + `aws-lc-rs` with
+# the SAME versions and features `nz-api` already builds (so neither lock gains a
+# second copy), `quinn`/`rcgen`/`mdns-sd` are the workspace pins, and `symphonia`
+# (the decoder probe), `rusqlite` (the device's `lan.sqlite`) and `libc`
+# (`statvfs`, `setpriority`) are declared before the lots that need them so no
+# later lot edits this file.
+
+[package]
+name = "nz-lan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# `mdns-sd` is the desktop's browse and announce. It is OPTIONAL so that
+# `--no-default-features` (the Android build) does not put its daemon thread and
+# its dependencies in the phone's graph for nothing.
+default = ["mdns"]
+mdns = ["dep:mdns-sd"]
+
+[dependencies]
+nz-api = { path = "../nz-api" }
+nz-model = { path = "../nz-model" }
+nz-cache = { path = "../nz-cache" }
+# The playback seam `PeerFirstOpener` wraps, and the downloads worker
+# `PeerFirstDownloader` + `sets.rs` speak to. `nz-audio` without its defaults:
+# `cpal` must never reach the Android build through feature unification.
+nz-audio = { path = "../nz-audio", default-features = false }
+nz-offline = { path = "../nz-offline" }
+# `tokio`'s `net` is `Endpoint::bind`'s UDP socket and `discovery.rs`'s events;
+# the rest of the features are the workspace pin's.
+tokio = { workspace = true, features = ["net"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+symphonia = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# `statvfs` (free space before a fetch writes) and `setpriority` (the serving
+# and hashing threads, +5 and +10). The same version both locks already hold.
+libc = "0.2"
+# TLS 1.3 only, and the provider is aws-lc-rs THROUGHOUT: these two lines are
+# `nz-api`'s own declarations, verbatim, so the graph keeps ONE rustls and ONE
+# provider. Enabling rustls' `ring` feature here would make the process-default
+# provider ambiguous and `ClientConfig::builder()` panics.
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "aws_lc_rs",
+] }
+aws-lc-rs = { version = "1", default-features = false, features = [
+    "aws-lc-sys",
+    "prebuilt-nasm",
+] }
+quinn = { workspace = true }
+rcgen = { workspace = true }
+mdns-sd = { workspace = true, optional = true }

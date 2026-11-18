@@ -11,18 +11,26 @@ use crate::ids::TrackId;
 /// `q` means FLAC. `Opus256` and `Opus192` are accepted by `?q=` too (an older
 /// client may ask for them) but the desktop's own picker offers 320/128/64 —
 /// never MP3, which the server never sends.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+///
+/// **The declaration order IS the quality order** (`Ord`, ascending: the worst
+/// Opus rung first, the archive last), and the variants are kept in that order
+/// on purpose: `nz-lan`'s tolerated-quality set is a `BTreeSet<Quality>`, and
+/// "the best quality a peer has" must be `iter().max()`, not a second ranking
+/// table that could disagree with this one. `tests::the_declaration_order_is_the_quality_order`
+/// holds the two together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Quality {
+    /// The lowest rung: what the Auto ladder picks on a bad link.
+    Opus64,
+    Opus128,
+    /// Accepted by the server, not offered by the desktop's picker.
+    Opus192,
+    /// Accepted by the server, not offered by the desktop's picker.
+    Opus256,
+    Opus320,
     /// The archived FLAC itself. Its wire form is the ABSENCE of `q`.
     #[default]
     Flac,
-    Opus320,
-    Opus128,
-    Opus64,
-    /// Accepted by the server, not offered by the desktop's picker.
-    Opus256,
-    /// Accepted by the server, not offered by the desktop's picker.
-    Opus192,
 }
 
 impl Quality {
@@ -146,6 +154,34 @@ pub struct ListenPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Ord` is the quality ranking `nz-lan` relies on (`Tolerance` is a
+    /// `BTreeSet<Quality>`, and "the best a peer has" is `iter().max()`).
+    /// The values are the ones the stream route's `q=` rungs really are: 64 kbit
+    /// is worse than 128, 128 worse than 320, and the archived FLAC is the top.
+    #[test]
+    fn the_declaration_order_is_the_quality_order() {
+        use Quality::*;
+        assert!(Opus64 < Opus128);
+        assert!(Opus128 < Opus192);
+        assert!(Opus192 < Opus256);
+        assert!(Opus256 < Opus320);
+        assert!(Opus320 < Flac);
+        // The whole list, sorted, is the declaration order: a variant appended
+        // at the end of the enum is then the best one, which is a decision the
+        // author must take knowingly.
+        let mut all = [Opus64, Opus128, Opus192, Opus256, Opus320, Flac];
+        all.sort();
+        assert_eq!(
+            all,
+            [Opus64, Opus128, Opus192, Opus256, Opus320, Flac],
+            "the declaration order is the quality order"
+        );
+        // `max()` is what a peer's copies are ranked by: FLAC wins.
+        assert_eq!(all.iter().max(), Some(&Flac));
+        // And `Default` is still FLAC, independent of the order.
+        assert_eq!(Quality::default(), Flac);
+    }
 
     #[test]
     fn flac_is_the_absence_of_q_and_every_other_quality_has_its_wire_form() {

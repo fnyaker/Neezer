@@ -38,6 +38,8 @@ import fr.neezer.mobile.feature.entity.ArtistEntry
 import fr.neezer.mobile.feature.entity.CreditsEntry
 import fr.neezer.mobile.feature.genres.GenresEntry
 import fr.neezer.mobile.feature.home.HomeEntry
+import fr.neezer.mobile.feature.lan.LanEntry
+import fr.neezer.mobile.feature.lan.PeerSetsEntry
 import fr.neezer.mobile.feature.library.HistoryEntry
 import fr.neezer.mobile.feature.library.LibraryEntry
 import fr.neezer.mobile.feature.nowplaying.MiniPlayer
@@ -132,6 +134,14 @@ object Routes {
 
     @Serializable
     data class Settings(val section: String? = null)
+
+    /** Appareils à proximité — the LAN exchange's own screen (LN14 fills it). */
+    @Serializable
+    data object Lan
+
+    /** Sur vos appareils — the sets the connected peers expose (LN14 fills it). */
+    @Serializable
+    data object PeerSets
 
     @Serializable
     data class Party(val id: String)
@@ -265,6 +275,8 @@ private fun NavDestination?.title(): String {
         name == Routes.Releases::class.qualifiedName -> "Nouveautés"
         name == Routes.Recap::class.qualifiedName -> "Récap"
         name == Routes.Genres::class.qualifiedName -> "Genres"
+        name == Routes.Lan::class.qualifiedName -> "Appareils à proximité"
+        name == Routes.PeerSets::class.qualifiedName -> "Sur vos appareils"
         name == Routes.Viz::class.qualifiedName -> "Visualiseur"
         name == Routes.History::class.qualifiedName -> "Historique"
         name == Routes.Setup::class.qualifiedName -> "Serveur"
@@ -308,6 +320,8 @@ private fun NavGraph(graph: AppGraph, nav: NavHostController) {
         composable<Routes.Genres> { GenresEntry(nav = navigator) }
         composable<Routes.Viz> { VizEntry(nav = navigator) }
         composable<Routes.Settings> { entry -> SettingsEntry(entry.toRoute<Routes.Settings>().section, navigator) }
+        composable<Routes.Lan> { LanEntry(nav = navigator) }
+        composable<Routes.PeerSets> { PeerSetsEntry(nav = navigator) }
         composable<Routes.Party> { entry -> PartyEntry(entry.toRoute<Routes.Party>().id, navigator) }
         composable<Routes.RemoteClaim> {
             entry -> RemoteClaimEntry(entry.toRoute<Routes.RemoteClaim>().token, navigator)

@@ -146,6 +146,9 @@ dependencies {
     implementation(project(":feature:genres"))
     implementation(project(":feature:remote"))
     implementation(project(":feature:party"))
+    // The LAN exchange between the person's devices (docs/agents/lan-nodes.md):
+    // the « Appareils à proximité » screen and « Sur vos appareils ».
+    implementation(project(":feature:lan"))
     implementation(project(":feature:viz"))
     implementation(project(":feature:worlds"))
 
