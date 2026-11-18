@@ -808,14 +808,6 @@ impl LanCore {
         self.lan.forget();
     }
 
-    /// The failure the FFI turns into an `NzError` with a French sentence.
-    pub fn shutdown_error_text(error: &LanError) -> String {
-        match error {
-            LanError::Unsupported | LanError::Disabled => FEATURE.to_owned(),
-            other => other.cause_fr(),
-        }
-    }
-
     /// Stops everything and JOINS: the watcher, the queued downloads, then the
     /// `nz-lan` runtime with its own threads. Idempotent.
     pub fn shutdown(&self) {
@@ -911,6 +903,13 @@ fn parse_set_key(raw: &str) -> Result<nz_lan::sets::PeerSetKey, LanError> {
     let key: [u8; 32] = hex_decode(peer)
         .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
         .ok_or_else(|| LanError::Internal("clé d'appareil illisible".to_owned()))?;
+    // The three kinds `nz-lan` can serve, refused HERE rather than on the thread
+    // that queues the job: a screen gets the cause in the same frame.
+    if !matches!(kind, "playlist" | "album" | "show") {
+        return Err(LanError::Internal(format!(
+            "genre d'ensemble inconnu : {kind:?}"
+        )));
+    }
     if ident.is_empty() || ident.len() > 64 {
         return Err(LanError::Internal(
             "identifiant d'ensemble invalide".to_owned(),

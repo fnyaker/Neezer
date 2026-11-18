@@ -447,6 +447,7 @@ async fn a_set_key_is_parsed_before_anything_is_asked() {
         "ab:playlist:42",
         &format!("{}:playlist:", "ab".repeat(32)),
         &format!("{}:playlist:{}", "ab".repeat(32), "x".repeat(65)),
+        &format!("{}:../:42", "ab".repeat(32)),
     ] {
         assert!(
             parse_set_key(bad).is_err(),
@@ -548,5 +549,5 @@ fn every_lan_failure_has_a_french_cause() {
             .contains("2 s")
     );
     // The feature's name is what `Unsupported` carries across the boundary.
-    assert!(LanCore::shutdown_error_text(&LanError::Unsupported).contains("proches"));
+    assert!(super::FEATURE.contains("proches"));
 }
