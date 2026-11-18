@@ -280,7 +280,11 @@ check_door() {
 # own marker takes over (the same rule as the home below: a literal, in EVERY
 # state, independent of the query and of the clock).
 check_door "Rechercher" "Recherche Neezer"
-check_door "Bibliothèque" "Playlists et dossiers, favoris"
+# Bibliothèque draws a STABLE marker too (`LibraryScreen.kt`'s `LIBRARY_MARKER`,
+# « Bibliothèque Neezer », a contentDescription on its root): the MB0 stub's text
+# is gone now the lot paints the real screen, and the bottom bar's own
+# « Bibliothèque » would open this door from any tab.
+check_door "Bibliothèque" "Bibliothèque Neezer"
 check_door "Podcasts" "Les abonnements, la recherche"
 # Accueil draws a STABLE marker (`HomeScreen.kt`'s `HOME_MARKER`, a
 # contentDescription on the screen's root) instead of its MB0 stub text: the

@@ -48,11 +48,16 @@ class ShellSmokeTest {
         rule.onNodeWithContentDescription("Accueil Neezer").assertIsDisplayed()
     }
 
-    /** A tab opens its own destination: the library's stub replaces the home's. */
+    /**
+     * A tab opens its own destination. MB8 filled the library, so its stub's
+     * sentence is gone and the test reads the screen's own marker
+     * (`LibraryScreen.kt#LIBRARY_MARKER`, a fixed `contentDescription` present in
+     * every state) — the same rule the home's test took when MB5 filled it.
+     */
     @Test
     fun libraryTabOpensItsRoute() {
         rule.onNode(hasText("Bibliothèque") and hasClickAction()).performClick()
-        rule.onNodeWithText("Playlists et dossiers, favoris", substring = true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Bibliothèque Neezer").assertIsDisplayed()
     }
 
     /**

@@ -1,0 +1,1 @@
+routes=[GET /api/version, POST /api/login, OPTIONS /api/playlist-folders, GET /api/me/favorites] stats=[NetStats(tag=library, requests=1, bytesIn=2294902, bytesOut=0)]
