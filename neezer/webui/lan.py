@@ -108,8 +108,11 @@ def _json_error(exc):
                 exc.code,
             )
         )
-    logger.error("Unhandled LAN error on %s %s", request.method, request.path,
-                 exc_info=True)
+    # No request value in the message: `request.path` is user-provided, and the
+    # traceback below already names the failure. `neezer/logsafe` would keep the
+    # line breaks out of it, but a line with nothing tainted in it is stronger
+    # than an escape that a scanner cannot see (CodeQL `py/log-injection`).
+    logger.error("Unhandled LAN error", exc_info=True)
     return _refused(lan.Refused("server_error", "Erreur serveur.", 500))
 
 
