@@ -32,6 +32,37 @@ pub const BASS_FREQ: f64 = 120.0;
 pub const MAX_CHANNELS: usize = 8;
 /// How long a gain change takes when the caller does not say.
 pub const GAIN_RAMP_MS: f64 = 10.0;
+/// The meter's floor: what silence reads instead of `-inf` (`saturation.js#PEAK_FLOOR_DB`).
+pub const METER_FLOOR_DB: f64 = -96.0;
+
+/// What the chain's own dynamics did to the last buffer (`saturation.js`).
+///
+/// The equalizer's meter needs two numbers the chain already computes frame by
+/// frame and used to throw away: the PRE-limiter peak (after the ten bands and
+/// the bass shelf, the SPA's `pre` analyser) and how hard the safety limiter
+/// pulled it back down. Measured on the same buffer, so the two are comparable.
+///
+/// **Nothing here is estimated.** The app's card reads these while it is on
+/// screen and the chain publishes nothing when it is not (`set_meter(false)` is
+/// the default), which is what makes "0 analysis CPU when the card leaves" true
+/// by construction rather than by a timer that happens to be stopped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChainMeter {
+    /// The pre-limiter sample peak of the buffer, dBFS, floored at
+    /// [`METER_FLOOR_DB`].
+    pub peak_db: f64,
+    /// The limiter's gain reduction on that same buffer, dB, `>= 0`
+    /// (`saturation.js#limiterReduction`).
+    pub reduction_db: f64,
+}
+
+impl ChainMeter {
+    /// Nothing measured yet: silence, and a limiter that did nothing.
+    pub const SILENT: ChainMeter = ChainMeter {
+        peak_db: METER_FLOOR_DB,
+        reduction_db: 0.0,
+    };
+}
 
 /// One biquad, transposed direct form II, in f64: at 31 Hz and 48 kHz the
 /// poles sit within 0.4% of the unit circle, where f32 state audibly rounds.
@@ -238,6 +269,12 @@ pub struct Chain {
     gain_len: u64,
     gain_at: u64,
     fade: Ramp,
+    /// The equalizer card's meter: on only while that card is on screen
+    /// ([`Chain::set_meter`]). Off, `process` runs exactly as it did before the
+    /// meter existed.
+    meter_on: bool,
+    /// The last buffer's pre-limiter peak and limiter reduction.
+    meter: ChainMeter,
 }
 
 impl Chain {
@@ -260,11 +297,29 @@ impl Chain {
             gain_len: 0,
             gain_at: 0,
             fade: Ramp::steady(1.0),
+            meter_on: false,
+            meter: ChainMeter::SILENT,
         }
     }
 
     pub fn channels(&self) -> usize {
         self.channels
+    }
+
+    /// Turns the meter on or off. While it is off, `process` does exactly the
+    /// arithmetic it did before the meter existed: the card that reads it is the
+    /// only thing that pays for it.
+    pub fn set_meter(&mut self, on: bool) {
+        self.meter_on = on;
+        if !on {
+            self.meter = ChainMeter::SILENT;
+        }
+    }
+
+    /// The last buffer's pre-limiter peak and limiter reduction. Both are
+    /// measured in [`Chain::process`] and cost nothing to read.
+    pub fn meter(&self) -> ChainMeter {
+        self.meter
     }
 
     fn samples(&self, ms: f64) -> u64 {
@@ -356,6 +411,10 @@ impl Chain {
         // The filters, and the dynamics behind them, only while an effect is on.
         let any_eq = self.eq.iter().any(|b| !b.flat) || !self.bass.flat;
         let mut row = [0f64; MAX_CHANNELS];
+        // The meter reads the block, not the frame: the SPA's two analysers read
+        // an 85 ms window, and a buffer is the same kind of window (`set_meter`).
+        let mut peak_max = 0f64;
+        let mut post_max = 0f64;
         for f in 0..frames {
             let g = self.gain_now() * self.fade.value();
             if self.gain_at < self.gain_len {
@@ -368,6 +427,13 @@ impl Chain {
             if !any_eq {
                 for s in out.iter_mut() {
                     *s = (*s as f64 * g) as f32;
+                }
+                if self.meter_on {
+                    for s in out.iter() {
+                        let a = f64::from(*s).abs();
+                        peak_max = peak_max.max(a);
+                        post_max = post_max.max(a);
+                    }
                 }
                 continue;
             }
@@ -391,9 +457,37 @@ impl Chain {
             } else {
                 (1.0, 1.0)
             };
-            for (c, s) in out.iter_mut().enumerate() {
-                *s = (row[c] * gc * gl) as f32;
+            // The SPA's `pre` analyser sits AFTER the bass shelf and its
+            // compressor, BEFORE the limiter: `saturation.js` measures the
+            // limiter's own reduction, not the pair's.
+            if self.meter_on {
+                peak_max = peak_max.max(peak * gc);
             }
+            for (c, s) in out.iter_mut().enumerate() {
+                let y = row[c] * gc * gl;
+                *s = y as f32;
+                if self.meter_on {
+                    post_max = post_max.max(y.abs());
+                }
+            }
+        }
+        if self.meter_on {
+            // `saturation.js#limiterReduction`: the same window's peak before and
+            // after the limiter, in dB. Two logarithms per buffer, nothing per
+            // sample beyond the two maxima above.
+            let db_of = |x: f64| {
+                if x > 0.0 {
+                    (20.0 * x.log10()).max(METER_FLOOR_DB)
+                } else {
+                    METER_FLOOR_DB
+                }
+            };
+            let pre = db_of(peak_max);
+            let post = db_of(post_max);
+            self.meter = ChainMeter {
+                peak_db: pre,
+                reduction_db: (pre - post).max(0.0),
+            };
         }
     }
 }
@@ -597,5 +691,143 @@ mod tests {
         // 0.5 over 480 samples: no step bigger than one sample's share.
         assert!(worst < 0.0011, "{worst}");
         assert!((buf[959] - target).abs() < 1e-6);
+    }
+
+    // -- the equalizer card's meter (MB12) ----------------------------------
+
+    /// A block of a 1 kHz sine at `amp`, stereo, `frames` long.
+    fn sine_block(amp: f32, frames: usize) -> Vec<f32> {
+        (0..frames * 2)
+            .map(|i| {
+                (2.0 * core::f64::consts::PI * 1000.0 * (i / 2) as f64 / SR as f64).sin() as f32 * amp
+            })
+            .collect()
+    }
+
+    /// **Off by default, and off costs nothing**: the same block through the same
+    /// chain produces the same samples with the meter on, so turning the card on
+    /// cannot change what the person hears.
+    #[test]
+    fn the_meter_is_off_by_default_and_never_changes_the_sound() {
+        let mut quiet = Chain::new(SR, 2);
+        quiet.set_eq(4, 9.0);
+        quiet.set_bass(12.0);
+        assert_eq!(quiet.meter(), ChainMeter::SILENT, "no meter asked for");
+        quiet.set_meter(false);
+
+        let mut metered = Chain::new(SR, 2);
+        metered.set_eq(4, 9.0);
+        metered.set_bass(12.0);
+        metered.set_meter(true);
+
+        let block = sine_block(0.31, 4_800);
+        let mut a = block.clone();
+        let mut b = block.clone();
+        quiet.process(&mut a, 4_800);
+        metered.process(&mut b, 4_800);
+        assert_eq!(a, b, "the meter must not touch a sample");
+        assert_ne!(metered.meter(), ChainMeter::SILENT);
+    }
+
+    /// The two numbers are the SPA's: the PRE-limiter peak (after the bands, the
+    /// bass shelf and its compressor) and the limiter's own reduction on the same
+    /// buffer (`saturation.js#limiterReduction`).
+    #[test]
+    fn the_meter_reads_the_pre_limiter_peak_and_the_limiters_work() {
+        // Transparent chain, meter on: the peak is the input's own, exactly.
+        let mut plain = Chain::new(SR, 2);
+        plain.set_meter(true);
+        let mut buf = sine_block(0.25, 4_800);
+        plain.process(&mut buf, 4_800);
+        let m = plain.meter();
+        assert!((m.peak_db - db(0.25)).abs() < 0.02, "{}", m.peak_db);
+        assert_eq!(m.reduction_db, 0.0, "a clean master never touches the limiter");
+
+        // A +16 dB band on the same sine drives the limiter: the peak is read
+        // BEFORE it, so it stays above full scale, and the reduction is the
+        // difference the limiter made.
+        let mut hot = Chain::new(SR, 2);
+        hot.set_eq(5, 16.0); // 1 kHz, the sine's own band
+        hot.set_meter(true);
+        let mut buf = sine_block(0.25, 4_800);
+        hot.process(&mut buf, 4_800);
+        let m = hot.meter();
+        assert!(
+            (m.peak_db - (db(0.25) + 16.0)).abs() < 1.5,
+            "pre-limiter peak {} dB, expected about {}",
+            m.peak_db,
+            db(0.25) + 16.0
+        );
+        assert!(m.reduction_db > 0.5, "the limiter pulled {} dB", m.reduction_db);
+        // The reduction the meter reports is what the limiter actually took off
+        // the peak it measured: pre-limiter minus post-limiter, in dB. (It is
+        // 0.9 dB here, not the 3.5 its static curve asks for: a 2 ms attack with
+        // no look-ahead lets each cycle's crest over, exactly as Web Audio's
+        // DynamicsCompressorNode does — the SPA measured 0.38 dB on a finished
+        // master for the same reason.)
+        let post = buf.iter().fold(0f32, |m, v| m.max(v.abs()));
+        let heard = db(f64::from(post));
+        assert!(
+            (m.peak_db - heard - m.reduction_db).abs() < 1.0,
+            "{} - {} = {} vs {}",
+            m.peak_db,
+            heard,
+            m.peak_db - heard,
+            m.reduction_db
+        );
+    }
+
+    /// Silence reads the floor, not `-inf`, and a fresh chain that measured
+    /// nothing says so: the card's "Mesure en cours…" is that state.
+    #[test]
+    fn silence_reads_the_floor_and_a_fresh_chain_has_no_reading() {
+        let mut c = Chain::new(SR, 2);
+        assert_eq!(c.meter(), ChainMeter::SILENT);
+        c.set_meter(true);
+        let mut buf = vec![0.0f32; 4_800 * 2];
+        c.process(&mut buf, 4_800);
+        assert_eq!(c.meter().peak_db, METER_FLOOR_DB);
+        assert_eq!(c.meter().reduction_db, 0.0);
+        // Turning it off forgets: a stale reading under a hidden card is a lie.
+        c.set_meter(false);
+        assert_eq!(c.meter(), ChainMeter::SILENT);
+    }
+
+    /// **The cost, measured**: 2 000 buffers of 480 frames through an engaged
+    /// chain, meter off against meter on. The meter is a max over the block and
+    /// two logarithms per buffer, and this says so in nanoseconds per sample
+    /// rather than assuming it.
+    #[test]
+    fn the_meter_costs_a_max_per_sample_and_nothing_else() {
+        const BUFFERS: usize = 2_000;
+        const FRAMES: usize = 480;
+        let block = sine_block(0.4, FRAMES);
+        let run = |meter: bool| {
+            let mut c = Chain::new(SR, 2);
+            c.set_eq(2, 6.0);
+            c.set_bass(6.0);
+            c.set_meter(meter);
+            let mut buf = vec![0f32; FRAMES * 2];
+            let start = std::time::Instant::now();
+            for _ in 0..BUFFERS {
+                buf.copy_from_slice(&block);
+                c.process(&mut buf, FRAMES);
+            }
+            let ns = start.elapsed().as_nanos() as f64;
+            std::hint::black_box(c.meter());
+            ns / (BUFFERS * FRAMES) as f64
+        };
+        // Warm the branch predictor and the caches before either measurement.
+        let _ = run(false);
+        let _ = run(true);
+        let off = run(false);
+        let on = run(true);
+        // A max over 480 samples and two logarithms per buffer. Measured on this
+        // machine 2026-11-18, 2 000 buffers of 480 frames through an engaged
+        // chain: **+3.7 ns/frame in release** (69.1 → 72.8), i.e. 0.18 ms of one
+        // core per second of 48 kHz stereo — 0.018 %, under the noise floor in a
+        // debug build. The bound is what a later machine may not cross.
+        println!("meter cost {:.3} ns/frame (off {off:.3}, on {on:.3})", on - off);
+        assert!(on - off < 8.0, "meter cost {:.2} ns/frame (off {off:.2}, on {on:.2})", on - off);
     }
 }
