@@ -977,12 +977,6 @@ fn entries(positions: std::collections::BTreeMap<String, Position>) -> Vec<Episo
 /// The error a screen shows for a transcript that the server refuses with a
 /// machine code: `too_long`, `not_archived`, `no_duration`, `queue_full`,
 /// `already_running` (`Show.svelte#transcribeError`).
-#[uniffi::export]
-pub fn nz_podcast_transcription_cause(code: String) -> String {
-    transcription_cause(&code)
-}
-
-/// The same table, for this crate's own callers and tests.
 pub fn transcription_cause(code: &str) -> String {
     match code {
         "too_long" => "L'épisode dépasse la durée maximale de transcription.".to_owned(),
@@ -991,68 +985,6 @@ pub fn transcription_cause(code: &str) -> String {
         "queue_full" => "La file de transcription est pleine.".to_owned(),
         "already_running" => "Cet épisode est déjà en cours de transcription.".to_owned(),
         _ => "La transcription n'a pas pu démarrer.".to_owned(),
-    }
-}
-
-/// One piece of a line with the search's words marked (`highlightParts`), so the
-/// panel draws a hit's highlights without re-implementing the merge.
-#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq, Default)]
-pub struct TextPartData {
-    pub text: String,
-    pub marked: bool,
-}
-
-/// « Français », « Détection automatique », or the code in capitals.
-#[uniffi::export]
-pub fn nz_podcast_language_label(code: String) -> String {
-    core_podcasts::language_label(&code)
-}
-
-/// Why the server cannot transcribe, in French — never a machine code.
-#[uniffi::export]
-pub fn nz_podcast_reason_text(reason: String) -> String {
-    core_podcasts::reason_text(&reason)
-}
-
-/// The batch sizes the transcription card offers for `eligible` episodes
-/// (5, then 10 and 20).
-#[uniffi::export]
-pub fn nz_podcast_batch_options(eligible: u32) -> Vec<u32> {
-    core_podcasts::batch_options(eligible)
-}
-
-/// `highlightParts`: the whole query first, then each word, the ranges merged —
-/// a line never gets two overlapping marks.
-#[uniffi::export]
-pub fn nz_podcast_highlight_parts(text: String, query: String) -> Vec<TextPartData> {
-    core_podcasts::highlight_parts(&text, &query)
-        .into_iter()
-        .map(|part| TextPartData {
-            text: part.text,
-            marked: part.marked,
-        })
-        .collect()
-}
-
-/// `pageInfo(offset, limit, total)`: which page of a paged read, and the rows it
-/// covers. Returned as a record so the panel's footer is the core's arithmetic.
-#[derive(uniffi::Record, Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PageInfoData {
-    pub page: u32,
-    pub pages: u32,
-    pub from: u32,
-    pub to: u32,
-}
-
-/// One page's numbers (`transcript.js#pageInfo`).
-#[uniffi::export]
-pub fn nz_podcast_page_info(offset: u32, limit: u32, total: u32) -> PageInfoData {
-    let info: core_podcasts::PageInfo = core_podcasts::page_info(offset, limit, total);
-    PageInfoData {
-        page: info.page,
-        pages: info.pages,
-        from: info.from,
-        to: info.to,
     }
 }
 

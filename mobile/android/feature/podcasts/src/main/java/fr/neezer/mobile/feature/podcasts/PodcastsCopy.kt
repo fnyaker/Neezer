@@ -3,26 +3,38 @@ package fr.neezer.mobile.feature.podcasts
 import uniffi.nz_ffi.EpisodeData
 import uniffi.nz_ffi.EpisodePositionData
 import uniffi.nz_ffi.TranscriptInfoData
-import uniffi.nz_ffi.nzPodcastBatchOptions
-import uniffi.nz_ffi.nzPodcastLanguageLabel
-import uniffi.nz_ffi.nzPodcastPageInfo
-import uniffi.nz_ffi.nzPodcastReasonText
-import uniffi.nz_ffi.nzPodcastTranscriptionCause
 
 /**
  * The French words the podcast screens write, in ONE file (rule 5).
  *
  * Every sentence the SPA writes is here, translated from `Show.svelte`,
  * `TranscriptPanel.svelte`, `Podcasts.svelte` and `lib/transcript.js`, so a
- * screen never builds a phrase inline — and the arithmetic that a phrase needs
- * (a duration, a percentage, a page count, a batch size) is asked of the CORE,
- * not re-done here: `nzPodcast*` are Rust's own ports of `format.js` and
- * `transcript.js`.
+ * screen never builds a phrase inline. `nz-core::podcasts::text` holds the SAME
+ * tables for the core's own use (its `reason_text`, `language_label`,
+ * `batch_options`, `page_info` and `highlight_parts` are Rust's ports of
+ * `transcript.js`, with their own tests); this file is what a phone draws, and
+ * it is Kotlin on purpose: a screen's copy must not need the `.so` to compose,
+ * which is also what lets the screenshots render on the JVM.
  */
 object PodcastsCopy {
     /** « 12 épisodes » / « 1 épisode » (`Podcasts.svelte`'s count). */
     fun episodeCount(count: Int): String =
-        if (count > 1) "$count épisodes" else "$count épisode"
+        if (count > 1) "${thousands(count)} épisodes" else "${thousands(count)} épisode"
+
+    /**
+     * `2 000`, with the NARROW NO-BREAK SPACE French typography uses between
+     * digit groups (`toLocaleString("fr-FR")` in the SPA) — a plain space lets
+     * a line break inside a number.
+     */
+    fun thousands(count: Int): String {
+        val digits = count.coerceAtLeast(0).toString()
+        val out = StringBuilder()
+        digits.forEachIndexed { index, char ->
+            if (index > 0 && (digits.length - index) % 3 == 0) out.append('\u202F')
+            out.append(char)
+        }
+        return out.toString()
+    }
 
     /**
      * « Reprendre · il reste 1:02:05 » — the resume line under an episode
@@ -45,20 +57,51 @@ object PodcastsCopy {
         else -> ""
     }
 
-    /** `langueLabel` for the transcription card. */
-    fun language(code: String): String = nzPodcastLanguageLabel(code)
+    /**
+     * `langueLabel` for the transcription card (`transcript.js#languageLabel`):
+     * the seven codes the picker offers, and a code it does not know in
+     * capitals.
+     */
+    fun language(code: String): String = when (val key = code.lowercase()) {
+        "" -> ""
+        "auto" -> "Détection automatique"
+        "fr" -> "Français"
+        "en" -> "Anglais"
+        "es" -> "Espagnol"
+        "de" -> "Allemand"
+        "it" -> "Italien"
+        "pt" -> "Portugais"
+        else -> key.uppercase()
+    }
 
     /** Why the server cannot transcribe, in French (`reasonText`). */
-    fun reason(code: String?): String =
-        code?.takeIf { it.isNotBlank() }?.let { nzPodcastReasonText(it) }
-            ?: "La transcription n'est pas configurée sur ce serveur."
+    fun reason(code: String?): String = when (code) {
+        null, "" -> "La transcription n'est pas configurée sur ce serveur."
+        "disabled" -> "La transcription est désactivée sur ce serveur."
+        "engine_missing" -> "Le moteur de transcription n'est pas installé sur le serveur."
+        "model_missing" -> "Le modèle de transcription est introuvable sur le serveur."
+        "model_invalid" -> "Le fichier de modèle n'est pas un modèle whisper.cpp valide."
+        else -> "La transcription n'est pas configurée sur ce serveur."
+    }
 
     /** What a refused start says (`transcribeError`). */
-    fun transcribeCause(code: String?): String =
-        nzPodcastTranscriptionCause(code.orEmpty())
+    fun transcribeCause(code: String?): String = when (code) {
+        "too_long" -> "L'épisode dépasse la durée maximale de transcription."
+        "not_archived" -> "L'épisode doit d'abord être archivé sur le serveur."
+        "no_duration" -> "La durée de l'épisode est inconnue ; impossible de la borner."
+        "queue_full" -> "La file de transcription est pleine."
+        "already_running" -> "Cet épisode est déjà en cours de transcription."
+        else -> "La transcription n'a pas pu démarrer."
+    }
 
-    /** The batch sizes the transcription card offers for `eligible` episodes. */
-    fun batchChoices(eligible: Int): List<Int> = nzPodcastBatchOptions(eligible.c).map { it.toInt() }
+    /** The batch sizes the transcription card offers (`batchOptions`). */
+    fun batchChoices(eligible: Int): List<Int> {
+        if (eligible <= 0) return emptyList()
+        val out = mutableListOf(minOf(5, eligible))
+        if (eligible >= 10) out += 10
+        if (eligible >= 20) out += 20
+        return out
+    }
 
     /** « 12 épisodes en file d'archivage. » */
     fun archiveQueued(count: Int): String =
@@ -77,15 +120,18 @@ object PodcastsCopy {
 
     /** « 3 épisodes · 2,5 h d'audio, environ 1,2 h de calcul. » */
     fun estimate(eligible: Int, audioSeconds: Long): String {
-        val hours = (audioSeconds / 3600.0 * 10).round1()
-        val cpu = (hours / 2 * 10).round1()
+        val hours = round1(audioSeconds / 3600.0)
+        val cpu = round1(hours / 2)
         return "${episodeCount(eligible)} · ${hours.hours()} d'audio, environ ${cpu.hours()} de calcul."
     }
 
     /** « page 2 sur 5 », the transcript's footer (`pageInfo`). */
     fun page(offset: Int, limit: Int, total: Int): String {
-        val info = nzPodcastPageInfo(offset.c, limit.c, total.c)
-        return "page ${info.page} sur ${info.pages}"
+        val step = limit.coerceAtLeast(1)
+        val count = total.coerceAtLeast(0)
+        val pages = ((count + step - 1) / step).coerceAtLeast(1)
+        val page = (offset.coerceAtLeast(0) / step + 1).coerceIn(1, pages)
+        return "page $page sur $pages"
     }
 
     /** « Aucun passage pour « x » dans cette émission. » */
@@ -124,9 +170,6 @@ object PodcastsCopy {
         "Ce podcast n'existe plus sur Deezer. Tout ce qui a été archivé reste ici, jouable et " +
             "téléchargeable comme avant — c'est désormais un podcast local."
 
-    /** The chip that says an episode's audio is on the server. */
-    const val ARCHIVED = "Archivé"
-
     /** The chip that says the provider cannot serve an episode any more. */
     const val UNAVAILABLE = "non archivé"
 
@@ -138,9 +181,6 @@ object PodcastsCopy {
 
     /** « Chapitres indisponibles. » — a failure, with « Réessayer ». */
     const val CHAPTERS_FAILED = "Chapitres indisponibles."
-
-    /** « Hors ligne : les chapitres n'ont pas encore été chargés. » */
-    const val CHAPTERS_OFFLINE = "Hors ligne : les chapitres n'ont pas encore été chargés."
 
     /** « Hors ligne — dernière copie » — the note over a kept list. */
     const val OFFLINE_COPY = "Hors ligne — dernière copie"
@@ -180,11 +220,8 @@ object PodcastsCopy {
         }
     }
 
-    private fun Double.round1(): Double = kotlin.math.round(this * 10) / 10
+    private fun round1(value: Double): Double = kotlin.math.round(value * 10) / 10
 
     /** « 2,5 h » / « 4,8 h » — French decimal comma, one decimal. */
-    private fun Double.hours(): String {
-        val text = toString().replace('.', ',')
-        return "$text h"
-    }
+    private fun Double.hours(): String = "${toString().replace('.', ',')} h"
 }

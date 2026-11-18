@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -133,8 +134,8 @@ fun EpisodeRow(
                             .clickable(role = Role.Button) { expanded = !expanded },
                     )
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                FlowRow(
+                    verticalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
                     horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
                 ) {
                     Text(
@@ -186,6 +187,7 @@ fun EpisodeRow(
                                         text = label,
                                         style = Sillon.type.bodySmall,
                                         color = colors.dim,
+                                        maxLines = 1,
                                     )
                                 }
                             }

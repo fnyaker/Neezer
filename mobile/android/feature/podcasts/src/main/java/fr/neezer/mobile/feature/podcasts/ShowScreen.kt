@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -541,7 +542,11 @@ private fun ArchiveSwitch(
                 checked = show.autoArchive,
                 onCheckedChange = { onToggle() },
                 enabled = !state.archiveBusy,
-                label = "Archiver automatiquement les nouveaux épisodes",
+                // The sentence is DRAWN beside it, so it is the switch's NAME,
+                // not its label: `NzSwitch(label = …)` renders a second copy.
+                modifier = Modifier.semantics {
+                    contentDescription = "Archiver automatiquement les nouveaux épisodes"
+                },
             )
         }
     }
@@ -609,7 +614,10 @@ private fun TranscriptionCard(
                             checked = state.show?.autoTranscribe == true,
                             onCheckedChange = { actions.toggleTranscribe() },
                             enabled = !state.transcribeBusy,
-                            label = "Transcrire automatiquement les nouveaux épisodes",
+                            modifier = Modifier.semantics {
+                                contentDescription =
+                                    "Transcrire automatiquement les nouveaux épisodes"
+                            },
                         )
                     }
                     ChoiceRow(
@@ -639,27 +647,22 @@ private fun TranscriptionCard(
                             style = Sillon.type.bodySmall,
                             color = colors.dim,
                         )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        Text(
+                            text = "Transcrire les épisodes archivés les plus récents",
+                            style = Sillon.type.bodySmall,
+                            color = colors.dim,
+                        )
+                        FlowRow(
+                            verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
                             horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
                         ) {
-                            Text(
-                                text = "Transcrire les",
-                                style = Sillon.type.bodySmall,
-                                color = colors.dim,
-                            )
                             state.batchChoices.forEach { count ->
                                 NzChip(
-                                    text = "$count",
+                                    text = if (count > 1) "$count épisodes" else "1 épisode",
                                     selected = state.batchCount == count,
                                     onClick = { actions.setBatchCount(count) },
                                 )
                             }
-                            Text(
-                                text = "plus récents",
-                                style = Sillon.type.bodySmall,
-                                color = colors.dim,
-                            )
                         }
                         NzButton(
                             text = if (state.transcribeBusy) "Envoi…" else "Transcrire",
@@ -679,7 +682,11 @@ private fun TranscriptionCard(
                     }
                     if (state.queuedCount > 0) {
                         Text(
-                            text = "${state.queuedCount} épisode(s) en attente de transcription.",
+                            text = if (state.queuedCount > 1) {
+                                "${state.queuedCount} épisodes en attente de transcription."
+                            } else {
+                                "1 épisode en attente de transcription."
+                            },
                             style = Sillon.type.bodySmall,
                             color = colors.dim,
                         )
@@ -734,7 +741,13 @@ private fun ChoiceRow(
     val colors = Sillon.colors
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
         Text(text = title, style = Sillon.type.bodySmall, color = colors.dim)
-        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
+        // A FLOW, not a row: at 360 dp « Les 10 épisodes archivés les plus
+        // récents » beside « Tout l'historique archivé » does not fit, and a
+        // crushed chip (one letter per line) is a bug, not a compromise.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+            verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+        ) {
             options.forEach { (value, label) ->
                 NzChip(
                     text = label,
@@ -768,7 +781,7 @@ private fun TranscriptSearchField(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(NzMinTouchTarget)
-                .semantics { contentDescription = "Rechercher dans le texte des épisodes" },
+                .semantics { contentDescription = "Rechercher dans les épisodes" },
             decorationBox = { inner ->
                 Row(
                     modifier = Modifier
@@ -782,7 +795,7 @@ private fun TranscriptSearchField(
                     Box(Modifier.weight(1f)) {
                         if (state.searchQuery.isEmpty()) {
                             Text(
-                                text = "Rechercher dans le texte des épisodes…",
+                                text = "Rechercher dans les épisodes…",
                                 style = Sillon.type.body,
                                 color = colors.dim,
                                 maxLines = 1,

@@ -269,7 +269,7 @@ private fun ShowGrid(
     subscribing: String? = null,
 ) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 160.dp),
+        columns = GridCells.Adaptive(minSize = 148.dp),
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(
             start = NzSpacing.pageX,
@@ -328,9 +328,13 @@ private fun ShowCard(
                     style = Sillon.type.bodySmall,
                     color = colors.dim,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
                 if (show.autoArchive) {
-                    Icon(glyph = NzGlyph.Archive, size = 12.dp, tint = colors.dim)
+                    // « auto », as the SPA's own badge says (`Podcasts.svelte`).
+                    Icon(glyph = NzGlyph.Archive, size = 12.dp, tint = colors.btn)
+                    Text(text = "auto", style = Sillon.type.labelMono, color = colors.btn)
                 }
             }
             if (onSubscribe != null) {

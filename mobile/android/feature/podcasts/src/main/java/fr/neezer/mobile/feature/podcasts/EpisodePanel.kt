@@ -733,20 +733,26 @@ class TranscriptModel(
                 _state.update { it.copy(loading = false, version = it.version + 1) }
                 return@launch
             }
-            load(offset = 0, at = null)
+            // The copy was ALREADY applied above: asking for it twice would be
+            // two disk reads for one page (`transcriptcache.js` reads it once).
+            load(offset = 0, at = null, skipCache = true)
         }
     }
 
     /** One page, by offset or by the moment it must cover. */
-    fun load(offset: Int, at: Double?) {
+    fun load(offset: Int, at: Double?, skipCache: Boolean = false) {
         val episodeId = _state.value.episodeId
         if (episodeId.isEmpty()) return
         job?.cancel()
         _state.update { it.copy(loading = true, failure = null, version = it.version + 1) }
         job = scope.launch {
-            val cached = runCatching {
-                service.cachedTranscript(episodeId, pageSize, offset, at)
-            }.getOrNull()
+            val cached = if (skipCache) {
+                null
+            } else {
+                runCatching {
+                    service.cachedTranscript(episodeId, pageSize, offset, at)
+                }.getOrNull()
+            }
             if (cached != null) apply(cached, cached = true)
             try {
                 val page = service.transcript(episodeId, pageSize, offset, at, null)
