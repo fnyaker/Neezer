@@ -236,7 +236,6 @@ impl TapSlot {
             },
         )
     }
-
 }
 
 /// The callback's side of the tap: one producer per reader, no allocation, no
