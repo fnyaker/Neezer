@@ -8,6 +8,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.BitmapLoader
+import androidx.media3.common.util.UnstableApi
+import androidx.annotation.OptIn
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -56,6 +58,7 @@ object CoverArt {
  * FETCH on first use (a lane, up to a second), and `getState()` must never wait
  * for that.
  */
+@OptIn(UnstableApi::class)
 class NzBitmapLoader(
     private val screens: Screens?,
     private val artworkPx: Int = ARTWORK_PX,

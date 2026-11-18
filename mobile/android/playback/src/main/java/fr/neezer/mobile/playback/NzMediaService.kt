@@ -10,11 +10,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionError
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -48,6 +51,7 @@ import fr.neezer.mobile.bridge.NzBridge
  * `PlayerApi.command`, and every field of the state comes back from its
  * snapshot.
  */
+@OptIn(UnstableApi::class)
 class NzMediaService : MediaLibraryService() {
 
     private var api: PlayerApi? = null
@@ -277,7 +281,7 @@ class NzMediaService : MediaLibraryService() {
         ): ListenableFuture<LibraryResult<MediaItem>> {
             val item = LibraryTrees.current.item(mediaId)
             return if (item == null) {
-                Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
+                Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
             } else {
                 Futures.immediateFuture(LibraryResult.ofItem(item, null))
             }
@@ -289,7 +293,7 @@ class NzMediaService : MediaLibraryService() {
             query: String,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
-            Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_NOT_SUPPORTED))
+            Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
 
         override fun onGetSearchResult(
             session: MediaLibrarySession,
@@ -299,7 +303,7 @@ class NzMediaService : MediaLibraryService() {
             pageSize: Int,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
-            Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_NOT_SUPPORTED))
+            Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
     }
 
     companion object {
