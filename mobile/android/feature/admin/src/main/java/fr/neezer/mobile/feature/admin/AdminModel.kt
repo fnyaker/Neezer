@@ -199,6 +199,15 @@ class AdminModel(
                 " · ${rows.users().size} sur $total chargés"
         }
 
+        /**
+         * The quota's field: what the person typed, else the SERVER's own value
+         * — the card never shows an empty box while it knows the number.
+         */
+        val quotaValue: String
+            get() = quotaDraft.ifBlank {
+                server.data?.let { formatQuota(it.uploadQuotaGb) } ?: ""
+            }
+
         /** The disk gauge's filled share, for *Stockage serveur*. */
         val diskUsedShare: Float
             get() {
@@ -692,8 +701,6 @@ class AdminModel(
             launch { card({ service.cachedSimilar() }, { service.similar() }) { state = state.copy(similar = it) } }
             launch { card({ service.cachedAutomatch() }, { service.automatch() }) { state = state.copy(automatch = it) } }
             launch { card({ service.cachedTranscribe() }, { service.transcribe(false) }) { state = state.copy(transcribe = it) } }
-            // The quota's field starts on the server's own value.
-            state.server.data?.let { server -> state = state.copy(quotaDraft = formatQuota(server.uploadQuotaGb)) }
             // A job that was still running when the page was left resumes its
             // poll: the server did not stop because the screen closed.
             pollIfRunning()
@@ -741,7 +748,7 @@ class AdminModel(
 
     /** *Enregistrer* the upload quota — 0 disables the limit. */
     fun saveQuota() {
-        val value = state.quotaDraft.replace(',', '.').toDoubleOrNull()
+        val value = state.quotaValue.replace(',', '.').toDoubleOrNull()
         if (value == null || value < 0.0) {
             state = state.copy(actionError = "Valeur de quota invalide")
             return

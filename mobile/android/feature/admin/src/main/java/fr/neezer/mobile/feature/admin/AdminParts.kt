@@ -182,9 +182,8 @@ internal fun AdminSwitchRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .sizeIn(minHeight = NzMinTouchTarget)
-            .clickable(enabled = enabled, role = Role.Switch) { onChange(!checked) }
-            .padding(vertical = NzSpacing.xs),
+            .heightIn(min = NzMinTouchTarget)
+            .clickable(enabled = enabled, role = Role.Switch) { onChange(!checked) },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
@@ -292,10 +291,11 @@ internal fun JobFailuresBlock(
     failures: AdminJobFailures,
     label: String,
     onCopy: ((String) -> Unit)? = null,
+    startOpen: Boolean = false,
 ) {
     if (failures.failed == 0u) return
     val colors = Sillon.colors
-    var open by remember(failures.failed) { mutableStateOf(false) }
+    var open by remember(failures.failed) { mutableStateOf(startOpen) }
     val shape = RoundedCornerShape(NzRadius.field)
     Column(
         modifier = Modifier
@@ -382,6 +382,25 @@ internal fun failuresText(failures: AdminJobFailures, label: String): String = b
     failures.rows.forEach { appendLine("  ${it.track.ifBlank { "?" }} — ${it.reason}") }
     if (failures.hidden > 0u) appendLine("  … et ${failures.hidden} autre(s)")
 }.trimEnd()
+
+/**
+ * A row of buttons that WRAPS. Measured at a 200 % font scale: two pills in a
+ * `Row` are wider than a phone, and the second one was clipped by the card's
+ * edge rather than moved to the next line.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+internal fun AdminActions(
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.FlowRowScope.() -> Unit,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        content = content,
+    )
+}
 
 /** One action row of a sheet (`AdminUsers.svelte`'s `.action`). */
 @Composable

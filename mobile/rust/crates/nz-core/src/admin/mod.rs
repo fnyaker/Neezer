@@ -58,11 +58,11 @@ mod testing;
 use nz_model::{AdminUser, AnalysisBackfill};
 
 pub use view::{
-    AnalysisJobView, ArchiveStatusView, AutomatchMissView, AutomatchView, CauseView, CleanupTrackView,
-    CleanupView, CountView, CreditsView, DeleteResultView, EnrichView, FailureRow, InviteIssuedView,
-    InviteView, JobFailuresView, MigrateView, PlanView, ReplacedView, RuleSetView, RuleSwitchView,
-    RulesView, ScheduleView, ServerCardView, SimilarView, StageView, StorageView, TranscribeView,
-    UserDetailView, UserView, UsersPageView,
+    AnalysisJobView, ArchiveStatusView, AutomatchMissView, AutomatchView, CauseView,
+    CleanupTrackView, CleanupView, CountView, CreditsView, DeleteResultView, EnrichView,
+    FailureRow, InviteIssuedView, InviteView, JobFailuresView, MigrateView, PlanView, ReplacedView,
+    RuleSetView, RuleSwitchView, RulesView, ScheduleView, ServerCardView, SimilarView, StageView,
+    StorageView, TranscribeView, UserDetailView, UserView, UsersPageView,
 };
 
 use crate::core::{Core, CoreError};
@@ -345,10 +345,7 @@ impl Core {
     }
 
     /// The `{invite, token}` envelope the two minting routes answer.
-    fn read_issued(
-        &self,
-        answer: serde_json::Value,
-    ) -> Result<InviteIssuedView, CoreError> {
+    fn read_issued(&self, answer: serde_json::Value) -> Result<InviteIssuedView, CoreError> {
         let invite: nz_model::AdminInvite = answer
             .get("invite")
             .cloned()
@@ -452,7 +449,8 @@ impl Core {
         let gb = gb.clamp(0.0, 1_000_000.0);
         let api = self.admin_api()?;
         let before = wire::totals(&api);
-        let answer = wire::save_server_settings(&api, &serde_json::json!({ "upload_quota_gb": gb })).await;
+        let answer =
+            wire::save_server_settings(&api, &serde_json::json!({ "upload_quota_gb": gb })).await;
         self.note_admin_traffic(&api, before);
         let server = answer?;
         wire::Snapshot::write(self, |snapshot| {
@@ -499,11 +497,7 @@ impl Core {
     /// `field` is the server's own key (`on_fav_album`, `artist_scope`,
     /// `clean_min_free_gb`, …) and `value` its JSON, which is why this takes a
     /// string: an unknown key is refused by the server, not guessed at here.
-    pub async fn admin_save_rule(
-        &self,
-        field: &str,
-        value: &str,
-    ) -> Result<RulesView, CoreError> {
+    pub async fn admin_save_rule(&self, field: &str, value: &str) -> Result<RulesView, CoreError> {
         if !is_rule_field(field) {
             return Err(CoreError::Invalid {
                 detail: format!("réglage d'archivage inconnu : {field}"),
@@ -1034,10 +1028,11 @@ fn invite_url(core: &Core, token: &str) -> String {
 /// Applies the tap's decision to the device's copy before the request.
 fn patch_copy_users(core: &Core, id: &str, patch: impl FnOnce(&mut AdminUser)) {
     wire::Snapshot::write(core, |snapshot| {
-        if let Some(page) = snapshot.users.as_mut() {
-            if let Some(user) = page.users.iter_mut().find(|user| user.id.to_string() == id) {
-                patch(user);
-            }
+        let Some(page) = snapshot.users.as_mut() else {
+            return;
+        };
+        if let Some(user) = page.users.iter_mut().find(|user| user.id.as_str() == id) {
+            patch(user);
         }
     });
 }
@@ -1049,7 +1044,7 @@ fn replace_copy_user(core: &Core, user: &AdminUser) {
             match page
                 .users
                 .iter_mut()
-                .find(|row| row.id.to_string() == user.id.to_string())
+                .find(|row| row.id.as_str() == user.id.as_str())
             {
                 Some(row) => *row = user.clone(),
                 None => page.users.push(user.clone()),
@@ -1063,7 +1058,7 @@ fn drop_copy_user(core: &Core, id: &str) {
     wire::Snapshot::write(core, |snapshot| {
         if let Some(page) = snapshot.users.as_mut() {
             let before = page.users.len();
-            page.users.retain(|user| user.id.to_string() != id);
+            page.users.retain(|user| user.id.as_str() != id);
             if page.users.len() != before {
                 page.total = page.total.saturating_sub(1);
             }
@@ -1173,7 +1168,10 @@ mod tests {
             vec!["GET /api/admin/users", "GET /api/admin/invites"],
             "one request per card, exactly the SPA's own two"
         );
-        assert!(server.hits()[0].path.contains("limit=25"), "one page, 25 rows");
+        assert!(
+            server.hits()[0].path.contains("limit=25"),
+            "one page, 25 rows"
+        );
         assert_eq!(page.users.len(), 2);
         assert_eq!(page.total, 3, "the count line says how many there are");
         assert_eq!(page.next.as_deref(), Some("u-2"), "the cursor continues");
@@ -1200,12 +1198,20 @@ mod tests {
     #[tokio::test]
     async fn the_second_page_continues_the_cursor_and_the_search_travels() {
         let (server, _dir, core) = testing::configured().await;
-        core.admin_users("", None, USERS_PAGE_SIZE).await.expect("one");
+        core.admin_users("", None, USERS_PAGE_SIZE)
+            .await
+            .expect("one");
         core.admin_users("", Some("u-2"), USERS_PAGE_SIZE)
             .await
             .expect("two");
-        core.admin_users("Léo", None, USERS_PAGE_SIZE).await.expect("search");
-        assert!(server.hits()[1].path.contains("after=u-2"), "{:?}", server.hits());
+        core.admin_users("Léo", None, USERS_PAGE_SIZE)
+            .await
+            .expect("search");
+        assert!(
+            server.hits()[1].path.contains("after=u-2"),
+            "{:?}",
+            server.hits()
+        );
         assert!(
             server.hits()[2].path.contains("q=L%C3%A9o"),
             "the query is encoded and goes to the server: {:?}",
@@ -1218,11 +1224,15 @@ mod tests {
     #[tokio::test]
     async fn the_two_account_switches_post_one_field_and_draw_the_servers_row() {
         let (server, _dir, core) = testing::configured().await;
-        core.admin_users("", None, USERS_PAGE_SIZE).await.expect("the page");
+        core.admin_users("", None, USERS_PAGE_SIZE)
+            .await
+            .expect("the page");
 
         let user = core.admin_set_role("u-2", true).await.expect("promoted");
         assert_eq!(
-            server.last_body_of("PATCH", "/api/admin/users/u-2").as_deref(),
+            server
+                .last_body_of("PATCH", "/api/admin/users/u-2")
+                .as_deref(),
             Some(r#"{"admin":true}"#),
             "one field, the SPA's own body"
         );
@@ -1236,9 +1246,14 @@ mod tests {
             "a warm open shows the new role"
         );
 
-        let user = core.admin_set_disabled("u-2", true).await.expect("disabled");
+        let user = core
+            .admin_set_disabled("u-2", true)
+            .await
+            .expect("disabled");
         assert_eq!(
-            server.last_body_of("PATCH", "/api/admin/users/u-2").as_deref(),
+            server
+                .last_body_of("PATCH", "/api/admin/users/u-2")
+                .as_deref(),
             Some(r#"{"disabled":true}"#)
         );
         assert!(user.disabled);
@@ -1249,7 +1264,9 @@ mod tests {
     #[tokio::test]
     async fn a_refused_switch_rolls_the_copy_back_and_keeps_its_code() {
         let (server, _dir, core) = testing::configured().await;
-        core.admin_users("", None, USERS_PAGE_SIZE).await.expect("the page");
+        core.admin_users("", None, USERS_PAGE_SIZE)
+            .await
+            .expect("the page");
         server.break_code("/api/admin/users/u-2", 409, "last_admin");
 
         let error = core
@@ -1280,10 +1297,14 @@ mod tests {
     #[tokio::test]
     async fn deleting_an_account_confirms_its_name_and_says_what_moved() {
         let (server, _dir, core) = testing::configured().await;
-        core.admin_users("", None, USERS_PAGE_SIZE).await.expect("the page");
+        core.admin_users("", None, USERS_PAGE_SIZE)
+            .await
+            .expect("the page");
         let moved = core.admin_delete_user("u-2", "Léo").await.expect("deleted");
         assert_eq!(
-            server.last_body_of("DELETE", "/api/admin/users/u-2").as_deref(),
+            server
+                .last_body_of("DELETE", "/api/admin/users/u-2")
+                .as_deref(),
             Some(r#"{"confirm":"Léo"}"#)
         );
         assert_eq!(moved.uploads_reassigned, 4);
@@ -1312,8 +1333,16 @@ mod tests {
             server.last_body_of("POST", "/api/admin/invites").as_deref(),
             Some(r#"{"expires_in":604800,"note":"Léa"}"#)
         );
-        assert!(issued.url.ends_with("/app/#/invite/tok-abc123"), "{}", issued.url);
-        assert!(issued.url.starts_with("http://127.0.0.1:"), "{}", issued.url);
+        assert!(
+            issued.url.ends_with("/app/#/invite/tok-abc123"),
+            "{}",
+            issued.url
+        );
+        assert!(
+            issued.url.starts_with("http://127.0.0.1:"),
+            "{}",
+            issued.url
+        );
         assert_eq!(issued.token, "tok-abc123");
         assert!(
             core.cached_admin_invites()
@@ -1339,7 +1368,9 @@ mod tests {
     #[tokio::test]
     async fn a_cold_server_page_costs_the_spas_reads_and_a_warm_one_none() {
         let (server, _dir, core) = testing::configured().await;
-        core.admin_server_card().await.expect("the quota and the verdict");
+        core.admin_server_card()
+            .await
+            .expect("the quota and the verdict");
         core.admin_storage().await.expect("the disk");
         core.admin_rules().await.expect("the rules");
         core.admin_cleanup().await.expect("the preview");
@@ -1347,7 +1378,9 @@ mod tests {
         core.admin_migrate().await.expect("the migration");
         core.admin_enrich().await.expect("the facts");
         core.admin_credits().await.expect("the credits");
-        core.admin_transcribe(false).await.expect("the transcription");
+        core.admin_transcribe(false)
+            .await
+            .expect("the transcription");
         core.admin_plan().await.expect("the plan");
         core.admin_analysis().await.expect("the job");
 
@@ -1405,10 +1438,13 @@ mod tests {
         let run = core.admin_run_cleanup().await.expect("the cleanup");
         assert_eq!(run.deleted, 2);
         assert_eq!(run.freed, 24_000_000);
-        assert_eq!(server.routes(), vec![
-            "GET /api/archive/cleanup/preview",
-            "POST /api/archive/cleanup"
-        ]);
+        assert_eq!(
+            server.routes(),
+            vec![
+                "GET /api/archive/cleanup/preview",
+                "POST /api/archive/cleanup"
+            ]
+        );
     }
 
     /// A rule is saved ONE field at a time, and the card draws the server's whole
@@ -1484,7 +1520,9 @@ mod tests {
             "the start, then the state the card draws"
         );
         assert_eq!(
-            server.last_body_of("POST", "/api/analysis/backfill").as_deref(),
+            server
+                .last_body_of("POST", "/api/analysis/backfill")
+                .as_deref(),
             Some(r#"{"force":true,"workers":0}"#)
         );
         assert_eq!(job.failures.failed, 2);
@@ -1557,7 +1595,9 @@ mod tests {
         let status = core.admin_set_automatch(false).await.expect("off");
         assert!(!status.enabled);
         assert_eq!(
-            server.last_body_of("PUT", "/api/automatch/settings").as_deref(),
+            server
+                .last_body_of("PUT", "/api/automatch/settings")
+                .as_deref(),
             Some(r#"{"enabled":false}"#)
         );
         let status = core.admin_run_automatch().await.expect("a pass");
@@ -1575,9 +1615,14 @@ mod tests {
         assert_eq!(view.max_minutes, 180);
         assert_eq!(view.model_size_mb, 466);
 
-        let view = core.admin_save_transcribe("max_minutes", "30").await.expect("saved");
+        let view = core
+            .admin_save_transcribe("max_minutes", "30")
+            .await
+            .expect("saved");
         assert_eq!(
-            server.last_body_of("PUT", "/api/transcribe/settings").as_deref(),
+            server
+                .last_body_of("PUT", "/api/transcribe/settings")
+                .as_deref(),
             Some(r#"{"max_minutes":30}"#)
         );
         assert_eq!(view.max_minutes, 30);

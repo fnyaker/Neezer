@@ -148,31 +148,32 @@ private fun AdminCoreUnavailable(modifier: Modifier) {
 private fun UsersPage(model: AdminModel, state: AdminModel.State) {
     val colors = Sillon.colors
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
-        if (state.usersFailure != null && state.rows.isEmpty()) {
+        // A tap on a row opens a sheet, and the sheet IS the page until it is
+        // closed: the SPA shows a modal, and a phone has no second column. The
+        // list behind it is one back tap away (`closeSheet`).
+        val sheet = state.sheet
+        val openUser = state.openUser
+        if (sheet != null || openUser != null) {
+            when (sheet) {
+                is AdminModel.Sheet.Invite -> InviteSheet(model, state, sheet.source)
+                is AdminModel.Sheet.Confirm -> ConfirmSheet(model, state, sheet)
+                null -> state.rows.users().firstOrNull { it.id == openUser }?.let { UserSheet(model, state, it) }
+            }
+            return@Column
+        }
+        if (state.usersFailure != null && state.rows.users().isEmpty()) {
             LoadFailed(cause = state.usersFailure, onRetry = model::retryUsers)
             return@Column
         }
 
-        // The SPA's head: what the list is, and the two buttons.
+        // The SPA's head, re-flowed for a phone: the two actions on their own
+        // line (a count line squeezed beside them wrapped mid-phrase), then what
+        // the list is and when it was refreshed, full width.
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = state.countLine(),
-                    style = Sillon.type.bodySmall,
-                    color = colors.dim,
-                )
-                state.refreshedAt?.let { at ->
-                    Text(
-                        text = "Actualisé à " + AdminCopy.clockTimeOf(at),
-                        style = Sillon.type.bodySmall,
-                        color = colors.dim,
-                    )
-                }
-            }
             NzButton(
                 text = "Inviter",
                 onClick = { model.openInvite() },
@@ -183,6 +184,20 @@ private fun UsersPage(model: AdminModel, state: AdminModel.State) {
                 contentDescription = "Rafraîchir la liste",
                 onClick = model::refresh,
                 enabled = !state.usersLoading,
+            )
+        }
+        if (state.usersFailure == null) {
+            Text(
+                text = state.countLine(),
+                style = Sillon.type.bodySmall,
+                color = colors.dim,
+            )
+        }
+        state.refreshedAt?.let { at ->
+            Text(
+                text = "Actualisé à " + AdminCopy.clockTimeOf(at),
+                style = Sillon.type.bodySmall,
+                color = colors.dim,
             )
         }
 
@@ -251,16 +266,6 @@ private fun UsersPage(model: AdminModel, state: AdminModel.State) {
             AdminHint("${AdminCopy.MAX_ROWS} comptes chargés. Affinez la recherche pour trouver les autres.")
         }
 
-        state.sheet?.let { sheet ->
-            when (sheet) {
-                is AdminModel.Sheet.Invite -> InviteSheet(model, state, sheet.source)
-                is AdminModel.Sheet.Confirm -> ConfirmSheet(model, state, sheet)
-            }
-        }
-        state.openUser?.let { id ->
-            val user = state.rows.users().firstOrNull { it.id == id }
-            if (user != null && state.sheet !is AdminModel.Sheet.Confirm) UserSheet(model, state, user)
-        }
     }
 }
 
@@ -571,9 +576,11 @@ private fun InviteSheet(model: AdminModel, state: AdminModel.State, source: Admi
         },
     ) {
         if (issued != null) {
-            Text(text = issued, style = Sillon.type.mono, color = colors.tx)
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(text = issued, style = Sillon.type.mono, color = colors.tx)
+            }
             AdminHint("Copiez ce lien maintenant : il ne sera plus affiché.", warn = true)
-            Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+            AdminActions {
                 NzButton(
                     text = "Copier le lien",
                     onClick = {
@@ -619,7 +626,7 @@ private fun InviteSheet(model: AdminModel, state: AdminModel.State, source: Admi
             onSelect = { id -> if (source == null) ttl = id.toUInt() },
         )
         state.actionError?.let { AdminError(it) }
-        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+        AdminActions {
             NzButton(
                 text = if (state.busy) "En cours…" else if (source != null) "Créer un nouveau lien" else "Créer le lien",
                 onClick = { model.createInvite(note, ttl, source) },
@@ -669,7 +676,7 @@ private fun ConfirmSheet(model: AdminModel, state: AdminModel.State, sheet: Admi
             )
         }
         state.actionError?.let { AdminError(it) }
-        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+        AdminActions {
             NzButton(
                 text = when (sheet.action) {
                     ConfirmAction.Delete -> if (state.busy) "En cours…" else "Supprimer définitivement"
@@ -737,11 +744,16 @@ private fun ArchiveCard(model: AdminModel, state: AdminModel.State) {
                 )
                 AdminHint("Vous pouvez fermer l'application, le serveur continue.")
             } else {
-                AdminChips(
-                    options = AdminCopy.ARCHIVE_SCOPES,
-                    selected = "",
-                    onSelect = { scope -> model.startArchive(scope) },
-                )
+                AdminActions {
+                    AdminCopy.ARCHIVE_SCOPES.forEach { (scope, label) ->
+                        NzButton(
+                            text = label,
+                            onClick = { model.startArchive(scope) },
+                            kind = if (scope == "all") NzButtonKind.Primary else NzButtonKind.Secondary,
+                            glyph = if (scope == "all") NzGlyph.Archive else null,
+                        )
+                    }
+                }
                 if (status.total > 0u) {
                     AdminHint(
                         "Dernier passage : ${status.archived} archivé(s)" +
@@ -781,7 +793,7 @@ private fun MigrateBody(model: AdminModel, migrate: AdminMigrate) {
         )
     } else {
         NzButton(
-            text = "Mettre à niveau les fichiers",
+            text = "Mettre à niveau",
             onClick = model::startMigrate,
             glyph = NzGlyph.Refresh,
             kind = NzButtonKind.Secondary,
@@ -818,9 +830,9 @@ private fun EnrichBody(model: AdminModel, enrich: AdminEnrich) {
             indeterminate = true,
         )
     } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+        AdminActions {
             NzButton(
-                text = "Compléter depuis MusicBrainz",
+                text = "Compléter les faits",
                 onClick = { model.startEnrich(false) },
                 glyph = NzGlyph.Refresh,
                 kind = NzButtonKind.Secondary,
@@ -878,7 +890,7 @@ private fun CreditsBody(model: AdminModel, credits: AdminCredits) {
             detail = credits.sources.joinToString(" · ") { "${it.count} par ${it.name}" },
         )
     } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+        AdminActions {
             NzButton(
                 text = "Compléter les crédits",
                 onClick = { model.startCredits(false) },
@@ -1030,7 +1042,7 @@ private fun CleanupPolicy(model: AdminModel, rules: AdminRules) {
 
 @Composable
 private fun CleanupPreview(model: AdminModel, cleanup: AdminCleanup?) {
-    Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+    AdminActions {
         NzButton(
             text = "Prévisualiser",
             onClick = model::previewCleanup,
@@ -1184,7 +1196,7 @@ private fun PlanBody(model: AdminModel, plan: AdminPlan) {
             onSelect = { hours -> model.saveSchedule(true, plan.schedule.at, hours.toUInt()) },
         )
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+    AdminActions {
         NzButton(
             text = "Mesurer maintenant",
             onClick = { model.startAnalysis(false, 0u) },
@@ -1240,9 +1252,9 @@ private fun SimilarBody(model: AdminModel, similar: AdminSimilar) {
     if (similar.running) {
         AdminGauge(fraction = 0f, label = "Calcul des voisins…", indeterminate = true)
     } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+        AdminActions {
             NzButton(
-                text = "Recalculer les voisins sonores",
+                text = "Recalculer les voisins",
                 onClick = { model.startSimilar(false) },
                 glyph = NzGlyph.Activity,
                 kind = NzButtonKind.Secondary,
@@ -1470,7 +1482,7 @@ private fun QuotaSection(model: AdminModel, state: AdminModel.State) {
     ) {
         AdminField(
             label = "Go par utilisateur",
-            value = state.quotaDraft,
+            value = state.quotaValue,
             onValue = model::setQuotaDraft,
             suffix = "Go",
             onDone = model::saveQuota,

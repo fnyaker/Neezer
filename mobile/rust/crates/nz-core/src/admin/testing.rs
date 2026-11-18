@@ -73,7 +73,6 @@ pub struct AdminServer {
     address: String,
     log: Arc<Mutex<Vec<Hit>>>,
     broken: Arc<Mutex<Vec<String>>>,
-    state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     connections: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
@@ -120,7 +119,6 @@ impl AdminServer {
             address,
             log,
             broken,
-            state,
             stop,
             thread: Some(thread),
             connections,
@@ -171,14 +169,6 @@ impl AdminServer {
             .clear();
     }
 
-    /// Makes `route` answer `status` from now on (the failure tests).
-    pub fn break_route(&self, route: &str, status: u16) {
-        self.broken
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .push(format!("{route} {status} "));
-    }
-
     /// Makes `route` answer `status` with the server's own REFUSAL code, which is
     /// what `AdminCopy.guardMessage` turns into its French sentence.
     pub fn break_code(&self, route: &str, status: u16, code: &str) {
@@ -186,11 +176,6 @@ impl AdminServer {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .push(format!("{route} {status} {code}"));
-    }
-
-    /// Runs `change` against the server's own state (a switch the answer reads).
-    fn with_state(&self, change: impl FnOnce(&mut State)) {
-        change(&mut self.state.lock().unwrap_or_else(|err| err.into_inner()));
     }
 }
 
@@ -297,7 +282,8 @@ fn serve(
             },
         ),
         None => answer_for(&method, &path, &body, state),
-    };    let head = format!(
+    };
+    let head = format!(
         "HTTP/1.1 {status} X\r\nContent-Length: {}\r\n{extra}\r\nConnection: close\r\n\r\n",
         answer.len()
     );
@@ -440,11 +426,17 @@ const TRANSCRIBE: &str = r#"{"available":true,"enabled":true,"runner":"server","
           "budget_limit_ms":3600000,"budget_used_ms":600000}}"#;
 
 fn transcribe_with(max_minutes: u32) -> String {
-    TRANSCRIBE.replace("\"max_minutes\":180", &format!("\"max_minutes\":{max_minutes}"))
+    TRANSCRIBE.replace(
+        "\"max_minutes\":180",
+        &format!("\"max_minutes\":{max_minutes}"),
+    )
 }
 
 fn server_settings_with(quota: f64) -> String {
-    SERVER_SETTINGS.replace("\"upload_quota_gb\":12.5", &format!("\"upload_quota_gb\":{quota}"))
+    SERVER_SETTINGS.replace(
+        "\"upload_quota_gb\":12.5",
+        &format!("\"upload_quota_gb\":{quota}"),
+    )
 }
 
 /// The account a `PATCH` answers, with the switch the request asked for applied
@@ -475,7 +467,11 @@ fn quota_of(body: &str) -> f64 {
 }
 
 fn json(status: u16, body: String) -> (u16, String, Vec<u8>) {
-    (status, "Content-Type: application/json".to_owned(), body.into_bytes())
+    (
+        status,
+        "Content-Type: application/json".to_owned(),
+        body.into_bytes(),
+    )
 }
 
 fn answer_for(
@@ -496,10 +492,8 @@ fn answer_for(
             }
             ("POST", "/api/automatch/cancel") => state.automatch_cancel = true,
             ("POST", "/api/settings") => state.quota_gb = quota_of(body),
-            ("PUT", "/api/transcribe/settings") => {
-                if body.contains("\"max_minutes\":30") {
-                    state.max_minutes = 30;
-                }
+            ("PUT", "/api/transcribe/settings") if body.contains("\"max_minutes\":30") => {
+                state.max_minutes = 30;
             }
             _ => {}
         }
@@ -581,9 +575,7 @@ fn answer_for(
                 ARCHIVE_STATUS.to_owned()
             },
         ),
-        ("POST", "/api/archive/backfill") => {
-            json(200, r#"{"ok":true,"running":true}"#.to_owned())
-        }
+        ("POST", "/api/archive/backfill") => json(200, r#"{"ok":true,"running":true}"#.to_owned()),
         ("GET", "/api/archive/rules") => json(200, RULES.to_owned()),
         ("POST", "/api/archive/rules") => json(200, RULES.to_owned()),
         ("GET", "/api/archive/cleanup/preview") => json(200, CLEANUP.to_owned()),
@@ -616,11 +608,7 @@ fn answer_for(
         // -- the auto-match ---------------------------------------------------
         ("GET", "/api/automatch") => json(
             200,
-            automatch(
-                snapshot.automatch_running,
-                snapshot.automatch_cancel,
-                true,
-            ),
+            automatch(snapshot.automatch_running, snapshot.automatch_cancel, true),
         ),
         ("PUT", "/api/automatch/settings") => json(
             200,
@@ -633,9 +621,10 @@ fn answer_for(
                 r#"{"id":"j1","running":true,"total":40,"done":0,"counts":{},"cancel":false}"#
             ),
         ),
-        ("POST", "/api/automatch/cancel") => {
-            json(200, automatch(true, true, true).replace("\"cancel\":false", "\"cancel\":true"))
-        }
+        ("POST", "/api/automatch/cancel") => json(
+            200,
+            automatch(true, true, true).replace("\"cancel\":false", "\"cancel\":true"),
+        ),
 
         // -- transcription -----------------------------------------------------
         ("GET", "/api/transcribe/settings") => json(200, transcribe_with(snapshot.max_minutes)),

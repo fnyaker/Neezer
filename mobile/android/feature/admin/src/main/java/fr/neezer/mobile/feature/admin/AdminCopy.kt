@@ -56,7 +56,9 @@ object AdminCopy {
 
     /** Les portées d'un archivage manuel (`Settings.svelte#startBackfill`). */
     val ARCHIVE_SCOPES: List<Pair<String, String>> = listOf(
-        "all" to "Tout archiver maintenant",
+        // Short on purpose: a pill is ONE line, and at a 200 % font scale the
+        // long form ellipsized the primary action's label (measured).
+        "all" to "Tout archiver",
         "favorites" to "Favoris",
         "playlists" to "Playlists",
         "podcasts" to "Podcasts",

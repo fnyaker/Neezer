@@ -36,7 +36,7 @@ use nz_api::{Api, Lane, Method};
 use nz_model::{
     AdminInvites, AdminUsers, AnalysisBackfill, AnalysisPlan, ArchiveRules, ArchiveStatus,
     Automatch, CleanupPreview, CreditsBackfill, DeezerStatus, EnrichStatus, MigrateStatus,
-    ServerSettings, SimilarStatus, Storage, TranscribeSettings, TranscribeStatus,
+    ServerSettings, SimilarStatus, Storage, TranscribeSettings,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,11 +84,7 @@ pub(super) async fn fetch_user(api: &Api, id: &str) -> Result<Value, CoreError> 
 }
 
 /// `PATCH /api/admin/users/<id>` — `{"admin": bool}` or `{"disabled": bool}`.
-pub(super) async fn patch_user(
-    api: &Api,
-    id: &str,
-    payload: &Value,
-) -> Result<Value, CoreError> {
+pub(super) async fn patch_user(api: &Api, id: &str, payload: &Value) -> Result<Value, CoreError> {
     Ok(api.admin_user_patch(id, payload).await?)
 }
 
@@ -360,7 +356,10 @@ pub(super) async fn cancel_automatch(api: &Api) -> Result<Automatch, CoreError> 
 
 /// `GET /api/transcribe/settings[?probe=1]` — the engine's options, its last
 /// probe and the queue. `probe` is the *Tester* button: it runs the engine once.
-pub(super) async fn fetch_transcribe(api: &Api, probe: bool) -> Result<TranscribeSettings, CoreError> {
+pub(super) async fn fetch_transcribe(
+    api: &Api,
+    probe: bool,
+) -> Result<TranscribeSettings, CoreError> {
     Ok(api.transcribe_settings(probe).await?)
 }
 
@@ -371,11 +370,6 @@ pub(super) async fn save_transcribe(
 ) -> Result<TranscribeSettings, CoreError> {
     api.save_transcribe_settings(fields).await?;
     fetch_transcribe(api, false).await
-}
-
-/// `GET /api/transcribe/status` — what the server's worker is doing now.
-pub(super) async fn fetch_transcribe_status(api: &Api) -> Result<TranscribeStatus, CoreError> {
-    Ok(api.transcribe_status().await?)
 }
 
 // --- the server's own settings and the provider's verdict -------------------------
@@ -488,12 +482,6 @@ fn owner(core: &Core) -> String {
         .map(|me| me.user.id.to_string())
         .filter(|id| !id.is_empty())
         .unwrap_or_default()
-}
-
-/// The copy's path, for a test that reads the file back.
-#[cfg(test)]
-pub(super) fn snapshot_path_for_test(core: &Core) -> PathBuf {
-    snapshot_path(core)
 }
 
 /// FNV-1a: a stable file name for an account id, and no dependency for it.

@@ -23,9 +23,9 @@
 use std::collections::BTreeMap;
 
 use nz_model::{
-    AdminInvite, AdminInvites, AdminUser, AdminUsers, AnalysisBackfill, AnalysisPlan,
-    ArchiveRuleSet, ArchiveRules, ArchiveStatus, Automatch, CleanupPreview, CreditsBackfill,
-    DeezerStatus, EnrichStatus, JobStatus, MigrateStatus, ServerSettings, SimilarStatus, Storage,
+    AdminInvite, AdminUser, AdminUsers, AnalysisBackfill, AnalysisPlan, ArchiveRuleSet,
+    ArchiveRules, ArchiveStatus, Automatch, CleanupPreview, CreditsBackfill, DeezerStatus,
+    EnrichStatus, JobStatus, MigrateStatus, ServerSettings, SimilarStatus, Storage,
     TranscribeQueue, TranscribeSettings,
 };
 use serde_json::Value;
@@ -826,10 +826,7 @@ impl From<&TranscribeSettings> for TranscribeView {
                 .as_ref()
                 .and_then(|engine| engine.version.clone()),
             engine_ok: settings.engine.as_ref().is_some_and(|engine| engine.ok),
-            model_name: settings
-                .model
-                .as_ref()
-                .and_then(|model| model.name.clone()),
+            model_name: settings.model.as_ref().and_then(|model| model.name.clone()),
             model_size_mb: settings
                 .model
                 .as_ref()
@@ -893,10 +890,7 @@ pub(super) fn text_of(row: &Value, key: &str) -> String {
 /// A `Value` as a count, saturating at `u32::MAX` (`done`/`total` are counts on
 /// the wire; a server that grows past 4 G rows is not this screen's problem).
 pub(super) fn u32_of(value: &Value) -> u32 {
-    value
-        .as_u64()
-        .unwrap_or_default()
-        .min(u64::from(u32::MAX)) as u32
+    value.as_u64().unwrap_or_default().min(u64::from(u32::MAX)) as u32
 }
 
 /// A map of counters, in its own key order.
@@ -1074,10 +1068,7 @@ mod tests {
         assert_eq!(view.total, Some(40));
         assert_eq!(view.last_counts[0].name, "no_candidate");
         assert_eq!(view.last_counts[0].count, 5);
-        assert_eq!(
-            view.last_stopped.as_deref(),
-            Some("Deezer is unreachable")
-        );
+        assert_eq!(view.last_stopped.as_deref(), Some("Deezer is unreachable"));
         assert_eq!(view.misses[0].title, "Perdu");
         assert_eq!(view.recent[0].to_title, "Raretés");
         assert_eq!(view.recent[0].to_source, "youtube");
@@ -1088,7 +1079,7 @@ mod tests {
     /// pending when the server omits it.
     #[test]
     fn an_invite_carries_its_note_and_its_state() {
-        let invites: AdminInvites = serde_json::from_str(
+        let invites: nz_model::AdminInvites = serde_json::from_str(
             r#"{"invites":[{"id":"i1","note":"Léa","created":"2026-11-17T09:00:00",
                             "expires":"2026-11-24T09:00:00","created_by":"Nadia"}],"next":null}"#,
         )

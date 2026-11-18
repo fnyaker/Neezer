@@ -96,10 +96,21 @@ class SettingsModel(
         val discoveryPending: Double? = null,
         /** One write is in flight; a second tap on the same control is ignored. */
         val busy: Boolean = false,
+        /**
+         * `/api/me`'s `user.admin`, read from the SESSION — no request.
+         *
+         * Why the menu needs it: on a phone the list is a ROUTE of its own, so
+         * opening Réglages builds a fresh model that has neither `/access` nor
+         * `/settings`; the two administrator categories were therefore never
+         * drawn until *Sources* had been opened once (measured on the emulator
+         * by MB17, whose pages a person could not reach at all). The session
+         * already knows the answer, for free.
+         */
+        val sessionAdmin: Boolean = false,
     ) {
-        val categories get() = filterCategories(categoriesFor(isAdmin = server != null || access.data?.admin == true), query)
+        val categories get() = filterCategories(categoriesFor(isAdmin = admin), query)
 
-        val admin: Boolean get() = server != null || access.data?.admin == true
+        val admin: Boolean get() = sessionAdmin || server != null || access.data?.admin == true
 
         /** The sources in the order the card draws them: main, fallbacks, off. */
         val orderedSources: List<SourceData>
@@ -118,6 +129,12 @@ class SettingsModel(
 
     /** The device's own settings, before any section asks for anything. */
     fun start() {
+        if (!state.sessionAdmin) {
+            state = state.copy(
+                sessionAdmin = runCatching { fr.neezer.mobile.feature.admin.AppAdmin.service()?.identity()?.admin }
+                    .getOrNull() == true,
+            )
+        }
         if (state.settings == null) {
             state = state.copy(settings = runCatching { service.settings() }.getOrNull())
             state.settings?.let(NzAppearance::apply)
