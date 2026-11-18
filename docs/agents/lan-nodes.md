@@ -1522,6 +1522,12 @@ package and version were already in both.
 - `PeerInfo.scope` is the **empty friend scope** when I dialled a peer that shares with me but to whom
   I share nothing: `Scope` has no third variant, and an empty `Friend` answers `NotFound` to every
   request — the answer an absent file gets (T7).
+- **No keep-alive by default**: an idle connection closes after 30 s and is re-dialled
+  (one handshake, ~3 ms) when the person comes back. The note's 10 s keep-alive is a
+  *foreground* policy and quinn only takes the interval at configuration time, so
+  enabling it inside the endpoint would ping every ten seconds with the screen off —
+  exactly what the battery measure forbids ("0 LAN packets"). A transfer keeps itself
+  alive by sending bytes.
 - `codec::frame_body_len(header, cap)` is the pure "check before allocate" decision;
   `codec::MAX_CHUNK_BYTES` is 64 KiB. `Incoming` and `Body` own their stream, so a caller never sees a
   `quinn` type.

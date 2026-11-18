@@ -85,8 +85,15 @@ pub const CLOSE_DUPLICATE: u32 = 0x12;
 /// The idle timeout: a connection with nothing to say for this long is gone.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How often a live connection sends a keep-alive, while the app is foreground or
-/// transferring (the note's number; `Lan` turns it off in the background).
+/// How often a connection WOULD send a keep-alive, while the app is foreground or
+/// transferring: the note's number, and the one `Lan` would ask for.
+///
+/// The endpoint does not send it: quinn takes the interval once, at configuration
+/// time, so there is no per-connection switch to turn it off in the background — and
+/// a phone that pings every ten seconds with the screen off is exactly what the
+/// note's battery measure forbids ("0 LAN packets"). An idle connection therefore
+/// closes after [`IDLE_TIMEOUT`] and is re-dialled (one handshake, ~3 ms) when the
+/// person comes back; a transfer carries its own traffic and never idles.
 pub const KEEP_ALIVE: Duration = Duration::from_secs(10);
 
 /// How long a dial may take before the peer is treated as unreachable. A LAN
@@ -1051,7 +1058,9 @@ fn transport_config() -> quinn::TransportConfig {
             .try_into()
             .expect("30 secondes tiennent dans un idle timeout QUIC"),
     ));
-    transport.keep_alive_interval(Some(KEEP_ALIVE));
+    // No keep-alive by default: see `KEEP_ALIVE`. A transfer keeps itself alive by
+    // sending bytes, and an idle control connection costs one handshake to reopen.
+    transport.keep_alive_interval(None);
     // One request is one stream, and the control stream is a second: a peer that
     // opens more at once than it can be answered is refused by QUIC itself, not by
     // a queue this node has to bound.
