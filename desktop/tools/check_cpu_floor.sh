@@ -59,11 +59,14 @@ variant4="${binary}-v4"
 # Where `whisper-rs-sys` keeps the tree it configured, per binary: the floor one
 # next to `<profile>/`, the v3 one in `target/engine-v3/<profile>/` (its own target
 # directory, see tools/build_engine_variants.sh).
+profile="$(dirname "$binary")"
+# The children's trees are ALWAYS derived from the binary's profile directory: an
+# explicit `--ggml` names the floor binary's tree, and it must not silently disable
+# the checks of the two children beside it.
+ggml_v3="$(ls -d "$profile"/../engine-v3/"$(basename "$profile")"/build/whisper-rs-sys-*/out/build/ggml/src 2>/dev/null | head -1 || true)"
+ggml_v4="$(ls -d "$profile"/../engine-v4/"$(basename "$profile")"/build/whisper-rs-sys-*/out/build/ggml/src 2>/dev/null | head -1 || true)"
 if [ -z "$ggml" ]; then
-    profile="$(dirname "$binary")"
     ggml="$(ls -d "$profile"/build/whisper-rs-sys-*/out/build/ggml/src 2>/dev/null | head -1 || true)"
-    ggml_v3="$(ls -d "$profile"/../engine-v3/"$(basename "$profile")"/build/whisper-rs-sys-*/out/build/ggml/src 2>/dev/null | head -1 || true)"
-    ggml_v4="$(ls -d "$profile"/../engine-v4/"$(basename "$profile")"/build/whisper-rs-sys-*/out/build/ggml/src 2>/dev/null | head -1 || true)"
 fi
 
 echo "== 1. le relevé du binaire (toutes les catégories, aucun portillon) : $binary"
