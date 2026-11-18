@@ -330,7 +330,12 @@ jobs:
         if: steps.harness.outputs.present == 'true'
         run: |
           set -euo pipefail
-          mobile/rust/build-android.sh --check-libs mobile/android/bridge/src/main/jniLibs
+          # ABSOLUTE: `build-android.sh` `cd`s into `mobile/rust` before it reads
+          # its argument, so a relative path would resolve under that directory
+          # and the guard would answer "absent" on files that are there (measured
+          # on this PR's first run — the guard refused to bless a copy it could
+          # not read, which is the behaviour wanted from a guard).
+          mobile/rust/build-android.sh --check-libs "$GITHUB_WORKSPACE/mobile/android/bridge/src/main/jniLibs"
           for abi in arm64-v8a armeabi-v7a x86_64; do
             printf '   %-12s %8s bytes\n' "$abi" \
               "$(stat -c %s "mobile/android/bridge/src/main/jniLibs/$abi/libnz_ffi.so")"
