@@ -2296,47 +2296,124 @@ it pauses the queue for a source that is up.
   > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
   > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
 
-### LN13 — Mobile core and FFI (wave 6, effort high)
+### LN13 — Mobile core and FFI (delivered 2026-11-18)
 
-- **Objective**: the phone's Rust core is a node: `nz-core::lan` owns `Lan` (`DiscoveryKind::
-  External`), wraps the player's opener and the offline downloader, and `nz-ffi::LanApi` exposes it
-  to Kotlin with a change-only listener.
-- **Files**: LN13 row. **Contracts**: *Mobile FFI* in *Contracts*; mobile.md's FFI rules (one impl
-  block per file, screen-shaped records, events on change only, `NzError` with a French sentence).
-- **Depends on**: LN11; mobile MB3b and MB15 merged (the opener and the downloader it wraps).
-- **Acceptance**: host `cargo test --workspace --locked` in `mobile/rust`: two cores (temp dirs under
-  `target/`) find each other through `found`, the second plays a track only the first has; `LanApi`
-  methods return within one frame for the snapshot (atomic/clone read), events fire on change only
-  (a 10 min idle test with the paused clock: 0 events); `set_active(false, false, false)` → no
-  packet; `shutdown` joins `Lan`; `cargo ndk -t arm64-v8a -P 26 build -p nz-ffi` green and
-  `libnz_ffi.so` grows by ≤ 1.5 MB (arm64, release — report the number).
-- **Prompt**:
+**What landed.** The phone's Rust core is a node, and Kotlin reaches it through the FFI LN0
+declared. `nz-core/src/lan/` (`mod.rs`, `source.rs`, and the test-only `harness.rs`/`tests.rs`),
+`nz-ffi/src/lan.rs` filled, and three small seams in files this lot shares with the app:
+`player/mod.rs` (the engine's opener), `offline/mod.rs` (the worker's fetcher) and
+`nz-core/Cargo.toml` (one dev-dependency).
 
-  > Tu implémentes le lot **LN13 — Mobile core and FFI** du plan « nœuds LAN » (effort high). But :
-  > le noyau Rust du téléphone devient un nœud — `nz-core/src/lan/` possède `Lan` (découverte
-  > externe, alimentée par Kotlin), enveloppe l'opener du lecteur et le downloader hors ligne, et
-  > `nz-ffi/src/lan.rs` expose `LanApi` (instantané en lecture immédiate, écouteur qui ne pousse que
-  > sur changement). Lis *Contracts* (*Mobile FFI*), *Discovery*, *Rule 1 on the LAN* et la section
-  > LN13 de `docs/agents/lan-nodes.md`, puis `docs/agents/mobile.md` (*The FFI boundary*, *Threads*,
-  > *Rule 1 on the phone*, *MB3b*, *MB15*). Fichiers exclusifs : la ligne LN13. Critères : la liste
-  > *Acceptance* de LN13.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **`LanCore`** owns the one `nz_lan::Lan` of the process, started with `DiscoveryKind::External`:
+  Kotlin's `NsdManager` resolves a node and calls `found(host, port)`, and nothing in the crate
+  multicasts. `found`/`lost` parse an IP literal and drop anything else (discovery carries an
+  address, never a name to resolve). `set_active(foreground, playing, downloading)` is the three
+  counted flags; `set_sleep_grace` is the test's, so no test waits the real minute.
+- **`PlayerSource`** is the engine's stable opener. The engine takes its opener ONCE and the phone
+  builds its player from the first screen, while the node only exists after login (it
+  authenticates with the session's client), so the source delegates to the server's `ServerOpener`
+  until a node exists and to `nz_lan::opener::PeerFirstOpener` from then on. It decides nothing:
+  LN11's adapter keeps the whole table (local → peer → server, the tolerated rungs, the sticky peer
+  of a seek, the 1.5 s stall).
+- **The downloads worker** is wrapped the moment a node exists: `offline::configure` asks
+  `lan::peer_downloader`, and `LanCore::start` calls `offline::reconfigure()` when the worker is
+  already running, so a queue started before the node still goes to the peer afterwards.
+- **`LanApi`** carries the core and nothing else (LN0's `Arc::new(LanApi)` per call would drop a
+  listener list), so every object talks to the process's one node. `snapshot`, `settings`,
+  `peer_sets`, `advertised_port` and `memory_bytes` answer in one frame from memory;
+  `devices`/`revoke`/`rename`/`friends`/`add_friend`/`set_friend_scope`/`remove_friend` are async on
+  the session's client; `download_sets` validates and queues, never blocks.
+- **The listener** is `LanListener` over the core's `ChangeSink`; one watcher thread per node owns
+  a current-thread runtime and fans out `Lan::events()` — on change only, no timer. A listener
+  registered before the node exists (`onViewCreated`) is kept and hears the node from its start.
+
+**Additions to LN0's surface**, each additive and each with its reason:
+
+1. **`LanApi::start()` / `stop()`** (async, sync): the node needs the session's client, and
+   `Lan::start` probes the server when it runs OUTSIDE a runtime — a blocking request on Kotlin's
+   main thread is what mobile.md forbids. `start()` puts it on the FFI's runtime, and every async
+   method starts the node on first use, so a screen that only reads `devices()` still gets one.
+   LN14 calls `start()` with its NSD setup and `stop()` on the process-death path.
+2. **`LanApi::network_changed()`** — `ConnectivityManager`'s callback: re-announce and try the
+   last-known addresses (the reconnect path when multicast is filtered but unicast passes).
+3. **`LanApi::memory_bytes()`** — the counted bytes of the node's state (worker rule 4, never an
+   RSS), for Aide and for this lot's measure.
+4. **`nz_core::lan::{attach, get, shutdown, reset, unsupported, subscribe, stored_settings,
+   save_settings, peer_downloader}`** — the process slot, exactly `crate::offline`'s pattern.
+5. **`offline::reconfigure()` and `offline::worker()`** — the two doors the LAN needs in a file
+   this lot does not own (declared in the PR).
+6. **`nz-core/Cargo.toml`: `tokio` with `test-util` as a dev-dependency** — `time::pause` is what
+   the acceptance's "10 min idle, 0 events" test needs; a dev-dependency only, so `libnz_ffi.so` is
+   unaffected (`Cargo.lock` unmoved). Approved by the orchestrator, and the same line
+   `desktop/crates/nz-lan/Cargo.toml` already carries.
+
+**What a later lot can rely on.** LN14's screens read `snapshot()` (state, peers, transfers,
+failures, port, key validity), `settings()`/`set_settings()` — which answer the STORED values before
+the node exists, so Réglages works on a device that never enrolled — `peer_sets()` and
+`advertised_port()` (the port really bound, ephemeral fallback included); `download_sets` takes
+`"<peer>:<kind>:<ident>"` from `PeerSetFfi`. A server without `/api/lan/status` answers
+`NzError::Unsupported { feature }` from `start()`/`devices()`, and `snapshot().state` is
+`Unsupported` before any node exists: the section is hidden, nothing was created.
+
+**The numbers, each with its command** (`mobile/rust`, `CARGO_BUILD_JOBS=4`, debug unless said,
+2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| two cores find each other and the second reads the first's track | peer body complete in **1.0–7.5 ms** (loopback), inner opener called **0** times | `cargo test -p nz-core lan::two_cores -- --nocapture` |
+| the node's counted memory, one peer | **1 075 B** (`LanCore::memory()`) | same |
+| `snapshot`, peer connected | **22.6–24.1 ms for 10 000 calls = 2.3–2.4 µs** each | `cargo test -p nz-core lan::the_snapshot -- --nocapture` |
+| events, 10 min idle on a paused clock | **0** (and a real change — an enrolment, a peer connecting — is heard) | same |
+| `set_active(false, false, false)` then a `found` + a `network_changed` | **0** new datagrams, **0** new dials (`Lan::wire()`) | `cargo test -p nz-core lan::a_paused_node -- --nocapture` |
+| `shutdown` | joins the watcher and the queued downloads, then `nz-lan`; the UDP port is **bindable again**, twice called is a no-op | `cargo test -p nz-core lan::shutdown_joins -- --nocapture` |
+| a server without the feature | `Err(Unsupported)`, **1** `OPTIONS /api/lan/status`, **0** enrolments, **no** `lan/` directory | `cargo test -p nz-core lan::a_server_without -- --nocapture` |
+| the lot's file | **8 tests**, ~21 s | `cargo test -p nz-core lan::` |
+| the workspace | **337 + 56 + 7 + 1** tests, all green | `cargo test --workspace --locked` |
+| lints, formatting | clean (`-D warnings`, `--all-targets`) | `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo fmt --check` |
+| `libnz_ffi.so`, arm64-v8a, release, API 26 | **14 347 464 B** after, **12 700 488 B** at `origin/master` = **+1 646 976 B (+1.57 MiB)** | `cargo ndk -t arm64-v8a -P 26 build --locked --release -p nz-ffi` with `build-android.sh`'s `CXXSTDLIB=c++_static` |
+| its `NEEDED` entries | **5** (`libaaudio`, `libdl`, `liblog`, `libm`, `libc`), **no `libc++_shared`** | `readelf -d target/aarch64-linux-android/release/libnz_ffi.so \| grep NEEDED` |
+
+**Rules a measurement taught.**
+
+- **`Lan::start` inside a runtime skips its probe, so rule 7's probe is the CALLER's.** The first
+  version started the node from the FFI's runtime and an older server got a `lan/` directory, a
+  socket and a thread before the driver noticed the `404`. `attach`/`start` now ask
+  `has_route(Feature::Lan.probe())` themselves, on the `Prefetch` lane, before anything is created;
+  the test asserts the directory is absent and exactly one `OPTIONS` was made.
+- **A fake server must answer `404`, not `200` with an error body.** `Api::has_route` reads the
+  STATUS; the harness's generic `json(...)` answered `200` for an unknown route, and the
+  no-feature test passed against a server that really did answer "route inconnue" — it only failed
+  once the status was right.
+- **A node whose peer goes away publishes the close's own changes for hundreds of ms** (measured:
+  6 → 17 listener calls after `set_active(false)`), so "0 events in 10 idle minutes" cannot be
+  measured on a node that just lost its peer: it would count the change, not the clock. The paused
+  window is taken on an enrolled node with no peer, and the "a real change is heard" half is
+  asserted separately, on the same listener.
+- **`tokio::time::pause` only works on a current-thread runtime, and a node started from that
+  runtime's context hands its HTTP client a handle onto it.** The paused clock then froze the fake
+  server's answers and the enrolment never came back (40 s deadline). The harness builds such a
+  node on a runtime of its own (`node_on_own_runtime`), which the test keeps alive beside it — and
+  a `Runtime` may not be dropped from inside an async context either ("Cannot drop a runtime in a
+  context where blocking is not allowed"), so `Node::close()` moves that drop to a thread.
+- **A watcher blocked on `Lan::events()` cannot be joined before `Lan::shutdown`.** The watch
+  sender lives in `Lan`'s `Shared`, which is joined after the watcher: the first `shutdown` hung the
+  test's 40 s deadline. `Fanout` carries its own `stop` channel, and the watcher selects on it.
+- **A `std::sync::MutexGuard` across an await makes the FFI's futures non-`Send`.** Holding the
+  slot while the node builds is what a second caller needs, but UniFFI's `async fn`s must stay
+  `Send`: the slot has a `Starting` state instead, and the guard is released before every await.
+- **Thin LTO means the "before" library has almost no `nz-lan` in it.** LN0's stubs were
+  unreachable, so the whole crate was dead-stripped; the measured growth is the node itself
+  (`quinn`, `rcgen`, the 23 modules), **1.57 MiB**, i.e. 5 % over this lot's provisional 1.5 MB
+  ceiling — the number above replaces it.
+- **`cargo ndk` by hand links the SHARED libc++.** Called directly, `libnz_ffi.so` carries
+  `NEEDED libc++_shared.so` (measured), the exact failure `build-android.sh`'s link guard exists
+  for; the recipe that must be used is its `CXXSTDLIB=c++_static` plus `-C link-arg=-lc++abi`.
+
+**Security, and the mutant it was run against.** A `"<peer>:<kind>:<ident>"` key is parsed before
+anything is asked of a peer: 32 bytes of hex for the device, a non-empty ident of ≤64 characters,
+and the peer must be CONNECTED (else `PeerGone`) — nothing a screen sends becomes a path or a
+request line. Mutant M-LN13-1 (the peer part accepted unvalidated, `[0u8; 32]`) made
+`a_set_key_is_parsed_before_anything_is_asked` fail, and was restored afterwards.
 
 ### LN14 — Android: NSD and screens (wave 7, effort high)
 
