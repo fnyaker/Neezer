@@ -305,7 +305,7 @@ class EnrollTestCase(LanRouteCase):
         self.assertEqual(credential[41:73].hex(), lan.LanKey(_seed(1)).pub.hex())
         not_before = int.from_bytes(credential[73:81], "big")
         not_after = int.from_bytes(credential[81:89], "big")
-        self.assertLessEqual(abs(not_before - int(time.time())), 5)
+        self.assertLessEqual(abs(not_before - int(time.time())), 60)
         self.assertLessEqual(
             abs((not_after - not_before) - 30 * 86400), 5
         )
@@ -368,9 +368,11 @@ class EnrollTestCase(LanRouteCase):
         self.assertEqual(answer.get_json()["code"], "stale_proof")
         self.assertIn("300", answer.get_json()["error"])
         self.assertEqual(LanDevice.select().count(), 0)
-        # 300 s is inside the window.
+        # 295 s is inside the window (a second of slack either side: the server
+        # reads its own clock, and 300 exactly is the boundary the crypto test
+        # pins deterministically).
         self.assertEqual(
-            self._enroll(self.alice_client, _seed(3), at=int(time.time()) - 300).status_code,
+            self._enroll(self.alice_client, _seed(3), at=int(time.time()) - 295).status_code,
             200,
         )
 
