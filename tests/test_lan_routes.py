@@ -733,6 +733,53 @@ class RosterRouteTestCase(LanRouteCase):
         self.assertLessEqual(len(answer.get_data()), 4 * len(body) // 3 + 4096)
 
 
+class DeleteCostTestCase(LanRouteCase):
+    """Deleting an account must not cost a statement per enrolled device.
+
+    Peewee's recursive delete emits ONE ``DELETE`` per reverse relation, and
+    the engine's own ``ON DELETE CASCADE`` removes that relation's rows. The
+    LAN lot adds four such relations, which moved `tests/test_admin_users.py`'s
+    pinned 58 to 65 — but the number must be the same for an account with no
+    device and one with twenty, or an admin deleting a person who enrolled
+    twenty devices would pay twenty statements.
+
+    Measured (SQLite, 2026-11-18): **60 statements either way** — 4 SELECT,
+    10 UPDATE, 46 DELETE, with 20 devices as with none. The four relations cost
+    their one DELETE each, and the engine's CASCADE removes the rows.
+    """
+
+    def test_the_cost_is_the_same_with_twenty_devices_and_with_none(self):
+        from tests.test_deezer import count_statements
+
+        for index in range(lan.MAX_DEVICES):
+            self._enrolled(self.bob_client, _seed(600 + index))
+        UserManager.add("carol", "Passw0rd!", admin=False)
+        carol = User.get(User.name == "carol")
+        self.assertEqual(
+            LanDevice.select().where(LanDevice.user == self.bob).count(),
+            lan.MAX_DEVICES,
+        )
+        self.assertEqual(
+            LanDeviceKey.select()
+            .join(LanDevice)
+            .where(LanDevice.user == self.bob)
+            .count(),
+            lan.MAX_DEVICES,
+        )
+        with count_statements() as many:
+            UserManager.delete_guarded(self.bob.id, self.alice)
+        with count_statements() as none:
+            UserManager.delete_guarded(carol.id, self.alice)
+        self.assertEqual(sum(many.values()), sum(none.values()), (dict(many), dict(none)))
+        # The rows really went, through the engine's cascade.
+        self.assertEqual(
+            LanDevice.select().where(LanDevice.user == self.bob).count(), 0
+        )
+        self.assertEqual(
+            LanDeviceKey.select().join(LanDevice).count(), 0
+        )
+
+
 class SettingsTestCase(LanRouteCase):
     def test_the_settings_are_admin_only_and_land_in_meta(self):
         self.assertEqual(self.alice_client.get("/api/lan/settings").status_code, 200)
