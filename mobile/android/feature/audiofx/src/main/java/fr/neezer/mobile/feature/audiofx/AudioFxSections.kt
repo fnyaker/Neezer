@@ -624,8 +624,12 @@ private fun FxSlider(
                 val v = current.value.coerceIn(0f, 1f)
                 val x = thumbPx / 2f + span * v
                 val alpha = if (enabled) 1f else 0.4f
+                // The rail is the HAIRLINE, not a well: `s2` on a glass card is
+                // invisible, and a slider at 0 then reads as a lone white knob
+                // floating on the card (the emulator capture showed exactly
+                // that). The fill stays `--ac-mark`, the value's own colour.
                 drawRoundRect(
-                    color = colors.s2.copy(alpha = alpha),
+                    color = colors.dim.copy(alpha = 0.30f * alpha),
                     topLeft = Offset(thumbPx / 2f, cy - trackPx / 2f),
                     size = Size(span, trackPx),
                     cornerRadius = CornerRadius(trackPx / 2f),
@@ -655,13 +659,21 @@ private fun FxSlider(
     }
 }
 
-/** One band's measured level, beside its fader: a 4 dp bar over −60..0 dBFS. */
+/**
+ * One band's measured level, beside its fader: a 6 dp groove over −60..0 dBFS.
+ *
+ * The groove is the HAIRLINE, not the card's own well: on Encre, `s2` on a glass
+ * card is invisible, and a fader resting at 0 shown as a lone white knob read as
+ * a stray dot in the emulator capture (MB1's `NzFader` draws its own track in
+ * `s2`). This bar gives the column a visible rail at every value, and the level
+ * fills it from the bottom.
+ */
 @Composable
 private fun FxLevelBar(level: Float, modifier: Modifier = Modifier) {
     val colors = Sillon.colors
-    Canvas(modifier.width(4.dp)) {
+    Canvas(modifier.width(6.dp)) {
         val radius = CornerRadius(size.width / 2f)
-        drawRoundRect(color = colors.s2, size = size, cornerRadius = radius)
+        drawRoundRect(color = colors.ln, size = size, cornerRadius = radius)
         val v = level.coerceIn(0f, 1f)
         val height = size.height * v
         drawRoundRect(
