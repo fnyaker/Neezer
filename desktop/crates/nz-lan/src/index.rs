@@ -425,7 +425,9 @@ impl Index {
             )
         };
         if changed {
-            let _ = self.inner.events.send(version);
+            // `send_replace`: the version must stick for a peer (or a screen) that
+            // subscribes after the change, not only wake the ones already there.
+            self.inner.events.send_replace(version);
         }
         if changed || sets_changed {
             debug!(
@@ -477,7 +479,11 @@ impl Index {
     /// Announces that one file was hashed (the hashing worker).
     pub(crate) fn note_hashed(&self) {
         let next = self.inner.hashed.borrow().wrapping_add(1);
-        let _ = self.inner.hashed.send(next);
+        // `send_replace`, never `send`: a `watch::Sender::send` FAILS — and keeps
+        // the old value — while no receiver is subscribed, so the first hash (or
+        // the first inventory change, see `refresh`) would be lost for every
+        // subscriber that arrives afterwards. A counted signal must stick.
+        self.inner.hashed.send_replace(next);
     }
 
     /// How many SQL statements this index issued since it was built: the

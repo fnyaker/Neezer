@@ -1290,7 +1290,7 @@ this file's header, not to this lot.
   | inventory memory | **48 B/item**, 384 KB for 8 000 tracks (cap 64 B) | same run (`Index::memory`) |
   | hashing throughput | **1 778 MB/s** on 64 MiB (release, SHA-NI) | `cargo test -p nz-lan --release --test serve hashing_reaches -- --nocapture` |
   | hashing niceness | **+10** on `nz-lan-hash`, read back from `/proc/self/task/<tid>/stat` | `cargo test -p nz-lan --lib the_worker_hashes` |
-  | the crate's tests | **71 passed** (53 unit + 18 acceptance) | `cargo test -p nz-lan` |
+  | the crate's tests | **72 passed** (53 unit + 19 acceptance) | `cargo test -p nz-lan` |
   | a `Bulk` serve that waits for the person | ~1.1 s per test run (the gate's 1 s quiet) | `cargo test -p nz-lan --test serve a_bulk_serve_waits` |
   | the refusal's size | `{"t":"NotFound"}`, 18 bytes, for absent AND unshared | `cargo test -p nz-lan --test serve an_out_of_scope_request` |
   | `clippy -D warnings` on the crate | clean, `--all-targets` | `cargo clippy -p nz-lan --all-targets -- -D warnings` |
@@ -1307,7 +1307,7 @@ this file's header, not to this lot.
   | M6: no serve budget (99 of each) | `the_third_concurrent_play_is_busy_and_the_slot_comes_back` |
   | M7: a `Bulk` serve does not wait on the node's gates | `a_bulk_serve_waits_while_a_user_request_is_in_flight` |
   | M8: a set is advertised whatever its members' scope | `a_friend_sees_only_the_sets_they_can_see_whole` |
-  | M9: a file that cannot be read is re-attempted at once | `an_unreadable_file_is_not_retried_in_a_loop` |
+  | M9: a file that cannot be read is re-attempted at once | `an_unreadable_file_is_not_retried_in_a_loop` (never reaches `Idle`) |
 
 - **A residual, stated**: a `Cover` answer takes no serve slot and no lane, because the `Cover` frame
   carries no `Urgency` (LN0's shape, final) — the responder cannot tell a list's art from a tap's.
@@ -1329,6 +1329,19 @@ this file's header, not to this lot.
     file is a core kept for its length; taking it per 1 MiB tile is a mutex and a `Notify` per
     megabyte when nobody waits, and a real pause the moment the person taps something — 1 778 MB/s
     measured still, so the yield costs nothing measurable.
+  - **`watch::Sender::send` LOSES the value when no receiver is subscribed.** Not "wakes nobody":
+    it fails and keeps the previous value, so the first inventory version (and the first hashed
+    file) were invisible to every subscriber that arrived afterwards — a peer that connects after a
+    refresh would never hear about it, and the CI flake that exposed it was my own test waiting on a
+    count that had been thrown away. `send_replace` is the call that stores and wakes; every signal
+    this crate publishes (`events`, `hashed`, `attempts`, the hashing state) uses it. The regression
+    test is `a_version_bumped_before_any_subscriber_is_still_seen`.
+  - **Never wait on a TRANSIENT state after starting a worker.** `Hashing`/`Idle` last microseconds;
+    a test that subscribes a tick late waits for ever (2 runs in 5 on a loaded runner, 44 in 60
+    pinned to one CPU). A test waits on a MONOTONIC counter (`Hashing::attempts`, or a sticky state)
+    that cannot be missed, and proves "no loop" by the worker reaching `Idle` — a spinning worker
+    only ever announces `Hashing` again. Verified: 200 runs pinned to one CPU and 200 unpinned, 0
+    failures; the mutant fails in every run.
   - **A worker that cannot do a job must remember that.** The first hashing loop re-listed a file it
     had just failed to open (a `chmod 000` copy, a full disk on the tag write) and re-attempted it in a
     tight loop — a core at 100 % for a file nobody can read, the exact thing rule 1 forbids. The

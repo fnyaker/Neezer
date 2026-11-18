@@ -1256,6 +1256,50 @@ fn a_cover_over_the_answer_cap_is_not_served() {
 
 // --- hashing: the pause, and the yield --------------------------------------
 
+/// The version and the hash counter STICK: a subscriber that arrives after the
+/// change still sees it.
+///
+/// This is the bug a CI flake led to: `watch::Sender::send` fails (and keeps the
+/// old value) while no receiver is subscribed, so a version bumped before any
+/// peer (or test) subscribed was lost for ever. `send_replace` is the one that
+/// stores the value whatever the receivers are doing.
+#[tokio::test]
+async fn a_version_bumped_before_any_subscriber_is_still_seen() {
+    let fixture = Fixture::new("version-sticks");
+    fixture.download("a", nz_model::Quality::Flac, b"a");
+    let index = fixture.index();
+    // No subscriber exists for either channel at this point.
+    index.refresh();
+    assert_eq!(index.version(), 1);
+    assert_eq!(index.sets_version(), 1);
+
+    // Subscribing afterwards reads the value instead of waiting for ever.
+    let events = index.events();
+    assert_eq!(*events.borrow(), 1, "the inventory version stuck");
+    let hashed = index.hashed();
+    assert_eq!(*hashed.borrow(), 0);
+
+    let worker = nz_lan::hashing::Hashing::start(index.clone(), fixture.store.clone());
+    let mut hashed = index.hashed();
+    let mut attempts = worker.attempts();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        attempts.wait_for(|count| *count >= 1),
+    )
+    .await
+    .expect("the worker tried the file")
+    .expect("the attempts channel");
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        hashed.wait_for(|count| *count >= 1),
+    )
+    .await
+    .expect("the hash counter fired")
+    .expect("the hash channel");
+    worker.stop();
+    assert_eq!(*index.hashed().borrow(), 1);
+}
+
 /// A hashed file: its tag, the length/mtime pair that makes the next boot skip it,
 /// and the `nice +10` thread. (`hashing`'s unit tests hold the rule and the join;
 /// this one holds the END of the story: the tag a `Fetch` announces.)
@@ -1354,10 +1398,13 @@ fn hashing_waits_while_a_user_request_is_in_flight() {
         Arc::clone(&gates),
     );
     let mut state = worker.state();
-    // A WATCHDOG, not a wait: the correct worker reports `Waiting` within
-    // microseconds of starting, so this only fires on a worker that ignores the
-    // gate (the mutant this test was run against) — and it then says so instead of
-    // hanging the run.
+    // `Waiting` is a TRANSIENT state, and waiting for one after starting a worker
+    // is a race (see `hashing`'s own "tried exactly once" test, which counts
+    // attempts for that reason). It is safe HERE for one reason: the `User` guard
+    // above is held before the worker starts, so a `Bulk` slot cannot be admitted
+    // and `Waiting` PERSISTS until this test releases it. The watchdog below only
+    // fires on a worker that ignores the gate — the mutant this test was run
+    // against — and then says so instead of hanging the run.
     match runtime.block_on(async {
         tokio::time::timeout(
             Duration::from_secs(10),

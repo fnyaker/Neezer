@@ -85,6 +85,11 @@ pub enum HashState {
 pub struct Hashing {
     stop: Arc<Stop>,
     state: watch::Receiver<HashState>,
+    /// How many files this worker has tried, success or failure: a MONOTONIC
+    /// counter, which is the one signal a test can wait on without racing a
+    /// transient state (a worker that finishes before the waiter subscribes still
+    /// leaves its count at 1).
+    attempts: watch::Receiver<u64>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -149,11 +154,12 @@ impl Hashing {
     ) -> Hashing {
         let stop = Stop::new();
         let (states, state) = watch::channel(HashState::Idle);
+        let (attempts, attempts_seen) = watch::channel(0u64);
         let thread = {
             let stop = Arc::clone(&stop);
             thread::Builder::new()
                 .name("nz-lan-hash".to_owned())
-                .spawn(move || run(index, store, gates, stop, states))
+                .spawn(move || run(index, store, gates, stop, states, attempts))
                 .ok()
         };
         if thread.is_none() {
@@ -162,13 +168,25 @@ impl Hashing {
         Hashing {
             stop,
             state,
+            attempts: attempts_seen,
             thread,
         }
     }
 
     /// What the worker is doing (a screen line, and the event a test waits on).
+    ///
+    /// `Idle`/`Hashing` are TRANSIENT: a waiter that subscribes after the fact has
+    /// missed them, so a test that must know "how many files were tried" reads
+    /// [`Hashing::attempts`] instead.
     pub fn state(&self) -> watch::Receiver<HashState> {
         self.state.clone()
+    }
+
+    /// How many files this worker has tried (a success or a failure), as a live
+    /// MONOTONIC count — the signal the acceptance test waits on, and a number a
+    /// Réglages line can print.
+    pub fn attempts(&self) -> watch::Receiver<u64> {
+        self.attempts.clone()
     }
 
     /// Stops the worker and JOINS its thread.
@@ -204,6 +222,7 @@ fn run(
     gates: Option<Arc<nz_api::lanes::Gates>>,
     stop: Arc<Stop>,
     states: watch::Sender<HashState>,
+    attempts: watch::Sender<u64>,
 ) {
     lower_priority();
     // The worker's OWN runtime, owned by this thread: `Gates::acquire` awaits a
@@ -234,7 +253,7 @@ fn run(
             pending_paths(&index, &tags, &failed)
         };
         if pending.is_empty() {
-            let _ = states.send(HashState::Idle);
+            states.send_replace(HashState::Idle);
             let stopped = runtime.block_on(async {
                 tokio::select! {
                     _ = events.changed() => false,
@@ -251,6 +270,14 @@ fn run(
             if stop.stopped() {
                 return;
             }
+            // Counted BEFORE the attempt, and monotonically: a worker that fails
+            // on a file still leaves its mark, which is what makes "tried exactly
+            // once" provable after the fact instead of only observable live.
+            let tried = attempts.borrow().wrapping_add(1);
+            // `send_replace`, not `send`: `send` FAILS (and stores nothing) when
+            // every receiver has been dropped, which is exactly the state a
+            // freshly built channel is in until somebody subscribes.
+            attempts.send_replace(tried);
             match hash_one(
                 &index,
                 &store,
@@ -337,7 +364,7 @@ fn hash_one(
 ) -> Outcome {
     // "A file is being worked on" starts with the open, not with the first tile: a
     // file this process may not read is still an attempt, and the state says so.
-    let _ = states.send(HashState::Hashing);
+    states.send_replace(HashState::Hashing);
     let Ok(meta) = fs::metadata(path) else {
         // Gone between the inventory and here: nothing to hash, and nothing to
         // remember (the next refresh takes it out of the index).
@@ -363,15 +390,15 @@ fn hash_one(
         // is where the worker waits.
         let _slot = match gates {
             Some(gates) => {
-                let _ = states.send(HashState::Waiting);
+                states.send_replace(HashState::Waiting);
                 let Some(slot) = wait_for_gate(gates, runtime, stop) else {
                     return Outcome::Stopped;
                 };
-                let _ = states.send(HashState::Hashing);
+                states.send_replace(HashState::Hashing);
                 Some(slot)
             }
             None => {
-                let _ = states.send(HashState::Hashing);
+                states.send_replace(HashState::Hashing);
                 None
             }
         };
@@ -629,27 +656,27 @@ mod tests {
         assert_eq!(index.tracks(), 1, "the file is in the inventory");
 
         let worker = Hashing::start(index.clone(), store.clone());
-        let mut state = worker.state();
+        // Wait on the Attempts COUNT, never on `HashState`: `Hashing`/`Idle` are
+        // transient, so a waiter subscribing a microsecond late misses them and
+        // waits for ever (this test failed 2 runs in 5 that way). The count is
+        // monotonic and stays at its last value, so it cannot be missed.
+        let mut attempts = worker.attempts();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
-        // It announces the attempt, then gives up on it and goes idle: two events,
-        // no clock read (the watchdogs only fire on a worker that spins).
-        for wanted in [HashState::Hashing, HashState::Idle] {
-            match runtime.block_on(async {
-                tokio::time::timeout(
-                    Duration::from_secs(10),
-                    state.wait_for(|state| *state == wanted),
-                )
-                .await
-            }) {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => panic!("the worker's state channel closed: {error}"),
-                Err(_) => panic!("the worker never reached {wanted:?}: it is spinning"),
-            }
-        }
+        runtime
+            .block_on(attempts.wait_for(|count| *count >= 1))
+            .expect("the worker tried the file");
+        // `stop` joins the thread; a worker that re-listed the unreadable file
+        // would have counted more than once by then (the mutant fails HERE, at
+        // once, not after a timeout).
         worker.stop();
+        assert_eq!(
+            *attempts.borrow(),
+            1,
+            "an unreadable file is tried exactly once, never in a loop"
+        );
         assert!(
             store.tag(&published).is_none(),
             "a file that cannot be read has no tag"
