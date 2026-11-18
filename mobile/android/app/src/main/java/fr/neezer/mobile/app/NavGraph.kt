@@ -18,9 +18,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.filter
 import androidx.navigation.NavDestination
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -170,6 +173,18 @@ fun NzApp(graph: AppGraph) {
 
     val backStackEntry by nav.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination
+
+    // A link that STARTED the app (a shared `neezer://` view, a post's link) is
+    // kept by the graph until the `NavHost` has a graph — `attach` cannot open it,
+    // the graph does not exist yet and `getGraph()` throws (the app died on a cold
+    // start). This effect runs AFTER that composition and on every route change,
+    // so the intent that opened the app and one that arrives during the first
+    // frames (`onNewIntent`) take the same door.
+    LaunchedEffect(nav) {
+        snapshotFlow { nav.currentBackStackEntry != null }
+            .filter { it }
+            .collect { graph.openPendingLink() }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 640.dp

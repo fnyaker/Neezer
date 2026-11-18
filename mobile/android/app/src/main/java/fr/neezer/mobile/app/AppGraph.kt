@@ -29,20 +29,42 @@ class AppGraph(private val application: Application) : NzNavigator {
 
     fun attach(navController: NavHostController) {
         controller = navController
-        pendingLink?.let { url ->
-            pendingLink = null
-            openLink(url)
-        }
+        // NOTHING is navigated here: `attach` runs at the top of the shell's
+        // composition, BEFORE the `NavHost` composes — its graph does not exist
+        // yet, and `NavController.getGraph()` throws
+        // (`IllegalStateException: You must call setGraph() before calling
+        // getGraph()`), killing the app on a cold start from a shared link.
+        // [openPendingLink] runs once, from the shell, after the graph exists.
     }
 
     /**
      * Keeps a link that arrived from an `Intent` (a share sheet's text, a
-     * `neezer://` view). Opening it now would find no `NavHost` on a cold start,
-     * so it waits for [attach].
+     * `neezer://` view). It waits for a controller whose graph is really there,
+     * which on a cold start is after the `NavHost`'s first composition — so the
+     * intent that STARTED the app and one that arrives during the first frames
+     * (`onNewIntent`) take the same door.
      */
     fun openLinkLater(url: String) {
-        if (controller == null) pendingLink = url else openLink(url)
+        if (graphReady()) openLink(url) else pendingLink = url
     }
+
+    /**
+     * Opens the link a cold start kept, once the shell's `NavHost` has a graph.
+     * Called from the shell's own effect (after `NavHost`), so the graph is
+     * there; a composition that has not reached it yet simply leaves the link
+     * pending for the next call.
+     */
+    fun openPendingLink() {
+        val url = pendingLink ?: return
+        if (!graphReady()) return
+        pendingLink = null
+        openLink(url)
+    }
+
+    /** Whether a controller exists AND has its graph (never throws on a cold start). */
+    private fun graphReady(): Boolean = runCatching {
+        controller?.currentBackStackEntry != null
+    }.getOrDefault(false)
 
     /** The app's version, as the launcher shows it (Aide and the diagnostic log). */
     fun appVersion(): String = runCatching {
