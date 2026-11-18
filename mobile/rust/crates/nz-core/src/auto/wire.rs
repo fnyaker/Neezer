@@ -81,7 +81,7 @@ pub(super) fn items(body: &str, request: Request) -> Result<Vec<Item>, CoreError
             // The person's own lists first, then the ones shared with them, each
             // in the server's own order (see the module's "Ordering of the
             // playlists": the pinned-first rule waits for MB24's pin store).
-            playlists.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
+            playlists.sort_by_key(|playlist| order_key(playlist));
             Ok(playlists.into_iter().map(Item::playlist).collect())
         }
         Request::Playlist => {

@@ -138,7 +138,10 @@ async fn a_browse_asks_once_then_reads_the_device_copy() {
         .into_iter()
         .find(|row| row.tag == TAG_AUTO)
         .expect("le tag auto");
-    assert_eq!(stats.requests, 1, "une lecture froide = une requête comptée");
+    assert_eq!(
+        stats.requests, 1,
+        "une lecture froide = une requête comptée"
+    );
     assert!(stats.bytes_in > 0, "et ses octets");
     core.shutdown();
 }

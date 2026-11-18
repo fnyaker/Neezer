@@ -4366,53 +4366,98 @@ Fin : branche <ta-branche>/mb24, PR « feat(mobile): MB24 car mode on the native
 rebase + diff --stat, merge, section MB24 réécrite, `ao report --done`.
 ```
 
-### MB25 — Android Auto (wave 4)
+### MB25 — Android Auto (delivered 2026-11-18)
 
-**Goal.** A head unit browses and plays Neezer (added value; free once MB3c exists).
-**Depends on**: MB3c. **Exclusive files**: `playback/src/main/java/fr/neezer/mobile/playback/auto/**`,
-`nz-ffi/src/auto.rs`.
-**Contract.** `AutoLibraryTree : LibraryTree` registered at service start: root → Favoris, Playlists
-(the person's, pinned first), Mon Flow, Récents, Téléchargements; stable media ids (`kind:id`), ≤ 100
-children per node, artwork through `cover_path`; `auto.rs`: `auto_children(parent) -> Vec<AutoItem>`
-(cached first, `Prefetch` lane — never `User`, the phone's screen comes first) and `auto_play(media_id)`.
-**Acceptance.** With the Desktop Head Unit (DHU, from the SDK's extras, run headless) or Media3's
-`MediaBrowser` test client: the tree browses, a playlist plays, the browse costs ≤ 1 request per node
-(0 warm). Documented: a sideloaded app needs Android Auto's "Unknown sources" developer setting.
+**What landed.** A head unit browses and plays Neezer through MB3c's
+`MediaLibrarySession`: five nodes (`Favoris`, `Playlists`, `Mon Flow`, `Récents`,
+`Téléchargements`), a playlist's tracks, and titles that play through the SAME
+player as the phone's. The tree is Rust's (`nz-core/src/auto/`), `nz-ffi/src/
+auto.rs` is the record boundary (`AutoItem`, `AutoPlay`), and `playback/.../
+auto/**` is the Media3 glue: `AutoNode` (ids, "is this a node?"), `AutoItems`
+(row → `MediaItem` carrying `NzPlayer`'s extras), `AutoLibraryTree` (paint from
+the device, refresh behind, `notifyChildrenChanged`), `AutoLibrary` (register and
+play).
 
-```text
-Tu es le worker du lot MB25 (Android Auto) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« MB25 », « Rule 1 », « Worker rules ») et la doc Media3 MediaLibraryService /
-Android for Cars.
-Objectif : l'arbre de navigation Auto (Favoris, Playlists, Mon Flow, Récents, Téléchargements) servi
-par Rust sur la voie Prefetch, la lecture d'un élément, selon la section MB25.
-Fichiers à toi seul : mobile/android/playback/src/main/java/fr/neezer/mobile/playback/auto/** et
-nz-ffi/src/auto.rs.
-Acceptation : navigation et lecture via DHU sans affichage ou client MediaBrowser de test ; ≤ 1 requête
-par nœud (0 à chaud) ; la note « Unknown sources » écrite.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb25, PR « feat(mobile): MB25 Android Auto browse tree », CI verte, rebase +
-diff --stat, merge, section MB25 réécrite, `ao report --done`.
-```
+**The cost, node by node** — measured at a fake server that logs every request
+and its lane (`nz-core/src/auto/tests.rs`):
+
+| Node | Browse | Play |
+|---|---|---|
+| `neezer:root` | **0** (static) | — |
+| Favoris | 1 cold, **0** warm, 100 rows of 4 000 | 0 — the rows it showed ARE the queue |
+| Playlists | 1 cold, 0 warm (own lists first, then shared) | — (a folder) |
+| `neezer:playlist:<id>` | 1 cold, 0 warm | 0 when browsed, 1 on `User` when not |
+| `neezer:flow` | — (playable only) | 0 — the player's `PlayEntity("flow")` asks each title |
+| Récents | 1 cold, 0 warm (one row per title, newest first) | 0 |
+| Téléchargements | **0 ever** (the device's own store) | 0 |
+
+"Warm" is the copy in `cacheDir/neezer/auto` (≤ 100 rows per node, 15 minutes
+fresh). A browse that does not need the network runs on the `Prefetch` lane — the
+fake asserts `X-NS-Background: 1` — and only a tap on a node the device has never
+seen asks on `User`. That is rule 1 in both directions, and it is why the tree is
+not a screen.
+
+**What a measurement taught** (rules a later lot inherits):
+
+- **Media3's default `onAddMediaItems` refuses every row this app has.**
+  `MediaSession.Callback.onAddMediaItems` fails with
+  `UnsupportedOperationException` on a `MediaItem` without a `LocalConfiguration`
+  (read from the shipped `media3-session-1.10.1` bytecode), and a browse-tree row
+  is exactly that: the stream lives in Rust, not behind a URI. `onSetMediaItems`
+  must therefore hand the tree's own titles to the player unchanged, and a NODE
+  must be expanded by us. A head unit that "cannot play this item" is this rule,
+  not a network fault.
+- **An empty `MediaItemsWithStartPosition` is how a direct command keeps the
+  queue.** `NzPlayer.handleSetMediaItems` ignores an empty list (MB3c), so
+  `AutoLibrary.play` can send `PlayEntity` to the ONE player and answer "nothing
+  for Media3 to set" — the queue the car then sees is the player's own.
+- **`MediaBrowser` takes its library listener on the BUILDER.** `addListener`
+  only accepts a `Player.Listener`: a `MediaBrowser.Listener` passed there does
+  not compile (the compiler asks for `Player.Listener`), and `setListener(...)`
+  on the builder is the only way to receive `onChildrenChanged` — which is how a
+  node says "j'ai plus".
+- **`MediaMetadata.isPlayable` is a `java.lang.Boolean` FIELD**, so Kotlin sees
+  `Boolean?`: `isPlayable == true`, never `isPlayable`. And JUnit 4's message goes
+  FIRST (`assertEquals(message, expected, actual)`). Two facts, three compile
+  errors, all invisible until the module built.
+- **A lane is chosen in `nz-core`, not in `nz-ffi`.** `nz-ffi` depends on
+  `nz-core` alone, and `nz-core` re-exports neither `nz_api::Lane` nor
+  `nz_model`, so a module that must ask on `Prefetch` cannot live there: the tree
+  is `nz-core/src/auto/` and `nz-ffi/src/auto.rs` only converts — the shape every
+  other area already has, with ONE `pub mod auto;` line in `nz-core/src/lib.rs`
+  (declared outside the lot's file list).
+- **The downloads' names need no service.** MB15 keeps a title's label under
+  `offline.set.<ctx>` in the same `kv` (`KEY_SETS`/`KEY_SET_PREFIX` are `pub`), so
+  a car that started the process — no offline screen, no worker, no network —
+  still shows « Titre » instead of « deezer:1234 ». The labels are read in ONE
+  pass over the sets, never a statement per row.
+- **Pinned playlists wait for MB24.** "The person's, pinned first" needs the car
+  overlay's pin store, which MB24 owns and no lot had written when this one
+  landed: the order is the person's own lists first, then the ones shared with
+  them, each in the server's order. Declared here so nobody reads the absence as
+  a bug.
+- **A test binary's neighbours matter.** `cargo test -p nz-core -p nz-ffi` runs
+  two binaries at once and starved MB3b's `three_slow_streams_step_the_quality_
+  down_to_64` (it passes alone and in `-p nz-core`); a timing-sensitive player
+  test is not evidence of a regression when the same commit passes in its own
+  crate.
+
+**Measured.** `cargo test -p nz-core auto::` = **10 tests, all green** (the counts
+above, the 100-row cap from a 120-row answer, the 15-minute expiry aged through
+the copy's mtime instead of a sleep, hostile ids refused, the play plans);
+`cargo test -p nz-ffi` = **2 new** (the root's five rows and a French cause
+crossing the boundary); `:playback:testDebugUnitTest` = **5 new** (ids, kinds,
+"is this a node?", paging); `clippy -D warnings` and `cargo fmt --check` clean on
+both crates.
+
+**Files.** `mobile/rust/crates/nz-core/src/auto/**` (mod, wire, store, testing,
+tests), `mobile/rust/crates/nz-ffi/src/auto.rs`,
+`mobile/android/playback/src/main/java/fr/neezer/mobile/playback/auto/**`,
+`mobile/android/playback/src/test/.../auto/AutoNodeTest.kt`,
+`mobile/android/playback/src/androidTest/.../auto/AutoBrowseTest.kt`, and — outside
+the lot's list, declared in the PR — `nz-core/src/lib.rs` (one `pub mod auto;`)
+and `playback/.../NzMediaService.kt` (the tree is registered once the session
+exists, and `onSetMediaItems` recognises a node id and the tree's own titles).
 
 ### MQ2 — The whole journey, measured (wave 5)
 

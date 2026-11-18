@@ -239,7 +239,7 @@ impl Item {
     /// One playlist of the person's library.
     fn playlist(card: &Playlist) -> Item {
         Item {
-            media_id: playlist_media_id(&card.id.to_string()),
+            media_id: playlist_media_id(card.id.as_ref()),
             title: card.title.clone(),
             subtitle: count_label(card.nb_tracks),
             kind: Kind::Playlist,
