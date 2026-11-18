@@ -3480,10 +3480,8 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   does, what it measured, and the one line of MB16's screen it had to change.
 - **MB19 — Remote control.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
   port: see « MB19 — Télécommande » below.*
-- **MB20 — Listen party** [SC6, MB3b]. FFI (`party.rs`): `PartyApi` over `nz-party` (host, join
-  `/party/<id>`, leave, members). The guest's sync reads `Engine::output_clock()` (SC2's latency).
-  Kotlin: `PartyButton()`, `PartySheet`, `PartyEntry(id)`. Rows: two emulators (one host, one guest)
-  on perf_api: the guest's position stays within the SPA's tolerance (party-remote.md) for 5 min.
+- **MB20 — Soirée d'écoute**: **delivered** — see *MB20 — Soirée d'écoute* below for what it does,
+  what it measured and what it does not port.
 - **MB21 — Visualiser: bars and oscilloscope** [SC1, MB3b]. FFI (`viz.rs`): `VizApi { set_visible(view,
   bool), frame() -> VizFrame /* bars heights, scope samples, palette */ }` over `nz-analysis` + `nz-viz`
   (the tap runs only while a view is visible). Kotlin: `VizSurface(mode)` on a Compose `Canvas`
