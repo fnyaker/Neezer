@@ -411,11 +411,11 @@ fn the_party_costs_the_pages_requests_and_never_more() {
             .expect("the server answers");
         core.login("bench", "Bench1").await.expect("the session");
         server.forget();
-        let player = crate::player::Player::open(Arc::clone(&core)).expect("the player");
-        let party = party::attach(&core, Some(Arc::clone(&player)));
-        (party, player)
+        // No player yet: the card, the copy, the dead link, the probe and the
+        // offline verdict need none, and a `Player` owns two runtimes and five
+        // threads — a full `cargo test` runs this beside 400 other tests.
+        party::attach(&core, None)
     });
-    let (party, player) = party;
 
     // --- the landing card, cold: ONE request, and its bytes.
     runtime.block_on(async {
