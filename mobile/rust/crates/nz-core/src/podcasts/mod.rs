@@ -76,8 +76,8 @@ use crate::lists::Row;
 use crate::player::EpisodeProgress;
 
 pub use text::{
-    batch_options, chapter_count_label, chapter_label, fold_text, highlight_parts, language_label,
-    page_info, reason_text, PageInfo, TextPart,
+    PageInfo, TextPart, batch_options, chapter_count_label, chapter_label, fold_text,
+    highlight_parts, language_label, page_info, reason_text,
 };
 pub use views::{
     ChapterCard, Chapters, EpisodeCard, Marker, Position, Segment, ShowCard, ShowPage, ShowSearch,
@@ -181,7 +181,7 @@ impl Core {
         let mut shows = self.cached_podcasts().unwrap_or_default();
         shows.retain(|show| show.id != card.id);
         shows.push(card.clone());
-        shows.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
+        shows.sort_by_key(|show| show.title.to_lowercase());
         write_shows(self, &shows);
         Ok(card)
     }

@@ -396,10 +396,10 @@ pub fn chapter_at(chapters: &[ChapterCard], seconds: f64) -> Option<(usize, &Cha
     }
     let index = best?;
     let chapter = &chapters[index];
-    if let Some(end) = chapter.end {
-        if seconds >= f64::from(end) {
-            return None;
-        }
+    if let Some(end) = chapter.end
+        && seconds >= f64::from(end)
+    {
+        return None;
     }
     Some((index, chapter))
 }

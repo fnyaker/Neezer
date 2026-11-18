@@ -31,10 +31,7 @@ pub(super) fn all(core: &Core) -> BTreeMap<String, Vec<Marker>> {
 
 /// One episode's markers, in position order.
 pub(super) fn for_episode(core: &Core, episode_id: &str) -> Vec<Marker> {
-    all(core)
-        .remove(episode_id)
-        .map(|markers| sorted(markers))
-        .unwrap_or_default()
+    all(core).remove(episode_id).map(sorted).unwrap_or_default()
 }
 
 /// Replaces one episode's list (the answer to `GET /api/podcast/<id>/markers`

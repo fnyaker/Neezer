@@ -435,12 +435,12 @@ fn shows_body() -> String {
 }
 
 fn subscribed_body() -> String {
-    format!(
-        r#"{{"id":"7c7f9b1e-0000-4000-8000-000000000002","deezer_id":"9400003",
+    String::from(
+        r#"{"id":"7c7f9b1e-0000-4000-8000-000000000002","deezer_id":"9400003",
             "title":"Nouveau podcast","description":"","cover":null,"subscribed":true,
             "local":false,"status":"ok","episode_count":3,"archived_count":0,
             "auto_archive":false,"auto_transcribe":false,"transcribe_language":"auto",
-            "episodes":[],"next":null}}"#
+            "episodes":[],"next":null}"#,
     )
 }
 

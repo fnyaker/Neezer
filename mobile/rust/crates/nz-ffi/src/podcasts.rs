@@ -256,7 +256,11 @@ impl From<&EpisodeCard> for EpisodeData {
             channel_title: episode.channel_title.clone(),
             transcript: episode.transcript.as_ref().map(TranscriptInfoData::from),
             position: episode.position.as_ref().map(EpisodePositionData::from),
-            markers: episode.markers.iter().map(EpisodeMarkerData::from).collect(),
+            markers: episode
+                .markers
+                .iter()
+                .map(EpisodeMarkerData::from)
+                .collect(),
             about: episode.about(),
             row: TrackRow::from(episode.to_row(0)),
         }
@@ -617,7 +621,11 @@ impl Screens {
 
     /// `GET /api/search/podcasts?q=` — the provider's catalogue, one request.
     pub async fn search_podcasts(&self, q: String) -> Result<Vec<ShowData>, NzError> {
-        let shows = self.core().search_podcasts(&q).await.map_err(NzError::from)?;
+        let shows = self
+            .core()
+            .search_podcasts(&q)
+            .await
+            .map_err(NzError::from)?;
         Ok(shows.iter().map(ShowData::from).collect())
     }
 
@@ -666,12 +674,7 @@ impl Screens {
 
     /// The episodes `start..start+count` this device holds, for the rows a
     /// windowed list is about to draw. **No request**: the page is already in.
-    pub fn podcast_episode_cards(
-        &self,
-        id: String,
-        start: u32,
-        count: u32,
-    ) -> Vec<EpisodeData> {
+    pub fn podcast_episode_cards(&self, id: String, start: u32, count: u32) -> Vec<EpisodeData> {
         self.core()
             .episode_cards(&id, start, count)
             .iter()
