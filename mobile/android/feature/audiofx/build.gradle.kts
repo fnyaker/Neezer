@@ -16,6 +16,8 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.minSdk.get().toInt()
+        // The device capture runs as an instrumented test on the emulator.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -76,6 +78,14 @@ dependencies {
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation("androidx.activity:activity-compose:1.11.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // --- device test: the real card on the emulator, for the capture ----------
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation("androidx.activity:activity-compose:1.11.0")
 }
 
 // The screenshot test writes the PNGs the lot commits under

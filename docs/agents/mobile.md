@@ -3448,12 +3448,13 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
 - **MB9 — Playlist.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
   port: see « MB9 — Playlist » below.*
 - **MB11 — Now playing — DELIVERED 2026-11-18.** See *MB11 — Now playing (delivered)* below.
-- **MB12 — Audio effects** [MB3b]. FFI (`audiofx.rs`): EQ presets list, meter frames (only while the
-  card is visible — `VizApi` tap), output verdicts per connection. Kotlin: `AudioFxSections()` (EQ
-  picker + meter + ten VERTICAL faders, bass, mono/balance, crossfade, trim, normalisation, the
-  volume warning with its peak-hold rule), `AudioManager` device callback → `PlayerApi::set_route`
-  (`AudioRoute.kt`'s ranking ported). Rows: moving a fader changes the sound within one buffer
-  (measured on the sink), the meter stops (0 analysis CPU) when the card leaves.
+- **MB12 — Audio effects — DELIVERED 2026-11-18.** See *MB12 — Audio effects (delivered)* below.
+  FFI (`audiofx.rs`): EQ presets list, meter frames (only while the card is visible — its own
+  counted tap subscription, see the tap contract below), output verdicts per connection. Kotlin:
+  `AudioFxSections()` (EQ picker + meter + ten VERTICAL faders, bass, mono/balance, crossfade, trim,
+  normalisation, the volume warning with its peak-hold rule), `AudioManager` device callback →
+  `PlayerApi::set_route` (`AudioRoute.kt`'s ranking ported). Rows: moving a fader changes the sound
+  within one buffer (measured on the sink), the meter stops (0 analysis CPU) when the card leaves.
 - **MB13 — Podcasts** [MB3b]: **delivered** — see *MB13 — Podcasts* below for what it does and what it
   measured. FFI (`podcasts.rs`): subscriptions, search/subscribe by URL, show by UUID or Deezer id,
   episodes (cursor), progress, auto-archive, markers, chapters, transcript (+ search,
@@ -3941,6 +3942,148 @@ CI's sake, the desktop's own `nz-remote::host` + `nz_player` as the controlled p
 - The SPA's whole-app read-only browsing at `read` level: the SERVER enforces the four levels, and
   every screen already reads through the owner's session, so a `read` loan browses the owner's
   library with MB5–MB9's screens unchanged. Nothing extra to port.
+=======
+### MB12 — Audio effects (delivered 2026-11-18)
+
+**What landed.** The SPA's whole effects card on the phone's own player, and the one measurement
+seam the later visualiser builds on.
+
+- **`nz-core/src/audiofx/`**: `risk.rs` (the four saturation thresholds, `eqRisk`, the peak-hold
+  episode, the French readout, the recommended cut), `presets.rs` (the five built-in curves, a
+  preset's identity, what "Mettre à jour" may write, the one-row-per-name save), `pan.rs` (the
+  spec's equal-power law and mono down-mix, defensive stored values), `output.rs` (the route and its
+  connection, the per-connection verdict with its doubling backoff, the probe, the six windows that
+  clear it), `meter.rs` (the band plan, a 4 096-point Blackman transform, the 25 Hz session whose
+  thread exists only while the card does), and `mod.rs` (`FxSettings`, the SPA's `kv` keys, the
+  mapping onto `AudioSettings`, the presets, the verdicts, the meter's start).
+- **`nz-ffi/src/audiofx.rs`**: `FxState`, `FxMeterFrame`, `FxPreset`, `FxVerdict`, the
+  `AudioFxListener`, and the setters — as `#[uniffi::export] impl PlayerApi` blocks, which UniFFI
+  merges into the one Kotlin class the screen already holds. **No method of this file touches the
+  network.**
+- **`feature/audiofx/`**: `AudioFxSections()` (Sortie audio, Mono et balance, Audio, Égaliseur with
+  its presets/meter/ten vertical faders, Transitions), `AudioFxModel` over an `AudioFxBackend` port
+  (the JVM tests drive every control), `AudioRouteWatcher` (`AudioRoute.kt`'s ranking, ported), and
+  the French copy in one file.
+
+**The shared additions this lot needed** (each approved by the orchestrator, each declared in the
+PR, both `desktop.yaml` and `mobile.yaml` green):
+
+- **`android/nscore/src/dsp.rs`**: `Chain::set_meter(bool)` / `Chain::meter() -> ChainMeter`
+  (`peak_db`, `reduction_db`), additive. The two numbers the SPA's meter needs — the PRE-limiter
+  peak and the limiter's own reduction — were already computed frame by frame and thrown away.
+- **`nz-audio/src/tap.rs`**: the tap became a COUNTED SUBSCRIPTION
+  (`Engine::subscribe_tap() -> Option<TapSubscription>`, `MAX_TAP_READERS = 3`, the legacy
+  `Engine::tap()` unchanged as slot 0). **This is the contract MB21 codes against** — see *The tap
+  contract* below.
+- **`nz-audio/src/engine.rs`, `mixer.rs`, `dsp.rs`**: `Engine::set_meter`, `Engine::chain_meter`,
+  `MixerCmd::Meter`, `MixerCmd::TapAttach`, and the two atomics the callback publishes into.
+- **`nz-core/src/player/mod.rs`**: `Player::subscribe_tap`, `Player::set_meter`,
+  `Player::chain_meter` (the same three, for a lot that holds the player rather than the engine).
+- **`nz-ffi/src/player.rs`**: `PlayerApi::player()` and `core_ref()` made `pub(crate)` (two lines) so
+  a lot's own `impl PlayerApi` block can reach the engine it is asking.
+- **`nz-core/src/player/quality.rs`**: the EQ clamp was **±12 dB**; `graph.js#EQ_MIN_DB/EQ_MAX_DB`
+  and `nscore::dsp` both say **±16**, so a +16 fader was silently arriving as +12. Fixed.
+
+**The tap contract (published for MB21; stable since this lot's PR).**
+
+```text
+nz-audio, relayed by nz-core::player::Player:
+  Player::subscribe_tap(&self) -> Option<nz_audio::TapSubscription>
+  Engine::tap() -> Option<TapReader>            // legacy, ONE reader, unchanged (slot 0)
+TapSubscription: read(&mut [f32]) -> usize      // FRAMES written, interleaved stereo f32, the
+                                                //   engine's own rate (48 kHz on the phone)
+  frames_available() -> usize; dropped() -> u64; clear()
+  One 8 192-frame ring (170 ms) PER subscription: a slow reader loses its OWN oldest frames and
+  nothing else; the callback never blocks and counts what it dropped.
+  Drop = unsubscribe (live = false). The mixer frees the slot at the next buffer: no command, no
+  lock, no join. At ZERO subscriptions the callback does two `Option` checks per buffer and copies
+  nothing. MAX_TAP_READERS = 3 concurrent (the equalizer card takes one only while it is on screen).
+  The point is post-DSP (EQ, bass comp, limiter, volume) and PRE mono/balance — the SPA's
+  analysisBus.
+```
+
+**Rules a measurement taught** (each one is what a later lot inherits):
+
+- **A single-reader tap makes two views enemies.** The visualiser and the equalizer card can be on
+  screen at once; a `Mutex<Option<TapReader>>` taken once would have given the frames to whichever
+  opened first. Counted subscriptions cost two `Option` checks at zero subscribers (measured in
+  `nz-audio`'s existing callback budget test) and one ring per reader.
+- **The meter's two numbers already existed and were being thrown away.** `Chain::process` computes
+  the pre-limiter peak and the limiter's gain per frame; reading them costs **+3.7 ns/frame in
+  release** (69.1 → 72.8, 2 000 buffers of 480 frames) — 0.18 ms of one core per second of 48 kHz
+  stereo, 0.018 % — and **nothing at all** while the card is closed, because the chain skips both
+  maxima. A separate analysis of the same audio would have been 0.35 ms per reading *and* would have
+  missed the limiter (it sits after it).
+- **A fader changes the sound in the NEXT buffer.** Measured on the rendered sink: the first sample
+  that differs from the un-EQ'd reference is **sample 0 of the very next buffer** (`Chat::process`
+  reads the engine's atomics at the top of every callback).
+- **The limiter's reduction is what was measured, not what its curve asks.** A +16 dB band on a
+  −12 dBFS tone reads **+3.96 dBFS pre-limiter** and only **0.89 dB of reduction**: a 2 ms attack
+  with no look-ahead lets each cycle's crest over, exactly as Web Audio's does (the SPA measured
+  0.38 dB for the same reason). A test that expected the curve's 3.5 dB was wrong, not the chain.
+- **The band plan must be one octave per SLIDER.** The visualiser's log plan over 22 Hz..18 kHz
+  would put the 31 Hz bar across two sliders; with the octave plan (geometric midpoints, 21.9 Hz ..
+  22.6 kHz) a full-scale 1 kHz sine reads **0.0 dBFS on band 5** and 250 Hz stays **40 dB below**.
+  The Blackman window and the analyser's **−13.56 dB** offset are what make a band's dB comparable
+  to the peak's.
+- **A test that overfeeds the tap tests itself.** Pushing more frames per reading than the ring
+  holds drops them mid-cycle, and the splice reads as a broadband spectrum — the first version of
+  this lot's meter test "measured" 2 kHz on a 1 kHz tone. The test now feeds exactly one tick
+  (1 920 frames) and waits on the session's tick counter, never on a clock.
+- **The card must not scroll itself.** Réglages' pane is already `verticalScroll`; a nested one is
+  measured with an infinite height and crashes. The block stacks its cards and lets the page scroll.
+- **`PlayerApi` is where a lot's controls belong.** UniFFI merges `impl PlayerApi` blocks across
+  files exactly as it merges `impl Screens`, so the screen's object carried the new methods and no
+  accessor had to be invented — only two `pub(crate)` lines.
+- **A Kotlin `callback_interface` is an interface, not a `fun interface`.** `player.fxMeterSubscribe
+  { … }` does not compile; the listener is an `object : AudioFxListener`.
+- **JDK 27 breaks the embedded Kotlin compiler** (`IllegalArgumentException: 27.0.1.0.2`): Gradle
+  runs on `mobile/tools/env.sh`'s JDK 21. MQ1 had already written the rule; this lot hit it.
+
+**Measured** (this machine, Rust 1.99.1, JDK 21, Gradle 8.14.7, `CARGO_BUILD_JOBS=4`):
+
+| What | How | Numbers |
+|---|---|---|
+| Rust, the lot | `cargo test -p nz-core audiofx` | **35 tests** (risk 6, presets 6, pan 4, output 6, meter 3, service 10) |
+| Rust, the crates | `cargo test --offline --workspace` (mobile) and `-p nz-audio` (desktop) | **381** `nz-core`, **62** `nz-ffi`, **72 + 9** `nz-audio`, **15** `nscore` — all green; `clippy -D warnings` clean on every crate this lot touched |
+| The meter's cost | 2 000 buffers of 480 frames, release, chain engaged | **+3.7 ns/frame** (off 69.1, on 72.8) — 0.018 % of one core; **0** when the card is closed |
+| A fader | offline engine, rendered sink, 480-frame buffers | the first differing sample is **sample 0 of the next buffer** |
+| The tap, two readers | `nz-audio/tests/dsp.rs`, real FLAC | both subscriptions got **2 400 frames**, identical to 1e-6 (0.2500/0.2500); the meter read **−12.04 dB**, then **−96.00 dB** (the floor) after the card left |
+| The meter's lifetime | `nz-core` + `nz-ffi` tests, counted ticks | readings while subscribed; after `stop_and_join`/`fx_meter_unsubscribe` **0 new ticks** and **0 new frames** over 200 ms |
+| Requests | `NzCore::stats()` around a card's whole life | **0 requests, 0 bytes**, cold and warm: every value is this device's `kv` |
+| Kotlin | `:feature:audiofx:testDebugUnitTest` | §PENDING§ |
+| Screenshots | Robolectric, NATIVE graphics | §PENDING§ |
+| The real screen | emulator API 35 headless, own port | §PENDING§ |
+
+**Deliberate deviations from the plan paragraph.**
+
+- **The trim threshold is shown, not adjustable.** The player measures a track's edges at the
+  server's own threshold (`TRIM_DB = −45 dBFS`, `edges.py`'s default); the card states that sentence
+  instead of offering a slider that would change nothing. A per-device threshold needs
+  `AudioSettings.trim_db`, which is the playback lot's field.
+- **No master-volume row.** The SPA puts one in this card because its player bar is hidden on a
+  phone; the phone's player bar is MB11's, and duplicating the control would be two sources for one
+  value.
+- **The ten band levels are drawn BESIDE the faders, not behind them.** `NzFader` is MB1's file and
+  draws no tint; a 4 dp level bar in the same column says the same thing and stays readable at 390 dp
+  with a 200 % font scale.
+- **The verdict is computed and shown, but nothing feeds it yet on the phone.** `fx_report_glitch`
+  is the door `:playback` will use (the engine's own starvation count per connection);
+  `AudioRouteWatcher` exists and is started by the card, and starting it process-wide is the media
+  service's one line (see *Still owed*). With no verdict the card says what the SPA says with none:
+  the route, the path, and why.
+
+**Files.** `mobile/rust/crates/nz-core/src/audiofx/**`,
+`mobile/rust/crates/nz-ffi/src/audiofx.rs`, `mobile/android/feature/audiofx/**`,
+`docs/agents/screenshots/mobile/MB12/*.png`, and this section. Shared, each declared in the PR:
+`android/nscore/src/dsp.rs`, `desktop/crates/nz-audio/src/{tap,mixer,engine,dsp,lib}.rs`,
+`desktop/crates/nz-audio/tests/dsp.rs`, `mobile/rust/crates/nz-core/src/player/{mod,quality}.rs`,
+`mobile/rust/crates/nz-ffi/src/player.rs`.
+
+**Still owed** (named where it belongs): `:playback` starts `AudioRouteWatcher` with the media
+service and calls `fx_report_glitch` on a measured starvation (MB3c's own numbers); the trim
+threshold as a device setting (the playback lot's `AudioSettings`); the MQ2 journey's numbers for
+this card (its 25 Hz meter under the full-screen player).
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).

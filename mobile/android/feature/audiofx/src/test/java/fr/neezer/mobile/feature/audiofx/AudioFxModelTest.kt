@@ -38,13 +38,14 @@ class AudioFxModelTest {
 
         model.setEqEnabled(false)
         assertFalse(model.state!!.eqEnabled)
-        assertEquals("eq=false", backend.writes.last())
-        assertEquals("change=eq", backend.writes.dropLast(1).last(), "a switch starts a new episode")
+        // The write, then the episode it starts: a switch is a deliberate change.
+        assertEquals("change=eq", backend.writes.last())
+        assertEquals("eq=false", backend.writes.dropLast(1).last())
 
         model.setBand(4, 9f)
         assertEquals(9f, model.state!!.bands[4])
-        assertEquals("band:4=9.0", backend.writes.last())
-        assertEquals("change=band:4", backend.writes.dropLast(1).last())
+        assertEquals("change=band:4", backend.writes.last())
+        assertEquals("band:4=9.0", backend.writes.dropLast(1).last())
 
         model.setBass(1.7f)
         assertEquals("the bass is a 0..1 lift", 1f, model.state!!.bass, 1e-6f)
@@ -145,7 +146,7 @@ class AudioFxModelTest {
 
     @Test
     fun theWarningButtonLowersTheVolumeAndCanUndoIt() {
-        val backend = FakeAudioFx(volume = 0.8f)
+        val backend = FakeAudioFx(level = 0.8f)
         val model = AudioFxModel(backend)
         model.start()
         model.openMeter()
@@ -153,13 +154,13 @@ class AudioFxModelTest {
 
         // 6,5 dB of cut is ×0.4732: 0.8 → 0.3786.
         model.reduceVolume(6.5)
-        assertEquals(0.3786f, backend.volume, 1e-3f)
-        assertEquals("change=volume", backend.writes.last(), "a new episode starts")
+        assertEquals(0.3786f, backend.level, 1e-3f)
+        assertEquals("a new episode starts", "change=volume", backend.writes.last())
         // The toast carries the undo; pressing it restores the level exactly.
         val toast = fr.neezer.mobile.designsystem.NzToasts.toasts.last()
         assertEquals("Volume réduit de 6,5 dB", toast.text)
         toast.onAction?.invoke()
-        assertEquals(0.8f, backend.volume, 1e-6f)
+        assertEquals(0.8f, backend.level, 1e-6f)
     }
 
     @Test

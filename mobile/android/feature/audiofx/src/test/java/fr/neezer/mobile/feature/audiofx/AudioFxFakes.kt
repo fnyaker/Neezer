@@ -14,7 +14,7 @@ import uniffi.nz_ffi.FxWarning
  */
 internal class FakeAudioFx(
     var state: FxState = FxFixtures.state(),
-    var volume: Float = 1f,
+    var level: Float = 1f,
     var muted: Boolean = false,
 ) : AudioFxBackend {
     /** Every setting the screen wrote, in order: the test's record of the taps. */
@@ -136,14 +136,14 @@ internal class FakeAudioFx(
         writes += "forget=$key"
     }
 
-    override fun volume(): Float = volume
+    override fun volume(): Float = level
 
     override fun isMuted(): Boolean = muted
 
     override fun setVolume(volume: Float) {
         failure?.let { throw it }
         writes += "volume=$volume"
-        this.volume = volume
+        this.level = volume
     }
 
     override fun toggleMute() {

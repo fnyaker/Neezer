@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
@@ -175,11 +177,14 @@ private fun PanCard(model: AudioFxModel, state: FxState) {
     FxCard(FxCopy.PAN_TITLE, FxCopy.PAN_SUB) {
         FxSwitchRow(FxCopy.MONO, FxCopy.MONO_HINT, state.mono, model::setMono)
         Spacer(Modifier.height(NzSpacing.s))
+        // The slider carries no value of its own: the summary line below already
+        // says « Stéréo · 30 % à gauche », and at a 200 % font scale the repeated
+        // one was truncated to « 30 % à … » anyway (the capture showed it).
         FxSlider(
             value = (state.balance + 1f) / 2f,
             onChange = { fraction -> model.setBalance(fraction * 2f - 1f) },
             label = "Balance gauche-droite",
-            valueText = state.panText,
+            valueText = "",
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -257,7 +262,7 @@ private fun PresetsBlock(model: AudioFxModel, state: FxState) {
     val builtins = state.presets.filter { it.builtin }
     val mine = state.presets.filter { !it.builtin }
     val selectedId = model.selectedId()
-    FxGroupHeader(FxCopy.BUILTINS, builtins.size.toString()) {}
+    FxGroupHeader(FxCopy.BUILTINS, builtins.size.toString(), onAdd = null)
     FxBandsWrap {
         builtins.forEach { preset ->
             NzChip(
@@ -302,32 +307,31 @@ private fun PresetsBlock(model: AudioFxModel, state: FxState) {
             NzButton(FxCopy.CANCEL, { model.cancelNaming() }, kind = NzButtonKind.Ghost)
         }
     } else {
+        val label = when {
+            selection == null -> ""
+            selection.builtin -> "« ${selection.name} » · préréglage intégré, non modifiable."
+            else -> "« ${selection.name} » · à jour."
+        }
+        if (label.isNotEmpty()) {
+            // Above the buttons, on its own line: beside them it was squeezed
+            // into a two-character column (the first capture).
+            Text(
+                text = label,
+                style = Sillon.type.bodySmall,
+                color = Sillon.colors.dim,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val label = when {
-                selection == null -> ""
-                selection.builtin -> "« ${selection.name} » · préréglage intégré, non modifiable."
-                else -> "« ${selection.name} » · à jour."
-            }
             if (selection?.builtin == true || selection == null) {
                 NzButton(FxCopy.SAVE_AS, { model.openNaming() }, kind = NzButtonKind.Secondary)
             } else {
                 NzButton(FxCopy.UPDATE, { model.updateSelected() }, kind = NzButtonKind.Secondary)
                 NzButton(FxCopy.DELETE, { model.deleteSelected() }, kind = NzButtonKind.Ghost)
-            }
-            Spacer(Modifier.weight(1f))
-            if (label.isNotEmpty()) {
-                Text(
-                    text = label,
-                    style = Sillon.type.bodySmall,
-                    color = Sillon.colors.dim,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(2f),
-                )
             }
         }
     }
@@ -338,24 +342,28 @@ private fun MeterBlock(model: AudioFxModel, state: FxState) {
     val frame = model.meter
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(NzGlyph.Activity, size = 14.dp, tint = Sillon.colors.dim)
         Text(FxCopy.METER_TITLE, style = Sillon.type.label, color = Sillon.colors.tx)
-        Spacer(Modifier.weight(1f))
-        when {
-            frame == null || !frame.available -> Text(
-                text = if (!state.eqEnabled) FxCopy.METER_IDLE else FxCopy.METER_PENDING,
-                style = Sillon.type.bodySmall,
-                color = Sillon.colors.dim,
-            )
+    }
+    // The three readings get their own line: beside the title they were squeezed
+    // into a 40 dp column and wrapped letter by letter (the first capture).
+    when {
+        frame == null || !frame.available -> Text(
+            text = if (!state.eqEnabled) FxCopy.METER_IDLE else FxCopy.METER_PENDING,
+            style = Sillon.type.bodySmall,
+            color = Sillon.colors.dim,
+        )
 
-            else -> Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-                FxReading(FxCopy.METER_PEAK, FxFormat.db(frame.peakDb))
-                FxReading(FxCopy.METER_HEADROOM, FxFormat.db(frame.headroomDb))
-                FxReading(FxCopy.METER_LIMITER, FxFormat.db(frame.reductionDb))
-            }
+        else -> androidx.compose.foundation.layout.FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
+        ) {
+            FxReading(FxCopy.METER_PEAK, FxFormat.db(frame.peakDb))
+            FxReading(FxCopy.METER_HEADROOM, FxFormat.db(frame.headroomDb))
+            FxReading(FxCopy.METER_LIMITER, FxFormat.db(frame.reductionDb))
         }
     }
     val warning = frame?.warning
@@ -375,9 +383,12 @@ private fun MeterBlock(model: AudioFxModel, state: FxState) {
 @Composable
 private fun FadersBlock(model: AudioFxModel, state: FxState) {
     val levels = model.meter?.bands.orEmpty()
-    // Ten faders do not fit across 390 dp: the phone gets two rows of five, the
-    // tablet one row of ten (the SPA's own ≤ 640 px rule, and MB1's 48 dp target).
-    val perRow = 5
+    // Ten 56 dp columns do not fit across 390 dp: the phone gets two rows of
+    // five, the tablet's reading column one row of ten (the SPA's own ≤ 640 px
+    // rule, and MB1's 48 dp touch target).
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val perRow = if (maxWidth >= 560.dp) 10 else 5
+        Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
     BAND_HZ.chunked(perRow).forEachIndexed { rowIndex, row ->
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -412,11 +423,13 @@ private fun FadersBlock(model: AudioFxModel, state: FxState) {
             }
         }
     }
-    Text(
-        text = if (state.eqEnabled) "±16 dB par bande." else "Inactif : activez l'égaliseur.",
-        style = Sillon.type.bodySmall,
-        color = Sillon.colors.dim,
-    )
+            Text(
+                text = if (state.eqEnabled) "±16 dB par bande." else "Inactif : activez l'égaliseur.",
+                style = Sillon.type.bodySmall,
+                color = Sillon.colors.dim,
+            )
+        }
+    }
 }
 
 @Composable
@@ -476,7 +489,7 @@ private fun FxCard(title: String, subtitle: String, content: @Composable () -> U
 }
 
 @Composable
-private fun FxGroupHeader(title: String, count: String, onAdd: () -> Unit) {
+private fun FxGroupHeader(title: String, count: String, onAdd: (() -> Unit)?) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -485,7 +498,9 @@ private fun FxGroupHeader(title: String, count: String, onAdd: () -> Unit) {
         Text(title, style = Sillon.type.label, color = Sillon.colors.tx)
         Text(count, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
         Spacer(Modifier.weight(1f))
-        NzChip(FxCopy.NEW_PRESET, onAdd, selected = false, glyph = NzGlyph.Plus)
+        if (onAdd != null) {
+            NzChip(FxCopy.NEW_PRESET, onAdd, selected = false, glyph = NzGlyph.Plus)
+        }
     }
 }
 
@@ -633,7 +648,9 @@ private fun FxSlider(
             style = Sillon.type.bodySmall,
             color = Sillon.colors.dim,
             maxLines = 1,
-            modifier = Modifier.width(84.dp),
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(104.dp),
         )
     }
 }
@@ -681,11 +698,19 @@ private fun FxWarningBanner(
 ) {
     val colors = Sillon.colors
     val clip = tone == "clip"
-    NzCard(Modifier.fillMaxWidth()) {
+    // A bare block, not a card inside the card: the equalizer card already is one.
+    androidx.compose.foundation.layout.Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(NzRadius.field))
+            .background(colors.s2)
+            .padding(NzSpacing.s),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
             Icon(NzGlyph.Alert, size = 18.dp, tint = if (clip) colors.ac else colors.acMark)
             Column(Modifier.weight(1f)) {
@@ -703,13 +728,15 @@ private fun FxWarningBanner(
                     color = colors.dim,
                 )
             }
-            NzButton(
-                text = FxCopy.reduceVolume(cut),
-                onClick = onReduce,
-                kind = NzButtonKind.Secondary,
-                enabled = canReduce,
-            )
         }
+        // The button gets its own line: beside the sentence it halved the text's
+        // width and wrapped « le limiteur réduit de 6,4 dB » into three lines.
+        NzButton(
+            text = FxCopy.reduceVolume(cut),
+            onClick = onReduce,
+            kind = NzButtonKind.Secondary,
+            enabled = canReduce,
+        )
     }
 }
 
