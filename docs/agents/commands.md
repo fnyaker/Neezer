@@ -255,6 +255,24 @@ argon2 for cheap parameters (hashing was half the wall clock; `tests.managers.te
 pins the production defaults), and it compiles each distinct werkzeug URL builder once per process
 instead of once per rule per app (~95% of every `create_application`; `tests.test_harness` checks
 every rule's URLs against a fresh werkzeug compilation). CI runs nine workflows:
+### CI: the Actions cache budget is a hard constraint
+
+Measured 2026-11-18: `gh api /repos/fnyaker/Neezer/actions/caches` → **30 entries, 16.9 GB**, for the
+**10 GB** GitHub allows per repository. Past the limit GitHub evicts in LRU order, so a run that asks
+for its cache often finds it gone: that is where `mobile`'s 8-minute Rust rebuilds, the 29-minute
+`Arch package` and `desktop.yaml`'s variance came from, not from the workflows' own logic. Every
+cache experiment run in that state measures eviction.
+
+The rule, then: **the number of entries and their size are part of the design.** Two jobs that build
+the same thing share one entry (`shared-key`), and a job that only reads a cache should not write a
+second copy of it.
+
+- `desktop.yaml`'s `floor` shares the `test` job's entry (`shared-key: test`) — same debug profile,
+  same workspace. It also holds `target/engine-v3|-v4`, so when `test` writes the entry the children
+  are rebuilt: ~6 min, on a job that is not the workflow's longest.
+- `desktop.yaml`'s `build` and `release.yaml`'s `binaries` share one release entry
+  (`shared-key: desktop-release`) instead of keeping 1.35 GB each.
+
 - `tests.yaml` — three jobs, not a version matrix: **image** (Python 3.13, what the Docker image
   ships, with numpy, `NS_REQUIRE_FFMPEG=1`, under coverage, and the image's OWN ffmpeg binary —
   the job reads the pinned `FROM mwader/static-ffmpeg…` line out of the Dockerfile and copies
