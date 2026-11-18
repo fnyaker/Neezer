@@ -487,7 +487,7 @@ private fun TagRow(tag: GenreTagRow, enabled: Boolean, model: GenresModel) {
                 NzButton(
                     text = "Enregistrer",
                     onClick = {
-                        model.editTag(tag.id.toLong(), name = name)
+                        model.editTag(tag.id, name = name)
                         renaming = false
                     },
                     kind = NzButtonKind.Primary,
@@ -516,7 +516,7 @@ private fun TagRow(tag: GenreTagRow, enabled: Boolean, model: GenresModel) {
                 fr.neezer.mobile.designsystem.NzIconButton(
                     glyph = NzGlyph.Trash,
                     contentDescription = GenresCopy.DELETE_TAG + " " + tag.name,
-                    onClick = { model.deleteTag(tag.id.toLong()) },
+                    onClick = { model.deleteTag(tag.id) },
                     enabled = enabled,
                 )
             }
@@ -1150,10 +1150,10 @@ private fun GenreTagSheetPage(
                 hint = GenresCopy.SEARCH_HINT,
             )
             state.sheetRanked.take(40).forEach { tag ->
-                val selected = state.sheetTagId == tag.id.toLong()
+                val selected = state.sheetTagId == tag.id
                 NzChip(
                     text = if (selected) "✓ ${tag.name}" else tag.name,
-                    onClick = { model.sheetLabel(if (selected) null else tag.id.toLong()) },
+                    onClick = { model.sheetLabel(if (selected) null else tag.id) },
                     selected = selected,
                 )
             }

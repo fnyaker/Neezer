@@ -275,7 +275,7 @@ class GenresModel(
             busy = true,
             last = LastLabel(
                 candidate = candidate,
-                tagId = tag.id.toLong(),
+                tagId = tag.id,
                 tagName = tag.name,
                 at = at,
                 rewritten = rewritten,
@@ -284,7 +284,7 @@ class GenresModel(
         state = state.copy(ranked = rankCurrent(state.studio.data, ""))
         scope.launch {
             try {
-                withContext(io) { service.label(candidate.reference, tag.id.toLong()) }
+                withContext(io) { service.label(candidate.reference, tag.id) }
                 bump(tag.name, +1, !rewritten)
                 state = state.copy(busy = false, actionError = null)
                 if (state.candidates.data?.rows.isNullOrEmpty()) loadCandidates()
@@ -724,7 +724,7 @@ class GenresModel(
                 state = state.copy(
                     sheetReference = reference,
                     sheetTitle = title,
-                    sheetTagId = sheet.tag?.id?.toLong(),
+                    sheetTagId = sheet.tag?.id,
                     sheetRanked = ranked,
                 )
             } catch (e: CancellationException) {
@@ -759,7 +759,7 @@ class GenresModel(
                         .getOrDefault(state.sheetRanked),
                     actionError = null,
                 )
-                val name = tagId?.let { id -> state.sheetRanked.firstOrNull { it.id.toLong() == id }?.name }
+                val name = tagId?.let { id -> state.sheetRanked.firstOrNull { it.id == id }?.name }
                 toast(
                     if (name != null) GenresCopy.labelled(title, name) else GenresCopy.SHEET_REMOVE,
                 )

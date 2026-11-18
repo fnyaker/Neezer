@@ -172,7 +172,4 @@ internal object GenresCopy {
             "seul un administrateur peut l'ouvrir."
     const val CORE_MISSING = "Le noyau natif n'a pas pu être chargé."
     const val ACTION_FAILED = "Action impossible"
-
-    /** Ce que coûte un écran, écrit à côté de l'assertion qui le compte. */
-    const val BUDGET_TAG = "2 requêtes à froid (statut + candidats), 0 à chaud"
 }
