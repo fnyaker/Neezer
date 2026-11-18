@@ -392,7 +392,9 @@ impl NzCore {
     }
 
     pub fn settings(&self) -> Arc<SettingsApi> {
-        Arc::new(SettingsApi)
+        // MB16: the settings need the core's store, client and meter, so they
+        // are built over it (the same one-line seam MB3b's `player()` used).
+        Arc::new(SettingsApi::open(Arc::clone(&self.core)))
     }
 
     /// Opens an EMPTY list over `keys` (rule 4). A lot that has rows in hand

@@ -186,6 +186,20 @@ tap_text() {
     adb_dev shell input tap "$cx" "$cy" >/dev/null
 }
 
+# Swipes up until <needle> is on screen (a menu longer than the window), then
+# leaves it visible for tap_text. Bounded: five swipes, and each one is a gesture
+# the device performed, never a sleep.
+scroll_to_text() {
+    local needle="$1" attempt
+    for attempt in 1 2 3 4 5; do
+        if dump_ui | grep -qF -- "text=\"$needle\""; then
+            return 0
+        fi
+        adb_dev shell input swipe 540 1600 540 800 240 >/dev/null
+    done
+    dump_ui | grep -qF -- "text=\"$needle\""
+}
+
 # The app's own process, or nothing: a `am start` that returns 0 proves a task was
 # created, never that the app is still alive two seconds later.
 app_pid() {
@@ -295,8 +309,15 @@ check_door "Accueil" "Accueil Neezer"
 
 # Réglages, and the one line that proves the whole chain Kotlin -> JNA -> Rust:
 # the version comes from `nz_version()`, not from a Kotlin constant.
-if tap_text "Réglages" && await_text "Choisis une section." && tap_text "Aide" &&
-    await_text "Version du noyau (Rust) :"; then
+#
+# MB16 filled the screen: the MB0 placeholder (« Choisis une section. ») is gone,
+# and the list is two levels now — the menu's filter is the literal that proves
+# the first level, and *Assistance* (the last row, below the fold) is reached by
+# ONE swipe, then shows the core's version. The needles are the screen's own, as
+# MB6 did for the search.
+if tap_text "Réglages" && await_text "Chercher un réglage" &&
+    scroll_to_text "Assistance" && tap_text "Assistance" &&
+    await_text "Noyau (Rust)"; then
     printf 'door=Réglages opened=1 rust_version=1\n'
     doors=$((doors + 1))
 else

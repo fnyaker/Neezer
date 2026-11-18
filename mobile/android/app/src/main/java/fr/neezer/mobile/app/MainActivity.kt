@@ -5,7 +5,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import fr.neezer.mobile.designsystem.NzTheme
+import fr.neezer.mobile.feature.settings.AppSettings
+import fr.neezer.mobile.feature.settings.NzAppearance
+import fr.neezer.mobile.feature.settings.NzAppearanceTheme
 
 /**
  * The app's ONE activity (docs/agents/mobile.md, "Navigation, screens and the
@@ -30,13 +32,21 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         graph = AppGraph(application)
 
+        // BEFORE the first frame, and never inside one: the device's theme, its
+        // accent and the eco switch, read from the `kv` store the core opened in
+        // `Application.onCreate` (one indexed SELECT per key: 197.6 µs for all
+        // 17, MB16's measured number). A person who chose Papier must not see
+        // Encre first.
+        NzAppearance.load(AppSettings.service())
+
         handleIntent(intent)
 
         setContent {
-            // The theme is `encre` until Réglages › Apparence says otherwise
-            // (MB16); reading it from the core would make the first frame wait
-            // on disk, which rule 4 forbids.
-            NzTheme {
+            // The theme, the accent and the eco switch are Réglages' (MB16):
+            // `NzAppearance` read them ONCE in `onCreate` (above), before the
+            // first frame, so a launch in Papier never flashes Encre, and every
+            // change since then repaints through the same state — no reload.
+            NzAppearanceTheme {
                 NzApp(graph)
             }
         }
