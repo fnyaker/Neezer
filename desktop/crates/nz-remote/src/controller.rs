@@ -437,6 +437,9 @@ struct Shared {
     fast_until: Mutex<Option<Instant>>,
     /// One loop per process, whatever a re-login does.
     looping: AtomicBool,
+    /// A claim arrived while that one loop was on its way out. Its exit starts
+    /// the next loop: a `spawn` swallowed in that instant ran nothing at all.
+    wanted: AtomicBool,
 }
 
 static SERVICE: OnceLock<Controller> = OnceLock::new();
@@ -455,6 +458,13 @@ impl Controller {
     }
 
     /// What the screen paints.
+    /// Whether the read loop is running. `spawn` takes this guard and the loop
+    /// releases it on every way out (`Looping`), so a stuck `true` means the
+    /// controller is silently dead.
+    pub fn looping(&self) -> bool {
+        self.shared.looping.load(Ordering::Acquire)
+    }
+
     pub fn status(&self) -> Status {
         lock(&self.shared.status).clone()
     }
@@ -621,6 +631,9 @@ impl Controller {
     /// Run the network loop, once per process whatever a re-login does.
     pub fn spawn(&self, api: Arc<Api>) {
         if self.shared.looping.swap(true, Ordering::AcqRel) {
+            // A loop is on its way out: remember the claim, so its exit starts
+            // the next one (see `Looping`).
+            self.shared.wanted.store(true, Ordering::Release);
             return;
         }
         let Some(runtime) = lock(&self.shared.runtime).clone() else {
@@ -634,13 +647,34 @@ impl Controller {
     /// The whole traffic in one loop: send what the person asked, read what the
     /// owner is doing. Runs on `nz-net` until the grant ends.
     async fn run(&self, api: Arc<Api>) {
+        {
+            // The guard lives in a value, so EVERY way out of the traffic loop
+            // releases it — the `return` a loan that ended on an error takes
+            // used to leave it set, and then a re-claim's `spawn` was swallowed:
+            // the screen said « Connecté » and nothing read until the app
+            // restarted (SC5's find (a)).
+            let _looping = Looping(&self.shared.looping);
+            self.traffic(&api).await;
+        }
+        if self.shared.wanted.swap(false, Ordering::AcqRel)
+            && let Some(api) = lock(&self.shared.api).clone()
+        {
+            // A claim arrived while the loop above was exiting, with the
+            // session's CURRENT client (a re-login replaces it).
+            self.spawn(api);
+        }
+    }
+
+    /// The loop itself: send what the person asked, read what the owner is
+    /// doing, until a leave or a grant that ended.
+    async fn traffic(&self, api: &Api) {
         let mut failures = 0_u32;
         loop {
             if *lock(&self.shared.stop) {
                 break;
             }
-            self.flush(&api).await;
-            match self.read_once(&api).await {
+            self.flush(api).await;
+            match self.read_once(api).await {
                 ReadStep::Read => {
                     failures = 0;
                 }
@@ -657,7 +691,6 @@ impl Controller {
             let fast = lock(&self.shared.fast_until).is_some_and(|until| Instant::now() < until);
             tokio::time::sleep(if fast { POLL_FAST } else { POLL }).await;
         }
-        self.shared.looping.store(false, Ordering::Release);
     }
 
     /// One read of `/api/remote/state`, applied to the shared view. Public so a
@@ -896,6 +929,20 @@ pub async fn claim(api: &Api, token: &str) -> Result<Value, ApiError> {
     api.remote_claim(token).await
 }
 
+/// Releases the "one loop per process" guard however the loop returns.
+///
+/// A plain `store(false)` at the end of the loop body was not enough: the arm
+/// that ends a loan on an error (`ReadStep::Ended`) returns from the middle, so
+/// the guard stayed set and every later claim in that process called `spawn`
+/// only to be turned away.
+struct Looping<'a>(&'a AtomicBool);
+
+impl Drop for Looping<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
@@ -1109,6 +1156,49 @@ mod tests {
             ..Status::default()
         };
         controller
+    }
+
+    /// **A loan that ends on an error releases the loop.** SC5's find (a): the
+    /// `Ended` arm returns from the middle of the traffic loop, so a plain
+    /// `store(false)` at its end never ran, the "one loop per process" guard
+    /// stayed set, and every later claim's `spawn` was turned away — the screen
+    /// showed « Connecté » and nothing read until the app restarted.
+    ///
+    /// A client that never claimed gets the server's 401, which is the same
+    /// `Ended` path a cut, an expiry and a revoked token take.
+    #[test]
+    fn a_loan_that_ends_on_an_error_releases_the_loop_for_the_next_claim() {
+        let bench = Bench::start();
+        let runtime = runtime();
+        let api = Arc::new(bench.client());
+        let controller = detached(RemoteLevel::Full);
+        assert!(!controller.looping(), "a fresh controller runs no loop");
+
+        runtime.block_on(controller.run(Arc::clone(&api)));
+        assert_eq!(controller.status().phase(), Phase::Ended);
+        assert!(
+            !controller.looping(),
+            "the guard `spawn` takes must be released when the loan ends, or a \
+             re-claim in this process never reads again"
+        );
+
+        // The next claim runs a loop of its own — the behaviour the stuck guard
+        // took away — and that loop releases the guard when it ends too.
+        *lock(&controller.shared.runtime) = Some(runtime.handle().clone());
+        *lock(&controller.shared.api) = Some(Arc::clone(&api));
+        *lock(&controller.shared.stop) = false;
+        controller.spawn(Arc::clone(&api));
+        assert!(
+            controller.looping(),
+            "a claim after the first loan starts a loop"
+        );
+        runtime.block_on(async { tokio::time::sleep(Duration::from_millis(200)).await });
+        assert_eq!(
+            controller.status().phase(),
+            Phase::Ended,
+            "the new loop read, and met the same verdict"
+        );
+        assert!(!controller.looping(), "and it released the guard in turn");
     }
 
     /// A loan's `queue` level cannot send a `full`-only op, and the refusal

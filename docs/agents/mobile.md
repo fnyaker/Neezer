@@ -1435,12 +1435,20 @@ changed** (SC0's manifest already named every dependency, and the crate uses not
   neezer-desktop`: **408 passed, 0 failed, 8 ignored**. `cargo ndk -t arm64-v8a -P 26 check -p
   nz-remote` → Finished (29.7 s), `cargo clippy --workspace --all-targets --locked -D warnings`
   and `cargo fmt --check` clean.
-- **Pitfalls, two pre-existing quirks found and NOT changed** (the extraction may not move
-  behaviour, so MB19 owns them): (a) `run` leaves `looping = true` when the grant ends on an
-  error, so a cut ends the loop but a re-claim in the same process spawns no new one; (b) a
-  controller that sets `offline.quality = FLAC` sees `OPUS_320` on its next read, because
-  `Quality::Flac.wire()` is the ABSENCE of `q=` and `offline_quality_wire` falls back to its
-  default — writing "FLAC" is the case that does not round-trip, the Opus rungs do. And the
+- **Pitfalls, two pre-existing quirks found and NOT changed here** — both fixed afterwards, in the
+  crate this note hands them to: (a) `run` left `looping = true` when the grant ended on an error,
+  so a cut ended the loop but a re-claim in the same process spawned no new one; the guard is now
+  a value (`Looping`) whose `Drop` releases it on EVERY way out, and a claim made while the loop is
+  exiting is remembered (`wanted`) and starts the next one — pinned by
+  `a_loan_that_ends_on_an_error_releases_the_loop_for_the_next_claim`, which failed before the fix
+  (the screen said « Connecté » and nothing read); (b) a controller that set
+  `offline.quality = FLAC` saw `OPUS_320` on its next read, because `Quality::Flac.wire()` is the
+  ABSENCE of `q=` and `offline_quality_wire` fell back to its default. A *setting's* spelling is
+  not a URL's: the store writes "FLAC" out loud (`nz-offline`'s `Settings::write`), so the read-back
+  now spells it too (`wire().unwrap_or("FLAC")`), and the mirrored-settings test drives FLAC
+  instead of dodging it — it failed before the fix with « offline.quality ne se relit pas tel qu'il
+  a été écrit ». Only the DISPLAY was wrong: `controller.js#watchSettings` sends a `set` only for a
+  key the controller itself changed, so no loan ever downgraded the owner's downloads. And the
   app-level test that times out only under load (`screens::album::tests`, `widgets/card.rs`:
   "timed out waiting for three downloads" when the whole workspace runs beside the heavy
   crates, 1.08 s alone) belongs to the album screen's own lot, not to this one.

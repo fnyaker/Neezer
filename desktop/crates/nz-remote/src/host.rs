@@ -1166,10 +1166,17 @@ pub fn parse_quality(value: &Value) -> Option<&'static str> {
 /// `offline.quality` vocabulary is `nz_api::Quality`'s, so the wire value is
 /// `quality.wire()`'s (`"OPUS_320"`, or FLAC for none).
 pub fn offline_quality_wire(raw: &str) -> String {
-    nz_api::Quality::parse(Some(raw))
-        .and_then(|quality| quality.wire())
-        .unwrap_or("OPUS_320")
-        .to_owned()
+    // `Quality::wire()` is the `q=` value of a stream URL, where FLAC is the
+    // ABSENCE of `q` — that is NOT how a setting is spelled. The store writes
+    // "FLAC" out loud (`nz-offline`'s `Settings::write`, "read by a human in
+    // `sqlite3` as often as by the code"), so reading it back must spell it out
+    // too: `and_then(wire)` with a default turned a person's FLAC into
+    // OPUS_320 for every controller that mirrors their settings (SC5's find
+    // (b), the desktop's own mirror included).
+    match nz_api::Quality::parse(Some(raw)) {
+        Some(quality) => quality.wire().unwrap_or("FLAC").to_owned(),
+        None => "OPUS_320".to_owned(),
+    }
 }
 
 /// The settings snapshot a publish carries: the SPA's keys, read from the same
@@ -1670,11 +1677,9 @@ mod tests {
         let cases: [(&str, Value); 5] = [
             ("player.quality", json!("OPUS_128")),
             ("podcast.speeds", json!({"1": 1.25})),
-            // Not FLAC: `Quality::Flac.wire()` is the ABSENCE of `q=`, so
-            // `offline_quality_wire` reads a stored "FLAC" back as the default.
-            // That predates this crate and is not this lot's to change; the
-            // rung a controller can round-trip is an Opus one.
-            ("offline.quality", json!("OPUS_128")),
+            // FLAC included since SC5's find (b) was fixed here: a stored
+            // "FLAC" reads back as "FLAC", never as the OPUS_320 default.
+            ("offline.quality", json!("FLAC")),
             ("offline.onlyDownloaded", json!(false)),
             ("cache.limit", json!(512 * 1024 * 1024_i64)),
         ];
