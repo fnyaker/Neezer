@@ -164,6 +164,17 @@ cd desktop && xvfb-run -a ./target/debug/neezer-desktop --self-test-quit-after-f
 cd desktop && cargo run -p nz-transcribe -- --version   # the linked whisper.cpp build (Vulkan included)
 VULKAN_SDK=/path/to/vulkan-headers cargo build -p nz-transcribe   # whisper.cpp's CMake needs the Vulkan HEADERS,
                                                      # not only the loader (Arch: vulkan-headers + shaderc)
+desktop/tools/check_cpu_floor.sh desktop/target/release/neezer-transcribe
+                                                     # the CPU floor (x86-64-v2, desktop/.cargo/config.toml): the
+                                                     # binary's census, ggml's OWN objects gated, then the binary
+                                                     # run under an emulated x86-64-v2 CPU (qemu-x86_64 -cpu
+                                                     # Nehalem, `qemu-user`; NZ_WHISPER_MODEL + NZ_WHISPER_AUDIO
+                                                     # for that last step, the crate's own fixture names). A ggml
+                                                     # built with -march=native SIGILLs here in under a second.
+cd desktop && cargo clean -p whisper-rs-sys && cargo build -p nz-transcribe
+                                                     # after editing desktop/.cargo/config.toml: cargo does not
+                                                     # rebuild a dependency for a build-script environment change,
+                                                     # so an old target/ keeps the old instruction set once more
 
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works
