@@ -566,8 +566,13 @@ struct Entry {
 }
 
 impl ConnTable {
+    /// How many connections this endpoint really has: an entry whose connection the
+    /// peer (or the network) already ended is forgotten here, so sixteen dead peers
+    /// cannot fill the table for ever — the slot is the connection, not the row.
     fn len(&self) -> usize {
-        self.lock().len()
+        let mut live = self.lock();
+        live.retain(|_, entry| entry.conn.connection().close_reason().is_none());
+        live.len()
     }
 
     /// Puts `candidate` in the table, applying the one-connection-per-pair rule:
@@ -582,6 +587,8 @@ impl ConnTable {
         let candidate_id = candidate.stable_id;
 
         let mut live = self.lock();
+        // A peer that went away frees its slot before the cap below is read.
+        live.retain(|_, entry| entry.conn.connection().close_reason().is_none());
         match live.get(&peer) {
             None => {
                 if live.len() >= MAX_CONNECTIONS {
