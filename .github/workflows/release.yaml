@@ -297,6 +297,15 @@ jobs:
           # here: the runner's CPU (#329's fingerprint) and the floors the engine
           # children are built for (docs/agents/desktop.md, *The CPU floor*).
           prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
+          # THE SAME ENTRY AS `desktop.yaml`'s `build` job, which compiles exactly
+          # this graph (same workspace, same `--release`, same two engine
+          # children) and kept a second 1.35 GB copy of it. This is a cache-BUDGET
+          # fix: the repository was at 30 entries for 16.9 GB against the 10 GB
+          # GitHub allows, so the fleet lives in LRU eviction. rust-cache's
+          # `shared-key` "is used instead of the automatic `job`-based key, and is
+          # stable over multiple jobs", so the two workflows now write and read one
+          # entry.
+          shared-key: desktop-release
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
       # The x86-64-v3 engine child, beside the floor one (docs/agents/desktop.md,

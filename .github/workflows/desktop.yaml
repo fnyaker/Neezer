@@ -457,6 +457,16 @@ jobs:
           # entry cannot be reused after a floor change either (docs/agents/
           # desktop.md, *The CPU floor*).
           prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
+          # ONE ENTRY FOR THE TWO DEBUG JOBS, and this is a cache-BUDGET fix, not
+          # a preference: the repository had 30 cache entries for 16.9 GB against
+          # the 10 GB GitHub allows (`gh api /repos/…/actions/caches`), so the
+          # fleet lives in LRU eviction and a run that asks for its cache often
+          # finds it gone. `test` and `floor` build the same debug profile of the
+          # same workspace; sharing the key halves what they store. The price:
+          # `floor` also holds `target/engine-v3|-v4`, so when `test` writes the
+          # entry the children are rebuilt (~6 min, and it is 10 min of the
+          # workflow's critical path only when it is the longest job — it is not).
+          shared-key: test
       # Local transcription is proven on a REAL model, not a stub: eleven seconds
       # of speech (whisper.cpp's `jfk.wav`, at the tag this build vendors) go
       # through `neezer-transcribe file` on the CPU and on `lavapipe` (the
@@ -581,6 +591,11 @@ jobs:
           # entry cannot be reused after a floor change either (docs/agents/
           # desktop.md, *The CPU floor*).
           prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
+          # Same budget fix, release side: `release.yaml`'s `binaries` job builds
+          # exactly this graph — same workspace, same `--release`, same two engine
+          # children — and kept a second 1.35 GB copy of it. One entry, written by
+          # whichever workflow runs first, restored by the other.
+          shared-key: desktop-release
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
       - name: Build the x86-64-v3 and x86-64-v4 engine children
