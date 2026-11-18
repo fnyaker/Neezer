@@ -124,13 +124,53 @@ jobs:
           # A dispatch names the tag to (re)build; every other event uses its
           # own ref (the tag that was pushed, the pull request's merge, master).
           ref: ${{ github.event.inputs.tag || '' }}
-      - name: Cache the crate registry
-        uses: actions/cache@v4
+      # `Build the package` below is the workflow's critical path: median 21.47
+      # min, max 36.53 min over 8 successful runs — a FULL release build of GPUI,
+      # whisper.cpp and the three engine children, from scratch, on every run,
+      # because nothing but the crate registry was cached. `makepkg` builds into
+      # `$srcdir/target` (the PKGBUILD's `CARGO_TARGET_DIR`), the same path on
+      # every run (/__w/Neezer/Neezer/desktop/packaging/arch/src/target), so
+      # rust-cache can carry it — and it carries the right part: it saves only
+      # the DEPENDENCIES ("In particular, the workspace crates themselves are not
+      # cached since doing so is generally not effective", rust-cache README),
+      # which is what a fresh checkout can reuse: the 887 packages under the
+      # workspace, 90 % of the cost, come back and our own crates are rebuilt.
+      #
+      # The prefix names the TOOLCHAIN, not the CPU, and that is a measurement:
+      # `pacman -Syu` moves `rust` under the build (so rustc belongs here), but
+      # the runner's CPU does not, because this fleet does not repeat it — the
+      # two attempts of run 44302526625 landed on two EPYC models with two
+      # fingerprints (00fc71a8aeddc1a2 and 9d8c5c3531335850), and a CPU-keyed
+      # entry therefore matched neither: 29.12 min cold, then 28.1 min still
+      # cold. `ggml-x86-64-v2-v3-v4` stays in the prefix because a *floor*
+      # change invalidates the objects.
+      #
+      # Why the CPU is safe to leave out HERE, and not in desktop.yaml: that
+      # `target/` cannot hold a binary built for a higher ISA. `desktop/.cargo/
+      # config.toml` forces `GGML_NATIVE=OFF` and every ISA above x86-64-v2 off
+      # (docs/agents/desktop.md, *The CPU floor*), and this job then runs
+      # `tools/check_cpu_floor.sh` ON THE BINARY EXTRACTED FROM THE PACKAGE —
+      # census, each child's ggml objects gated at its own level, and the floor
+      # binary transcribing under an emulated Nehalem. A wrong-ISA object fails
+      # here, before anything is attached to a release.
+      - name: The toolchain, as a cache key
+        id: cachekey
+        run: |
+          rust="$(rustc -vV | sha256sum | cut -c1-16)"
+          echo "prefix=v0-rust-rustc-$rust-ggml-x86-64-v2-v3-v4" >> "$GITHUB_OUTPUT"
+          echo "CPU: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//'), $(rustc -V)"
+      # It replaces the crate-registry cache this job used to keep: rust-cache
+      # covers CARGO_HOME (registry, git, bin) AND the build tree, and prunes
+      # what a week of builds left behind — the 10 GB per repository is shared
+      # with the desktop's own entries. Measured on the rerun that finally hit:
+      # `Build the package` 29.12 -> (see the PR) and the whole `Arch package`
+      # job 33.9 -> 28.1 min.
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: /tmp/cargo/registry
-          key: cargo-registry-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-
+          workspaces: |
+            desktop -> packaging/arch/src/target
+          prefix-key: ${{ steps.cachekey.outputs.prefix }}
       - name: Build the package
         run: |
           set -euo pipefail
