@@ -2,7 +2,10 @@ package fr.neezer.mobile.app
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -68,8 +71,15 @@ class ShellSmokeTest {
      */
     @Test
     fun settingsShowsTheRustVersion() {
+        // MB16 filled the screen: the skeleton's placeholder (« Choisis une
+        // section. ») and its « Aide » row are gone, and Réglages is two levels
+        // now — the menu, then a category. The proof is unchanged: the version
+        // comes from `nz_version()`, read through JNA, never from a Kotlin
+        // constant. *Assistance* is the last row, so the menu is scrolled to it.
         rule.onNode(hasText("Réglages") and hasClickAction()).performClick()
-        rule.onNode(hasText("Aide") and hasClickAction()).performClick()
-        rule.onNodeWithText("Version du noyau (Rust) :", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Chercher un réglage", substring = true).assertIsDisplayed()
+        rule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("Assistance"))
+        rule.onNode(hasText("Assistance") and hasClickAction()).performClick()
+        rule.onNodeWithText("Noyau (Rust) :", substring = true).assertIsDisplayed()
     }
 }

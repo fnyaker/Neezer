@@ -3322,9 +3322,11 @@ section.
 **Still owed** (named where it belongs): the Macrobenchmark numbers for *Sources* (MQ2's). YouTube
 Music's connect form is the one SPA control not ported (see the checklist).
 
-`mobile/tools/ci-emulator.sh`'s Réglages door follows the screen it now finds (MB6's own rule): the
-MB0 placeholder is gone, so it proves the menu's filter, swipes once to *Assistance*
-(`scroll_to_text`, a bounded gesture — never a sleep) and reads « Noyau (Rust) » there.
+**The two smokes that name a screen** follow the one they now find (MB6's own rule, and the reason
+both were red before this lot's second push): `mobile/tools/ci-emulator.sh` proves the menu's filter,
+swipes to *Assistance* (`scroll_to_text`, a bounded gesture — never a sleep) and reads
+« Noyau (Rust) » there; `:app`'s `ShellSmokeTest.settingsShowsTheRustVersion` does the same with
+Compose semantics (`performScrollToNode`). Both are SHARED files, edited here and declared in the PR.
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).
