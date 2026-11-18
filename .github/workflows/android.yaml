@@ -27,6 +27,20 @@ on:
       - .github/workflows/android.yaml
   workflow_dispatch:
 
+# A newer push to the same pull request makes the running build pointless — and
+# this workflow had no guard at all, so a superseded run kept a runner for its
+# whole 2.8-5.5 min (8 successful runs) to publish an APK nobody would take.
+# Pull requests only: a `v*` tag's run is the APK a release ships, and a
+# `master` run is the commit the next release is cut from. Both go to the end.
+#
+# The other short workflows need nothing more: `tests.yaml`, `webapp.yaml`,
+# `docker.yaml` and `security.yaml` already carry this exact guard (3.1, 3.2,
+# 2.2 and 1.3-2.0 min, each already at the cost of its own suite), and
+# `network.yaml` is a weekly cron with no push to supersede.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   apk:
     name: Build APK
