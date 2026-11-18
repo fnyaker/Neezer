@@ -4051,9 +4051,9 @@ TapSubscription: read(&mut [f32]) -> usize      // FRAMES written, interleaved s
 | The tap, two readers | `nz-audio/tests/dsp.rs`, real FLAC | both subscriptions got **2 400 frames**, identical to 1e-6 (0.2500/0.2500); the meter read **−12.04 dB**, then **−96.00 dB** (the floor) after the card left |
 | The meter's lifetime | `nz-core` + `nz-ffi` tests, counted ticks | readings while subscribed; after `stop_and_join`/`fx_meter_unsubscribe` **0 new ticks** and **0 new frames** over 200 ms |
 | Requests | `NzCore::stats()` around a card's whole life | **0 requests, 0 bytes**, cold and warm: every value is this device's `kv` |
-| Kotlin | `:feature:audiofx:testDebugUnitTest` | §PENDING§ |
-| Screenshots | Robolectric, NATIVE graphics | §PENDING§ |
-| The real screen | emulator API 35 headless, own port | §PENDING§ |
+| Kotlin | `:feature:audiofx:testDebugUnitTest` | **17 tests**: 7 `AudioFxModelTest` (the defaults, every control's write and episode key, a refused write's rollback, presets saved/updated/deleted, the meter's lifetime, the warning's volume + undo, the French readouts) and 10 screenshots |
+| Screenshots | Robolectric, NATIVE graphics | **10 PNGs** at 360 and 600 dp (Encre, Papier, 200 %, the equalizer off, an output verdict) under `docs/agents/screenshots/mobile/MB12/` — looked at, and **six layout bugs fixed from them and from the emulator capture** (the meter's readout crushed into a 40 dp column, a preset's state sentence in a two-character column, « 30 % à gauche » truncated at 200 %, « Nouveau préréglage » twice, the warning in a card inside the card, and a slider at 0 reading as a lone white dot because its rail was `s2` on a glass card) |
+| The real screen | emulator API 35 x86_64, `-no-window -no-audio`, own port 5570, instrumented test reading the card's own graphics layer | `mb12-emulator.png`: the REAL `AudioFxSections()` over the REAL Rust core and FFI on the device, 945 × 2 146 px (the window clips the page; the Robolectric PNGs carry the full one). **0 requests** to paint it |
 
 **Deliberate deviations from the plan paragraph.**
 
@@ -4079,6 +4079,15 @@ TapSubscription: read(&mut [f32]) -> usize      // FRAMES written, interleaved s
 `android/nscore/src/dsp.rs`, `desktop/crates/nz-audio/src/{tap,mixer,engine,dsp,lib}.rs`,
 `desktop/crates/nz-audio/tests/dsp.rs`, `mobile/rust/crates/nz-core/src/player/{mod,quality}.rs`,
 `mobile/rust/crates/nz-ffi/src/player.rs`.
+
+**The tap→sound latency (MB11 measured 739 ms p50) is untouched by construction, and by the
+numbers.** This lot adds nothing to load → decode → sink: the only work it puts in the output
+callback is two `Option` checks per buffer when no analysis reader is subscribed, and — only while
+the equalizer card is open — the chain's two maxima and two logarithms (**+3.7 ns/frame**, 0.018 % of
+one core). `nz-audio`'s own callback budget test (p99 over 2 000 buffers, every effect on) is
+unchanged and green. The end-to-end figure is not re-measured here: the phone's faithful
+tap→sound harness is MQ2's journey (an app on a device against `perf_api`), and re-running MB11's
+without it would have measured a bare test activity, not the app.
 
 **Still owed** (named where it belongs): `:playback` starts `AudioRouteWatcher` with the media
 service and calls `fx_report_glitch` on a measured starvation (MB3c's own numbers); the trim

@@ -237,15 +237,12 @@ impl TapSlot {
         )
     }
 
-    fn into_slot(self) -> (Producer<f32>, Arc<AtomicU64>, Arc<AtomicBool>) {
-        (self.ring, self.dropped, self.live)
-    }
 }
 
 /// The callback's side of the tap: one producer per reader, no allocation, no
 /// wait.
 pub(crate) struct Tap {
-    slots: [Option<(Producer<f32>, Arc<AtomicU64>, Arc<AtomicBool>)>; MAX_TAP_READERS],
+    slots: [Option<TapSlot>; MAX_TAP_READERS],
 }
 
 impl Tap {
@@ -260,7 +257,11 @@ impl Tap {
         // the life of the engine, exactly as before MB12.
         let live = Arc::new(AtomicBool::new(true));
         let mut slots = std::array::from_fn(|_| None);
-        slots[0] = Some((producer, Arc::clone(&dropped), live));
+        slots[0] = Some(TapSlot {
+            ring: producer,
+            dropped: Arc::clone(&dropped),
+            live,
+        });
         (
             Tap { slots },
             TapReader {
@@ -276,7 +277,7 @@ impl Tap {
     pub(crate) fn attach(&mut self, slot: TapSlot) -> bool {
         for entry in self.slots.iter_mut() {
             if entry.is_none() {
-                *entry = Some(slot.into_slot());
+                *entry = Some(slot);
                 return true;
             }
         }
@@ -294,16 +295,16 @@ impl Tap {
     /// does not fit. Never waits: this runs in the output callback.
     pub(crate) fn push(&mut self, stereo: &[f32]) {
         for entry in self.slots.iter_mut() {
-            let Some((ring, dropped, live)) = entry else {
+            let Some(slot) = entry else {
                 continue;
             };
             // A subscription dropped on another thread takes effect here, at a
             // buffer boundary: from then on it costs nothing.
-            if !live.load(Ordering::Relaxed) {
+            if !slot.live.load(Ordering::Relaxed) {
                 *entry = None;
                 continue;
             }
-            push_stereo(ring, dropped, stereo);
+            push_stereo(&mut slot.ring, &slot.dropped, stereo);
         }
     }
 }
