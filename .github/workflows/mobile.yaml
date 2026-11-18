@@ -122,8 +122,52 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
-      - name: Cache the cargo registry, binaries and target dir
+      # THE PRODUCTS OF THE RUST BUILD, CACHED BY THE HASH OF EVERY RUST INPUT.
+      #
+      # Measured on run 44368850444: `Build libnz_ffi.so and the Kotlin bindings`
+      # takes 9.53 min on a cold cache and 9.97 on a "warm" one, because a
+      # `target/` cache cannot help a fresh checkout: cargo's fingerprint for a
+      # crate under a PATH dependency is a mtime, and `actions/checkout` gives
+      # every file a new one, so all eleven `nz-*` crates, `appcore` and `rhythm`
+      # are rebuilt at every run while only the registry dependencies come back.
+      #
+      # So the build is cached where it actually ends: its two outputs — the three
+      # `libnz_ffi.so` and the generated UniFFI Kotlin — under a key that hashes
+      # every input of the build (`mobile/rust/**`, its three path-dependency
+      # trees, its toolchain and its config). A Kotlin-only or docs-only change
+      # hits it and the step is skipped entirely; a Rust change misses it and
+      # builds, which is the only honest answer.
+      #
+      # NO `restore-keys` HERE, deliberately: a product is never partially
+      # reusable. Restoring the `.so` of another source tree would ship that tree.
+      # 20.8 MB compressed against 1.36 GB for `target/`.
+      #
+      # It runs BEFORE the `target/` restore because `hashFiles` must not see a
+      # restored `mobile/rust/target` (the key would change with the cache's
+      # contents).
+      - name: Restore the native library and the bindings
+        id: native
         uses: actions/cache@v4
+        with:
+          path: |
+            mobile/android/bridge/src/main/jniLibs
+            mobile/android/bridge/build/generated/uniffi
+          key: mobile-native-${{ hashFiles(
+            'mobile/rust/Cargo.toml',
+            'mobile/rust/Cargo.lock',
+            'mobile/rust/uniffi.toml',
+            'mobile/rust/rust-toolchain.toml',
+            'mobile/rust/build-android.sh',
+            'mobile/rust/crates/**',
+            'mobile/rust/bindgen/**',
+            'desktop/crates/**',
+            'webapp/appcore/**',
+            'webapp/rhythm/**'
+            ) }}
+
+      - name: Cache the cargo registry, binaries and target dir
+        uses: actions/cache/restore@v4
+        id: cargo
         with:
           path: |
             ~/.cargo/registry
@@ -133,30 +177,55 @@ jobs:
           key: mobile-apk-${{ hashFiles('mobile/rust/Cargo.lock', 'desktop/Cargo.lock') }}
           restore-keys: mobile-apk-
 
-      # The NDK the Rust build links against, and the platform/tools the Gradle
-      # build compiles and signs with. Pinned, so a runner image change cannot
-      # move them under a build.
-      - name: Install the NDK and the SDK packages
+      # The platform/tools the Gradle build compiles and signs with. Pinned, so a
+      # runner image change cannot move them under a build.
+      - name: Install the SDK packages
         run: |
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" "platform-tools" "ndk;$NDK_VERSION"
+            "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      # The NDK is for `cargo ndk` alone, so it is installed only when the Rust
+      # build will actually run: on a cached build there is nothing to link.
+      - name: Install the NDK (only when the Rust build will run)
+        if: steps.native.outputs.cache-hit != 'true'
+        run: |
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION"
 
       # Idempotent on purpose: the job caches `~/.cargo/bin`, so the second run
       # finds the binary and `cargo install` refuses ("binary `cargo-ndk` already
       # exists in destination", exit 101) — measured on this very PR.
-      - name: Install cargo-ndk
+      - name: Install cargo-ndk (only when the Rust build will run)
+        if: steps.native.outputs.cache-hit != 'true'
         run: |
           cargo ndk --version 2>/dev/null || cargo install cargo-ndk --locked --version 4.1.2
           cargo ndk --version
 
       # The one documented native build: host debug library → UniFFI bindings →
       # cargo ndk for arm64-v8a, armeabi-v7a and x86_64 (docs/agents/mobile.md,
-      # MB0 "Contract").
+      # MB0 "Contract"). Skipped when no Rust input changed (`steps.native`).
       - name: Build libnz_ffi.so and the Kotlin bindings
+        if: steps.native.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
           time mobile/rust/build-android.sh
+
+      # A cached product is only as good as the guard that accepts it: the same
+      # `--check-libs` (a `NEEDED` the APK does not carry is an app that dies at
+      # `System.loadLibrary`) runs on what came out of the cache, on every run.
+      - name: The cached native library still holds (no Rust change)
+        if: steps.native.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          echo "native=from cache (no Rust input changed since the cached build)"
+          mobile/rust/build-android.sh --check-libs \
+            "$GITHUB_WORKSPACE/mobile/android/bridge/src/main/jniLibs"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            so="mobile/android/bridge/src/main/jniLibs/$abi/libnz_ffi.so"
+            test -f "$so" || { echo "::error::$so is missing from the cache"; exit 1; }
+            printf '   %-12s %8s bytes\n' "$abi" "$(stat -c %s "$so")"
+          done
+          test "$(find mobile/android/bridge/build/generated/uniffi -name '*.kt' | wc -l)" -gt 0
 
       # `AudioTrackPull.kt` (the API-26 output, lot MB3a) reaches its natives by
       # NAME (`System.loadLibrary` + `external fun`), so nothing calls them from
@@ -261,6 +330,22 @@ jobs:
           name: neezer-mobile-apk
           path: mobile/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # `master` WRITES the cargo cache, every branch READS it. `actions/cache`
+      # scopes an entry to the ref that saved it, so a save from a pull request is
+      # a second 1.36 GB copy under `refs/pull/<n>/merge` that only that PR can
+      # read — measured: two identical `mobile-apk-<hash>` entries, 1.36 GB each,
+      # for the repository's 10 GB. One writer, one entry.
+      - name: Save the cargo cache (master only)
+        if: github.ref == 'refs/heads/master' && steps.cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            mobile/rust/target
+          key: mobile-apk-${{ hashFiles('mobile/rust/Cargo.lock', 'desktop/Cargo.lock') }}
 
   # --- the emulator ----------------------------------------------------------
   # MQ1 writes `mobile/tools/ci-emulator.sh` (it starts the emulator with the

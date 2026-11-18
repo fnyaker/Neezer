@@ -509,6 +509,21 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
   fleet lives in permanent LRU eviction: `mobile-apk-…` is missing exactly when a run asks for it,
   and every "cache" experiment here measures eviction, not the change. Shrinking the entries that
   exist (the desktop's `target/` caches are ~7 GB of them) is the prerequisite to any cache work.
+- **The Rust build is cached as a PRODUCT, not as a `target/`.** Measured on run 44368850444:
+  `Build libnz_ffi.so and the Kotlin bindings` takes **9.53 min cold and 9.97 min "warm"** — a
+  `target/` cache cannot help a fresh checkout, because cargo's fingerprint for a crate under a
+  PATH dependency is an mtime and `actions/checkout` gives every file a new one, so the eleven
+  `nz-*` crates, `appcore` and `rhythm` are rebuilt every run while only the registry dependencies
+  come back. What is cached instead is what the build produces — the three `libnz_ffi.so` and the
+  generated UniFFI Kotlin — under `mobile-native-<hashFiles(every Rust input)>`: a Kotlin-only change
+  hits it and the step does not run at all, a Rust change misses and builds. **No `restore-keys`
+  on that key**: a product is never partially reusable, and restoring another tree's `.so` would
+  ship it. 20.8 MB against 1.36 GB. The `--check-libs` guard runs on what came out of the cache.
+- **`master` writes the cargo cache, every branch reads it.** `actions/cache` scopes an entry to
+  the ref that saved it: a save from a pull request is a second 1.36 GB copy under
+  `refs/pull/<n>/merge` that only that PR can read (measured: two identical `mobile-apk-<hash>`
+  entries for the repository's 10 GB). `restore` + `save` are split for that reason.
+
 - **The `emulator` job never builds Rust: it receives the library and the bindings.** `apk` uploads
   `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` (three ABIs) and `bridge/build/generated/uniffi`
   as the `neezer-mobile-native` artifact; `emulator` downloads it into `mobile/android/bridge`, and
