@@ -303,7 +303,9 @@ impl AudioFx {
             ),
             crossfade_on_skip: kv.get::<bool>(KEY_FADE_ON_SKIP).unwrap_or(true),
             crossfade_skip_s: kv.get::<f64>(KEY_FADE_SKIP_SECONDS).unwrap_or(1.5) as f32,
-            trim: kv.get::<bool>(KEY_TRIM).unwrap_or(audio.trim_silence),
+            // The SPA's own default is ON (`stores.js#trimSilence`), so a device
+            // that never chose reads ON, not the player's own quieter default.
+            trim: kv.get::<bool>(KEY_TRIM).unwrap_or(true),
             output: kv
                 .get::<String>(KEY_OUTPUT)
                 .unwrap_or_else(|| "auto".to_owned()),
