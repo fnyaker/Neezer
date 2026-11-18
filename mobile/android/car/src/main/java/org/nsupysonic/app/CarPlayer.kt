@@ -218,11 +218,16 @@ internal class CarPlayer(
     }
 
     /**
-     * The metadata a state carries, for the notification's own line: the old
-     * `PlayerService.State` had it, and the car's notification prints
-     * "titre · artiste". Public for the service's `buildNotification`.
+     * The current item's id — `row.key`, the `<source>:<id>` every queue row
+     * carries (`NzPlayer` sets it as the `MediaItem`'s media id). The service
+     * keys the heart it just toggled by it, so a track change drops the stale
+     * answer instead of painting it on the next title.
      */
-    fun metadata(): MediaMetadata? = controller?.currentMediaItem?.mediaMetadata
+    fun currentKey(): String = try {
+        controller?.currentMediaItem?.mediaId.orEmpty()
+    } catch (_: Exception) {
+        ""
+    }
 
     private companion object {
         /** The old `onBindingDied` retry, unchanged: one second. */

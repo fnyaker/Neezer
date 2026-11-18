@@ -1109,11 +1109,7 @@ class CarModeService : Service(), CarHost {
     }
 
     /** The current row's key, as the player names it (`<source>:<id>`). */
-    private fun nowKey(): String = try {
-        carPlayer?.metadata()?.extras?.getString("nz.id").orEmpty()
-    } catch (_: Exception) {
-        ""
-    }
+    private fun nowKey(): String = carPlayer?.currentKey().orEmpty()
 
     /** The core's answer for the heart, or null when nothing plays. */
     private fun coreFavorite(): Boolean? = try {

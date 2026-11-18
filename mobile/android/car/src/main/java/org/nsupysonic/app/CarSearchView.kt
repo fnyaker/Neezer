@@ -678,6 +678,10 @@ class CarSearchView(
             val outcome = try {
                 val answer = screens.search(q, uniffi.nz_ffi.SearchScope.LIBRARY, false)
                 SearchOutcome.Done(suggestionsOf(answer, q))
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                // A new keystroke or a detach dropped this call: that is not a
+                // failure to report.
+                throw cancelled
             } catch (error: Throwable) {
                 SearchOutcome.Failed(messageFor(error), session = isSessionError(error))
             }
