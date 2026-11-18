@@ -4366,8 +4366,45 @@ pub(crate) mod stub {
 
 #[cfg(test)]
 mod screen_tests {
+    use std::time::{Duration, Instant};
+
     use super::stub::{self, Stub};
     use super::*;
+
+    /// Pump until a toast carries `needle`, so an assertion about what the
+    /// person READS waits for it instead of racing the frame that publishes it.
+    ///
+    /// A default deadline is [`crate::testwait::WAIT`]: a hang guard, and the
+    /// message says which sentence never arrived.
+    fn wait_for_toast(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut gpui::VisualTestContext,
+        state: &Entity<AppState>,
+        needle: &str,
+    ) {
+        let deadline = Instant::now() + crate::testwait::WAIT;
+        loop {
+            runtime.block_on(async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            });
+            cx.run_until_parked();
+            let arrived = cx.update(|_, cx| {
+                state
+                    .read(cx)
+                    .toasts
+                    .items()
+                    .iter()
+                    .any(|toast| toast.message.contains(needle))
+            });
+            if arrived {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the toast « {needle} » never arrived"
+            );
+        }
+    }
 
     /// The acceptance's shape: the Serveur tab is TEN reads, one per card, and a
     /// finished job is not polled again. Measured against a real socket.
@@ -4472,7 +4509,12 @@ mod screen_tests {
             "one poll per 1.5 s, never a storm: {calls} calls"
         );
 
-        stub::wait_until(&runtime, cx, &view, "the closing toast", |_| true);
+        // WAIT for the toast the assertion reads. This used to be
+        // `wait_until(…, "the closing toast", |_| true)`, a predicate that is
+        // always true: it pumped ONE frame and the assertion then raced the
+        // next publication (the same one-pump wait that stalled the Album
+        // download test, PR #334).
+        wait_for_toast(&runtime, cx, &state, "Archivage terminé");
         let text = cx.update(|_, cx| {
             state
                 .read(cx)
