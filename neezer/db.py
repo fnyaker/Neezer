@@ -38,7 +38,7 @@ from .media_types import transcode_mimetype
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261123"
+SCHEMA_VERSION = "20261124"
 
 
 def now():
@@ -712,6 +712,12 @@ class User(_Model):
     disabled = BooleanField(default=False)
     last_login = DateTimeField(null=True)
     onboarding_step = CharField(16, default="done")
+    # The LAN roster's counter, bumped on every change that touches this
+    # account's trust (a friend added or removed, a scope changed). It is a
+    # COLUMN and not a Meta row: Meta.key is 32 characters and
+    # "lan_roster_serial:<uuid>" is 54, which is the choice the LAN plan leaves
+    # to this lot (docs/agents/lan-nodes.md).
+    lan_serial = IntegerField(default=0)
 
     lastfm_session = FixedCharField(32, null=True)
     lastfm_status = BooleanField(
@@ -1944,6 +1950,80 @@ class TrackCredit(_Model):
         indexes = ((("track", "source"), False), (("name_key",), False))
 
 
+class LanDevice(_Model):
+    """One device enrolled against this server's LAN key (schema ``20261124``).
+
+    The row's ``id`` is also the credential's 12-byte ``device_id`` (24 hex
+    characters, random). ``pubkey`` is the CURRENT Ed25519 key; a renewal rotates
+    it and every key the device ever held stays in ``lan_device_key`` with its
+    own expiry, so a later revocation can name the ones a peer may still be
+    presented. ``not_after`` is when the current credential stops being valid;
+    nothing here is ever deleted — revoking stamps ``revoked`` and the row stays
+    on the person's screen.
+    """
+
+    id = CharField(24, primary_key=True)
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    pubkey = CharField(64, unique=True)
+    name = CharField(64)
+    platform = CharField(16)
+    created = DateTimeField(default=now)
+    last_seen = DateTimeField(default=now)
+    not_after = DateTimeField()
+    revoked = DateTimeField(null=True)
+
+    class Meta:
+        table_name = "lan_device"
+        indexes = ((("user",), False),)
+
+
+class LanDeviceKey(_Model):
+    """Every Ed25519 key one enrolled device ever presented, with the expiry of
+    the credential that named it. The revocation list is built from here: a
+    revoked device must be refused by every peer for as long as ANY of its keys
+    can still be presented, not only the current one."""
+
+    pubkey = CharField(64, primary_key=True)
+    device = ForeignKeyField(LanDevice, backref="+", on_delete="CASCADE")
+    not_after = DateTimeField()
+
+    class Meta:
+        table_name = "lan_device_key"
+        indexes = ((("device",), False),)
+
+
+class LanFriend(_Model):
+    """One trusted friendship: ``owner`` shares with ``friend``.
+
+    One row per direction, deliberately: two friends who share with each other
+    each have their own scope, and ``trusted_by`` on a roster is the other
+    direction's rows. ``share_all`` means everything the owner has locally;
+    otherwise ``lan_friend_playlist`` lists the playlists they may take.
+    """
+
+    owner = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    friend = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    share_all = BooleanField(default=False)
+    created = DateTimeField(default=now)
+
+    class Meta:
+        table_name = "lan_friend"
+        primary_key = CompositeKey("owner", "friend")
+
+
+class LanFriendPlaylist(_Model):
+    """One playlist ``owner`` lets ``friend`` fetch (when ``share_all`` is off).
+    Deleting the playlist drops the grant; deleting either account does too."""
+
+    owner = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    friend = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    playlist = ForeignKeyField(Playlist, backref="+", on_delete="CASCADE")
+
+    class Meta:
+        table_name = "lan_friend_playlist"
+        primary_key = CompositeKey("owner", "friend", "playlist")
+
+
 def get_resource_text(respath):
     return importlib.resources.files(__package__).joinpath(respath).read_text("utf-8")
 
@@ -2198,6 +2278,10 @@ def _migration_order():
         ArtistMute,  # after User
         ListenEvent,  # after User and Track
         TrackCredit,  # after Track
+        LanDevice,  # after User
+        LanDeviceKey,  # after LanDevice
+        LanFriend,  # after User
+        LanFriendPlaylist,  # after LanFriend's two accounts and Playlist
         TrackDislike,  # after User and Track
     ]
 

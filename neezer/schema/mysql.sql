@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS user (
     disabled BOOLEAN NOT NULL DEFAULT FALSE,
     last_login DATETIME,
     onboarding_step VARCHAR(16) NOT NULL DEFAULT 'done',
+    lan_serial INTEGER NOT NULL DEFAULT 0,
     listenbrainz_session CHAR(36),
     listenbrainz_status BOOLEAN NOT NULL,
     lastfm_session CHAR(32),
@@ -714,3 +715,43 @@ CREATE TABLE IF NOT EXISTS discovery (
     payload TEXT
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE INDEX index_discovery_state ON discovery(state);
+
+CREATE TABLE IF NOT EXISTS lan_device (
+    id CHAR(24) PRIMARY KEY,
+    user_id CHAR(32) NOT NULL,
+    pubkey CHAR(64) NOT NULL,
+    name VARCHAR(64) NOT NULL,
+    platform VARCHAR(16) NOT NULL,
+    created DATETIME NOT NULL,
+    last_seen DATETIME NOT NULL,
+    not_after DATETIME NOT NULL,
+    revoked DATETIME,
+    UNIQUE INDEX index_lan_device_pubkey (pubkey),
+    INDEX index_lan_device_user (user_id),
+    CONSTRAINT lan_device_user_fk FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS lan_device_key (
+    pubkey CHAR(64) PRIMARY KEY,
+    device_id CHAR(24) NOT NULL,
+    not_after DATETIME NOT NULL,
+    INDEX index_lan_device_key_device (device_id),
+    CONSTRAINT lan_device_key_device_fk FOREIGN KEY (device_id) REFERENCES lan_device(id) ON DELETE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS lan_friend (
+    owner_id CHAR(32) NOT NULL,
+    friend_id CHAR(32) NOT NULL,
+    share_all BOOLEAN NOT NULL DEFAULT FALSE,
+    created DATETIME NOT NULL,
+    PRIMARY KEY (owner_id, friend_id),
+    CONSTRAINT lan_friend_owner_fk FOREIGN KEY (owner_id) REFERENCES user(id) ON DELETE CASCADE,
+    CONSTRAINT lan_friend_friend_fk FOREIGN KEY (friend_id) REFERENCES user(id) ON DELETE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS lan_friend_playlist (
+    owner_id CHAR(32) NOT NULL,
+    friend_id CHAR(32) NOT NULL,
+    playlist_id CHAR(32) NOT NULL,
+    PRIMARY KEY (owner_id, friend_id, playlist_id),
+    CONSTRAINT lan_friend_playlist_owner_fk FOREIGN KEY (owner_id) REFERENCES user(id) ON DELETE CASCADE,
+    CONSTRAINT lan_friend_playlist_friend_fk FOREIGN KEY (friend_id) REFERENCES user(id) ON DELETE CASCADE,
+    CONSTRAINT lan_friend_playlist_playlist_fk FOREIGN KEY (playlist_id) REFERENCES playlist(id) ON DELETE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

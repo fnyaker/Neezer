@@ -27,6 +27,10 @@ from peewee import IntegrityError
 from neezer import db as dbmod
 from neezer.db import (
     Invite,
+    LanDevice,
+    LanDeviceKey,
+    LanFriend,
+    LanFriendPlaylist,
     Meta,
     Playlist,
     PlaylistFolder,
@@ -50,7 +54,15 @@ from neezer.managers.user import UserManager
 
 URI = os.environ.get("NEEZER_TEST_DATABASE", "").strip()
 REQUIRE_DATABASE = os.environ.get("NS_REQUIRE_DATABASE") == "1"
-LOT = ("20261114", "20261115", "20261116", "20261117", "20261118", "20261121")
+LOT = (
+    "20261114",
+    "20261115",
+    "20261116",
+    "20261117",
+    "20261118",
+    "20261121",
+    "20261124",
+)
 
 EXPECTED_SHAPE = {
     "playlist": (
@@ -73,7 +85,27 @@ EXPECTED_SHAPE = {
         "revoked_at",
         "note",
     ),
-    "user": ("name_key", "disabled", "last_login", "onboarding_step"),
+    "user": (
+        "name_key",
+        "disabled",
+        "last_login",
+        "onboarding_step",
+        "lan_serial",
+    ),
+    "lan_device": (
+        "id",
+        "user_id",
+        "pubkey",
+        "name",
+        "platform",
+        "created",
+        "last_seen",
+        "not_after",
+        "revoked",
+    ),
+    "lan_device_key": ("pubkey", "device_id", "not_after"),
+    "lan_friend": ("owner_id", "friend_id", "share_all", "created"),
+    "lan_friend_playlist": ("owner_id", "friend_id", "playlist_id"),
     "podcast_chapter": (
         "id",
         "episode_id",
@@ -369,6 +401,50 @@ def _strip_to_20261118():
         _drop_column("podcast_channel", column)
 
 
+def _strip_to_20261123():
+    """The LAN lot (20261124) is the only thing a 20261123 server lacks."""
+    for table in (
+        "lan_friend_playlist",
+        "lan_friend",
+        "lan_device_key",
+        "lan_device",
+    ):
+        _drop_table(table)
+    _drop_column("user", "lan_serial")
+
+
+def _seed_lan_device(alice):
+    """One enrolled device with a rotated-away key."""
+    device = LanDevice.create(
+        id="0123456789abcdef01234567",
+        user=alice,
+        pubkey="a" * 64,
+        name="PC du salon",
+        platform="desktop",
+        created=datetime(2026, 1, 1),
+        last_seen=datetime(2026, 1, 2),
+        not_after=datetime(2026, 2, 1),
+    )
+    LanDeviceKey.create(
+        pubkey="b" * 64, device=device, not_after=datetime(2026, 1, 20)
+    )
+    LanDeviceKey.create(
+        pubkey="a" * 64, device=device, not_after=datetime(2026, 2, 1)
+    )
+    return device
+
+
+def _seed_lan(alice, bob, playlist):
+    """One enrolled device, and one friendship with a playlist scope — the rows
+    20261124 creates, so a replay has something to leave alone."""
+    device = _seed_lan_device(alice)
+    LanFriend.create(
+        owner=alice, friend=bob, share_all=False, created=datetime(2026, 1, 1)
+    )
+    LanFriendPlaylist.create(owner=alice, friend=bob, playlist=playlist)
+    return device
+
+
 class _ExternalDatabaseTestCase(unittest.TestCase):
     def setUp(self):
         self.addCleanup(release_database)
@@ -402,6 +478,10 @@ class FreshSchemaTestCase(_ExternalDatabaseTestCase):
             PodcastTranscriptSegment,
             TranscribeWorker,
             PodcastTranscriptLease,
+            LanDevice,
+            LanDeviceKey,
+            LanFriend,
+            LanFriendPlaylist,
         ):
             self.assertEqual(model.select().count(), 0)
 
@@ -449,6 +529,7 @@ class MigrationReplayTestCase(_ExternalDatabaseTestCase):
             text="Au revoir",
             search_text="au revoir",
         )
+        lan_device = _seed_lan(alice, bob, playlist)
 
         for _ in range(2):
             for date in LOT:
@@ -481,6 +562,13 @@ class MigrationReplayTestCase(_ExternalDatabaseTestCase):
         self.assertEqual(PodcastTranscript.get().source, "server")
         show = PodcastChannel.get(PodcastChannel.id == channel.id)
         self.assertFalse(show.auto_transcribe)
+        self.assertEqual(LanDevice.select().count(), 1)
+        self.assertEqual(LanDeviceKey.select().count(), 2)
+        self.assertEqual(
+            LanDevice.get(LanDevice.id == lan_device.id).name, "PC du salon"
+        )
+        self.assertEqual(LanFriend.select().count(), 1)
+        self.assertEqual(LanFriendPlaylist.select().count(), 1)
 
 
 class UpgradeFrom20261113TestCase(_ExternalDatabaseTestCase):
@@ -692,6 +780,52 @@ class UpgradeFrom20261118TestCase(_ExternalDatabaseTestCase):
         self.assertEqual(PodcastTranscriptLease.select().count(), 0)
 
 
+class UpgradeFrom20261123TestCase(_ExternalDatabaseTestCase):
+    """A 20261123 server has everything but the LAN lot: no enrolled device, no
+    key registry, no friendship and no roster counter. The migration is additive
+    and idempotent, and it must keep every existing row and account intact."""
+
+    def test_an_upgraded_server_gains_the_lan_shape_and_keeps_its_rows(self):
+        alice, bob = _seed_users()
+        playlist = Playlist.create(user=alice, name="Mix")
+        PlaylistMember.create(playlist=playlist, user=alice, role="owner")
+        channel, episode = _seed_show(alice)
+        users_before = {
+            u.name: (u.password, u.salt, u.admin, u.mail, u.name_key)
+            for u in User.select()
+        }
+
+        _strip_to_20261123()
+        _rewind("20261123")
+        release_database()
+        init_database(URI)
+
+        self.assertEqual(Meta["schema_version"].value, SCHEMA_VERSION)
+        self.assertEqual(dbmod._missing_columns(), [])
+        _assert_shape(self)
+        self.assertEqual(Playlist.select().count(), 1)
+        self.assertEqual(PlaylistMember.select().count(), 1)
+        self.assertEqual(PodcastEpisode.select().count(), 1)
+        self.assertEqual(
+            {
+                u.name: (u.password, u.salt, u.admin, u.mail, u.name_key)
+                for u in User.select()
+            },
+            users_before,
+        )
+        # The roster counter starts at 0 for every account an upgrade carried.
+        self.assertEqual([u.lan_serial for u in User.select()], [0, 0])
+        for model in (LanDevice, LanDeviceKey, LanFriend, LanFriendPlaylist):
+            self.assertEqual(model.select().count(), 0)
+        # Replaying the lot on a database that already has it changes nothing.
+        for _ in range(2):
+            _replay("20261124")
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(Meta["schema_version"].value, SCHEMA_VERSION)
+        self.assertEqual(Playlist.select().count(), 1)
+        self.assertEqual(User.select().count(), 2)
+
+
 class UniqueKeysTestCase(_ExternalDatabaseTestCase):
     """The folded name and the invitation's token hash are the two unique keys
     the account lot relies on, and each must be enforced by the engine itself."""
@@ -791,6 +925,31 @@ class CascadeTestCase(_ExternalDatabaseTestCase):
             self.assertEqual(model.select().count(), 0)
         self.assertEqual(PodcastChannel.select().count(), 1)
 
+    def test_lan_rows_follow_their_account_device_and_playlist(self):
+        """The four LAN tables are held by the engine's own foreign keys: a
+        deleted playlist drops the grant, a deleted device drops its keys, and a
+        deleted account drops its friendships."""
+        alice, bob = _seed_users()
+        shared = Playlist.create(user=alice, name="Shared")
+        other = Playlist.create(user=alice, name="Kept")
+        LanFriend.create(owner=alice, friend=bob, share_all=False)
+        LanFriendPlaylist.create(owner=alice, friend=bob, playlist=shared)
+        device = _seed_lan_device(alice)
+        self.assertEqual(LanDeviceKey.select().count(), 2)
+
+        shared.delete_instance()
+        self.assertEqual(LanFriendPlaylist.select().count(), 0)
+        self.assertEqual(LanFriend.select().count(), 1)
+
+        device.delete_instance()
+        self.assertEqual(LanDeviceKey.select().count(), 0)
+
+        LanFriendPlaylist.create(owner=alice, friend=bob, playlist=other)
+        bob.delete_instance()
+        self.assertEqual(LanFriend.select().count(), 0)
+        self.assertEqual(LanFriendPlaylist.select().count(), 0)
+        self.assertEqual(Playlist.select().count(), 1)
+
 
 class RepairPathTestCase(_ExternalDatabaseTestCase):
     """A database marked current but missing a table or a column is repaired at
@@ -808,8 +967,11 @@ class RepairPathTestCase(_ExternalDatabaseTestCase):
         )
         _drop_table("invite")
         _drop_table("podcast_transcript_lease")
+        _drop_table("lan_device_key")
+        _drop_table("lan_friend_playlist")
         _drop_column("podcast_transcript", "worker_name")
         _drop_column("user", "name_key")
+        _drop_column("user", "lan_serial")
 
         release_database()
         init_database(URI)
@@ -817,7 +979,10 @@ class RepairPathTestCase(_ExternalDatabaseTestCase):
         self.assertEqual(dbmod._missing_columns(), [])
         self.assertEqual(Invite.select().count(), 0)
         self.assertEqual(PodcastTranscriptLease.select().count(), 0)
+        self.assertEqual(LanDeviceKey.select().count(), 0)
+        self.assertEqual(LanFriendPlaylist.select().count(), 0)
         self.assertIn("worker_name", _columns("podcast_transcript"))
+        self.assertIn("lan_serial", _columns("user"))
         self.assertEqual(
             {m.user_id: m.role for m in PlaylistMember.select()},
             {alice.id: "owner", bob.id: "editor"},
