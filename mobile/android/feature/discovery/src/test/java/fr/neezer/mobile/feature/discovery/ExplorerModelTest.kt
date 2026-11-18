@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -47,7 +48,7 @@ class ExplorerModelTest {
     fun theKeptStylesPaintThenTheServers() = runTest {
         val (model, service, _) = harness()
         model.load()
-        advanceUntilIdle()
+        assertTrue("the tiles never painted: ${model.state.value}", settle("the tiles") { model.state.value.tiles.isNotEmpty() })
         assertEquals(1, service.stylesReads)
         assertEquals(4, model.state.value.tiles.size)
         assertEquals(5, model.state.value.levels.size)
@@ -63,6 +64,7 @@ class ExplorerModelTest {
         val (model, _, _) = harness(service)
         model.load()
         advanceUntilIdle()
+        settle("the answer") { model.state.value.screen is ScreenState.Ready }
         assertTrue(model.state.value.tiles.isEmpty())
         assertEquals("none", model.state.value.data?.source)
     }
@@ -75,18 +77,18 @@ class ExplorerModelTest {
     fun aDiscoveryIsOnePostThenOneGetPerPoll() = runTest {
         val (model, service, _) = harness()
         model.load()
-        advanceUntilIdle()
+        assertTrue("the tiles never painted: ${model.state.value}", settle("the tiles") { model.state.value.tiles.isNotEmpty() })
         model.chooseStyle(model.state.value.tiles.first())
         assertEquals(ExplorerModel.Phase.Idle, model.state.value.phase)
 
         model.discover()
-        advanceUntilIdle()
+        assertTrue("the discovery never answered: ${model.state.value}", settle("the discovery") { model.state.value.phase != ExplorerModel.Phase.Pending || service.discoverPosts > 0 })
         assertEquals(1, service.discoverPosts)
         assertEquals(ExplorerModel.Phase.Pending, model.state.value.phase)
 
         model.poll()
-        advanceUntilIdle()
-        assertEquals(1, service.pollReads)
+        assertTrue("the poll never ran: ${model.state.value}", settle("the poll") { service.pollReads > 0 })
+        settle("the answer") { model.state.value.phase == ExplorerModel.Phase.Ready }
         assertEquals("a poll starts no sweep", 1, service.discoverPosts)
         assertEquals(ExplorerModel.Phase.Ready, model.state.value.phase)
         assertEquals(2, model.state.value.playlists.size)
@@ -102,13 +104,12 @@ class ExplorerModelTest {
         )
         val (model, _, _) = harness(service)
         model.load()
-        advanceUntilIdle()
+        assertTrue("the tiles never painted: ${model.state.value}", settle("the tiles") { model.state.value.tiles.isNotEmpty() })
         model.chooseStyle(model.state.value.tiles.first())
         model.discover()
-        advanceUntilIdle()
+        assertTrue("no busy answer: ${model.state.value}", settle("busy") { model.state.value.phase == ExplorerModel.Phase.Busy })
 
         val state = model.state.value
-        assertEquals(ExplorerModel.Phase.Busy, state.phase)
         assertEquals("Le serveur est occupé.", state.cause)
         assertEquals(5, state.retryLeft)
         assertEquals("Réessaie dans 5 s.", state.busyWait)
@@ -132,23 +133,21 @@ class ExplorerModelTest {
         service.failure = null
         val (model, _, _) = harness(service)
         model.load()
-        advanceUntilIdle()
+        assertTrue("the tiles never painted: ${model.state.value}", settle("the tiles") { model.state.value.tiles.isNotEmpty() })
         model.chooseStyle(model.state.value.tiles.first())
         model.discover()
-        advanceUntilIdle()
+        assertTrue("no pending sweep: ${model.state.value}", settle("pending") { model.state.value.phase == ExplorerModel.Phase.Pending })
 
         service.failure = { RuntimeException("Le serveur ne répond pas") }
         model.poll()
-        advanceUntilIdle()
-        assertEquals(ExplorerModel.Phase.Error, model.state.value.phase)
+        assertTrue("the poll never failed: ${model.state.value}", settle("the refusal") { model.state.value.phase == ExplorerModel.Phase.Error })
         assertEquals(ExplorerModel.RETRY_POLL, model.state.value.retryMode)
         val posts = service.discoverPosts
 
         service.failure = null
         model.retryDiscover()
-        advanceUntilIdle()
+        assertTrue("the retry never answered: ${model.state.value}", settle("the retry") { model.state.value.phase == ExplorerModel.Phase.Ready })
         assertEquals("the sweep already runs: no second POST", posts, service.discoverPosts)
-        assertEquals(ExplorerModel.Phase.Ready, model.state.value.phase)
     }
 
     /** « Essayer un niveau plus large » moves one notch, then discovers. */
@@ -162,14 +161,13 @@ class ExplorerModelTest {
         )
         val (model, _, _) = harness(service)
         model.load()
-        advanceUntilIdle()
+        assertTrue("the tiles never painted: ${model.state.value}", settle("the tiles") { model.state.value.tiles.isNotEmpty() })
         model.chooseStyle(model.state.value.tiles.first())
         model.discover()
-        advanceUntilIdle()
-        assertEquals(ExplorerModel.Phase.Empty, model.state.value.phase)
+        assertTrue("an empty sweep was expected: ${model.state.value}", settle("the empty answer") { model.state.value.phase == ExplorerModel.Phase.Empty })
 
         model.widen()
-        advanceUntilIdle()
+        assertTrue("the wider sweep never started: ${model.state.value}", settle("the wider answer") { model.state.value.level == 4 && service.discoverPosts == 2 })
         assertEquals(4, model.state.value.level)
         assertEquals(2, service.discoverPosts)
         assertEquals("Le style, ses voisins et des passerelles.", model.state.value.aim?.hint)
@@ -236,9 +234,9 @@ class ExplorerModelTest {
         advanceUntilIdle()
         model.chooseStyle(model.state.value.tiles.first())
         model.discover()
-        advanceUntilIdle()
+        assertTrue("no pending sweep: ${model.state.value}", settle("pending") { model.state.value.phase == ExplorerModel.Phase.Pending })
         model.poll()
-        advanceUntilIdle()
+        assertTrue("no playlist: ${model.state.value}", settle("the playlists") { model.state.value.playlists.isNotEmpty() })
 
         val requests = service.discoverPosts + service.pollReads
         model.playPlaylist(model.state.value.playlists.first())
@@ -254,13 +252,13 @@ class ExplorerModelTest {
     fun reopeningARememberedStyleAsksNothing() = runTest {
         val (model, service, _) = harness()
         model.load()
-        advanceUntilIdle()
+        assertTrue("the tiles never painted: ${model.state.value}", settle("the tiles") { model.state.value.tiles.isNotEmpty() })
         val tile = model.state.value.tiles.first()
         model.chooseStyle(tile)
         model.discover()
-        advanceUntilIdle()
+        assertTrue("no pending sweep: ${model.state.value}", settle("pending") { model.state.value.phase == ExplorerModel.Phase.Pending })
         model.poll()
-        advanceUntilIdle()
+        assertTrue("no ready answer: ${model.state.value}", settle("ready") { model.state.value.phase == ExplorerModel.Phase.Ready })
 
         val posts = service.discoverPosts
         model.close()

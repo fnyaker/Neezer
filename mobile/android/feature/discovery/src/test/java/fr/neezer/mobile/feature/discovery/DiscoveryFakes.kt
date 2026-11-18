@@ -2,6 +2,9 @@ package fr.neezer.mobile.feature.discovery
 
 import fr.neezer.mobile.bridge.ScreenState
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import uniffi.nz_ffi.ExplorerLevelData
 import uniffi.nz_ffi.ExplorerSettingsData
 import uniffi.nz_ffi.ExplorerStylesData
@@ -559,6 +562,30 @@ class Toasts {
     }
 
     operator fun invoke(message: String) = record(message)
+}
+
+/**
+ * Waits for a model's STATE, on the test scheduler: it advances the queue until
+ * [condition] holds, then gives up with the state in the message.
+ *
+ * Why a helper and not a bare `advanceUntilIdle()`: a `screenFlow` emission and
+ * a `withContext` continuation can take a dispatch round each, and the runner's
+ * JVM (JDK 17) settled them differently from this machine's — the same six
+ * cases passed here and failed there. A test that waits on the STATE is a test
+ * of the model; one that waits on a queue length is a test of the scheduler.
+ * Nothing here waits on the clock: `advanceUntilIdle` and `runCurrent` run what
+ * is pending, and the loop is bounded.
+ */
+fun TestScope.settle(
+    what: String = "state",
+    condition: () -> Boolean,
+): Boolean {
+    repeat(64) {
+        if (condition()) return true
+        advanceUntilIdle()
+        runCurrent()
+    }
+    return condition()
 }
 
 /** A `ScreenState`'s data, or a test failure. */
