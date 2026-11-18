@@ -45,8 +45,11 @@ object PlayerFeed {
         if (!installed.compareAndSet(false, true)) return
         val sink = object : PlayerListener {
             override fun onSnapshot(snapshot: PlayerSnapshot) {
+                // ONLY a state write: this runs on a RUST thread, and calling back
+                // into the core from here is the deadlock the boundary's rules
+                // name. The reconcile step (a podcast's rate) runs on the
+                // collector's own thread, where `NowPlayingHost` drives it.
                 _snapshot.value = snapshot
-                PodcastSpeed.reconcile(port, snapshot)
             }
 
             override fun onQueueChanged(version: ULong) {

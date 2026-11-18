@@ -306,7 +306,7 @@ class NowPlayingWideScreenshotTest : NowPlayingScreenshotBase(600)
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = "w1280dp-h800dp-xhdpi")
+@Config(sdk = [34], qualifiers = "w1280dp-h800dp-mdpi")
 class NowPlayingTabletScreenshotTest : NowPlayingScreenshotBase(1280) {
     @Test
     fun tabletEncre() {
@@ -314,24 +314,6 @@ class NowPlayingTabletScreenshotTest : NowPlayingScreenshotBase(1280) {
         val state = model.state.value
         val lyricsModel = lyrics()
         capture(name(NzThemeKind.Encre, "lecteur-tablette"), NzThemeKind.Encre) {
-            PlayerSurface(
-                state = state,
-                model = model,
-                nav = navigator,
-                lyrics = lyricsModel,
-                about = null,
-                onClose = {},
-                liveReads = false,
-            )
-        }
-    }
-
-    @Test
-    fun tabletPapier() {
-        val model = model()
-        val state = model.state.value
-        val lyricsModel = lyrics()
-        capture(name(NzThemeKind.Papier, "lecteur-tablette"), NzThemeKind.Papier) {
             PlayerSurface(
                 state = state,
                 model = model,

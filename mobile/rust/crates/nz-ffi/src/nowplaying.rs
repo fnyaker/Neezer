@@ -150,7 +150,12 @@ impl From<core::card::Selection> for CardSelectionData {
     }
 }
 
-#[uniffi::export]
+// The attribute is REQUIRED here: UniFFI's `tokio` runtime is what polls the
+// `async fn`s below, and without it the first device call answers "there is no
+// reactor running, must be called from the context of a Tokio 1.x runtime"
+// (measured on the emulator, 2026-11-18 — the JVM tests never see it because the
+// host test runner's own runtime hides the missing one).
+#[uniffi::export(async_runtime = "tokio")]
 impl Screens {
     // -- the words of a title -------------------------------------------------
 

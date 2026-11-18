@@ -281,7 +281,7 @@ private fun previewLabel(texts: List<String>): String = if (texts.isEmpty()) {
 private fun shareCard(context: Context, file: File) {
     val uri: Uri = FileProvider.getUriForFile(
         context,
-        "${context.packageName}.nowplaying.cards",
+        "${context.packageName}.fileprovider",
         file,
     )
     val send = Intent(Intent.ACTION_SEND).apply {
@@ -344,7 +344,12 @@ object LyricCardPainter {
         drawWords(canvas, lines)
         drawMeta(canvas, cover, title, artist, accent)
 
-        val dir = File(context.cacheDir, "cards").apply { mkdirs() }
+        // `cacheDir/shared` is the ONE directory the app hands to other apps (it is
+        // what `:feature:setup`'s FileProvider exposes, `@xml/file_paths`): the card
+        // goes there, so the app has ONE provider and not two — the manifest
+        // merger refuses two `androidx.core.content.FileProvider` entries with
+        // different authorities (measured: `processDebugMainManifest` failed).
+        val dir = File(context.cacheDir, "shared").apply { mkdirs() }
         val file = File(dir, filename)
         file.outputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
         return bitmap to file

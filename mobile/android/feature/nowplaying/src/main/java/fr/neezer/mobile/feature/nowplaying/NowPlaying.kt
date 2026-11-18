@@ -200,15 +200,24 @@ fun NowPlayingHost(nav: NzNavigator, modifier: Modifier = Modifier) {
         PlayerFeed.install(playerPort, subscribe = { listener -> subscribePlayer(listener) })
         model.refresh()
     }
-    LaunchedEffect(model) {
-        PlayerFeed.snapshot.filterNotNull().collect { model.onSnapshot(it) }
+    LaunchedEffect(model, playerPort) {
+        PlayerFeed.snapshot.filterNotNull().collect { snapshot ->
+            model.onSnapshot(snapshot)
+            // A podcast's rate: the show's own, applied to the engine — on THIS
+            // thread (never inside the Rust callback that pushed the snapshot).
+            PodcastSpeed.reconcile(playerPort, snapshot)
+        }
     }
     LaunchedEffect(model) {
         PlayerFeed.queueVersion.collect { model.onQueueChanged(it) }
     }
 
     val now = state.current
-    val playable = state.snapshot?.state == PlayState.PLAYING
+    val opened = NowPlayingState.open
+    // The words are asked for when the AUDIO is under way AND somebody is looking
+    // at the player (`lib/lyrics.js`'s `playable`, plus rule 1: a request nobody
+    // asked for is not sent — the mini bar draws no words).
+    val playable = state.snapshot?.state == PlayState.PLAYING && opened
     LaunchedEffect(now?.key, playable, lyrics) {
         lyrics?.onTrack(now?.key, now?.artists ?: "", now?.title ?: "", playable)
     }
@@ -218,7 +227,6 @@ fun NowPlayingHost(nav: NzNavigator, modifier: Modifier = Modifier) {
         lyrics?.onPosition(state.position.positionS)
     }
 
-    val opened = NowPlayingState.open
     val pane = NowPlayingState.pane
     AnimatedVisibility(
         visible = opened,
