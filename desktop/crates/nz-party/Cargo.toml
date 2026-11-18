@@ -29,6 +29,11 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 symphonia = { workspace = true }
+# The guest's chunk decoder registers symphonia's Opus decoder by its
+# fully-qualified path (`guest.rs#decode_chunk`), which no `use` line shows:
+# SC0's manifest missed it, exactly as it did for `nz-analysis` (SC1). It was
+# already a workspace pin, so this adds a dependency EDGE and no package.
+symphonia-adapter-libopus = { workspace = true }
 rubato = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
