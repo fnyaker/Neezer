@@ -118,6 +118,11 @@ fun SettingsEntry(
                         state = state,
                         section = section,
                         onBack = null,
+                        // MB21's door: « Réglages → Animations » opens the full-screen
+                        // visualiser, exactly as `VisualizerSettings.svelte#openScreen`
+                        // opens the SPA's projector. One line, declared out of MB21's
+                        // file list in its PR.
+                        onOpenViz = { nav.openViz() },
                         modifier = Modifier.verticalScroll(rememberScrollState()),
                     )
                 }
@@ -137,6 +142,7 @@ fun SettingsEntry(
                 state = state,
                 section = section,
                 onBack = { nav.back() },
+                onOpenViz = { nav.openViz() },
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             )
         }
@@ -329,6 +335,8 @@ private fun SettingsPane(
     state: SettingsModel.State,
     section: String?,
     onBack: (() -> Unit)?,
+    /** MB21: opens the full-screen visualiser (null in a screenshot test). */
+    onOpenViz: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
@@ -366,7 +374,7 @@ private fun SettingsPane(
                 when (section) {
                     "playback" -> PlaybackSection(model, state)
                     "appearance" -> AppearanceSection(model, state)
-                    "viz" -> VizSection(model, state)
+                    "viz" -> VizSection(model, state, onOpenViz)
                     "downloads" -> DownloadsSection(model, state)
                     "discovery" -> DiscoverySection(model, state)
                     // LN14's own screen, hosted (MB16's extension point).

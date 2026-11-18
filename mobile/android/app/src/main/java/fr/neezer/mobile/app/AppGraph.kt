@@ -127,6 +127,16 @@ class AppGraph(private val application: Application) : NzNavigator {
     }
 
     /**
+     * The full-screen visualiser (MB21). One destination, reached from Réglages →
+     * Animations (`VisualizerSettings.svelte#openScreen`'s door); `launchSingleTop`
+     * so two taps do not stack two scenes, each with its own analysis view.
+     */
+    override fun openViz() {
+        val nav = controller ?: return
+        nav.navigate(Routes.Viz) { launchSingleTop = true }
+    }
+
+    /**
      * An incoming URL (`neezer://…`, a `/app/#/…` link, a shared Deezer or
      * Spotify URL) opened through [resolveLink] (MB2 owns the rule).
      */
