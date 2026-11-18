@@ -373,8 +373,11 @@ private fun SettingsPane(
                     "account" -> AccountSection(model, state)
                     "help" -> HelpSection(model, state)
                     // MB17's two pages: its own module, its own composable. This
-                    // line is the whole seam (the extension point the note names).
-                    "users", "server" -> AdminSections()
+                    // line is the whole seam (the extension point the note names),
+                    // and it hands the page ITS OWN id: `AdminSections()` with no
+                    // argument drew the same page for both categories (MB17's
+                    // PR declares the one-word edit as outside its file list).
+                    "users", "server" -> AdminSections(section)
                     else -> Text(
                         text = "Cette page arrive avec son lot.",
                         style = Sillon.type.body,
