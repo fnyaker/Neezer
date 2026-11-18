@@ -2078,13 +2078,8 @@ ViewModel test asserts the command sent through a fake). **Exclusive files**: th
 ownership table. **Acceptance**: the screen standard + the rows below. The SPA files of the
 inventory are the behaviour; port them, do not invent.
 
-- **MB5 — Home.** FFI (`home.rs`): `cached_home()/home() -> HomeData { hero: HeroData, resume:
-  Option<ResumeCard>, moods: Vec<MoodCard>, releases: Option<ReleasesCard>, recap: Option<RecapCard>,
-  flow: FlowState }`, `flow_styles() -> Vec<FlowStyle>`, `set_energy(level)`, `discovery_level()/
-  set_discovery_level(v)` (the slider, also used by MB16). Kotlin: `HomeEntry`, the Flow picker/
-  controls/up next ("the Flow holds the playing title and AT MOST the next", webapp.md). Rows:
-  cold home ≤ the SPA's request count; the hero paints from cache before any request on a warm start
-  (TTFD from cache ≤ 900 ms measured by MQ1's `StartupBenchmark`).
+- **MB5 — Home.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not port:
+  see « MB5 — Accueil » below.*
 - **MB5b — Invite and onboarding.** FFI (`onboarding.rs`): `inspect_invite(code)`, `redeem_invite(code,
   username, password)`, `onboarding_state()`, artists search/like/done, account options/link/import
   (import is a background job: progress + causes, rule 2). Kotlin: `InviteEntry`, `OnboardingEntry`.
@@ -2117,6 +2112,149 @@ inventory are the behaviour; port them, do not invent.
   podcast episode, an upload and a YouTube row differ exactly as the SPA's.
 
 Their prompts: *Ready prompts for the screen lots* below.
+
+### MB5 — Accueil (delivered 2026-11-18)
+
+**What landed.** The home, ported from `routes/Home.svelte` and the components it
+draws, and the Flow's steering — the notch, the styles, the breadth — which the
+SPA keeps in `lib/flow.js` and `lib/discovery.js`.
+
+- **One answer, seven requests.** `Screens.home()` asks the SPA's own list —
+  `/releases`, `/me/artists`, `/moods`, `/discover/prefs`→`/recommend`,
+  `/recap/years` — CONCURRENTLY on the `User` lane (`tokio::join!`, as
+  `loadAll()` fires them), and `Screens.flow_styles()` is the seventh (the chips
+  and Explorer share it, once per visit). Measured: **7 requests cold, 0 warm**,
+  and `NzCore::stats()` holds one `home` row with the same seven.
+- **The cache paints, the network replaces it.** The SPA's home paths are NOT in
+  `lib/apicache.js`'s cacheable list, so the lot keeps its OWN per-account
+  snapshot (`cacheDir/home-<fnv1a(account)>.json`, written through `.part` +
+  rename) plus the genre list (`flow-styles-<hash>.json`). `cached_home()` is
+  disk-only and overlays the DEVICE's Flow state, so a warm start has the hero's
+  notches on the first frame and costs no request; a dead link answers
+  `Offline` in zero sockets and the screen keeps that copy, flagged « Hors ligne
+  · version mémorisée ».
+- **A section that refuses costs its own sentence.** Releases, artists and
+  « Pour toi » each add one to `failures`; a mood or the Récap card failing
+  leaves the row absent and the home whole (the SPA's own rule), and only an
+  empty home with three failures says « L'accueil n'a pas pu se charger » with
+  « Réessayer ».
+- **The Flow's body is the SPA's.** `Screens.start_flow()` sends
+  `{sid, d, energy, styles, heard, more, less, exclude, n}` with `n = 2` and the
+  queue's tail as `exclude`, because `PlayerCommand::StartFlow` and
+  `Filler::flow` send `d: null, energy: null` — the notch would be lost. Each
+  press of the controls (`flow_feedback(More/Less/Reaim)`) is ONE `POST
+  /flow/next` with the session's `more`/`less`, and the Kotlin side replaces
+  what is queued (and skips, for « moins comme ça »): « the Flow holds the
+  playing title and AT MOST the next », then the player's own refill adds one at
+  a time, at the level the account holds.
+- **The device's prefs are the source of the first frame.**
+  `flow.energy`/`flow.styles`/`discover.level`/`flow.session` live in `kv`; the
+  notches and the chip are filled before any request, the account's copy wins
+  when `/discover/prefs` answers, and every write is one `PUT
+  /api/discover/prefs`.
+- **Kotlin**: `HomeEntry` (the wiring: `NzNavigator` links, MB10's
+  `TrackActions.open`, the player), `HomeScreen` (a pure `(state, actions)`
+  function), `HomeModel` (the state machine over `HomeService`/`PlayerPort`),
+  `HomeStyles` (the ported `styleFamilies`/`flat`), `AppPlayer` (one holder).
+
+**Measured on this machine** (API 35 x86_64 `-no-window -no-audio` on port 5640,
+`perf_api.py --serve` 400 tracks / 30 favourites reached at `10.0.2.2`):
+
+- **The screen**: cold home **7 requests / 53 210 bytes** on the real server
+  (`/releases` 46 367, `/me/artists` 5 388, `/moods` 682, `/discover/prefs` 426,
+  `/recommend` 68, `/recap/years` 265, `/flow/styles` 14 — this synthetic
+  library has no analysis, so the two shelves are the bulk); warm open **0
+  requests** (asserted twice: the snapshot read and `stats()`); the fake
+  server's own unit test holds 7 requests / 2 430 bytes.
+- **Rust**: `cargo test -p nz-core --locked` **130 tests** (24 of them
+  `home::*`: 6 ladder/prefs, 3 wire, 3 assembly, 12 against a counting HTTP
+  server), `nz-ffi` 22; `clippy -D warnings` and `fmt --check` clean.
+- **JVM**: `:feature:home:testDebugUnitTest` **26 tests** — `HomeModelTest` 16
+  (cache-then-answer, stale keeps the copy, `Failed(cause, retry)`, optimistic
+  notch with rollback + toast, one save per notch/level, one style write with no
+  request, `startFlow` sends one command with the session id, a refused launch is
+  a toast, `/moins/plus comme ça`, a mood is one request and a finite queue, an
+  empty mood says so, suggestions replace the rows, a release plays from its
+  title, a row plays then its radio, the chips are asked once),
+  `HomeStylesTest` 4, and the three screenshot tests per width.
+- **Look**: `docs/agents/screenshots/mobile/MB5/` — Encre and Papier at 360 dp
+  and 600 dp, Encre at 200 % font scale, and two headless-emulator captures of
+  the REAL screen against the live server (top: hero, « Reprendre »,
+  « Nouveautés 79 titres » with the unseen badge; bottom: the release grid,
+  « Tes artistes », the Récap card « Ton année 2026, en cours · 10 800 écoutes ·
+  37 400 minutes »). The window captures are cropped to their content, so the
+  PNG is the page and not an empty display.
+- **The screen's marker, a contract**: the home's root carries
+  `contentDescription = "Accueil Neezer"` (`HomeScreen.kt#HOME_MARKER`), in EVERY
+  state — hero, skeletons, a failed load with no server — and independent of the
+  clock. `mobile/tools/ci-emulator.sh` waits for that node after tapping
+  Accueil, instead of the MB0 stub's sentence which this lot removed. Measured
+  on a FRESH install with no server, at two clock settings: 09:10 Wednesday
+  gives `content-desc="Accueil Neezer"`, « BONJOUR · MERCREDI »,
+  « Quelle énergie ce matin ? », « L'accueil n'a pas pu se charger » and
+  « Réessayer »; 22:30 Thursday gives the SAME marker, the SAME page and a
+  greeting that changed to « BONJOUR · JEUDI ». A needle taken from the greeting
+  or from the masthead's « ce matin » would therefore be a clock in disguise
+  (the SPA keeps that copy fixed — the weekday above it is the real date), which
+  is why the marker is a literal and not a sentence.
+- **Sizes**: `libnz_ffi.so` arm64-v8a **9 587 912 B**, armeabi-v7a 6 517 224 B,
+  x86_64 11 506 576 B, and their `NEEDED` list is the system's alone
+  (`libdl liblog libm libc`) — PR #309's static C++ link, which this lot's
+  screen rebuilds and runs. MB4 was 6 356 480 / 4 413 880 / 6 925 840; the
+  +3.2 MB on arm64 is the analysis/playback stack MB3b linked, not this lot's
+  records.
+
+**Rules a measurement taught** (each cost a wrong build or a silent extra
+request):
+
+- **`NzCore::player()` opens a NEW player on every call** — its own queue, its
+  own two runtime workers, its own engine. A screen may not call it per click:
+  `AppPlayer` (this module) is the one holder, behind the `PlayerPort` seam, and
+  **MB3c takes it over** when `:playback` exposes the app's facade. Two holders
+  would be two queues over one database.
+- **A Flow started by the player cannot carry the notch.** `Filler::flow` builds
+  `{d: null, energy: null}` and `PlayerCommand::StartFlow` carries only a style,
+  so the home builds the body itself for the FIRST pick; the refills that follow
+  are right about the level only because `set_discovery_level` also wrote it to
+  the account (the server reads `discover.level_of` when `d` is null). The notch
+  is lost from the second title on — a follow-up for MB3b's `Filler` (read the
+  home's prefs, or take the body from it).
+- **Two `Ready` emissions cost a request if the loader is guarded on data.**
+  `screenFlow` sends the cached answer and then the fresh one; `loadStyles()`
+  checks a JOB, not `styles.isNotEmpty()`, or a cold home asks `/flow/styles`
+  twice (8 requests, not 7). Caught by the counting test, not by the screen.
+- **`nz-api`'s per-tag totals are the byte measure**, and `Meter::record` counts
+  exactly ONE request per call: the run's whole byte count goes with the first
+  row and the remaining N−1 are zeros. Measuring bytes any other way (a JSON
+  body the client decoded internally) is a guess.
+- **A UniFFI record's Kotlin `var` properties defeat smart casts.** `data.releases
+  != null && data.releases.tracks…` does not compile: take the value into a `val`
+  first. And `u32` becomes `UInt`, so every `> 0`, `>= 3` and `div` in a screen
+  needs its `u` — six compile errors in one pass.
+- **This tree builds with JDK 21, not 25/27.** The Kotlin compiler's own
+  `JavaVersion.parse` throws `IllegalArgumentException: 25.0.5` on a three-part
+  JDK version, and Gradle reports it as a bare « What went wrong: 25.0.5 » with
+  no task: `JAVA_HOME=~/.local/share/jdks/jdk-21.0.13+9` is what works here.
+- **The hero's button is `--onac` on an `--ac` surface**, i.e. ink on lemon in
+  Encre and lemon on ink in Papier. `NzButton(Primary)` is `--btn`/`--onbtn`,
+  which equals the accent in Encre — a lemon button on the lemon hero, invisible.
+  The notches and the tune chip draw their own outline/fill for the same reason.
+- **`NzCore::player()` aside, nothing restores the session at launch**: only
+  `SetupModel` calls `restore()`, so on a cold start `core.me()` is null and the
+  hero reads « BONJOUR · MERCREDI » without a name (visible in the emulator
+  capture). The shell (`NzApplication`/`AppGraph`) owns that call, not this lot.
+
+**Not ported, on purpose** (both named in the SPA's `routes/Home.svelte`):
+
+- **« Écoutés récemment »** — the SPA derives it from a DEVICE list
+  (`recent.tracks` in `localStorage`) that no core store carries yet; it needs
+  MB3b's listen accounting to publish the last played rows.
+- **« Tout afficher »** (the door to Nouveautés) — `NzNavigator` speaks
+  `AppLink`s and there is no `AppLink` for the releases shelf; MB14 adds one when
+  it fills that screen (this lot may not edit `links.rs`).
+- **The discovery SLIDER** — `DiscoverySlider.svelte` is MB14's; the hero's
+  tuning chip opens the four `discovery.js` stops as chips, which is the same
+  value set the slider snaps to.
 
 ### MB3c — Media service `:playback` (wave 3)
 
