@@ -31,10 +31,22 @@ internal object OfflineCore {
     private val mutex = Mutex()
     private val attached = AtomicBoolean(false)
 
-    /** The bound API, or `null` when the native core could not be built at all. */
+    /**
+     * The bound API, or `null` when the native core could not be built at all.
+     *
+     * **A bind that fails is NOT swallowed.** It used to be
+     * (`runCatching { … }.isSuccess`), and the effect was the worst kind: the
+     * attach answered `there is no reactor running` on every device — the export
+     * lacked `async_runtime = "tokio"` (fixed in `nz-ffi/src/offline.rs`) — so no
+     * download could ever be created, every screen said "les téléchargements ne
+     * sont pas reliés au noyau", and nothing in the app surfaced the cause
+     * (rules 2 and 3). The exception now reaches the caller, which shows it
+     * (`DownloadsModel`'s `causeText` → a notice with « Réessayer »), and the next
+     * call tries the bind again because [attached] is only set on success.
+     */
     suspend fun api(): OfflineApi? = mutex.withLock {
         val core = NzBridge.core ?: return null
-        if (!attached.get() && runCatching { offlineAttach(core) }.isSuccess) {
+        if (bindOnce(attached.get()) { offlineAttach(core) }) {
             attached.set(true)
         }
         core.offline()
@@ -44,6 +56,20 @@ internal object OfflineCore {
     fun forget() {
         attached.set(false)
     }
+}
+
+/**
+ * Binds the downloads' service ONCE, and lets a failure OUT.
+ *
+ * Extracted from [OfflineCore] so a JVM test can hold the two rules without a
+ * `.so`: an `attach` that throws propagates (the screen shows the cause), and the
+ * binding is not marked done, so the next call tries again — a silent `false`
+ * here is exactly the "button that seems to do nothing" of rule 2.
+ */
+internal suspend fun bindOnce(attached: Boolean, attach: suspend () -> Unit): Boolean {
+    if (attached) return true
+    attach()
+    return true
 }
 
 /**

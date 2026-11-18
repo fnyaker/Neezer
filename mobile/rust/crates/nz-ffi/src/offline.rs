@@ -252,7 +252,15 @@ fn unbound() -> NzError {
 /// (`NzBridge.install` cannot: `:bridge` is another lot's file). It is `async`
 /// because binding is where `nz-bulk` learns the runtime it drives its futures
 /// with, and only an async call has one. Idempotent.
-#[uniffi::export]
+///
+/// **`async_runtime = "tokio"` is not optional.** Without it UniFFI polls the
+/// future on no reactor at all: the JVM suites never see it (their own runtime
+/// hides the gap), and on a DEVICE the call answers
+/// `InternalException: there is no reactor running, must be called from the
+/// context of a Tokio 1.x runtime` — measured on the emulator on 2026-11-18, where
+/// it made every download impossible (`OfflineCore.api()` swallowed it, so the
+/// screens said "les téléchargements ne sont pas reliés au noyau").
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn offline_attach(core: Arc<NzCore>) {
     core::attach(core.core()).start_session().await;
 }
