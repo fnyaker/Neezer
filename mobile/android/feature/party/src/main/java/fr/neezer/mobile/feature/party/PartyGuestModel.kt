@@ -237,11 +237,19 @@ class PartyGuestModel(
     /**
      * The screen is going away. The guest KEEPS playing (the note's rule: a party
      * outlives its screen, like the player's queue) — only an explicit [leave]
-     * ends it. What stops here is the push subscription for a screen nobody sees.
+     * ends it. What stops here is this screen's own work, and a *Décalage* the
+     * person tapped just before leaving is APPLIED rather than dropped: a value
+     * they set is a setting, and a debounce is not a reason to lose it
+     * (`Party.svelte#nudge` applies on the last tap, never on unload).
      */
     fun close() {
         unsubscribe()
         trimJob?.cancel()
+        if (trimDraft != 0) {
+            service.setTrim(service.prefs().trimMs + trimDraft.toDouble())
+            trimDraft = 0
+            _state.value = _state.value.copy(trimMs = service.prefs().trimMs.toInt())
+        }
     }
 
     private fun subscribe() {
