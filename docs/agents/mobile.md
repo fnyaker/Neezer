@@ -3328,13 +3328,14 @@ badge, a podcast's rate — and the data behind them, in Rust.
   file : **p50 737,6 ms, max 749,7 ms** (première série : 755,2 / 981,3) sur
   l'émulateur, **0 underrun**, tampon 500 ms — et `latency_ms` (500) est la part
   du HAL, que le son entendu ajoute APRÈS le premier échantillon rendu.
-- **Un titre téléchargé se lit sur le disque par CE lecteur** : MB3b's
-  `ServerOpener::local` demande d'abord `Downloads::local`, puis la play cache,
-  puis le réseau (`nz-core/src/player/source.rs`). La preuve de bout en bout
-  (mode avion → le titre joue) n'a PAS pu être faite : `offline_attach` de MB15 est
-  exporté sans `async_runtime = "tokio"` et rend « there is no reactor running »
-  sur l'appareil (mesuré), si bien que `OfflineCore.api()` avale l'échec et
-  qu'aucun téléchargement ne peut être créé — c'est le fichier de MB15.
+- **Un titre téléchargé se lit sur le disque par CE lecteur, et c'est mesuré.** La file de MB11 ne
+  pousse que des `PlayQueue`/`Jump` dans MB3b's `ServerOpener::local`, qui demande d'abord
+  `Downloads::local`, puis la play cache, puis le réseau. La preuve de bout en bout manquait : elle
+  était BLOQUÉE par MB15 (`offline_attach` exporté sans `async_runtime = "tokio"` → « there is no
+  reactor running » sur l'appareil, avalé par `OfflineCore.api()`, donc aucun téléchargement ne pouvait
+  exister). Corrigé dans une PR séparée (une ligne + la cause qui remonte) ; depuis, le test de ce lot
+  télécharge un vrai titre, coupe le lien au noyau (`setNetwork(None)`), et le lecteur REND :
+  **position 0,247 s, 0 underrun, aucune requête pour ce titre**.
 - **`position()` is a frame's work, and a frame that draws nothing touches no binding.** The sheet's
   rail reads it once per visible frame, the mini bar at the SPA's own 4 Hz, and
   `PositionTicker.frame(drawn)` answers `null` otherwise. Device: **6 reads while the player draws,
@@ -3393,7 +3394,8 @@ emulator API 35 x86_64 `-no-window -no-audio` on this lot's own port 5660):
 | The device: the words | `NowPlayingDeviceTest` (loopback bench in the app process) | **1 request / 214 B** cold, **0** from the copy, the radio **1** |
 | The device: the queue | 4 000 real rows (`PlayerCommand.PlayQueue`), scrolled to row 1201 | rows **4 000**, reached **1201**, the screenshot above; **frames not measured** (see the rule) |
 | The device: screen off | `UiDevice.sleep()` + ON_STOP, then forced frames | **6** `position()` calls while drawing, **0** more asleep |
-| The device: **tap → son** | 20 taps on queue rows, one clock (`elapsedRealtimeNanos`), first RENDERED sample | **p50 737,6 ms, max 749,7 ms**, 0 underrun, `latency_ms` 500 (the HAL's own part) |
+| The device: **tap → son** | 20 taps on queue rows, one clock (`elapsedRealtimeNanos`), first RENDERED sample | **p50 737,6 / 739,1 / 761,3 ms, max 749,7 / 749,6 / 981,3 ms** (3 runs), 0 underrun, `latency_ms` 500 (the HAL's part) |
+| The device: **mode avion** | MB15's real `addSet`, then `setNetwork(None)`, then `PlayQueue` + `Play` | le titre téléchargé joue (**position 0,247 s**), **0 underrun**, **0 requête** pour ce titre |
 | `libnz_ffi.so` | `build-android.sh` (release, stripped) | arm64-v8a **11 203 016 B**, armeabi-v7a **7 566 440 B**, x86_64 **13 304 976 B**; `NEEDED` names only what Android provides |
 
 **Deliberate deviations from the plan paragraph, and why.**
@@ -3412,11 +3414,7 @@ emulator API 35 x86_64 `-no-window -no-audio` on this lot's own port 5660):
 - The queue crosses as `NzRowSource` (`ListHandle.asRowSource()`) rather than a raw handle, so a JVM
   test can hold a 4 000-row queue without a `.so`; the window is still `:designsystem`'s `ListWindow`.
 
-**Still owed, and to whom.** MB15's `offline_attach` needs `#[uniffi::export(async_runtime = "tokio")]`
-(it runs on the JVM tests' own runtime but fails on a device: "there is no reactor running"), and
-`OfflineCore.api()` should not swallow that failure — until then the airplane-mode download cannot be
-created and this lot's disk-play path is proven only by MB3b's `ServerOpener::local` (which has no test
-of its own). The frame budget of a 4 000-row fling on real hardware: MQ2's
+**Still owed, and to whom.** The frame budget of a 4 000-row fling on real hardware: MQ2's
 `ScrollBenchmark#queueScroll4000` (MQ1's file, inactive until a screen paints the queue — the queue is
 reachable now that `openQueue()` opens it). A podcast's own panel (chapters, description, transcript)
 is MB13's; until it lands the player offers no « À propos » for an episode. `VizApi`'s strip (MB21)
