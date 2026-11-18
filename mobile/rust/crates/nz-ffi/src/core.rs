@@ -392,7 +392,7 @@ impl NzCore {
         // audio tap, so it is ONE per process like the player (MB3b's rule), built
         // over this core. A one-line seam in MB2's merged file, declared out of
         // this lot's list in the PR, exactly as `player()` was.
-        VizApi::shared(Arc::clone(&self.core))
+        VizApi::shared(Arc::clone(&self.core), self.player())
     }
 
     pub fn settings(&self) -> Arc<SettingsApi> {

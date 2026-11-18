@@ -54,6 +54,29 @@ pub fn no_tap() -> TapOpener {
     Arc::new(|| None)
 }
 
+/// **MB12's own subscription, as this seam sees it.** The four methods are the
+/// whole of the published contract (`docs/agents/mobile.md`, *The tap contract*),
+/// and Drop is the unsubscription: MB12's `TapSubscription` frees its slot on the
+/// mixer's next buffer with no lock and no join, so the visualiser releasing one
+/// costs the music nothing.
+impl TapSource for nz_audio::TapSubscription {
+    fn read(&mut self, out: &mut [f32]) -> usize {
+        nz_audio::TapSubscription::read(self, out)
+    }
+
+    fn frames_available(&self) -> usize {
+        nz_audio::TapSubscription::frames_available(self)
+    }
+
+    fn dropped(&self) -> u64 {
+        nz_audio::TapSubscription::dropped(self)
+    }
+
+    fn clear(&mut self) {
+        nz_audio::TapSubscription::clear(self)
+    }
+}
+
 /// What one read of a [`SyntheticTap`] costs, in frames: 10 ms at 48 kHz.
 pub const SYNTH_BLOCK: usize = 480;
 

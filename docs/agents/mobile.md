@@ -3515,7 +3515,9 @@ its cap and its analysis subscription), `lib/viz/scenes/bars.js` and `scope.js`'
   (the source's targets, the clock-free drift, the easing, the sleeve's seven-stop walk);
   `settings.rs` reads the device's `kv` store and applies the two rules the acceptance names
   (eco means NONE, and it caps the picture at 30); `tap.rs` is the seam MB12's multi-reader tap plugs
-  into, proven with a deterministic synthetic source.
+  into — `impl TapSource for nz_audio::TapSubscription` is the whole adapter, and the visualiser opens
+  ONE subscription when the first view appears and drops it when the last leaves, so it and MB12's EQ
+  meter look at the same sound at the same time without either borrowing it.
 - **The FFI** (`nz-ffi/src/viz.rs`): `VizApi` (one per process, like the player), `VizFrame` (the
   record MB0 pinned, grown to what a `Canvas` needs: peaks, both traces, the palette's HSL and its
   seven stops, the scope's gain and lock), `VizSettingsData`, `VizStats` (ticks, subscriptions,
@@ -3568,7 +3570,7 @@ API 35 x86_64 `-no-window -no-audio` on this lot's port 5606):
 | Rust, the frame | `cargo test -p nz-core viz::frame` | one level and one peak per capsule, no scope in bars mode and 512 columns in scope mode, the shape clamped, a frame counted at **≤ 16 KB** |
 | Rust, the palette | `cargo test -p nz-core viz::palette` | the Sillon lemon for a sleeve with no hue, red→green→blue left to right, the short way round the wheel, a grey band borrowing the sleeve's hue, the four fixed schemes' own spread |
 | Rust, the boundary | `cargo test -p nz-ffi viz` | the record crosses with its 7 × 3 palette stops; the settings cross with the effective mode and the eco cap |
-| Rust, the workspace | `cargo test --workspace --locked` | **440 `nz-core` + 69 `nz-ffi` + 7 + 1**, all green; `clippy -D warnings` and `fmt --check` clean |
+| Rust, the workspace | `cargo test --workspace --locked` | **570 `nz-core` + 92 `nz-ffi` + 7 + 1** (on MB12's merged tap), all green; `clippy -D warnings` and `fmt --check` clean |
 | JVM | `:feature:viz:testDebugUnitTest` | **38 tests**: 13 model (optimistic tap, rollback + « Réessayer », eco, one cover per track, the card and the pause), 19 screenshots, 6 semantics |
 | The look | `docs/agents/screenshots/mobile/MB21/` | **20 PNGs**: Encre/Papier at 360 and 600 dp, the two scenes, the pause, « Rien en lecture », eco, the 200 % scale, the photosensitivity warning in both themes |
 | The device | `:feature:viz:connectedDebugAndroidTest` (port 5606) | **bars p95 5.88 ms / p99 9.39 ms, scope p95 12.95 / p99 14.42** for one scene's draw into the backing store (120 draws each, measured while the machine carried other lots' builds) |
@@ -3619,9 +3621,8 @@ change), `app/.../AppGraph.kt` (its override, one route), `feature/settings/.../
 
 **Still owed, and to whom.**
 
-- **The p95 on a quiet machine, or CI**: the harness is `:feature:viz:connectedDebugAndroidTest`
-  (FrameMetrics, 120 frames, latch on the frame count). MQ2 owns the journey's numbers; this lot
-  contributes the screen's own.
+- **The whole frame's p95 on a device**: this lot measures the scene's draw (in budget); the frame's
+  rasterisation is MQ2's `FrameTimingMetric` on the journey (see above).
 - **`NzSwitch`'s `toggleableState`** (MB1): TalkBack says "interrupteur" without on/off on every
   switch in the app. One line in `Buttons.kt`'s `NzSwitch` semantics.
 - **`viz.flash` / `viz.flash.ack` in the local whitelist** (MB16/MB22) — the warning's gate.

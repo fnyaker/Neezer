@@ -38,6 +38,7 @@ use nz_core::core::Core;
 use nz_core::viz::{self as core_viz, Viz};
 
 use crate::errors::NzError;
+use crate::player::PlayerApi;
 
 /// One analysed frame, as the bars and the oscilloscope draw it.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Default)]
@@ -151,21 +152,21 @@ impl VizApi {
     /// Builds the service over the core. `nz-core::viz::Viz` starts no thread
     /// until a view is visible, so this is cheap enough for
     /// `Application.onCreate`'s graph.
-    pub fn open(core: Arc<Core>) -> Arc<VizApi> {
-        // MB12's multi-reader tap (`Player::subscribe_tap`) is what the opener
-        // takes, and it is merged with this lot: `NzCore::viz()` hands the
-        // player's subscription in. Until then the seam answers "no tap" and the
-        // surface draws its rest frame — the analysis, the gating and every rule
-        // are proven against the synthetic source in `nz-core::viz`'s tests.
-        let opener = core_viz::tap::no_tap();
+    pub fn open(core: Arc<Core>, player: Arc<PlayerApi>) -> Arc<VizApi> {
+        // The analysis tap is MB12's multi-reader subscription
+        // (`Player::subscribe_tap`): the opener takes ONE when the first view
+        // becomes visible and drops it when the last leaves, so the visualiser and
+        // the EQ meter can look at the same sound at the same time without either
+        // borrowing it.
+        let opener: core_viz::tap::TapOpener = Arc::new(move || player.subscribe_tap());
         Arc::new(VizApi {
             viz: Viz::new(core, opener),
         })
     }
 
     /// The process' one instance, opened over the first core that asks.
-    pub fn shared(core: Arc<Core>) -> Arc<VizApi> {
-        Arc::clone(SHARED.get_or_init(|| VizApi::open(core)))
+    pub fn shared(core: Arc<Core>, player: Arc<PlayerApi>) -> Arc<VizApi> {
+        Arc::clone(SHARED.get_or_init(|| VizApi::open(core, player)))
     }
 }
 

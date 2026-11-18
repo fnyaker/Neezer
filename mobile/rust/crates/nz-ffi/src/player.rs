@@ -989,6 +989,25 @@ fn core_audio(audio: AudioSettings) -> core::AudioSettings {
     }
 }
 
+/// The Rust-side seams MB21 needs and Kotlin does not.
+///
+/// Deliberately OUTSIDE the `#[uniffi::export]` blocks: UniFFI exports every
+/// `pub fn` of an exported `impl`, and a `Box<dyn TapSource>` is not a type it can
+/// carry. The visualiser opens the tap inside Rust, so no subscription object ever
+/// has to cross to Kotlin (and no Kotlin code could hold one by mistake).
+impl PlayerApi {
+    /// ONE subscription on MB12's multi-reader tap, released on Drop.
+    ///
+    /// Boxed rather than named `nz_audio::TapSubscription` because `nz-ffi` does
+    /// not depend on `nz-audio` (a shared manifest this lot may not edit): the type
+    /// is `nz-core`'s own seam, and MB12's subscription is behind it
+    /// (`impl TapSource for TapSubscription`).
+    pub fn subscribe_tap(&self) -> Option<Box<dyn nz_core::viz::tap::TapSource>> {
+        let tap = self.player()?.subscribe_tap()?;
+        Some(Box::new(tap))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
