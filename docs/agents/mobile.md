@@ -1557,71 +1557,66 @@ ONE line each.
   table row above still reads as a plan: this lot could not edit another lot's
   section, so those two lines are the follow-up when desktop.md is next touched.
 
-### LG1 — The new logo (wave 1)
+### LG1 — The new logo (delivered 2026-11-18)
 
-**Goal.** A new Neezer mark, coherent with Sillon (the groove; ink `#0c0c0b`, lemon `#d2ff3c`, cream
-`#f3f0e8`; the layered glass of the SPA's surfaces), that reads at 16 px and survives every
-launcher mask. **Depends on**: MB0 (placeholders). **Exclusive files**: `mobile/brand/**`, the
-launcher/notification resources named in the ownership table.
-**Research first (in the PR, sources named)**: Android [adaptive icons](https://developer.android.com/develop/ui/views/launch/icon_design_adaptive)
-(108 dp canvas, the 66 dp safe zone, monochrome layer for themed icons on Android 13+), the
-notification small-icon rules (white silhouette on transparent, no colour, legible at 24 dp), Material
-product-icon guidance, Apple's app-icon guidance (for iOS later), and how glass/“liquid” marks are
-drawn today (layered translucency, a highlight, refraction) — as a VISUAL LANGUAGE, never a copied mark.
-**Must not resemble**: Spotify (three arcs in a disc — concentric GROOVES are close to it: a groove
-mark must break that reading, e.g. a spiral or an off-centre lens over grooves), Deezer (bars, the
-heart), Apple Music (a note), YouTube Music (a play triangle in a disc — the old SPA icon is a play
-triangle on purple: retired), Tidal, Qobuz. No text, no emoji, no gradient that dies in monochrome.
-**Deliverables.** Three directions as SVG, a contact sheet (each at 16, 24, 48, 108 px, on light and
-dark wallpapers, in circle/squircle/teardrop masks, monochrome) → **the person chooses** (`ao report
---needs-input` with the sheet as an artifact; do not pick alone). Then for the chosen one:
-`mobile/brand/logo.svg` (master, 1024 viewBox), `logo-mono.svg`, `logo-notification.svg`, an export
-script (`mobile/brand/export.sh`, resvg or rsvg-convert, no network) producing the Android vector
-drawables (adaptive foreground/background/monochrome, round, `ic_stat_neezer`) and a 512 px PNG for
-the release page.
-**Acceptance (measured).** At 16 px the mark's silhouette keeps ≥ 2 distinct shapes (no detail below
-1 px); every stroke ≥ 2 dp at 24 dp; contrast ≥ 3:1 against both a white and a black wallpaper in
-colour AND monochrome; the foreground stays inside the 66 dp circle (a script checks the bounding box
-of the SVG paths); the emulator's launcher shows it in the three masks and as a themed icon
-(screenshots via `adb exec-out screencap` on the headless emulator, never the user's screen).
+**What landed.** « La lentille »: a disc and its lens laid off-centre — the gorge around the lens
+is the groove, the lens is the light, nothing concentric and nothing at the centre (Sillon's own
+70/30 rhythm). The person chose it from three measured directions (`mobile/brand/directions/`: la
+lentille, la pochette, le sillage) on a contact sheet at 16/24/48/108 px, two wallpapers, the three
+launcher masks and monochrome.
 
-```text
-Tu es le worker du lot LG1 (nouveau logo) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« LG1 », « Worker rules », « Tests and emulation »), docs/agents/webapp.md
-(Sillon, verre) et webapp/src/app.css.
-Objectif : rechercher (sources nommées dans la PR) puis dessiner TROIS directions de logo en SVG
-cohérentes avec Sillon (sillon, encre/citron/crème, verre en couches), sans ressembler à Spotify,
-Deezer, Apple Music, YouTube Music, Tidal ou Qobuz, sans texte ni emoji ; planche de contact
-(16/24/48/108 px, fonds clair et sombre, trois masques, monochrome) ajoutée comme artefact ; puis
-`ao report --needs-input` : la personne choisit. Ensuite seulement : SVG maître, monochrome,
-notification, script d'export hors-ligne, ressources Android de la section LG1.
-Fichiers à toi seul : mobile/brand/** et les ressources d'icône nommées dans la table de propriété.
-Acceptation : les mesures de la section LG1 (silhouette à 16 px, traits ≥ 2 dp à 24 dp, contrastes ≥ 3:1
-en couleur et monochrome, zone sûre 66 dp vérifiée par script, captures de l'émulateur sans affichage).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/lg1, PR « feat(mobile): LG1 new Neezer logo », CI verte, rebase + diff --stat,
-merge, section LG1 réécrite (direction retenue et pourquoi), `ao report --done`.
-```
+**The icon follows the theme; it is not a fixed black tile** (the person's own requirement). Same
+geometry, two colour arrangements, because a Sillon theme is a colour pair:
+
+| `logo.svg` Encre (night) | ink ground, lemon disc, the gorge a HOLE (ink shows), cream lens |
+|---|---|
+| `logo-papier.svg` Papier (day) | cream ground, ink disc, the gorge PAINTED LEMON, ink lens |
+| `logo-mono.svg` | the mask: same geometry, one colour, no theme |
+| `logo-notification.svg` | the same silhouette at its 24 dp optical size |
+
+The adaptive icon's `<background>` points at `@drawable/ic_launcher_background`, whose
+`drawable-night/` twin is the ink: that is what gives a day/night pair without touching
+`values/colors.xml` (MB0's file, verified read-only by `export.sh`). The two foregrounds and the two
+grounds are generated by `mobile/brand/export.sh` from the four SVGs; the monochrome layer is the
+same geometry, so the themed icon is not a redrawing.
+
+**Measured** (`mobile/brand/check.py`, `rsvg-convert` + numpy, no network):
+
+- **Safe zone**: the farthest foreground pixel is **30.01 dp** from the centre (limit 33), in both
+  themes. Measured on PIXELS: a 60 dp disc's bounding box has corners 42 dp out, so a corner test
+  would reject every round mark.
+- **Every touching edge ≥ 3:1**, measured on the render by finding which colour pairs actually
+  touch: worst edge **16.88:1** in both themes.
+- **Reads on both wallpapers**: Encre holds 19.57:1 on white (the ink tile) and Papier 17.18:1 on
+  black (the cream tile); the other way round the mark itself carries (18.11:1 / 19.57:1).
+- **16 px**: 2 distinct shapes, average widths **5.75 px and 2.0 px** — no detail below 1 px.
+- **Glyph 24 dp**: 2 shapes; a 2×2 opening keeps **98 %** of the area. Calibration, measured: a 1 dp
+  band falls to **0 %**, a 2 dp band keeps 94–100 %.
+- **Monochrome**: 2 shapes at 16 px, 17.2:1 in both themed modes.
+- **Resources**: `aapt2 compile` + `aapt2 link` pass for all three directions and both themes;
+  `:app:assembleDebug` rebuilds in **30 s** (11 tasks) after the export.
+
+**What it cost to learn** (the rules a later lot should not rediscover):
+
+- **Cream and lemon are 1.02:1 apart** (same luminance). They must never touch except deliberately:
+  a cream shape on a lemon one is a hue-only edge, invisible in greyscale. In Papier the gorge is
+  therefore PAINTED lemon *inside the ink disc* — a hole would be cream against the lemon lens at
+  1.05:1 and the lens would lose its edge. Measured gap in Encre: 5.60 dp of ink.
+- **1 px = 6.75 dp** on the 108 dp canvas. The first mark was a groove spiralling from the rim to
+  the label; at 16 px it fragmented the disc into 1–2 px specks (five components, 0 % surviving a
+  2×2 opening). A mark that must read at 16 px carries **two shapes**, not four zones.
+- **The emulator image has no icon-shape overlays and no themed-icons setting** (`cmd overlay list`
+  has one font entry; `settings list secure` has no `themed_icons`), so the three masks and the
+  themed icon are drawn on the device by the framework's own `AdaptiveIconDrawable` over the
+  installed APK's resources (`mobile/brand/device/`), and the **launcher in light mode** (`cmd uimode
+  night no`) is what proves the Papier variant — the launcher picks the `-night` resources itself.
+- **The export refuses what it does not understand** (a dropped element is a wrong icon) and
+  `--check` compares byte for byte; regenerating the 1024 master with a different band primitive was
+  caught by the 16 px measurement, not by the eye.
+
+**Files.** `mobile/brand/**` (sources, `export.sh`, `check.py`, `device/`, `directions/`), the
+launcher resources `drawable{,-night}/ic_launcher_{background,foreground,monochrome}.xml`,
+`drawable/ic_stat_neezer.xml`, `mipmap-anydpi-v26/ic_launcher{,_round}.xml`, and this section.
 
 ### MQ1 — Test and measurement harness (delivered 2026-11-17)
 
