@@ -136,7 +136,7 @@ fun PlaylistEntry(id: String, nav: NzNavigator, modifier: Modifier = Modifier) {
             toggleEdit = model::toggleEdit,
             move = model::move,
             remove = model::removeAt,
-            openRow = { _, _ -> model.playAll() },
+            openRow = { _, index -> model.playFrom(index) },
             more = { row, index ->
                 TrackActions.open(
                     row,

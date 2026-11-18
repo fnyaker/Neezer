@@ -3,6 +3,7 @@ package fr.neezer.mobile.feature.playlist
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -87,7 +88,9 @@ class PlaylistModelTest {
         val state = model.state.value
         assertEquals(4_000, state.trackCount)
         assertEquals("one page request", 1, harness.service.calls.count { it == "playlist" })
-        assertEquals("a cold open has no copy", 0, harness.service.calls.count { it == "cached" })
+        // The disk read happens (a warm visit would paint it); here it answers
+        // nothing, so what is on screen is the network's answer.
+        assertFalse("the page on screen is the server's", state.stale)
         assertEquals(
             "the suggestions are their own beat",
             1,
@@ -100,7 +103,7 @@ class PlaylistModelTest {
         val rows = state.rows!!
         assertEquals(64, rows.source.window(0, 64).size)
         assertEquals(4_000, rows.source.len())
-        assertEquals(64, rows.source.window(3_990, 64).size.minus(54))
+        assertEquals(10, rows.source.window(3_990, 64).size)
     }
 
     /** A warm visit paints the kept copy first, then the network replaces it. */
@@ -148,9 +151,14 @@ class PlaylistModelTest {
         assertTrue(model.state.value.editing)
 
         model.move(0, 2)
-        advanceUntilIdle()
+        // `runCurrent`, not `advanceUntilIdle`: the coalescing window IS 400 ms of
+        // virtual time, and advancing to idle would fire the `PUT` this asserts is
+        // still pending.
+        runCurrent()
         assertEquals("a move sends nothing yet", 0, harness.service.orderSaves)
-        assertEquals("Titre 2", model.state.value.rows!!.source.window(2, 1).first().title)
+        // Row 0 lands at index 2: the row THAT index now carries is the dragged one.
+        assertEquals("Titre 0", model.state.value.rows!!.source.window(2, 1).first().title)
+        assertEquals("Titre 1", model.state.value.rows!!.source.window(0, 1).first().title)
 
         // Three drags in less than the window → one PUT.
         model.move(2, 3)
@@ -271,7 +279,10 @@ class PlaylistModelTest {
         model.onTitle("Nouveau nom")
         model.saveMeta()
         advanceUntilIdle()
-        assertEquals("Nouveau nom", harness.service.calls.first { it == "edit" }.let { "edit" })
+        assertTrue(
+            "the rename is the one request",
+            harness.service.calls.contains("edit:Nouveau nom"),
+        )
         assertFalse(model.state.value.editingMeta)
 
         harness.service.writeFailure = RuntimeException("refusé")
@@ -340,6 +351,7 @@ class PlaylistModelTest {
             canManage = false,
             denied = true,
         )
+        model.onInviteName("sam")
         model.invite()
         advanceUntilIdle()
         val sheet = model.state.value.members!!
@@ -365,14 +377,18 @@ class PlaylistModelTest {
         assertEquals("opus320", export.fmt)
         assertEquals("the linked service is chosen", "spotify", export.service)
 
+        // The POST, then ONE poll: the job runs, and the screen says so.
         model.sendExport()
-        advanceUntilIdle()
+        runCurrent()
         assertTrue(model.state.value.export!!.job!!.running)
 
-        // One poll per 800 ms, and the job ends when the server says so.
+        // One poll per 800 ms; the job ends when the server says so. A poll loop
+        // is why this test steps the clock instead of `advanceUntilIdle` — an
+        // always-running job would spin virtual time for ever (measured: the
+        // first version of this test hung the suite for 4 minutes).
         harness.service.job = PlaylistFixtures.job(running = false, matched = 3u, missing = 1u)
         advanceTimeBy(PlaylistModel.POLL_MS + 1)
-        advanceUntilIdle()
+        runCurrent()
         val done = model.state.value.export!!.job!!
         assertFalse(done.running)
         assertEquals(3u, done.matched)

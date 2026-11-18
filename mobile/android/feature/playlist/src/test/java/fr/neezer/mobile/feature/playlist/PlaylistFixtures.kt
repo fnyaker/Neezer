@@ -412,9 +412,18 @@ class FakePlaylistService(
     }
 
     override suspend fun edit(id: String, title: String?, description: String?): PlaylistWritten {
-        note("edit")
+        note("edit:${title.orEmpty()}")
         writeFailure?.let { throw it }
-        return PlaylistWritten(page ?: error("no page"), conflict = writeConflict)
+        val current = page ?: error("no page")
+        // The server's page now carries the new name (the model adopts it).
+        val renamed = current.copy(
+            meta = current.meta.copy(
+                title = title ?: current.meta.title,
+                description = description ?: current.meta.description,
+            ),
+        )
+        page = renamed
+        return PlaylistWritten(renamed, conflict = writeConflict)
     }
 
     override suspend fun delete(id: String) {

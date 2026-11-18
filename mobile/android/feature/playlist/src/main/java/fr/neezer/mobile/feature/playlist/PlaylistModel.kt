@@ -1053,6 +1053,16 @@ class PlaylistModel(
 
     // -- play -------------------------------------------------------------------
 
+    /** A row's tap: the queue from THAT title, its index the start (rule 1a). */
+    fun playFrom(index: Int) {
+        val state = _state.value
+        val rows = state.rows ?: return
+        if (index < 0 || index >= rows.len()) return
+        val page = pageRows(rows)
+        if (index >= page.size) return
+        player.play(page, "playlist", state.id, start = index)
+    }
+
     fun playAll() {
         val state = _state.value
         val rows = state.rows ?: return

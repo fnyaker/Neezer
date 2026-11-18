@@ -2813,6 +2813,118 @@ playlist creation from the library's add menu; MQ2 owns the real-phone p95 and T
 3 JVM test files, 1 instrumented test, its build file), `docs/agents/screenshots/mobile/MB8/` (36
 renders + 2 device captures + the device measure file), and this section.
 
+### MB9 — Playlist (delivered 2026-11-18)
+
+**What landed.** One playlist, ported from `routes/Playlist.svelte`, `PlaylistTracks`,
+`PlaylistMembersSheet`, `AddTracksSheet`, `ExportSheet`, `routes/Import`, `routes/SharedPlaylist`
+and `lib/linkimport.js` — the Rust core, the FFI and four surfaces (page, members sheet, export
+panel, public page) plus the import job.
+
+- **A 4 000-row playlist is ONE request and a windowed list.** `nz-core::playlist` keeps the open
+  page (rows, header, capabilities, members, suggestions) in a two-entry LRU keyed by the install
+  and the playlist id, `ListHandle`-shaped for the screen; `Core::playlist` asks
+  `GET /api/playlist/<id>` once, however long the list. Measured on `perf_api.py --serve` with its
+  4 000-track playlist: **1 request, 2 008 038 bytes, 78 ms** server-side, `nb_tracks` 4 000. The
+  SPA's own open is the same one `api.swr('/playlist/<id>')` (+ the same recommendations call), so
+  the phone spends **≤ the SPA's bytes**; the suggestions are their OWN call after the list is on
+  screen, exactly the SPA's beat.
+- **Warm is 0 blocking requests, for free.** `cached_playlist` reads the copy `nz-api` kept for
+  `/playlist/<id>` (`lib/apicache.js`'s own cacheable prefix) — no second file, no second write —
+  parses it, and paints. A dead link keeps it with « Hors ligne · version mémorisée »; with nothing
+  kept, `LoadFailed` with the cause and « Réessayer », proven with **0 sockets** opened at the peer.
+- **Every write is optimistic, in the person's order, and never replayed.** A drag is TWO beats as
+  in the SPA: `playlist_move` reorders in memory and sends nothing (measured: **0.696 ms** for
+  4 000 rows, inside a frame), then the model coalesces a burst into ONE `PUT` after 400 ms. A
+  removal and an append touch the list at once (`playlist_cut` / `playlist_append`, 0 requests) and
+  one request follows; a failure undoes them EXACTLY from the core's own undo slot (no second read,
+  which a dead link cannot make) and the toast offers « Réessayer ». A `409` is never retried: the
+  core drops the optimistic order, makes ONE re-read of the scope the server named
+  (`content`/`members`), and the answer carries the server's state plus which half moved — the
+  screen says « La playlist a changé entre-temps » and the person drags again from the truth. The
+  counting server holds all of it: one `PUT` and one `GET` on a conflict, never a replay.
+- **The role drives the controls, and the server is the judge.** `role` + `editable` + `can_manage`
+  come from the page: an owner/admin gets rename, delete, share, invites; an editor gets add/drag/
+  remove and no rename; a viewer reads, plays and can leave; the public link reads only. A `403`
+  under an open sheet refreshes the capabilities and says the right is gone (the SPA's own
+  `onForbidden`), a `409` on `members_version` re-reads the members only (**0 page re-reads**).
+- **The public link is a capability, and the page says what plays.** `ExportSheet`'s fourth tab
+  reads, mints and revokes `/api/playlist/<id>/share` (one live link per playlist, the server's
+  rule), the share sheet takes the whole URL, and the public page lists every row with
+  `streamable` — an unarchived title is listed and not playable, never a `409` on a tap. The page
+  is kept on disk under `cacheDir/playlists/shared-<hash>.json` (a hash, never the token; the last
+  three kept), so a warm open costs **0 requests**.
+- **Export is the sheet's four questions, and the job says where it is.** `GET
+  /api/export/formats` and `GET /api/services` answer with the SERVER's formats and accounts (never
+  a constant), the audio ZIP streams on the `Bulk` lane (rule 1: an export never competes with what
+  is playing), the list file (CSV/XSPF/text) goes to Android's share sheet as text, and the
+  service export is a job polled every 800 ms with its progress, its matched count, its missing
+  titles with their artists and « Copier la liste » — a `relink` refreshes the accounts instead of
+  pretending.
+- **The import is a server job, with a cause per line.** `POST /api/import/playlist` answers an id,
+  the screen polls it every 700 ms (`Import.svelte`'s own beat), stops as soon as the state is
+  final, keeps the item list while a save's polls carry none, and shows « À vérifier » (matched but
+  not surely) and « Introuvables » — each with a « Chercher » into MB6's search. « Enregistrer »
+  keeps the matched lines as a local playlist; nothing is written before that.
+
+**Measured on this machine** (API 35 x86_64, `-no-window -no-audio`, port 5680;
+`perf_api.py --serve` on 5690, 8 000 tracks, its 4 000-track playlist):
+
+- **The page, on the real server**: `GET /api/playlist/<id>` → **1 request, 2 008 038 bytes**,
+  4 000 rows, 78 ms; `GET /api/playlist/<id>/recommendations?limit=12` → **109 bytes** (this
+  synthetic library stores no neighbours, so the answer is empty and the section says « Pas de
+  suggestion pour l'instant »). Warm: **0 blocking requests**, the kept page paints first.
+- **Rust**: `cargo test --workspace` **nz-core 23 in `playlist`** (the 4 000-row page at one
+  request, the kept page offline with 0 sockets, the reorder at 0 requests then one `PUT`, the
+  `409` at one re-read and no replay, the frame budget under 16 ms, an append/cut undone on
+  failure, rename guards, members role-driven with a members-only re-read, the public link and its
+  unarchived rows, the four export answers, the import job and its causes, the LRU cap and the
+  counted bytes) + **nz-ffi 4 in `playlist`**; `clippy -D warnings` and `fmt --check` clean.
+- **JVM**: `:feature:playlist:testDebugUnitTest` **17 `PlaylistModelTest`** on a VIRTUAL clock (one
+  page request, cached-then-fresh, cause + retry, a drag at 0 requests and one `PUT` per burst, a
+  `409` adopting the server's rows, a removal at once and the write after it, a failed removal put
+  back by the core's rows, an append in one request, « Tout ajouter » in one, a rename put back,
+  the drag mode only in the natural order, the members and a refusal named, the export's formats
+  and its 800 ms polls, the public link created and shared, delete confirmed first, play/shuffle
+  handing the whole list and its context, « Ajouter des titres » searching once per settled term)
+  and **9 screenshot renders** (Encre/Papier at 360 and 600 dp, 200 %, edit mode, read-only,
+  failed, the public page).
+- **Look**: `docs/agents/screenshots/mobile/MB9/` — the band, the action line on one scrolling row,
+  the windowed list, the suggestions, the edit rows with their grips and arrows, and the
+  read-only band, in both themes at both widths.
+
+**Rules a measurement taught**:
+
+- **A 4 000-row page is 2 MB, and that is the SPA's own price.** The temptation was to page the
+  tracklist; the SPA sends it whole in one answer, and one 2 MB body on a phone link costs less
+  than 63 round trips. What the phone does NOT do is copy it again: the rows live in the core, the
+  screen windows 64 at a time, and the mutation answers a fresh handle instead of a fresh payload.
+- **The edit mode must be gated on the natural order, not offer a wrong index.** A remove names the
+  caller's VISIBLE index; after a sort or a filter that index is not the server's row order. The
+  drag/search/sort therefore cannot coexist: any of them leaves the edit mode (the SPA's
+  `manualView` rule), and `PlaylistModelTest` holds it.
+- **A writer loop keeps `runTest` from finishing.** The model serializes its writes through one
+  coroutine; `runTest`'s `backgroundScope` is NOT advanced by `advanceUntilIdle` in this
+  `kotlinx-coroutines-test`, which made every test read an empty model (`calls=[]` after idle). The
+  tests drive a scope on `StandardTestDispatcher(testScheduler)` and cancel it in `@After`.
+- **`backgroundScope`-style churn is invisible in the screenshots but not in the model**: the first
+  version of the write path asked the network inside the same call that moved the row, so a tap
+  left the list unchanged for one round trip. Splitting every mutation into an in-memory half and a
+  network half is what made « a drag answers in the frame » true for removals and appends too.
+
+**Not ported, on purpose** (each named where it is drawn):
+
+- **The public page's own player.** The SPA owns an `<audio>` element and a queue for a link no
+  account signed in for; the app's player streams the LIBRARY of the signed-in person. A playable
+  public row therefore opens its capability URL with the platform's viewer, and the page says how
+  many titles are playable — the one gesture this lot hands to the OS.
+- **The car pin** (`lib/car.js`) — MB24/MB25 own the car; the entry is not drawn here.
+- **« Donner un genre »** (the genre bulk sheet) — MB18's, and the menu entry appears when that lot
+  installs it.
+
+**Files.** `mobile/rust/crates/nz-core/src/playlist/{mod,wire,testing}.rs`,
+`mobile/rust/crates/nz-ffi/src/playlist.rs`, `mobile/android/feature/playlist/**` (7 main Kotlin
+files, 3 JVM test files, its build file), `docs/agents/screenshots/mobile/MB9/`, and this section.
+
 ### MB10 — Actions sur un titre (delivered 2026-11-18)
 
 **What landed.** The ONE track menu of the SPA — `webapp/src/lib/trackmenu.js`, its
@@ -3152,14 +3264,8 @@ airplane-mode measure on a released build.
 
 Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
 
-- **MB9 — Playlist** [MB10]. FFI (`playlist.rs`): `playlist(id) -> PlaylistData { meta, tracks:
-  Arc<ListHandle>, role, members, recommendations }`, edit (title, description, cover), reorder
-  (`version` conflict → re-read, desktop's 409 rule), add/remove, members (role-driven), share link
-  create/revoke, public read-only page (`/shared/playlist/<id>`), export (formats, services, job with
-  progress), import from a link (`/import/<url>`, a background job with causes). Kotlin:
-  `PlaylistEntry`, `SharedPlaylistEntry`, `ImportEntry`, `DownloadButton("playlist", id)`. Rows: a
-  4 000-row playlist opens with one request, scrolls at p95 ≤ 16.7 ms, a drag reorder answers in the
-  frame and survives a `409` by re-reading.
+- **MB9 — Playlist.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
+  port: see « MB9 — Playlist » below.*
 - **MB11 — Now playing** [MB3b]. FFI (`nowplaying.rs`): `lyrics(key) -> Lyrics { synced: Vec<Line>,
   plain }`, `lyric_card(key, lines, style) -> String /* PNG path */`, `full_credits(key)`, cover-derived
   accent (`coverpalette.js` in Rust, for Pochette). Kotlin: `MiniPlayer()`, `NowPlayingSheet()` (phone

@@ -2,6 +2,8 @@ package fr.neezer.mobile.feature.playlist
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +37,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -59,7 +62,6 @@ import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
-import fr.neezer.mobile.designsystem.TrackRowView
 import fr.neezer.mobile.designsystem.nzDuration
 import fr.neezer.mobile.designsystem.rememberListWindow
 import fr.neezer.mobile.feature.offline.DownloadButton
@@ -90,7 +92,10 @@ fun PlaylistScreen(
     val colors = Sillon.colors
     Column(modifier = modifier.fillMaxSize()) {
         NzTopBar(
-            title = state.displayTitle.ifEmpty { "Playlist" },
+            // The band below carries the playlist's own title; the bar names the
+            // SCREEN (the SPA has no second heading, and a 200 % font scale made
+            // the long title wrap under the bar's own line).
+            title = "Playlist",
             onBack = actions.back,
             actions = {
                 if (state.canManage) {
@@ -125,11 +130,11 @@ fun PlaylistScreen(
                         if (state.readOnlyNote) ReadOnlyNote(state)
                     }
                     Box(Modifier.weight(1f).fillMaxSize()) {
-                        Tracks(state, actions)
+                        Tracks(state, actions, showBand = false)
                     }
                 }
             } else {
-                Tracks(state, actions)
+                Tracks(state, actions, showBand = true)
             }
         }
     }
@@ -405,7 +410,11 @@ private fun ReadOnlyNote(state: PlaylistModel.State) {
 }
 
 @Composable
-private fun Tracks(state: PlaylistModel.State, actions: PlaylistActions) {
+private fun Tracks(
+    state: PlaylistModel.State,
+    actions: PlaylistActions,
+    showBand: Boolean,
+) {
     val rows = state.rows
     val page = state.page
     if (rows == null || page == null) return
@@ -426,9 +435,11 @@ private fun Tracks(state: PlaylistModel.State, actions: PlaylistActions) {
                 modifier = Modifier.padding(horizontal = NzSpacing.l, vertical = NzSpacing.m),
                 verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
             ) {
-                Band(state, actions)
-                ActionLine(state, actions)
-                if (state.readOnlyNote) ReadOnlyNote(state)
+                if (showBand) {
+                    Band(state, actions)
+                    ActionLine(state, actions)
+                    if (state.readOnlyNote) ReadOnlyNote(state)
+                }
                 if (state.editable) Toolbar(state, actions)
                 if (state.editing) {
                     Text(
@@ -479,9 +490,8 @@ private fun Tracks(state: PlaylistModel.State, actions: PlaylistActions) {
             } else if (state.editing) {
                 EditRow(row, index, state.trackCount, actions)
             } else {
-                TrackRowView(
+                PlaylistRow(
                     row = row,
-                    playing = false,
                     onClick = { actions.openRow(row, index) },
                     onMore = { actions.more(row, index) },
                     onSwipeQueue = { actions.queueNext(row) },
@@ -505,6 +515,90 @@ private fun rememberPlaylistWindow(rows: PlaylistRows, wake: Long): ListWindow {
         androidx.compose.runtime.key(wake) { rememberListWindow(handle) }
     } else {
         remember(rows.source, wake) { ListWindow(rows.source) }
+    }
+}
+
+/**
+ * One row of the list: a 44 dp sleeve, the title and its artists, the duration in
+ * mono figures, one ⋯ control, and swipe right = « Lire ensuite ».
+ *
+ * It is this module's own row and not `TrackRowView` for ONE measured reason: the
+ * design system's row is a fixed 56 dp, and at the 200 % font scale its artist
+ * line is CUT IN HALF (`mb9-encre-360dp-font200.png` before the fix — MB6 hit the
+ * same defect and drew its own row for it). Here the row grows: `heightIn(min =
+ * 56.dp)` with no ceiling, which is what the design system's row owes too.
+ */
+@Composable
+private fun PlaylistRow(
+    row: TrackRow,
+    onClick: () -> Unit,
+    onMore: () -> Unit,
+    onSwipeQueue: () -> Unit,
+) {
+    val colors = Sillon.colors
+    var drag by remember(row.key) { mutableFloatStateOf(0f) }
+    val threshold = 72.dp
+    Box(Modifier.fillMaxWidth()) {
+        Text(
+            text = "Lire ensuite",
+            style = Sillon.type.label,
+            color = colors.acText,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = NzSpacing.l),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .graphicsLayer { translationX = drag }
+                .background(colors.bg)
+                .pointerInput(row.key) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            val passed = drag > threshold.toPx()
+                            drag = 0f
+                            if (passed) onSwipeQueue()
+                        },
+                        onDragCancel = { drag = 0f },
+                    ) { change, amount ->
+                        // Right only: a left swipe belongs to the page's back gesture.
+                        drag = (drag + amount).coerceIn(0f, size.width.toFloat() * 0.75f)
+                        change.consume()
+                    }
+                }
+                .clickable(role = Role.Button, onClick = onClick)
+                .padding(horizontal = NzSpacing.s, vertical = NzSpacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
+        ) {
+            CoverImage(url = row.cover, sizeDp = 44.dp, seed = row.id)
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
+            ) {
+                Text(
+                    text = row.title,
+                    style = Sillon.type.body,
+                    color = colors.tx,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = row.artists,
+                    style = Sillon.type.bodySmall,
+                    color = colors.dim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(nzDuration(row.durationS.toInt()), style = Sillon.type.mono, color = colors.dim)
+            NzIconButton(
+                glyph = NzGlyph.MoreVertical,
+                contentDescription = "Plus d'actions pour ${row.title}",
+                onClick = onMore,
+            )
+        }
     }
 }
 
