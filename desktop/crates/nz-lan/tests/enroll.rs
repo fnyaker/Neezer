@@ -358,8 +358,15 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, hits: &Mutex<Vec<Hit>>) {
 
     let mut state = state.lock().expect("state");
     let (status, headers, response) = route(&method, &path, &body, &if_none_match, &mut state);
+    drop(state);
+    // Record the hit BEFORE answering. A test clears this log and then asserts a
+    // count, and the client comes back the moment it has the response: writing
+    // first let the assertion run while this thread was still on its way to the
+    // `push`, so a request that DID happen read as zero (measured: 1 of 200
+    // turns, 4 of 200 pinned to one core; the CI job that failed 22/23 was this).
+    // Pushing first makes the hit happen-before the response, which is the only
+    // order in which the log a client can see is the log it caused.
     let response_bytes = response.len();
-    write_answer(&mut stream, status, &headers, &response);
     hits.lock().expect("hits").push(Hit {
         method,
         path,
@@ -369,6 +376,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, hits: &Mutex<Vec<Hit>>) {
         status,
         response_bytes,
     });
+    write_answer(&mut stream, status, &headers, &response);
 }
 
 fn write_answer(stream: &mut TcpStream, status: u16, headers: &[(String, String)], body: &[u8]) {
