@@ -513,6 +513,8 @@ fn the_party_costs_the_pages_requests_and_never_more() {
 
     // --- hosting: the POST, then the FIRST LINE at once (the guests' card names
     // the track the person is already hearing).
+    let player = crate::player::Player::open(Arc::clone(&core)).expect("the player");
+    let party = party::attach(&core, Some(Arc::clone(&player)));
     runtime.block_on(async {
         server.forget();
         let link = party.host().await.expect("the party starts");
