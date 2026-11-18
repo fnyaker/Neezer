@@ -70,3 +70,9 @@ aws-lc-rs = { version = "1", default-features = false, features = [
 quinn = { workspace = true }
 rcgen = { workspace = true }
 mdns-sd = { workspace = true, optional = true }
+
+[dev-dependencies]
+# `test-util` gives the transport tests a virtual clock (`start_paused`), so the
+# 2 s pre-authentication deadline and the shutdown deadline are measured exactly
+# instead of slept through — the same line, for the same reason, as `nz-api`'s.
+tokio = { workspace = true, features = ["test-util"] }
