@@ -1000,7 +1000,10 @@ corrected here with the number that proved it):
   `sha256(get_secret_key("lan_ca_secret"))`, a rotation keeping the previous key 90 days in
   `lan_ca_prev`), the **subject**, `encode_credential` / `encode_revocations` / `encode_roster`,
   the enrolment proof, the device and friendship operations. `Refused` carries the French cause
-  and the machine code a route answers; a caller that is refused learns nothing else.
+  and the machine code a route answers; a caller that is refused learns nothing else. The 20 000
+  track ids are capped **in total** at write time (`_shared_track_total`, one statement counted per
+  friend-playlist pair), not per friend: 64 friends each sharing 4 000 titles would otherwise make
+  every device launch read a quarter of a million rows.
 - **`neezer/webui/lan.py`** — the twelve routes of the *Server* table, `LAN_POLICY` (every route
   `NEVER`) merged into `remote.POLICY` from the blueprint's `register`, the two budgets (30
   enrolments and 30 befriending attempts per account per hour), an 8 KiB body cap and one JSON
@@ -1036,7 +1039,7 @@ one kind (an unknown account, yourself and a disabled account are one 404).
 |---|---|---|
 | The note's three vectors | **3 / 3 byte-identical** (credential 154 B, revocations 129 B, auth proof 64 B) | `python -m unittest tests.test_lan_crypto.VectorTestCase` |
 | The enrolment vector LN2 pins | **byte-identical** (`a5f56aec…cb08`); `at` as 8-byte big-endian gives a DIFFERENT proof and is refused by the test | same file, `test_the_enrollment_proof_is_the_message_ln2_pins` |
-| LAN tests | **52 passed** (19 crypto + 29 routes + 4 upgrade) | `python -m unittest tests.test_lan_crypto tests.test_lan_routes tests.test_lan_upgrade` |
+| LAN tests | **53 passed** (20 crypto + 29 routes + 4 upgrade) | `python -m unittest tests.test_lan_crypto tests.test_lan_routes tests.test_lan_upgrade` |
 | Whole Python suite | **2 548 passed, 39 skipped, 0 failed** (16 workers, 23.2 s) | `python tools/partest.py` |
 | A share of ONE 4 000-title playlist | body **156 305 B** (the note's 200 KB), base64 envelope **208 408 B**, HTTP payload **208 701 B**, gzip **104 698 B** | `tests/test_lan_crypto.RosterTestCase.test_a_four_thousand_track_share_stays_under_200_kb_and_two_statements` |
 | The same roster's cost | **5 SELECT**, of which **2** are the share (playlists + tracks); a 40-title share costs the **same 5** — no statement per title | same test (`count_statements`) |
