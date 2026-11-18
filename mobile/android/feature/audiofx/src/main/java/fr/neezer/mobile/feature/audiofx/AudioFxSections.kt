@@ -533,7 +533,16 @@ private fun FxSwitchRow(
             Text(title, style = Sillon.type.label, color = Sillon.colors.tx)
             Text(hint, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
         }
-        NzSwitch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+        // The switch's own name for TalkBack, in SEMANTICS and not as a label
+        // beside it: `NzSwitch` draws a label inline, and MB16 measured that a
+        // label inside a row with a weighted child squeezes the row to a
+        // one-letter column.
+        NzSwitch(
+            checked = checked,
+            onCheckedChange = onChange,
+            enabled = enabled,
+            modifier = Modifier.semantics { contentDescription = title },
+        )
     }
 }
 
