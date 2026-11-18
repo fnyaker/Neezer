@@ -527,7 +527,8 @@ device's old public keys are kept in `lan_device_key(pubkey PK, device_id FK CAS
 until they expire, so the revocation list can name every key of a device whose credential may still
 be valid. Meta keys: `lan_ca_seed` (encrypted), `lan_ca_prev` (previous key, encrypted, with its
 end date), `lan_revocation_serial`, `lan_enabled` (default `1`), `lan_credential_days` (default 30,
-7–90).
+7–90). The roster serial is a **column**, `user.lan_serial` (default `0`): `Meta.key` is 32
+characters and `lan_roster_serial:<uuid>` is 54, which is the choice this plan left to LN1.
 
 **Routes** (`neezer/webui/lan.py`, its own blueprint under `/api`, every route `@login_required`,
 `LAN_POLICY` merged into `remote.POLICY` with every route `NEVER` — a remote-control session never
@@ -541,10 +542,10 @@ enrols, revokes or befriends; rate limits per user):
 | `GET /api/lan/devices` | → `[{id, name, platform, created, last_seen, revoked, current}]` | own devices only |
 | `DELETE /api/lan/devices/<id>` (`self` allowed) | → `204` | own device only (else `404`); bumps the revocation serial; audit log |
 | `PATCH /api/lan/devices/<id>` | `{name}` → device | 1–64 chars |
-| `GET /api/lan/friends` | → `{shares_to:[{user_id, name, all, playlists:[{id,title}]}], trusted_by:[{user_id,name}]}` | |
+| `GET /api/lan/friends` | → `{shares_to:[{user_id, subject, name, all, playlists:[{id,title}]}], trusted_by:[{user_id, subject, name}]}` | `user_id` is the ACCOUNT's **UUID** (String), never a number: every account id the API sends is a UUID; `subject` is the LAN's own opaque name and is a SEPARATE field |
 | `POST /api/lan/friends` | `{name}` → friend | exact account name (folded); unknown or self → `404` « aucun compte de ce nom » (same answer for a disabled account); 30/h |
-| `PATCH /api/lan/friends/<user_id>` | `{all?, playlists?:[id]}` → friend | only playlists the OWNER may read (`playlist_access`); bumps both rosters' serials |
-| `DELETE /api/lan/friends/<user_id>` | → `204` | bumps both rosters |
+| `PATCH /api/lan/friends/<user_id>` | `{all?, playlists?:[id]}` → friend | `<user_id>` is the account UUID; only playlists the OWNER may read (`playlist_access`); 20 000 shared titles at most; bumps both rosters' serials |
+| `DELETE /api/lan/friends/<user_id>` | → `204` | `<user_id>` is the account UUID; bumps both rosters |
 | `GET/PUT /api/lan/settings` (admin) | `{enabled, credential_days}` | Meta; rule 6 |
 | `POST /api/lan/rotate` (admin) | → `{kid}` | new LAN key, previous kept 90 days |
 
@@ -639,6 +640,11 @@ impl DeviceKey {
     pub fn wipe(dir: &Path) -> std::io::Result<()>;
     pub fn public(&self) -> DevicePub;
     pub fn sign(&self, msg: &[u8]) -> [u8; 64];
+    // `at` is its DECIMAL TEXT, not an i64: the two neighbours in
+    // `b"neezer-lan/1 enroll\0" ‖ subject_hex ‖ pubkey_hex ‖ at` are strings, and
+    // every binary field of this plan is spelled `i64`. LN1 and LN2 each assert
+    // the same proof bytes (`tests/test_lan_crypto.py`,
+    // `nz-lan/tests/cred.rs`).
     pub fn enroll_proof(&self, subject_hex: &str, at: i64) -> [u8; 64];
 }
 
@@ -985,79 +991,86 @@ corrected here with the number that proved it):
    `/genre/status` = `Some(true)` / an unknown route = `Some(false)`, and **LN1 removes `Lan` from
    that list** — see LN1's acceptance, which carries the step.
 
-### LN1 — Server: schema, LAN key, routes (wave 1, effort max)
+### LN1 — Server: schema, LAN key, routes (delivered 2026-11-18)
 
-- **Objective**: the server issues, renews and revokes device credentials, keeps the trusted-friend
-  relations and their scope, signs rosters and revocation lists, and exposes the admin settings —
-  on SQLite, PostgreSQL and MySQL, as an upgrade of an existing server.
-- **Files**: LN1 row. `neezer/lan.py` holds the pure logic (LAN key creation and decryption,
-  `subject(user_id)`, `encode_credential`, `encode_revocations`, `encode_roster`, signatures),
-  `neezer/webui/lan.py` the routes and `LAN_POLICY` (all `NEVER`, merged into `remote.POLICY` the way
-  `invites.py` merges `INVITE_POLICY`).
-- **Contracts**: *Trust chain* (byte layouts, domain strings, the test vectors), *Server* (schema,
-  Meta keys, routes and their rules). Ed25519 with `pycryptodome` (`Crypto.Signature.eddsa`,
-  `'rfc8032'`) — already a dependency, no new package.
-- **Depends on**: LN0 (only for the contract text; no Rust).
-- **Acceptance**:
-  - the three test vectors reproduced byte for byte by `neezer/lan.py` (`tests/test_lan_crypto.py`);
-  - migration: an existing database at the previous `SCHEMA_VERSION` upgrades on SQLite, on a REAL
-    PostgreSQL (the `tests.yaml` PostgreSQL job) and MySQL; replaying the migration is a no-op
-    (`db._repair_skipped_migrations` path covered); `tests/test_schema.py` green;
-  - every route answers `401` without a session and `403`/`NEVER` to a remote-control session
-    (`tests/test_remote*.py`'s "every endpoint is in POLICY" test passes with the new routes);
-  - enrol: a bad proof, a proof 301 s old, someone else's subject, a 21st device → refused with a
-    French cause; a renewal rotates the key and the old key appears in the revocation list ONLY after
-    `DELETE`; `DELETE /api/lan/devices/<other user's id>` → `404`;
-  - friends: unknown, self and disabled account → the same `404`; a playlist the owner cannot read is
-    refused; adding/removing a friend or a playlist bumps both rosters' serials; the roster lists
-    exactly the shared tracks (a 4 000-track playlist: one roster ≤ 200 KB, built in ≤ 2 SQL
-    statements per shared playlist — count them with the existing statement counter);
-  - `GET /api/lan/roster` with the current `ETag` → `304`, 0 body bytes;
-  - a disabled account: its devices are all in the next revocation list, enrol refused;
-  - the LAN key is encrypted at rest (a `Meta` dump does not contain the seed) and survives a
-    restart; a changed secret creates a new key and old credentials are refused at renewal only;
-  - admin settings are in `Meta` and change `credential_days` of the NEXT credential;
-  - `OPTIONS /api/lan/status` answers `200`, and `desktop/crates/nz-api/tests/bench.rs`'s
-    `PENDING_SERVER_ROUTES` no longer names `Feature::Lan` (it is deleted, not shortened): the bench
-    then requires `Some(true)` for every `Feature::ALL` again, which is the state LN0 could not reach
-    without this route (`docs/agents/lan-nodes.md`, LN0's second correction);
-  - `security.yaml`'s Bandit/Semgrep: no new finding (no `nosec` without a justification).
-- **Pitfalls**: PostgreSQL has no `REPLACE` and quotes `user`; a migration script is split on `;`
-  after its `--` lines are dropped (`db.split_sql_script`); keep the migration idempotent
-  (`CREATE … IF NOT EXISTS`, guarded `ALTER`); Ed25519 in pycryptodome needs `'rfc8032'` mode and raw
-  32-byte public keys (`export_key(format='raw')`); never log a credential or the seed; rule 7: a
-  server without the tables must keep starting (the boot repair adds them).
-- **Prompt**:
+**What landed.** The server is the LAN's authority, and it holds the only signing key.
 
-  > Tu implémentes le lot **LN1 — Server: schema, LAN key, routes** du plan « nœuds LAN » (effort
-  > max : cryptographie et authentification). But : le serveur émet, renouvelle et révoque les
-  > attestations d'appareil (Ed25519, format binaire exact de *Trust chain*), tient les amis de
-  > confiance et ce qu'on leur partage, signe les rosters et les listes de révocation, expose les
-  > réglages admin ; migration idempotente SQLite + PostgreSQL + MySQL, testée en mise à jour et sur
-  > un vrai PostgreSQL. Lis *Trust chain*, *Server*, *Threat model* et la section LN1 de
-  > `docs/agents/lan-nodes.md`, puis `docs/agents/server.md`, `docs/agents/providers.md`, et le code :
-  > `neezer/db.py`, `neezer/webui/remote.py` (POLICY), `neezer/webui/invites.py` (comment il fusionne
-  > sa politique, ses limites de débit), `neezer/managers/user.py` (`encrypt_password`,
-  > `get_secret_key`), `neezer/playlist_access.py`. Ed25519 via `pycryptodome` (déjà installé),
-  > aucune nouvelle dépendance. Les trois vecteurs de test de la note doivent être reproduits octet
-  > pour octet. Fichiers exclusifs : la ligne LN1. Critères : la liste *Acceptance* de LN1.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **`neezer/lan.py`** — the whole trust chain, with no Flask in it: the LAN key (Ed25519,
+  created on first use, its 32-byte seed **sealed** in `Meta lan_ca_seed` under
+  `sha256(get_secret_key("lan_ca_secret"))`, a rotation keeping the previous key 90 days in
+  `lan_ca_prev`), the **subject**, `encode_credential` / `encode_revocations` / `encode_roster`,
+  the enrolment proof, the device and friendship operations. `Refused` carries the French cause
+  and the machine code a route answers; a caller that is refused learns nothing else.
+- **`neezer/webui/lan.py`** — the twelve routes of the *Server* table, `LAN_POLICY` (every route
+  `NEVER`) merged into `remote.POLICY` from the blueprint's `register`, the two budgets (30
+  enrolments and 30 befriending attempts per account per hour), an 8 KiB body cap and one JSON
+  error handler. `neezer/web.py` gains one registration.
+- **Schema `20261124`** — `lan_device`, `lan_device_key`, `lan_friend`, `lan_friend_playlist`, and
+  `user.lan_serial`. The roster counter is a **column**, not `Meta lan_roster_serial:<user_id>`:
+  `Meta.key` is 32 characters and that key is 54 — the plan left the choice to this lot. The
+  migration is a `.py` on all three engines (a guarded `ALTER` plus `CREATE TABLE IF NOT EXISTS`),
+  so it is idempotent and the boot repair can replay it.
+- **One contract correction, accepted before merge**: `nz-model`'s `LanFriend.user_id` (and the
+  `nz-api`/`nz-ffi` friend calls) were `u32`, but every account id this API sends is a UUID
+  (`AdminUser.id`, `ids::UserId`). They are `UserId`/`String` now, and the LAN's opaque `subject`
+  travels as its own field — the trust chain never names an account by its id. `nz-api`'s bench
+  also deleted its `PENDING_SERVER_ROUTES` exemption, so `Feature::ALL` is required again.
+
+**What a later lot can rely on.** These are the parts LN7/LN8/LN13 consume: `GET /api/lan/status`
+answers `{enabled, subject, keys:[{kid, pub, until?}], credential_days, revocation_serial}` and
+`OPTIONS` on it is a 200, so the feature probe works before a login; `POST /api/lan/enroll` takes
+`{pubkey, name, platform, at, proof, device_id?}` and answers `{device_id, credential, roster,
+revocations}`, with `roster` as `{body, sig}` and the two blobs base64; `GET /api/lan/roster`
+answers the same pair plus `etag` and sets the note's `"<roster>-<revocation>"` ETag (`304`, 0 body
+bytes, on a match); `GET /api/lan/devices` is a bare array and `PATCH` a bare object; the friends
+routes answer `{shares_to, trusted_by}` and one friend object, with `user_id` the account's UUID and
+`subject` the hex; `GET|PUT /api/lan/settings` is admin-only; `POST /api/lan/rotate` answers
+`{kid}`. The enrol proof signs `b"neezer-lan/1 enroll\0" ‖ subject_hex ‖ pubkey_hex ‖ at` with `at`
+in **decimal text** — the same message LN2 pins, and the vector below is asserted on both sides.
+A refusal is always `{"error": <French>, "code": <machine>}`, and the same body for every cause of
+one kind (an unknown account, yourself and a disabled account are one 404).
+
+**The numbers, each with its command** (SQLite, this machine, 2026-11-18; `~/.cache/neezer-ln1/venv`).
+
+| Measure | Value | Command |
+|---|---|---|
+| The note's three vectors | **3 / 3 byte-identical** (credential 154 B, revocations 129 B, auth proof 64 B) | `python -m unittest tests.test_lan_crypto.VectorTestCase` |
+| The enrolment vector LN2 pins | **byte-identical** (`a5f56aec…cb08`); `at` as 8-byte big-endian gives a DIFFERENT proof and is refused by the test | same file, `test_the_enrollment_proof_is_the_message_ln2_pins` |
+| LAN tests | **52 passed** (19 crypto + 29 routes + 4 upgrade) | `python -m unittest tests.test_lan_crypto tests.test_lan_routes tests.test_lan_upgrade` |
+| Whole Python suite | **2 548 passed, 39 skipped, 0 failed** (16 workers, 23.2 s) | `python tools/partest.py` |
+| A share of ONE 4 000-title playlist | body **156 305 B** (the note's 200 KB), base64 envelope **208 408 B**, HTTP payload **208 701 B**, gzip **104 698 B** | `tests/test_lan_crypto.RosterTestCase.test_a_four_thousand_track_share_stays_under_200_kb_and_two_statements` |
+| The same roster's cost | **5 SELECT**, of which **2** are the share (playlists + tracks); a 40-title share costs the **same 5** — no statement per title | same test (`count_statements`) |
+| Roster build | **14.4 ms** for the 4 000-title share, signature included | `~/.cache/neezer-ln1/measure.py` |
+| One enrolment | **18 statements** (14 SELECT, 2 INSERT, 1 SAVEPOINT + 1 RELEASE), credential 208 base64 chars | `~/.cache/neezer-ln1/measure2.py` |
+| Migration, 1 000 existing accounts | **86.2 ms** for the boot that upgrades (schema check included); the migration alone replays in **0.46–0.75 ms** | `~/.cache/neezer-ln1/measure3.py`, 5 runs |
+| `nz-model` | **37 passed** (33 unit + 4 fixtures) | `cargo test -p nz-model --locked` |
+| `nz-api` + `nz-model` lints | **0 warning**, all targets | `cargo clippy -p nz-model -p nz-api --all-targets --locked -- -D warnings` |
+| Formatting | clean | `cargo fmt --check` |
+
+**Rules a measurement taught.**
+
+- **pycryptodome's `eddsa.sign(SHA512.new(msg))` is Ed25519ph, not Ed25519.** The hash-object form
+  prepends `dom2(1, "")` (RFC 8032 §5.1.7) and produces a signature no `ed25519-dalek` or
+  `aws-lc-rs` verifier accepts. Passing the message as **`bytes`** is the pure form. The first
+  vector did not reproduce until this was found — a mismatch that looked like a wrong note vector
+  and was a wrong API call.
+- **`Meta.key` is 32 characters**, so a per-account key (`lan_roster_serial:<uuid>`, 54) does not
+  fit; `user.lan_serial` is the column, and `_repair_skipped_migrations` sees it like any other.
+- **PostgreSQL has no `REPLACE` and quotes `"user"`.** `_meta_set` updates and falls back to an
+  INSERT inside its own SAVEPOINT (an IntegrityError in the outer transaction poisons it on
+  PostgreSQL), and every statement that names the table is written `"user"` on that engine.
+- **A JSON body's playlist id is a string; `Playlist.id` is a UUID.** Comparing them directly
+  matched nothing and answered "liste introuvable" for the caller's own playlist — the ids are
+  parsed (`uuid.UUID`) before the query, in the same place the regex validates the spelling.
+- **A share must not carry another person's private upload.** The test's administrator can see every
+  row, so `Track.visible_clause` would have let a friend receive the id of somebody else's file:
+  the roster filter is the stricter `owner IS NULL OR owner = <sharer>`, deliberately.
+- **The revocation serial moves by itself.** There is no hook in the account manager (a file this
+  lot does not own) for "this account was disabled": a digest of the list is stored in `Meta`, and
+  the next sync that changes it bumps the serial. A `DELETE` bumps it explicitly.
+- **Adding a table that names a user moves the admin deletion budget.** Peewee's recursive delete
+  emits one DELETE per reverse relation, so the four LAN tables took that test's pinned
+  `58 → 65` statements (+7, nothing per row); the number is updated with its reason, not widened.
 
 ### LN2 — Trust codec and device key (wave 1, effort max)
 
