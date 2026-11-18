@@ -832,8 +832,11 @@ async fn a_play_serve_never_waits_for_a_bulk_one() {
         )
         .await;
     assert!(bulk.has_body());
+    // 500 ms: a `Play` that waited for the bulk lane would take the gate's whole
+    // 1 s quiet period, so this still tells the two apart while tolerating a
+    // loaded runner's file open.
     let tapped = tokio::time::timeout(
-        Duration::from_millis(50),
+        Duration::from_millis(500),
         server.answer(
             &Scope::Own,
             &fetch("tap", WireQuality::Flac, 0, None, Urgency::Play),

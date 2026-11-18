@@ -1250,6 +1250,11 @@ this file's header, not to this lot.
     `Server::handle` the whole request; the serve slot and the `Bulk` lane are held by the `Answer`
     until the bytes are written, so a peer that hangs up frees them.
   - `Scope::is_own`/`is_all` answer "everything I have" (what a set's own art needs), not "this id".
+  - **Hand-offs**: LN6 calls `Server::handle` (which is `answer` + the write, and holds the serve slot
+    and the `Bulk` lane across the bytes); LN10 creates the `nz-lan` runtime thread **niced +5** (this
+    crate cannot renice a thread it does not create), owns the `Index` (one `refresh` at start, then on
+    a timer — `nz-cache` has no "something changed" event — and after a download completes) and starts
+    `Hashing::start_with(index, store, api.gates())`, joining it before its runtime stops.
 - **Three additions to the note's contract** (each additive, each with its reason):
   1. **`Hashing::start_with`** — `start(index, store)` has no room for the gate, and a worker that
      never sees `Api::gates()` cannot yield. The declared `start` stays; the service uses
