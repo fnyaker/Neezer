@@ -1324,9 +1324,11 @@ mod tests {
         cx.update(|window, cx| {
             window.dispatch_action(Box::new(DownloadSelection), cx);
         });
-        stub::until(&runtime, cx, "three downloads", |_| {
-            offline.snapshot().progress.done == 3
-        });
+        let snapshot = wait_for_downloads(&runtime, cx, &offline, 3);
+        assert_eq!(
+            snapshot.progress.done, 3,
+            "three tracks on the device: {snapshot:?}"
+        );
         let asked: usize = ["row-0", "row-1", "row-2"]
             .iter()
             .map(|id| stub.count(&format!("/api/stream/{id}")))
@@ -1361,6 +1363,51 @@ mod tests {
                 "{id} is on the device: no second request"
             );
         }
+    }
+
+    /// Pump until `done` tracks landed — and **stop on the first failure, with
+    /// its cause**.
+    ///
+    /// A failed track can never be counted, so a bare `progress.done == 3` wait
+    /// could only ever run out of time, and its message was « timed out waiting
+    /// for three downloads » with no cause — exactly what rule 2 forbids. The
+    /// worker's own failure sentence is the answer, and it arrives in
+    /// milliseconds instead of a deadline.
+    fn wait_for_downloads(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut gpui::VisualTestContext,
+        offline: &crate::wiring::offline::Offline,
+        done: usize,
+    ) -> crate::wiring::offline::Snapshot {
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
+        let mut last = offline.snapshot();
+        loop {
+            // The test thread is the network thread (D7's rule): a real worker
+            // thread may not wake a GPUI task.
+            runtime.block_on(async {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            });
+            cx.run_until_parked();
+            last = offline.snapshot();
+            if last.progress.done >= done || !last.failures.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the downloads never landed: {last:?}"
+            );
+        }
+        assert!(
+            last.failures.is_empty(),
+            "a download failed instead of landing: {:?} (état {:?}, {} fait(s), \
+             {} échec(s), note {:?})",
+            last.failures,
+            last.state,
+            last.progress.done,
+            last.progress.failed,
+            last.note
+        );
+        last
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
