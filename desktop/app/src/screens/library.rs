@@ -3450,7 +3450,7 @@ mod journey {
         let dir = temporary("cache-open");
         seed_cache(&dir, 4_000);
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = runtime();
@@ -3536,7 +3536,7 @@ mod journey {
             .expect("cache");
         cache.put("u1", "/playlist/pl-1", &cache_body);
         drop(cache);
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let runtime = runtime();
         let (state, _events) = app_state(cx, &dir, stub_server(r#"{"tracks":[]}"#), &runtime);
         cx.update(|cx| {
@@ -3618,7 +3618,7 @@ mod journey {
         let dir = temporary("verbs");
         seed_cache(&dir, 3);
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = runtime();
@@ -3661,7 +3661,7 @@ mod journey {
         seed_cache(&dir, 2);
         let server = stub_server(favourites_json(2));
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = runtime();
@@ -3705,7 +3705,7 @@ mod journey {
         seed_cache(&dir, 2);
         let server = stub_server(favourites_json(2));
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = runtime();

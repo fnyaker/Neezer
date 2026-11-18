@@ -624,7 +624,7 @@ mod tests {
         use gpui_kit::AppContext as _;
         reset_for_test();
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = std::env::temp_dir().join(format!(

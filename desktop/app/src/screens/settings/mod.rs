@@ -1914,7 +1914,7 @@ mod ui {
     #[gpui::test]
     async fn the_downloads_section_is_its_screen_and_not_the_stub(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("downloads-section");
@@ -1943,7 +1943,7 @@ mod ui {
     #[gpui::test]
     async fn every_section_lays_out_inside_the_three_windows(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("layout");
@@ -2065,7 +2065,7 @@ mod ui {
     #[gpui::test]
     async fn the_mouse_turns_the_silence_trim_off(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("trim-mouse");
@@ -2115,7 +2115,7 @@ mod ui {
     #[gpui::test]
     async fn the_mouse_switches_sections_and_flips_a_setting(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("mouse");
@@ -2191,7 +2191,7 @@ mod ui {
     #[gpui::test]
     async fn the_keyboard_reaches_the_search_and_narrows_the_strip(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("keys");
@@ -2346,7 +2346,7 @@ mod ui {
         use crate::testmem::Meter;
 
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("weight");

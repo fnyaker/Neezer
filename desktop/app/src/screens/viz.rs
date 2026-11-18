@@ -748,7 +748,7 @@ mod tests {
 
     fn app_state(cx: &mut gpui::TestAppContext, dir: &std::path::Path) -> Entity<AppState> {
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = tokio::runtime::Builder::new_current_thread()

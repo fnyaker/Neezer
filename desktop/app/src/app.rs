@@ -1331,7 +1331,7 @@ mod tests {
         let server = stub_server();
         let dir = temp_dir("journey");
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
 
@@ -1470,7 +1470,7 @@ mod tests {
         std::fs::write(&session, r#"{"http://127.0.0.1:1":[["session","abc"]]}"#)
             .expect("session file");
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1531,7 +1531,39 @@ mod tests {
 
 #[cfg(test)]
 mod theme_tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use gpui_kit::{Hsla, rgb};
     use gpui_omarchy::ActiveTheme;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "neezer-theme-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// One Omarchy palette, the shape `omarchy-theme-set` writes.
+    fn write_colors(root: &Path, accent: &str) {
+        std::fs::write(
+            root.join("colors.toml"),
+            format!(
+                "mode = 'dark'\nbackground = '#1a1b26'\nforeground = '#a9b1d6'\n\
+                 accent = '{accent}'\nred = '#f7768e'\ngreen = '#9ece6a'\n\
+                 yellow = '#e0af68'\nselection = '#292e42'\n"
+            ),
+        )
+        .expect("write the temporary palette");
+    }
 
     /// The shell reads every colour through `cx.omarchy()`; a theme applied at
     /// runtime must reach those tokens, and gpui-omarchy's `apply_palette` is
@@ -1539,7 +1571,7 @@ mod theme_tests {
     /// the watcher calls exactly this).
     #[gpui::test]
     async fn a_theme_change_reaches_the_shell_tokens(cx: &mut gpui::TestAppContext) {
-        cx.update(gpui_omarchy::init);
+        cx.update(crate::theme::init);
         let before = cx.update(|cx| {
             (
                 crate::theme::shell(cx),
@@ -1562,6 +1594,88 @@ mod theme_tests {
             cx.update(|cx| cx.omarchy().name.to_string()),
             "Flexoki Light"
         );
+    }
+
+    /// **A theme file rewritten while a GPUI test runs reaches the shell, and
+    /// no observer points at the person's configuration.**
+    ///
+    /// This is the shape of the flake SC4 reported: the person's shell writes
+    /// `~/.config/omarchy/shell.json` beside their theme, and a test whose
+    /// theme init watched that directory was aborted at its end by
+    /// « Detected activity on thread Some("notify-rs inotify loop") » — the
+    /// deterministic scheduler cannot be woken from notify's thread. The palette
+    /// here comes from a temporary file the test owns: a thread keeps rewriting
+    /// it, and the `shell.json` beside it, while the test pumps the scheduler 50
+    /// times; a wake from that thread would be recorded and fail this test, and
+    /// the new palette must still reach `cx.omarchy()` when the file is read.
+    #[gpui::test]
+    async fn a_theme_file_written_while_the_test_runs_reaches_the_shell(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        const FIRST: &str = "#205ea6";
+        const SECOND: &str = "#7aa2f7";
+        let root = temp_dir("written");
+        write_colors(&root, FIRST);
+        std::fs::write(root.join("shell.json"), "{}\n").expect("write the temporary shell.json");
+        cx.update(|cx| crate::theme::init_at(cx, &root).expect("the temporary palette"));
+        assert_eq!(
+            cx.update(|cx| crate::theme::accent(cx)),
+            Hsla::from(rgb(0x205ea6)),
+            "the shell starts on the temporary palette"
+        );
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let written = Arc::new(AtomicUsize::new(0));
+        let writer = {
+            let root = root.clone();
+            let (stop, written) = (Arc::clone(&stop), Arc::clone(&written));
+            std::thread::spawn(move || {
+                let mut round = 0u32;
+                while !stop.load(Ordering::Relaxed) {
+                    let accent = if round.is_multiple_of(2) {
+                        SECOND
+                    } else {
+                        FIRST
+                    };
+                    write_colors(&root, accent);
+                    std::fs::write(root.join("shell.json"), format!("{{\"t\":{round}}}\n")).ok();
+                    written.fetch_add(1, Ordering::Relaxed);
+                    round = round.wrapping_add(1);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            })
+        };
+        for _ in 0..50 {
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().expect("the writer thread");
+        let written = written.load(Ordering::Relaxed);
+        assert!(
+            written >= 10,
+            "the temporary theme file was rewritten {written} times, not enough to race the test"
+        );
+
+        // Whatever the last write left, the shell reads the file, not a copy.
+        let last = std::fs::read_to_string(root.join("colors.toml")).expect("read the palette");
+        let (accent, shell) = cx.update(|cx| {
+            crate::theme::apply_from(cx, &root).expect("the temporary palette");
+            (crate::theme::accent(cx), crate::theme::shell(cx))
+        });
+        assert_eq!(
+            accent,
+            if last.contains(SECOND) {
+                Hsla::from(rgb(0x7aa2f7))
+            } else {
+                Hsla::from(rgb(0x205ea6))
+            },
+            "the shell's accent is the file's last palette"
+        );
+        assert_ne!(shell, accent, "the palette is a whole theme, not one token");
+        assert_eq!(cx.update(|cx| cx.omarchy().name.to_string()), "Test");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
 
@@ -1652,7 +1766,7 @@ mod mouse {
         let server = stub_server();
         let dir = temp_dir("journey");
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1774,7 +1888,7 @@ mod mouse {
         use crate::testmem::{Meter, retained_bytes};
 
         cx.update(|cx| {
-            gpui_omarchy::init(cx);
+            crate::theme::init(cx);
             crate::keymap::install(cx);
         });
         let dir = temp_dir("nav-guard");
