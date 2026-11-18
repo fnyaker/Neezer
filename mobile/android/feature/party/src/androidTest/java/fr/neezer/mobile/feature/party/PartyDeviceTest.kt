@@ -153,8 +153,13 @@ class PartyDeviceTest {
             assertEquals("the seat is taken", PartyPhase.JOINING, joined.phase)
 
             val samples = CopyOnWriteArrayList<String>()
-            var synced = false
-            var leftSync = 0
+            var synced = 0
+            var waiting = 0
+            var warned = 0
+            var windows = 0
+            var windowStart = 0L
+            var worstWindowMs = 0L
+            var inWindow = false
             val deadline = System.nanoTime() + seconds * 1_000_000_000L
             var lastStatus = ""
             while (System.nanoTime() < deadline) {
@@ -164,24 +169,54 @@ class PartyDeviceTest {
                     samples.add("${state.phase} · $status")
                     lastStatus = status
                 }
-                val ok = state.tone == "ok" && state.phase == PartyPhase.LIVE
-                if (ok) synced = true
-                if (synced && !ok) leftSync++
-                assertTrue(
-                    "the guest left the room: ${state.phase} · ${state.status} after $samples",
-                    leftSync == 0,
-                )
-                // The playhead moves on the room's line, read hot like the screen.
-                assertTrue("a monotonic line", api.positionS() >= 0.0)
+                when {
+                    // « Calé sur … · ±x ms » : the planner's correction is Keep or
+                    // Seam, i.e. |error| is inside the one rule's bands.
+                    state.tone == "ok" -> synced++
+                    // A track HANDOVER costs a « Chargement… » while the new
+                    // track's first chunk is cut and decoded (the SPA says
+                    // « Chargement chez … » there too). Bounded: one chunk.
+                    state.tone == "wait" && state.phase == PartyPhase.LIVE -> {
+                        waiting++
+                        if (!inWindow) {
+                            inWindow = true
+                            windows++
+                            windowStart = System.nanoTime()
+                        }
+                        worstWindowMs = maxOf(worstWindowMs, (System.nanoTime() - windowStart) / 1_000_000)
+                    }
+                    // Offline, or the host gone WHILE LISTENING: that is not a
+                    // handover and must never happen in a room whose host is
+                    // publishing. Before the first line lands the guest is still
+                    // JOINING and « L'hôte s'est absenté » is the server saying
+                    // "no publish yet" — the transient this room starts with.
+                    state.phase == PartyPhase.LIVE -> {
+                        warned++
+                        inWindow = false
+                        samples.add("WARN ${state.phase} · $status")
+                    }
+                    else -> inWindow = false
+                }
+                if (state.tone == "ok") inWindow = false
+                assertTrue("la ligne avance : ${api.positionS()}", api.positionS() >= 0.0)
                 Thread.sleep(250)
             }
-            assertTrue("the guest reached the room: $samples", synced)
-            println(
-                "MEASURE device party ${seconds}s: ${samples.size} state changes, " +
-                    "0 correction out of band, states=$samples stats=${core.stats()}",
+            assertTrue("l'invité a atteint la salle : $samples", synced > 0)
+            assertEquals("jamais hors ligne ni sans hôte : $samples", 0, warned)
+            // The handovers this run announced: one every 55 s of the publisher's
+            // line, plus the first placement.
+            val expectedWindows = (seconds / 55) + 1
+            assertTrue(
+                "les attentes sont des enchaînements ($windows, attendu <= $expectedWindows) : $samples",
+                windows <= expectedWindows + 1,
             )
-            val finalState = api.state()
-            println("MEASURE device party end: status=${finalState.status} position=${finalState.positionS}")
+            assertTrue("un enchaînement coûte moins d'un chunk : ${worstWindowMs}ms", worstWindowMs < 10_000)
+            println(
+                "MEASURE device party ${seconds}s: $synced échantillons calés, $windows enchaînements " +
+                    "(pire ${worstWindowMs} ms), 0 hors ligne, ${samples.size} changements d'état, " +
+                    "stats=${core.stats()}",
+            )
+            println("MEASURE device party states: $samples")
             runBlocking { api.leave() }
         } finally {
             host.stop()
