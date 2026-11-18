@@ -1532,9 +1532,6 @@ mod tests {
 #[cfg(test)]
 mod theme_tests {
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::Duration;
 
     use gpui_kit::{Hsla, rgb};
     use gpui_omarchy::ActiveTheme;
@@ -1604,76 +1601,112 @@ mod theme_tests {
     /// theme init watched that directory was aborted at its end by
     /// « Detected activity on thread Some("notify-rs inotify loop") » — the
     /// deterministic scheduler cannot be woken from notify's thread. The palette
-    /// here comes from a temporary file the test owns: a thread keeps rewriting
-    /// it, and the `shell.json` beside it, while the test pumps the scheduler 50
-    /// times; a wake from that thread would be recorded and fail this test, and
-    /// the new palette must still reach `cx.omarchy()` when the file is read.
+    /// here comes from a temporary file the test owns, and the `shell.json`
+    /// beside it is rewritten with it; a wake from that writer would be recorded
+    /// and fail this test, and the palette the file ends on must reach
+    /// `cx.omarchy()` when the file is read.
+    ///
+    /// **The write is an EVENT the test drives and waits for, never a rate it
+    /// hopes for.** This test used to let a thread rewrite the file every 2 ms
+    /// and then require ten rewrites in fifty pumps: that floor measured the
+    /// runner's scheduler, not the theme, and it is what turned `cargo test +
+    /// window` red on a loaded machine — CI runs 44219296421 and 44216181175
+    /// failed it with **9** and **3** rewrites while every theme assertion in it
+    /// held. Now the test asks the writer for one named palette at a time and
+    /// pumps the deterministic scheduler until the writer reports the file
+    /// written, so the bytes are landing *while* the scheduler runs on any
+    /// machine, and the assertion is the behaviour: the shell paints the
+    /// palette the file holds, twice, with both accents.
     #[gpui::test]
     async fn a_theme_file_written_while_the_test_runs_reaches_the_shell(
         cx: &mut gpui::TestAppContext,
     ) {
-        const FIRST: &str = "#205ea6";
-        const SECOND: &str = "#7aa2f7";
+        // Colours no Omarchy palette carries, so a stale or wrong palette
+        // fails the accent assertion itself instead of matching by accident
+        // (Tokyo Night's accent IS `#7aa2f7`, which the old pair used).
+        const FIRST: &str = "#123456";
+        const SECOND: &str = "#abcdef";
         let root = temp_dir("written");
         write_colors(&root, FIRST);
         std::fs::write(root.join("shell.json"), "{}\n").expect("write the temporary shell.json");
         cx.update(|cx| crate::theme::init_at(cx, &root).expect("the temporary palette"));
         assert_eq!(
             cx.update(|cx| crate::theme::accent(cx)),
-            Hsla::from(rgb(0x205ea6)),
+            Hsla::from(rgb(0x123456)),
             "the shell starts on the temporary palette"
         );
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let written = Arc::new(AtomicUsize::new(0));
+        // The writer owns the file, the test owns the rhythm: one channel asks
+        // it for a palette, the other says the bytes are on disk. No sleep and
+        // no count decides the outcome.
+        let (orders, asked) = std::sync::mpsc::channel::<&'static str>();
+        let (wrote, written) = std::sync::mpsc::channel::<&'static str>();
         let writer = {
             let root = root.clone();
-            let (stop, written) = (Arc::clone(&stop), Arc::clone(&written));
             std::thread::spawn(move || {
-                let mut round = 0u32;
-                while !stop.load(Ordering::Relaxed) {
-                    let accent = if round.is_multiple_of(2) {
-                        SECOND
-                    } else {
-                        FIRST
-                    };
+                for accent in asked {
                     write_colors(&root, accent);
-                    std::fs::write(root.join("shell.json"), format!("{{\"t\":{round}}}\n")).ok();
-                    written.fetch_add(1, Ordering::Relaxed);
-                    round = round.wrapping_add(1);
-                    std::thread::sleep(Duration::from_millis(2));
+                    std::fs::write(
+                        root.join("shell.json"),
+                        format!("{{\"accent\":\"{accent}\"}}\n"),
+                    )
+                    .ok();
+                    if wrote.send(accent).is_err() {
+                        break;
+                    }
                 }
             })
         };
-        for _ in 0..50 {
-            cx.run_until_parked();
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        stop.store(true, Ordering::Relaxed);
-        writer.join().expect("the writer thread");
-        let written = written.load(Ordering::Relaxed);
-        assert!(
-            written >= 10,
-            "the temporary theme file was rewritten {written} times, not enough to race the test"
-        );
 
-        // Whatever the last write left, the shell reads the file, not a copy.
-        let last = std::fs::read_to_string(root.join("colors.toml")).expect("read the palette");
-        let (accent, shell) = cx.update(|cx| {
-            crate::theme::apply_from(cx, &root).expect("the temporary palette");
-            (crate::theme::accent(cx), crate::theme::shell(cx))
-        });
-        assert_eq!(
-            accent,
-            if last.contains(SECOND) {
-                Hsla::from(rgb(0x7aa2f7))
-            } else {
-                Hsla::from(rgb(0x205ea6))
-            },
-            "the shell's accent is the file's last palette"
-        );
-        assert_ne!(shell, accent, "the palette is a whole theme, not one token");
-        assert_eq!(cx.update(|cx| cx.omarchy().name.to_string()), "Test");
+        for accent in [SECOND, FIRST] {
+            orders.send(accent).expect("the writer thread");
+            // Pump until the write LANDS: the scheduler therefore runs while
+            // the theme file is being rewritten, which is the race this test is
+            // about, whatever the machine's speed. The pump budget is a hang
+            // guard, far above a write (a parked scheduler pumps in microseconds
+            // and the writer needs one write per round).
+            let mut pumps = 0u32;
+            let landed = loop {
+                cx.run_until_parked();
+                match written.try_recv() {
+                    Ok(landed) => break landed,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        pumps += 1;
+                        assert!(
+                            pumps < 1_000_000,
+                            "the writer thread never finished one palette"
+                        );
+                        std::thread::yield_now();
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        panic!("the writer thread died before writing {accent}")
+                    }
+                }
+            };
+            assert_eq!(landed, accent, "the writer landed the palette asked for");
+
+            // The shell paints with the file, not with a copy taken at start-up.
+            let (painted, shell, name) = cx.update(|cx| {
+                crate::theme::apply_from(cx, &root).expect("the temporary palette");
+                (
+                    crate::theme::accent(cx),
+                    crate::theme::shell(cx),
+                    cx.omarchy().name.to_string(),
+                )
+            });
+            assert_eq!(
+                painted,
+                Hsla::from(rgb(if accent == SECOND { 0xabcdef } else { 0x123456 })),
+                "the shell's accent is the palette the file holds ({accent})"
+            );
+            assert_ne!(
+                shell, painted,
+                "the palette is a whole theme, not one token"
+            );
+            assert_eq!(name, "Test");
+        }
+        drop(orders);
+        writer.join().expect("the writer thread");
 
         std::fs::remove_dir_all(&root).ok();
     }
