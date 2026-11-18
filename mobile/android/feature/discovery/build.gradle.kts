@@ -42,6 +42,14 @@ android {
             // manifest and the resources of the module (fonts, values).
             isIncludeAndroidResources = true
         }
+        // A failing assertion must NAME its two values in the CI log: Gradle's
+        // default prints the class and the line only, which cost this lot a
+        // whole CI cycle (the six `ExplorerModelTest` failures below).
+        unitTests.all {
+            it.testLogging {
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            }
+        }
     }
 }
 
