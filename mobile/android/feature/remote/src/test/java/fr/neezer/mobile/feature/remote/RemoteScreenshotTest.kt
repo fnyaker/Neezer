@@ -225,8 +225,11 @@ abstract class RemoteScreenshotBase(private val width: Int) {
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun the_control_screen_draws_the_owner_player() {
         val model = loan()
+        // Read the state OUTSIDE composition: a `StateFlow.value` read in a
+        // composable is the lint error the CI found (and a stale frame anyway).
+        val state = model.state.value
         capture("mb19-control-encre-${width}dp.png", NzThemeKind.Encre) {
-            ControlForTest(model = model, state = model.state.value, rows = RemoteRows(ring()))
+            ControlForTest(model = model, state = state, rows = RemoteRows(ring()))
         }
     }
 
@@ -234,8 +237,9 @@ abstract class RemoteScreenshotBase(private val width: Int) {
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun the_control_screen_wide() {
         val model = loan(level = "read", playing = false, position = 0.0)
+        val state = model.state.value
         capture("mb19-control-encre-${width}dp.png", NzThemeKind.Encre) {
-            ControlForTest(model = model, state = model.state.value, rows = RemoteRows(ring()))
+            ControlForTest(model = model, state = state, rows = RemoteRows(ring()))
         }
     }
 
@@ -243,8 +247,9 @@ abstract class RemoteScreenshotBase(private val width: Int) {
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun the_control_screen_in_papier() {
         val model = loan(level = "queue", playing = true, position = 12.0)
+        val state = model.state.value
         capture("mb19-control-papier-${width}dp.png", NzThemeKind.Papier) {
-            ControlForTest(model = model, state = model.state.value, rows = RemoteRows(ring()))
+            ControlForTest(model = model, state = state, rows = RemoteRows(ring()))
         }
     }
 
