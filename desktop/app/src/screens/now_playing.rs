@@ -251,6 +251,11 @@ impl Render for Screen {
             Some("radio") => "Radio".to_owned(),
             _ => "En lecture".to_owned(),
         };
+        // LN12: where the bytes came from. `LanOpener` records the peer that
+        // served a track when it opens it (`wiring::lan::record_served`), so this
+        // is one bounded lookup and no request — nothing here asks the network
+        // what is playing (rule 1).
+        let source = entry.reference().and_then(crate::wiring::lan::source_line);
 
         // -- the header: the two chips that change the sound, and where we are.
         let header = div()
@@ -264,10 +269,29 @@ impl Render for Screen {
             .py(rems(0.75))
             .child(
                 div()
-                    .text_size(rems(0.6875))
-                    .font_family(theme::mono(cx))
-                    .text_color(theme::secondary(cx))
-                    .child(where_),
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.5))
+                    .child(
+                        div()
+                            .text_size(rems(0.6875))
+                            .font_family(theme::mono(cx))
+                            .text_color(theme::secondary(cx))
+                            .child(where_),
+                    )
+                    .when(source.is_some(), |line| {
+                        line.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(rems(0.6875))
+                                .font_family(theme::mono(cx))
+                                .text_color(theme::accent(cx))
+                                .debug_selector(|| "np-source".to_owned())
+                                .child(source.clone().unwrap_or_default()),
+                        )
+                    }),
             )
             .child(
                 div()

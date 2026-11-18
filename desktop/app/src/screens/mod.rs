@@ -21,6 +21,7 @@ pub mod library;
 pub mod now_playing;
 pub mod onboarding;
 pub mod party;
+pub mod peer_sets;
 pub mod playlist;
 pub mod podcasts;
 pub mod queue;

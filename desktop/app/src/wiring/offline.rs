@@ -21,6 +21,8 @@
 
 pub use nz_offline::*;
 
+use std::sync::Arc;
+
 use crate::state::AppState;
 
 /// The process's worker for this session, started on the first call.
@@ -31,7 +33,18 @@ use crate::state::AppState;
 pub fn attach(state: &AppState) -> Option<Offline> {
     let api = state.api.clone()?;
     let store = state.cache.clone()?;
-    Some(Offline::ensure(api, store, state.runtime.clone()))
+    // The process's one worker: `ensure` creates it (and points it at `nz-api`)
+    // the first time, and every later session keeps the same thread and queue —
+    // a download queued before a restart resumes (rule 2).
+    let service = match Offline::get() {
+        Some(service) => service,
+        None => Offline::ensure(Arc::clone(&api), store, state.runtime.clone()),
+    };
+    // The peer-first fetcher, installed ONCE per session (`wiring::lan`): the
+    // worker reads its fetcher per job, so a node that starts a moment later is
+    // picked up without re-installing anything.
+    crate::wiring::lan::install_downloader(&service, api, state.runtime.clone());
+    Some(service)
 }
 
 /// The tests that stayed with the app, and the harness the app's own benches

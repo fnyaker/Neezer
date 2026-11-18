@@ -27,9 +27,9 @@ use std::time::Duration;
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, px, relative, rems,
+    AnyElement, App, AppContext as _, Context, Div, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, Window, div, px, relative, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon, icon_button, separator, switch, toggle};
 use nz_cache::DownloadSet;
@@ -61,6 +61,10 @@ pub struct Screen {
     /// twice (the SPA's `clearAll` sits behind its own confirmation).
     clear_armed: bool,
     scroll: ScrollHandle,
+    /// « Sur vos appareils » (LN12): the sets the peers on this network expose.
+    /// One entity, built with this screen: it reads the node's replica and
+    /// queues into the same worker this page shows.
+    peers: Entity<crate::screens::peer_sets::Card>,
     _state: Subscription,
 }
 
@@ -113,9 +117,11 @@ impl Screen {
             }
         })
         .detach();
+        let peers = cx.new(|cx| crate::screens::peer_sets::Card::new(state.clone(), cx));
         Self {
             state,
             offline,
+            peers,
             painted: 0,
             sets_page: 0,
             failures_page: 0,
@@ -202,7 +208,12 @@ impl Render for Screen {
         if !snapshot.failures.is_empty() {
             column = column.child(failures_card(&snapshot, self.failures_page, cx));
         }
-        column = column.child(sets_card(&snapshot, self.sets_page, self.clear_armed, cx));
+        column = column
+            .child(sets_card(&snapshot, self.sets_page, self.clear_armed, cx))
+            // « Sur vos appareils » : what the peers on this network expose, and
+            // what to take from them (LN12). The card draws nothing when this
+            // app is not a node.
+            .child(self.peers.clone());
 
         div()
             .id("settings-downloads")
@@ -1151,7 +1162,7 @@ mod tests {
 mod layout_tests {
     use std::path::PathBuf;
 
-    use gpui_kit::{AppContext as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, px, size};
+    use gpui_kit::{KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, px, size};
 
     use super::*;
     use crate::state::{AppConfig, event_channel};
