@@ -1,39 +1,68 @@
 package fr.neezer.mobile.feature.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.Icon
+import fr.neezer.mobile.designsystem.NzCard
+import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzMinTouchTarget
+import fr.neezer.mobile.designsystem.NzRadius
+import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.admin.AdminSections
-import fr.neezer.mobile.feature.audiofx.AudioFxSections
-import uniffi.nz_ffi.nzVersion
+import uniffi.nz_ffi.AppLink
 
 /**
- * Réglages, the person's own sections (lot MB16) and, behind [isAdmin], the
- * server's (MB17).
+ * Réglages, the person's own sections (lot MB16) and, behind the administrator's
+ * own pages, the server's (MB17).
  *
- * MB0 draws the section list and — this is the point of the skeleton — the Aide
- * section, which shows `nz_version()` READ FROM RUST. That one line proves the
- * whole chain end to end: Kotlin → JNA → `libnz_ffi.so` → the crate's version.
- * Every other section is a placeholder naming its lot.
+ * The SPA's two levels, ported (`routes/Settings.svelte`): the LIST of categories
+ * is the phone's screen, a category is another one, and back returns to the list.
+ * At 900 dp the list becomes a 200 dp rail beside the open category, exactly as
+ * the SPA's `wide` grid does. The filter narrows the MENU — no route, no request,
+ * no state beyond its field — and matching is accent- and case-blind, which is
+ * what a thumb types.
+ *
+ * **The extension point a later lot uses** (`docs/agents/mobile.md`, MB16's
+ * section): [SETTING_CATEGORIES] and [ADMIN_CATEGORIES] are data, and
+ * [SettingsSections]/[AdminSections] dispatch on ids. LN14 (« Appareils et
+ * amis ») adds ONE entry to that table plus one branch here; MB17 replaces the
+ * `AdminSections()` stub with its own module. No other line of this screen moves.
  */
 @Composable
 fun SettingsEntry(
@@ -41,139 +70,433 @@ fun SettingsEntry(
     nav: NzNavigator,
     modifier: Modifier = Modifier,
     isAdmin: Boolean = false,
+    // The seam a JVM test uses (`SettingsScreenshotTest`): the app passes
+    // nothing and gets the core's own service; a fake renders the same screen.
+    service: SettingsService? = AppSettings.service(),
 ) {
-    var current by remember(section) { mutableStateOf(section) }
+    val scope = rememberCoroutineScope()
+    val model = remember(service) { service?.let { SettingsModel(it, scope) } }
 
-    Column(
+    // The section comes from the ROUTE (a tap navigates, back pops): one source
+    // of truth, so a deep link and a tap land on the same page.
+    LaunchedEffect(section) {
+        model?.start()
+        model?.open(section)
+    }
+
+    val colors = Sillon.colors
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Sillon.space, vertical = Sillon.gap),
-        verticalArrangement = Arrangement.spacedBy(Sillon.gap),
+            .background(colors.bg),
     ) {
-        Text("Réglages", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(vertical = Sillon.gap))
-
-        for (id in SECTIONS) {
-            SectionRow(id = id, selected = current == id) { current = if (current == id) null else id }
-        }
-        if (isAdmin) {
-            for (id in ADMIN_SECTIONS) {
-                SectionRow(id = id, selected = current == id) { current = if (current == id) null else id }
-            }
+        val wide = maxWidth >= 900.dp
+        val state = model?.state
+        if (model == null || state == null) {
+            // The native core could not be built: Aide still says which build
+            // this is, and why it cannot read anything (rule 3).
+            CoreUnavailable(modifier = Modifier.fillMaxSize())
+            return@BoxWithConstraints
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-
-        when (val open = current) {
-            null -> Text(
-                text = "Choisis une section.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = Sillon.gap),
-            )
-
-            "Aide" -> HelpSection()
-
-            "Lecture & son" -> {
-                AudioFxSections()
-                SectionNote(
-                    "Qualité, normalisation, fondu et silence sont décrits par le lot MB12 ; les autres réglages d'écoute arrivent avec le lot MB16.",
-                )
-            }
-
-            "Serveur" -> {
-                if (isAdmin) {
-                    AdminSections()
-                } else {
-                    MissingSection(open)
+        val go: (String) -> Unit = { id -> nav.go(AppLink.Settings(section = id)) }
+        if (wide) {
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.width(200.dp).fillMaxHeight()) {
+                    SettingsMenu(
+                        model = model,
+                        state = state,
+                        selected = section,
+                        onOpen = go,
+                        showHints = false,
+                        modifier = Modifier.verticalScroll(rememberScrollState()).padding(NzSpacing.l),
+                    )
+                }
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    SettingsPane(
+                        model = model,
+                        state = state,
+                        section = section,
+                        onBack = null,
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                    )
                 }
             }
-
-            else -> MissingSection(open)
+        } else if (section == null) {
+            SettingsMenu(
+                model = model,
+                state = state,
+                selected = null,
+                onOpen = go,
+                showHints = true,
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            )
+        } else {
+            SettingsPane(
+                model = model,
+                state = state,
+                section = section,
+                onBack = { nav.back() },
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            )
         }
     }
 }
 
-/** Aide (MB16): the two versions, and the diagnostic log's path. */
+/** The list: the title, the filter, then the groups of categories. */
 @Composable
-private fun HelpSection() {
-    // Read ONCE: the call crosses into Rust, and a recomposition must not.
-    val rustVersion = remember { runCatching { nzVersion() }.getOrElse { "indisponible (${it.message})" } }
-    val appVersion = remember { NzBridge.version ?: "indisponible" }
-
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Aide", style = MaterialTheme.typography.titleMedium)
+private fun SettingsMenu(
+    model: SettingsModel,
+    state: SettingsModel.State,
+    selected: String?,
+    onOpen: (String) -> Unit,
+    showHints: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = Sillon.colors
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
+    ) {
         Text(
-            text = "Version de l'application : ${appVersion}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = "Réglages",
+            style = Sillon.type.title,
+            color = colors.tx,
+            modifier = Modifier.padding(
+                start = NzSpacing.pageX,
+                end = NzSpacing.pageX,
+                top = NzSpacing.pageY,
+                bottom = NzSpacing.m,
+            ),
         )
-        Text(
-            text = "Version du noyau (Rust) : $rustVersion",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        SettingsFilter(
+            value = state.query,
+            onValue = model::setQuery,
+            modifier = Modifier.padding(horizontal = NzSpacing.pageX),
         )
-        Text(
-            text = "Le journal de diagnostic et l'export arrivent avec le lot MB16.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        val groups = state.categories
+        if (groups.isEmpty()) {
+            Text(
+                text = "Aucun réglage ne porte ce nom.",
+                style = Sillon.type.bodySmall,
+                color = colors.dim,
+                modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
+            )
+        }
+        groups.forEach { (group, items) ->
+            Text(
+                text = group.label.uppercase(),
+                style = Sillon.type.labelMono,
+                color = colors.dim,
+                modifier = Modifier.padding(start = NzSpacing.pageX, top = NzSpacing.l, bottom = NzSpacing.xs),
+            )
+            items.forEach { category ->
+                CategoryRow(
+                    category = category,
+                    selected = selected == category.id,
+                    hint = showHints,
+                    onClick = { onOpen(category.id) },
+                )
+            }
+        }
+        Spacer(Modifier.height(NzSpacing.pageY))
     }
 }
 
+/** `Settings.svelte`'s `.cat` row: an icon chip, the name, and what it holds. */
 @Composable
-private fun MissingSection(id: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(id, style = MaterialTheme.typography.titleMedium)
-        SectionNote("Cette section arrive avec son lot (docs/agents/mobile.md, inventaire des fonctionnalités).")
+private fun CategoryRow(
+    category: SettingCategory,
+    selected: Boolean,
+    hint: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = Sillon.colors
+    val shape = RoundedCornerShape(NzRadius.field)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = NzSpacing.m)
+            .height(NzMinTouchTarget + 12.dp)
+            // A selected row is the accent SURFACE with its own ink, never a
+            // lemon label on cream (MB1's rule: a label never inherits a colour).
+            .then(
+                if (selected) Modifier.background(colors.ac, shape) else Modifier,
+            )
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = NzSpacing.m),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(
+                    if (selected) colors.onac.copy(alpha = 0f) else nzChipTint(),
+                    RoundedCornerShape(NzRadius.field),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(glyph = category.glyph, size = 19.dp, tint = if (selected) colors.onac else colors.btn)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = category.label,
+                style = Sillon.type.label,
+                color = if (selected) colors.onac else colors.tx,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (hint && !selected) {
+                Text(
+                    text = category.hint,
+                    style = Sillon.type.bodySmall,
+                    color = colors.dim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (hint) {
+            Icon(
+                glyph = NzGlyph.ChevronRight,
+                size = 18.dp,
+                tint = if (selected) colors.onac else colors.dim,
+            )
+        }
     }
 }
 
+/** The icon chip's 16 % accent tint (`Settings.svelte`'s `.cat-ico`). */
 @Composable
-private fun SectionNote(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+private fun nzChipTint() = fr.neezer.mobile.designsystem.nzMix(
+    Sillon.colors.btn.copy(alpha = 0.16f),
+    Sillon.colors.bg,
+    1f,
+)
+
+/** "Chercher un réglage…" — a pill field, Sillon's own colours, 48 dp. */
+@Composable
+private fun SettingsFilter(
+    value: String,
+    onValue: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = Sillon.colors
+    val shape = RoundedCornerShape(NzRadius.chip)
+    BasicTextField(
+        value = value,
+        onValueChange = onValue,
+        singleLine = true,
+        textStyle = Sillon.type.body.copy(color = colors.tx),
+        cursorBrush = SolidColor(colors.acText),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(NzMinTouchTarget)
+            .semantics { contentDescription = "Chercher un réglage" },
+        decorationBox = { inner ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.s1, shape)
+                    .border(1.dp, colors.ln, shape)
+                    .padding(horizontal = NzSpacing.m),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+            ) {
+                Icon(glyph = NzGlyph.Search, size = 16.dp, tint = colors.dim)
+                Box(Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "Chercher un réglage…",
+                            style = Sillon.type.body,
+                            color = colors.dim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    inner()
+                }
+                if (value.isNotEmpty()) {
+                    NzIconButton(
+                        glyph = NzGlyph.Close,
+                        contentDescription = "Effacer la recherche",
+                        onClick = { onValue("") },
+                        size = 14.dp,
+                    )
+                }
+            }
+        },
     )
 }
 
+/** One category's page: its back button, its title, its cards. */
 @Composable
-private fun SectionRow(id: String, selected: Boolean, onClick: () -> Unit) {
+private fun SettingsPane(
+    model: SettingsModel,
+    state: SettingsModel.State,
+    section: String?,
+    onBack: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val colors = Sillon.colors
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
+        modifier = modifier.fillMaxWidth().padding(bottom = NzSpacing.pageY),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
-        Text(
-            text = id,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-        )
-        if (selected) {
-            Text("ouvert", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = if (onBack != null) NzSpacing.s else NzSpacing.pageX,
+                    end = NzSpacing.pageX,
+                    top = NzSpacing.l,
+                    bottom = NzSpacing.xs,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        ) {
+            if (onBack != null) {
+                NzIconButton(
+                    glyph = NzGlyph.ChevronLeft,
+                    contentDescription = "Retour aux réglages",
+                    onClick = onBack,
+                )
+            }
+            Text(
+                text = categoryOf(section)?.label ?: "Réglages",
+                style = Sillon.type.titleSmall,
+                color = colors.tx,
+            )
+        }
+        Box(Modifier.padding(horizontal = NzSpacing.pageX)) {
+            Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                when (section) {
+                    "playback" -> PlaybackSection(model, state)
+                    "appearance" -> AppearanceSection(model, state)
+                    "viz" -> VizSection(model, state)
+                    "downloads" -> DownloadsSection(model, state)
+                    "discovery" -> DiscoverySection(model, state)
+                    "sources" -> SourcesSection(model, state)
+                    "account" -> AccountSection(model, state)
+                    "help" -> HelpSection(model, state)
+                    // MB17's two pages: its own module, its own composable. This
+                    // line is the whole seam (the extension point the note names).
+                    "users", "server" -> AdminSections()
+                    else -> Text(
+                        text = "Cette page arrive avec son lot.",
+                        style = Sillon.type.body,
+                        color = colors.dim,
+                    )
+                }
+            }
+        }
+    }
+    // Nothing here fixes a text height: at a 200 % font scale the labels grow and
+    // the cards follow them, which is what the acceptance's scale check reads.
+}
+
+/**
+ * One section, over a model a test built — the real dispatch, without the route.
+ * The screenshots use it; the app never does (the route is the app's).
+ */
+@Composable
+internal fun SettingsSection(
+    section: String,
+    model: SettingsModel,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.fillMaxWidth()) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
+            modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
+        ) {
+            when (section) {
+                "playback" -> PlaybackSection(model, model.state)
+                "appearance" -> AppearanceSection(model, model.state)
+                "viz" -> VizSection(model, model.state)
+                "downloads" -> DownloadsSection(model, model.state)
+                "discovery" -> DiscoverySection(model, model.state)
+                "sources" -> SourcesSection(model, model.state)
+                "account" -> AccountSection(model, model.state)
+                "help" -> HelpSection(model, model.state)
+                else -> Text(
+                    text = categoryOf(section)?.label ?: "Réglages",
+                    style = Sillon.type.titleSmall,
+                    color = Sillon.colors.tx,
+                )
+            }
         }
     }
 }
 
-/** The SPA's section ids (`routes/Settings`), in its order. */
-private val SECTIONS = listOf(
-    "Lecture & son",
-    "Apparence",
-    "Animations",
-    "Écoute",
-    "Bibliothèque",
-    "Téléchargements",
-    "Découverte",
-    "Sources",
-    "Compte",
-    "Aide",
-)
+/** A card with a title, a subtitle and its content (the SPA's `.card`). */
+@Composable
+internal fun SettingsCard(
+    title: String,
+    subtitle: String? = null,
+    content: @Composable () -> Unit,
+) {
+    val colors = Sillon.colors
+    NzCard(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+            Text(text = title, style = Sillon.type.label, color = colors.tx)
+            if (subtitle != null) {
+                Text(text = subtitle, style = Sillon.type.bodySmall, color = colors.dim)
+            }
+            content()
+        }
+    }
+}
 
-/** MB17's sections: only an administrator sees them. */
-private val ADMIN_SECTIONS = listOf(
-    "Utilisateurs",
-    "Serveur",
-)
+/** « Hors ligne · version mémorisée » — what a card says over its kept copy. */
+@Composable
+internal fun StaleNote() {
+    Text(
+        text = "Hors ligne · version mémorisée",
+        style = Sillon.type.bodySmall,
+        color = Sillon.colors.dim,
+    )
+}
+
+/** The build could not load the native core: Aide still names what it knows. */
+@Composable
+private fun CoreUnavailable(modifier: Modifier = Modifier) {
+    val colors = Sillon.colors
+    Column(
+        modifier = modifier.padding(NzSpacing.pageX),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
+    ) {
+        Text(text = "Réglages", style = Sillon.type.title, color = colors.tx)
+        Text(
+            text = "Le noyau de l'application n'a pas pu être chargé : ces réglages sont indisponibles.",
+            style = Sillon.type.body,
+            color = colors.dim,
+        )
+        Text(
+            text = fr.neezer.mobile.bridge.NzBridge.failure ?: "cause inconnue",
+            style = Sillon.type.bodySmall,
+            color = colors.dim,
+        )
+    }
+}
+
+/**
+ * The wrapper `MainActivity` reads: everything it draws is inside [NzTheme] with
+ * what Réglages saved, so a theme, an accent or the eco switch applies to the
+ * WHOLE app — the home included — without a restart.
+ *
+ * It is the one seam between this module and `:app` (see `NzAppearance`), and
+ * `SettingsThemeSwitchTest` proves a switch repaints another feature's screen.
+ */
+@Composable
+fun NzAppearanceTheme(content: @Composable () -> Unit) {
+    val appearance by NzAppearance.current
+    NzTheme(
+        kind = appearance.theme,
+        accent = appearance.accent,
+        coverAccent = appearance.sleeve,
+        motion = appearance.motion,
+        content = content,
+    )
+}

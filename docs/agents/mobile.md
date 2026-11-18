@@ -3186,14 +3186,8 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   (stories, tap/hold, share), `ExplorerStylesSection()`. Rows: the recap story preloads only the next
   slide's image (Prefetch lane), never the whole year.
 - **MB15 — Offline** [SC4, MB3b]: **delivered** — see *MB15 — Hors ligne* above.
-- **MB16 — Réglages, user sections** [MB2; hosts MB12's and MB15's sections]. FFI (`settings.rs`):
-  `SettingsApi` (server settings `/settings` the user may change, sources order, my accounts, Deezer
-  ARL (MB4's save), YouTube connect, access grants, groups, export services, diagnostic log export,
-  app/server versions); local settings in kv (theme, accent, animations, listen, library, discovery).
-  Kotlin: `SettingsEntry(section)` two levels (webapp.md), sections `playback appearance viz listen
-  library downloads discovery sources accounts account help`, `AdminSections()` slot for admins.
-  Rows: every setting the SPA has is here (a checklist against `routes/Settings.svelte` in the PR);
-  a value set here overrides the config file (rule 6) — read back from the server.
+- **MB16 — Réglages, user sections** [MB2; hosts MB12's and MB15's sections]. **Delivered
+  2026-11-18** — see *MB16 — Réglages, user sections* below for what it does and what it measured.
 - **MB17 — Réglages, admin** [MB16]. FFI (`admin.rs`): users dashboard, invites, server (archive status,
   rules, cleanup preview/run, storage, quotas, migrate, analysis plan/backfill/schedule, credits/enrich/
   similar backfills, automatch run/cancel/settings, transcription settings + workers, job failures with
@@ -3215,6 +3209,116 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   (bars, scope with orientation/colour), `VizEntry` (full screen), viz settings (palette, intensity, fps
   cap, eco), `FlashWarning`. Rows: 60 fps p95 ≤ 16.7 ms on the full-screen bars; analysis thread CPU
   = 0 when no view is visible (counted ticks); eco = 30 fps cap.
+
+### MB16 — Réglages, user sections (delivered 2026-11-18)
+
+**What landed.** The SPA's Réglages, its two levels and every user section, plus the one seam that
+makes a theme a property of the APP instead of a screen.
+
+- **`nz-core/src/settings/`**: `local.rs` (the `kv` store's whitelist and the SPA's defaults),
+  `view.rs` (the server's answers, screen-shaped — `nz-ffi` carries no `serde_json`), `wire.rs` (the
+  seven routes, the counted traffic, the device's copy in one `settings-<hash>.json`), `mod.rs` (the
+  `Core` methods), `testing.rs` (a loopback server that answers these routes and counts them).
+- **`nz-ffi/src/settings.rs`**: `SettingsApi` — this device's settings as ONE record
+  (`settings()`, synchronous: the shell needs it before the first frame), each server section as a
+  `cached_x()`/`x()` pair, "Je n'aime pas" as a **`ListHandle`**, the ARL saved through MB4's own
+  validating `Core::save_deezer_arl`, and `diagnostic_report()`. No JSON crosses: the screen says
+  what it wants (`save_sources_order`, `set_source_enabled`, `save_upload_quota`, …).
+- **`feature/settings/`**: `SettingsEntry(section, nav)` — the list ↔ category two levels, the
+  « Chercher un réglage… » filter, the 200 dp rail at ≥ 900 dp — `SettingsModel` (one state machine
+  over a `SettingsService` port), the sections (`Apparence`, `Animations`, `Téléchargements`,
+  `Découverte`, `Sources` = order + my accounts + who may use what + the ARL card, `Compte` =
+  services, `Assistance`), `WhoSheet` (the grant picker), and **`NzAppearance`**: the theme, the
+  accent, Pochette's sleeve and eco, read ONCE at launch and applied to the whole app by
+  `MainActivity`'s `NzTheme`.
+- `AudioFxSections()` (MB12) and `AdminSections()` (MB17) are HOSTED; `feature:offline`'s
+  downloaded-titles page is MB15's and the section that links to it is `Bibliothèque → Hors-ligne`.
+
+**Rules a measurement taught** (each one is what a later lot inherits):
+
+- **The theme must be applied ABOVE the shell, or it is not a theme.** `NzTheme` was called with
+  defaults in `MainActivity`, so Réglages could store `ui.theme` and nothing would repaint. MB16
+  owns `NzAppearance` (a Compose state in `:feature/settings`) and `MainActivity` wraps `NzApp` in
+  `NzAppearanceTheme` — **a 6-line edit of MB0's file, approved by the orchestrator and declared in
+  the PR**. `SettingsThemeSwitchTest` renders the REAL `HomeScreen` inside that wrapper, samples the
+  painted pixel, switches to Encre and samples it again: the home repaint is a number, not a claim.
+- **A synchronous read is what keeps the first frame honest.** The theme is read in
+  `MainActivity.onCreate` before `setContent`, and 17 `SELECT`s on the core's WAL store cost
+  **197.6 µs** (measured, `nz-core`, 200 runs) — so a launch in Papier never flashes Encre, and the
+  reading costs less than one frame's budget. A background read would flash; a network read would
+  block.
+- **`nz-ffi` has no `serde_json`, and a lot may not add one to a shared manifest.** The routes'
+  JSON-shaped fields (`running`, `last`, the grant maps) are read in `nz-core::settings::view`,
+  which hands `nz-ffi` plain structs. Anything else would have needed `mobile/rust/Cargo.toml`.
+- **The admin card must wait for `/access`.** Asked in parallel with the section's three reads, a
+  member's `/api/settings` was a `403` on every open of *Sources* (measured: 4 requests where the SPA
+  sends 3). The card is now asked only after `/access` said `admin: true`: **3 requests for a
+  member, 5 for an administrator**, exactly the SPA's own cards.
+- **A switch's label inside a row squeezes the row.** `NzSwitch(label = …)` draws its text inline:
+  beside a source's status it left the status a one-letter-wide column (this lot's first capture).
+  The label belongs on its own line, or in `semantics.contentDescription` — never inside a `Row`
+  that has a weighted child.
+- **A `Row` cuts, a `FlowRow` wraps.** Six quality pills and ten prefetch chips are wider than a
+  phone at a 200 % font scale; the first *Téléchargements* capture had four chips off screen. Chips,
+  quality rates and limits go through `FlowRow`, and a card whose text can grow uses `heightIn`, not
+  `height`.
+- **On Papier the accent preview must not be a button.** Without a custom colour, painting
+  `pair.surface` as a « Lire » pill gives a lemon button on cream — the highlighter MB1 forbids
+  (`--btn` is ink there). The preview paints the THEME's button pair when no custom accent is set,
+  and the accent's own pair when one is (which is what `theme.js#apply` really does).
+
+**The checklist against `routes/Settings.svelte`** (every user setting, where it lives now):
+
+| SPA | Mobile |
+|---|---|
+| Listening: `AudioEffects` (EQ, bass, mono/balance, output, volume warning) | `AudioFxSections()` (MB12), hosted under *Lecture & son* |
+| `player.quality` (the player's rate) | *Lecture & son* → chips (`player.quality`) |
+| `AppearanceSettings`: 3 themes, custom accent (field, reset, correction, preview), Pochette's sleeve | *Apparence*, all of it; the ink correction is `nzAccent`'s, and the sentence names the theme it corrected for |
+| `ui.theme`, `ui.accent`, `ui.coverAc` in `localStorage` | the same three keys in `kv`, read by `NzAppearance` |
+| `VisualizerSettings`: eco, mode, palette, intensity, fps, beat, scope orientation/colour | *Animations*; the 50 worlds and the full-screen visualiser are MB21/MB22 |
+| Downloads: default quality, offline-only, prefetch on/count, cache limit, storage use | *Téléchargements* (`offline.quality`, `offline.onlyDownloaded`, `cache.prefetch`, `cache.prefetchCount`, `cache.limit`); the storage gauge and the downloaded-titles page are MB15's |
+| `DiscoverySlider` (`/discover/prefs`) | *Découverte* → the four steps, MB5's own store |
+| `DislikedTracks` (`/me/dislikes`, one removal = one `POST /dislike`) | *Découverte* → a `ListHandle` (windowed), optimistic removal |
+| `SourceOrder` (`/sources`, admin's order and switches, « classer par qualité ») | *Sources* → optimistic order, then the server's answer |
+| `MyAccounts` (`/me/accounts`, import + progress, default platform, kinds, link/unlink) | *Sources* → the same, progress polled at 1.5 s ONLY while an import runs |
+| `AccessSettings` (`/access`, grants, groups) | *Sources* → the providers' features with their audience, `WhoSheet`, groups (create/delete/members) |
+| The ARL card (`/settings`, `/deezer/status`, *Tester*) | *Sources* → admin only, the masked hint and where it comes from, never the credential |
+| `ServicesSettings` (`/services`, Spotify app, link/unlink) | *Compte* → the targets, Spotify's consent URL opened in the platform browser |
+| `AdminUsers`, the server page | MB17's `AdminSections()` |
+| `HardReload` + `lib/log.js` (diagnostic log, download/copy) | *Assistance* → the two versions and `diagnostic_report()` shared with `ACTION_SEND`. A native app has no page to reload and its journal is logcat (`adb logcat -s neezer`, MB2): there is nothing to download, so the report is what a person attaches |
+| 「 YouTube connect 」 (pasted browser headers) | **not ported**: the row says where the session is linked (the web app's Services page); the form needs a text-field surface MB14's import lot does not have yet |
+
+**The extension point the next lots use** (LN14's « Appareils et amis », MB17's two pages, and any
+later one): the menu is DATA — `SETTING_CATEGORIES`/`ADMIN_CATEGORIES` in `SettingsCopy.kt`, with
+`SettingGroup` and `adminOnly` — and a page is one `when` branch in `SettingsEntry`'s `SettingsPane`.
+LN14 adds one entry to that table plus one branch that calls its own composable; MB17 replaces the
+`AdminSections()` stub. No other line of the screen moves, and the filter follows automatically.
+
+**Measured** (this machine, JDK 21, Gradle 8.14.7, Rust 1.99.1, `CARGO_BUILD_JOBS=4`):
+
+| What | How | Numbers |
+|---|---|---|
+| Rust | `cargo test --workspace --locked` | **250 `nz-core` tests** (12 of them this lot's), 16 `nz-ffi`, 7 `nz-droid-audio`, all green; `fmt` and `clippy -D warnings` clean |
+| This device's settings | 17 `kv` reads, 200 runs | **197.6 µs** — the first-frame cost `MainActivity` pays for the stored theme |
+| A cold *Sources*, administrator | fake server, counted | **5 requests**: `GET /sources`, `/me/accounts`, `/access`, `/settings`, `/deezer/status` — the SPA's own five |
+| A cold *Sources*, member | same | **3 requests**; a warm open paints the device's copy with the link still working (held at a gate, not a sleep) |
+| A dead link with a copy | same | the copy is kept and flagged, no failure block; off a network the gate answers `Offline` in **0 sockets** |
+| The ARL | same | posted **once** in the `POST /api/settings` body; the device's copy holds the masked hint (`…a1b2`) and **not** the credential |
+| One discovery drag | 3 moves, settle | **1 write** (`discover.level` = the last value), the value moving in every frame |
+| Kotlin | `:feature:settings:testDebugUnitTest` | **39 tests**: 13 `SettingsModelTest` (counts, the four states, optimistic + rollback, settle, clamping, the filter, the report), 2 `SettingsThemeSwitchTest`, 12 + 12 screenshot tests (360 dp / 600 dp) |
+| Screenshots | Robolectric, NATIVE graphics | **24 PNGs** under `docs/agents/screenshots/mobile/MB16/`: Encre/Papier/Pochette, 360 and 600 dp, the 200 % scale, a failure card — looked at, and three real layout bugs fixed from them (a switch's label squeezing a row, chips cut at 200 %, a lemon button on Papier) |
+
+**Files.** `mobile/rust/crates/nz-core/src/settings/**`, `mobile/rust/crates/nz-ffi/src/settings.rs`,
+`mobile/rust/crates/nz-ffi/src/core.rs` (`settings()` builds over the core — the same one-line seam
+MB3b's `player()` used), `mobile/android/feature/settings/**`,
+`mobile/android/app/src/main/java/fr/neezer/mobile/app/MainActivity.kt` (**outside the lot's list**:
+the theme seam, approved by the orchestrator), `docs/agents/screenshots/mobile/MB16/*.png`, and this
+section.
+
+**Still owed** (named where it belongs): the headless-emulator screenshot of the real screen (this
+lot's captures are Robolectric's; the emulator needs the 3-ABI `build-android.sh`, and the machine
+already had another lot's emulator running) and the Macrobenchmark numbers for *Sources* (MQ2's).
+YouTube Music's connect form is the one SPA control not ported (see the checklist).
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).

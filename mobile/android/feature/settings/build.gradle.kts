@@ -27,6 +27,20 @@ android {
         compose = true
         buildConfig = false
     }
+
+    // The JVM-test pins this module needs are literal: the catalog belongs to
+    // MB0 (worker rule 3), and a test-only coordinate is not worth a shared edit.
+    lint {
+        disable += "UseTomlInstead"
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric renders the screenshots: it needs the merged manifest
+            // and this module's resources (fonts, values).
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -42,12 +56,39 @@ composeCompiler {
 dependencies {
     implementation(project(":bridge"))
     implementation(project(":designsystem"))
+    // MB12's own effects cards and MB17's own pages: hosted, never copied.
+    implementation(project(":feature:audiofx"))
+    implementation(project(":feature:admin"))
+    implementation(project(":feature:offline"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(project(":feature:audiofx"))
-    implementation(project(":feature:admin"))
-    implementation(project(":feature:offline"))
+
+    // --- JVM tests -----------------------------------------------------------
+    // `SettingsModelTest` is plain Kotlin over the screen's port: no JNA, no
+    // `.so`, no device. The screenshots need real measure/layout and real
+    // pixels, so they run on Robolectric with its NATIVE graphics backend (the
+    // recipe MB1 measured and MB5/MB6/MB7 reused): no emulator, no window on the
+    // person's display (worker rule 7).
+    testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.18")
+    testImplementation("androidx.test:core:1.7.0")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    // The theme-switch test renders ANOTHER feature (the home) inside the
+    // wrapper, which is what the acceptance asks it to prove.
+    testImplementation(project(":feature:home"))
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// The screenshot test writes the PNGs the lot commits under
+// `docs/agents/screenshots/mobile/MB16/` (the acceptance asks for them there).
+val repoRoot = rootProject.layout.projectDirectory.dir("../..")
+
+tasks.withType<Test>().configureEach {
+    systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
+    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB16").asFile.absolutePath)
 }
