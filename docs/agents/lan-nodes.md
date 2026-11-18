@@ -1071,9 +1071,11 @@ one kind (an unknown account, yourself and a disabled account are one 404).
 - **The revocation serial moves by itself.** There is no hook in the account manager (a file this
   lot does not own) for "this account was disabled": a digest of the list is stored in `Meta`, and
   the next sync that changes it bumps the serial. A `DELETE` bumps it explicitly.
-- **Adding a table that names a user moves the admin deletion budget.** Peewee's recursive delete
-  emits one DELETE per reverse relation, so the four LAN tables took that test's pinned
-  `58 → 65` statements (+7, nothing per row); the number is updated with its reason, not widened.
+- **Adding a table that names a user moves the admin deletion budget, but never per row.** Peewee's
+  recursive delete emits one DELETE per reverse relation, so the four LAN tables took that test's
+  pinned `58 → 65` statements (+7); measured, deleting an account costs **60 statements with 20
+  enrolled devices and 60 with none** — the engine's CASCADE removes the rows. The pinned number is
+  updated with its reason, never widened.
 
 ### LN2 — Trust codec and device key (wave 1, effort max)
 
