@@ -3439,11 +3439,11 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   volume warning with its peak-hold rule), `AudioManager` device callback → `PlayerApi::set_route`
   (`AudioRoute.kt`'s ranking ported). Rows: moving a fader changes the sound within one buffer
   (measured on the sink), the meter stops (0 analysis CPU) when the card leaves.
-- **MB13 — Podcasts** [MB3b]. FFI (`podcasts.rs`): subscriptions, search/subscribe by URL, show by
-  UUID or Deezer id, episodes (cursor), progress, auto-archive, markers, chapters, transcript (+ search,
-  `transcriptcache.js`), start/stop server transcription + status. Kotlin: `PodcastsEntry`, `ShowEntry`,
-  episode panel, chapter list/sheet/ticks, transcript panel, `DownloadButton("show", id)`. Rows: an
-  episode resumes at its saved position offline; a show of 2 000 episodes pages by cursor.
+- **MB13 — Podcasts** [MB3b]: **delivered** — see *MB13 — Podcasts* below for what it does and what it
+  measured. FFI (`podcasts.rs`): subscriptions, search/subscribe by URL, show by UUID or Deezer id,
+  episodes (cursor), progress, auto-archive, markers, chapters, transcript (+ search,
+  `transcriptcache.js`), start/stop server transcription + status. Kotlin: `PodcastsEntry`,
+  `ShowEntry`, episode panel (chapters/sheet/ticks + transcript), `DownloadButton("show", id)`.
 - **MB14 — Discovery** [MB2]. FFI (`discovery.rs`): releases (two shelves, per-release list, seen,
   settings, check), shelves, recap (years, stories, share image), moods, explorer styles, genre station,
   mute artist, `/recommend`. Kotlin: `ReleasesEntry`, `ReleaseShelfEntry(kind)`, `RecapEntry(year)`
@@ -3473,6 +3473,120 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   (bars, scope with orientation/colour), `VizEntry` (full screen), viz settings (palette, intensity, fps
   cap, eco), `FlashWarning`. Rows: 60 fps p95 ≤ 16.7 ms on the full-screen bars; analysis thread CPU
   = 0 when no view is visible (counted ticks); eco = 30 fps cap.
+
+### MB13 — Podcasts (delivered 2026-11-18)
+
+**What landed.** The SPA's podcasts, ported: `routes/Podcasts.svelte` (the subscriptions grid, the
+catalogue search and the subscribe gesture), `routes/Show.svelte` (the show page: episodes paged by
+cursor, the archive switch, the transcription card, the search inside the transcripts),
+`lib/markers.js`, `lib/chapters.js`, `lib/transcript.js` + `transcriptcache.js` and
+`components/TranscriptPanel.svelte`, plus `lib/podcastProgress.js`'s resume — which lives in MB3b's
+player and is only READ here.
+
+- **The core** (`nz-core::podcasts/`): `mod.rs` is the service — the subscription list, subscribe by
+  URL, one show (`show`, `show_more` by cursor), the episode cards a window draws, the archive switch,
+  the show's transcription settings, the positions (`progress`, `positions`, `position`), the markers
+  (optimistic add/remove), the chapters, the transcripts (`transcript`, `local_transcript_search`,
+  `show_transcript_search`), the server's `transcribe_settings`/`transcribe_status` and
+  start/stop/delete. Siblings: `wire.rs` (every route, on the `User` lane, counted under the
+  `podcasts` tag), `views.rs` (screen-shaped `ShowCard`/`EpisodeCard`/`TranscriptPage`/…, the row
+  conversion and every counted-bytes figure), `text.rs` (Rust's ports of `transcript.js` and
+  `chapters.js`: folding, `reasonText`, `pageInfo`, `batchOptions`, `highlightParts`,
+  `normalizeChapters`, `chapterAt`, the date and duration labels), `transcript_cache.rs` (the page
+  cache), `chapters.rs` (the 40-list LRU), `markers.rs` (the optimistic store), `store.rs` (every
+  device copy: one hashed file per account and key, `.part` + rename).
+- **The FFI** (`nz-ffi/src/podcasts.rs`): `ShowData`, `EpisodeData`, `ShowPageData` (a header, a
+  `ListHandle` and a cursor — never 2 000 rows), `EpisodePositionData`, `EpisodeMarkerData`,
+  `TranscriptInfoData`, `ChaptersData`, `TranscriptPageData`, `TranscriptHitData`,
+  `TranscriptSearchData`, `ShowArchiveData`, `ShowTranscribeData`, `TranscribeSettingsData`,
+  `TranscribeStatusData`, `TranscriptCacheData`, and one `impl Screens` block.
+- **Kotlin** (`:feature/podcasts`): `PodcastService` + `NzPodcastService` and `PodcastsPlayer` (the
+  seams a JVM test fakes), `PodcastsModel` (the grid, the 300 ms search, the subscribe),
+  `ShowModel` (the page: cursor paging, the window's cards, the archive switch, the transcription
+  card, the show search, the chapters, the markers, the taps), `TranscriptModel` (pages, `at`, the
+  local search, the poll), `PodcastsScreen`, `ShowScreen`, `EpisodeRow`, `EpisodePanelSheet` (the
+  SPA's *À propos*: Chapitres | Transcription, Description, Informations), `ChapterList`,
+  `ChapterTicks`, `PodcastsCopy` (every French sentence).
+
+**What a measurement taught** (each one cost a red test or a wrong screenshot):
+
+- **`nz-model::Chapter::end` is an `f64` and the route sends `null`.** `GET
+  /podcast/episode/<id>/chapters` answers `"end": null` for a chapter that declares no end
+  (`podcast_chapters.py`), so `nz-api`'s typed `episode_chapters` refuses the WHOLE answer — the
+  desktop's own read has the same hole. This lot reads the route tolerantly (`ChaptersAnswer`, an
+  `Option<f64>` per chapter) and keeps `None` through to the screen, where the last chapter ends with
+  the file. The shared fix is owed (see below); the phone never depends on it.
+- **`nz-api`'s `add_marker` decodes the wrong object.** The route answers `{"ok": true, "marker":
+  {…}}` and the typed function deserialises that whole body AS the marker, so every field came back
+  default and a marker could never be deleted (its id was empty). One POST through `Api::send` with
+  the route's own shape fixed it; declared for the shared crate.
+- **A chapter list is per EPISODE, not per show.** A grid of 40 shows' worth of chapters would be a
+  cache with no bound, so the store keeps `chapters.js`'s own number — **40 lists**, pruned by the
+  file's mtime on every write, and the list just written is never the one dropped (`cached_chapters`
+  still answers 3 chapters after 45 other episodes were read).
+- **A `ShowPageData` crossing with a `ListHandle` is what keeps 2 000 episodes out of Kotlin** — and
+  it makes the model's window cheap in a way worth stating: `onVisible` asks for the CARDS of the
+  rows it is about to draw (`episodeCards(start, count)`), so a 2 000-episode show scrolls on ONE
+  FFI call per settled window and **zero** requests; the next cursor is asked only when the viewport
+  is within 10 rows of the end and the finger has stopped.
+- **The archive switch's text was the SWITCH'S label.** `NzSwitch(label = …)` draws that label beside
+  the track, so passing the sentence while also drawing it gave a second copy squeezed to one
+  character per line — the first 360 dp capture showed a column of letters. The sentence is now the
+  control's `contentDescription`, and the card draws it once.
+- **A row of chips does not fit a phone.** « Tout l'historique archivé » beside « Les 10 épisodes
+  archivés les plus récents » crushed the third chip into a vertical column of letters at 360 dp;
+  the choices and the episode footer are `FlowRow`s now, which is also what made 200 % legible.
+- **`GridCells.Adaptive(160.dp)` is ONE column at 360 dp.** With the page's 20 dp margins the two
+  cells are 154 dp — under the minimum — so the SPA's `minmax(160px, 1fr)` grid collapsed on the
+  phone. 148 dp gives the two columns the SPA shows, and 3 at 600 dp.
+- **A French number needs U+202F.** « 2000 épisodes » was the first capture; `toLocaleString("fr-FR")`
+  writes `2 000` with a NARROW NO-BREAK space (a plain space lets a line break inside the number), so
+  the core's `group_digits` and Kotlin's `thousands` both use it — measured: « 2 000 épisodes », « 1 200
+  sur 2 000 épisodes archivés ».
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, emulator API 35 x86_64
+`-no-window -no-audio` on port 5600, `nz-core`'s own counting server):
+
+| What | How | Number |
+|---|---|---|
+| A show's cold open | `cargo test -p nz-core podcasts` (the fake server counts) | **2 requests** (`/api/podcast/<id>` + its markers), the SPA's own count |
+| A show's warm open | `cached_show` then `cached_podcasts` | **0 requests**, 50 rows and the cursor already on disk; a restarted core paints them (per account) |
+| 2 000 episodes by cursor | `show` + 39 × `show_more` | **41 requests** for the whole archive, one per 50 rows, 23 953 B of rows for the first page (**479 B/row** counted) |
+| The window | `episode_cards(0, 12)` / `(1 990, 64)` | **1 FFI call, 0 requests**; a tap queues the loaded page at the tapped index |
+| A ready transcript | `transcript(limit=200)` then `cached_transcript` | **1 request**, then **0** per page held; `at=<s>` finds the covering page with **0** |
+| A search inside a show | `show_transcript_search`, 1 char / 2 chars | **0** then **1** request; offline the held pages answer (1 hit for « ligne 137 ») |
+| Chapters | `chapters` then `cached_chapters` | **1 request**, then **0**; the store keeps **40** lists |
+| Resume | the player's mirror + `/api/podcast/progress`, then `set_network(None)` | the position comes back with **0 sockets** (1 200 s of 3 600), newest-wins against the server's copy |
+| Rust | `cargo test -p nz-core --lib podcasts` / `-p nz-ffi --lib podcasts` | **36 + 4** tests green, 0 failed |
+| The models, JVM | `gradle :feature:podcasts:testDebugUnitTest` | **51** tests: 9 grid, 14 show, 4 transcript, 4 helpers, and **20 renders** |
+| The screenshots | Robolectric 4.18 `GraphicsMode.NATIVE` | **18** PNGs, 360/600 dp × Encre/Papier + 200 %, under `docs/agents/screenshots/mobile/MB13/` |
+| The real screens | instrumented capture on the emulator (the test APK, no `:app` change) | **3 tests, 4.7 s**, 1080 × 2400 PNGs pulled from the test app's files |
+| Emulator boot | `mobile/tools/emu.sh start|wait --stop --port 5600` | booted in **13 s**, `-no-window -no-audio` |
+
+**Deliberate deviations from the plan paragraph (each declared in the PR).**
+
+- **The screens' French copy is Kotlin's (`PodcastsCopy`)**, not an FFI round trip: a sentence must not
+  need the `.so` to compose (it is also what lets Robolectric render the screens). Rust holds the same
+  tables in `nz-core::podcasts::text`, with its own tests; no `nz_podcast_*` helper ships.
+- **A marker's and a chapter's answer is read through `Api::get` / `Api::send`**, because the typed
+  endpoints decode the wrong shape (see above). Both stay on the `User` lane and counted.
+- **Unsubscribing re-reads `/api/podcasts`** (1 extra request, an admin gesture): `nz-api`'s typed
+  `DELETE` drops the body that says how many archived episodes were kept, and the list is the
+  screen's truth.
+- **`position()` reads MB3b's mirror through the key `podcast.progress`** — `player/mod.rs` does not
+  re-export `listen::KEY_PROGRESS` and this lot may not edit that file; the literal lives in
+  `podcasts::KEY_PROGRESS` with a test that a stored position round-trips through it.
+- **The transcript cache is one file per episode**, capped at the SPA's 50 pages / 5 MB / 4 per episode,
+  but evicting WHOLE episodes oldest-first (a partly-cached episode goes as one) instead of single
+  pages: the same three caps, a bounded file count, and a page key still includes its offset.
+
+**Still owed** (each named where it belongs): the shared crates — `nz-model::Chapter::end` should be
+`Option<f64>`, `nz-api`'s `add_marker` should decode `{"marker": …}`, and `player` should re-export
+`KEY_PROGRESS`; **MB11** hosts `EpisodePanelSheet` in the full-screen player's *À propos* (it is a
+public composable of this module, taking the episode and a `PodcastService`); the SPA's
+« Réessayez dans N s » countdown on a `429` search is not drawn (the cause is, in French); a real
+phone for the touch targets and the 200 % font on a released build; `Core::memory()` counts the
+show's rows through the `lists` registry, not the device copies on disk.
 
 ### MB16 — Réglages, user sections (delivered 2026-11-18)
 
