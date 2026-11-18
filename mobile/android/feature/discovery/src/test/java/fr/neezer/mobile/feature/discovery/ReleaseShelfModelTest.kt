@@ -2,7 +2,7 @@ package fr.neezer.mobile.feature.discovery
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -24,7 +24,13 @@ class ReleaseShelfModelTest {
         service: FakeDiscoveryService = FakeDiscoveryService(),
         player: FakePlayPort = FakePlayPort(),
     ): Pair<ReleaseShelfModel, FakeDiscoveryService> {
-        val dispatcher = StandardTestDispatcher(testScheduler)
+        // UNCONFINED, and that is the point: a model's `launch` (a read, a
+        // discovery) runs to completion EAGERLY, so a test never depends on how
+        // many dispatch rounds a `channelFlow` needs — measured: the same six
+        // `ExplorerModelTest` cases passed on this machine and failed on the CI
+        // runner's JDK 17, because `advanceUntilIdle()` returned before a
+        // `withContext` continuation had run.
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val model = ReleaseShelfModel(
             kind = kind,
             service = service,
