@@ -44,6 +44,9 @@ async fn eight_thousand_favorites_cost_one_request_cold_and_none_warm() {
 
     // The counted bytes are what the answer really weighed, not a guess.
     let (requests, bytes_in, _) = library_stats(&core);
+    println!(
+        "MEASURE favorites cold: requests={requests} bytes_in={bytes_in} rows={FAVORITES_ROWS}"
+    );
     assert_eq!(requests, 1);
     assert!(
         bytes_in > 1_000_000,
@@ -133,6 +136,11 @@ async fn a_refused_leaf_answers_its_cause() {
 async fn the_playlist_tree_is_grouped_like_the_spa() {
     let (server, _dir, core) = configured().await;
     let tree = core.library_playlists().await.expect("the tree");
+    println!(
+        "MEASURE playlists cold: routes={:?} bytes={}",
+        server.routes(),
+        library_stats(&core).1
+    );
     assert_eq!(server.routes(), ["GET /api/me/playlists"]);
     assert_eq!(tree.folders.len(), 2);
     assert_eq!(tree.playlists.len(), 4);
@@ -405,6 +413,12 @@ async fn every_leaf_costs_one_request_cold_and_none_warm() {
             let warm = core.$cached().expect($name);
             assert!(!warm.is_empty() || rows.is_empty(), $name);
             assert_eq!(server.count(), 1, "{}: one request, never two", $name);
+            let (_, bytes, _) = library_stats(&core);
+            println!(
+                "MEASURE {}: requests={} bytes_in_total={bytes}",
+                $name,
+                server.count()
+            );
         }};
     }
     leaf!("the artists", "/api/me/artists", artists, cached_artists);
@@ -478,6 +492,11 @@ async fn the_history_pages_by_cursor_and_keeps_its_first_page() {
         .history(None, None, None, HISTORY_PAGE)
         .await
         .expect("the first page");
+    println!(
+        "MEASURE history cold: routes={:?} bytes={}",
+        server.routes(),
+        library_stats(&core).1
+    );
     assert_eq!(server.routes(), ["GET /api/history"]);
     let hit = server.last_hit("/api/history").expect("the request");
     assert_eq!(hit.query("limit").as_deref(), Some("50"));

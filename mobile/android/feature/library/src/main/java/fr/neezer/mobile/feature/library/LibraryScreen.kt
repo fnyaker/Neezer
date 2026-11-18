@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -166,7 +167,7 @@ fun LibraryScreen(
         Box(Modifier.fillMaxSize().background(colors.bg)) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().testTag(LIBRARY_LIST_TAG),
                 contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
             ) {
                 item(key = "head") {
@@ -209,6 +210,13 @@ fun LibraryScreen(
         }
     }
 }
+
+/**
+ * The page's own scrolling list, for the device test: the strip of leaves and the
+ * sort chips scroll sideways, so `hasScrollAction()` alone names three nodes.
+ * A test tag is invisible to TalkBack (unlike a content description).
+ */
+const val LIBRARY_LIST_TAG = "library-list"
 
 /** The three lazily-composed items above a windowed list's first row. */
 private const val WINDOW_OFFSET = 3

@@ -16,6 +16,14 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.minSdk.get().toInt()
+        // The test APK is an APP on the device, and one whose targetSdk is below
+        // the device's gets Android's "This app was built for an older version"
+        // dialog over the very screen a test waits for (MB7 measured it).
+        targetSdk = libs.versions.targetSdk.get().toInt()
+        // Without a runner an androidTest module is a JUnit3 one and runs ZERO
+        // tests ("Starting 0 tests on emulator-5640"): measured on this lot's
+        // first device run, where the class was in the APK all along.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -87,6 +95,9 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // The fling is driven by uiautomator's own touch injection, exactly as the
+    // plan's `:baselineprofile` benches fling (`BenchTarget.fling`).
+    androidTestImplementation(libs.androidx.test.uiautomator)
 }
 
 // The screenshot test writes the PNGs the lot commits under

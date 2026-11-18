@@ -2191,12 +2191,8 @@ inventory are the behaviour; port them, do not invent.
   see « MB6 — Recherche » below.*
 - **MB7 — Artist, album, credits.** *Delivered 2026-11-18 — what it cost, what it taught, what it
   does not port: see « MB7 — Artiste, album, crédits » below.*
-- **MB8 — Library.** FFI (`library.rs`): `library_playlists() -> LibraryTree { folders, playlists }`,
-  folder CRUD/move/order (optimistic), `favorites() -> Arc<ListHandle>` (8 000), `favorite_ids()`
-  (light route, the car's counter), albums, artists, uploads (+ usage), dislikes, unavailable (+
-  replace entry), history (cursor), local tracks. Kotlin: `LibraryEntry(tab)`, `HistoryEntry`. Rows:
-  8 000 favourites open with ONE request (or 0 warm) and scroll at p95 ≤ 16.7 ms; folder move offline
-  rolls back with "Réessayer".
+- **MB8 — Library.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not port:
+  see « MB8 — Bibliothèque » below.*
 - **MB10 — Track actions.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
   port: see « MB10 — Actions sur un titre » below.*
 
@@ -2557,6 +2553,120 @@ so the phone shows the SPA's list for the same answer and the tests are the SPA'
   lands the tap says so in a toast, and this lot's paragraph is the record.
 - **The local transcript search** (`lib/transcriptcache.js`, IndexedDB pages) — the phone has no
   pages cache and the scope is server-only; a dead link answers `Offline` there.
+### MB8 — Bibliothèque (delivered 2026-11-18)
+
+**What landed.** The library, ported from `routes/Library.svelte`, `History.svelte`, `LibraryNav`,
+`FolderSheet`, `MoveToFolderSheet`, `DislikedTracks`, `UnavailableList` and
+`lib/playlistfolders.js` — Rust core, FFI and the two screens.
+
+- **The core** (`nz-core::library`): `wire.rs` reads the ten routes a leaf opens with (raw bodies,
+  parsed by the same converter a cached copy goes through), `store.rs` keeps each body per ACCOUNT
+  under the CACHE directory, `testing.rs` is a counting loopback server that speaks those routes
+  and answers 8 000 favourites. **The SPA's grouping and ordering are ported literally**
+  (`groupPlaylists` + `buildSections` → `LibraryTree::sections`; `moveItem`, `orderFolders`,
+  `orderContainer`, `containerIds`), so the phone never invents a section the SPA would not draw.
+- **The FFI** (`nz-ffi/src/library.rs`): the paragraph's contract — `library_playlists() ->
+  LibraryTree { folders, playlists }` (plus `sections`, derived), the folder CRUD/move/order that
+  answers the WHOLE tree (`create_folder`, `rename_folder`, `delete_folder`, `reorder_folders`,
+  `reorder_container`, `move_playlist_to`), `favorites() -> Arc<ListHandle>`, `favorite_ids()`,
+  `artists()`, `albums()`, `local()`, `upload_usage()`, `dislikes()` + `remove_dislike`,
+  `unavailable()`, `history(outcome, before, before_id, limit)` — each with its `cached_` twin.
+- **Kotlin** (`:feature/library`): `LibraryModel`, `HistoryModel` (plain Kotlin over `LibraryService`
+  and `LibraryPlayer`, so the JVM proves every rule with fakes), `LibraryScreen`, `HistoryScreen`,
+  `LibraryBits` (the search field, the quota bar, the cards, the organiser's rows and the row
+  itself), `DislikedSection` (exported for MB16's Réglages), and the two entries. The history is ONE
+  screen: the library's « Historique » leaf and the `Historique` route share `HistoryScreen` and
+  `HistoryModel`.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, NDK 30.0.16248370; emulator
+API 35 x86_64 `-no-window -no-audio`, my own port 5640, the device bench inside the app process):
+
+| What | How | Number |
+|---|---|---|
+| 8 000 favourites, cold | `cargo test -p nz-core library` (counting server) | **1 request, 2 042 902 B** |
+| 8 000 favourites, warm | `cached_favorites()` | **0 requests**, the same 8 000 rows |
+| The other leaves, cold | the same suite | playlists **1 / 1 115 B**, artists **1 / 375 B**, albums **1 / 743 B**, files **1 / 1 021 B**, dislikes **1 / 1 244 B**, unavailable **1 / 1 484 B**, one history page **1 / 1 162 B** |
+| The same, on the device | `LibraryDeviceTest`'s own loopback bench | favourites **1 request, 2 294 902 B** (the bench's body spells its rows longer), `OPTIONS /api/playlist-folders` once for the folder probe |
+| A dead link | `set_network(None)` then `favorites()`/`library_playlists()`/`move_playlist_to()` | `Offline` in **0 sockets**, the copies still there |
+| Rust | `cargo test --workspace --locked` | **172** `nz-core` (23 new library) + **36** `nz-ffi` (4 new library); clippy `-D warnings` and fmt clean |
+| JVM | `:feature:library:testDebugUnitTest` | **75 tests**: 26 model (one leaf = one request, the copy first, cause + Réessayer, optimistic folder writes and their rollback, the coalesced orders, one command per tap) + 13 history (cursor halves, append, dedupe, filters, day grouping with a pinned date) + 36 renders |
+| The look | `docs/agents/screenshots/mobile/MB8/` | **36 PNGs**: Encre/Papier at 360 and 600 dp, the two sheets, the organiser, the failure card, the 200 % font scale, the empty history |
+| The device | `LibraryDeviceTest` (2 tests) | the real screen over a real `ListHandle`: **8 000 rows**, the last one reachable by a scroll (the `asRowSource` path #321 fixed), **2 device captures** |
+| A fling over 8 000 rows | `FrameMetrics.TOTAL_DURATION`, uiautomator's own touch injection, 12 flings | **31 frames, p50 33.6 ms, p95 116.9 ms, max 131.6 ms** on swiftshader — the same emulator's shell repaint is p50 31.1 / p95 50.6 ms (MQ1), so the list adds **~8 % to the median paint**, and 16.7 ms stays a phone budget (MQ2) |
+| `libnz_ffi.so` | `build-android.sh` | arm64-v8a **10 469 448 B** (MB7: 10 152 776 → this lot **+316 672 B**), armeabi-v7a 7 110 120, x86_64 12 480 272 |
+
+**Rules a measurement taught** (each cost a red run, a wrong image or a dead test):
+
+- **An androidTest module without a `testInstrumentationRunner` is a JUnit3 one: it runs ZERO
+  tests.** `:feature/library:connectedDebugAndroidTest` answered `Starting 0 tests on emulator-5640`
+  while `LibraryDeviceTest` sat in `classes7.dex` of the test APK — AGP had used the default
+  runner. The runner belongs in the module's `defaultConfig` (MB7's module had it for the same
+  reason; the MB0 stub did not).
+- **`hasScrollAction()` names three nodes on this screen**: the page's list, the leaf strip (a
+  `LazyRow`) and the sort chips (a `horizontalScroll` Row). `performScrollToIndex` failed with
+  « Expected exactly 1 node but found 3 ». The page's list carries `LIBRARY_LIST_TAG` — a test tag,
+  invisible to TalkBack, unlike a content description.
+- **A `performTouchInput` swipe convicts the HARNESS, not the list.** The first frame measure read
+  p50 100.7 / p95 653.4 ms: the Compose test framework suspends the UI thread for its own gesture
+  bookkeeping, and those 17 frames were the harness's. uiautomator's real touch injection (the same
+  gesture `BenchTarget.fling` makes) on the same screen reads **p50 33.6 / p95 116.9 ms over 31
+  frames** — the emulator's own paint floor, and the number this lot quotes.
+- **MB1's `TrackRowView` is a fixed 56 dp box, so the artist's line is cut in half at a 200 % font
+  scale** (MB7 found the same row and drew `EntityTrackRow`). This lot's `LibraryTrackRow` is
+  `heightIn(min = 56.dp)` with two one-line texts, and keeps the swipe-right gesture and the playing
+  badge the design system's row carries.
+- **The font scale is a LAYOUT, not a smaller box.** At 200 % the three summary figures broke their
+  labels mid-word (« écout / es »), the day heading — a fixed 44 dp box — lost its date entirely, and
+  an event's title and time were cut to « Ouv… » / « 21:0… ». `HistoryScreen` reads
+  `LocalDensity.fontScale`, stacks the figures, grows the heading and moves the verdict under the
+  time: all 200 % renders are now whole words (looked at, both themes).
+- **The leaf strip must REVEAL the selected leaf.** At 360 dp the eighth chip (« Je n'aime pas ») and
+  even « Playlists » sat off-screen with no way to tell which was active; the strip is a `LazyRow`
+  that scrolls the chosen leaf into view (`LibraryNav.svelte#revealSelected`).
+- **A pending order dispatched from its own job's `finally` is lost.** `writeFolderOrder()` checked
+  `orderJob?.isActive` — true from inside the finishing job — so the third press's order was
+  swallowed and three presses sent ONE `PUT`. Clearing the field before re-dispatching makes it two
+  (the SPA's 400 ms debounce, restated as one write in flight plus the latest order), which the test
+  now holds.
+- **`screenFlow`'s two `Ready` emissions apply the table's tools twice.** Harmless (the second
+  handle is a different object), but a test that asserted an absolute `filters`/`sorts` count read 3
+  where the code was right; the assertions are relative now.
+- **A cached body must be dropped by every mutation that changes its list.** « Retirer » on « Je
+  n'aime pas » deletes the kept `/me/dislikes` body (`store::forget`), or the next visit paints the
+  removed row back from disk.
+- **A `ListHandle` is immutable by contract.** The SPA splices its dislikes array locally; the phone
+  re-reads the list after the mutation (**1** extra `User` request per removal) rather than holding a
+  second, mutable copy — MB10 owns the mutation that patches every open list.
+
+**Deliberate deviations from the plan paragraph.** The leaves are LAZY: the SPA's `onMount` asks
+`/me/favorites`, `/me/playlists`, `/me/local` and `/upload/usage` whatever leaf is open (four
+requests), while a phone open costs the ONE leaf's route — that is why the favourites' number is 1 and
+not 1-of-4. `LibraryTree` also carries `sections`, because the grouping is `playlistfolders.js`'s rule
+and belongs in Rust, not in a second spelling on the Kotlin side. « Je n'aime pas » is a LEAF here (the
+SPA draws `DislikedTracks` as a Réglages card): the phone manages its collection from the library, and
+the same `DislikedSection` composable is ready for MB16 to place in Réglages. A history page beyond the
+first is never cached (a cursor page is a position in a live log, `apicache.js` refuses `/history`
+too). The folder probe is one `OPTIONS` on the `Prefetch` lane (`Feature::Folders`), asked once when
+the library opens, and `Some(false)` hides « Nouveau dossier »/« Organiser » instead of failing.
+
+**Not ported, on purpose** (each belongs to a lot that owns the component): « Nouvelle playlist » and
+« Importer une playlist partagée » (MB9 — the creation sheet and the import route), « Importer des
+fichiers audio » (MB15 — a SAF picker and a multipart upload, not a library list), « Exporter » (MB9's
+sheet), « Télécharger (archiver) toute la liste » (MB15's `DownloadButton`), the « Téléchargés » leaf
+(MB15's offline store), the podcast world of `LibraryNav` (MB13's route), the row's ⋯ menu (MB10's
+`TrackActions.open`, called and stubbed), the unavailable row's replacement sheet (MB10), and the
+delete toast's « Annuler »: the design system's toast carries no action (`NzToasts.show(text)`), and
+adding one there is MB1's file — the toast states how many playlists moved instead.
+
+**Still owed to a later lot**: MB16 places `DislikedSection` in Réglages → Découverte; MB11 feeds
+`playingKey` (the parameter exists and is null today) and owns the mini-player clearance; MB9 opens
+playlist creation from the library's add menu; MQ2 owns the real-phone p95 and TTFD for this screen
+(`reportFullyDrawn` is still the shell's).
+
+**Files.** `mobile/rust/crates/nz-core/src/library/{mod,wire,store,testing,tests}.rs`,
+`mobile/rust/crates/nz-ffi/src/library.rs`, `mobile/android/feature/library/**` (8 main Kotlin files,
+3 JVM test files, 1 instrumented test, its build file), `docs/agents/screenshots/mobile/MB8/` (36
+renders + 2 device captures + the device measure file), and this section.
 
 ### MB10 — Actions sur un titre (delivered 2026-11-18)
 
