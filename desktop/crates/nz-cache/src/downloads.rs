@@ -523,6 +523,24 @@ impl<'a> Downloads<'a> {
         Ok(progress)
     }
 
+    /// Every track PUBLISHED on the device (`state = 'done'`), as ids.
+    ///
+    /// One `SELECT` on the `(owner, state)` index, for the snapshot a screen
+    /// reads: a list needs to say « téléchargé » on a row without a second
+    /// source of truth and without a query of its own (the GPUI thread never
+    /// touches SQLite). The ids are the stream's (`deezer_id`, or the row uuid),
+    /// which is what `/api/stream` and the engine's offline seam take.
+    pub fn published(&self, owner: &str) -> Result<Vec<String>> {
+        self.cache.read(|conn| {
+            self.cache.rows(
+                conn,
+                "SELECT track FROM downloads WHERE owner = ?1 AND state = 'done'",
+                params![owner],
+                |row| row.get::<_, String>(0),
+            )
+        })
+    }
+
     /// The cause of every failed download, ready to be printed (rule 2: what
     /// failed and why, never just a count).
     pub fn failures(&self, owner: &str) -> Result<Vec<(TrackId, String)>> {
@@ -581,6 +599,46 @@ mod tests {
         assert_eq!(sets[0].title, "Soirée");
         assert_eq!(sets[0].tracks, 3);
         assert_eq!(sets[0].done, 0);
+        Ok(())
+    }
+
+    /// **What is ON the device, as ids**: the snapshot a list reads. A pending
+    /// row is not published, a complete one is, a failed one is not — and the
+    /// ids are the STREAM's, which is what a row's `t` and the engine's offline
+    /// seam both look up.
+    #[test]
+    fn published_lists_exactly_the_complete_tracks() -> Result<()> {
+        let dir = TempDir::new("dl-published");
+        let cache = dir.open();
+        let downloads = cache.downloads();
+        downloads.add_set(
+            "42",
+            "album",
+            "a1",
+            "Un album",
+            &[one("a"), one("b"), one("c")],
+        )?;
+        assert_eq!(downloads.published("42")?, Vec::<String>::new());
+
+        for track in ["a", "b"] {
+            let id = TrackId::new(track);
+            let partial = downloads.reserve("42", &id, Quality::Opus320)?;
+            fs::write(&partial, vec![1u8; 64])?;
+            downloads.complete("42", &id, 64)?;
+        }
+        downloads.mark(
+            "42",
+            &TrackId::new("c"),
+            DownloadState::Failed,
+            Some("HTTP 404"),
+        )?;
+        let mut published = downloads.published("42")?;
+        published.sort();
+        assert_eq!(published, vec!["a".to_owned(), "b".to_owned()]);
+        assert!(
+            downloads.published("another-owner")?.is_empty(),
+            "the set is per account, like every other row"
+        );
         Ok(())
     }
 

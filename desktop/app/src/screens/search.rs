@@ -688,7 +688,7 @@ impl Screen {
             .list
             .row(index)
             .map(|track| {
-                download_control::track(self.downloads.get(), &download_control::key(track), false)
+                download_control::track(self.downloads.get(), &download_control::key(track))
             })
             .map(|state| context_menu::Download::from(&state))
             .unwrap_or_default();
@@ -785,7 +785,7 @@ impl Screen {
         let key = download_control::key(track);
         let title = track.title.clone();
         if let Some(message) =
-            download_control::row_verb(&service, self.downloads.get(), &key, &title, false)
+            download_control::row_verb(&service, self.downloads.get(), &key, &title)
         {
             self.state.update(cx, |state, cx| {
                 state

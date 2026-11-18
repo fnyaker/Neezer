@@ -620,8 +620,7 @@ impl Render for Screen {
         };
         let version = self.downloads.get().version;
         if version != self.rows_version {
-            let done = matches!(download_state, DownloadState::Done { .. });
-            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows = Rc::new(Rows::build(self.downloads.get()));
             self.rows_version = version;
         }
         let total: u64 = entries.iter().map(|entry| entry.duration as u64).sum();

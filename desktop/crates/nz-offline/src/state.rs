@@ -8,7 +8,8 @@
 //!
 //! Moved here verbatim from `desktop/app/src/wiring/offline.rs` (SC4).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use nz_api::Quality;
 use nz_cache::{DownloadProgress, DownloadSet};
@@ -97,6 +98,11 @@ pub struct Snapshot {
     /// would clone four thousand entries on every publication.
     pub labels: HashMap<String, Labels>,
     pub running: Option<Running>,
+    /// Every track published on the device, as one `Arc`: a publication clones a
+    /// POINTER, not four thousand strings, and a row answers « téléchargé » from
+    /// the snapshot instead of a SQLite read on the GPUI thread (`nz-cache`'s
+    /// access rule). The ids are the stream's (`deezer_id`, or the row uuid).
+    pub downloaded: Arc<HashSet<String>>,
     /// What the two evictable caches hold (their caps are in `settings`).
     pub play_cache_bytes: i64,
     pub covers_bytes: i64,
@@ -115,6 +121,7 @@ impl Default for Snapshot {
             failures: Vec::new(),
             labels: HashMap::new(),
             running: None,
+            downloaded: Arc::new(HashSet::new()),
             play_cache_bytes: 0,
             covers_bytes: 0,
             note: None,

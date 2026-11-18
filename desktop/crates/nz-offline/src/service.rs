@@ -35,7 +35,7 @@
 //! own `X-NS-Error` classification, a `4xx`, or a full disk marks a row failed,
 //! and then the CAUSE is stored and shown (rule 2), with « Réessayer ».
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -837,6 +837,14 @@ fn refresh(shared: &Shared, store: &Cache, owner: &str) {
             cause,
         })
         .collect();
+    let downloaded: Arc<HashSet<String>> = Arc::new(
+        store
+            .downloads()
+            .published(owner)
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+    );
     let play_cache_bytes = store.play_cache().total_bytes().unwrap_or(0);
     let covers_bytes = store.covers().total_bytes().unwrap_or(0);
     let same = {
@@ -845,6 +853,7 @@ fn refresh(shared: &Shared, store: &Cache, owner: &str) {
             && snapshot.sets == sets
             && snapshot.failures == failures
             && snapshot.labels == labels
+            && *snapshot.downloaded == *downloaded
             && snapshot.play_cache_bytes == play_cache_bytes
             && snapshot.covers_bytes == covers_bytes
     };
@@ -856,6 +865,7 @@ fn refresh(shared: &Shared, store: &Cache, owner: &str) {
         snapshot.sets = sets;
         snapshot.failures = failures;
         snapshot.labels = labels;
+        snapshot.downloaded = downloaded;
         snapshot.play_cache_bytes = play_cache_bytes;
         snapshot.covers_bytes = covers_bytes;
     });

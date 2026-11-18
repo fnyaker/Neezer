@@ -538,28 +538,12 @@ impl Screen {
         if key.is_empty() {
             return;
         }
-        let downloaded = matches!(self.download_state(), DownloadState::Done { .. });
-        let state = download_control::track(self.downloads.get(), &key, downloaded);
-        match state {
-            DownloadState::Idle | DownloadState::Failed { .. } => {
-                let choice = Choice::new(key.clone(), track.title.clone());
-                service.choose_track(choice);
-                self.notice(
-                    ToastKind::Info,
-                    format!("« {} » ajouté aux téléchargements", track.title),
-                    cx,
-                );
-            }
-            DownloadState::Queued { .. }
-            | DownloadState::Running { .. }
-            | DownloadState::Done { .. } => {
-                service.drop_track(&key);
-                self.notice(
-                    ToastKind::Info,
-                    format!("« {} » retiré des téléchargements", track.title),
-                    cx,
-                );
-            }
+        // One verb for a row (`download_control::row_verb`): ask, retry, cancel
+        // or take back, decided by the snapshot's own state for that track.
+        if let Some(message) =
+            download_control::row_verb(&service, self.downloads.get(), &key, &track.title)
+        {
+            self.notice(ToastKind::Info, message, cx);
         }
         cx.notify();
     }
@@ -586,16 +570,11 @@ impl Screen {
         // An album's own rows have no album to open: the entry would be a door to
         // the page the person is already on.
         let _ = has_album;
-        let downloaded = matches!(self.download_state(), DownloadState::Done { .. });
         let download = self
             .list
             .row(index)
             .map(|track| {
-                download_control::track(
-                    self.downloads.get(),
-                    &download_control::key(track),
-                    downloaded,
-                )
+                download_control::track(self.downloads.get(), &download_control::key(track))
             })
             .map(|state| context_menu::Download::from(&state))
             .unwrap_or_default();
@@ -859,8 +838,7 @@ impl Screen {
         };
         let version = self.downloads.get().version;
         if version != self.rows_version {
-            let done = matches!(download_state, DownloadState::Done { .. });
-            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows = Rc::new(Rows::build(self.downloads.get()));
             self.rows_version = version;
         }
         let rows_for_chips = Rc::clone(&self.rows);

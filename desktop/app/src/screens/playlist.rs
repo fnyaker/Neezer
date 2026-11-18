@@ -1647,8 +1647,7 @@ impl Render for Screen {
         let download_state = self.download_state();
         let version = self.downloads.get().version;
         if version != self.rows_version {
-            let done = matches!(download_state, DownloadState::Done { .. });
-            self.rows = Rc::new(Rows::build(self.downloads.get(), done));
+            self.rows = Rc::new(Rows::build(self.downloads.get()));
             self.rows_version = version;
         }
 

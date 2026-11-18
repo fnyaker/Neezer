@@ -17,18 +17,17 @@
 //! - **A failure is never a bare count.** [`State::Failed`] carries the first
 //!   CAUSE the server or the link gave, because a screen that says "2 échecs"
 //!   makes the person guess (rule 2, rule 3).
-//! - **What the snapshot cannot prove is not invented.** A track whose
-//!   collection is only PARTLY downloaded reads [`State::Idle`]: the store skips
-//!   a track it already published (`DownloadStore::add_set`'s
-//!   `ON CONFLICT DO NOTHING`), so pressing « Télécharger » again costs no
-//!   request. The collection's own control says `12 / 40`. A per-track
-//!   `Snapshot.downloaded` set would remove that gap; it lives in `nz-offline`,
-//!   which SC4 (PR #298) owns until it merges.
+//! - **The snapshot says what is ON the device, per track.**
+//!   `Snapshot.downloaded` is every published id as one `Arc<HashSet>`, so a row
+//!   answers « téléchargé » from the value the worker published — never from a
+//!   SQLite read on the GPUI thread. A failed row says why, the row in flight
+//!   says its bytes, and a set nobody finished says how far it got.
 //! - **The keyboard and the mouse are the same.** [`State::label`] is the
 //!   button's text, the menu row's label and the toast's sentence, and the
 //!   keymap's `t` / `Maj+T` dispatch the actions the buttons dispatch.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::{
@@ -270,10 +269,10 @@ pub fn collection(snapshot: &Snapshot, kind: &str, ident: &str, tracks: &[String
     }
 }
 
-/// One track's state. `downloaded` is the caller's answer — every row of a
-/// fully downloaded collection, the snapshot's single-track and episode sets,
-/// or `false` when the snapshot cannot prove it.
-pub fn track(snapshot: &Snapshot, track: &str, downloaded: bool) -> State {
+/// One track's state, from the snapshot alone: `Snapshot.downloaded` says
+/// whether the bytes are published, the failures say why one is not, and the
+/// running row says which is being written.
+pub fn track(snapshot: &Snapshot, track: &str) -> State {
     if let Some(failure) = snapshot
         .failures
         .iter()
@@ -295,7 +294,7 @@ pub fn track(snapshot: &Snapshot, track: &str, downloaded: bool) -> State {
             size: running.total,
         };
     }
-    if downloaded {
+    if snapshot.downloaded.contains(track) {
         return State::Done { tracks: 1 };
     }
     // A single track and an episode are each a set of one (D13), which is what
@@ -329,16 +328,17 @@ pub fn key(track: &nz_model::Track) -> String {
 /// flight, the single-track sets — in three lookups a paint can afford.
 #[derive(Debug, Default)]
 pub struct Rows {
-    /// Every row of the collection is on the device, so every row reads
-    /// « téléchargé » (the snapshot's per-track truth lands with `nz-offline`).
-    done: bool,
+    /// Every track PUBLISHED on the device, straight from the snapshot
+    /// (`Snapshot.downloaded`, one `Arc` — a version clones a pointer, not four
+    /// thousand ids).
+    downloaded: Arc<HashSet<String>>,
     failed: HashMap<String, String>,
     queued: HashSet<String>,
     running: Option<(String, u64, Option<u64>)>,
 }
 
 impl Rows {
-    pub fn build(snapshot: &Snapshot, collection_done: bool) -> Self {
+    pub fn build(snapshot: &Snapshot) -> Self {
         let failed: HashMap<String, String> = snapshot
             .failures
             .iter()
@@ -355,7 +355,7 @@ impl Rows {
             .as_ref()
             .map(|running| (running.track.clone(), running.bytes, running.total));
         Self {
-            done: collection_done,
+            downloaded: Arc::clone(&snapshot.downloaded),
             failed,
             queued,
             running,
@@ -380,7 +380,7 @@ impl Rows {
                 size: *size,
             };
         }
-        if self.done {
+        if self.downloaded.contains(track) {
             return State::Done { tracks: 1 };
         }
         if self.queued.contains(track) {
@@ -397,17 +397,11 @@ impl Rows {
 /// Returns the sentence to toast, or `None` when the track has no id to ask for.
 /// A screen's menu, its `t` / `Maj+T` keys and a page control all end here, so
 /// the three paths cannot drift.
-pub fn row_verb(
-    service: &Offline,
-    snapshot: &Snapshot,
-    id: &str,
-    title: &str,
-    downloaded: bool,
-) -> Option<String> {
+pub fn row_verb(service: &Offline, snapshot: &Snapshot, id: &str, title: &str) -> Option<String> {
     if id.is_empty() {
         return None;
     }
-    let state = track(snapshot, id, downloaded);
+    let state = track(snapshot, id);
     match state {
         State::Idle | State::Failed { .. } => {
             service.choose_track(Choice::new(id, title));
@@ -744,11 +738,8 @@ mod tests {
     #[test]
     fn a_track_is_its_own_set_and_says_so() {
         let mut snapshot = snap(vec![set_row("track", "a", "A", 1, 0)]);
-        assert_eq!(
-            track(&snapshot, "a", false),
-            State::Queued { done: 0, total: 1 }
-        );
-        assert_eq!(track(&snapshot, "b", false), State::Idle);
+        assert_eq!(track(&snapshot, "a"), State::Queued { done: 0, total: 1 });
+        assert_eq!(track(&snapshot, "b"), State::Idle);
 
         snapshot.running = Some(Running {
             track: "a".to_owned(),
@@ -757,10 +748,7 @@ mod tests {
             bytes: 10,
             total: None,
         });
-        assert!(matches!(
-            track(&snapshot, "a", false),
-            State::Running { .. }
-        ));
+        assert!(matches!(track(&snapshot, "a"), State::Running { .. }));
 
         snapshot.failures = vec![Failure {
             track: "a".to_owned(),
@@ -768,7 +756,7 @@ mod tests {
             cause: "disque plein".to_owned(),
         }];
         assert_eq!(
-            track(&snapshot, "a", false),
+            track(&snapshot, "a"),
             State::Failed {
                 cause: "disque plein".to_owned(),
                 failed: 1,
@@ -776,11 +764,19 @@ mod tests {
             }
         );
 
-        // An episode is a show set of one; a downloaded track answers from the
-        // caller (its collection, or its own set once published).
+        // A published track answers from `Snapshot.downloaded`, whatever set
+        // brought it in — a collection's member included, which is the whole
+        // point of the field.
+        let mut published = snap(vec![set_row("album", "9", "Un album", 3, 3)]);
+        published.downloaded = Arc::new(HashSet::from(["a".to_owned()]));
+        assert_eq!(
+            track(&published, "a"),
+            State::Done { tracks: 1 },
+            "a row of a downloaded ALBUM is downloaded too"
+        );
+        assert_eq!(track(&published, "b"), State::Idle);
         let episode = snap(vec![set_row("show", "e-1", "Un épisode", 1, 1)]);
-        assert_eq!(track(&episode, "e-1", true), State::Done { tracks: 1 });
-        assert_eq!(track(&episode, "e-1", false), State::Idle);
+        assert_eq!(track(&episode, "e-1"), State::Idle);
     }
 
     #[test]
@@ -900,7 +896,7 @@ mod tests {
             })
             .collect();
         let mark = Meter::now();
-        let rows = Rows::build(&snapshot, false);
+        let rows = Rows::build(&snapshot);
         let collection = mark.since();
         println!("one collection of 4 000 titles, 1 in flight, 2 failures: {collection} B");
         assert!(
@@ -918,7 +914,7 @@ mod tests {
             .collect();
         let snapshot = snap(singles);
         let mark = Meter::now();
-        let rows = Rows::build(&snapshot, false);
+        let rows = Rows::build(&snapshot);
         let bytes = mark.since();
         println!("4 000 single-track sets: {bytes} B");
         assert!(
@@ -926,6 +922,21 @@ mod tests {
             "4 000 single-track sets cost {bytes} B of row state"
         );
         assert!(matches!(rows.state("row-3999"), State::Queued { .. }));
+        drop(rows);
+
+        // The snapshot's published set is an `Arc`: a version's `Rows` clones a
+        // POINTER, whatever the device holds.
+        let mut published = snap(Vec::new());
+        published.downloaded = Arc::new((0..4_000).map(|i| format!("row-{i}")).collect());
+        let mark = Meter::now();
+        let rows = Rows::build(&published);
+        let bytes = mark.since();
+        println!("a Rows over 4 000 published tracks: {bytes} B");
+        assert!(
+            bytes < 1_024,
+            "the published set must not be copied per version: {bytes} B"
+        );
+        assert_eq!(rows.state("row-3999"), State::Done { tracks: 1 });
     }
 
     /// The labels a person reads: no emoji, no bare number, French.
