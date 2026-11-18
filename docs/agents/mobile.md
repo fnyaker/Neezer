@@ -2301,8 +2301,8 @@ API 35 x86_64 `-no-window -no-audio`, my own port, `tools/perf_api.py --serve` a
 | Rust | `cargo test --workspace --locked` | **150** `nz-core` (20 `entity`) + **32** `nz-ffi` (3 `entity`), others unchanged; clippy `-D warnings` and fmt clean |
 | JVM | `:feature:entity:testDebugUnitTest` | **49 tests**: 25 model (cache, stale, cause+retry, one request per part, the double `Ready` trap, the heart's rollback, every player command) + 24 screenshots |
 | The look | `docs/agents/screenshots/mobile/MB7/` | **25 PNGs**: Encre/Papier at 360 and 600 dp, the 200 % font scale, the titles tab, the credits tab, the sheet, the failure card |
-| The device | `EntityDeviceTest` on the emulator (2 tests, on the rebased tree after PR #321) | album page **3 requests / 10 752 B**, artist page **5 / 8 715 B**, « Radio » + both tabs in the tree; `Lire` → `position_s` **0.255 s**, **0 underruns**, buffer **500 ms**, **48 000 Hz** |
-| Tap → sound | `output_stats()` after the tap | `tap_ns=1 433 325 662 690`, `first_audible_ns=2 208 000 000`, position 0.255 s, 0 underruns — **the two instants are on DIFFERENT clocks** (see below) |
+| The device | `EntityDeviceTest` on the emulator (2 tests, rebased on PR #321), **its own loopback bench** | album page **2 requests / 714 B** (`/album/1`, `/on-deezer`), artist page **5 / 1 640 B**, « Radio » + both tabs in the tree; `Lire` → `position_s` **0.246 s**, **0 underrun**, buffer **500 ms**, **48 000 Hz** |
+| Tap → sound | `output_stats()` after the tap | `tap_ns=99 647 889 366`, `first_audible_ns=962 000 000`, position 0.246 s, 0 underruns — **the two instants are on DIFFERENT clocks** (see below) |
 | `libnz_ffi.so` | `build-android.sh` | arm64-v8a **10 152 776 B** (MB5: 9 587 912 → this lot **+564 864 B**), armeabi-v7a 6 899 048, x86_64 12 123 792; universal debug APK **46 510 429 B** |
 
 **Rules a measurement taught** (each cost a red test, a wrong image or a dead screen):
@@ -2328,6 +2328,16 @@ API 35 x86_64 `-no-window -no-audio`, my own port, `tools/perf_api.py --serve` a
 - **A test APK whose `targetSdk` is below the device's gets Android's "built for an older version"
   dialog over the very screen the test waits for** — it covered the page and the wait timed out. The
   module's `defaultConfig` now states `targetSdk`.
+- **`mobile.yaml`'s emulator job runs EVERY module's `connectedDebugAndroidTest`.** The lot's first
+  device test took the bench's ids as instrumentation arguments and a `perf_api.py` on the host: CI
+  ran it without either and the job went red (`IllegalStateException: pass … album=<id>`). The test
+  now carries its own bench — a loopback server inside the app process (session, one artist, one
+  album, one stream) — and no argument: it is green on any emulator and still proves the page and the
+  sound. **A device test that only runs on one machine is a test that is red for everybody else.**
+- **The engine cannot decode WAV** (MB3c's own note: `symphonia` is built without the `wav` feature).
+  The bench's first stream was a generated WAV and the clock never moved — `no suitable format reader
+  found`. It serves a 10 s FLAC (41 065 B, ffmpeg, committed beside the test), and the same page then
+  played.
 - **`tap_ns` and `first_audible_ns` are not on the same clock, so `output_stats()` cannot report
   tap → sound yet.** `tap_ns` is Android's `CLOCK_MONOTONIC` (Kotlin's `System.nanoTime`), while
   `first_audible_ns` is the player's own milliseconds-since-start × 1e6 (`nz-core::player` sets it
