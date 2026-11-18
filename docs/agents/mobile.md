@@ -497,6 +497,19 @@ CI: the `mobile.yaml` workflow enables KVM on the runner (udev rule, the documen
 recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator against
 `tools/perf_api.py --serve` reached at `10.0.2.2`.
 
+**Two measured rules around that CI (2026-11-18).**
+
+- **`cancel-in-progress` is for pull requests only** (`${{ github.event_name == 'pull_request' }}`),
+  like every other workflow here. It was `true` for every event, so a push to `master` killed the run
+  in flight — and a cancelled run never reaches its cache's post-save step. Run **44278965693** then
+  logged `Cache not found for input keys: mobile-apk-…` and recompiled the whole Rust tree cold
+  (`Build libnz_ffi.so and the Kotlin bindings`: **8.0 min median, 2.72 min with the cache**).
+- **The caches are not the workflow's problem, the repository's budget is.** `gh api
+  /repos/…/actions/caches` lists **30 entries for 16.9 GB against the 10 GB GitHub allows**, so the
+  fleet lives in permanent LRU eviction: `mobile-apk-…` is missing exactly when a run asks for it,
+  and every "cache" experiment here measures eviction, not the change. Shrinking the entries that
+  exist (the desktop's `target/` caches are ~7 GB of them) is the prerequisite to any cache work.
+
 ### Measures (every lot that touches what they measure writes them in its PR)
 
 | Measure | How | Target (emulator x86_64, KVM, swiftshader; real phone numbers reported beside) |

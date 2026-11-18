@@ -37,8 +37,17 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: mobile-${{ github.ref }}
-  cancel-in-progress: true
+  # PULL REQUESTS ONLY, like every other workflow here (`tests.yaml`,
+  # `webapp.yaml`, `desktop.yaml`, `security.yaml`). It used to be
+  # `cancel-in-progress: true` for every event, which also killed a run of
+  # `master` — and a cancelled run never reaches its cache's post-save step, so
+  # the cargo cache the next run needed was simply absent: run 44278965693
+  # logged "Cache not found for input keys: mobile-apk-…" and rebuilt 8 min of
+  # Rust cold. A push to `master` is the commit a release comes from: it runs to
+  # the end. (The cache itself is a separate problem — the repository's cache
+  # budget, not this file; see the PR.)
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_BUILD_JOBS: "4"

@@ -289,6 +289,17 @@ every rule's URLs against a fresh werkzeug compilation). CI runs nine workflows:
     binaries, same assertions. Its Rust cache has its own key on purpose — the two jobs hold
     different artifacts (`target/engine-v3`, `-v4`), and one shared entry would be overwritten by
     whichever job finished last.
+- `mobile.yaml` — the Rust core (`mobile/rust`), the APK (UniFFI bindings, Gradle, lint, sizes) and
+  the headless emulator, in three jobs; the emulator `needs` the APK, so the workflow lasts both.
+  **`cancel-in-progress` is for pull requests only** (`${{ github.event_name == 'pull_request' }}`),
+  and that is a bug fix, not a preference: it was unconditional, so every push to `master` killed the
+  run in flight — and **a cancelled run never reaches its cache's post-save step**, which is exactly
+  why run 44278965693 logged `Cache not found for input keys: mobile-apk-…` and recompiled 8 min of
+  Rust. A push to `master` is the commit a release comes from: it runs to the end.
+  The rest of this workflow's cost is not in this file: the repository's Actions cache budget is
+  exceeded (30 entries, **16.9 GB for the 10 GB** GitHub allows, `gh api /repos/…/actions/caches`),
+  so entries are evicted in LRU order and a run that asks for its cache often finds it gone. That is
+  the next lot, and it is where the 8-minute Rust rebuilds and the 29-minute Arch rebuilds come from.
 - `docker.yaml` — a PR builds amd64 only (no QEMU) and runs `docker/smoke.sh` on it; master and
   `v*` tags smoke-test amd64, then build and push both architectures. **ffmpeg in the image is a
   static build** (one file, no shared library): the apt layer that installed Debian's package was
