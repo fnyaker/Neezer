@@ -1421,48 +1421,115 @@ Fin : branche <ta-branche>/sc5, PR « refactor(desktop): SC5 extract nz-remote �
 diff --stat, merge, section SC5 réécrite, `ao report --done`.
 ```
 
-### SC6 — Extract `nz-party` (wave 1)
+### SC6 — Extract `nz-party` (delivered 2026-11-18)
 
-**Goal.** Listen party host and guest shared. **Depends on**: SC0.
-**Exclusive files**: `desktop/crates/nz-party/**`, `desktop/app/src/wiring/party_host.rs`,
-`desktop/app/src/wiring/party_guest.rs`.
-**Contract.** `party_guest.rs` (0 GPUI) moves whole; `party_host.rs`'s protocol moves, its 17 GPUI uses
-stay as an adapter. The guest drives `nz_audio::PartyChannel` and the output clock (which on Android
-comes from SC2's external sink — the guest must only use `Engine::output_clock()`).
-**Acceptance.** Desktop CI green, same test count; Android check; the existing guest planner tests
-pass in the crate.
+**What landed.** `desktop/crates/nz-party` owns the listen party: `timeline` (the
+line `{t, p}`, the chunk geometry, the ONE correction rule — all pure), `planner`
+(the guest's brain: where this device is, where the room is, what to place next),
+`clock` (the NTP probe plus the process's own millisecond domain), `guest` (the
+poll loop, the chunk fetch and decode, the scheduler thread, the view a screen
+paints) and `host` (the 250 ms fit, the decision, the publish loop, the recovery
+after a server restart, the launch resume). `desktop/app/src/wiring/party_guest.rs`
+went from **2 757 to 15 lines** (a `pub use nz_party::guest::*`, so every screen's
+path and `Guest::start`'s engine seam are unchanged) and
+`desktop/app/src/wiring/party_host.rs` from **1 580 to 300**: the GPUI adapter.
+No shared file changed; `desktop/Cargo.lock` and `mobile/rust/Cargo.lock` gained
+ONE line each.
 
-```text
-Tu es le worker du lot SC6 du plan mobile Neezer. Lis CLAUDE.md, docs/agents/mobile.md (« Reuse »,
-« Worker rules », « SC6 »), docs/agents/party-remote.md, docs/agents/desktop.md (D15b).
-Objectif : déplacer desktop/app/src/wiring/party_guest.rs entier et la partie protocole de party_host.rs
-dans desktop/crates/nz-party ; adaptateurs GPUI côté desktop ; comportement inchangé.
-Fichiers à toi seul : desktop/crates/nz-party/** et ces deux fichiers.
-Acceptation : CI desktop verte, même nombre de tests ; check Android arm64.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/sc6, PR « refactor(desktop): SC6 extract nz-party », CI verte, rebase +
-diff --stat, merge, section SC6 réécrite, `ao report --done`.
-```
+- **The rule, the GPUI seam is a newtype because an inherent `impl` lives with
+  its type.** `screens/party.rs` passes `PartyHost::start` as a function item
+  (`state.update(cx, PartyHost::start)`), and that screen belongs to another lot,
+  so the name and the signature had to survive. An inherent `impl` can only be
+  written in the crate that DEFINES the type, so the app cannot extend
+  `nz_party::host::Host`; `party_host.rs` therefore keeps a one-field newtype —
+  `PartyHost { host: Host }`, `Clone` — that forwards `status()`/`id()`/
+  `running()` and owns exactly the GPUI seams (`start`, `resume_at_launch`,
+  `begin`, `resume_under`, `end`, `snapshot`, `spawn_tick`). A free function
+  would have compiled and cost an edit to `screens/party.rs`.
+- **The rule, `begin` is the adapter's and `tick` is the crate's.** Everything
+  that talks to the server moved (adopt a party, close it, take an id back after
+  a 404, publish, heartbeat, probe the clock). What cannot move is the shell's
+  timer: `Host::begin(party)` sets the loops and the sheet's status and returns
+  the link, and the app's `begin` then starts `spawn_tick`; `Host::tick(snapshot)`
+  takes the numbers the app read from ITS player and engine (`state.player`,
+  `state.audio`, the output clock's generation, the crossfade, the level), which
+  is the whole of what `AppState` is needed for. Behaviour is unchanged down to
+  the order of the calls: `end` still stops the loops BEFORE the request so
+  nothing is published on a party being closed, and the launch resume still reads
+  the remembered id before it asks (`Host::saved_id`), so a feature nobody used
+  costs a launch one request — zero.
+- **The rule, a `pub` item in a BINARY is not public.** `Line::new` shipped for
+  a year without a `Default` and clippy never said so: in `app/` the type is not
+  externally reachable, and `clippy::new_without_default` only fires on an
+  exported one. The same code in a library is a `-D warnings` failure; the fix is
+  `impl Default for Line`. Every extraction lot should expect one or two of these
+  lints the app's own `#![allow(dead_code)]` and its binary-ness were hiding, and
+  `cargo clippy --workspace --all-targets -- -D warnings` on the crate is what
+  finds them.
+- **The rule, SC0's manifest misses what a fully-qualified path hides.** The
+  guest's decoder registers `symphonia_adapter_libopus::OpusDecoder` BY PATH (no
+  `use` line mentions the crate), so `nz-party`'s manifest did not carry
+  `symphonia-adapter-libopus` — the exact miss SC1 documented for `nz-analysis`.
+  It is already a workspace pin, so the fix is one dependency EDGE, and each lock
+  gains one line inside `nz-party`'s entry: regenerate with `cargo metadata`, in
+  BOTH workspaces (`desktop/` and `mobile/rust/`, which path-depends on the
+  crate), never by hand.
+- **The rule, the tests move, they are not rewritten.** 21 tests went with the
+  code — 9 for the host's decision (`next_plan`, the gaps, the four "needs a
+  publish" rules, the empty queue) and 12 for the guest (the timeline's
+  arithmetic, the correction bands, the stream↔server conversion, the
+  normalisation gain, the published state, ten minutes of drift, a stepped
+  mapping, a 40 s cut, joining mid-track, a real server's chunk, a real minute of
+  placements, and two real engines end to end). Are any of them gone? No: the
+  desktop suite goes **437 → 416** and `cargo test -p nz-party` runs **21**, so
+  the workspace's count is the same before and after. The one thing that could
+  not move as-is is the 60 s hang guard `app/src/testwait.rs#WAIT`: a dependency
+  cannot reach it, and a test-only feature would mean editing `app/Cargo.toml`,
+  which SC0's rule gives to nobody — so `tests/end_to_end.rs` carries its own
+  `WAIT` with the same reason written next to it.
+- **The rule, one seam recovery, not three.** "After a seam correction, put back
+  the placement that is sounding" was copy-pasted in the guest tests and in the
+  end-to-end bench; it is now `Planner::keep_sounding(stream_now)`. It changes no
+  behaviour (the scheduler keeps its own table) and it is the kind of three-copy
+  logic an extraction exists to collapse.
+- **Measured** (this machine: 16 threads, Rust 1.99.1, NDK 30.0.16248370, ffmpeg
+  9.0.2; the party server from `webapp/test/party/server.py` with the repository's
+  own venv):
+  - `cargo test -p nz-party --locked`: **21 tests, 0 failed, 13.35 s** (31.80 s
+    with `--nocapture`, which the numbers below come from).
+    `cargo test -p neezer-desktop --locked` (under Xvfb): **416 tests, 408 passed,
+    8 ignored, 0 failed**; the 8 ignores are master's own (fixtures, model hosts).
+  - **Ten minutes at 35 ppm** (the device's crystal against the server's): worst
+    `|error|` BETWEEN seams **0.452 ms** (the host's own republish threshold is
+    2.5 ms), at a seam **0.000 ms**, **0 corrections** — the seam is where drift
+    dies.
+  - **A 20 ms device-mapping step**: worst `|error|` after it **0.000 ms** (a jump
+    must never be needed).
+  - **A 40 s cut** (longer than the 24 s look-ahead): back on the live line within
+    one tick, `|error|` **0.000 ms**.
+  - **Two real engines, 12 s**: **26 clicks compared**, guest minus host p50
+    **+0.0 ms**, worst **+0.0 ms**, 4 chunks placed, both peaks > 0.5 (a silent
+    run would compare nothing).
+  - **A real chunk**: **175 860 bytes** of Ogg Opus → **6.0500 s** of stereo f32
+    (the server cuts 6.05 s), the fixture's first click at 0.500 s measured at
+    peak **0.894** with **0.005** before it.
+  - `cargo ndk -t arm64-v8a -P 26 check -p nz-party --locked` → **Finished,
+    57.46 s**; `cargo tree -p nz-party -e normal --locked | grep -cE
+    'gpui|cpal|zbus|whisper'` → **0**; `mobile/rust`'s `cargo check -p nz-core
+    --locked` (which path-depends on the crate) → **Finished, 1 m 18 s**;
+    `cargo fmt --check` and `cargo clippy --workspace --all-targets --locked --
+    -D warnings` clean.
+- **Pitfalls.** `cargo test --workspace` on this machine cannot build
+  `nz-transcribe` without a Vulkan SDK: `VULKAN_SDK=$HOME/.cache/nz-vulkan` (the
+  headers plus a `lib/libvulkan.so`, CI's own recipe) is what makes whisper.cpp's
+  CMake configure, and it must be set BEFORE the first build of that crate
+  (desktop.md's D0/T1 note). The party tests also need a Python that can
+  `import peewee, neezer` (`NZ_PYTHON`); without it the real-server test SKIPS
+  and says so, which is why CI installs the server before the test job.
+  [desktop.md](desktop.md)'s D15b still names
+  `app/src/wiring/party_{host,guest}.rs` as the party's home, and the *Reuse*
+  table row above still reads as a plan: this lot could not edit another lot's
+  section, so those two lines are the follow-up when desktop.md is next touched.
 
 ### LG1 — The new logo (wave 1)
 
