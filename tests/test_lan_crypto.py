@@ -525,6 +525,46 @@ class RosterTestCase(LanDatabaseCase):
             .exists()
         )
 
+    def test_the_cap_counts_every_friend_together_not_each_alone(self):
+        """« 20 000 identifiants en tout » : deux amis qui partagent chacun une
+        playlist sous le plafond ne doivent pas en dépasser le total, sinon un
+        roster lirait un quart de million de lignes à chaque lancement."""
+        UserManager.add("carol", "Passw0rd!", admin=False)
+        carol = User.get(User.name == "carol")
+        first = Playlist.create(user=self.alice, name="Une")
+        second = Playlist.create(user=self.alice, name="Deux")
+        self.make_tracks(4, playlist=first)
+        self.make_tracks(3, playlist=second)
+        lan.add_friend(self.alice, "bob")
+        lan.add_friend(self.alice, "carol")
+
+        with mock.patch.object(lan, "MAX_SHARED_TRACKS", 6):
+            lan.set_scope(
+                self.alice, str(self.bob.id), all_=False, playlists=[str(first.id)]
+            )
+            # 4 already shared with bob + 3 more for carol = 7 > 6.
+            with self.assertRaises(lan.Refused) as caught:
+                lan.set_scope(
+                    self.alice,
+                    str(carol.id),
+                    all_=False,
+                    playlists=[str(second.id)],
+                )
+            self.assertEqual(caught.exception.code, "too_many_tracks")
+            # The very same playlist for the SAME friend is not double counted.
+            self.assertEqual(
+                lan.set_scope(
+                    self.alice, str(self.bob.id), all_=False, playlists=[str(first.id)]
+                )["user_id"],
+                str(self.bob.id),
+            )
+        self.assertEqual(
+            LanFriendPlaylist.select()
+            .where(LanFriendPlaylist.owner == self.alice)
+            .count(),
+            1,
+        )
+
     def test_a_friend_who_shares_with_me_appears_in_trusted_by(self):
         lan.add_friend(self.bob, "alice")
         body = lan.roster_body(self.alice)

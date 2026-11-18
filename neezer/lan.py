@@ -625,6 +625,10 @@ def _playlist_tracks(playlist_ids, owner):
             & (Track.owner.is_null(True) | (Track.owner == owner.id))
         )
         .order_by(PlaylistTrack.playlist, PlaylistTrack.index)
+        # The write path refuses a share above the cap, so this never truncates
+        # a legitimate roster; it bounds the rows a hand-edited or legacy
+        # database can make this build read.
+        .limit(MAX_SHARED_TRACKS + 1)
     )
     out = {}
     for playlist_id, track_id in query.tuples():
@@ -1168,6 +1172,38 @@ def _readable_playlists(user, playlist_ids):
     return out
 
 
+def _shared_track_total(user, target, wanted):
+    """The track ids THIS friend's new scope would add to the roster, plus the
+    ones the other friends already have.
+
+    The note's cap is "20 000 track ids in total", not per friend: sixty-four
+    friends each sharing a 4 000-title playlist would otherwise make the roster
+    build read a quarter of a million rows on every device launch. One
+    statement, counted as a row per (friend, playlist) pair — the same rows the
+    roster will emit.
+    """
+    mine = (
+        PlaylistTrack.select()
+        .where(PlaylistTrack.playlist.in_([playlist.id for playlist in wanted]))
+        .count()
+        if wanted
+        else 0
+    )
+    others = (
+        PlaylistTrack.select()
+        .join(
+            LanFriendPlaylist,
+            on=(PlaylistTrack.playlist == LanFriendPlaylist.playlist),
+        )
+        .where(
+            (LanFriendPlaylist.owner == user)
+            & (LanFriendPlaylist.friend != target)
+        )
+        .count()
+    )
+    return mine + others
+
+
 def set_scope(user, friend_id, *, all_=None, playlists=None):
     """What one friend may fetch: everything, or the listed playlists."""
     if not isinstance(friend_id, str) or not UUID_RE.match(friend_id):
@@ -1189,13 +1225,7 @@ def set_scope(user, friend_id, *, all_=None, playlists=None):
                 field="playlists",
             )
         wanted = _readable_playlists(user, playlists)
-        total = (
-            PlaylistTrack.select()
-            .where(PlaylistTrack.playlist.in_([p.id for p in wanted]))
-            .count()
-            if wanted
-            else 0
-        )
+        total = _shared_track_total(user, target, wanted)
         if total > MAX_SHARED_TRACKS:
             raise Refused(
                 "too_many_tracks",
