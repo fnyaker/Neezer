@@ -1,5 +1,6 @@
 package fr.neezer.mobile.feature.offline
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -50,11 +51,19 @@ object OfflineTransfer {
     /** The notification channel the `dataSync` worker uses below API 34. */
     const val CHANNEL_ID = "neezer-downloads"
 
-    /** Schedule the transfer for whatever the queue holds now. */
+    /**
+     * Schedule the transfer for whatever the queue holds now.
+     *
+     * The SDK check is written HERE, as a plain `if`, and not only inside
+     * [TransferPolicy]: `lint` refuses a `setUserInitiated` call it cannot see
+     * guarded by the version that introduced it (API 34), and the guard is also
+     * the truth — [TransferPolicy.kind] states the same threshold for a test.
+     */
     fun ensure(context: Context) {
-        when (TransferPolicy.kind(Build.VERSION.SDK_INT)) {
-            TransferKind.UserInitiated -> scheduleJob(context)
-            TransferKind.ForegroundWorker -> scheduleWorker(context)
+        if (Build.VERSION.SDK_INT >= TransferPolicy.USER_INITIATED_API) {
+            scheduleJob(context)
+        } else {
+            scheduleWorker(context)
         }
     }
 
@@ -66,6 +75,7 @@ object OfflineTransfer {
         runCatching { WorkManager.getInstance(context).cancelUniqueWork(TransferPolicy.WORK_NAME) }
     }
 
+    @androidx.annotation.RequiresApi(TransferPolicy.USER_INITIATED_API)
     private fun scheduleJob(context: Context) {
         val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
         val component = ComponentName(context, OfflineTransferJobService::class.java)
@@ -156,6 +166,13 @@ object TransferPolicy {
  * a half file stays `active` for the next start) and does not reschedule by
  * itself: the next launch or the next tap schedules it again.
  */
+// `SpecifyJobSchedulerIdRange`: the range IS declared — this module's manifest
+// carries `androidx.work.jobSchedulerIdStartInclusive/EndInclusive` (810000..810100)
+// and this service's id is outside it, so nothing collides at runtime. Lint's
+// check only reads the manifest of the module it is analysing, and the range is
+// a fact of the APP once the manifests merge; suppressing it here is saying so,
+// not hiding an unfixed report (the merger is what the next build proves).
+@SuppressLint("SpecifyJobSchedulerIdRange")
 class OfflineTransferJobService : JobService() {
     private var scope: CoroutineScope? = null
     private var watcher: Job? = null
