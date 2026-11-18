@@ -2182,11 +2182,8 @@ inventory are the behaviour; port them, do not invent.
 
 - **MB5 — Home.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not port:
   see « MB5 — Accueil » below.*
-- **MB5b — Invite and onboarding.** FFI (`onboarding.rs`): `inspect_invite(code)`, `redeem_invite(code,
-  username, password)`, `onboarding_state()`, artists search/like/done, account options/link/import
-  (import is a background job: progress + causes, rule 2). Kotlin: `InviteEntry`, `OnboardingEntry`.
-  Rows: an import of a large account shows progress and finishes with per-item causes; leaving and
-  coming back resumes (server job).
+- **MB5b — Invite and onboarding.** *Delivered 2026-11-18 — what it cost, what it taught, what it
+  does not port: see « MB5b — Invitation et bienvenue » below.*
 - **MB6 — Search.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not port:
   see « MB6 — Recherche » below.*
 - **MB7 — Artist, album, credits.** *Delivered 2026-11-18 — what it cost, what it taught, what it
@@ -2346,7 +2343,155 @@ request):
   value set the slider snaps to.
 
 
-### MB7 — Artiste, album, crédits (delivered 2026-11-18)
+### MB5b — Invitation et bienvenue (delivered 2026-11-18)
+
+**What landed.** The invitation page and the first-run flow, ported from
+`routes/Invite.svelte`, `routes/Onboarding.svelte`, `components/Onboarding*` and the two
+`lib/*.js` they rest on — the folds, the form's rules, the neighbours' insertion, the
+import's phases — plus the FFI that carries them and the account step's import job.
+
+- **The artists step is TWO requests, the SPA's two.** `Screens.onboarding()` asks
+  `GET /api/onboarding` and `GET /api/onboarding/artists?limit=36` CONCURRENTLY on the
+  `User` lane (`Onboarding.svelte#load` asks them in sequence; the answer is the same and
+  the wait is halved). Measured on the real bench: **2 requests, 6 632 bytes**
+  (`/onboarding` 866, `/onboarding/artists?limit=36` 5 766); a warm open paints the kept
+  copy with **0 requests**, asserted twice (the snapshot read and `stats()`).
+- **The kept copy is the device's, and expires.** `cached_onboarding()` answers from
+  `onboarding-<account hash>.json` in the CACHE directory (the SPA's 30-minute
+  `sessionStorage` life, written through `.part` + rename). A dead link keeps what it
+  painted with « Hors ligne · version mémorisée »; with nothing, `LoadFailed`'s cause and
+  « Réessayer ». A `404` on `/onboarding` is a server older than the feature (rule 7) and
+  crosses as `Unsupported`.
+- **A like is optimistic and carries its neighbours.** The heart and the count change in
+  the same frame; ONE request (`POST /onboarding/artists/like`) already carries
+  `related`, so a like costs one and no follow-up. The insertion policy is the page's own
+  (`insertSimilar`: two at most, no duplicate, no liked artist, the list's 12-tile budget,
+  the server's diversity window) and lives in `nz-core` where its tests are; the Kotlin
+  model calls it through the `OnboardingRules` seam. A refusal rolls both back with
+  « Réessayer »; a `pending` neighbour answer is polled at 900 ms then 1 500 ms (five
+  tries), and a failed one shows its own line with its own retry.
+- **The search box is one request per settled term**: 350 ms debounce (the page's own),
+  cancelled by a new key (the FFI future is dropped), refused under two characters, and
+  its provider cause (« Deezer ne répond pas. ») beside a library-only answer.
+- **« Terminé » obeys the page's gate** — one kept artist, a live link, nothing still
+  being written — and « Passer pour l'instant » appears only after two attempts at a feed
+  the server itself calls unavailable. The finish is ONE request; the server's `409` is
+  its own sentence.
+- **The account step is ONE request** (`/onboarding/account/options`: 749 bytes on the
+  bench) and never blocks the exit: every card paints from it even with a provider
+  switched off, each card can be skipped, and a link is one request
+  (`/onboarding/account/link`). The import is the SERVER's job (rule 2): one request to
+  start, then a poll that shows the phase, the count and **the cause of each line nobody
+  found** (its title and artists, from the job's own `items`), and a five-minute cap that
+  offers « Actualiser » instead of polling forever. Leaving the screen stops the poll,
+  never the job; coming back reads `options.job` and resumes where it was.
+- **The invitation is ONE request to inspect, ONE to create.** A token that is not
+  `<22>.<24>` costs **0 requests** (`tokenShapeOk`); a `404` on the inspect is the page's
+  « plus valide » (no retry), a `429` says « Trop de tentatives », anything else the
+  cause and « Réessayer ». Measured: inspect **68 bytes**, redeem **363 bytes**. The
+  form's rules are `lib/invite.js`'s (folding, 3–32, 12–128, no username inside, two
+  passwords equal) and run before the request. A server refusal — its `400` names the
+  field through its `code` — goes UNDER that field, never into a toast. The draft
+  (`nsInvite.draft`: token, name, request id, **never the password**) lives in `kv` for
+  ten minutes, so an interrupted connection replays the SAME attempt instead of creating
+  a second account.
+- **The redeemed account is adopted without `/me`.** `redeem` answers the new account's
+  own `user`, and the core stores it (`Core::set_me`), so the shell sees the person with
+  `stats()` still at one request. This is the lot's ONE change outside its files:
+  `core/session.rs`'s `set_me` became `pub(crate)` (one line, listed in the PR).
+
+**Measured on this machine** (`perf_api.py --serve --onboarding` 400 tracks on 5690;
+`-no-window -no-audio` emulator on the lot's port 5680 for the real screen):
+
+- **The screen, on the real server**: the artists step **2 requests / 6 632 bytes** cold
+  (`/onboarding` 866 B, `/onboarding/artists?limit=36` 5 766 B), **0** warm; the account
+  step 1 request / 749 B; the invitation 68 B then 363 B. `NzCore::stats()` holds one
+  `onboarding` row per screen open, one `invite` row for the two page requests, and an
+  `import` row for the job's polls.
+- **Rust**: `cargo test -p nz-core -p nz-ffi` = **254 + 42 tests**, of which
+  **50** are this lot's `nz-core::onboarding` (31 pure rules — the SPA's
+  `invite.test.mjs`/`onboarding.test.mjs` cases one for one — 6 wire shapes and 13 against
+  a counting server: the 2-request budget, the warm 0, the kept copy on a `500`, the
+  offline 0 sockets, the `Unsupported` 404, a like's 1 with its neighbours, an unlike's 1,
+  a search's 1 and a short term's 0, the step transitions and their `409`, the account
+  step's 1, a link's 1, an import's 1 + its per-line causes, an expired job's cause, an
+  inspect's 0/1, a redeem's 1 and the adopted session, the form's 0-before-the-request,
+  the server's field mapping, the draft's ten-minute life, a `429`'s wait, a stale
+  snapshot) and **6** its `nz-ffi` conversions; `clippy -D warnings` and `fmt --check`
+  clean.
+- **JVM**: `:feature:onboarding:testDebugUnitTest` **69 tests** — `OnboardingModelTest`
+  27 (kept-then-fresh, a failed refresh keeping the copy, nothing painted → cause, a like
+  visible before the request with its neighbours, a rolled-back like, a polled `pending`,
+  a failed neighbours' line and its retry, an unlike with rollback, the 350 ms one-search,
+  a short term at 0, a failed search retried, clearing, the finish gate at 0, the account
+  step after `artists_done`, `pass` to home, the options and their failure, a link's note,
+  an import's progress then its two unmatched lines, a save, a resumed job, the armed
+  second « Terminer », `artists_not_done`, skip/unskip, a page more, a refused rebuild, and
+  leaving cancelling the poll), `InviteModelTest` 18, `OnboardingCopyTest` 8, and 16
+  screenshot renders.
+- **Look**: `docs/agents/screenshots/mobile/MB5b/` — Encre and Papier at 360 dp and
+  600 dp for the artists step, the account step and the invitation form, the invalid link
+  at 360, and Encre at 200 % font scale; plus **three headless-emulator captures of the
+  REAL screens** against the live bench (`mb5b-emulateur-{invitation,artistes,compte}.png`:
+  the link read from `neezer://invite/<token>` with its « Expire le 25 novembre 2026 à
+  08:39. », the artists page after ONE like with « 2 proches ajoutés » and its count at
+  « 1 artiste », and the account pane saying « Indisponible sur ce serveur. » for Deezer and
+  « YouTube Music n'est pas installé sur ce serveur. » — the server's own state). The
+  server's log for that run: inspect, redeem, then the visit's two reads, a like's ONE
+  `POST /artists/like`, `artists/done`, and ONE `account/options`. Looked at: the page's
+  hierarchy holds, the heart is a glyph `Icon` (never emoji), every control is ≥ 48 dp,
+  TalkBack sees the form's labels (« Nom d'utilisateur », « Force du mot de passe : Bon »,
+  « Afficher le mot de passe »), and no title clips at 200 %.
+- **Sizes**: `libnz_ffi.so` arm64-v8a **10 753 992 B**, armeabi-v7a 7 304 040 B, x86_64
+  12 802 448 B; their `NEEDED` list is the system's alone (`libaaudio libdl liblog libm
+  libc`). The growth since MB6 is the crates merged in between (MB7), not this lot's
+  records: the same build script, the same link guard.
+
+**Rules a measurement taught** (each one cost a compile or a wrong screenshot):
+
+- **UniFFI generates records with `var` properties AND makes every `u32` a `UInt`.**
+  `provider.account != null && provider.account.running != null` does not smart-cast, and
+  `total > 0` on a `UInt` does not compile against `Int`: the first Kotlin pass paid 40
+  errors on this alone. Take the record property into a `val`, and convert once at the
+  edge (`.toInt()`), like MB5's note says.
+- **A generated error enum's variants are nested CLASSES**: `NzException.Server` carries
+  `status: UShort`, `NzException.NotReady` carries `retryAfterS: UInt`. The page reads the
+  status from them (`404` is invalid, `429` is the wait) instead of parsing a sentence.
+- **A cross-Lot name collides across the ONE Kotlin `Screens` surface.** `ImportOffer`
+  already existed for MB6's pasted-link offer; UniFFI's metadata symbol for the second one
+  failed the WHOLE crate with `UNIFFI_META_NZ_FFI_RECORD_IMPORTOFFER is already defined`.
+  This lot's is `AccountImportOffer`.
+- **`NzNavigator` speaks `AppLink`s, and MB2's enum has no `Onboarding` route.** A lot
+  writes only its files, so `InviteEntry` shows the onboarding flow ITSELF once the account
+  is created; the `Onboarding` route still exists for a shell that opens it after a restore.
+  Same reason the page's « Se connecter » goes to `Home`: the setup/login routes are not
+  links either (MB4's own deviation).
+- **The screen's own state must not flash the wrong step.** An account created at the
+  `account` step paints the account pane BEFORE the visit's read (`gotoAccountForStart`),
+  or the artists page appears for a frame and then vanishes.
+- **A test that wants an offline cause must throw `NzException.Offline`**, not a plain
+  exception: the model learns the link from the failure's TYPE (`online` is a fact the
+  protocol reports, never inferred from a message), and `nz_error_text` is a native call a
+  JVM test cannot make — hence the `describe` seam the models take.
+
+**Not ported, on purpose** (each named where it is drawn):
+
+- **The SPA's own `sessionStorage` caches for the liked set, the offline like queue and the
+  import handle.** The phone keeps the liked set in the screen's state (the server's
+  `liked` seeds it on the next visit), a like made offline fails and rolls back with
+  « Réessayer » (rule 4: mutations are never queued), and the running import is resumed
+  through the SERVER's `options.job` — a FINISHED import that the person left before saving
+  is therefore not shown again, and nothing is lost: it was never written.
+- **Keyboard grid navigation** (arrows/Home/End across the tiles; the page's
+  `onGridNav`). A phone is a touch and TalkBack target; every tile is a button with its
+  full label and its `Suivi`/`Non suivi` state, and the list is one `LazyVerticalGrid`.
+
+**One deviation from the plan paragraph**: the pinned `redeem_invite(code, username,
+password)` sends the SAME string as `password_confirm` — the page validates equality before
+sending, and the server compares the two itself, so a field the person cannot make differ
+has no reason to cross the boundary twice.
+
+
 
 **What landed.** The three pages of the inventory — `routes/Artist.svelte`,
 `routes/Album.svelte`, `routes/Credits.svelte` and the credit components — ported to Rust + Compose,
