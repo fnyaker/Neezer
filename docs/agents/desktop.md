@@ -116,7 +116,15 @@ Every choice below was checked against several sources and then **built together
   fallback palette (Tokyo Night — what CI's runner gets), and `theme::init_at(cx, root)` gives it a
   palette from a temporary `colors.toml` it owns, with no observer at all. A test that rewrites that
   file and the `shell.json` beside it while it runs proves it
-  (`a_theme_file_written_while_the_test_runs_reaches_the_shell`), and
+  (`a_theme_file_written_while_the_test_runs_reaches_the_shell`), **and it waits for the event, never
+  for a rate**: that test used to require ten rewrites inside fifty pumped ticks, which measured the
+  runner's scheduler — `cargo test + window` went red on it twice, with **9** and **3** rewrites
+  (CI runs 44219296421 and 44216181175, the second on master), while every theme assertion in it
+  held. It now asks the writer thread for one named palette, pumps the scheduler until the writer
+  reports the bytes on disk, and asserts the shell paints exactly that accent — twice, with colours
+  no Omarchy palette carries (Tokyo Night's accent IS `#7aa2f7`, which the old pair used, so a stale
+  palette matched by accident). Measured: **50 runs on one core with twelve hogs, 0 failures**; an
+  `apply_from` mutated to keep the first palette fails it on the accent line; and
   `theme::tests::no_other_module_starts_the_omarchy_observer` walks `app/src` so a new test cannot
   paste the call back. The shipped app is untouched: it still follows the person's theme live — on
   this session's own `Xvfb :130` (temporary HOME and XDG tree, Wayland variables stripped, private
