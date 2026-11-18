@@ -11,24 +11,54 @@
 #[derive(uniffi::Enum, Debug, Clone, PartialEq, Eq)]
 pub enum AppLink {
     Home,
-    Search { q: Option<String> },
-    Artist { id: String },
-    Album { id: String },
-    Playlist { id: String },
-    Track { id: String },
-    Podcast { id: String },
-    Credits { name: String },
-    SharedPlaylist { id: String },
-    Import { url: String },
-    Party { id: String },
-    RemoteClaim { token: String },
-    Invite { code: String },
-    Settings { section: Option<String> },
-    Recap { year: Option<u32> },
+    Search {
+        q: Option<String>,
+    },
+    Artist {
+        id: String,
+    },
+    Album {
+        id: String,
+    },
+    Playlist {
+        id: String,
+    },
+    Track {
+        id: String,
+    },
+    Podcast {
+        id: String,
+    },
+    Credits {
+        name: String,
+    },
+    SharedPlaylist {
+        id: String,
+    },
+    Import {
+        url: String,
+    },
+    Party {
+        id: String,
+    },
+    RemoteClaim {
+        token: String,
+    },
+    Invite {
+        code: String,
+    },
+    Settings {
+        section: Option<String>,
+    },
+    Recap {
+        year: Option<u32>,
+    },
     /// Nouveautés (MB14): the releases feed's own screen.
     Releases,
     /// One release shelf (MB14): `artists` or `discovery`.
-    ReleaseShelf { kind: String },
+    ReleaseShelf {
+        kind: String,
+    },
 }
 
 impl From<nz_core::links::AppLink> for AppLink {

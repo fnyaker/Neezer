@@ -23,26 +23,56 @@ use crate::core::Url;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppLink {
     Home,
-    Search { q: Option<String> },
-    Artist { id: String },
-    Album { id: String },
-    Playlist { id: String },
-    Track { id: String },
-    Podcast { id: String },
-    Credits { name: String },
-    SharedPlaylist { id: String },
-    Import { url: String },
-    Party { id: String },
-    RemoteClaim { token: String },
-    Invite { code: String },
-    Settings { section: Option<String> },
-    Recap { year: Option<u32> },
+    Search {
+        q: Option<String>,
+    },
+    Artist {
+        id: String,
+    },
+    Album {
+        id: String,
+    },
+    Playlist {
+        id: String,
+    },
+    Track {
+        id: String,
+    },
+    Podcast {
+        id: String,
+    },
+    Credits {
+        name: String,
+    },
+    SharedPlaylist {
+        id: String,
+    },
+    Import {
+        url: String,
+    },
+    Party {
+        id: String,
+    },
+    RemoteClaim {
+        token: String,
+    },
+    Invite {
+        code: String,
+    },
+    Settings {
+        section: Option<String>,
+    },
+    Recap {
+        year: Option<u32>,
+    },
     /// Nouveautés — the feed's own screen (`#/releases`). Added by MB14: it is
     /// what makes the releases shelf reachable at all (MB5 left the door out on
     /// purpose).
     Releases,
     /// One shelf of the feed (`#/releases/artists`, `#/releases/discovery`).
-    ReleaseShelf { kind: String },
+    ReleaseShelf {
+        kind: String,
+    },
 }
 
 /// Parses an incoming URL. `None` for anything this app does not open.
