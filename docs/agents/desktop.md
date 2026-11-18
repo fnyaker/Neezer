@@ -468,14 +468,15 @@ of its callers.
   instructions above the floor in `libggml-cpu.a` (**8 040** AVX-512, **15 806** AVX, 420 FMA, 42
   F16C, 56 BMI2) and **104 194** EVEX in `neezer-transcribe`; `qemu-x86_64 -cpu Nehalem
   neezer-transcribe file jfk.wav …` dies in **0.7 s** on the first VEX instruction,
-  `vmovdqa 0x30(%rsp),%xmm0` in `ggml_cpu_init` (exit 132). After it: **0** in both variants'
-  objects, the floor binary transcribes under `qemu -cpu Nehalem` (**140 s** of emulation, release)
-  and the `-v3` child natively on the same excerpt, and `engine-program` answers Nehalem with the
-  floor binary and Haswell with the `-v3` one. **Cost**: the second
-  children cost **+49 399 312 B and +49 4xx xxx B installed** (a full copy of the sidecar each, a few
-  kB of code apart) against **+7 114 988 B compressed with xz -9** each (what a `.deb`'s data.tar
-  carries) or **+8 232 128 B with zstd -19** (the Arch package), measured on the release binaries —
-  a fallback the GPU path never pays, and dropping a level is a one-line revert.
+  `vmovdqa 0x30(%rsp),%xmm0` in `ggml_cpu_init` (exit 132). After it: **0** in every variant's
+  objects, the floor binary transcribes under `qemu -cpu Nehalem` (**140 s** of emulation, release),
+  each child transcribes natively on the same excerpt, and `engine-program` answers Nehalem with the
+  floor binary, Haswell with `-v3`, and this Zen 4 with `-v4`. **Cost**, measured on the release
+  binaries: each child is a full copy of the sidecar (`-v3` **49 399 440 B**, `-v4` **49 543 216 B**,
+  against **49 392 528 B** for the floor one), so the pair adds **98 942 656 B installed** and
+  **14 267 300 B compressed with xz -9** (`14,2 Mo`, what a `.deb`'s data.tar carries) or
+  `16 528 899 B` with zstd -19 (the Arch package) — a fallback the GPU path never pays, and dropping
+  a level is a one-line revert.
 - **The check.** `desktop/tools/check_cpu_floor.sh <binary>` runs, in order: the census of each
   binary, each variant's ggml objects **gated at its own level**
   (`check_cpu_baseline.py --baseline x86-64-v2|v3|v4`, which reads the RAW BYTES because an EVEX and
