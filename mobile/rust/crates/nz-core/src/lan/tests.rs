@@ -470,7 +470,7 @@ async fn a_set_key_is_parsed_before_anything_is_asked() {
     let fake = Fake::start();
     let b = node(&fake, "keys", "Téléphone").await;
     enrolled(&b.lan).await;
-    let refused = b.lan.download_sets(&[good.clone()]);
+    let refused = b.lan.download_sets(std::slice::from_ref(&good));
     assert!(
         matches!(refused, Err(nz_lan::LanError::PeerGone)),
         "un ensemble pour un pair absent doit être refusé : {refused:?}"
