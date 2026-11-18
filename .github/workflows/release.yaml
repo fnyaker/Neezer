@@ -136,24 +136,35 @@ jobs:
       # which is what a fresh checkout can reuse: the 887 packages under the
       # workspace, 90 % of the cost, come back and our own crates are rebuilt.
       #
-      # The prefix names the machine, for the reason #329 gives: a `target/`
-      # belongs to the CPU that wrote it, and `.cargo/config.toml` fixes ggml's
-      # instruction sets there. `pacman -Syu` also moves `rust` under the build,
-      # so the toolchain is in the key too. Another runner model or another rustc
-      # is another cache, never a binary that traps.
-      - name: The CPU and the toolchain, as a cache key
+      # The prefix names the TOOLCHAIN, not the CPU, and that is a measurement:
+      # `pacman -Syu` moves `rust` under the build (so rustc belongs here), but
+      # the runner's CPU does not, because this fleet does not repeat it — the
+      # two attempts of run 44302526625 landed on two EPYC models with two
+      # fingerprints (00fc71a8aeddc1a2 and 9d8c5c3531335850), and a CPU-keyed
+      # entry therefore matched neither: 29.12 min cold, then 28.1 min still
+      # cold. `ggml-x86-64-v2-v3-v4` stays in the prefix because a *floor*
+      # change invalidates the objects.
+      #
+      # Why the CPU is safe to leave out HERE, and not in desktop.yaml: that
+      # `target/` cannot hold a binary built for a higher ISA. `desktop/.cargo/
+      # config.toml` forces `GGML_NATIVE=OFF` and every ISA above x86-64-v2 off
+      # (docs/agents/desktop.md, *The CPU floor*), and this job then runs
+      # `tools/check_cpu_floor.sh` ON THE BINARY EXTRACTED FROM THE PACKAGE —
+      # census, each child's ggml objects gated at its own level, and the floor
+      # binary transcribing under an emulated Nehalem. A wrong-ISA object fails
+      # here, before anything is attached to a release.
+      - name: The toolchain, as a cache key
         id: cachekey
         run: |
-          model="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
-          flags="$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | sed 's/^ *//')"
-          cpu="$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-16)"
           rust="$(rustc -vV | sha256sum | cut -c1-16)"
-          echo "prefix=v0-rust-cpu-$cpu-rustc-$rust-ggml-x86-64-v2-v3-v4" >> "$GITHUB_OUTPUT"
-          echo "CPU: $model (empreinte $cpu), $(rustc -V)"
+          echo "prefix=v0-rust-rustc-$rust-ggml-x86-64-v2-v3-v4" >> "$GITHUB_OUTPUT"
+          echo "CPU: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//'), $(rustc -V)"
       # It replaces the crate-registry cache this job used to keep: rust-cache
       # covers CARGO_HOME (registry, git, bin) AND the build tree, and prunes
       # what a week of builds left behind — the 10 GB per repository is shared
-      # with the desktop's own entries.
+      # with the desktop's own entries. Measured on the rerun that finally hit:
+      # `Build the package` 29.12 -> (see the PR) and the whole `Arch package`
+      # job 33.9 -> 28.1 min.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
