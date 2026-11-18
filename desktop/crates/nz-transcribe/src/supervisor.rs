@@ -320,6 +320,133 @@ impl Engine {
     }
 }
 
+/// The suffix a build adds to the x86-64-v3 engine child: `neezer-transcribe-v3`.
+///
+/// Three binaries are shipped because ggml's instruction set is decided at BUILD time
+/// (`GGML_NATIVE`, docs/agents/desktop.md's *CPU floor*): one binary is therefore
+/// either portable and slow — x86-64-v2, **5.0×** real time on the CPU, measured —
+/// or as fast as the builder's CPU and dead on an older one (`SIGILL (signal 4)`, CI
+/// run 44234946582). The engine already runs in a CHILD process, so the answer costs
+/// one file per level and one CPUID test instead of a decision everybody has to live
+/// with: the floor binary stays the floor, and the supervisor starts the best child
+/// the CPU can run. Measured on one 330 s excerpt, scored on CPU-seconds: **5.0×** at
+/// v2, **23.5×** for this child, **26.7×** for the `-v4` one (the native build:
+/// 28.7×).
+pub const V3_SUFFIX: &str = "-v3";
+
+/// The suffix of the x86-64-v4 engine child: `neezer-transcribe-v4`.
+///
+/// v4 is AVX512**F/CD/BW/DQ/VL** and nothing else — not VNNI, not BF16, not VBMI —
+/// so the child runs on a Skylake-Server and on a Zen 4 alike, and
+/// [`Simd::v4`] asks for exactly those five bits.
+pub const V4_SUFFIX: &str = "-v4";
+
+/// What this CPU can run, as far as the engine variants care.
+///
+/// `is_x86_feature_detected!` is the standard test — CPUID plus the OS's XSAVE
+/// state, i.e. the same answer glibc's and OpenBLAS's own dispatch trusts — so a
+/// machine whose kernel does not enable the registers is not offered the variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Simd {
+    pub avx2: bool,
+    pub fma: bool,
+    pub f16c: bool,
+    /// AVX512F **and** CD, BW, DQ, VL: x86-64-v4's five bits, no extension.
+    pub avx512: bool,
+}
+
+impl Simd {
+    /// This machine's answer. Not x86-64 (a test build on another host, a future
+    /// port) answers "the floor", which is always right.
+    pub fn this_cpu() -> Simd {
+        #[cfg(target_arch = "x86_64")]
+        {
+            Simd {
+                avx2: std::arch::is_x86_feature_detected!("avx2"),
+                fma: std::arch::is_x86_feature_detected!("fma"),
+                f16c: std::arch::is_x86_feature_detected!("f16c"),
+                // v4 is these five together (a Skylake-X has them, a Knights Landing
+                // does not have BW/DQ/VL, and a Zen 4 has them all).
+                avx512: std::arch::is_x86_feature_detected!("avx512f")
+                    && std::arch::is_x86_feature_detected!("avx512cd")
+                    && std::arch::is_x86_feature_detected!("avx512bw")
+                    && std::arch::is_x86_feature_detected!("avx512dq")
+                    && std::arch::is_x86_feature_detected!("avx512vl"),
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            Simd {
+                avx2: false,
+                fma: false,
+                f16c: false,
+                avx512: false,
+            }
+        }
+    }
+
+    /// x86-64-v3 as the `-v3` child needs it: AVX2, FMA and F16C (Haswell 2013 /
+    /// Excavator 2015). BMI2 is in the build too, and every CPU with those three
+    /// has it; `desktop/tools/check_cpu_baseline.py` gates the child at exactly this
+    /// level, so a build that added AVX-512 would be caught.
+    pub fn v3(self) -> bool {
+        self.avx2 && self.fma && self.f16c
+    }
+
+    /// The suffixes of the engine children this CPU can run, BEST FIRST — the order
+    /// [`engine_program`] tries them in. v4 implies v3 (its build has AVX2/FMA/F16C
+    /// too), so a CPU that can run the `-v4` child can also run the `-v3` one.
+    pub fn variants(self) -> &'static [&'static str] {
+        if self.avx512 && self.v3() {
+            &[V4_SUFFIX, V3_SUFFIX]
+        } else if self.v3() {
+            &[V3_SUFFIX]
+        } else {
+            &[]
+        }
+    }
+}
+
+/// The engine binary this machine should run: the best `-vN` sibling the CPU can run
+/// and that is installed, the binary itself otherwise.
+///
+/// `base` is the supervisor's own executable (or `--engine-program`, which is
+/// explicit and therefore never second-guessed by this function's caller). A
+/// variant is never a variant of a variant, so running `neezer-transcribe-v4
+/// worker` keeps it: the name already ends with a suffix.
+pub fn engine_program(base: &Path, simd: Simd) -> PathBuf {
+    let Some(name) = base.file_name().and_then(|name| name.to_str()) else {
+        return base.to_path_buf();
+    };
+    if name.ends_with(V3_SUFFIX) || name.ends_with(V4_SUFFIX) {
+        return base.to_path_buf();
+    }
+    for suffix in simd.variants() {
+        let variant = base.with_file_name(format!("{name}{suffix}"));
+        if is_installed(&variant) {
+            return variant;
+        }
+    }
+    base.to_path_buf()
+}
+
+/// Executable, and a file: a `.part` left by a package manager, or an artefact
+/// unpacked without its mode, must send the machine back to the floor binary
+/// instead of failing every episode with `EACCES`.
+fn is_installed(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
 /// A running engine child whose process group this supervisor can signal.
 #[derive(Debug)]
 pub struct EngineChild {
@@ -1651,10 +1778,13 @@ pub fn worker_main(args: Vec<OsString>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // `--engine-program` is explicit (a test, a person debugging): used as given.
+    // Otherwise the sibling that fits THIS CPU, and the floor binary when the `-v3`
+    // one is absent or the CPU cannot run it — never a guess at what is installed.
     let program = parsed
         .value("--engine-program")
         .map(PathBuf::from)
-        .or_else(current_exe)
+        .or_else(|| current_exe().map(|base| engine_program(&base, Simd::this_cpu())))
         .unwrap_or_else(|| PathBuf::from("neezer-transcribe"));
     let sink: Arc<dyn EventSink> = Arc::new(StdoutSink);
     let work = parsed
@@ -1696,10 +1826,13 @@ pub fn local_main(args: Vec<OsString>) -> ExitCode {
     let Some(model) = parsed.value("--model") else {
         return usage_error("--model est requis (le fichier GGML du modèle)", usage);
     };
+    // `--engine-program` is explicit (a test, a person debugging): used as given.
+    // Otherwise the sibling that fits THIS CPU, and the floor binary when the `-v3`
+    // one is absent or the CPU cannot run it — never a guess at what is installed.
     let program = parsed
         .value("--engine-program")
         .map(PathBuf::from)
-        .or_else(current_exe)
+        .or_else(|| current_exe().map(|base| engine_program(&base, Simd::this_cpu())))
         .unwrap_or_else(|| PathBuf::from("neezer-transcribe"));
     let sink: Arc<dyn EventSink> = Arc::new(StdoutSink);
     let mut supervisor = Supervisor::new(
@@ -1869,7 +2002,8 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::{
-        EngineChild, Halt, Options, civil_from_days, format_local, last_percent, parse_percent,
+        EngineChild, Halt, Options, Simd, civil_from_days, engine_program, format_local,
+        last_percent, parse_percent,
     };
     use std::ffi::OsString;
     use std::time::Duration;
@@ -2015,5 +2149,104 @@ mod tests {
         assert!(halt.paused(), "the server's pause stands on its own");
         halt.reset();
         assert!(!halt.paused());
+    }
+
+    /// An empty executable, which is all `engine_program` looks at.
+    fn executable(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::write(path, b"").expect("file");
+        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("chmod");
+    }
+
+    /// A CPU that can run x86-64-v3: AVX2, FMA and F16C (Haswell 2013).
+    const V3_CPU: Simd = Simd {
+        avx2: true,
+        fma: true,
+        f16c: true,
+        avx512: false,
+    };
+    /// A CPU that can run x86-64-v4: the three above plus AVX512F/CD/BW/DQ/VL
+    /// (Skylake-Server 2017, Zen 4 2022).
+    const V4_CPU: Simd = Simd {
+        avx2: true,
+        fma: true,
+        f16c: true,
+        avx512: true,
+    };
+    /// A CPU that cannot: anything from Nehalem 2008 to Ivy Bridge 2012.
+    const V2_CPU: Simd = Simd {
+        avx2: false,
+        fma: false,
+        f16c: false,
+        avx512: false,
+    };
+
+    /// The dispatch, which is the whole reason two engine binaries are shipped:
+    /// the `-v3` child only where the CPU answers all three features AND the file
+    /// is installed; the floor binary everywhere else, including when only one of
+    /// the three is missing (FMA alone is enough to die on a Sandy Bridge).
+    #[test]
+    fn the_engine_child_is_the_one_this_cpu_can_run() {
+        let directory =
+            std::env::temp_dir().join(format!("nz-engine-program-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("scratch");
+        let base = directory.join("neezer-transcribe");
+        let variant = directory.join("neezer-transcribe-v3");
+        let fourth = directory.join("neezer-transcribe-v4");
+        executable(&base);
+
+        // Nothing installed beside us: the floor binary, whatever the CPU says.
+        assert_eq!(engine_program(&base, V3_CPU), base);
+
+        // A file that is there but not executable (a package manager's leftover
+        // mode, an artefact unpacked without it) is as good as absent.
+        std::fs::write(&variant, b"").expect("variant 0644");
+        assert_eq!(
+            engine_program(&base, V3_CPU),
+            base,
+            "0644 n'est pas installé"
+        );
+        executable(&variant);
+        assert_eq!(engine_program(&base, V3_CPU), variant);
+        assert_eq!(engine_program(&base, V2_CPU), base);
+        assert_eq!(
+            engine_program(
+                &base,
+                Simd {
+                    avx2: true,
+                    fma: false,
+                    f16c: true,
+                    avx512: false
+                }
+            ),
+            base,
+            "AVX2 without FMA is Sandy Bridge: the v3 child would SIGILL there"
+        );
+        assert_eq!(
+            engine_program(
+                &base,
+                Simd {
+                    avx2: false,
+                    fma: true,
+                    f16c: true,
+                    avx512: false
+                }
+            ),
+            base
+        );
+
+        // A variant is never a variant of a variant: `neezer-transcribe-v4 worker`
+        // keeps its own binary instead of looking for `neezer-transcribe-v4-v4`.
+        assert_eq!(engine_program(&variant, V3_CPU), variant);
+        assert_eq!(engine_program(&fourth, V4_CPU), fourth);
+        // And a name-less path is answered as it is, not indexed into.
+        assert_eq!(
+            engine_program(std::path::Path::new("/"), V3_CPU),
+            std::path::Path::new("/")
+        );
+
+        std::fs::remove_dir_all(&directory).expect("clean up");
     }
 }

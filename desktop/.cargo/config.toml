@@ -1,0 +1,61 @@
+# Cargo settings for the whole desktop workspace — and the ONE reason this file
+# exists is the CPU floor of `docs/agents/desktop.md` (*The CPU floor*).
+#
+# whisper.cpp's CPU backend (ggml, compiled by CMake from `whisper-rs-sys`) is the
+# only part of this stack whose instruction set is decided at BUILD time. ggml
+# defaults `GGML_NATIVE` to ON, which is `-march=native`
+# (ggml/CMakeLists.txt: `option(GGML_NATIVE ... ${GGML_NATIVE_DEFAULT})` and
+# ggml/src/ggml-cpu/CMakeLists.txt: `list(APPEND ARCH_FLAGS -march=native)`), so the
+# same commit produces an AVX-512 binary on one builder and an SSE4.2 one on
+# another. Two things then break, and both were measured here:
+#
+#   - CI: Swatinem/rust-cache keys on rustc, the lockfiles and `.cargo/config.toml`,
+#     never on the CPU, so a `target/` built on a runner with AVX-512 (measured: an
+#     AMX+Sapphire-Rapids-class runner, its ggml even printed "AMX is not ready to be
+#     used!") is restored into a job running on a runner without it and the engine
+#     child dies with `SIGILL (signal 4)` (desktop.yaml, run 44234946582: 4 of the 8
+#     `nz-transcribe --test engine` tests, all four that run whisper).
+#   - the packages: `release.yaml` builds the two binaries ONCE and the five packages
+#     ship them to other people's laptops, whose CPU is whatever it is. A native build
+#     there is a download that dies on arrival.
+#
+# So ggml is pinned to **x86-64-v2** (SSE4.2 + POPCNT: every x86-64 CPU since Nehalem
+# 2008 and Bulldozer 2011 — and below Fedora's own x86-64-v2 floor, above Debian's and
+# Arch's baseline). `GGML_NATIVE=OFF` alone is NOT the baseline: it flips ggml's
+# `INS_ENB` to ON, which turns AVX, AVX2, FMA, F16C and BMI2 ON (ggml/CMakeLists.txt),
+# i.e. x86-64-v3 with a different name; every one of them is therefore named OFF, and
+# `GGML_SSE42` is what stays. `lzcnt`/`tzcnt` need no switch: they are `bsr`/`bsf`
+# with an F3 prefix and execute as those on a CPU without the feature.
+#
+# `whisper-rs-sys` 0.15's build.rs forwards EVERY environment variable whose name
+# starts with `WHISPER_`, `GGML_` or `CMAKE_` into CMake (`for (key, value) in
+# env::vars() { … config.define(&key, &value) }`), which is what makes this file the
+# right place: it applies to every cargo invocation started under `desktop/` (CI's
+# three jobs, `makepkg` in `desktop/packaging/arch`, a developer's `cargo test`) with
+# no per-workflow flag to forget.
+#
+# `force = true` on purpose: a shell that already exports `GGML_NATIVE=ON` must not be
+# able to produce a binary that dies on someone else's laptop. The cost is measured
+# and written down in the note (CPU transcription only — the Vulkan path, which is the
+# fast path, is untouched).
+#
+# Changing the floor is a decision, not a tweak: bump `GGML_*` here, bump this
+# comment, bump the `key:` of the rust-cache steps in `.github/workflows/desktop.yaml`
+# and `release.yaml` (`ggml-x86-64-v2`) so no cache entry survives the change, and
+# update the note's measurement. `desktop/tools/check_cpu_baseline.py` is the check.
+[env]
+GGML_NATIVE = { value = "OFF", force = true }
+GGML_SSE42 = { value = "ON", force = true }
+GGML_AVX = { value = "OFF", force = true }
+GGML_AVX2 = { value = "OFF", force = true }
+GGML_AVX_VNNI = { value = "OFF", force = true }
+GGML_AVX512 = { value = "OFF", force = true }
+GGML_AVX512_VBMI = { value = "OFF", force = true }
+GGML_AVX512_VNNI = { value = "OFF", force = true }
+GGML_AVX512_BF16 = { value = "OFF", force = true }
+GGML_FMA = { value = "OFF", force = true }
+GGML_F16C = { value = "OFF", force = true }
+GGML_BMI2 = { value = "OFF", force = true }
+GGML_AMX_TILE = { value = "OFF", force = true }
+GGML_AMX_INT8 = { value = "OFF", force = true }
+GGML_AMX_BF16 = { value = "OFF", force = true }

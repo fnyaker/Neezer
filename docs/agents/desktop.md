@@ -174,6 +174,7 @@ Every choice below was checked against several sources and then **built together
 desktop/
   Cargo.toml            # [workspace] resolver = "3", edition 2024, rust-version 1.89
   Cargo.lock            # committed
+  .cargo/config.toml    # the CPU floor: ggml is built for x86-64-v2, never -march=native
   crates/
     nz-model/           # the server's JSON as Rust types (serde, tolerant)        — no I/O
     nz-api/             # HTTP client, session, lanes (rule 1), errors, endpoints  — tokio + reqwest
@@ -440,6 +441,75 @@ of its callers.
   speed: "Transcription sur le processeur : aucun GPU Vulkan utilisable (<cause>). Environ 3× plus
   lent." (measured ratio, 44.9× vs 13.9×). Causes are named: `no_vulkan_loader`,
   `no_vulkan_device`, `gpu_init_failed`, `gpu_out_of_memory`, `user_forced_cpu`.
+- **The CPU floor is x86-64-v2, pinned where every build sees it — and the engine child picks
+  its own ISA.** ggml's `GGML_NATIVE` defaults to ON, i.e. `-march=native`, so ONE commit produces
+  an AVX-512 binary on one builder and an SSE4.2 one on another — and `Swatinem/rust-cache` keys on
+  rustc, the lockfiles and `.cargo/config.toml`, never on the CPU, so the first is restored into a
+  job running on the second. `desktop/.cargo/config.toml` sets `GGML_NATIVE=OFF` **and** names
+  every ISA above v2 OFF (`GGML_AVX`/`AVX2`/`AVX_VNNI`/`AVX512*`/`FMA`/`F16C`/`BMI2`/`AMX_*`) with
+  `GGML_SSE42=ON`: `GGML_NATIVE=OFF` alone flips ggml's `INS_ENB` to ON and gives x86-64-v3 under
+  another name (whisper.cpp#4103 and its fix #4111; lemonade #3898 names the same trap).
+  `whisper-rs-sys` 0.15 forwards every `GGML_*` environment variable to CMake, so that one file
+  covers the three CI jobs, `makepkg` and a developer's `cargo test`, with `force = true` so no
+  shell can undo it. **It is not only a CI concern**: `release.yaml` builds the artefacts ONCE for
+  five package formats, and they land on CPUs nobody chose.
+- **A portable binary is a slow one, so the app ships THREE engine children.** Measured on one
+  330 s excerpt of `ggml-tiny`, best of two, scored on CPU-seconds: **28.7×** real time with
+  `-march=native`, **5.0×** at the v2 floor, **23.5×** for the `-v3` child (AVX2 + FMA + F16C,
+  `desktop/.cargo/engine-v3.toml`) and **26.7×** for the `-v4` one (AVX512F/CD/BW/DQ/VL,
+  `desktop/.cargo/engine-v4.toml`) — 92 % of the native build's gap closed, with Vulkan untouched
+  (**128.1×** against **127.5×**). v4 is the five v4 bits and NOTHING more: VNNI, BF16, VBMI, VBMI2,
+  IFMA, VPOPCNTDQ and GFNI stay OFF, because a Zen 4 has some of them and a Skylake-Server others,
+  and a child that needed one would `SIGILL` on the other — the census **gates that too**
+  (`avx512_ext`, measured: it caught `vpermt2w`/`vpermi2w` in my own first list, which are
+  AVX512**BW**, i.e. v4). The engine is already a CHILD process (T3), so the dispatch is one file per
+  level and one CPUID test: `supervisor::engine_program` walks `Simd::variants()` best-first and
+  starts the first `<exe>-v4`/`<exe>-v3` that `is_x86_feature_detected!` allows **and** that is
+  installed and executable, the floor binary otherwise (pre-2013 CPUs, a child a package forgot, an
+  explicit `--engine-program`); `neezer-transcribe engine-program` prints the choice, which is how a
+  test, a support call and the CI see it. The children are built by
+  `desktop/tools/build_engine_variants.sh`, each into its own `target/engine-<level>`: cargo builds
+  ONE copy of a dependency per graph, so three `GGML_*` sets cannot share a `target/`.
+  **`GGML_CPU_ALL_VARIANTS` would be the single-binary answer and is refused with the failure
+  measured**: ggml stops at `CMake Error at ggml/src/CMakeLists.txt:189: GGML_BACKEND_DL requires
+  BUILD_SHARED_LIBS`, and `whisper-rs-sys` hard-codes `BUILD_SHARED_LIBS=OFF` (its env pass-through
+  only forwards `WHISPER_*`/`GGML_*`/`CMAKE_*`) and links `static=ggml*` — a vendored fork plus a
+  dozen `ggml-cpu-*.so` in five package formats is a larger change than two extra files.
+  **Measured, the crash this exists for**: CI run **44234946582** lost the four
+  `nz-transcribe --test engine` tests that run whisper (`a_missing_vulkan_driver…`,
+  `language_auto…`, `cpu_and_vulkan…`, `the_engine_child…`) to `SIGILL (signal 4)` after
+  `whisper_model_load: n_langs = 99`, and its log carried `AMX is not ready to be used!` — a line
+  ggml compiles only under `__AMX_INT8__ && __AVX512VNNI__` (`ggml-cpu/ggml-cpu.cpp`), so the cached
+  object came from an AMX-capable runner and ran on one without it (whisper.cpp#4103 found the same
+  signature on a Zen 2: an EVEX `vpbroadcastq %rcx,%xmm0` in
+  `ggml_backend_cpu_get_extra_buffer_types`, before any compute). Before the pin, here: **24 364**
+  instructions above the floor in `libggml-cpu.a` (**8 040** AVX-512, **15 806** AVX, 420 FMA, 42
+  F16C, 56 BMI2) and **104 194** EVEX in `neezer-transcribe`; `qemu-x86_64 -cpu Nehalem
+  neezer-transcribe file jfk.wav …` dies in **0.7 s** on the first VEX instruction,
+  `vmovdqa 0x30(%rsp),%xmm0` in `ggml_cpu_init` (exit 132). After it: **0** in every variant's
+  objects, the floor binary transcribes under `qemu -cpu Nehalem` (**140 s** of emulation, release),
+  each child transcribes natively on the same excerpt, and `engine-program` answers Nehalem with the
+  floor binary, Haswell with `-v3`, and this Zen 4 with `-v4`. **Cost**, measured on the release
+  binaries: each child is a full copy of the sidecar (`-v3` **49 399 440 B**, `-v4` **49 543 216 B**,
+  against **49 392 528 B** for the floor one), so the pair adds **98 942 656 B installed** and
+  **14 267 300 B compressed with xz -9** (`14,2 Mo`, what a `.deb`'s data.tar carries) or
+  `16 528 899 B` with zstd -19 (the Arch package) — a fallback the GPU path never pays, and dropping
+  a level is a one-line revert.
+- **The check.** `desktop/tools/check_cpu_floor.sh <binary>` runs, in order: the census of each
+  binary, each variant's ggml objects **gated at its own level**
+  (`check_cpu_baseline.py --baseline x86-64-v2|v3|v4`, which reads the RAW BYTES because an EVEX and
+  a VEX `vpbroadcastq %rcx,%xmm0` print the same mnemonic), the floor binary transcribing real speech
+  under an emulated x86-64-v2 CPU (`qemu -cpu Nehalem` — 125 s of emulation for eleven seconds), each
+  child transcribing **natively** on a host that has its features (qemu's TCG emulates AVX2 through
+  helper calls: >10 min for the same eleven seconds, which no workflow can pay), and the DISPATCH
+  under one emulated CPU per level — `Nehalem` must answer the floor binary, `Haswell` the `-v3`
+  one — then on the REAL CPU, where the choice must match what this host's own `flags` say
+  (`-v4` on AVX512F/CD/BW/DQ/VL, else `-v3`, else the floor). QEMU's TCG has **no AVX-512 at all**
+  (measured: `-cpu Skylake-Server` and `-cpu max` both clear the five bits with "TCG doesn't support
+  requested feature"), so the v4 rung is proven natively and by `supervisor`'s unit test with an
+  injected `Simd`. Both workflows run it on the binaries they ship. A `target/`
+  older than the pin keeps the old objects once more: `cargo clean -p whisper-rs-sys`, because cargo
+  does not fingerprint a dependency's build-script environment.
 - **Models** — the server's ladder and file names (`ggml-large-v3-turbo-q8_0.bin` when ≥ 2.5 GB of
   free memory, else `…-q5_0.bin`, else `ggml-small.bin`), plus the Silero VAD GGML model. Nothing is
   downloaded without the person's click in Réglages → Transcription locale, which shows each size;
@@ -3078,12 +3148,15 @@ Waves that can run in parallel (disjoint files):
   or directory` in all four (measured, run 44150836135) while `binaries` and
   `arch` — which must read the tag — were green. A tag that carries the recipes
   behaves the same way, because then `github.sha` IS the tag.
-- **The rule, the sidecar travels with the app.** Every format installs
-  `neezer-transcribe` in the SAME directory as `neezer-desktop` — `/usr/bin`,
-  `/app/bin`, `usr/bin` inside the AppDir — because `wiring/transcribe.rs#program`
-  resolves `current_exe().parent()` before `PATH`. A package that forgets it
-  installs an app whose every episode says « Le binaire neezer-transcribe est
-  introuvable ». `neezer_check_sidecar_installed` asserts it in each test.
+- **The rule, the sidecars travel with the app.** Every format installs
+  `neezer-transcribe` **and its `-v3` engine child** in the SAME directory as
+  `neezer-desktop` — `/usr/bin`, `/app/bin`, `usr/bin` inside the AppDir — because
+  `wiring/transcribe.rs#program` resolves `current_exe().parent()` before `PATH`, and
+  `supervisor::engine_program` derives the variant from that same path. A package that
+  forgets the first installs an app whose every episode says « Le binaire
+  neezer-transcribe est introuvable »; one that forgets the second works, silently at
+  the v2 floor's 5× instead of 23.5×. `neezer_check_binaries` and
+  `neezer_check_sidecar_installed` assert both in each format's test.
 - **The rule, `depends` are read from the binaries, once.** `lib.sh` holds the
   ten sonames the two binaries may NEED (`readelf -d`) and the Debian package
   that provides each; `neezer_check_needed` **fails the build of every format** on

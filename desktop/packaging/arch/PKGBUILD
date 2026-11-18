@@ -100,6 +100,12 @@ build() {
   # removes every artefact, and the checkout's own `target/` stays untouched.
   export CARGO_TARGET_DIR="$srcdir/target"
   cargo build --frozen --release
+  # The x86-64-v3 engine child (`neezer-transcribe-v3`): the supervisor starts it
+  # where the CPU answers AVX2+FMA+F16C and the floor binary everywhere else
+  # (docs/agents/desktop.md, *The CPU floor, and the child that picks its own ISA*).
+  # It is a SECOND cargo build into `$srcdir/target/engine-v3`: cargo builds one
+  # copy of a dependency per graph, so the two `GGML_*` sets cannot share a target.
+  NEEZER_FROZEN=1 tools/build_engine_variants.sh --release
 }
 
 # No `check()` on purpose: the workspace's suite starts the Python server
@@ -112,6 +118,12 @@ package() {
     "$pkgdir/usr/bin/neezer-desktop"
   install -Dm755 "$srcdir/target/release/neezer-transcribe" \
     "$pkgdir/usr/bin/neezer-transcribe"
+  # BESIDE it, never elsewhere: `supervisor::engine_program` derives the variant's
+  # path from `current_exe()`.
+  install -Dm755 "$srcdir/target/release/neezer-transcribe-v3" \
+    "$pkgdir/usr/bin/neezer-transcribe-v3"
+  install -Dm755 "$srcdir/target/release/neezer-transcribe-v4" \
+    "$pkgdir/usr/bin/neezer-transcribe-v4"
   install -Dm644 "$_pkgdir/neezer-desktop.desktop" \
     "$pkgdir/usr/share/applications/neezer-desktop.desktop"
   install -Dm644 "$_pkgdir/neezer-desktop.svg" \

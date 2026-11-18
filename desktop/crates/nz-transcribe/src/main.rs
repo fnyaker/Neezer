@@ -11,6 +11,13 @@
 //!     child (see `engine.rs`), so a machine with no usable driver prints the
 //!     cause instead of aborting.
 //!
+//! neezer-transcribe engine-program
+//!     Which engine binary THIS machine runs, in one line on stdout: the
+//!     `neezer-transcribe-v3` child when the CPU answers AVX2+FMA+F16C and that
+//!     file is installed beside this one, the binary itself otherwise (see
+//!     `supervisor::engine_program`, and docs/agents/desktop.md's *CPU floor*).
+//!     The one call that shows the dispatch without starting a transcription.
+//!
 //! neezer-transcribe engine --pcm <raw f32le 16k mono> --model <ggml-*.bin>
 //!                           [--lang auto] [--vad <path>] [--no-vad] [--cpu]
 //!                           [--threads N] [--device N] --out <x.json>
@@ -58,6 +65,7 @@ USAGE:
     neezer-transcribe --version
     neezer-transcribe --help
     neezer-transcribe probe [--cpu]
+    neezer-transcribe engine-program
     neezer-transcribe engine --pcm <fichier> --model <modèle> --out <x.json>
                              [--lang auto] [--vad <modèle>] [--no-vad] [--cpu]
                              [--threads N] [--device N]
@@ -230,6 +238,7 @@ fn main() -> ExitCode {
         }
         Some(VULKAN_DEVICES_FLAG) => vulkan_devices(),
         Some("probe") => probe(&args[1..]),
+        Some("engine-program") => engine_program(),
         Some("engine") => engine_command(&args[1..]),
         Some("file") => file_command(&args[1..]),
         Some(other) => Err(Failure::Usage(format!(
@@ -266,6 +275,22 @@ fn probe(args: &[String]) -> Result<(), Failure> {
     parsed.only(&[], &["cpu"], false, USAGE)?;
     let report = engine::Availability::detect().report(parsed.switch("cpu"));
     print!("{}", report.event_json());
+    Ok(())
+}
+
+/// `engine-program`: the engine binary THIS machine runs, one line on stdout.
+///
+/// The dispatch of `supervisor::engine_program`, printed without starting a
+/// transcription — the only way a test or a support call can see which child a CPU
+/// gets, and how the CI proves that a Nehalem-class host keeps the floor binary
+/// while a Haswell one gets the `-v3` child (docs/agents/desktop.md, *The CPU
+/// floor*).
+fn engine_program() -> Result<(), Failure> {
+    let base = std::env::current_exe()
+        .map_err(|error| Failure::Run(format!("exécutable courant : {error}")))?;
+    let simd = supervisor::Simd::this_cpu();
+    let program = supervisor::engine_program(&base, simd);
+    println!("{}", program.display());
     Ok(())
 }
 

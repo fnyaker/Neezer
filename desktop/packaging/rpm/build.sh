@@ -21,6 +21,10 @@ stage="$work/stage"
 install -d "$stage"
 install -m 755 "$NEEZER_BINARY_DIR/neezer-desktop" "$stage/neezer-desktop"
 install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe" "$stage/neezer-transcribe"
+# The x86-64-v3 engine child in the SAME directory: `supervisor::engine_program`
+# derives it from `current_exe()`, so a second directory would never be found.
+install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v3" "$stage/neezer-transcribe-v3"
+install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v4" "$stage/neezer-transcribe-v4"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.desktop" "$stage/neezer-desktop.desktop"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.svg" "$stage/neezer-desktop.svg"
 install -m 644 "$NEEZER_ROOT/LICENSE" "$stage/LICENSE"

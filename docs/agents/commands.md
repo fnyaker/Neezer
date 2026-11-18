@@ -164,6 +164,28 @@ cd desktop && xvfb-run -a ./target/debug/neezer-desktop --self-test-quit-after-f
 cd desktop && cargo run -p nz-transcribe -- --version   # the linked whisper.cpp build (Vulkan included)
 VULKAN_SDK=/path/to/vulkan-headers cargo build -p nz-transcribe   # whisper.cpp's CMake needs the Vulkan HEADERS,
                                                      # not only the loader (Arch: vulkan-headers + shaderc)
+desktop/tools/build_engine_variants.sh --release      # the x86-64-v3 and x86-64-v4 engine children,
+                                                     # `neezer-transcribe-v3` / `-v4`, beside the floor one:
+                                                     # one cargo build each into target/engine-<level> with
+                                                     # desktop/.cargo/engine-<level>.toml (cargo builds one
+                                                     # copy of a dependency per graph). `v3`/`v4` as arguments
+                                                     # to build only some of them.
+cd desktop && cargo build --release && target/release/neezer-transcribe engine-program
+                                                     # which engine child THIS CPU gets, one line: -v4 on
+                                                     # AVX512F/CD/BW/DQ/VL, else -v3 on AVX2+FMA+F16C, else
+                                                     # the floor binary
+desktop/tools/check_cpu_floor.sh desktop/target/release/neezer-transcribe
+                                                     # every floor at once: each binary's census, each child's
+                                                     # ggml OWN objects gated at its level (v2/v3/v4), the floor
+                                                     # binary transcribing under an emulated Nehalem
+                                                     # (`qemu-user`; NZ_WHISPER_MODEL + NZ_WHISPER_AUDIO for
+                                                     # the speech, the crate's fixtures), each child natively,
+                                                     # then the dispatch under Nehalem/Haswell/Skylake-Server.
+                                                     # A ggml built with -march=native SIGILLs here in a second.
+cd desktop && cargo clean -p whisper-rs-sys && cargo build -p nz-transcribe
+                                                     # after editing desktop/.cargo/config.toml: cargo does not
+                                                     # rebuild a dependency for a build-script environment change,
+                                                     # so an old target/ keeps the old instruction set once more
 
 # Deezer CLI
 neezer-cli deezer login-test                      # check the ARL works

@@ -51,14 +51,18 @@ crossfaded playback through PipeWire, MPRIS (the media keys and the desktop's
 player widget drive it), an offline cache, and local podcast transcription on
 the GPU through Vulkan.
 
-Both binaries are installed: neezer-desktop (the app) and neezer-transcribe (the
-sidecar it starts, whisper.cpp with the Vulkan backend; it falls back to the CPU
-and says why when no Vulkan device is usable).
+The app and its three engine children are installed: neezer-desktop, and
+neezer-transcribe / -v3 / -v4 — the sidecar it starts (whisper.cpp with the
+Vulkan backend, which falls back to the CPU and says why when no Vulkan device is
+usable) and the same engine built for x86-64-v3 and x86-64-v4, which the
+supervisor starts when the CPU can run them.
 
 %install
 rm -rf %{buildroot}
 install -Dpm 755 %{_neezer_stage}/neezer-desktop %{buildroot}%{_bindir}/neezer-desktop
 install -Dpm 755 %{_neezer_stage}/neezer-transcribe %{buildroot}%{_bindir}/neezer-transcribe
+install -Dpm 755 %{_neezer_stage}/neezer-transcribe-v3 %{buildroot}%{_bindir}/neezer-transcribe-v3
+install -Dpm 755 %{_neezer_stage}/neezer-transcribe-v4 %{buildroot}%{_bindir}/neezer-transcribe-v4
 install -Dpm 644 %{_neezer_stage}/neezer-desktop.desktop \
   %{buildroot}%{_datadir}/applications/neezer-desktop.desktop
 install -Dpm 644 %{_neezer_stage}/neezer-desktop.svg \
@@ -69,6 +73,11 @@ install -Dpm 644 %{_neezer_stage}/LICENSE \
 %files
 %{_bindir}/neezer-desktop
 %{_bindir}/neezer-transcribe
+# The two faster engine children, in the same bindir: `supervisor::engine_program`
+# derives their paths from `current_exe()`, so a `%files` that forgets one installs
+# an app that silently runs at the v2 floor's 5x (docs/agents/desktop.md).
+%{_bindir}/neezer-transcribe-v3
+%{_bindir}/neezer-transcribe-v4
 %{_datadir}/applications/neezer-desktop.desktop
 %{_datadir}/icons/hicolor/scalable/apps/neezer-desktop.svg
 %license %{_licensedir}/%{name}/LICENSE
