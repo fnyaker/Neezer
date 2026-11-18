@@ -484,13 +484,18 @@ class FakeDiscoveryService(
     override suspend fun explorerDiscover(style: String, level: Int): DiscoverResult {
         discoverPosts++
         failure?.let { throw it() }
-        return discoverAnswers.removeFirst()
+        // `removeAt(0)`, never `removeFirst()`: the latter resolves to JAVA 21's
+        // `List.removeFirst` member when the tests are compiled on a 21 JDK, and
+        // the CI runner's test JVM is 17 — `NoSuchMethodError`, an Error the
+        // models' `catch (Exception)` does not see (measured: six cases green
+        // here, red on the runner).
+        return discoverAnswers.removeAt(0)
     }
 
     override suspend fun explorerPoll(style: String, level: Int): DiscoverResult {
         pollReads++
         failure?.let { throw it() }
-        return pollAnswers.removeFirst()
+        return pollAnswers.removeAt(0)
     }
 
     override fun explorerSettings(): ExplorerSettingsData = DiscoveryFixtures.explorerSettings()
@@ -569,13 +574,12 @@ class Toasts {
  * REAL dispatcher finish.
  *
  * Why this and not a bare `advanceUntilIdle()`: a `screenFlow` emission and a
- * `withContext` continuation can take a dispatch round each — and on the CI
- * runner (JDK 17) the same six `ExplorerModelTest` cases stalled there while
- * passing on this machine. The loop therefore drives the VIRTUAL clock
- * (`advanceUntilIdle`, `runCurrent`) and, when nothing is left to run, yields
- * the thread so a `withContext(Dispatchers.IO)` continuation can land. The
- * clock is a LIVENESS ceiling (a latch timeout), never the thing asserted: the
- * assertions are on the state, and [what] names what never happened.
+ * `withContext` continuation can take a dispatch round each, and a real
+ * dispatcher's continuation lands when it lands. The loop drives the VIRTUAL
+ * clock and yields the thread between rounds; the clock is a LIVENESS ceiling
+ * (a latch timeout), never the thing asserted — the assertions are on the
+ * state, and [what] plus the state itself say what never happened (which is how
+ * the JDK-21 `removeFirst()` bug was found on the runner).
  */
 fun TestScope.settle(
     what: String = "state",
