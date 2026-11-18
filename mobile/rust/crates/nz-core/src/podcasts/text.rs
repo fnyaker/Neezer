@@ -9,12 +9,12 @@
 //! | [`fold_text`] | `lib/transcript.js#foldText` (through `appcore::fold`) |
 //! | [`language_label`] | `lib/transcript.js#languageLabel` |
 //! | [`reason_text`] | `lib/transcript.js#reasonText` |
-//! | [`is_active_status`], [`is_terminal_status`] | `lib/transcript.js#ACTIVE_STATUSES`/`#TERMINAL_STATUSES` |
+//! | [`is_active_status`] | `lib/transcript.js#ACTIVE_STATUSES` |
 //! | [`segment_at`] | `lib/transcript.js#segmentAt` |
 //! | [`page_info`] | `lib/transcript.js#pageInfo` |
 //! | [`batch_options`] | `lib/transcript.js#batchOptions` |
 //! | [`highlight_parts`], [`excerpt_around`] | `lib/transcript.js#highlightParts`/`#excerptAround` |
-//! | [`chapter_at`], [`next_chapter`], [`chapter_end`], [`chapter_label`], [`chapter_count_label`] | `lib/chapters.js` |
+//! | [`chapter_at`], [`next_chapter`], [`chapter_label`], [`chapter_count_label`] | `lib/chapters.js` |
 //! | [`normalize_chapters`] | `lib/chapters.js#normalizeChapters` |
 //! | [`date_label`], [`duration_label`] | `lib/chapters.js#dateLabel`, `lib/format.js#duration` |
 //!
@@ -31,9 +31,6 @@ pub const LANGUAGES: [&str; 7] = ["auto", "fr", "en", "es", "de", "it", "pt"];
 
 /// A transcription in the server's queue (`ACTIVE_STATUSES`).
 pub const ACTIVE_STATUSES: [&str; 3] = ["queued", "leased", "running"];
-
-/// A transcription that will not move by itself (`TERMINAL_STATUSES`).
-pub const TERMINAL_STATUSES: [&str; 3] = ["ready", "error", "stopped"];
 
 /// Case- and accent-blind text, so a search typed from a phone keyboard finds
 /// « Beyoncé » (`transcript.js#foldText`, through `appcore::fold` — the fold the
@@ -79,11 +76,6 @@ pub fn reason_text(reason: &str) -> String {
 /// A status the poller waits for.
 pub fn is_active_status(status: &str) -> bool {
     ACTIVE_STATUSES.contains(&status)
-}
-
-/// A status that is over: the panel stops polling on it.
-pub fn is_terminal_status(status: &str) -> bool {
-    TERMINAL_STATUSES.contains(&status)
 }
 
 /// The last segment that started at or before `seconds` (`segmentAt`): a binary
@@ -420,25 +412,6 @@ pub fn next_chapter(chapters: &[ChapterCard], seconds: f64) -> Option<(usize, &C
     chapters.get(at).map(|chapter| (at, chapter))
 }
 
-/// Where a chapter ends (`chapterEnd`): its own end, else the next chapter's
-/// start, else the episode's duration when that is past its start.
-pub fn chapter_end(chapters: &[ChapterCard], index: usize, fallback: u32) -> u32 {
-    let Some(chapter) = chapters.get(index) else {
-        return 0;
-    };
-    if let Some(end) = chapter.end {
-        return end;
-    }
-    if let Some(after) = chapters.get(index + 1) {
-        return after.start;
-    }
-    if fallback > chapter.start {
-        fallback
-    } else {
-        chapter.start
-    }
-}
-
 /// « Chapitre 3 · Le nom » (`chapterLabel`).
 pub fn chapter_label(chapters: &[ChapterCard], index: usize) -> String {
     let Some(chapter) = chapters.get(index) else {
@@ -571,7 +544,6 @@ mod tests {
         // The end the FIRST of the two carried survives: `normalizeChapters`
         // dedupes by start, never by end.
         assert_eq!(chapters[1].end, Some(60));
-        assert_eq!(chapter_end(&chapters, 1, 3_600), 60);
         // An end before the start is no end at all.
         let backwards = normalize_chapters(&[(0, 10.0, Some(2.0), String::new())]);
         assert_eq!(backwards[0].end, None);
@@ -666,6 +638,5 @@ mod tests {
         assert_eq!(language_label("xx"), "XX");
         assert!(is_active_status("running"));
         assert!(!is_active_status("ready"));
-        assert!(is_terminal_status("stopped"));
     }
 }

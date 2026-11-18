@@ -75,6 +75,10 @@ use crate::core::{Core, CoreError};
 use crate::lists::Row;
 use crate::player::EpisodeProgress;
 
+pub use text::{
+    batch_options, chapter_count_label, chapter_label, fold_text, highlight_parts, language_label,
+    page_info, reason_text, PageInfo, TextPart,
+};
 pub use views::{
     ChapterCard, Chapters, EpisodeCard, Marker, Position, Segment, ShowCard, ShowPage, ShowSearch,
     TranscriptHit, TranscriptInfo, TranscriptPage, TranscriptSearch,

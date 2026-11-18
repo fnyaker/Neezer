@@ -89,14 +89,6 @@ pub(super) fn restore(core: &Core, marker: Marker) {
     insert(core, marker);
 }
 
-/// Drops an episode's markers (the server answered with none).
-pub(super) fn clear_episode(core: &Core, episode_id: &str) {
-    let mut map = all(core);
-    if map.remove(episode_id).is_some() {
-        save(core, &map);
-    }
-}
-
 fn sorted(mut markers: Vec<Marker>) -> Vec<Marker> {
     markers.sort_by_key(|marker| (marker.position_ms, marker.id.clone()));
     markers
@@ -170,7 +162,7 @@ mod tests {
         merge_show(&core, grouped);
         assert_eq!(for_episode(&core, "ep-1").len(), 1);
         assert_eq!(for_episode(&core, "elsewhere").len(), 1);
-        clear_episode(&core, "ep-1");
+        put_episode(&core, "ep-1", Vec::new());
         assert!(for_episode(&core, "ep-1").is_empty());
         assert_eq!(for_episode(&core, "elsewhere").len(), 1);
     }

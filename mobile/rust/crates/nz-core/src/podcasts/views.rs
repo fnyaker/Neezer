@@ -229,8 +229,8 @@ impl ShowCard {
     pub fn archive_line(&self) -> String {
         format!(
             "{} sur {} épisode{} archivé{} sur le serveur",
-            self.archived_count.min(self.episode_count),
-            self.episode_count,
+            group_digits(self.archived_count.min(self.episode_count)),
+            group_digits(self.episode_count),
             if self.episode_count > 1 { "s" } else { "" },
             if self.archived_count > 1 { "s" } else { "" },
         )
@@ -247,6 +247,21 @@ impl ShowCard {
                 + self.status.len()
                 + self.transcribe_language.len()) as u64
     }
+}
+
+/// `2 000`: the NARROW NO-BREAK SPACE French typography puts between digit
+/// groups (the SPA's `toLocaleString("fr-FR")`). A plain space would let a
+/// line break inside a number, which is why it is U+202F and not `' '`.
+pub fn group_digits(count: u32) -> String {
+    let digits = count.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push('\u{202F}');
+        }
+        out.push(character);
+    }
+    out
 }
 
 /// One episode, as a row of the show page.
@@ -433,16 +448,7 @@ pub struct Chapters {
 impl Chapters {
     /// `chapterAt`, for the card above the list.
     pub fn at(&self, seconds: f64) -> Option<(usize, &ChapterCard)> {
-        let normalized: Vec<text::ChapterCard> = self
-            .chapters
-            .iter()
-            .map(|chapter| text::ChapterCard {
-                index: chapter.index,
-                start: chapter.start,
-                end: chapter.end,
-                title: chapter.title.clone(),
-            })
-            .collect();
+        let normalized = self.text_cards();
         // `chapter_at` needs the same normalisation the server's rows already
         // have (sorted by start), so the slice is searched directly.
         if normalized.is_empty() || !seconds.is_finite() {
@@ -454,8 +460,25 @@ impl Chapters {
 
     /// The chapter after `seconds`, for « dans … ».
     pub fn next(&self, seconds: f64) -> Option<(usize, &ChapterCard)> {
-        let normalized: Vec<text::ChapterCard> = self
-            .chapters
+        let normalized = self.text_cards();
+        let at = text::next_chapter(&normalized, seconds)?;
+        self.chapters.get(at.0).map(|chapter| (at.0, chapter))
+    }
+
+    /// « Chapitre 3 · Le nom » for the chapter at `index`, from the whole list
+    /// (`chapterLabel` needs the position, not just the row).
+    pub fn label(&self, index: usize) -> String {
+        text::chapter_label(&self.text_cards(), index)
+    }
+
+    /// « 3 chapitres ».
+    pub fn count_label(&self) -> String {
+        text::chapter_count_label(self.chapters.len() as u32)
+    }
+
+    /// The same list in the pure functions' own shape.
+    fn text_cards(&self) -> Vec<text::ChapterCard> {
+        self.chapters
             .iter()
             .map(|chapter| text::ChapterCard {
                 index: chapter.index,
@@ -463,9 +486,7 @@ impl Chapters {
                 end: chapter.end,
                 title: chapter.title.clone(),
             })
-            .collect();
-        let at = text::next_chapter(&normalized, seconds)?;
-        self.chapters.get(at.0).map(|chapter| (at.0, chapter))
+            .collect()
     }
 
     /// Where chapter `index` ends, with the episode's length as the fallback.
@@ -721,6 +742,15 @@ mod tests {
         assert_eq!(
             show.archive_line(),
             "12 sur 40 épisodes archivés sur le serveur"
+        );
+        let big = ShowCard {
+            episode_count: 2_000,
+            archived_count: 1_200,
+            ..ShowCard::default()
+        };
+        assert_eq!(
+            big.archive_line(),
+            "1\u{202F}200 sur 2\u{202F}000 épisodes archivés sur le serveur"
         );
         let card = episode("abc", 3);
         assert_eq!(card.published_label(), "18 nov. 2026");
