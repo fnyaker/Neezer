@@ -3133,7 +3133,7 @@ mod tests {
             language: Some("fr".to_owned()),
         });
         // Wait for the reader thread's events (an event, never a clock).
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             let snapshot = service.snapshot();
             if snapshot.job.is_none() && snapshot.last_done.as_deref() == Some(episode) {

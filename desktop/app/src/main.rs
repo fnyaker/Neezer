@@ -36,6 +36,8 @@ mod screens;
 mod state;
 #[cfg(test)]
 mod testmem;
+#[cfg(test)]
+mod testwait;
 mod theme;
 mod toast;
 mod widgets;

@@ -719,7 +719,7 @@ mod tests {
 
         // The test thread is the network thread: it drives the runtime between
         // two frames, exactly as the shell's own runtime is driven in the app.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;

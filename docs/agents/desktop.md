@@ -97,6 +97,22 @@ Every choice below was checked against several sources and then **built together
   Measured again in T1: an *aborted first* build counts as interrupted — with no `VULKAN_SDK` CMake
   stops at `Could NOT find Vulkan (missing: Vulkan_INCLUDE_DIR)`, and the next attempt then fails at
   link, so set `VULKAN_SDK` (headers + `lib/libvulkan.so`) before the first build, not after.
+- **A test's deadline is a hang guard, never a machine-speed assertion.** Every "pump until" loop in
+  the app's suite waits for an EVENT (three downloads counted, a screen's first paint, a session
+  arriving) and is bounded by a deadline; a deadline that expires first is supposed to mean "the
+  event never came", but a 5 or 10 s one also means "the runner was slow", which is not something a
+  test should measure. That is what turned `cargo test + window` red: `screens::album::…nothing_the_
+  second_time` panicked with « timed out waiting for three downloads » (`widgets::card::stub::until`)
+  on a job that took 33.9 s where the same tree takes 15.9 s on four cores, and again on master. All
+  **25** such deadlines now use one budget, `app/src/testwait.rs::WAIT` = **60 s** (`1.1 s` is what
+  that download test really takes; 60 s is a fiftyfold allowance), and nothing changed in what is
+  expected or counted. Measured: the full app suite **428/428 twice**; at ambient load (heavier than
+  a runner here) the Album download test **20/20**; under a deterministic `CPUQuota=8%` the OLD 10 s
+  budget fails at **10.8 s** with the message above while the new one passes at **2.1 s**. Two
+  caveats found while measuring: a genuinely blocked event still fails with the same clear message
+  (that is the guard working), and **~2-4 % of runs under two pinned cores and two hogs stall past
+  60 s on BOTH budgets** — a pre-existing hard stall in that test's stub/worker, not a deadline
+  problem, so a bigger budget cannot be expected to remove it.
 - **A GPUI test cannot be woken from a real OS thread, and the Omarchy theme observer is one — so a
   test must never watch the person's configuration.** `gpui_omarchy::init` starts
   `Theme::follow_system`, which watches `$HOME/.config/omarchy` (and its ancestors) with

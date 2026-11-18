@@ -869,7 +869,7 @@ mod tests {
 
         // Et elle repart dès qu'un écran la redemande.
         vcx.update(|_, cx| state.read(cx).viz.as_ref().unwrap().set_visible(true));
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         loop {
             for _ in 0..4 {
                 sink.render(&mut buffer);

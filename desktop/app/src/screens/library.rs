@@ -3594,7 +3594,7 @@ mod journey {
         what: &str,
         mut done: impl FnMut(&AppState) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + crate::testwait::WAIT;
         loop {
             runtime.block_on(async {
                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -3875,7 +3875,7 @@ mod journey {
         );
         // Let every visible row's sleeve land: each answer lets the next ask,
         // and each frame's own declaration starts the next decode.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         while cover_hits(&stub) < shown
             || vcx.update(|_, cx| cx.global::<cover::Sleeves>().resident().1)
                 < shown.saturating_sub(1)
@@ -3950,7 +3950,7 @@ mod journey {
         // A virtual list applies a deferred scroll on its next layout: the test
         // draws the frames (a `refresh` so the list REALLY lays out again, not
         // a repaint of the same layout) and waits for the list to BE there.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         while !vcx.update(|_, cx| screen.read(cx).visible_rows().contains(&target)) {
             runtime
                 .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(2)).await });
@@ -3973,7 +3973,7 @@ mod journey {
         // sweep runs on a frame: this is the person scrolling on and stopping.
         // The wait is on the FIRST row's own pixels, never on a count — a
         // count would pass while the images that must go are still there.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         while vcx.update(|_, cx| cx.global::<cover::Sleeves>().holds(&file)) {
             runtime
                 .block_on(async { tokio::time::sleep(std::time::Duration::from_millis(6)).await });
