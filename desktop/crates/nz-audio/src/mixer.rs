@@ -152,8 +152,7 @@ impl MixerShared {
     /// Publish one buffer's meter reading (MB12). Called by the callback, only
     /// while the equalizer card asked for it: two stores, no arithmetic.
     pub(crate) fn note_meter(&self, peak_db: f64, reduction_db: f64) {
-        self.meter_peak
-            .store(peak_db.to_bits(), Ordering::Relaxed);
+        self.meter_peak.store(peak_db.to_bits(), Ordering::Relaxed);
         self.meter_reduction
             .store(reduction_db.to_bits(), Ordering::Relaxed);
     }

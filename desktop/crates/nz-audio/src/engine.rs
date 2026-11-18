@@ -26,7 +26,6 @@ use crate::clock::AtomicF32;
 use crate::crossfade::FadeSettings;
 use crate::decode::{self, DecodeError};
 use crate::dsp::{Normalization, Settings};
-use nscore::dsp::{ChainMeter, METER_FLOOR_DB};
 use crate::events::{EngineEvent, EventBus, VoiceInfo, VoiceInfoEntry};
 use crate::mixer::{MixerCmd, MixerShared};
 use crate::output::{self, ExternalSink, OfflineSink, Output, OutputChoice, OutputInfo};
@@ -35,6 +34,7 @@ use crate::source::{Lane, Quality, SourceError, Spoolers, StreamOpener, spool_pa
 use crate::tap::{TAP_FRAMES, Tap, TapReader, TapSlot, TapSubscription};
 use crate::trim::{self, Edges, Trim};
 use crate::voice::{VoiceConsumer, VoiceMeta, VoiceStatus};
+use nscore::dsp::{ChainMeter, METER_FLOOR_DB};
 
 /// Everything the engine needs to start. `sample_rate` is a preference: the
 /// device's own rate wins when it cannot do this one, and the decode threads
@@ -725,9 +725,7 @@ impl Engine {
         if !on {
             // A card that left must not find a stale number when it comes back:
             // forget the reading in the same call that stops measuring it.
-            self.inner
-                .shared
-                .note_meter(METER_FLOOR_DB, 0.0);
+            self.inner.shared.note_meter(METER_FLOOR_DB, 0.0);
         }
     }
 

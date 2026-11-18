@@ -152,6 +152,60 @@ impl Drop for TapSubscription {
     }
 }
 
+/// A feed for a subscription with no engine behind it — tests, and a tool that
+/// synthesises frames. It pushes exactly as the mixer does (whole frames,
+/// dropping what does not fit), so a reader cannot tell the difference.
+pub struct TapFeed {
+    ring: Producer<f32>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl TapFeed {
+    pub fn push(&mut self, stereo: &[f32]) {
+        push_stereo(&mut self.ring, &self.dropped, stereo);
+    }
+
+    /// Frames this feed had to drop because the reader was behind.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+/// A subscription and its feed, with no engine in between ([`TapFeed`]).
+pub fn tap_channel(frames: usize) -> (TapFeed, TapSubscription) {
+    let capacity = (frames.max(2) * 2) & !1;
+    let (producer, consumer) = RingBuffer::new(capacity);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let live = Arc::new(AtomicBool::new(true));
+    (
+        TapFeed {
+            ring: producer,
+            dropped: Arc::clone(&dropped),
+        },
+        TapSubscription {
+            frames: Frames {
+                ring: consumer,
+                dropped,
+            },
+            live,
+        },
+    )
+}
+
+/// Offer `stereo` to one ring, whole frames only, and count what does not fit.
+/// Never waits: this runs in the output callback.
+fn push_stereo(ring: &mut Producer<f32>, dropped: &AtomicU64, stereo: &[f32]) {
+    let room = ring.slots() & !1;
+    let offered = stereo.len() & !1;
+    let take = room.min(offered);
+    if take > 0 {
+        let _ = ring.push_partial_slice(&stereo[..take]);
+    }
+    if offered > take {
+        dropped.fetch_add(((offered - take) / 2) as u64, Ordering::Relaxed);
+    }
+}
+
 /// What the engine hands the mixer to attach one subscription's producer.
 pub(crate) struct TapSlot {
     ring: Producer<f32>,
@@ -174,7 +228,10 @@ impl TapSlot {
                 live: Arc::clone(&live),
             },
             TapSubscription {
-                frames: Frames { ring: consumer, dropped },
+                frames: Frames {
+                    ring: consumer,
+                    dropped,
+                },
                 live,
             },
         )
@@ -237,22 +294,16 @@ impl Tap {
     /// does not fit. Never waits: this runs in the output callback.
     pub(crate) fn push(&mut self, stereo: &[f32]) {
         for entry in self.slots.iter_mut() {
-            let Some((ring, dropped, live)) = entry else { continue };
+            let Some((ring, dropped, live)) = entry else {
+                continue;
+            };
             // A subscription dropped on another thread takes effect here, at a
             // buffer boundary: from then on it costs nothing.
             if !live.load(Ordering::Relaxed) {
                 *entry = None;
                 continue;
             }
-            let room = ring.slots() & !1;
-            let offered = stereo.len() & !1;
-            let take = room.min(offered);
-            if take > 0 {
-                let _ = ring.push_partial_slice(&stereo[..take]);
-            }
-            if offered > take {
-                dropped.fetch_add(((offered - take) / 2) as u64, Ordering::Relaxed);
-            }
+            push_stereo(ring, dropped, stereo);
         }
     }
 }

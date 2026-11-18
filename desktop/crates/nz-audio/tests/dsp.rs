@@ -727,16 +727,30 @@ fn two_taps_read_the_same_sound_and_the_meter_measures_the_chain() {
     engine.set_meter(true);
     pump_seconds(&mut sink, 0.2);
     let on = engine.chain_meter();
-    println!("meter on: peak {:.2} dB, reduction {:.2} dB", on.peak_db, on.reduction_db);
-    assert!((on.peak_db - db(0.25)).abs() < 0.5, "peak {:.2}", on.peak_db);
-    assert_eq!(on.reduction_db, 0.0, "a clean master never touches the limiter");
+    println!(
+        "meter on: peak {:.2} dB, reduction {:.2} dB",
+        on.peak_db, on.reduction_db
+    );
+    assert!(
+        (on.peak_db - db(0.25)).abs() < 0.5,
+        "peak {:.2}",
+        on.peak_db
+    );
+    assert_eq!(
+        on.reduction_db, 0.0,
+        "a clean master never touches the limiter"
+    );
 
     // It leaves: the reading is forgotten in the same call, not left standing
     // for the next visit to show as a live number.
     engine.set_meter(false);
     engine.pause();
     let off = engine.chain_meter();
-    assert_eq!(off.peak_db, nz_audio::METER_FLOOR_DB, "a hidden card has no reading");
+    assert_eq!(
+        off.peak_db,
+        nz_audio::METER_FLOOR_DB,
+        "a hidden card has no reading"
+    );
     assert_eq!(off.reduction_db, 0.0);
     // And a dropped subscription stops: the card's reader is gone, the
     // visualiser's keeps working.
@@ -744,6 +758,9 @@ fn two_taps_read_the_same_sound_and_the_meter_measures_the_chain() {
     engine.play();
     pump_seconds(&mut sink, 0.1);
     let mut c = vec![0.0f32; 480];
-    assert!(viz.read(&mut c) > 0, "the visualiser still reads after the card left");
+    assert!(
+        viz.read(&mut c) > 0,
+        "the visualiser still reads after the card left"
+    );
     engine.pause();
 }

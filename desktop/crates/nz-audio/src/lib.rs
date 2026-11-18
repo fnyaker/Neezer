@@ -40,12 +40,12 @@ mod voice;
 pub use clock::Clock;
 pub use crossfade::{FadeSettings, equal_power};
 pub use dsp::{Normalization, Settings, gain_db};
-pub use nscore::dsp::{ChainMeter, METER_FLOOR_DB};
 pub use engine::{
     Engine, EngineConfig, EngineError, EngineHandle, OutputClock, PartyChannel, TrackMeta,
 };
 pub use events::EngineEvent;
 pub use mixer::MixerShared;
+pub use nscore::dsp::{ChainMeter, METER_FLOOR_DB};
 pub use output::{
     ExternalSink, OfflineSink, OutputChoice, OutputError, OutputInfo, is_default_output_alias,
     output_devices,
@@ -53,7 +53,7 @@ pub use output::{
 pub use party::{EDGE_S, SLOTS as PARTY_SLOTS, Segment};
 pub use source::{ByteStream, Lane, Quality, SourceError, StreamOpener, StreamReady, TrackId};
 pub use stretch::{MAX_SPEED, MIN_SPEED, clamp_speed};
-pub use tap::{MAX_TAP_READERS, TAP_FRAMES, TapReader, TapSubscription};
+pub use tap::{MAX_TAP_READERS, TAP_FRAMES, TapFeed, TapReader, TapSubscription, tap_channel};
 pub use trim::{EDGE_LENGTH_SLACK, Edges, MAX_EDGE_TRIM, Trim, trim_for};
 
 #[cfg(all(test, feature = "cpal"))]
