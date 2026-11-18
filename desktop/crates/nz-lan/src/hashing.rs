@@ -695,6 +695,15 @@ mod tests {
         assert!(store.tag(&published).is_some());
     }
 
+    /// How long a `/proc/self/task` lookup waits for a thread to carry its name.
+    ///
+    /// A `thread::Builder::spawn` returns before the child has set its name, and a
+    /// loaded machine widens that window. Ten seconds is far longer than any real
+    /// wait and short enough that a thread that never appears fails the test.
+    const THREAD_NAME_WAIT: Duration = Duration::from_secs(10);
+    /// How often the lookup looks again while it waits.
+    const THREAD_NAME_POLL: Duration = Duration::from_millis(1);
+
     /// The thread id of the caller (`gettid`), which is not the process id.
     fn thread_id() -> i64 {
         // SAFETY: `gettid` reads the calling thread's kernel id and touches no
@@ -714,11 +723,38 @@ mod tests {
     }
 
     /// The tid of the thread carrying `name`, 15 characters at most in `/proc`
-    /// (`nz-lan-hash` is 11).
+    /// (`nz-lan-hash` is 11), waiting (bounded) for it to appear.
+    ///
+    /// A lookup of a name must never fail because ANOTHER thread exited between
+    /// `read_dir` and the read of its `comm`: the first version returned `None` for
+    /// the whole scan on the first unreadable entry, and under 101 parallel tests
+    /// that was **2 failures in 8 runs on `master`** (a thread of another test exits
+    /// in exactly that window). An entry that cannot be read is skipped, and the
+    /// scan is retried for [`THREAD_NAME_WAIT`], so a thread that really never takes
+    /// its name still fails — with the name it looked for, not with a `None`.
     fn thread_by_name(name: &str) -> Option<i64> {
+        let deadline = std::time::Instant::now() + THREAD_NAME_WAIT;
+        loop {
+            if let Some(tid) = scan_thread_by_name(name) {
+                return Some(tid);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "aucun thread nommé `{name}` dans /proc/self/task après {THREAD_NAME_WAIT:?}"
+            );
+            std::thread::sleep(THREAD_NAME_POLL);
+        }
+    }
+
+    /// One pass over `/proc/self/task`, skipping every entry this process cannot
+    /// read any more (a thread that exited between the directory listing and the
+    /// read of its name).
+    fn scan_thread_by_name(name: &str) -> Option<i64> {
         for entry in fs::read_dir("/proc/self/task").ok()? {
-            let entry = entry.ok()?;
-            let comm = fs::read_to_string(entry.path().join("comm")).ok()?;
+            let Ok(entry) = entry else { continue };
+            let Ok(comm) = fs::read_to_string(entry.path().join("comm")) else {
+                continue;
+            };
             if comm.trim_end() == name {
                 return entry.file_name().to_string_lossy().parse().ok();
             }

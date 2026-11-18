@@ -2091,6 +2091,14 @@ bind-the-port assertion.
 - **The 60 s of grace cannot be paused from outside.** `tokio::time::pause` affects the runtime it is
   set on, and the node owns its own: hence `set_sleep_grace`, and the *unit* test that spells
   `SLEEP_GRACE == 60 s` (LN7's rule: a test must not take its boundary from the constant it tests).
+- **A `/proc` scan must skip the entry it cannot read.** `thread_by_name` returned `None` for the
+  WHOLE scan when one entry vanished between `read_dir` and the read of its `comm`, and under 101
+  parallel tests that is a thread of another test exiting in exactly that window: measured **2
+  failures in 8 runs on `master`**, 0/3 in series, 0/5 alone. The lookup now skips what it cannot
+  read and waits — bounded, 10 s — for the name to appear (a `spawn` returns before the child has
+  set it), so a thread that never takes its name still fails, with the name in the message. Fixed in
+  this lot's PR because LN4 was delivered and nobody else writes `hashing.rs`: **0 failures in 50
+  parallel runs** after, and the same test fails in 10.0 s when the worker's name is changed.
 - **A fake server's credential window must move for a renewal to be observable.** `key_until` is the
   only screen-shaped trace of a new credential, and a renewal that lands in the same second leaves
   it unchanged: the fake issues `at + days + n` for the n-th credential of a device, which is what a
