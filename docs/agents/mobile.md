@@ -2194,14 +2194,8 @@ inventory are the behaviour; port them, do not invent.
   replace entry), history (cursor), local tracks. Kotlin: `LibraryEntry(tab)`, `HistoryEntry`. Rows:
   8 000 favourites open with ONE request (or 0 warm) and scroll at p95 ≤ 16.7 ms; folder move offline
   rolls back with "Réessayer".
-- **MB10 — Track actions.** FFI (`actions.rs`): `track_menu(row: TrackRow, ctx: MenuContext) ->
-  Vec<MenuItem>` (the ONE spec of `lib/trackmenu.js`, ported in Rust so every list gets the same
-  menu), `like/unlike/dislike/undislike(key)` (optimistic, updates every open `ListHandle` row via
-  their `version`), `add_to_playlist(playlist_id, keys)`, `replace_candidates(key)`, `replace(key,
-  candidate)`, `delete_uploads(keys)`, `share_link(kind, id)`. Kotlin: `TrackActionsHost()` +
-  `TrackActions.open(row, ctx)`, the playlist picker, the replace sheet, swipe-right = play next.
-  Rows: a like is visible in the same frame (no request awaited) on every open list; the menu of a
-  podcast episode, an upload and a YouTube row differ exactly as the SPA's.
+- **MB10 — Track actions.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
+  port: see « MB10 — Actions sur un titre » below.*
 
 Their prompts: *Ready prompts for the screen lots* below.
 
@@ -2560,6 +2554,143 @@ so the phone shows the SPA's list for the same answer and the tests are the SPA'
   lands the tap says so in a toast, and this lot's paragraph is the record.
 - **The local transcript search** (`lib/transcriptcache.js`, IndexedDB pages) — the phone has no
   pages cache and the scope is server-only; a dead link answers `Offline` there.
+
+### MB10 — Actions sur un titre (delivered 2026-11-18)
+
+**What landed.** The ONE track menu of the SPA — `webapp/src/lib/trackmenu.js`, its
+two builders, its labels and its order — ported into Rust so every list of the app
+gets the same menu, plus the four things it opens: the heart and the thumb, the
+playlist picker, the replacement sheet, and the share address. The menu is DATA
+(a label, the SPA's icon name, a verb, its submenu, its hairline), because a
+JavaScript closure cannot cross the FFI and a second opinion about which entry
+belongs on which surface is how menus drift.
+
+- **The core** (`nz-core::actions`): `menu.rs` is `buildTrackMenu`/`buildEpisodeMenu`
+  (`surface`, the playhead, `canKeep`/`canBrowse`/`admin`, the last playlist used,
+  the credited artists, the episode flags, and the four gates another lot owns);
+  `mod.rs` is the optimistic writes and the sheet's reads (`set_track_favorite`,
+  `set_track_dislike` — patching every open list BEFORE the request and back on a
+  refusal — `menu_playlists`/`cached_menu_playlists`, `add_to_playlist` (no
+  `version`: an append is commutative), `create_playlist`, `replace_candidates`,
+  `replace`/`replace_status`, `delete_tracks`/`delete_status`, `delete_uploads`
+  (`DELETE /api/local/<id>`, each key keeping its own cause), `share_link`);
+  `store.rs` keeps the picker's list per account (raw body, `.part` + rename) and
+  the last playlist in `kv`; `wire.rs` is the routes.
+- **The FFI** (`nz-ffi/src/actions.rs`): `track_menu(row, ctx) -> Vec<MenuEntry>`
+  (synchronous, free), `menu_actor()`, the picker's pair, `like`/`unlike`/
+  `dislike`/`undislike`, `add_to_playlist`, `create_playlist_from`,
+  `replace_candidates`/`replace`/`replace_status`, `delete_uploads`/
+  `delete_tracks`/`delete_status`, `share_link`, and the listener
+  `subscribe_track_actions` + `track_actions_version` (the counter a list
+  re-windows on).
+- **Kotlin** (`:feature/trackactions`): `TrackActions.open(row, nav[, ctx])` (the
+  MB0 signature other lots already call, plus the facts a surface knows),
+  `TrackActionsHost()` (the ONE sheet, placed by the shell), `TrackActionsModel`
+  (plain Kotlin over ports, so every rule is a JVM assertion), `TrackMenuSheet`,
+  `PlaylistPickerSheet`, `ReplaceSheet`, `AndroidSharer`, and
+  `TrackActions.queueNext(row)` — the verb `TrackRowView`'s swipe-right calls.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21,
+NDK 30.0.16248370; emulator API 35 x86_64 `-no-window -no-audio` on port 5660):
+
+| What | How | Number |
+|---|---|---|
+| Opening the menu | `cargo test -p nz-core actions` (a counting server) | **0 requests, 0 sockets**, on a live server and offline alike |
+| A like | the same, two open `ListHandle`s | **1 POST** /2favorite; **both** rows flip before the answer; the list `version` moved; the meter holds 1 |
+| The picker, cold | `menu_playlists()` | **1 GET** `/me/playlists` = **485 B** (asserted against the fake's own body) |
+| The picker, warm | `cached_menu_playlists()` | **0 requests**, the meter unchanged |
+| Adding / creating | `add_to_playlist`, `create_playlist` | **1 POST** each; the append carries **no `version`** |
+| The replacement sheet | `replace_candidates` | **1 GET**; a typed search **1 GET** with `q=` and `fallbacks=1`; `replace` **1 POST** then the job's status |
+| A bulk deletion | `delete_tracks` | **1 POST** + status, and each kept title with its cause (`playable`) |
+| Deleting an upload | `delete_uploads(2 keys)` | **1 DELETE each**, each keeping its own refusal |
+| A share address | `share_link` | playlist **1 GET then 1 POST** the first time, **1 GET** after; a title **0 requests** |
+| Rust | `cargo test --workspace --locked` | **182** `nz-core` (32 `actions`) + **38** `nz-ffi` (6 `actions`); clippy `-D warnings`, `fmt --check` clean |
+| JVM | `:feature:trackactions:testDebugUnitTest` | **49** tests: 23 model (0-request menu, the rollback + « Réessayer », the copy-then-answer picker, a tick that never adds twice, the replacement's one read/one commit, each player command, sharing) + 26 renders |
+| The look | `docs/agents/screenshots/mobile/MB10/` | **26 PNGs**: the menu, its accordion, the episode's menu, Encre/Papier at 360 and 600 dp, 200 % scale, the picker (copy, offline, failure), the replacement sheet (candidates, empty, failure) |
+| The device | `TrackActionsDeviceTest` on the emulator, **its own loopback bench** | the menu's 8 SPA labels in the tree; a like = **3 requests** (version, login, favourite), **both** lists' hearts filled beside the open menu's « Retirer des favoris » (1080×2400); the picker = **5 requests** including its one list read and one append |
+| `libnz_ffi.so` | `build-android.sh` | arm64-v8a **10 425 288 B** (MB7: 10 152 776 → **+272 512 B**), armeabi-v7a 7 084 520, x86_64 12 432 656 |
+
+**Rules a measurement taught** (each cost a red test or a wrong image):
+
+- **A list's row must take the counter as a PARAMETER, or Compose skips it.** The
+  device run had the two handles already saying `liked = true` while both lists
+  still drew hollow hearts: the parent read the listener's version and re-ran,
+  but `ListSection(title, handle)`'s parameters were unchanged, so Compose
+  skipped it. Passing `version` into the section (what `rememberListWindow`'s
+  callers must do) filled both hearts in the same frame.
+- **A listener fired on nz-api's worker does NOT schedule a recomposition.** The
+  same run, before the fix: `subscribe_track_actions`'s callback set a
+  `mutableStateOf` from the network thread and nothing redrew. A surface
+  subscribes, posts to the main thread, and only then touches Compose state —
+  which is what every later consumer (MB15's downloads, MB11's queue) must do.
+- **`nz_error_text` reads the `.so`.** A JVM test that makes a fake promise fail
+  could not produce a toast: `NzErrors.text(e)` calls the native library and threw
+  an `UnsatisfiedLinkError` INSIDE the catch (so the rollback ran and the sentence
+  never did). The model takes the cause's sentence as a port
+  (`causeText: (Throwable) -> String`, `NzErrors.text` in the app).
+- **A feature whose lot has not landed is a GATE, not a button.** The download
+  entries (MB15), « Étiqueter le genre… » (MB18), « Marquer cette position »
+  (MB13) and « Voir les crédits » (MB7's sheet, wired by the shell) are four
+  booleans on the context; the default is off, so the menu this build ships has
+  no entry that does nothing. The device test asserts the absence, and the
+  dividers collapse around an empty group (no double hairline).
+- **The credits door cannot be a module dependency.** `:feature:entity` already
+  depends on `:feature:trackactions` (its rows open this menu), and a Gradle
+  project graph has no cycles: `TrackActions.creditsSheet` is a composable the
+  shell installs, and until it does the entry is hidden. The plan's sentence
+  (« the door MB10's menu opens ») needs the SHELL to make the call, not this lot.
+- **A sheet over a LIST ghosts through its pane, and the SPA's answer is the
+  frost.** On Papier the list's titles read through the menu at 93 % (measured on
+  the 360 dp render) — the SPA kills that with `backdrop-filter`; Compose below
+  API 31 cannot, so `NzSheet`'s `backdrop` (the sleeve, blurred on 31+) is what
+  the menu passes, and the ghost is gone. `CreditsView` (MB7) has the same ghost
+  and no backdrop: the design system's sheet should own it once.
+- **`TrackActionsHost` is inside the shell's padded `Box`**, so the sheet's veil
+  stops at the tab bar instead of covering it (`NowPlayingHost` has the same
+  shape): a follow-up for the shell, not this lot's files.
+- **A full-width bottom sheet is not a menu at 600 dp.** The items are a
+  `.widthIn(max = 440.dp)` column centred in the sheet; the picker takes 560 and
+  the replacement sheet 620, and the 600 dp renders are what caught it.
+- **`cargo fmt --all` reformats the crates this workspace only borrows**
+  (`android/nscore/src/dsp.rs` has pre-existing diffs); CI's `cargo fmt` (no
+  `--all`) is the gate, and `-p` is what a lot runs locally.
+- **`connectedDebugAndroidTest` uninstalls the apps when it finishes**, so the
+  capture that lands in the test app's `filesDir` is gone before it can be pulled:
+  install the built `androidTest` APK, run `am instrument` yourself, then
+  `run-as … cat files/<name>`.
+- **The Xvfb-free path is the same one MB7 measured**: `emu.sh start/wait/stop` on
+  our own port, `-no-window -no-audio`, and only our PID — used here for the two
+  device tests and the capture.
+
+**Deliberate deviations from the plan paragraph.**
+
+- **« Aller à l'artiste » needs the ids the row does not carry.** A `TrackRow` has
+  the artists' names joined for display and its album's id, not the artists' row
+  ids; the menu offers the entry only when the SURFACE passes them
+  (`MenuContext.artists`), because a link that leads nowhere is worse than none
+  (`lib/entity.js`'s own rule). « Aller à l'album » always works (`album_id`).
+- **The share is a LINK, not a clip.** The SPA's sheet cuts an excerpt on a
+  waveform; the phone hands out `GET /api/share/file/<id>` (the whole archived
+  file) or the playlist's public page, through Android's own share sheet.
+- **`delete_uploads` is not in the menu.** The SPA has no upload-delete entry
+  (only the unavailable list's bulk deletion, which this lot also exposes as
+  `delete_tracks`); the method exists for MB8's « Mes fichiers » list, which is
+  where a person sees their uploads.
+- **`TrackActions.open(row, nav)` is kept** beside the `TrackActionsContext`
+  overload: `:feature:entity` and `:feature:home` already call the MB0 signature.
+
+**Not ported, on purpose** (each needs a component another lot owns): the
+audition (« Écouter ») of a replacement candidate — an audio path is the player's
+and a silent button is a bug; « Importer mon fichier » (MB8's upload flow); the
+fallback sources' names (Réglages → Sources, MB16); the dislike's `artist_hint`
+toast and its automatic skip of a generated queue's playing title (the player's
+snapshot carries no context kind yet — a follow-up in MB3b's file).
+
+**Files.** `mobile/rust/crates/nz-core/src/actions/{mod,menu,wire,store,testing}.rs`,
+`mobile/rust/crates/nz-ffi/src/actions.rs`,
+`mobile/android/feature/trackactions/**` (7 Kotlin files + its build file, 2 JVM
+test files, 1 instrumented test), `docs/agents/screenshots/mobile/MB10/` (26
+renders + 2 emulator captures), and this section.
 
 ### MB3c — Media service `:playback` (delivered 2026-11-18)
 
