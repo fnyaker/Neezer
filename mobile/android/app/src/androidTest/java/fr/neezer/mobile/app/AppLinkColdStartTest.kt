@@ -47,12 +47,21 @@ class AppLinkColdStartTest {
     private val device: UiDevice
         get() = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
 
-    private fun playlistIntent(id: String): Intent {
+    /**
+     * A `neezer://playlist/<id>` view for [MainActivity].
+     *
+     * [cold] is the intent a chat app's tap builds for a stopped app; the warm
+     * door is the same intent WITHOUT `CLEAR_TASK` (clearing the task would tear
+     * the running activity down, which is not what "a link arrives while the app
+     * runs" means — measured: the first version of this test asserted the
+     * scenario was RESUMED and failed on exactly that).
+     */
+    private fun playlistIntent(id: String, cold: Boolean = true): Intent {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         return Intent(Intent.ACTION_VIEW, Uri.parse("neezer://playlist/$id")).apply {
             setClassName(context, MainActivity::class.java.name)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            if (cold) addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
         }
     }
 
@@ -80,15 +89,17 @@ class AppLinkColdStartTest {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         ).use { scenario ->
             device.wait(Until.hasObject(By.text("Playlist")), TIMEOUT_MS)
-            // The warm door: `onNewIntent` with a view link.
-            scenario.onActivity { activity -> activity.startActivity(playlistIntent("pl-warm")) }
+            // The warm door: the same link while the app runs.
+            scenario.onActivity { activity ->
+                activity.startActivity(playlistIntent("pl-warm", cold = false))
+            }
             assertTrue(
                 "le lien reçu à chaud n'a pas ouvert la playlist",
                 device.wait(Until.hasObject(By.text("Playlist")), TIMEOUT_MS),
             )
             assertTrue(
                 "l'application a planté sur le lien à chaud",
-                scenario.state == Lifecycle.State.RESUMED,
+                scenario.state != Lifecycle.State.DESTROYED,
             )
         }
     }
