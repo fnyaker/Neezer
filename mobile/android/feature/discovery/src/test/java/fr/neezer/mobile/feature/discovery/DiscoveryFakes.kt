@@ -565,27 +565,33 @@ class Toasts {
 }
 
 /**
- * Waits for a model's STATE, on the test scheduler: it advances the queue until
- * [condition] holds, then gives up with the state in the message.
+ * Waits until [condition] holds, advancing the test scheduler and letting any
+ * REAL dispatcher finish.
  *
- * Why a helper and not a bare `advanceUntilIdle()`: a `screenFlow` emission and
- * a `withContext` continuation can take a dispatch round each, and the runner's
- * JVM (JDK 17) settled them differently from this machine's — the same six
- * cases passed here and failed there. A test that waits on the STATE is a test
- * of the model; one that waits on a queue length is a test of the scheduler.
- * Nothing here waits on the clock: `advanceUntilIdle` and `runCurrent` run what
- * is pending, and the loop is bounded.
+ * Why this and not a bare `advanceUntilIdle()`: a `screenFlow` emission and a
+ * `withContext` continuation can take a dispatch round each — and on the CI
+ * runner (JDK 17) the same six `ExplorerModelTest` cases stalled there while
+ * passing on this machine. The loop therefore drives the VIRTUAL clock
+ * (`advanceUntilIdle`, `runCurrent`) and, when nothing is left to run, yields
+ * the thread so a `withContext(Dispatchers.IO)` continuation can land. The
+ * clock is a LIVENESS ceiling (a latch timeout), never the thing asserted: the
+ * assertions are on the state, and [what] names what never happened.
  */
 fun TestScope.settle(
     what: String = "state",
+    timeoutMs: Long = 5_000,
     condition: () -> Boolean,
 ): Boolean {
-    repeat(64) {
+    val deadline = System.nanoTime() + timeoutMs * 1_000_000
+    while (true) {
         if (condition()) return true
         advanceUntilIdle()
         runCurrent()
+        if (condition()) return true
+        if (System.nanoTime() >= deadline) return false
+        Thread.onSpinWait()
+        Thread.yield()
     }
-    return condition()
 }
 
 /** A `ScreenState`'s data, or a test failure. */
