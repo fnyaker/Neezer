@@ -221,6 +221,21 @@ jobs:
           # names the device index unconditionally (ggml-vulkan.cpp, the
           # `CUDA_VISIBLE_DEVICES` emulation).
           GGML_VK_VISIBLE_DEVICES: "0"
+      # A test that dies without saying why leaves the kernel as the only
+      # witness: an OOM kill names the process and its cgroup, and `/proc/
+      # pressure/memory` says how much pressure there was. It runs only when the
+      # suite failed, costs nothing on a green run, and it is what would have
+      # named run 44200808004's killer — 4 engine children dead by a signal the
+      # harness reported as `(None)` (docs/agents/desktop.md, T2's *a dead engine
+      # NAMES ITS SIGNAL*). `continue-on-error` so a missing `dmesg` permission
+      # never turns one failure into two.
+      - name: Why a test died (kernel log, memory pressure)
+        if: failure()
+        continue-on-error: true
+        run: |
+          free -m || true
+          cat /proc/pressure/memory || true
+          sudo dmesg --ctime | tail -60 || true
       # v1.6.0 asked its own server for `/apihttps://huggingface.co/…` and every
       # model download in Réglages → Transcription locale was a 404. The suite
       # pins the URL's shape and the request target against a loopback server
