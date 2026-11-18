@@ -28,6 +28,7 @@ import uniffi.nz_ffi.PlayerApi
 import uniffi.nz_ffi.PlayerSnapshot
 import uniffi.nz_ffi.nzErrorText
 import fr.neezer.mobile.bridge.NzBridge
+import fr.neezer.mobile.playback.auto.AutoLibrary
 
 /**
  * The one foreground service while music plays.
@@ -126,12 +127,18 @@ class NzMediaService : MediaLibraryService() {
         nzPlayer = player
         api = playerApi
 
-        session =
+        val built =
             MediaLibrarySession.Builder(this, player, LibraryCallback())
                 // Covers: Rust caches the file, Android decodes it (MB2's rule).
                 .setBitmapLoader(NzBitmapLoader(core.screens()))
                 .setSessionActivity(launchIntent())
                 .build()
+        session = built
+
+        // MB25: the car's browse tree, installed once the session exists (it is
+        // what lets a node say "j'ai plus" while a head unit looks at it). The
+        // tree itself is Rust's; `AutoLibrary` is the Media3 glue.
+        AutoLibrary.register(core.screens(), playerApi, built)
 
         focus = FocusController(this, wasPlaying = ::playing) { action -> applyFocus(action) }
         locks = PlaybackLocks(this)
@@ -294,6 +301,49 @@ class NzMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
             Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED))
+
+        /**
+         * A head unit plays by media id: the platform's `playFromMediaId` becomes
+         * `setMediaItems([one item])` here. Three cases, and only the first two
+         * are MB25's:
+         *
+         * 1. **A NODE of the car's tree** (Favoris, a playlist, Mon Flow,
+         *    Récents, Téléchargements): [AutoLibrary.play] queues what the node
+         *    showed — or asks the player for its own entity — and answers an
+         *    EMPTY list, which `NzPlayer.handleSetMediaItems` ignores because
+         *    the queue is already the right one.
+         * 2. **The tree's own titles** (`neezer:track:<key>`): they already carry
+         *    everything `NzPlayer.trackOf` needs (id, album, duration), so they
+         *    pass through untouched — Media3's default `onAddMediaItems` refuses
+         *    a `MediaItem` without a `LocalConfiguration`, and every row of this
+         *    app's queue is of that kind (`androidx.media3.session.MediaSession`
+         *    `Callback.onAddMediaItems`: `UnsupportedOperationException`).
+         * 3. **Anything else** — a queue row handed back by MB24's car overlay, a
+         *    controller's own item — keeps Media3's default path exactly as it
+         *    was; the notification, the lock screen and Bluetooth never come here
+         *    at all (they drive the queue the player already holds).
+         */
+        override fun onSetMediaItems(
+            session: MediaSession,
+            browser: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val node = mediaItems.singleOrNull()?.mediaId
+            if (node != null && AutoLibrary.isContainer(node)) {
+                return AutoLibrary.play(node)
+            }
+            if (mediaItems.isNotEmpty() && mediaItems.all { AutoLibrary.isTreeItem(it.mediaId) }) {
+                // `setMediaItem` arrives with `C.INDEX_UNSET` (-1): the one item
+                // it named IS the first one.
+                val start = startIndex.coerceIn(0, mediaItems.size - 1)
+                return Futures.immediateFuture(
+                    MediaSession.MediaItemsWithStartPosition(mediaItems, start, startPositionMs),
+                )
+            }
+            return super.onSetMediaItems(session, browser, mediaItems, startIndex, startPositionMs)
+        }
 
         override fun onGetSearchResult(
             session: MediaLibrarySession,
