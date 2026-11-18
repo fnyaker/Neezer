@@ -27,6 +27,19 @@ android {
         compose = true
         buildConfig = false
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric renders this screen's screenshots: it needs the merged
+            // manifest and the resources of the module (fonts, values).
+            isIncludeAndroidResources = true
+        }
+    }
+
+    // `UseTomlInstead` is answered by the catalog MB0 pinned (worker rule 3).
+    lint {
+        disable += "UseTomlInstead"
+    }
 }
 
 kotlin {
@@ -49,4 +62,28 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(project(":feature:offline"))
     implementation(project(":feature:trackactions"))
+
+    // --- JVM tests -----------------------------------------------------------
+    // `PlaylistModelTest` is plain Kotlin over the screen's ports (a fake 4 000-row
+    // source, a fake player, a fake sharer) on a VIRTUAL clock — never a sleep
+    // (worker rule 6). The screenshot test needs real measure/layout and real
+    // pixels, so it runs on Robolectric with its NATIVE graphics backend (Skia on
+    // the host): no emulator, no window on the person's display (worker rule 7),
+    // the recipe MB1 measured.
+    testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.18")
+    testImplementation("androidx.test:core:1.7.0")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// The screenshot test writes the PNGs the lot commits under
+// `docs/agents/screenshots/mobile/MB9/` (the acceptance asks for them there).
+val repoRoot = rootProject.layout.projectDirectory.dir("../..")
+
+tasks.withType<Test>().configureEach {
+    systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
+    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB9").asFile.absolutePath)
 }
