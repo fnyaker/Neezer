@@ -76,6 +76,10 @@ trap 'rm -rf "$TMP"' EXIT
 # (only that group, full bleed). `$5` is a tint forced on every fill and stroke.
 # An element the exporter does not understand is a hard error: a silently
 # dropped element is a wrong icon, and a wrong icon ships.
+#
+# It parses one of OUR SVGs in this directory, never untrusted input: no DTD, no
+# external entity, no socket. (`check.py` reads the same files by pattern and
+# needs no XML parser at all.)
 to_vector() {
     local src="$1" width="$2" height="$3" layer="$4" tint="$5" out="$6" what="$7"
     python3 - "$src" "$width" "$height" "$layer" "$tint" "$out" "$what" <<'PY'

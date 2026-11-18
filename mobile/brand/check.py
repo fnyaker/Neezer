@@ -44,14 +44,10 @@ Ce que le script mesure, et pourquoi (docs/agents/mobile.md, LG1) :
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
-# Les SVG lus ici sont nos sources du dépôt (mobile/brand/), jamais une entrée
-# non fiable : pas de DTD, pas d'entité externe, aucune socket ouverte. Le
-# scanner XXE de Semgrep ne s'applique donc pas à ce fichier — marqué faux
-# positif plutôt que d'ajouter une dépendance hors stdlib au script.
-import xml.etree.ElementTree as ET  # nosemgrep
 
 import numpy as np
 
@@ -66,28 +62,49 @@ LEMON = "#D2FF3C"
 
 # --- rendu -------------------------------------------------------------------
 
+GROUND_OPEN = '<g id="ground">'
+COLOUR = re.compile(r'(?:fill|stroke)="#([0-9A-Fa-f]{6})"')
+
+
+def _text(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _without_ground(text, src):
+    """Le SVG sans son groupe de fond, par découpe de texte.
+
+    Les sources de `mobile/brand/` ont UN groupe `<g id="ground">` qui ne
+    contient qu'un `<rect>` : on n'a donc pas besoin d'un analyseur XML (dont
+    l'usage générique est justement ce que le scanner XXE signale). On refuse
+    un groupe qui contiendrait un autre groupe plutôt que de deviner.
+    """
+    start = text.find(GROUND_OPEN)
+    if start < 0:
+        return text
+    end = text.find("</g>", start)
+    if end < 0:
+        sys.exit("check: %s has an unterminated ground group" % src)
+    inner = text[start + len(GROUND_OPEN):end]
+    if "<g" in inner:
+        sys.exit("check: %s nests a group in its ground group" % src)
+    return text[:start] + text[end + len("</g>"):]
+
+
 def _render(svg_path, size, strip_ground, out_png):
     """Rastérise `svg_path` à `size` px, sans le groupe id="ground" si demandé."""
     src = svg_path
     tmp = None
     if strip_ground:
-        tree = ET.parse(svg_path)  # nosemgrep
-        _drop_group(tree.getroot(), "ground")
         tmp = out_png + ".svg"
-        tree.write(tmp, encoding="utf-8", xml_declaration=False)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(_without_ground(_text(svg_path), svg_path))
         src = tmp
     subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size),
                     "-o", out_png, src], check=True)
     if tmp:
         os.unlink(tmp)
     return out_png
-
-
-def _drop_group(root, group_id):
-    for parent in root.iter():
-        for child in list(parent):
-            if child.get("id") == group_id:
-                parent.remove(child)
 
 
 def _rgba(png_path, size):
@@ -193,28 +210,26 @@ def contrast(a, b):
     return (hi + 0.05) / (lo + 0.05)
 
 
+def _colours_in(text):
+    out = []
+    for m in COLOUR.finditer(text):
+        c = "#" + m.group(1).upper()
+        if c not in out:
+            out.append(c)
+    return out
+
+
 def _layers(svg_path):
-    """Les couleurs du fond et des formes, séparément."""
-    tree = ET.parse(svg_path)  # nosemgrep
-    ground, marks, colours = [], [], []
-    for el in tree.getroot().iter():
-        for attr in ("fill", "stroke"):
-            c = el.get(attr)
-            if c and c.startswith("#"):
-                c = c.upper()
-                if c not in colours:
-                    colours.append(c)
-                (ground if _in_ground(tree, el) else marks).append(c)
-    # une couleur qui n'est que dans le fond
-    return colours, [c for c in colours if c not in marks]
-
-
-def _in_ground(tree, target):
-    for parent in tree.getroot().iter():
-        if parent.get("id") == "ground":
-            if any(child is target for child in parent.iter()):
-                return True
-    return False
+    """Les couleurs du SVG, et celles de son fond seulement."""
+    text = _text(svg_path)
+    colours = _colours_in(text)
+    start = text.find(GROUND_OPEN)
+    ground = []
+    if start >= 0:
+        end = text.find("</g>", start)
+        ground = _colours_in(text[start:end])
+    marks = [c for c in colours if c not in ground]
+    return colours, [c for c in ground if c not in marks]
 
 
 # --- rapport -----------------------------------------------------------------
@@ -273,13 +288,7 @@ def _variant(svg_path, work, tag):
 
 def _touching_pairs(svg_path, size=1080, reach=2):
     """Les couples de couleurs qui se touchent, et leur contraste WCAG."""
-    tree = ET.parse(svg_path)  # nosemgrep
-    colours = []
-    for el in tree.getroot().iter():
-        for attr in ("fill", "stroke"):
-            c = el.get(attr)
-            if c and c.startswith("#") and c.upper() not in colours:
-                colours.append(c.upper())
+    colours = _colours_in(_text(svg_path))
     png = os.path.join(tempfile.mkdtemp(prefix="lg1-adj-"), "c.png")
     _render(svg_path, size, False, png)
     arr = _rgba(png, size)
