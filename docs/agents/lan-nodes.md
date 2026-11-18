@@ -1306,6 +1306,10 @@ this file's header, not to this lot.
   | M6: no serve budget (99 of each) | `the_third_concurrent_play_is_busy_and_the_slot_comes_back` |
   | M7: a `Bulk` serve does not wait on the node's gates | `a_bulk_serve_waits_while_a_user_request_is_in_flight` |
 
+- **A residual, stated**: a `Cover` answer takes no serve slot and no lane, because the `Cover` frame
+  carries no `Urgency` (LN0's shape, final) — the responder cannot tell a list's art from a tap's.
+  It is bounded (≤ 2 MiB, and `nz-cache`'s covers are ~50 KB), and LN11 asks them on `Bulk`, so this
+  is a requester-side lane rather than a missing server rule.
 - **Rules a measurement taught.**
   - **A stored path costs double what the file costs to find.** 8 000 `PathBuf`s (24 B + a ~40-byte
     allocation each) were 90 B/item against the 64 B cap; deriving `nz-cache`'s name from
