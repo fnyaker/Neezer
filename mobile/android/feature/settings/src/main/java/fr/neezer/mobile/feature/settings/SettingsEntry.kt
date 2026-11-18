@@ -158,17 +158,9 @@ private fun SettingsMenu(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
-        Text(
-            text = "Réglages",
-            style = Sillon.type.title,
-            color = colors.tx,
-            modifier = Modifier.padding(
-                start = NzSpacing.pageX,
-                end = NzSpacing.pageX,
-                top = NzSpacing.pageY,
-                bottom = NzSpacing.m,
-            ),
-        )
+        // No second « Réglages »: the shell's top bar already names the route,
+        // and the emulator capture showed the two headings stacked.
+        Spacer(Modifier.height(NzSpacing.m))
         SettingsFilter(
             value = state.query,
             onValue = model::setQuery,

@@ -3262,6 +3262,9 @@ makes a theme a property of the APP instead of a screen.
   phone at a 200 % font scale; the first *Téléchargements* capture had four chips off screen. Chips,
   quality rates and limits go through `FlowRow`, and a card whose text can grow uses `heightIn`, not
   `height`.
+- **The shell's top bar already names the route.** A screen that repeats its name as a title
+  shows « Réglages » twice, one above the other (the emulator capture showed it); the settings list
+  starts with its filter, and the top bar is the only masthead. The same rule applies to every lot.
 - **On Papier the accent preview must not be a button.** Without a custom colour, painting
   `pair.surface` as a « Lire » pill gives a lemon button on cream — the highlighter MB1 forbids
   (`--btn` is ink there). The preview paints the THEME's button pair when no custom accent is set,
@@ -3307,6 +3310,7 @@ LN14 adds one entry to that table plus one branch that calls its own composable;
 | One discovery drag | 3 moves, settle | **1 write** (`discover.level` = the last value), the value moving in every frame |
 | Kotlin | `:feature:settings:testDebugUnitTest` | **39 tests**: 13 `SettingsModelTest` (counts, the four states, optimistic + rollback, settle, clamping, the filter, the report), 2 `SettingsThemeSwitchTest`, 12 + 12 screenshot tests (360 dp / 600 dp) |
 | Screenshots | Robolectric, NATIVE graphics | **24 PNGs** under `docs/agents/screenshots/mobile/MB16/`: Encre/Papier/Pochette, 360 and 600 dp, the 200 % scale, a failure card — looked at, and three real layout bugs fixed from them (a switch's label squeezing a row, chips cut at 200 %, a lemon button on Papier) |
+| The real app | emulator API 35 x86_64, `-no-window -no-audio`, the CI APK installed | `mb16-emulator-list.png` and `mb16-emulator-apparence.png`: the two levels open, « Noyau (Rust) : 0.1.0 » read from `nz_version()`, and the doubled « Réglages » heading it exposed |
 
 **Files.** `mobile/rust/crates/nz-core/src/settings/**`, `mobile/rust/crates/nz-ffi/src/settings.rs`,
 `mobile/rust/crates/nz-ffi/src/core.rs` (`settings()` builds over the core — the same one-line seam
@@ -3315,10 +3319,12 @@ MB3b's `player()` used), `mobile/android/feature/settings/**`,
 the theme seam, approved by the orchestrator), `docs/agents/screenshots/mobile/MB16/*.png`, and this
 section.
 
-**Still owed** (named where it belongs): the headless-emulator screenshot of the real screen (this
-lot's captures are Robolectric's; the emulator needs the 3-ABI `build-android.sh`, and the machine
-already had another lot's emulator running) and the Macrobenchmark numbers for *Sources* (MQ2's).
-YouTube Music's connect form is the one SPA control not ported (see the checklist).
+**Still owed** (named where it belongs): the Macrobenchmark numbers for *Sources* (MQ2's). YouTube
+Music's connect form is the one SPA control not ported (see the checklist).
+
+`mobile/tools/ci-emulator.sh`'s Réglages door follows the screen it now finds (MB6's own rule): the
+MB0 placeholder is gone, so it proves the menu's filter, swipes once to *Assistance*
+(`scroll_to_text`, a bounded gesture — never a sleep) and reads « Noyau (Rust) » there.
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).
