@@ -273,8 +273,12 @@ every rule's URLs against a fresh werkzeug compilation). CI runs nine workflows:
     (`.github/actions/cached-apt`, `Dir::Cache::archives` — apt-get(8), FILES). The same 116 MB came
     down at **87 and 120 kB/s** in two jobs and **12.4 MB/s** in a third of run 44278965583, so
     `System dependencies` was the workflow's critical path — **median 22.2 / 20.4 / 16.4 min** per
-    job over 8 successful runs — for a package set that never changes. The list still lives in the
-    workflow that installs it (release.yaml keeps its own): the action only caches the downloads.
+    job over 8 successful runs — for a package set that never changes. Same run, same mirror: what
+    varied was the CONNECTION, so the point is not to depend on it. The list still lives in the
+    workflow that installs it (release.yaml keeps its own): the action hashes it with the runner
+    IMAGE (`ImageVersion`) as the cache key — a new image or a new list is a new entry, and the four
+    jobs then download only the difference — and its cold path forces IPv4 and retries a stalled
+    fetch (`Acquire::ForceIPv4`, `Acquire::Retries`, `Acquire::http::Timeout`).
   - **The CPU-floor proof is its own job** (`floor`). The two engine children plus
     `check_cpu_floor.sh` were the tail of `cargo test + window` (medians **5.83 + 4.15 min**) and
     share nothing with the suite but the target directory. Moved, not lightened: same steps, same

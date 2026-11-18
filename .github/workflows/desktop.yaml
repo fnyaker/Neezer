@@ -85,8 +85,8 @@ env:
   # tried to install "seam)," and failed every job. Keep comments out here.)
   #
   # This list is the cache key of every `System dependencies` step
-  # (`.github/actions/cached-apt`): changing it means bumping their `revision:`
-  # so the four jobs pick up the new .deb instead of restoring the old set.
+  # (`.github/actions/cached-apt` hashes it, with the runner image): changing it
+  # is a new cache, and the four jobs download only the difference.
   APT_DEPS: >
     build-essential clang cmake pkg-config
     libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev

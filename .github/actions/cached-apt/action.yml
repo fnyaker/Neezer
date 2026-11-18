@@ -1,14 +1,15 @@
 name: Cached apt packages
 description: >-
   Install a job's system packages from a cache of the .deb files they are made
-  of, so no job pays the Ubuntu archive download twice.
+  of, and make the cold path survivable when the archive connection is bad.
 
   Measured before this existed, desktop.yaml run 44278965583: the same 116 MB of
   packages came down at 12.4 MB/s in the `release binaries` job (9 s) and at
   86.9 kB/s in `cargo clippy` (22 min 19 s) and 120 kB/s in
   `cargo test + window` (16 min 12 s) — `System dependencies` was the workflow's
   critical path (median 22.15 / 20.38 / 16.43 min per job over 8 successful
-  runs) for a package set that never changes.
+  runs) for a package set that never changes. Same run, same mirror: what varied
+  is the CONNECTION, not the archive, so the fix is not to depend on it.
 
 inputs:
   packages:
@@ -21,20 +22,30 @@ inputs:
     description: >-
       Which cache line this job belongs to (`desktop`, `release`). Restores the
       most recent entry of that line, so adding one package downloads one
-      package.
+      package instead of the whole set.
     required: true
-  revision:
-    description: >-
-      Bump when the package list above changes (`v1` -> `v2`): the .debs of a
-      previous list are already up to date and are restored, the new ones come
-      down once. The archive's own version bumps need no bump: apt fetches the
-      few .debs whose version moved.
-    required: false
-    default: v1
 
 runs:
   using: composite
   steps:
+    # The key is (which line, which RUNNER IMAGE, which package list): a new
+    # image ships other preinstalled versions and a new list other .debs, and
+    # either one restored into the other would leave apt downloading the
+    # difference on every run of that image — a permanently half-cold cache. The
+    # list hashes itself, so nobody has to remember to bump anything.
+    - name: The package list and the runner image, as a cache key
+      id: key
+      shell: bash
+      env:
+        APT_PACKAGES: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        list="$(printf '%s' "$APT_PACKAGES" | tr -s ' ' '\n' | sed '/^$/d' | sort |
+          sha256sum | cut -c1-16)"
+        echo "list=$list" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageVersion:-none}" >> "$GITHUB_OUTPUT"
+        echo "line=${{ inputs.line }} image=${ImageVersion:-none} list=$list"
+
     # `Dir::Cache::archives` is where apt keeps the .debs it retrieved
     # (apt-get(8), FILES: "/var/cache/apt/archives/ — Storage area for retrieved
     # package files. Configuration Item: Dir::Cache::Archives") and it looks
@@ -52,8 +63,10 @@ runs:
         # 116 MB of the repository's 10 GB, evicting the Rust caches the builds
         # need (docs.github.com, dependency caching, "Usage limits and eviction
         # policy").
-        key: apt-${{ inputs.line }}-${{ inputs.revision }}
-        restore-keys: apt-${{ inputs.line }}-
+        key: apt-${{ inputs.line }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.list }}
+        restore-keys: |
+          apt-${{ inputs.line }}-${{ steps.key.outputs.image }}-
+          apt-${{ inputs.line }}-
 
     - name: Install the system packages
       shell: bash
@@ -67,9 +80,23 @@ runs:
         # which version it wants, and a stale index would install a version the
         # archive no longer serves (apt then fails, where a fresh one downloads).
         sudo apt-get update
+        # A cold cache still meets the archive once, so the two ways a *single
+        # connection* fails are handled rather than paid:
+        #   - `Acquire::ForceIPv4` removes a broken IPv6 route, the usual reason
+        #     a fast mirror serves a runner at dial-up speed (apt.conf(5), THE
+        #     ACQUIRE GROUP);
+        #   - `Acquire::Retries` retries the files that stall or truncate, and
+        #     `Acquire::http::Timeout` turns "connected but silent" into a retry
+        #     (apt.conf(5): "Number of retries to perform"; "the connection as
+        #     well as the data timeout").
+        # None of this makes a slow mirror fast. What makes it never matter again
+        # is the cache above: one cold run per (image, package list), ever.
         sudo apt-get \
           -o Dir::Cache::archives="$cache/" \
           -o APT::Keep-Downloaded-Packages=true \
+          -o Acquire::ForceIPv4=true \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
           install -y --no-install-recommends $APT_PACKAGES
         # `apt-get install` deletes the .deb unless asked not to; without this
         # the cache the post step saves would be empty and every run cold.
