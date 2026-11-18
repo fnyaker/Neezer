@@ -43,9 +43,7 @@ use crate::state::AppState;
 use crate::theme;
 use crate::toast::ToastKind;
 use crate::wiring::events::{self, Sender};
-use crate::wiring::lan::{
-    self, LanSettings, LanSnapshot, LanState, PeerView, Relation, TransferView,
-};
+use crate::wiring::lan::{self, LanSettings, LanSnapshot, LanState, PeerView, TransferView};
 
 use super::{Load, card, card_title, eid, failed, hint, loading, value_line};
 
@@ -1316,10 +1314,7 @@ fn last_seen(device: &LanDevice) -> String {
 }
 
 fn peer_row(view: &PeerView, cx: &mut App) -> AnyElement {
-    let relation = match &view.relation {
-        Relation::Own => "mon appareil",
-        Relation::Friend { name } => name.as_str(),
-    };
+    let relation = lan::relation_label(&view.relation);
     div()
         .flex()
         .items_center()
@@ -1339,8 +1334,8 @@ fn peer_row(view: &PeerView, cx: &mut App) -> AnyElement {
                 .text_size(rems(0.6875))
                 .text_color(theme::secondary(cx))
                 .child(format!(
-                    "{relation} · connecté · {} ms · {} titres",
-                    view.rtt_ms, view.tracks
+                    "{} · connecté · {} ms · {} titres",
+                    relation, view.rtt_ms, view.tracks
                 )),
         )
         .into_any_element()
@@ -1497,7 +1492,9 @@ mod ui {
     use super::*;
     use crate::nav::{Route, SettingsSection};
     use crate::state::{AppConfig, Auth, Feature, Features};
-    use crate::wiring::lan::{Direction, LanSnapshot, LanState, PeerSet, PeerView, TransferView};
+    use crate::wiring::lan::{
+        Direction, LanSnapshot, LanState, PeerSet, PeerView, Relation, TransferView,
+    };
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

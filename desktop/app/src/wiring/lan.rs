@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use nz_api::{Api, ApiError, Quality};
+use nz_api::{Api, Quality};
 use nz_audio::{ByteStream, Lane, SourceError, StreamOpener, StreamReady};
 use nz_cache::Cache;
 use nz_lan::downloader::PeerFirstDownloader;
@@ -650,6 +650,7 @@ fn api_quality(quality: nz_audio::Quality) -> Quality {
     }
 }
 
+#[cfg(test)]
 fn audio_quality(quality: Quality) -> nz_audio::Quality {
     match quality {
         Quality::Opus64 => nz_audio::Quality::Opus64,
@@ -874,15 +875,6 @@ pub fn french_date(unix: i64) -> String {
     format!("{day} {}", MONTHS[(month - 1) as usize]) + &format!(" {year}")
 }
 
-/// The four rungs the « Qualités tolérées » card offers, in the order it lists
-/// them: the four `nz-audio` decodes, which is what a peer can serve.
-pub const TOLERABLE: [Quality; 4] = [
-    Quality::Flac,
-    Quality::Opus320,
-    Quality::Opus128,
-    Quality::Opus64,
-];
-
 /// The tolerated set with `quality` under `wanted`, refusing to leave it empty:
 /// the note says « four checkboxes, at least one », and an empty set would mean
 /// "never take anything from a peer" — a different feature from the one the
@@ -901,9 +893,10 @@ pub fn toggle_tolerated(tolerance: &Tolerance, quality: Quality, wanted: bool) -
 }
 
 /// What a peer list row says about the device beside its name: « mon appareil »
-/// or the friend's name, and the link's own state.
-pub fn relation_label(view: &PeerView) -> String {
-    match &view.relation {
+/// or the friend's name. One spelling for the peer list and for « Sur vos
+/// appareils », so the same relation cannot read two ways.
+pub fn relation_label(relation: &Relation) -> String {
+    match relation {
         Relation::Own => "mon appareil".to_owned(),
         Relation::Friend { name } => format!("ami · {name}"),
     }
@@ -921,31 +914,6 @@ pub fn transfer_line(view: &TransferView) -> String {
         view.title.as_str()
     };
     format!("{title} — {direction} {}", view.peer)
-}
-
-/// A `LanError` as a sentence a screen can print, with the retry it asks for.
-pub fn cause(error: &LanError) -> String {
-    error.cause_fr()
-}
-
-/// The `nz-api` error a screen's own route can answer (the device list, the
-/// friends), in the same words the rest of Réglages uses.
-pub fn api_cause(error: &ApiError) -> String {
-    error.cause_fr()
-}
-
-/// Whether what this device exposes is worth drawing: the « Sur vos appareils »
-/// card is hidden when no peer has a set, so a person without a second device
-/// does not read an empty list (rule 3: the UI says why, and an empty card that
-/// never fills says nothing).
-pub fn has_peer_sets() -> bool {
-    !peer_sets().is_empty()
-}
-
-/// The audio quality a peer served, back in the engine's ladder (the play
-/// cache names files with the engine's rungs).
-pub fn engine_quality(quality: Quality) -> nz_audio::Quality {
-    audio_quality(quality)
 }
 
 #[cfg(test)]

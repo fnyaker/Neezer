@@ -76,10 +76,7 @@ impl Row {
 
     /// What the row says under its title: the peer, the count, the size.
     pub fn detail(&self) -> String {
-        let relation = match &self.relation {
-            Relation::Own => "mon appareil",
-            Relation::Friend { name } => name.as_str(),
-        };
+        let relation = lan::relation_label(&self.relation);
         let state = if self.complete {
             "complet".to_owned()
         } else {
