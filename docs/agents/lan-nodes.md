@@ -2153,7 +2153,7 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
 |---|---|---|
 | tap → first audible frame from a peer | **4.3–10.9 ms** (loopback) | `cargo test -p nz-lan --test integration a_track_only_the_peer_has -- --nocapture` |
 | a track no peer has | **1.11 ms** from `load` to the inner opener's first byte, **1** open, **0** LAN datagrams | `... a_track_no_peer_has -- --nocapture` |
-| a decision over a replica | **1.32 µs** (1 000 calls = 1.32 ms), **0** packets | same |
+| a decision over a replica | **1.32 µs** (1 000 calls = 1.32 ms, under the 100 ms a single request's worth would need), **0** request | same |
 | `ready()` | **7.0 µs** per call (10 000 = 69.8 ms), so **0** requests (one round trip would be ≥ 3 s) | `... a_seek_reopens_the_same_peer -- --nocapture` |
 | a peer that stalls mid-track | takeover at **exactly 65 536 B** (one 64 KiB chunk), the spool byte-identical to the file | `... a_stalled_peer_hands -- --nocapture` |
 | a 50-track playlist from one peer | **50/50** files, **0** opens of the server, labels and pinned sleeve present; **35.5 s** through the worker (the Bulk gate) | `... a_fifty_track_playlist -- --nocapture` |
@@ -2183,7 +2183,8 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
   playback makes the READING grow by itself (measured in CI: 9 → 21 packets for a track nobody
   has). The tests prove it with what cannot lie: the inner opener's **open count**, the quality the
   event carries, and the spool compared byte for byte with the peer's file; the zero-request
-  property is asserted on 1 000 decisions inside one sampling window.
+  property is asserted on the COST of 1 000 decisions (1.3 ms — a single loopback request is
+  0.3–1 ms, so 1 000 would be ≥ 300 ms), never on the sampled counters.
 - **Stickiness is only observable where a fresh decision would differ.** Two peers with the same
   rung would make the assertion pass without the sticky map. The test gives A the FLAC and C the
   Opus 128, opens at FLAC (A), then seeks asking Opus 128 — where `decide` answers C — and asserts the
@@ -2198,11 +2199,9 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
   and `the_snapshot_and_a_tap_never_touch_sqlite_or_the_network` went red without a line changed in
   it. The sets are replicated first so that a caller which waits for the inventory already has them;
   the LN10 suite is green untouched, three runs in a row.
-- **`nz-offline`'s worker stops entirely when `Api::is_online()` is false** (`service::run`'s first
-  gate: `WorkerState::Offline`, `IDLE_POLL`). A peer-served playlist on a trip therefore cannot be
-  queued while the app KNOWS it is offline: the adapter path works (proved above, 50/50 with the
-  server unreachable) but the queue does not reach it. That file is not this lot's; the report names
-  it, and LN12/LN15 must decide whether the worker tries the peer before declaring itself offline.
+- **`nz-offline`'s worker used to stop entirely when `Api::is_online()` was false**, so a
+  peer-served playlist on a trip could not be QUEUED while the app knew it was offline. Fixed in the
+  addendum below: the gate now asks the fetcher, and a peer with files is a source.
 
 **Corrections to this plan, each proved by the code or a measurement:**
 
@@ -2224,6 +2223,31 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
 4. **The playlist's labels live in `nz-offline`'s kv, not in its snapshot.** `Snapshot::labels` only
    carries `kind == "track"` rows, so a playlist's titles are asserted on `LABELS_KEY` — which is also
    where the peer's `Meta` answer reads them on the next import.
+
+#### Addendum (2026-11-18): the downloads worker's source
+
+**What landed.** `nz_offline::Downloader::reachable() -> bool`, with a default of `true` and two
+overrides: `ApiDownloader` answers the server's own `is_online()` (exactly what the worker asked
+itself before), and `PeerFirstDownloader` answers « the server is reachable **or** a connected peer
+holds at least one file ». `service::run`'s gate asks the FETCHER instead of the `Api`, so a queue
+runs on a trip without data and the rows nobody has fall back to the server's own `Offline` outcome —
+a « later », never a verdict (rule 3, unchanged).
+
+**What a later lot can rely on.** An `ApiDownloader` behaves exactly as before (its own test
+`a_dead_link_keeps_the_work_queued` stays green untouched); a custom platform fetcher keeps the
+default and is not asked to know about the network; a LAN fetcher says when a peer can serve.
+
+**Measured** (`desktop/`, debug, 2026-11-18): a playlist of **50** tracks queued with the server
+unreachable and one peer holding it complete → **50/50 published**, the inner fetcher called **0**
+times, the worker **never** `Offline`
+(`cargo test -p nz-lan --test integration the_same_playlist_downloads -- --nocapture`); with no server
+AND no peer → state `Offline`, **0** download, **0** call (`… a_worker_with_no_source_stays_offline`);
+the fetcher's own verdict is what decides, whatever the link says
+(`cargo test -p nz-offline --lib a_fetcher`).
+
+**Rule.** The worker's gate asks the thing that KNOWS. `Api::is_online()` was a good enough proxy
+while the server was the only source; the moment a peer can serve, asking the link becomes the bug —
+it pauses the queue for a source that is up.
 
 ### LN12 — Desktop wiring and screens (wave 6, effort high)
 

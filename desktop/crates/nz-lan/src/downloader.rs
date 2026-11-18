@@ -69,6 +69,19 @@ impl PeerFirstDownloader {
 }
 
 impl Downloader for PeerFirstDownloader {
+    /// A source is the server **or a peer that holds files**: the worker's queue
+    /// must run on a trip without data, when the only source left is the LAN
+    /// (`docs/agents/lan-nodes.md`, LN11's addendum; `nz-offline` asks this before
+    /// it declares itself offline).
+    ///
+    /// It reads the replicated inventories, never the network: a connected peer
+    /// with at least one track counts, and the per-track decision then sends the
+    /// tracks nobody has to the server, whose own `Offline` outcome puts the row
+    /// back to `pending` — a "later", never a verdict (rule 3).
+    fn reachable(&self) -> bool {
+        self.lan.api().is_online() || self.lan.snapshot().peers.iter().any(|peer| peer.tracks > 0)
+    }
+
     /// Fetches one track into `part`, resuming when the row already holds bytes,
     /// and reports progress through the worker's own [`Progress`].
     ///

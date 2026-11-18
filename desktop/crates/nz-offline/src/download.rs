@@ -166,6 +166,26 @@ pub trait Downloader: Send + Sync {
         stop: &Stop,
         progress: &mut dyn Progress,
     ) -> Result<Fetched, Outcome>;
+
+    /// Whether this fetcher has a SOURCE for the queue right now.
+    ///
+    /// The worker asks this before it declares itself offline (`service::run`).
+    /// The server is only one possible source: a fetcher that has another one — a
+    /// peer on the local network (`docs/agents/lan-nodes.md`, LN11's addendum) —
+    /// must be able to say so, or a trip without data could never take a playlist
+    /// from a peer.
+    ///
+    /// The default is `true`: a fetcher that does not name its source is assumed
+    /// to have one, which is what a platform's own downloader is, and what keeps
+    /// every existing custom fetcher's behaviour. [`ApiDownloader`] answers the
+    /// server's own verdict, because that is the only source it has.
+    ///
+    /// It must be LOCAL and cheap: the worker calls it on every idle poll (2 s)
+    /// and it must never touch the network — rule 1, no request from a background
+    /// loop.
+    fn reachable(&self) -> bool {
+        true
+    }
 }
 
 /// The default fetcher: `nz-api` on `Lane::Bulk`.
@@ -189,6 +209,12 @@ impl ApiDownloader {
 }
 
 impl Downloader for ApiDownloader {
+    /// The server is this fetcher's only source: its own reachability verdict is
+    /// the answer, exactly what the worker used to ask itself.
+    fn reachable(&self) -> bool {
+        self.api.is_online()
+    }
+
     fn fetch(
         &self,
         track: &TrackId,

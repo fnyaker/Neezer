@@ -701,7 +701,12 @@ fn run(shared: Arc<Shared>) {
             continue;
         }
 
-        if !api.is_online() {
+        // Rule 3: a download needs a SOURCE, and the server is only one of them.
+        // The fetcher is the one that knows — `ApiDownloader` has the server alone,
+        // a LAN fetcher may have a peer with the file — so the gate asks IT
+        // (`docs/agents/lan-nodes.md`, LN11's addendum: a playlist must come from
+        // a peer on a trip without data).
+        if !downloader.reachable() {
             set_state(&shared, WorkerState::Offline);
             shared.wait(IDLE_POLL);
             continue;
