@@ -171,19 +171,19 @@ class NzPlayerPort(private val player: PlayerApi) : PlayerPort {
 }
 
 /**
- * The app's ONE player, taken from the core on first use.
+ * The app's player, asked of the core for every command.
  *
- * `NzCore::player()` opens a player (its own queue, its own engine thread) on
- * EVERY call, so a screen may not call it per click. Until **MB3c** puts the one
- * facade in `:playback` (where the media session lives), this object is the only
- * place the home reaches it; the [PlayerPort] seam means swapping it for the
- * shell's own is one file, and nothing on this screen changes.
+ * **No cache here on purpose.** `NzCore::player()` used to build a NEW player —
+ * its own queue, its own two runtime workers, its own engine — on every call
+ * (a contract bug MB3c found: two players would be two queues over one
+ * database), so this lot held one instance. The core now owns the ONE instance
+ * (a `OnceLock`, PR #313), which makes asking per command correct AND cheap;
+ * a cache here would keep an object the core could replace.
+ *
+ * The [PlayerPort] seam stays: `:playback` (MB3c) exposes the app's facade over
+ * the same object, and nothing on this screen changes the day it does.
  */
 object AppPlayer {
-    private val instance: PlayerApi? by lazy {
-        runCatching { NzBridge.core?.player() }.getOrNull()
-    }
-
     /** The app's player, or `null` when the native core could not be built. */
-    fun api(): PlayerApi? = instance
+    fun api(): PlayerApi? = runCatching { NzBridge.core?.player() }.getOrNull()
 }

@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -23,9 +24,13 @@ import org.junit.runner.RunWith
  *
  * Text uniqueness: a tab's label is on screen twice (the top bar's title and the
  * bar's own item), and the placeholder titles repeat it a third time. So no test
- * asserts on "Accueil" alone: they assert on the placeholder's BODY, which only
- * that screen draws, and they click the node that is clickable
- * ([hasClickAction]) rather than the first text match.
+ * asserts on "Accueil" alone: they assert on a sentence only that screen draws,
+ * and they click the node that is clickable ([hasClickAction]) rather than the
+ * first text match. For the home — the first screen a lot FILLED — the sentence
+ * is now a stable marker instead: `HomeScreen.kt#HOME_MARKER`, a fixed
+ * `contentDescription` on the screen's root, present in every state (hero,
+ * skeletons, a failed load with no server) and independent of the clock (the
+ * greeting above the hero names the weekday, so it can never be a needle).
  *
  * Runs on the emulator `mobile/tools/emu.sh` starts, through
  * `mobile/tools/ci-emulator.sh` (which discovers every module with an
@@ -37,10 +42,10 @@ class ShellSmokeTest {
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
-    /** The app starts and its shell paints the home stub (MB5 fills it). */
+    /** The app starts and its shell paints the home (MB5 filled it: its own marker). */
     @Test
     fun shellPaintsHome() {
-        rule.onNodeWithText("Le hero, la reprise, les humeurs", substring = true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Accueil Neezer").assertIsDisplayed()
     }
 
     /** A tab opens its own destination: the library's stub replaces the home's. */
