@@ -1008,6 +1008,38 @@ mod tests {
         assert!(position < anchor.duration, "la barre n'est pas pleine");
     }
 
+    /// The SAME body with INTEGER instants — the shape SC5's own bench writes, and
+    /// what a server behind a proxy or a future `jsonify` may send. The fix must
+    /// widen what parses, never narrow it: both shapes give the same position.
+    #[test]
+    fn an_integer_server_instant_still_reads_as_a_position() {
+        let now = 1_795_027_326_589_i64;
+        let t = now - 32_000;
+        let read = Read::parse(&json!({
+            "online": true,
+            "now": now,
+            "qv": "p.1",
+            "sv": "p.0",
+            "ack": 0,
+            "seq": 0,
+            "state": {
+                "index": 0, "playing": true, "p": 42.0, "duration": 214.0,
+                "volume": 0.8, "muted": false, "shuffle": false, "repeat": "off",
+                "status": "playing", "t": t,
+                "track": {"id": "abc", "title": "Alpha", "duration": 214},
+            },
+        }));
+        assert_eq!(read.now, now);
+        let anchor = read.anchor.expect("une ligne de position");
+        assert_eq!(anchor.t, t);
+        let position = anchor.position(read.now);
+        assert!(
+            (73.0..=74.0).contains(&position),
+            "42 s + les 32 s écoulées : {position}"
+        );
+        assert!(position < anchor.duration, "la barre n'est pas pleine");
+    }
+
     fn grant(level: RemoteLevel) -> Grant {
         Grant {
             level,

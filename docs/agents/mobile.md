@@ -3897,9 +3897,13 @@ above it says whose player it drives.
   epoch and clamped to the title's duration. Measured **on the emulator**: « 3:34 / 3:34 » for a
   title published at `p = 0`, on a bar that was full. Fixed in `nz-remote` (`millis()`, tolerant of
   both shapes) **— a shared crate, declared in the PR** — and covered by
-  `a_float_server_instant_is_a_position_not_the_end_of_the_track`; SC5's bench had hidden it because
-  its own server wrote integers. The lesson for the harness: **a fake server must be as rude as the
-  real one**, so MB19's loopback writes floats too.
+  `a_float_server_instant_is_a_position_not_the_end_of_the_track` (and its twin
+  `an_integer_server_instant_still_reads_as_a_position`, so the fix widened what parses instead of
+  narrowing it); SC5's bench had hidden it because its own server wrote integers. **The desktop's
+  own Contrôle distant showed the same full bar** — same `Read::parse`, same fallback — so the fix
+  is the desktop's too, which is why it was made in the shared crate and declared as such. The
+  lesson for the harness: **a fake server must be as rude as the real one**, so MB19's loopback
+  writes floats too.
 - **Read the room's queue AFTER the crate has read it.** The screen opened before the first
   `/remote/queue` answer painted an empty list and kept it: the queue version it captured was already
   the current one, so nothing ever asked again. `refreshControl` now re-reads while what it holds is
