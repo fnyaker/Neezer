@@ -3469,11 +3469,8 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   2026-11-18** — see *MB16 — Réglages, user sections* below for what it does and what it measured.
 - **MB17 — Réglages, admin** [MB16]: **delivered** — see *MB17 — Réglages, admin* below for what it
   does, what it measured, and the one line of MB16's screen it had to change.
-- **MB19 — Remote control** [SC5, MB3b]. FFI (`remote.rs`): `RemoteApi` over `nz-remote` (be
-  controlled: links create/revoke/list, host loop; control: claim `/rc/<token>`, the remote player's
-  state, commands), `RemoteEnded{restored}` handling. Kotlin: `RemoteButton()`, the sheet, the banner,
-  the host chip, `RemoteClaimEntry(token)`. Rows: phone controls the desktop app (both from perf_api)
-  — pause reaches it, acked; the host loop polls only while a link is active (0 requests otherwise).
+- **MB19 — Remote control.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
+  port: see « MB19 — Télécommande » below.*
 - **MB20 — Listen party** [SC6, MB3b]. FFI (`party.rs`): `PartyApi` over `nz-party` (host, join
   `/party/<id>`, leave, members). The guest's sync reads `Engine::output_clock()` (SC2's latency).
   Kotlin: `PartyButton()`, `PartySheet`, `PartyEntry(id)`. Rows: two emulators (one host, one guest)
@@ -3849,6 +3846,101 @@ that holds. `Analyse → Cet ordinateur` switches the server's own setting but t
 measuring client (MB18 owns the studio's worker). A fresh install still has no door to the
 server setup (MB2/MB4, and MQ2's whole journey): this lot's emulator walk had to seed the
 session through the app's own files, which is how the gate bug above was found.
+
+### MB19 — Télécommande (delivered 2026-11-18)
+
+**What landed.** Both roles of the remote control, the sheet that makes a link, the chip that says
+somebody is driving, the banner that says whose player this one drives — and the loan's own screen.
+
+- **`nz-core/src/remote/`**: `wire.rs` (the routes a screen calls — links, create, revoke, claim,
+  leave — all on `Lane::User` under the `remote` tag), `host.rs` (this phone's player LENT: the
+  `nz-remote` poll loop, and the half that knows this app — `HostPlayer`, the projection onto the
+  wire, the commands applied through `Player::command`), `controller.rs` (the loan's view:
+  `nz_player`'s state machine whose effects are dropped, `Transport`, the `ack` hold, the mirrored
+  settings), `settings.rs` (which device settings are lent), `view.rs` (what the screens print),
+  `mod.rs` (the service: one thread, parked when neither role runs, a status pushed on CHANGE) and
+  `testing.rs` (a loopback server speaking `remote.py`'s routes).
+- **`nz-ffi/src/remote.rs`**: `RemoteApi` (status, the loan's view, links, create/revoke, claim,
+  leave, one transport command, the host's start/stop/resume, the levels and durations),
+  `remoteAttach(core)` — MB0 declared the object WITHOUT state, so the service is bound once, as
+  `offlineAttach` is — and `RemoteListener`, which pushes a status only when it changed.
+- **`feature/remote/`**: `RemotePorts.kt` (the port + the FFI service + the row types),
+  `RemoteModel.kt` (links, create/cut/cut-all armed once, claim, transport, the ended state),
+  `RemoteSheet.kt` (levels, durations, name, invite card, live links, « Tout couper »),
+  `RemoteHostChip()`, `RemoteBanner()`, `RemoteControl.kt` (the loan's screen: transport + the
+  owner's queue) and `RemoteClaimEntry(token)`.
+
+**Why the loan is a SCREEN, not a rebound player.** The SPA rebinds its whole player store
+(`controller.js#rebindPlayer`) because its player IS a store. The phone's transport is one action
+path — `PlaybackConnection`, the Media3 session, the notification — that a feature lot may not
+replace, and a loan must never leave the phone's own queue reachable by a stray tap. The desktop made
+the same call for the same reason (`desktop.md` D15a: "a loan's transport lives in the Contrôle
+distant screen, with the owner's queue"). So `Routes.RemoteClaim` becomes that screen, and the banner
+above it says whose player it drives.
+
+**Rules a measurement taught** (each one is what a later lot inherits):
+
+- **A server instant is a FLOAT, and `as_i64` silently loses it.** Flask's `jsonify` writes
+  `server_ms()` (a Python float) as `1795027294444.0068`; `nz-remote`'s `Read::parse` read `now` and
+  `t` with `Value::as_i64`, got `None`, fell back to 0, and the position line extrapolated from the
+  epoch and clamped to the title's duration. Measured **on the emulator**: « 3:34 / 3:34 » for a
+  title published at `p = 0`, on a bar that was full. Fixed in `nz-remote` (`millis()`, tolerant of
+  both shapes) **— a shared crate, declared in the PR** — and covered by
+  `a_float_server_instant_is_a_position_not_the_end_of_the_track`; SC5's bench had hidden it because
+  its own server wrote integers. The lesson for the harness: **a fake server must be as rude as the
+  real one**, so MB19's loopback writes floats too.
+- **Read the room's queue AFTER the crate has read it.** The screen opened before the first
+  `/remote/queue` answer painted an empty list and kept it: the queue version it captured was already
+  the current one, so nothing ever asked again. `refreshControl` now re-reads while what it holds is
+  empty, which is also the honest reading of "the owner's queue is empty".
+- **One poll loop per PROCESS is a trap for tests, not for the app.** `nz-remote`'s host and
+  controller are `OnceLock` services whose loops are tasks on the runtime that spawned them: a test
+  with its own runtime killed a loop mid-answer and left `looping` set, so the next test's `start`
+  was swallowed. The tests therefore share ONE runtime and take a mutex — the app never sees it
+  (its runtime is UniFFI's, for the process's life).
+- **The claim screen must print the CAUSE.** « Ce lien n'est plus valide » was a lie on a phone with
+  no server configured; the cause (`Aucun serveur n'est configuré`) is what a person can act on.
+- **A `Row` cuts, a two-line `Text` wraps.** The link row's « Complet · Expire dans 1 jour ·
+  connecté » lost its last word at 360 dp; the sheet's link metadata and the banner's line now take
+  two lines with an ellipsis.
+
+**Measured** (this machine; loopback server speaking `remote.py`'s routes, `NZ_PYTHON` unset for
+CI's sake, the desktop's own `nz-remote::host` + `nz_player` as the controlled player):
+
+| What | Number |
+|---|---|
+| A pause from this phone to the desktop's player, with its `ack` | **3 requests, 665 bytes in, 77 out**; the owner's `ack` = 1, the desk's `PlayerState` paused |
+| The same tap pressed while offline | **0 requests**, and after the link is back: **0 commands queued** (never replayed) |
+| A device that was never lent | **0 requests** at the peer |
+| The host loop while a link is live | polls (700 ms driving / 1.5 s not), stops on the server's own `active:false`; **no request after** (bounded wait) |
+| Create / list / cut one link | **1 request each** (the SPA's own three calls) |
+| A queue-only link asking for a setting | refused **before** the request: 0 requests, 0 commands |
+| Rust | `cargo test -p nz-core` **354 passed** (8 for this lot), `-p nz-ffi` **64** (3), `-p nz-remote` **27** (1 new) |
+| Kotlin | `:feature:remote:testDebugUnitTest` **30 tests** (16 model, 14 screenshots) |
+| Captures | `docs/agents/screenshots/mobile/MB19/`: sheet, sheet scrolled to its links, control screen, ended notice — 360 dp and 600 dp, Encre and Papier, plus 200 % font; and one headless-emulator capture of the real screen |
+
+**Files** (this lot): `mobile/rust/crates/nz-core/src/remote/**`, `mobile/rust/crates/nz-ffi/src/remote.rs`,
+`mobile/android/feature/remote/**`, `docs/agents/screenshots/mobile/MB19/*.png`, this section — and
+**`desktop/crates/nz-remote/src/controller.rs`** (the `millis` fix above, shared crate, declared).
+
+**What is NOT ported, on purpose**:
+
+- **The QR code.** The SPA draws one (`qrcode-generator`, loaded only by the sheet); the phone hands
+  the link to the system share sheet and the clipboard instead. A QR needs a library this lot may not
+  add to a shared manifest — named as a follow-up for the shell lot.
+- **`viz.*` settings on the wire.** `nz-remote::host::decode_pending` gates a `set` on the DESKTOP's
+  five keys, so a phone publishing `viz.mode` would show a controller a switch nothing can move. The
+  phone lends the four it can honour (`player.quality`, `offline.quality`, `offline.onlyDownloaded`,
+  `cache.limit`); `podcast.speeds` waits for MB13's key. Widening it is a shared-crate change
+  (a whitelist parameter), not this lot's.
+- **Resuming at LAUNCH.** `remoteAttach` resumes what the session is (a loan starts driving; a device
+  lent before asks the server ONCE), but the call is made by `:feature:remote`'s own door, so a
+  process that is killed and restarted answers no controller until the remote screen (or the button)
+  is first used. The SPA does it at login; the phone needs one line in `:bridge`/`:app` — a shared
+  file this lot did not take.
+- The SPA's whole-app read-only browsing at `read` level: the SERVER enforces the four levels, and
+  every screen already reads through the owner's session, so a `read` loan browses the owner's
+  library with MB5–MB9's screens unchanged. Nothing extra to port.
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).

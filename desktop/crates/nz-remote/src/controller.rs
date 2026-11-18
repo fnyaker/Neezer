@@ -379,7 +379,10 @@ fn millis(value: Option<&Value>) -> Option<i64> {
     let value = value?;
     match value.as_i64() {
         Some(integer) => Some(integer),
-        None => value.as_f64().filter(|number| number.is_finite()).map(|number| number as i64),
+        None => value
+            .as_f64()
+            .filter(|number| number.is_finite())
+            .map(|number| number as i64),
     }
 }
 
@@ -978,8 +981,8 @@ mod tests {
     /// the end of the track (MB19's find, measured on the emulator).
     #[test]
     fn a_float_server_instant_is_a_position_not_the_end_of_the_track() {
-        let now = 1_795_027_326_589.2058_f64;
-        let t = (now - 32_000.0) as f64;
+        let now = 1_795_027_326_589.205_8_f64;
+        let t = now - 32_000.0;
         let read = Read::parse(&json!({
             "online": true,
             "now": now,
