@@ -276,7 +276,10 @@ check_door() {
     fi
     check_alive "the $tab door"
 }
-check_door "Rechercher" "Titres, albums, artistes, playlists et podcasts"
+# MB6 filled the search: its MB0 placeholder sentence is gone, and the screen's
+# own marker takes over (the same rule as the home below: a literal, in EVERY
+# state, independent of the query and of the clock).
+check_door "Rechercher" "Recherche Neezer"
 check_door "Bibliothèque" "Playlists et dossiers, favoris"
 check_door "Podcasts" "Les abonnements, la recherche"
 # Accueil draws a STABLE marker (`HomeScreen.kt`'s `HOME_MARKER`, a
