@@ -2423,8 +2423,17 @@ import's phases — plus the FFI that carries them and the account step's import
   screenshot renders.
 - **Look**: `docs/agents/screenshots/mobile/MB5b/` — Encre and Papier at 360 dp and
   600 dp for the artists step, the account step and the invitation form, the invalid link
-  at 360, and Encre at 200 % font scale. Looked at: the page's hierarchy holds, the heart
-  is a glyph `Icon` (never emoji), every control is ≥ 48 dp, and no title clips at 200 %.
+  at 360, and Encre at 200 % font scale; plus **three headless-emulator captures of the
+  REAL screens** against the live bench (`mb5b-emulateur-{invitation,artistes,compte}.png`:
+  the link read from `neezer://invite/<token>` with its « Expire le 25 novembre 2026 à
+  08:39. », the artists page after ONE like with « 2 proches ajoutés » and its count at
+  « 1 artiste », and the account pane saying « Indisponible sur ce serveur. » for Deezer and
+  « YouTube Music n'est pas installé sur ce serveur. » — the server's own state). The
+  server's log for that run: inspect, redeem, then the visit's two reads, a like's ONE
+  `POST /artists/like`, `artists/done`, and ONE `account/options`. Looked at: the page's
+  hierarchy holds, the heart is a glyph `Icon` (never emoji), every control is ≥ 48 dp,
+  TalkBack sees the form's labels (« Nom d'utilisateur », « Force du mot de passe : Bon »,
+  « Afficher le mot de passe »), and no title clips at 200 %.
 - **Sizes**: `libnz_ffi.so` arm64-v8a **10 753 992 B**, armeabi-v7a 7 304 040 B, x86_64
   12 802 448 B; their `NEEDED` list is the system's alone (`libaaudio libdl liblog libm
   libc`). The growth since MB6 is the crates merged in between (MB7), not this lot's

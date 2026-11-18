@@ -664,7 +664,9 @@ class OnboardingModel(
     }
 
     private fun enterAccount() {
-        _state.update { it.copy(step = OnboardingStep.ACCOUNT) }
+        // The artists step's own notice ("2 proches ajoutés") belongs to the step
+        // it was about; the account pane starts clean.
+        _state.update { it.copy(step = OnboardingStep.ACCOUNT, notice = null, status = null) }
         loadOptions()
     }
 
