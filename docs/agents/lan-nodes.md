@@ -1543,70 +1543,113 @@ destructure it unchanged, and every other `ByteStream` (`ApiByteStream`, `Measur
   > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
   > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
 
-### LN7 — Enrolment and trust sync (wave 2, effort max)
+### LN7 — Enrolment and trust sync (delivered 2026-11-18)
 
-- **Objective**: a device gets its credential silently after login, renews it daily (rotating its
-  key), keeps its roster and revocation lists current from the server and from peers, and forgets
-  everything at logout.
-- **Files**: LN7 row. **Contracts**:
+**What landed.** The device side of the trust chain, and the twelve `nz-api` bodies.
 
-  ```rust
-  pub struct Enrolled { pub identity: Arc<Identity>, pub trust: TrustState, pub until: i64 }
-  pub async fn ensure_enrolled(api: &nz_api::Api, dir: &Path, name: &str, platform: &str, now: i64)
-      -> Result<Enrolled, LanError>;            // status -> key -> enrol if absent or < 23 days left
-  pub async fn sync_trust(api: &nz_api::Api, store: &Store, trust: &SharedTrust) -> Result<bool, LanError>; // ETag, 304
-  pub async fn forget(api: Option<&nz_api::Api>, dir: &Path, store: &Store);
-  pub fn load_cached(dir: &Path, store: &Store, now: i64) -> Option<Enrolled>; // offline start
-  // gossip.rs
-  pub fn offers(trust: &TrustState, peer_revocation_serial: u64, same_subject: bool, peer_roster_serial: Option<u64>) -> Vec<proto::Control>;
-  pub fn accept(trust: &SharedTrust, store: &Store, c: &proto::Control, same_subject: bool) -> Result<bool, CredError>;
-  // settings.rs
-  pub const ENABLED: &str = "lan.enabled"; pub const SERVE: &str = "lan.serve";
-  pub const TOLERATED: &str = "lan.tolerated"; pub const PORT: &str = "lan.port";
-  pub fn load(cache: &nz_cache::Cache) -> LanSettings;  pub fn save(cache: &nz_cache::Cache, s: &LanSettings);
-  ```
-- **Depends on**: LN2; LN1 merged (its routes are the contract the endpoint bodies speak).
-- **Acceptance**: against a mock HTTP server in the test file that serves the LN1 contract with the
-  test vectors: first login enrols in **3 requests** (status, enroll; roster comes with enroll),
-  ≤ 6 KB; a second start within 24 h makes **0 requests** (cached credential), after 24 h one
-  conditional roster request answered `304`; < 23 days left → renewal with a NEW key; server `404` on
-  status → `LanError::Unsupported`, nothing written; offline start loads the cached credential and
-  trust; gossip: a higher-serial revocation list from a peer is verified, stored and used; a forged,
-  lower-serial or other-kid list is ignored; a roster is accepted only from the same subject and with
-  a higher serial; `forget` wipes `device.key`, the trust rows and calls `DELETE …/self` when online;
-  every request on the lane named in LN0's block (`Bulk` for enrol/roster: asserted through the
-  `X-NS-Background` header the mock records).
-- **Pitfalls**: the enrol proof uses the subject from `GET /api/lan/status`; clocks differ — the
-  proof's `at` is the device's clock and the server allows ±300 s, so a refused-for-skew answer must
-  say « l'heure de l'appareil est décalée »; never block a screen on enrolment.
-- **Prompt**:
+- **`nz-lan/src/enroll.rs`** — `ensure_enrolled`, `sync_trust`, `forget`, `load_cached`, plus the
+  store's five trust rows, the ETag derivation and the base64/hex decoders with their caps.
+- **`nz-lan/src/gossip.rs`** — `offers` / `accept`: one `Revocations` per `kid` this device is ahead
+  on, one `Roster` for one's own subject; nothing unverified is stored, nothing over 1 MiB of base64
+  is decoded, and a lower serial is silence (`Ok(false)`), not an error.
+- **`nz-lan/src/settings.rs`** — the four `lan.*` keys in `nz-cache`'s `kv`, with the defaults of the
+  note and rule 7's fallback (a row that no longer parses reads as its default; an empty or unknown
+  tolerated list is the default set, because an empty one means "never take anything from a peer").
+- **`nz-api/src/endpoints/lan.rs`** — the twelve bodies on LN0's lanes; **`nz-api/src/client.rs`**
+  gained `get_conditional` (the one shared-crate addition, approved by the orchestrator; see *Rules*).
+- **`nz-lan/tests/enroll.rs`** — 23 tests against a fake HTTP server that signs LN1's contract with
+  the note's LAN seed and asserts what the WIRE carried (see the numbers).
 
-  > Tu implémentes le lot **LN7 — Enrolment and trust sync** du plan « nœuds LAN » (effort max :
-  > authentification). But : l'appareil obtient son attestation en silence après la connexion, la
-  > renouvelle chaque jour (nouvelle clé), garde roster et listes de révocation à jour depuis le
-  > serveur (ETag, 304) ET depuis les pairs (bavardage signé, numéro de série croissant), et oublie
-  > tout à la déconnexion ; plus les corps de `nz-api/src/endpoints/lan.rs` et les clés de réglages.
-  > Lis *Trust chain*, *Server* (routes), *Threat model* et la section LN7 de
-  > `docs/agents/lan-nodes.md`, puis `desktop/crates/nz-api/src/{client,lanes,error}.rs`. Teste contre
-  > un faux serveur HTTP dans ton fichier de test qui parle le contrat de LN1 avec les vecteurs de la
-  > note. Fichiers exclusifs : la ligne LN7. Critères : la liste *Acceptance* de LN7.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**What a later lot can rely on.**
+
+- `ensure_enrolled` answers from disk with **0 requests** while the credential has more than 23 days
+  left; otherwise `GET /api/lan/status` → key → `POST /api/lan/enroll`. A renewal **rotates the key
+  and keeps the device row** (`device_id` read from the stored credential), so a device never takes a
+  second slot under the 20-device cap. A `404` on status is `Unsupported`, `enabled=false` is
+  `Disabled`, and **neither writes anything**: no key, no `lan.sqlite`, the directory stays empty.
+- **A refused renewal keeps the device a node.** A renewal stages its next key in `staged-key/` and
+  only renames it onto `device.key` once the credential, the roster and the revocation list have all
+  verified: a `403`, a lost answer or a crash leaves the old key with the credential it still holds,
+  and the next contact renews on the same `device_id`. Nothing is left behind on the failure path.
+- `sync_trust` is one `Bulk` conditional GET; `Ok(false)` on `304`. It verifies both blobs against
+  the `ca:` keys the store holds, and refuses a roster about another subject with `Mismatch`.
+- `forget` wipes the `trust` rows **first**, then `device.key` (so a reader never sees a key without
+  a credential), then `DELETE /api/lan/devices/self` when the client says it is online; a failed
+  revoke is a `debug!`, because the local wipe is what makes the device unusable.
+- `load_cached` never writes: a credential in the store with no key file answers `None` and mints no
+  key, and an expired or revoked credential answers `None` too (`Expired` is not "load it anyway").
+- The trust rows are `credential` (154 raw bytes), `roster` (the `{"body","sig"}` envelope — what
+  gossip relays), `revocations:<kid>` (raw, what gossip relays), `ca:<kid>` (the 32-byte Ed25519 key)
+  and **`roster.etag`**, one key the note's *Device storage* list had no place for: a blob key, no
+  schema change, wiped by `forget` with the rest.
+- `stale_proof` (the server's `403`) becomes `LanError::Server` whose `cause_fr` says « l'heure de
+  l'appareil est décalée » — the one refusal a person can act on. Every other cause keeps the
+  server's own French sentence.
+- Success is silent (`debug!`); `warn!` is only a refusal or a corrupted row, and **no key, credential,
+  roster, revocation list or cookie ever reaches a log line** — the blob is named by its KEY.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, debug, 2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| First login | **3 requests** (probe `OPTIONS`, `GET status`, `POST enroll`), **242 B** of request bodies + **1 217 B** of answers = **1 459 B** | `cargo test -p nz-lan --test enroll first_login -- --nocapture` |
+| Second start within 24 h | **0 requests**, same credential, same key file | `a_second_start_within_a_day_makes_zero_requests` |
+| Daily sync, nothing moved | **1 request**, `If-None-Match: "42-7"`, `304`, **0 body bytes** | `a_day_later_one_conditional_roster_request_answers_304` |
+| Daily sync, roster moved | 1 request, `200`, new validator `"43-7"` stored, next sync a `304` | `a_roster_that_moved_is_fetched_verified_and_stored` |
+| Renewal threshold | `> 23 d` → 0 requests; `= 23 d` → **2 requests** (status + enrol), new key, same `device_id` | `a_credential_with_less_than_23_days_left_renews_with_a_new_key` |
+| Server without the route / feature off | `Unsupported` / `Disabled`, **0 file** in the data directory | `a_server_without_the_route_writes_nothing`, `a_disabled_feature_writes_nothing` |
+| Offline start | credential + roster + revocation list loaded, **0 requests**, `None` past `not_after` | `an_offline_start_reads_the_cached_credential_and_trust` |
+| Enrol proof | verifies over `subject_hex ‖ pubkey_hex ‖ str(at)`; **refused** over `at.to_be_bytes()` | `the_enrol_proof_binds_the_subject_the_key_and_the_decimal_instant` |
+| Logout | `DELETE /devices/self` (1 request, no `X-NS-Background` = `User`), key gone, 0 trust rows; offline: 0 requests, same wipe | `forget_wipes_everything_and_revokes_once` |
+| Gossip | higher serial stored byte for byte and **used** (`load_cached` refuses the revoked device); equal/lower/unknown-kid/forged/over-cap all refused | `gossip_takes_a_higher_revocation_list_and_uses_it` |
+| Mutants | **24 mutants, 24 refused**, each test red against deliberately broken code, file restored + `touch`ed | `python3 target/ln7-mutants.py` |
+| A refused renewal | the old key file survives byte for byte, no `staged-key/` left, `load_cached` still answers; the retry rotates on the same `device_id` | `a_refused_renewal_keeps_the_device_a_node` |
+| The crate's tests | **67 unit + 19 cred + 23 enroll + 18 serve**, all green | `cargo test -p nz-lan --locked` |
+| `nz-api` (client change) | **42 unit + 6 bench + 22 others** green, bench against the real Flask server | `cargo test -p nz-api --locked` (`NZ_PYTHON=…`) |
+| The contract against the REAL server | derived `ETag "0-0"` → **304, 0 B**; unconditional roster **502 B**; `DELETE …/self` → `204` then the row is revoked | `desktop/target/ln7-live-check.py` (working material, not committed) |
+| Lints, both workspaces | desktop clippy `-D warnings` clean, rustfmt clean; `mobile/rust` `cargo check/clippy --workspace --locked` clean; **neither `Cargo.lock` changed** | the CI commands |
+
+**Two facts outside this lot's file list, both declared in the PR.** `nz-api/src/client.rs` gained
+`get_conditional` (the roster's `304`; `Api` had no way to send `If-None-Match` and `classify` treats
+`304` as an error — the orchestrator approved the additive change). And the `roster.etag` row above.
+
+**Rules a measurement taught.**
+
+- **The ETag is derivable, so the first daily sync is already conditional.** `ETag` is
+  `"<roster serial>-<revocation serial>"` and an enrolment carries both numbers: deriving it costs
+  nothing, while asking for it costs one full roster per device per day. Proven live: derived
+  `"0-0"` → `304`, 0 bytes, against `neezer/webui/lan.py`.
+- **A test must not compute its boundary from the constant it is testing.** The renewal test's first
+  version used `RENEW_BELOW_SECONDS` for "one second above / exactly at" — the mutant that moved the
+  constant by one second **survived**, because the boundary moved with it. The test now spells
+  `23 * DAY` and asserts the constant, and the mutant dies. Two other survivors (an untested
+  key-creation guard, a missing roster-subject test) were found the same way: a mutant campaign that
+  finishes green on the first try has not tested anything.
+- **Rotating a key "in place" is a rule-3 bug, and only a refusal test finds it.** The first version
+  called `DeviceKey::rotate(dir)` before the `POST`: when the server then refused, the stored
+  credential no longer matched the key on disk, so `load_cached` answered `None` and a device with
+  23 days of validity left stopped being a node. The key is now staged in `staged-key/` and promoted
+  by one `rename` after everything verified; the mutant that rotates in place fails
+  `a_refused_renewal_keeps_the_device_a_node`, and so does the one that drops the staging guard.
+- **A sync never moves the device backwards.** The server is authoritative, but an answer with a
+  serial BELOW what this device holds (a proxy replaying an old body) is not stored: only the
+  validator is taken, so the next request is conditional on the server's own current answer. The
+  decision and the `put_trust` happen under one write lock, which is what stops a concurrent gossip
+  from being overwritten; the mutant that drops the comparison (always "moved") turns
+  `an_older_roster_never_moves_the_device_backwards` red.
+- **`Store` has no per-key delete** (LN4's file), so a gossiped roster leaves `roster.etag` alone:
+  the next sync sends a stale validator, the server answers one full roster, and the fresh validator
+  is stored. Never a wrong roster, at most one extra body — cheaper than a second file's method.
+- **Opening `lan.sqlite` creates it**, so "a server without the feature writes nothing" needs the
+  open to happen *after* the status answer and only when the file already exists. `DeviceKey` has
+  only `load_or_create`, so "a read never creates a key" is a `KEY_FILE.is_file()` guard placed
+  *after* the credential check; both are asserted with a mutant that removes them.
+- **`at` in the enrol proof is `str(at)`, decimal** — LN2 said it, and the wire test now proves it
+  from the other side: the proof verifies over the decimal message and does not verify over
+  `at.to_be_bytes()`, so the Python server and this client cannot drift apart silently.
+- **A blob from the network is capped before it is decoded.** A revocation list at its 4 096-key cap
+  is 174 892 base64 characters; `accept` refuses anything over 1 MiB of text *without* allocating the
+  decoded body (mutant: drop the cap → the unit test's `CredError::Caps` becomes a decode error).
 
 ### LN8 — Web UI « Appareils et amis » (delivered 2026-11-18)
 
