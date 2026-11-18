@@ -9,7 +9,29 @@
      the process up, it never owns the transfers. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- A library that USES a permission declares it: `:app` carries the same two
+         (MB0's contract), so the merger deduplicates them, and `lint` can see the
+         grant a `setUserInitiated(true)` build needs — without them it refuses the
+         job builder with `MissingPermission` (measured on this PR's first CI run,
+         which is exactly the check that should catch it). -->
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application>
+        <!-- WorkManager and this module's job must not collide on a job id: the
+             range WorkManager may use is declared here, and `OfflineTransfer.JOB_ID`
+             (8 151) is deliberately OUTSIDE it. `lint`'s
+             `SpecifyJobSchedulerIdRange` is what asks for this (measured on this
+             lot's first green lint run), and a silent collision between a
+             download job and a WorkManager request is the kind of bug that only
+             shows on a device. -->
+        <meta-data
+            android:name="androidx.work.jobSchedulerIdStartInclusive"
+            android:value="810000" />
+        <meta-data
+            android:name="androidx.work.jobSchedulerIdEndInclusive"
+            android:value="810100" />
+
         <service
             android:name="fr.neezer.mobile.feature.offline.OfflineTransferJobService"
             android:exported="false"

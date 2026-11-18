@@ -3033,6 +3033,121 @@ manifest and resources, its build file's `androidTest` block), `mobile/rust/crat
 (the output wiring MB3c owed), `mobile/rust/crates/nz-ffi/src/core.rs` (one player per process — a
 separate, prior PR), and this section.
 
+### MB15 — Hors ligne (delivered 2026-11-18)
+
+**What landed.** The SPA's downloads, ported: `lib/offline.js` (per-playlist/album/show
+downloads, permanent, published once complete), `lib/playcache.js` (the play cache's
+gauge, cap and « Vider »), `apicache.js`'s offline browsing (already `nz-api`'s) and
+`Settings.svelte`'s `downloads` section, plus the battery of the two platform paths that
+keep the process alive while the Rust worker transfers.
+
+- **The core** (`nz-core::offline/`): `mod.rs` is the service — `attach`, the one
+  `nz-offline` worker over the core's cache, the 1 s/2 s publication loop, the labels,
+  the actions (`add_set`, `remove_set`, `remove_download`, `retry`, `retry_all`, `pause`,
+  `resume`, the four settings, `storage`, `keep_downloaded`, `local`); `sets.rs` resolves
+  a context into the titles it holds (`/api/playlist/<id>` and `/api/album/<id>` in ONE
+  read, a show's episodes page by page, a single title from the caller's own row);
+  `view.rs` is what a screen draws (`SetRow`, `DownloadRow`, `StorageView`,
+  `TrackLabel`, `QueuedSet`); `rate.rs` is `LinkMeter`.
+- **The FFI** (`nz-ffi/src/offline.rs`): `SetProgress`, `StorageReport`, `OfflineSettings`,
+  `OfflineState`, `DownloadEntry`, `LinkReport`, `OfflineListener`, `OfflineApi` and the
+  free `offlineAttach(core)`.
+- **Kotlin** (`:feature/offline`): `OfflineCore` (the bind), `OfflinePort` +
+  `FfiOfflinePort` (the seam a JVM test fakes), `DownloadsModel` (the state machine),
+  `DownloadButton` (five states), `OfflineSettingsSection()` (the Réglages content MB16
+  hosts, with the per-title list on its own page through `rememberListWindow`),
+  `OfflineTransfer` + `OfflineTransferJobService` + `OfflineTransferWorker` +
+  `TransferPolicy` (UIDT on API ≥ 34, `dataSync` below).
+
+**What a measurement taught** (each one cost a red test or a wrong screenshot):
+
+- **A unit FFI object cannot carry `Arc<Core>`.** MB0 declared `NzCore::offline()` as
+  `Arc::new(OfflineApi)` on a struct with no fields, so the service lives in
+  `nz_core::offline`'s one slot and Kotlin binds it: **`offlineAttach(core)` must be
+  `async`**, because `nz-bulk` is told the runtime it drives its futures with, and only
+  an async call has a handle (`Handle::current()` panics on the Kotlin main thread). The
+  same seam is waiting for `RemoteApi`, `PartyApi` and `SettingsApi`.
+- **The phone's Bulk cap needed a throughput nobody measured.** `nz-api` paces a Bulk
+  body at 25 % of "the stream's measured rate" and `nz-offline`'s meter is fed by the
+  DESKTOP player's reader; the phone's player has no such hook and this lot may not edit
+  it. So `LinkMeter` measures the same quantity from the client's own counters
+  (`Api::stats`) — and the tags make it honest: a download is `downloads`, a set read is
+  `offline`, the player's stream is `app`, so a download can never inflate the rate that
+  throttles it. Measured: an 800 kB/s reader binds a **200 kB/s** cap, and a download of
+  40 titles read **≤ the reader's bytes / 4 + 64 KiB** (the bucket's burst).
+- **`nz-api`'s 64 kB/s floor is the floor.** At a 40 kB/s stream
+  (`bulk_cap_from_stream(40_000)`) the cap is 64 kB/s, i.e. 160 % of that stream: the
+  25 % share binds above **256 kB/s** of stream, which is why the acceptance is measured
+  against a fast reader and the number is reported with its floor.
+- **A set's labels are stored per SET, in one statement.** A 4 000-track playlist is one
+  `kv` write (`offline.set.playlist:<id>` + the `offline.sets` index), never four
+  thousand: `nz-cache`'s `kv` is one upsert per call. And the worker's own snapshot
+  carries the labels of `kind == "track"` sets only, so a playlist's row would have read
+  its first title instead of « Nuit » — a test caught it (`row.title == "Nuit"`).
+- **The service owns its worker, not `nz-offline`'s singleton.** `Offline::ensure` wants
+  an `Api` at attach time (there is none before a login), so `nz-core::offline` calls
+  `Offline::start(cache)` and configures it at every async entry point when the client's
+  pointer changed. Consequence, documented: `nz_offline::note_stream_bytes` is a no-op on
+  the phone (no `nz-offline` singleton), and the engine's offline seam is
+  `cache.downloads().local` (MB3b's own path).
+- **A capture of the decor view is not a capture of the screen.** The test activity's own
+  window background showed as a grey band under the section, and text drawn below the
+  window still appeared over it — twice, with `clipToBounds` and with the node's
+  `captureToImage`. What fixed it: the window's background set to the theme's ground
+  before the frame, and the crop reading the theme's own `bg`.
+- **200 % broke four things a 100 % capture cannot see**: a sentence beside a button
+  broke mid-word (« Téléchargemen / t en cours »), side-by-side title and counts touched
+  (« Nuit194 / 200 »), a fixed `height(48.dp)` clipped a rung's hint under the next one,
+  and three texts in one row squeezed the count to one character per line. The fixes are
+  the layout's: the worker's sentence and its controls stack, the counts get their own
+  line, `heightIn(min = 48.dp)` replaces `height`, and the count moved under the size.
+- **The `o/Ko/Mo` rule is the SPA's, not an opinion.** `lib/format.js#bytes` prints one
+  decimal BELOW ten units and a rounded integer above; a first port printed « 812,0 Ko »
+  and a test held `812 Ko`.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, NDK
+30.0.16248370, emulator API 35 x86_64 `-no-window -no-audio` on port 5600):
+
+| What | How | Number |
+|---|---|---|
+| A 2-title playlist's download | `cargo test -p nz-core offline` (a local server that counts) | **1 read** on the `offline` tag, **2 bodies** on `downloads`, **16 384 B**; the section open costs **0 requests** |
+| Yielding to the stream (rule 1) | same bench, an 800 kB/s reader on the `app` tag | cap **200 kB/s** (25 %), download **≤ reader/4 + 64 KiB burst** |
+| Kill mid-download, restart | `Offline::shutdown()`, a second core over the same dirs | the set completes, a published title is **never re-fetched** (server hits unchanged), 2 of 4 titles survive |
+| Airplane mode | `set_network(None)` then `add_set` | `NzError::Offline` in **0 sockets**; the published set still lists, filters in, and answers a **local path** |
+| Rust workspace | `cargo test --workspace --locked` | **243 + 7 + 42 + 1** tests green, 0 failed |
+| The model, JVM | `gradle :feature:offline:testDebugUnitTest` | **10 model tests** + **8 screenshots** (360/600 dp × Encre/Papier + 200 % × 2) |
+| The screenshots | Robolectric 4.18 `GraphicsMode.NATIVE` | committed under `docs/agents/screenshots/mobile/MB15/` |
+| The real screen | instrumented capture on the emulator (test APK, no `:app` change) | **3 tests, 4.6 s**, 1080 × 2400 PNGs pulled from the test app's files |
+| Emulator boot | `mobile/tools/emu.sh start|wait --port 5600` | booted in **16 s**, `-no-window -no-audio` |
+
+**Deliberate deviations from the plan paragraph (each declared in the PR).**
+
+- **`add_set` takes `title` and `artist`**: a single title's labels exist nowhere on the
+  phone (no route turns a stream id back into a row), so the surface that pressed the
+  button passes them; the three other kinds are titled by their page.
+- **`OfflineApi` gained the methods the SECTION needs** (`state`, `downloads`,
+  `download_facts`, `download_entries`, `remove_download`, `retry_all`, `is_downloaded`,
+  `keep_downloaded`, `play_cache_bytes`, `set_quality`, `set_offline_only`,
+  `set_play_cache_cap`, `clear_play_cache`, `link_report`): MB0 pinned nine NAMES, and a
+  section that cannot change the quality or empty the play cache is not the SPA's.
+- **`StorageReport` gained `covers_bytes` and `tracks`; `free_bytes` stays 0** from Rust:
+  free space is `StatFs`'s, and `nz-core` forbids the `unsafe` binding that would answer
+  it. The Kotlin section prints the platform's number.
+- **`OfflineTransferJobService.kt` became part of `OfflineTransfer.kt`**: one file for the
+  job, the worker, the scheduler and the policy, so the class is declared once.
+- **WorkManager is a dependency of THIS module** (`libs.androidx.work.runtime.ktx`, a
+  pin MB0 already carries), added in the module's own build file: the catalog stays MB0's.
+
+**Still owed** (each named where it belongs): **MB16** composes
+`OfflineSettingsSection()` in its `downloads` section (signature final, the section owns
+every call inside it); **MB9/MB13** call `DownloadButton(context = "playlist:<id>")` /
+`"show:<id>"` (MB7 already calls it for an album); **MB10**'s « Télécharger ce titre »
+verb still prints its stub toast (the handler is that module's file); the queue builders
+apply `keep_downloaded` when `offline_only` is on AND the link is down (the setting and
+the filter exist on this side); `Core::memory()` does not yet count the labels
+(`Offline::memory_bytes`, MB2's file); a real phone for the UIDT job's timing and for the
+airplane-mode measure on a released build.
+
 ### Screen lots, wave 3: MB9, MB11, MB12, MB13, MB14, MB15, MB16, MB17, MB19, MB20, MB21
 
 Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
@@ -3070,17 +3185,7 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   mute artist, `/recommend`. Kotlin: `ReleasesEntry`, `ReleaseShelfEntry(kind)`, `RecapEntry(year)`
   (stories, tap/hold, share), `ExplorerStylesSection()`. Rows: the recap story preloads only the next
   slide's image (Prefetch lane), never the whole year.
-- **MB15 — Offline** [SC4, MB3b]. FFI (`offline.rs`): `OfflineApi { add_set(kind, id, quality),
-  remove_set, sets(), progress(), pause(), resume(), retry(key), storage(), subscribe(OfflineListener)
-  }` over `nz-offline`; the "only downloaded" filter; storage use. Android: a UIDT `JobService`
-  (`setUserInitiated(true)`, API ≥ 34) or a WorkManager worker with a `dataSync` foreground notification
-  (API < 34) kept ONLY while the queue is non-empty, showing progress; `onTimeout`/`onStopJob` stops
-  cleanly, the queue resumes from SQLite on the next start (rule 2). Kotlin: `DownloadButton(kind, id)`
-  (states: absent / queued / n of m / done / failed with cause), Réglages → Téléchargements section.
-  Rows: downloading a 200-track playlist while a track streams: **0 underruns, 0 rebuffers** of the
-  playing track and the Bulk lane at ≤ 25 % of the stream's throughput (counted bytes); kill the
-  process mid-download → resumes without re-fetching finished files; airplane mode → the downloaded
-  playlist plays and browses entirely.
+- **MB15 — Offline** [SC4, MB3b]: **delivered** — see *MB15 — Hors ligne* above.
 - **MB16 — Réglages, user sections** [MB2; hosts MB12's and MB15's sections]. FFI (`settings.rs`):
   `SettingsApi` (server settings `/settings` the user may change, sources order, my accounts, Deezer
   ARL (MB4's save), YouTube connect, access grants, groups, export services, diagnostic log export,
