@@ -75,25 +75,6 @@ class InviteModel(
         val leaving: Boolean = false,
         val leaveError: String = "",
     ) {
-        /** The name's message, once the person has touched the field. */
-        val usernameMessage: String
-            get() = fieldErrors[Field.Username]
-                ?: if (submitted || touched.contains(Field.Username)) "" else ""
-
-        val firstProblem: Field?
-            get() = when {
-                fieldErrors[Field.Username] != null -> Field.Username
-                fieldErrors[Field.Password] != null -> Field.Password
-                fieldErrors[Field.Confirm] != null -> Field.Confirm
-                else -> null
-            }
-
-        /** The form needs the person's own input before it can be sent. */
-        val formReady: Boolean
-            get() = username.isNotBlank() &&
-                password.isNotEmpty() &&
-                confirm.isNotEmpty() &&
-                !busy
     }
 
     private val _state = MutableStateFlow(State())
