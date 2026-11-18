@@ -186,6 +186,35 @@ tap_text() {
     adb_dev shell input tap "$cx" "$cy" >/dev/null
 }
 
+# The app's own process, or nothing: a `am start` that returns 0 proves a task was
+# created, never that the app is still alive two seconds later.
+app_pid() {
+    adb_dev shell pidof org.nsupysonic.app 2>/dev/null | tr -d '\r'
+}
+
+# WHY the app is not there. A native library that cannot be resolved, or a Kotlin
+# exception at startup, leaves the screen black and the accessibility tree empty —
+# the symptom this script used to report alone ("« Accueil » never painted"),
+# which names nothing actionable. The crash buffer names the cause.
+#
+# The lesson behind it (measured 2026-11-18): `libnz_ffi.so` carried
+# `NEEDED libc++_shared.so`, no APK shipped that file, and the whole app died at
+# `System.loadLibrary` with `UnsatisfiedLinkError: dlopen failed: library
+# "libc++_shared.so" not found`. `mobile/rust/build-android.sh` now refuses to
+# produce such a library, and this prints the reason if one ever gets through.
+app_crash_cause() {
+    local crash
+    crash="$(adb_dev logcat -d -b crash 2>/dev/null |
+        grep -E "UnsatisfiedLinkError|FATAL EXCEPTION|dlopen failed" | head -3 || true)"
+    if [[ -n "$crash" ]]; then
+        printf '%s' "$crash"
+        return 0
+    fi
+    if [[ -z "$(app_pid)" ]]; then
+        printf 'le processus org.nsupysonic.app ne tourne pas et le tampon de plantage est vide'
+    fi
+}
+
 launch_app() {
     local attempt
     for attempt in 1 2 3; do
@@ -202,12 +231,23 @@ launch_app() {
 }
 
 step "smoke: launch"
-launch_app || {
+if ! launch_app; then
     note "the shell never painted « Accueil »"
+    cause="$(app_crash_cause)"
+    [[ -n "$cause" ]] && note "cause : $cause"
     dump_ui | head -c 2000 >&2
     exit 1
+fi
+# The screen exists AND the app is still the app: a process that died a moment
+# after painting would let every later door fail for the wrong reason.
+pid_app="$(app_pid)"
+[[ -n "$pid_app" ]] || {
+    note "the app painted « Accueil » puis son processus a disparu"
+    cause="$(app_crash_cause)"
+    [[ -n "$cause" ]] && note "cause : $cause"
+    exit 1
 }
-printf 'shell_visible=1\n'
+printf 'shell_visible=1 app_pid=%s\n' "$pid_app"
 check_alive "the launch"
 
 # Each door is proved by the text ONLY that screen draws (its placeholder's
