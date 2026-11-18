@@ -218,15 +218,6 @@ val QUALITY_CHOICES: List<Triple<String, String, String>> = listOf(
     Triple("OPUS_64", "Opus 64", "Données réduites"),
 )
 
-/** `Settings.svelte#CACHE_LIMITS` — the five caps, as bytes and as words. */
-val CACHE_LIMIT_CHOICES: List<Pair<Long, String>> = listOf(
-    256L * 1024 * 1024 to "256 Mo",
-    512L * 1024 * 1024 to "512 Mo",
-    1024L * 1024 * 1024 to "1 Go",
-    2048L * 1024 * 1024 to "2 Go",
-    4096L * 1024 * 1024 to "4 Go",
-)
-
 /** `format.js#bytes`: 1,2 Go / 340 Mo / 12 ko, in French. */
 fun formatBytes(bytes: Long): String {
     val units = listOf("o", "ko", "Mo", "Go", "To")

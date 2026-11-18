@@ -135,18 +135,11 @@ abstract class SettingsScreenshotBase(private val width: Int) {
     )
 
     @Test
-    fun downloads() = capture(
-        section = "downloads",
-        theme = NzThemeKind.Encre,
-        name = "mb16-downloads-encre-%ddp.png".format(width),
-    )
-
-    @Test
-    fun downloadsAtTwoHundredPercent() = capture(
-        section = "downloads",
+    fun appearanceAtTwoHundredPercent() = capture(
+        section = "appearance",
         theme = NzThemeKind.Papier,
         fontScale = 2f,
-        name = "mb16-downloads-papier-%ddp-font200.png".format(width),
+        name = "mb16-appearance-papier-%ddp-font200.png".format(width),
     )
 
     @Test

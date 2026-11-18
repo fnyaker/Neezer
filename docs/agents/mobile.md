@@ -3279,7 +3279,7 @@ makes a theme a property of the APP instead of a screen.
 | `AppearanceSettings`: 3 themes, custom accent (field, reset, correction, preview), Pochette's sleeve | *Apparence*, all of it; the ink correction is `nzAccent`'s, and the sentence names the theme it corrected for |
 | `ui.theme`, `ui.accent`, `ui.coverAc` in `localStorage` | the same three keys in `kv`, read by `NzAppearance` |
 | `VisualizerSettings`: eco, mode, palette, intensity, fps, beat, scope orientation/colour | *Animations*; the 50 worlds and the full-screen visualiser are MB21/MB22 |
-| Downloads: default quality, offline-only, prefetch on/count, cache limit, storage use | *Téléchargements* (`offline.quality`, `offline.onlyDownloaded`, `cache.prefetch`, `cache.prefetchCount`, `cache.limit`); the storage gauge and the downloaded-titles page are MB15's |
+| Downloads: default quality, offline-only, prefetch on/count, cache limit, storage use, the downloaded-titles page | *Téléchargements* = **MB15's `OfflineSettingsSection()`, hosted** (the note's own contract: MB15 owns every pixel there, this lot composes it as it composes `AudioFxSections()`); the play cache's prefetch and limit are MB15's cards too, and the same keys |
 | `DiscoverySlider` (`/discover/prefs`) | *Découverte* → the four steps, MB5's own store |
 | `DislikedTracks` (`/me/dislikes`, one removal = one `POST /dislike`) | *Découverte* → a `ListHandle` (windowed), optimistic removal |
 | `SourceOrder` (`/sources`, admin's order and switches, « classer par qualité ») | *Sources* → optimistic order, then the server's answer |
@@ -3309,7 +3309,7 @@ LN14 adds one entry to that table plus one branch that calls its own composable;
 | The ARL | same | posted **once** in the `POST /api/settings` body; the device's copy holds the masked hint (`…a1b2`) and **not** the credential |
 | One discovery drag | 3 moves, settle | **1 write** (`discover.level` = the last value), the value moving in every frame |
 | Kotlin | `:feature:settings:testDebugUnitTest` | **39 tests**: 13 `SettingsModelTest` (counts, the four states, optimistic + rollback, settle, clamping, the filter, the report), 2 `SettingsThemeSwitchTest`, 12 + 12 screenshot tests (360 dp / 600 dp) |
-| Screenshots | Robolectric, NATIVE graphics | **24 PNGs** under `docs/agents/screenshots/mobile/MB16/`: Encre/Papier/Pochette, 360 and 600 dp, the 200 % scale, a failure card — looked at, and three real layout bugs fixed from them (a switch's label squeezing a row, chips cut at 200 %, a lemon button on Papier) |
+| Screenshots | Robolectric, NATIVE graphics | **22 PNGs** under `docs/agents/screenshots/mobile/MB16/`: Encre/Papier/Pochette, 360 and 600 dp, the 200 % scale, a failure card — looked at, and three real layout bugs fixed from them (a switch's label squeezing a row, chips cut at 200 %, a lemon button on Papier) |
 | The real app | emulator API 35 x86_64, `-no-window -no-audio`, the CI APK installed | `mb16-emulator-list.png` and `mb16-emulator-apparence.png`: the two levels open, « Noyau (Rust) : 0.1.0 » read from `nz_version()`, and the doubled « Réglages » heading it exposed |
 
 **Files.** `mobile/rust/crates/nz-core/src/settings/**`, `mobile/rust/crates/nz-ffi/src/settings.rs`,

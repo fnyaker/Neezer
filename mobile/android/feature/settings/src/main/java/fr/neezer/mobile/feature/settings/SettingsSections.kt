@@ -371,112 +371,18 @@ internal fun VizSection(model: SettingsModel, state: SettingsModel.State) {
     }
 }
 
-/** « Téléchargements » : quality, offline policy, the play cache. */
+/**
+ * « Téléchargements »: **MB15's own section, hosted**.
+ *
+ * `OfflineSettingsSection` owns every pixel and every call inside it (the quality
+ * a new download takes, what the device holds, the offline-only switch, the play
+ * cache's gauge and caps, and the per-title list on its own page) — MB15's note
+ * says so, and this lot composes it exactly as it composes `AudioFxSections()`.
+ * Nothing is copied here: a second version of the same cards would drift.
+ */
 @Composable
-internal fun DownloadsSection(model: SettingsModel, state: SettingsModel.State) {
-    val settings = state.settings ?: return
-    val colors = Sillon.colors
-    SettingsCard(
-        title = "Qualité de téléchargement par défaut",
-        subtitle = "Utilisée pour les nouveaux téléchargements (modifiable au cas par cas).",
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
-            QUALITY_CHOICES.forEach { (id, label, hint) ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        // Grows with the text: a fixed 48 dp row clipped the hint
-                        // to « Sans perte — » at a 200 % scale.
-                        .heightIn(min = NzMinTouchTarget)
-                        .clickable(role = Role.RadioButton) { model.setDownloadQuality(id) }
-                        .padding(vertical = NzSpacing.xs),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
-                ) {
-                    Box(
-                        Modifier
-                            .size(20.dp)
-                            .background(
-                                if (settings.downloadQuality == id) colors.btn else Color.Transparent,
-                                CircleShape,
-                            )
-                            .border(1.dp, if (settings.downloadQuality == id) colors.btn else colors.dim, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (settings.downloadQuality == id) Icon(NzGlyph.Check, size = 12.dp, tint = colors.onbtn)
-                    }
-                    Column {
-                        Text(label, style = Sillon.type.label, color = colors.tx)
-                        Text(hint, style = Sillon.type.bodySmall, color = colors.dim)
-                    }
-                }
-            }
-        }
-    }
-    SettingsCard(
-        title = "Hors-ligne",
-        subtitle = "Vos téléchargements sont permanents : ils restent disponibles hors-ligne jusqu'à ce que vous les retiriez vous-même. Ce n'est pas un cache — rien n'est supprimé automatiquement.",
-    ) {
-        NzSwitch(
-            checked = settings.offlineOnly,
-            onCheckedChange = model::setOfflineOnly,
-            label = "Hors-ligne : ne lire que les titres téléchargés",
-        )
-        Text(
-            text = "Lancer une playlist hors-ligne ne met en file que ce qui est disponible sur l'appareil, sans sauter les manquants. Désactivez pour tenter de tout lire.",
-            style = Sillon.type.bodySmall,
-            color = colors.dim,
-        )
-        Text(
-            text = "Les titres déjà sur cet appareil se gèrent depuis Bibliothèque → Hors-ligne.",
-            style = Sillon.type.bodySmall,
-            color = colors.dim,
-        )
-    }
-    SettingsCard(
-        title = "Cache de lecture",
-        subtitle = "Pendant la lecture, les titres à venir sont préchargés ici. La lecture est vérifiée d'abord en local, donc une coupure réseau ne l'interrompt pas.",
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-            NzSwitch(checked = settings.prefetch, onCheckedChange = model::setPrefetch, label = "Précharger les titres suivants")
-            Text(
-                text = "Désactivez pour économiser les données mobiles.",
-                style = Sillon.type.bodySmall,
-                color = colors.dim,
-            )
-            if (settings.prefetch) {
-                Text("Titres préchargés d'avance", style = Sillon.type.label, color = colors.tx)
-                androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
-                    verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
-                ) {
-                    (1..10).forEach { count ->
-                        NzChip(
-                            text = count.toString(),
-                            onClick = { model.setPrefetchCount(count) },
-                            selected = settings.prefetchCount.toInt() == count,
-                        )
-                    }
-                }
-                Text(
-                    text = "Ils sont téléchargés un par un, du plus proche au plus lointain, sans jamais prendre la bande passante du titre en cours.",
-                    style = Sillon.type.bodySmall,
-                    color = colors.dim,
-                )
-            }
-            Text("Limite du cache", style = Sillon.type.label, color = colors.tx)
-            ChoicePills(
-                choices = CACHE_LIMIT_CHOICES.map { it.second },
-                selected = CACHE_LIMIT_CHOICES.indexOfFirst { it.first.toULong() == settings.cacheLimit }.coerceAtLeast(0),
-                onSelect = { model.setCacheLimit(CACHE_LIMIT_CHOICES[it].first) },
-            )
-            Text(
-                text = "Au-delà, les plus anciens sont supprimés automatiquement.",
-                style = Sillon.type.bodySmall,
-                color = colors.dim,
-            )
-        }
-    }
+internal fun DownloadsSection(@Suppress("UNUSED_PARAMETER") model: SettingsModel, @Suppress("UNUSED_PARAMETER") state: SettingsModel.State) {
+    fr.neezer.mobile.feature.offline.OfflineSettingsSection()
 }
 
 /** « Découverte » : the level, and the titles the person does not like. */
