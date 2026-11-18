@@ -109,6 +109,16 @@ never committed; Rust 1.99.1):
   data directory (where the migration reads from). A new id would be a second app and lose
   everything (rule 7).
 - AAudio on API 26 can crash after close (Oboe #40): the AudioTrack fallback there.
+- **A C++ dependency that links the SHARED libc++ makes the whole app unloadable.** `signalsmith-stretch`
+  (inside `nz-audio`) is C++, and the `cc` crate's Android default is `c++_shared`: `libnz_ffi.so` then
+  carries `NEEDED libc++_shared.so`, no APK ships that file, and the app dies at `System.loadLibrary`
+  with `UnsatisfiedLinkError: dlopen failed: library "libc++_shared.so" not found` before
+  its first screen (measured 2026-11-18 on all three ABIs: `readelf -d`, the APK's `lib/` listing and
+  the device's crash buffer agreed). `build-android.sh` links `CXXSTDLIB=c++_static` (only for the
+  cargo-ndk step: the host build has no `libc++_static`) and then REFUSES a library whose `NEEDED` names
+  something Android does not provide and the APK does not carry (`--check-libs` also checks an unpacked
+  APK). `ci-emulator.sh` reads the crash buffer, so a launch failure names its cause instead of only
+  "« Accueil » never painted" — which is what hid this for a day.
 - An Android emulator plays its sound on the host by default: always `-no-audio`, or route it to
   a null sink; and never open its window on the user's display.
 

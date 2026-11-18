@@ -25,6 +25,84 @@ TARGETS=(arm64-v8a armeabi-v7a x86_64)
 : "${CARGO_BUILD_JOBS:=4}"
 export CARGO_BUILD_JOBS
 
+# --- the link guard --------------------------------------------------------
+#
+# A `NEEDED` entry the APK does not carry is an `UnsatisfiedLinkError` at the
+# FIRST `System.loadLibrary`: the app dies before its first screen, and the
+# emulator smoke can only say "« Accueil » never painted" unless it reads the
+# crash buffer (it does now, that script carries the same lesson).
+#
+# Measured, and the reason this function exists: `signalsmith-stretch` (the
+# time-stretch inside `nz-audio`) is C++ and the `cc` crate's Android default is
+# the SHARED libc++ — so `libnz_ffi.so` carried `NEEDED libc++_shared.so`, nothing
+# in this repository shipped that file, and the whole app was dead on every ABI
+# from the merge that linked `nz-audio` until this check. `readelf` on the built
+# library, the APK's `lib/` listing and the device's `logcat` all agreed; nothing
+# looked.
+#
+# The rule: every `NEEDED` name is either a library ANDROID provides, or a file
+# this directory really carries beside `libnz_ffi.so`. `libc++_shared.so` is
+# deliberately NOT on the system list — it is the exact case this catches.
+SYSTEM_LIBS="libc.so libm.so libdl.so liblog.so libandroid.so libaaudio.so libOpenSLES.so libEGL.so libGLESv2.so libvulkan.so libjnigraphics.so libz.so libstdc++.so libnativehelper.so libmediandk.so libcamera2ndk.so"
+
+# `readelf` from binutils, or the NDK's own (the NDK is installed on every
+# machine and runner this app is built on).
+nz_readelf() {
+    if command -v readelf >/dev/null 2>&1; then
+        command -v readelf
+    elif [ -x "${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" ]; then
+        printf '%s\n' "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+    else
+        printf 'build-android.sh: no readelf (binutils or the NDK): the link guard cannot run\n' >&2
+        return 1
+    fi
+}
+
+needed_of() {
+    local readelf
+    readelf="$(nz_readelf)" || return 1
+    "$readelf" -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'
+}
+
+# `check_libs <dir>` where <dir>/<abi>/libnz_ffi.so are the libraries an APK
+# carries. Answers 1 and names every offender.
+check_libs() {
+    local dir="$1" abi so name missing=0 checked=0
+    for abi in "${TARGETS[@]}"; do
+        so="$dir/$abi/libnz_ffi.so"
+        if [ ! -f "$so" ]; then
+            printf 'build-android.sh: %s absent, rien à vérifier\n' "$so" >&2
+            missing=1
+            continue
+        fi
+        checked=$((checked + 1))
+        while read -r name; do
+            [ -n "$name" ] || continue
+            case " $SYSTEM_LIBS " in
+                *" $name "*) continue ;;
+            esac
+            [ -f "$dir/$abi/$name" ] && continue
+            printf 'build-android.sh: %s/libnz_ffi.so dépend de %s, qu’Android ne fournit pas et que l’APK n’embarque pas\n' \
+                "$abi" "$name" >&2
+            missing=1
+        done <<<"$(needed_of "$so")"
+    done
+    if [ "$checked" -eq 0 ]; then
+        printf 'build-android.sh: aucune bibliothèque à vérifier dans %s\n' "$dir" >&2
+        return 1
+    fi
+    return "$missing"
+}
+
+# `build-android.sh --check-libs [<dir>]` checks an already-built set (the
+# jniLibs by default, or an unpacked APK's `lib/`) without building anything: the
+# same command a reviewer runs on a downloaded APK.
+if [ "${1:-}" = "--check-libs" ]; then
+    shift || true
+    check_libs "${1:-../android/bridge/src/main/jniLibs}"
+    exit $?
+fi
+
 if [ -z "${ANDROID_NDK_HOME:-}" ]; then
     if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
         export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
@@ -57,7 +135,22 @@ cargo run --quiet --locked -p nz-bindgen -- generate \
 
 echo "== build-android.sh: three ABIs (NDK $ANDROID_NDK_HOME, API $API)"
 mkdir -p "$JNI_LIBS"
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P "$API" -o "$JNI_LIBS" \
+# `CXXSTDLIB=c++_static` links the C++ runtime INTO our library instead of
+# requiring `libc++_shared.so` beside it (see the link guard above). It is set
+# for THIS command only: the host build above has no `libc++_static`, and an
+# exported value broke that build's link with `unable to find library -lc++_static`.
+#
+# `-lc++abi` is the second half of that library, and `cc` says so itself ("if
+# libc++ is linked statically, the build will probably also need c++abi, since
+# libc++.a usually doesn't contain it; cc doesn't link it, so link it from the
+# build script"). Ours is `build-android.sh`, so the flag rides in RUSTFLAGS —
+# appended, which puts it AFTER the `-lc++_static` a build script emits, the order
+# a static archive needs. Measured without it: the library links, and the device
+# then refuses it — `dlopen failed: cannot locate symbol "_ZTISt12length_error"`
+# (libc++abi's `std::length_error` typeinfo), the same dead app with a different
+# sentence.
+CXXSTDLIB=c++_static RUSTFLAGS="$RUSTFLAGS -C link-arg=-lc++abi" \
+    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P "$API" -o "$JNI_LIBS" \
     build --locked --release -p nz-ffi
 
 # cargo-ndk copies EVERY cdylib it built, and four of the shared crates are
@@ -74,9 +167,15 @@ for abi in "${TARGETS[@]}"; do
     so="$JNI_LIBS/$abi/libnz_ffi.so"
     if [ -f "$so" ]; then
         printf '   %-12s %8s bytes\n' "$abi" "$(stat -c %s "$so")"
+        printf '   %-12s NEEDED: %s\n' "" "$(needed_of "$so" | tr '\n' ' ')"
     else
         echo "   $abi MISSING" >&2
         exit 1
     fi
 done
+# The guard runs on every build, before anything packs these files.
+check_libs "$JNI_LIBS" || {
+    echo "build-android.sh: la bibliothèque ne se chargerait pas sur l'appareil (voir ci-dessus)" >&2
+    exit 1
+}
 echo "   kotlin:      $(find "$GENERATED" -name '*.kt' | wc -l) file(s)"
