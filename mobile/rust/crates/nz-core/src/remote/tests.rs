@@ -228,6 +228,18 @@ async fn a_pause_from_this_phone_reaches_the_desktop_player_and_is_acked_async()
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].title, "Alpha");
 
+    // The POSITION line: the owner published `p` at a server instant, and the
+    // phone extrapolates from it (`controller.js#position`). A server that
+    // stamps `t` as a float (Flask's `jsonify` does) must read as a position, not
+    // as "the end of the track".
+    let now = remote.now();
+    assert!(
+        now.position_s >= 0.0 && now.position_s <= now.duration_s.max(1.0),
+        "la position tient dans le titre : {} / {}",
+        now.position_s,
+        now.duration_s
+    );
+
     let after = remote.traffic();
     let spent = after.requests - before.requests;
     assert_eq!(
@@ -244,6 +256,67 @@ async fn a_pause_from_this_phone_reaches_the_desktop_player_and_is_acked_async()
         "pause → ack : {spent} requête(s), {} octets reçus, {} envoyés",
         after.bytes_in, after.bytes_out
     );
+}
+
+/// **The position line is the owner's**, not the end of the track.
+///
+/// The server stamps its instants as FLOATS (`server_ms()` is a Python float, and
+/// Flask writes `1795027294444.0068`). A crate that read them with `as_i64` found
+/// nothing, extrapolated from the epoch and clamped the bar to the title's end —
+/// measured on the emulator before SC5's `millis` fixed it. This test holds the
+/// phone's own answer to the rule: `p` plus the time since the publication.
+#[test]
+fn the_position_line_extrapolates_from_the_published_instant() {
+    rt().block_on(position_line());
+}
+
+async fn position_line() {
+    let _bench = bench();
+    let fake = FakeServer::start();
+    let dir = TempDir::new("position");
+    let core = phone(&fake, &dir, "friend").await;
+    let link = fake.create_link("queue", "deskdev1", "Salon", None);
+    let remote = service(&core);
+    remote.attach_player(FakePlayer::with_queue(&[("abc", "Alpha")]));
+    remote.claim(&link.token).await.expect("le claim");
+    remote.open_loan().await.expect("le loan");
+
+    // The desk plays, 42 s into a four-minute title.
+    let owner = client(&fake, "owner").await;
+    let mut player = nz_player::PlayerState::new();
+    player.apply(
+        Command::play_queue(
+            vec![{
+                let mut entry = nz_player::Entry::new("abc");
+                entry.title = "Alpha".to_owned();
+                entry.duration = 214;
+                entry
+            }],
+            0,
+            None,
+        ),
+        0,
+    );
+    player.set_position(42.0);
+    let mut session = Session::new("deskdev1", host::page_id());
+    let first: Value = owner
+        .get::<Value>(Lane::User, &session.poll_path())
+        .await
+        .expect("a poll")
+        .value;
+    session.absorb_poll(&first);
+    publish(&owner, &session, &player).await;
+
+    remote.step_loan().await.expect("une lecture");
+    let now = remote.now();
+    assert_eq!(now.duration_s, 214.0, "la durée du titre du bureau");
+    assert!(
+        (42.0..46.0).contains(&now.position_s),
+        "42 s il y a un instant, pas {} — la ligne est extrapolée depuis `t`",
+        now.position_s
+    );
+    assert!(now.playing, "le bureau joue");
+    assert_eq!(now.track.map(|track| track.title), Some("Alpha".to_owned()));
 }
 
 /// **A pause pressed during an outage is DROPPED, never replayed.**

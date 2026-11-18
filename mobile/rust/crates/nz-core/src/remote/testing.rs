@@ -773,7 +773,7 @@ fn route(
                 "sv": channel.sv,
                 "ack": channel.ack,
                 "seq": channel.seq,
-                "now": now_ms(),
+                "now": now_ms() as f64,
             });
             if sv != channel.sv {
                 answer["settings"] = channel.settings.clone();
@@ -882,7 +882,10 @@ fn publish(world: &mut World, device: &str, body: &serde_json::Value) -> serde_j
         channel.sv = sv;
     }
     state["qv"] = serde_json::Value::String(channel.qv.clone());
-    state["t"] = serde_json::Value::from(now_ms());
+    // A FLOAT, as Flask's `jsonify` writes `server_ms()` (a Python float):
+    // `1795027294444.0068`. The crate parses `t` with `as_i64`, and a test whose
+    // server was nicer than the real one hid that.
+    state["t"] = serde_json::Value::from(now_ms() as f64);
     channel.state = Some(state);
     let ack = body
         .get("ack")

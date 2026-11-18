@@ -284,7 +284,7 @@ impl Read {
             sv: text(answer, "sv"),
             ack: answer.get("ack").and_then(Value::as_u64).unwrap_or(0),
             seq: answer.get("seq").and_then(Value::as_u64).unwrap_or(0),
-            now: answer.get("now").and_then(Value::as_i64).unwrap_or(0),
+            now: millis(answer.get("now")).unwrap_or(0),
             settings: answer
                 .get("settings")
                 .cloned()
@@ -329,7 +329,7 @@ impl Read {
         }
         read.anchor = Some(Anchor {
             p,
-            t: state.get("t").and_then(Value::as_i64).unwrap_or(read.now),
+            t: millis(state.get("t")).unwrap_or(read.now),
             playing,
             duration,
         });
@@ -363,6 +363,24 @@ fn text(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+/// A server instant in milliseconds, whether it arrived as an integer or as a
+/// FLOAT — and Flask's `jsonify` writes `server_ms()` (a Python float) as
+/// `1795027294444.0068`, so `Value::as_i64` answers `None` for every timestamp
+/// the real server sends.
+///
+/// Measured (MB19, the emulator, 2026-11-18): the anchor's `t` fell back to 0,
+/// `position()` extrapolated from the epoch and clamped to the track's duration,
+/// and the phone's "Contrôle distant" showed a full bar and `3:34 / 3:34` for a
+/// title published at `p = 0`. The SC5 bench hid it because its server wrote
+/// integers.
+fn millis(value: Option<&Value>) -> Option<i64> {
+    let value = value?;
+    match value.as_i64() {
+        Some(integer) => Some(integer),
+        None => value.as_f64().filter(|number| number.is_finite()).map(|number| number as i64),
+    }
 }
 
 fn number(value: Option<&Value>) -> f64 {
@@ -953,6 +971,39 @@ mod tests {
     use crate::host::{Session, page_id};
     use crate::testing::{Bench, runtime};
     use serde_json::json;
+
+    /// The server's instants are FLOATS (`server_ms()` is a Python float, and
+    /// Flask writes `1795027294444.0068`): a read must keep the anchor at that
+    /// instant, or the position line extrapolates from the epoch and clamps to
+    /// the end of the track (MB19's find, measured on the emulator).
+    #[test]
+    fn a_float_server_instant_is_a_position_not_the_end_of_the_track() {
+        let now = 1_795_027_326_589.2058_f64;
+        let t = (now - 32_000.0) as f64;
+        let read = Read::parse(&json!({
+            "online": true,
+            "now": now,
+            "qv": "p.1",
+            "sv": "p.0",
+            "ack": 0,
+            "seq": 0,
+            "state": {
+                "index": 0, "playing": true, "p": 42.0, "duration": 214.0,
+                "volume": 0.8, "muted": false, "shuffle": false, "repeat": "off",
+                "status": "playing", "t": t,
+                "track": {"id": "abc", "title": "Alpha", "duration": 214},
+            },
+        }));
+        assert_eq!(read.now, now as i64, "l'horloge du serveur est lue");
+        let anchor = read.anchor.expect("une ligne de position");
+        assert_eq!(anchor.t, t as i64, "l'instant de la publication est lu");
+        let position = anchor.position(read.now);
+        assert!(
+            (73.0..=74.0).contains(&position),
+            "42 s + les 32 s écoulées depuis la publication : {position}"
+        );
+        assert!(position < anchor.duration, "la barre n'est pas pleine");
+    }
 
     fn grant(level: RemoteLevel) -> Grant {
         Grant {

@@ -54,17 +54,6 @@ use crate::player::{
     PlayerSnapshot, TrackRef,
 };
 
-/// This device's role in a remote session.
-#[derive(uniffi::Enum, Debug, Clone, PartialEq, Eq)]
-pub enum RemoteRole {
-    /// Nobody is controlling this player, and this device drives nobody.
-    None,
-    /// Another device drives this one (the chip names who).
-    Controlled { host_name: String },
-    /// This device drives another one (the banner names whose).
-    Controller { host_name: String },
-}
-
 /// One link this device made, as the sheet lists it.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct RemoteLink {
@@ -176,7 +165,10 @@ impl From<GrantView> for RemoteGrant {
 /// with a version so a repaint happens once per CHANGE.
 #[derive(uniffi::Record, Debug, Clone)]
 pub struct RemoteStatus {
-    pub role: RemoteRole,
+    /// `none`, `controlled` (another device drives this one) or `controller`
+    /// (this one drives another). A string rather than a UniFFI enum with fields:
+    /// the two screens only need to know WHICH card to draw.
+    pub role: String,
     /// This device's player is answering a controller (the chip).
     pub host_active: bool,
     /// `« Contrôlé par Léa »` — the chip's first line.
@@ -204,22 +196,14 @@ pub struct RemoteStatus {
 impl From<StatusView> for RemoteStatus {
     fn from(status: StatusView) -> Self {
         let role = if status.host_active || !status.controllers.is_empty() {
-            RemoteRole::Controlled {
-                host_name: status.who.clone(),
-            }
+            "controlled"
         } else if status.grant.is_some() || status.phase != service::Phase::Connecting {
-            RemoteRole::Controller {
-                host_name: status
-                    .grant
-                    .as_ref()
-                    .map(|grant| grant.owner.clone())
-                    .unwrap_or_default(),
-            }
+            "controller"
         } else {
-            RemoteRole::None
+            "none"
         };
         RemoteStatus {
-            role,
+            role: role.to_owned(),
             host_active: status.host_active,
             who: status.who,
             controllers: status.controllers.into_iter().map(Into::into).collect(),
@@ -661,7 +645,12 @@ pub fn remote_shutdown() {
     service::shutdown();
 }
 
-#[uniffi::export]
+// `async_runtime = "tokio"`: an async export runs on THIS crate's runtime, not on
+// the caller's thread. Without it the first request of a claim was answered
+// `Internal { detail: "there is no reactor running, must be called from the
+// context of a Tokio 1.x runtime" }` on a device — measured on the emulator,
+// 2026-11-18, its claim screen printing exactly that sentence.
+#[uniffi::export(async_runtime = "tokio")]
 impl RemoteApi {
     /// The chip and the banner, composed. Synchronous and cheap: the screen
     /// reads it once per pushed change, and on the repaint that follows.
