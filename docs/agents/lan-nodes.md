@@ -2104,69 +2104,126 @@ bind-the-port assertion.
   it unchanged: the fake issues `at + days + n` for the n-th credential of a device, which is what a
   real `now + 30 days` is one second later.
 
-### LN11 — Adapters: opener, downloader, sets, covers and metadata (wave 5, effort high)
+### LN11 — Adapters: opener, downloader, sets, covers and metadata (delivered 2026-11-18)
 
-- **Objective**: playing and downloading go to a peer first through the apps' existing seams
-  (`StreamOpener`, `Downloader`), playlists can be taken from a peer (complete first), and covers and
-  metadata follow.
-- **Files**: LN11 row. **Contracts**: `PeerFirstOpener`, `PeerFirstDownloader` (*Contracts*), and:
+**What landed.** The four seams the apps call, filled, plus the one thing they needed from the
+service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `download_peer_sets`, and
+`import.rs`'s metadata and sleeves. Nothing public in `nz-lan` changed shape; `service.rs` gained a
+`pub(crate)` block (see *Corrections*), declared out of the lot's file list in the PR.
 
-  ```rust
-  // sets.rs
-  pub struct PeerSetKey { pub peer: DevicePub, pub kind: String, pub ident: String }
-  pub fn download_peer_sets(lan: &Lan, offline: &nz_offline::Offline, keys: &[PeerSetKey]) -> Result<usize, LanError>;
-  // import.rs
-  pub async fn import_for_set(lan: &Lan, cache: &nz_cache::Cache, peer: &DevicePub, tracks: &[String]) -> Result<ImportReport, LanError>;
-  pub struct ImportReport { pub meta: usize, pub covers: usize, pub bytes: u64 }
-  ```
-- **Depends on**: LN5, LN10.
-- **Acceptance** (two `Lan`s + a real `nz-audio` `Engine::new_offline` + a real `nz-offline` worker,
-  loopback, real FLAC and Opus fixtures through ffmpeg):
-  - play a track only the peer has → served by the peer (`LanEvent::Served`), the play cache then
-    holds it under the peer's quality; tap → first audible frame ≤ 300 ms;
-  - peer has Opus 64 only, T = default, server reachable (mock stream) → the server serves; server
-    unreachable → the peer's Opus 64 plays;
-  - no peer has it → **0 LAN requests** and the inner opener is called at once;
-  - a peer stalls mid-track on `User` → the server takes over within 1.5 s, no audible gap beyond the
-    engine's own rebuffer rule;
-  - seek in a peer stream → a byte range from the same peer;
-  - download a 50-track playlist one peer has complete → all 50 from that peer, labels and pinned
-    covers present, the downloads screen state identical to a server download; the same with the
-    server unreachable (track list from the peer's `Sets`);
-  - rule 1: playing a network track while this node downloads from a peer and serves another →
-    **0 underruns** (`OfflineSink` render loop counts), first byte of the tapped track unchanged ±10 %.
-- **Pitfalls**: `ready()` must not make a request for a peer track; the opener's choice is sticky per
-  voice; `PeerFirstDownloader` reports progress through the existing `Progress` trait; covers pinned,
-  never through the LRU.
-- **Prompt**:
+- **`opener.rs`** — `open` decides (`Lan::decide`), and for a peer opens a `Fetch` at the lane's
+  urgency (`User → Play`, the rest 1:1) and returns a blocking body whose `len_hint` is what remains
+  of the file and whose `quality()` is the rung the peer really served (LN5). `start` never goes to a
+  peer; a seek re-opens at `from_byte`. The choice is sticky per track (256 entries): a byte-range
+  reopen asks the peer that served the stream, at the quality it served — even when a fresh decision
+  would have picked another device. `ready()` answers `ready = true, bytes = len, ranges = "bytes"`
+  from the replica, **0 requests**. No connected peer → the inner opener, 0 ms added.
+- **`downloader.rs`** — `fetch` runs `Lan::decide_download` (`Bulk`, with the set's committed peer as
+  `prefer`), and for a peer writes the worker's `.part` through LN9's `fetch_to_file` (length,
+  SHA-256, free space, over-send), probes it with the decoder, and answers `Fetched { bytes, quality:
+  the peer's }`. The transfer runs on the `nz-lan` runtime and progress crosses back through a
+  channel, because `nz_offline::Progress` is **not `Send`** and may only be touched by the worker's
+  thread. A `NotFound`/`Busy`/bad file/dead stream skips the peer and the inner fetcher takes over;
+  a `BadFile` also `mark_bad`s it so the person's retry goes to the server.
+- **`sets.rs`** — `Replica` holds each peer's `Sets` pages, counted and capped (512 sets/peer, 20 000
+  tracks/set, 8 MiB for all peers); the control loop replicates it on every connection and on every
+  `SetsChanged`, on the **Bulk** lane, so `Lan::sets()` is a short lock with **0 requests**.
+  `download_peer_sets` re-checks completeness against that live replica (one `Sets` pass only when it
+  has never heard the peer), takes the labels and sleeves from the same peer, records the peer as the
+  tracks' commitment, and queues ONE `nz-offline` job.
+- **`import.rs`** — `Meta` 200 ids a frame, one `Cover` per missing sleeve, capped before any
+  allocation (2 MiB a sleeve, 64 MiB a set), stored PINNED, and the titles/artists handed back for
+  the `Choice` labels. A sleeve is named by the digest of its URL, never by the URL: nothing the wire
+  says becomes a path.
 
-  > Tu implémentes le lot **LN11 — Adapters** du plan « nœuds LAN » (effort high). But : lecture et
-  > téléchargement vont d'abord à un pair par les coutures existantes des apps (`PeerFirstOpener`
-  > autour d'un `nz_audio::StreamOpener`, `PeerFirstDownloader` autour d'un `nz_offline::Downloader`),
-  > les playlists se prennent chez un pair (celui qui l'a complète d'abord, liste des titres depuis
-  > le pair si le serveur est injoignable), pochettes (épinglées) et métadonnées suivent. Lis
-  > *Playback: peer first*, *Downloads and playlists*, *Choosing the source*, *Rule 1 on the LAN* et
-  > la section LN11 de `docs/agents/lan-nodes.md`, puis `desktop/crates/nz-audio/src/source.rs`,
-  > `desktop/crates/nz-offline/src/{download,service}.rs`, `desktop/app/src/wiring/engine.rs`
-  > (`NetOpener`). Fichiers exclusifs : la ligne LN11. Critères : la liste *Acceptance* de LN11
-  > (vrais fichiers audio, vrai moteur, 0 sous-alimentation).
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**What a later lot can rely on.**
+
+- `PeerFirstOpener::new(inner, lan)` / `PeerFirstDownloader::new(inner, lan)` wrap the app's own
+  seams and change nothing else; `Lan::sets()` and `Lan::best_peer_for()` are what « Sur vos
+  appareils » and the playlist header read.
+- `Lan::decide_download(track, quality)` is the same table as `Lan::decide` with the set's committed
+  peer as its `prefer`.
+- The four adapters go through `import::run_on`, which never panics: a plain thread `block_on`s the
+  node's runtime, a thread INSIDE another runtime spawns the future and waits on a channel, and a
+  caller standing on the `nz-lan` runtime itself is told `None` so it can take the server.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=2`, debug, 2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| tap → first audible frame from a peer | **4.3–10.9 ms** (loopback) | `cargo test -p nz-lan --test integration a_track_only_the_peer_has -- --nocapture` |
+| a track no peer has | **1.11 ms** from `load` to the inner opener's first byte, **1** open, **0** LAN datagrams | `... a_track_no_peer_has -- --nocapture` |
+| a decision over a replica | **1.32 µs** (1 000 calls = 1.32 ms), **0** packets | same |
+| `ready()` | **7.0 µs** per call (10 000 = 69.8 ms), so **0** requests (one round trip would be ≥ 3 s) | `... a_seek_reopens_the_same_peer -- --nocapture` |
+| a peer that stalls mid-track | takeover at **exactly 65 536 B** (one 64 KiB chunk), the spool byte-identical to the file | `... a_stalled_peer_hands -- --nocapture` |
+| a 50-track playlist from one peer | **50/50** files, **0** opens of the server, labels and pinned sleeve present; **35.5 s** through the worker (the Bulk gate) | `... a_fifty_track_playlist -- --nocapture` |
+| the same, server unreachable | **50/50** from the peer, list from its `Sets`, **0** server opens | `... the_same_playlist_downloads -- --nocapture` |
+| a set replica, with its inventory | **3 924** counted bytes for 50 tracks (**78 B/track**: 1 524 for the sets, 2 400 for the inventory) | playlist test |
+| rule 1 | first sample **7.7 ms idle → 6.7 ms** while downloading from a peer AND serving another; **0** underruns | `... playing_while_downloading -- --nocapture` |
+| the lot's file | **8 tests**, ~154 s | `cargo test -p nz-lan --test integration` |
+| the crate | **108 unit + 19 cred + 5 discovery + 23 enroll + 11 fetch + 19 serve + 13 service + 20 transport**, green | `cargo test -p nz-lan` |
+| the crate for Android | `cargo check --workspace --locked` green in `mobile/rust`, neither lock moved | the `mobile` workflow's command |
+
+**Rules a measurement taught.**
+
+- **A splice is only honest between the SAME bytes.** The note's "the server takes over from the byte
+  already received" cannot hold when the peer serves a tolerated rung other than the one asked, nor
+  for an Opus transcode (not byte-reproducible): half of each is a file no decoder reads. `take_over`
+  therefore splices only when both sides are FLAC — the archive, byte-identical everywhere — and
+  otherwise stops the body and `mark_bad`s the peer, so the app's « Réessayer » fetches a clean file
+  from the server. Proved: a stall at 65 536 B gives `opens == [Some(65536)]` and a spool equal to
+  the original (`a_stalled_peer_hands...`); the same stall on an Opus 320 request never reaches the
+  server at an offset.
+- **`Progress` is not `Send`, so a peer download cannot publish progress through a closure.** Passing
+  `&mut dyn Progress` into `fetch_to_file`'s callback cannot compile, and spawning a thread for it
+  would not either. The transfer runs on the node's runtime and reports `(bytes, total)` over a
+  channel the worker's thread drains: live bar, no `unsafe`, no second thread.
+- **A counter sampled once a second is not an event.** `Lan::wire()` is read by the driver on a 1 s
+  tick, so "the peer served it" asserted on it fails for a transfer shorter than that — and a 3 s
+  playback makes the READING grow by itself (measured in CI: 9 → 21 packets for a track nobody
+  has). The tests prove it with what cannot lie: the inner opener's **open count**, the quality the
+  event carries, and the spool compared byte for byte with the peer's file; the zero-request
+  property is asserted on 1 000 decisions inside one sampling window.
+- **Stickiness is only observable where a fresh decision would differ.** Two peers with the same
+  rung would make the assertion pass without the sticky map. The test gives A the FLAC and C the
+  Opus 128, opens at FLAC (A), then seeks asking Opus 128 — where `decide` answers C — and asserts the
+  bytes are A's FLAC slice.
+- **A `Sets` answer is paginated and versioned, but a replica is re-read whole.** 64 sets a page and
+  a set that moves rarely do not justify a delta protocol `proto.rs` does not have; the version is
+  logged, not kept.
+- **The connect burst is ONE `Bulk` window, sets first.** Two `acquire`s would make the second sync
+  wait the quiet window again (a peer's files twice as long to become usable), and inventory first
+  let LN10's own measurement — 1 000 snapshots and taps with "0 request" counted on the peer — start
+  in a window where the sets request had not landed yet: measured in CI, **3 requests instead of 2**,
+  and `the_snapshot_and_a_tap_never_touch_sqlite_or_the_network` went red without a line changed in
+  it. The sets are replicated first so that a caller which waits for the inventory already has them;
+  the LN10 suite is green untouched, three runs in a row.
+- **`nz-offline`'s worker stops entirely when `Api::is_online()` is false** (`service::run`'s first
+  gate: `WorkerState::Offline`, `IDLE_POLL`). A peer-served playlist on a trip therefore cannot be
+  queued while the app KNOWS it is offline: the adapter path works (proved above, 50/50 with the
+  server unreachable) but the queue does not reach it. That file is not this lot's; the report names
+  it, and LN12/LN15 must decide whether the worker tries the peer before declaring itself offline.
+
+**Corrections to this plan, each proved by the code or a measurement:**
+
+1. **`LanEvent::Served` does not exist.** LN0 made `Lan`'s surface final and no such event is in it;
+   inventing one here would be a second source of truth. The opener reports the served quality through
+   LN5's `ByteStream::quality()`, the decision is `Lan::decide`, and the tests prove the source with
+   the inner opener's open count and the spool's bytes.
+2. **`PeerFirstOpener::new` needs `O: 'static`.** A body that falls back mid-track must hold the inner
+   opener, and `Box<dyn ByteStream>` cannot borrow it. The wrapper holds `Arc<dyn StreamOpener>`;
+   `O` stays the contract's type parameter (marker), and an opener lives for the process anyway.
+3. **`service.rs` gained a `pub(crate)` block** — `handle()`, `conn(&DevicePub)`, `api()`, `cache()`,
+   `peer_len(track, quality)`, `mark_bad(peer, track)`, `peer_set(peer, kind, ident)`,
+   `commit_peer_tracks(peer, tracks)`, `decide_download(track, quality)` — and `sets()` now answers
+   the replica. `Shared` gained two fields (`sets: Replica`, `handle: Mutex<Option<Handle>>`) and the
+   control loop replicates the sets. Without the doors the adapters could not open a transfer at all
+   (`Shared` is private to its module, and a sibling module cannot see `self.inner`); no existing
+   behaviour changed and `tests/service.rs` stayed green untouched. Approved by the orchestrator
+   before the edit.
+4. **The playlist's labels live in `nz-offline`'s kv, not in its snapshot.** `Snapshot::labels` only
+   carries `kind == "track"` rows, so a playlist's titles are asserted on `LABELS_KEY` — which is also
+   where the peer's `Meta` answer reads them on the next import.
 
 ### LN12 — Desktop wiring and screens (wave 6, effort high)
 

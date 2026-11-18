@@ -158,6 +158,11 @@ pub const LAN_NICE: i32 = 5;
 /// connected (never when none is: an idle node has no timer at all).
 const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
+/// How many track ids « Sur vos appareils » may weigh per call before a set's
+/// size is left at `0`: a screen refresh must not walk a library. 50 000 ids is
+/// a hundred 50-track playlists, each answered by one binary search per peer.
+const SET_SIZE_BUDGET: usize = 50_000;
+
 /// The longest an enrolment (or a renewal) may take on the server before the
 /// driver gives up on the try: a LAN node must not hold a task for minutes.
 const ENROL_DEADLINE: Duration = Duration::from_secs(30);
@@ -370,6 +375,16 @@ struct Shared {
     store: Store,
     index: Index,
     peers: Peers,
+    /// The peers' download sets, replicated by `sets.rs` (LN11). « Sur vos
+    /// appareils » and [`Lan::sets`] read it; nothing on the UI thread asks a
+    /// peer for it.
+    sets: crate::sets::Replica,
+    /// The `nz-lan` runtime's handle, so the adapters (`opener`, `downloader`,
+    /// `sets`, `import`) can run a peer request from their own thread — the
+    /// engine's decoder thread, the offline worker's. `None` before the runtime
+    /// exists and `None` again once `shutdown` joined it: a `block_on` on a dead
+    /// runtime panics, and an adapter must fall back, not crash.
+    handle: Mutex<Option<tokio::runtime::Handle>>,
     server: Server,
     trust: SharedTrust,
     /// The live connections, so a sleep (or a shutdown) can close them and the
@@ -741,6 +756,8 @@ impl Lan {
             peers,
             server,
             trust,
+            sets: crate::sets::Replica::new(),
+            handle: Mutex::new(None),
             conns: Mutex::new(HashMap::new()),
             view: Mutex::new(view),
             version: AtomicU64::new(0),
@@ -790,6 +807,15 @@ impl Lan {
                     };
                     // The driver joins every child before it returns, so this
                     // runtime borrows nothing when it is dropped.
+                    // LN11's adapters run a peer request from the engine's and the
+                    // offline worker's OWN threads: the handle is published before
+                    // the driver starts, and cleared before the runtime stops (see
+                    // `Shared::stop`), so a `block_on` on it is never a dead one.
+                    *shared
+                        .handle
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) =
+                        Some(runtime.handle().clone());
                     runtime.block_on(driver(
                         shared,
                         stop_rx,
@@ -921,12 +947,145 @@ impl Lan {
         )
     }
 
+    /// The same decision, with the peer a playlist download is COMMITTED to
+    /// (`download_peer_sets`): its tracks all come from that one device instead
+    /// of scattering across the LAN (`docs/agents/lan-nodes.md`, *Choosing the
+    /// source*, row 3's `prefer`).
+    ///
+    /// Additive to LN0's surface: the downloader is the only caller, and the
+    /// decision itself stays in [`decide_source`] — there is no second table.
+    pub(crate) fn decide_download(&self, track: &str, wanted: nz_api::Quality) -> Source {
+        let settings = self.settings();
+        let local = self.inner.index.best_local(track).map(|file| file.path);
+        let candidates = self.inner.peers.candidates(track);
+        decide_source(
+            local,
+            &candidates,
+            wanted,
+            &settings.tolerated,
+            self.inner.api.is_online(),
+            self.inner.sets.committed(track),
+        )
+    }
+
+    // --- the doors the adapters use (LN11, additive and `pub(crate)` only) -----
+    //
+    // The four adapters live in sibling modules of this one, and `Shared`'s
+    // fields are private to `service`: without these, `PeerFirstOpener` and
+    // `PeerFirstDownloader` could not open a single transfer. They are reads of
+    // state this module already owns, except `mark_bad`, which is the peer
+    // table's own verdict on a file that failed its SHA-256 or its decoder probe.
+
+    /// The `nz-lan` runtime, for a request started on the engine's or the offline
+    /// worker's thread. `None` before the runtime exists and after `shutdown`
+    /// joined it.
+    pub(crate) fn handle(&self) -> Option<tokio::runtime::Handle> {
+        self.inner
+            .handle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    /// The live connection to `peer`, if there is one. `None` is not an error:
+    /// the caller takes the server, which is what rule 3 asks of a failed LAN
+    /// path.
+    pub(crate) fn conn(&self, peer: &DevicePub) -> Option<PeerConn> {
+        self.inner
+            .conns
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(peer)
+            .cloned()
+    }
+
+    /// The client this node shares with its app: the ONE `Gates` a `Bulk` transfer
+    /// takes (server and LAN), and `is_online` for the decision.
+    pub(crate) fn api(&self) -> Arc<nz_api::Api> {
+        Arc::clone(&self.inner.api)
+    }
+
+    /// This device's caches, for `import.rs` (covers pinned, metadata read).
+    pub(crate) fn cache(&self) -> &nz_cache::Cache {
+        &self.inner.cache
+    }
+
+    /// The length a peer announced for one copy, from the replica: what
+    /// `StreamOpener::ready` answers **without a request**.
+    pub(crate) fn peer_len(&self, track: &str, quality: nz_api::Quality) -> Option<u64> {
+        self.inner
+            .peers
+            .candidates(track)
+            .into_iter()
+            .find(|candidate| candidate.has(quality))
+            .and_then(|candidate| {
+                candidate
+                    .copies
+                    .iter()
+                    .find(|(offered, _)| *offered == quality)
+                    .map(|(_, len)| *len)
+            })
+    }
+
+    /// A peer answered a wrong file (a bad SHA-256, a decoder probe that refused
+    /// it): out of this track's next decisions, for this session.
+    pub(crate) fn mark_bad(&self, peer: &DevicePub, track: &str) {
+        self.inner.peers.mark_bad(peer, track);
+        self.inner.touch();
+    }
+
+    /// One set of one peer, from the sets replica: what « Télécharger » re-checks
+    /// against, with **0** requests.
+    pub(crate) fn peer_set(
+        &self,
+        peer: &DevicePub,
+        kind: &str,
+        ident: &str,
+    ) -> Option<proto::SetInfo> {
+        self.inner.sets.find(peer, kind, ident)
+    }
+
+    /// The tracks of a set are being taken from `peer`: every later decision for
+    /// them prefers that device (`decide_download`).
+    pub(crate) fn commit_peer_tracks(&self, peer: &DevicePub, tracks: &[String]) {
+        self.inner.sets.commit(peer, tracks);
+    }
+
     /// Every set the connected peers expose, for « Sur vos appareils ».
     ///
-    /// The sets replica is `sets.rs`'s (LN11): LN10 replicates the inventories and
-    /// answers `Vec::new()` here rather than inventing a second source of truth.
+    /// The replica is `sets.rs`'s, filled by the control loop on every connection
+    /// (and on every `SetsChanged`), so this call is a short lock and no request.
+    /// The sizes come from the inventory replica, within a fixed budget: a
+    /// library with hundreds of sets must not make a screen walk millions of
+    /// tracks.
     pub fn sets(&self) -> Vec<PeerSet> {
-        Vec::new()
+        let mut rows = self.inner.sets.rows();
+        let mut budget: usize = SET_SIZE_BUDGET;
+        for row in &mut rows {
+            if row.set.tracks.len() > budget {
+                continue;
+            }
+            budget -= row.set.tracks.len();
+            row.bytes = self.peer_bytes(&row.peer, &row.set.tracks);
+        }
+        rows
+    }
+
+    /// What `peer`'s copies of `tracks` weigh, read from the replicated inventory:
+    /// the best copy of each, summed.
+    fn peer_bytes(&self, peer: &DevicePub, tracks: &[String]) -> u64 {
+        let mut total = 0u64;
+        for track in tracks {
+            let candidates = self.inner.peers.candidates(track);
+            let Some(candidate) = candidates.iter().find(|candidate| candidate.peer == *peer)
+            else {
+                continue;
+            };
+            if let Some((_, len)) = candidate.copies.iter().max_by_key(|(quality, _)| *quality) {
+                total += len;
+            }
+        }
+        total
     }
 
     /// The peer that has ALL of `tracks` complete, if one does: a playlist
@@ -976,6 +1135,7 @@ impl Lan {
     pub fn memory(&self) -> usize {
         self.inner.index.memory()
             + self.inner.peers.memory()
+            + self.inner.sets.memory()
             + counted_lock(&self.inner.conns, |conns| conns.len() * 64)
             + counted_lock(&self.inner.dials, DialTable::counted)
             + counted_lock(&self.inner.transfers, Transfers::counted)
@@ -1162,6 +1322,14 @@ impl Shared {
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(mut engine) = engine {
+            // The adapters must stop `block_on`ing what is about to be joined:
+            // the handle goes BEFORE the runtime's thread, never after (a caller
+            // that still holds one falls back to the inner opener instead of
+            // panicking inside tokio).
+            *self
+                .handle
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
             engine.stop();
         }
         self.publish(|view| view.state = LanState::Off);
@@ -1697,6 +1865,7 @@ impl Driver {
         )
         .await;
         let _ = self.shared.store.forget_peers();
+        self.shared.sets.clear();
         *self
             .shared
             .trust
@@ -1968,12 +2137,14 @@ impl Driver {
                             self.sample_connection(&conn);
                         }
                         self.shared.peers.remove(&peer);
+                        self.shared.sets.remove(&peer);
                         self.shared.touch();
                     }
                     // The connection this loop belonged to is already gone (a sleep
                     // drained it): its replica must go with it.
                     None => {
                         self.shared.peers.remove(&peer);
+                        self.shared.sets.remove(&peer);
                         self.shared.touch();
                     }
                     // A newer connection of the same device is live: leave it alone.
@@ -2231,26 +2402,21 @@ async fn control_loop(
             version: shared.index.sets_version(),
         })
         .await;
-    // The replica first, so a tap that lands now already sees the peer's files —
-    // and on the SAME Bulk lane as a download, so a 480 KB inventory yields to what
-    // the person is doing (rule 1 on the LAN, requester side) instead of competing
-    // with it.
-    // The lane is taken for the SYNC, never for the connection: held across the
-    // loop below it would keep every other peer's replica out for ever.
-    let outcome = {
+    // The connect burst: the peer's download sets, then its inventory, inside ONE
+    // `Bulk` window. One window because both are the same background work (rule 1:
+    // a 480 KB inventory and a sets page yield to what the person is doing), and
+    // because a second `acquire` would make the second sync wait the quiet window
+    // again — a peer's files would take twice as long to become usable.
+    //
+    // The sets go FIRST on purpose: a caller that waits for the inventory to arrive
+    // (a tap, and LN10's own measurement of "a tap sends no request") then already
+    // has the sets, so no request can land in the window it starts measuring once
+    // the inventory is visible.
+    {
         let gates = shared.api.gates();
         let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
-        shared.peers.sync_inventory(&peer).await
-    };
-    match outcome {
-        Ok(()) => shared.touch(),
-        Err(LanError::PeerGone) => {}
-        Err(error) => {
-            let _ = internal.send(Internal::Note(
-                "Inventaire d'un appareil".to_owned(),
-                Box::new(error),
-            ));
-        }
+        replicate_sets(&shared, &internal, &conn).await;
+        replicate_inventory(&shared, &internal, &peer).await;
     }
     while let Some(frame) = conn.next_control().await {
         match frame {
@@ -2262,21 +2428,14 @@ async fn control_loop(
                 }
             }
             proto::Control::InventoryChanged { .. } => {
-                let outcome = {
-                    let gates = shared.api.gates();
-                    let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
-                    shared.peers.sync_inventory(&peer).await
-                };
-                match outcome {
-                    Ok(()) => shared.touch(),
-                    Err(LanError::PeerGone) => {}
-                    Err(error) => {
-                        let _ = internal.send(Internal::Note(
-                            "Inventaire d'un appareil".to_owned(),
-                            Box::new(error),
-                        ));
-                    }
-                }
+                let gates = shared.api.gates();
+                let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
+                replicate_inventory(&shared, &internal, &peer).await;
+            }
+            proto::Control::SetsChanged { .. } => {
+                let gates = shared.api.gates();
+                let _bulk = gates.acquire(nz_api::Lane::Bulk).await;
+                replicate_sets(&shared, &internal, &conn).await;
             }
             proto::Control::Bye => {
                 conn.close(0);
@@ -2286,6 +2445,49 @@ async fn control_loop(
         }
     }
     let _ = internal.send(Internal::Closed { peer, connection });
+}
+
+/// Replicates one peer's inventory. The caller holds the `Bulk` lane: this is
+/// background work for this device (rule 1) and yields to what the person does.
+async fn replicate_inventory(
+    shared: &Arc<Shared>,
+    internal: &mpsc::UnboundedSender<Internal>,
+    peer: &DevicePub,
+) {
+    match shared.peers.sync_inventory(peer).await {
+        Ok(()) => shared.touch(),
+        Err(LanError::PeerGone) => {}
+        Err(error) => {
+            let _ = internal.send(Internal::Note(
+                "Inventaire d'un appareil".to_owned(),
+                Box::new(error),
+            ));
+        }
+    }
+}
+
+/// Replicates one peer's download sets. The caller holds the `Bulk` lane, for the
+/// same reason as the inventory.
+///
+/// A failure is a line for the screen and never a verdict about the peer (the
+/// replica keeps what it had). A peer that answers `NotFound` shares nothing (an
+/// older node, or one whose « Partager mes sons » never reached this frame): its
+/// sets are empty, not an error.
+async fn replicate_sets(
+    shared: &Arc<Shared>,
+    internal: &mpsc::UnboundedSender<Internal>,
+    conn: &PeerConn,
+) {
+    match shared.sets.sync(conn).await {
+        Ok(()) => shared.touch(),
+        Err(LanError::PeerGone) => {}
+        Err(error) => {
+            let _ = internal.send(Internal::Note(
+                "Ensembles d'un appareil".to_owned(),
+                Box::new(error),
+            ));
+        }
+    }
 }
 
 impl Shared {
