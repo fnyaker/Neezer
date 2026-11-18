@@ -1299,51 +1299,55 @@ this file's header, not to this lot.
   > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
   > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
 
-### LN5 — Shared-crate adaptations (wave 1, effort high)
+### LN5 — Shared-crate adaptations (delivered 2026-11-18)
 
-- **Objective**: the engine and the downloads worker record the quality a source ACTUALLY delivered,
-  so a peer's FLAC served for an Opus 320 request is cached and labelled as FLAC.
-- **Files**: LN5 row. **Contracts**: the *Shared-crate changes* block (`ByteStream::quality`,
-  `StreamComplete` with the delivered quality, `Fetched`, `Downloader::fetch -> Result<Fetched,
-  Outcome>`, `Downloads::complete_as`).
-- **Depends on**: LN0.
-- **Acceptance**: every existing test of `nz-audio`, `nz-offline`, `nz-cache`, the desktop app and
-  `mobile/rust` green unchanged in behaviour; new tests: a `ByteStream` reporting FLAC for an Opus
-  320 request → the play cache holds `(track, FLAC)` and not `(track, OPUS_320)`; a `Downloader`
-  returning `Fetched{quality: FLAC}` for a row reserved at Opus 320 → `Downloads::local` answers
-  FLAC, the file name is the FLAC digest, no `.part` remains, the downloads screen label says FLAC;
-  `complete` keeps its old behaviour (calls `complete_as` with the reserved quality); both locks
-  untouched (no dependency change) and both CIs green.
-- **Pitfalls**: the desktop app and the mobile core both match on `StreamComplete` — adapt the
-  pattern, change no behaviour; `tests/resume.rs` implements `Downloader` too.
-- **Prompt**:
+**What landed.** A source now says which quality it REALLY serves, and both consumers of bytes
+record that instead of the rung they asked for: `nz_audio::ByteStream::quality() -> Option<Quality>`
+(default `None`), `EngineEvent::StreamComplete` carrying `stream.quality().unwrap_or(requested)`,
+`nz_offline::Fetched { bytes, quality }` with `Downloader::fetch -> Result<Fetched, Outcome>`, and
+`nz_cache::Downloads::complete_as(owner, track, bytes, quality)`; `complete` keeps its signature and
+calls it with the reserved quality. No `Cargo.toml` and **no `Cargo.lock`** line moved in either
+workspace, and neither app needed a behaviour edit: `StreamComplete`'s `quality` is still
+`nz_audio::Quality`, so the desktop's `state.rs`/`publish_spool` and the phone's `nz-core::player`
+destructure it unchanged, and every other `ByteStream` (`ApiByteStream`, `MeasuredStream`,
+`HttpBody`, `FileSource`) keeps the default `None` — which IS the server's behaviour.
 
-  > Tu implémentes le lot **LN5 — Shared-crate adaptations** du plan « nœuds LAN » (effort high).
-  > But : que le moteur (`nz-audio`) et le travailleur de téléchargements (`nz-offline` + `nz-cache`)
-  > enregistrent la qualité RÉELLEMENT livrée par une source (`ByteStream::quality()` par défaut
-  > `None`, `StreamComplete` avec cette qualité, `Fetched{bytes, quality}`, `Downloads::complete_as`),
-  > sans changer aucun autre comportement. Ce sont des crates partagées desktop + mobile : les DEUX
-  > CI doivent être vertes. Lis *Shared-crate changes*, *Playback: peer first*, *Downloads and
-  > playlists* et la section LN5 de `docs/agents/lan-nodes.md`, puis `docs/agents/desktop.md`
-  > (*D13*) et `docs/agents/mobile.md` (*SC4*, *MB3b*). Fichiers exclusifs : la ligne LN5 (les sites
-  > d'appel ne reçoivent qu'une adaptation de signature). Critères : la liste *Acceptance* de LN5.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **The rule, a file's quality is the quality it IS.** The name, the row and the label a screen
+  prints are the digest and the word of `(track, quality really received)`, never of the request. A
+  peer that holds only the FLAC answers an Opus 320 download in FLAC; publishing it as
+  `{digest}.OPUS_320` would make the store, the engine's `local()` seam and LN4's LAN index claim a
+  transcode that never existed, and a later `local()` would answer for a rung whose file is not on
+  disk. Measured: reserved at `OPUS_320`, delivered `FLAC` → **1** file `<digest(FLAC)>.FLAC`,
+  **0** `.part`, `Downloads::local` = `(that file, Flac)`, `quality_label` = « FLAC »
+  (`cargo test -p nz-cache --lib a_download_delivered_in_flac`,
+  `cargo test -p nz-offline --lib a_download_delivered_in_flac`).
+- **The rule, `complete` is `complete_as` at the reserved quality.** One implementation
+  (`Downloads::publish`) plus a rename, so the server's path cannot drift from a peer's: the
+  reserved `.part` is renamed, never trusted before, and the length is read back from the published
+  file. One read + one `UPDATE`, as before.
+- **The rule, the engine's spool keeps the REQUESTED name while the event tells the truth.** The
+  spool is private scratch keyed by `(track, requested quality)`; naming it by the delivered quality
+  would collide with a concurrent voice spooling the same track at that quality, and only the cache
+  row matters. So `HttpSource` names the spool exactly as before and carries
+  `delivered = body.quality().unwrap_or(requested)` into `StreamComplete`; the app's `publish_spool`
+  (unchanged) reserves the play cache at THAT quality, which is what makes the entry
+  `(track, FLAC)`. Measured: a 4 096-byte body reporting FLAC for an `OPUS_320` request → the event
+  says `Flac` (`cargo test -p nz-audio --lib
+  the_completion_event_carries_the_quality_the_body_really_served`) and the play cache holds
+  `(track, FLAC)` and **nothing** under `OPUS_320` (`cargo test -p neezer-desktop --bins
+  wiring::engine::tests::a_spool_announced_as_flac`).
+- **The rule, the phone needed zero lines.** `StreamComplete.quality` stays `nz_audio::Quality`, and
+  `nz-core`'s `MeasuredStream` is a LEAF body (it owns the server's response), not a wrapper — so
+  the default `None` is right for it, and LN13's `PeerFirstOpener` will report a peer's quality from
+  `nz-lan`'s own `ByteStream` instead. `mobile/rust`'s whole suite stayed green with no edit.
+- **The rule, each new assertion was first run against a broken build.** Three deliberate mutants,
+  each one refused by the test that names it: `delivered = quality` in `HttpSource::new` (the
+  engine's test fails), `Downloads::complete_as` forwarding the RESERVED quality (the store's test
+  fails), and the worker calling `complete` instead of `complete_as` (the worker's test fails).
+- **Stated for LN11/LN12, not solved here:** a play cached under FLAC is not found by a later
+  `OPUS_320` request — `opener.local(id, Opus320)` only asks that rung — so the opener decides again
+  and may re-fetch from the peer. Nothing lies on disk; a later lot can cheapen that second play by
+  asking `local()` at the tolerated qualities `decide` already ranks.
 
 ### LN6 — Transport and authentication (wave 2, effort max)
 

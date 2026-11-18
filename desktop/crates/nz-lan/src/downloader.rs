@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use nz_api::Quality;
 use nz_model::TrackId;
-use nz_offline::{Downloader, Outcome, Progress, Stop};
+use nz_offline::{Downloader, Fetched, Outcome, Progress, Stop};
 
 use crate::service::Lan;
 
@@ -55,7 +55,7 @@ impl Downloader for PeerFirstDownloader {
         part: &Path,
         stop: &Stop,
         progress: &mut dyn Progress,
-    ) -> Result<u64, Outcome> {
+    ) -> Result<Fetched, Outcome> {
         // LN0: delegate, so wrapping changes nothing yet.
         self.inner.fetch(track, quality, part, stop, progress)
     }

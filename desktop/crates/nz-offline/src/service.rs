@@ -46,7 +46,7 @@ use nz_cache::{Cache, DownloadState, DownloadTrack};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
-use crate::download::{ApiDownloader, Downloader, Outcome, Progress, Stop};
+use crate::download::{ApiDownloader, Downloader, Fetched, Outcome, Progress, Stop};
 use crate::settings::{COVERS_CAP_BYTES, LABELS_KEY, Settings, bytes_label, quality_label};
 use crate::state::{Choice, Failure, Labels, Running, Snapshot, WorkerState};
 
@@ -1101,10 +1101,11 @@ fn step(
 
     let started = Instant::now();
     match fetch(shared, store, owner, job, downloader) {
-        Ok(bytes) => {
+        Ok(fetched) => {
             info!(
                 track = job.track.as_str(),
-                bytes,
+                bytes = fetched.bytes,
+                quality = fetched.quality.wire().unwrap_or("FLAC"),
                 ms = started.elapsed().as_millis() as u64,
                 "téléchargement terminé"
             );
@@ -1160,6 +1161,12 @@ fn step(
 /// Reserve the `.part`, let the fetcher fill it, then publish it — the store's
 /// own rule: a file is renamed into place only once complete.
 ///
+/// The quality published is the one the FETCHER reports, not the one the row
+/// asked for: a peer on the LAN serves the copy it holds, so a row reserved at
+/// Opus 320 can hold FLAC. The store then names, records and answers that
+/// quality, and every screen prints the rung the file really is
+/// (`docs/agents/lan-nodes.md`, *Shared-crate changes*).
+///
 /// An [`Outcome::Interrupted`] KEEPS the `.part`: the row stays `active` for the
 /// next start, which fetches the track again rather than trusting a truncated
 /// file (`a_restart_mid_download_resumes_the_set`). Every other failure throws
@@ -1171,7 +1178,7 @@ fn fetch(
     owner: &str,
     job: &nz_cache::DownloadJob,
     downloader: &Arc<dyn Downloader>,
-) -> Result<u64, Outcome> {
+) -> Result<Fetched, Outcome> {
     let _ = store
         .downloads()
         .mark(owner, &job.track, DownloadState::Active, None)
@@ -1189,8 +1196,8 @@ fn fetch(
         &shared.stop,
         &mut progress,
     );
-    let bytes = match outcome {
-        Ok(bytes) => bytes,
+    let fetched = match outcome {
+        Ok(fetched) => fetched,
         Err(Outcome::Interrupted) => return Err(Outcome::Interrupted),
         Err(other) => {
             let _ = std::fs::remove_file(&partial);
@@ -1200,9 +1207,9 @@ fn fetch(
 
     store
         .downloads()
-        .complete(owner, &job.track, bytes)
+        .complete_as(owner, &job.track, fetched.bytes, fetched.quality)
         .map_err(|error| Outcome::Failed(format!("publication : {error}")))?;
-    Ok(bytes)
+    Ok(fetched)
 }
 
 /// What a fetcher's byte count becomes: the snapshot a screen draws (rule 2 —
@@ -1269,4 +1276,109 @@ pub fn settings() -> Settings {
     Offline::get()
         .map(|service| service.settings())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    use nz_api::{Quality, TrackId};
+
+    use super::*;
+    use crate::download::{Downloader, Fetched};
+    use crate::settings::quality_label;
+    use crate::state::Choice;
+    use crate::testing::{Link, Scratch, TestServer, api_for, wait_for};
+
+    /// A fetcher that writes `bytes` itself and says they are FLAC: the peer a
+    /// LAN node is (`docs/agents/lan-nodes.md`, *Shared-crate changes*). The
+    /// server is never asked — only the trait's report changes.
+    struct DeliversFlac {
+        bytes: usize,
+    }
+
+    impl Downloader for DeliversFlac {
+        fn fetch(
+            &self,
+            _track: &TrackId,
+            _quality: Quality,
+            part: &Path,
+            _stop: &Stop,
+            progress: &mut dyn Progress,
+        ) -> Result<Fetched, Outcome> {
+            std::fs::write(part, vec![0x11u8; self.bytes])
+                .map_err(|error| Outcome::Failed(format!("écriture : {error}")))?;
+            progress.total(Some(self.bytes as u64));
+            progress.written(self.bytes as u64);
+            Ok(Fetched {
+                bytes: self.bytes as u64,
+                quality: Quality::Flac,
+            })
+        }
+    }
+
+    /// **LN5's acceptance for the downloads worker**: a row reserved at Opus 320
+    /// whose fetcher delivered FLAC is published, NAMED and reported as FLAC.
+    ///
+    /// `Downloads::local` answers `Flac` — which is what the engine's offline
+    /// seam and the downloads screen's label read — the file carries the FLAC
+    /// digest, no `.part` survives, and the run reports no failure.
+    ///
+    /// Measured: 1 published download of 4 096 bytes in **1** file named
+    /// `<digest(FLAC)>.FLAC`, **0** `.part`, `quality_label` = « FLAC ».
+    #[test]
+    fn a_download_delivered_in_flac_is_stored_and_labelled_flac() {
+        let scratch = Scratch::new("delivered-flac");
+        let store = scratch.store();
+        // The client needs a base URL; this fetcher never reaches it.
+        let server = TestServer::start(Link::new(None), HashMap::new());
+        let api = api_for(&server, &store, &scratch);
+        let owner = api.owner().expect("a session owner").to_owned();
+        let service = Offline::start(store.clone());
+        service.configure_with(api, Arc::new(DeliversFlac { bytes: 4096 }));
+        service.choose_track(Choice::new("3135556", "Titre").with_quality(Quality::Opus320));
+
+        assert!(
+            wait_for(Duration::from_secs(20), || service.snapshot().progress.done
+                == 1),
+            "the track was published: {:?}",
+            service.snapshot().progress
+        );
+        let snapshot = service.snapshot();
+        assert_eq!(snapshot.progress.failed, 0, "a delivery is not a failure");
+        assert_eq!(snapshot.progress.bytes, 4096);
+
+        let track = TrackId::new("3135556");
+        let (path, quality) = store
+            .downloads()
+            .local(&owner, &track)
+            .expect("the store")
+            .expect("the download is published");
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .expect("a file name");
+        println!(
+            "publié : {name}, qualité {quality:?}, libellé « {} »",
+            quality_label(quality)
+        );
+        assert_eq!(
+            quality,
+            Quality::Flac,
+            "the FLAC the fetcher delivered, not the OPUS_320 the row asked for"
+        );
+        assert_eq!(quality_label(quality), "FLAC", "what the screen prints");
+        assert!(name.ends_with(".FLAC"), "the file name holds the quality");
+        let leftovers: Vec<String> = std::fs::read_dir(store.offline_dir())
+            .expect("the offline directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".part"))
+            .collect();
+        assert_eq!(leftovers, Vec::<String>::new(), "no `.part` survives");
+
+        service.shutdown();
+        drop(service);
+    }
 }

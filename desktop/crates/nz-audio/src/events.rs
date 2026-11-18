@@ -62,6 +62,12 @@ pub enum EngineEvent {
     /// A network source reached the end of its body and its spool file is
     /// complete on disk. The app may publish it into the play cache (`nz-cache`)
     /// and then delete the spool; the engine reuses it until then.
+    ///
+    /// `quality` is the quality the source REALLY delivered
+    /// ([`ByteStream::quality`], or the requested rung when the body does not
+    /// say): a peer that only holds the FLAC answers an Opus 320 request with
+    /// FLAC, and the file must be cached under FLAC
+    /// (`docs/agents/lan-nodes.md`, *Shared-crate changes*).
     StreamComplete {
         id: String,
         quality: Quality,

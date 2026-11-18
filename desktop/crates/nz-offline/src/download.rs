@@ -134,11 +134,29 @@ pub trait Progress {
     fn written(&mut self, bytes: u64);
 }
 
+/// What a fetcher delivered: the bytes it wrote, and the quality they really
+/// are.
+///
+/// The quality is not always the one the row asked for. `ApiDownloader` answers
+/// the rung it requested — the server transcodes to order — but a peer on the
+/// LAN serves the copy it already holds, so a track reserved at Opus 320 can
+/// come back as FLAC. The worker records this one, and the file is then named,
+/// labelled and cached for what it is (`docs/agents/lan-nodes.md`,
+/// *Shared-crate changes*, LN5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fetched {
+    /// Bytes written into the `.part` the store reserved.
+    pub bytes: u64,
+    /// The quality of those bytes.
+    pub quality: Quality,
+}
+
 /// What fetches one track's bytes into the `.part` the store reserved.
 ///
-/// `fetch` owns the body: it opens `part`, writes it, and answers how many bytes
-/// it wrote. It publishes nothing and marks no row — the worker owns those, and
-/// a `0` is the worker's « corps vide » cause, not a success.
+/// `fetch` owns the body: it opens `part`, writes it, and answers what it
+/// delivered — the byte count and the quality those bytes really are. It
+/// publishes nothing and marks no row — the worker owns those, and a `0` is the
+/// worker's « corps vide » cause, not a success.
 pub trait Downloader: Send + Sync {
     fn fetch(
         &self,
@@ -147,7 +165,7 @@ pub trait Downloader: Send + Sync {
         part: &Path,
         stop: &Stop,
         progress: &mut dyn Progress,
-    ) -> Result<u64, Outcome>;
+    ) -> Result<Fetched, Outcome>;
 }
 
 /// The default fetcher: `nz-api` on `Lane::Bulk`.
@@ -178,7 +196,7 @@ impl Downloader for ApiDownloader {
         part: &Path,
         stop: &Stop,
         progress: &mut dyn Progress,
-    ) -> Result<u64, Outcome> {
+    ) -> Result<Fetched, Outcome> {
         let file =
             File::create(part).map_err(|error| Outcome::Failed(format!("disque : {error}")))?;
         let mut out = BufWriter::with_capacity(64 * 1024, file);
@@ -241,7 +259,8 @@ impl Downloader for ApiDownloader {
                 "le serveur a répondu un corps vide".to_owned(),
             ));
         }
-        Ok(bytes)
+        // The server transcodes to order: what was asked for is what arrived.
+        Ok(Fetched { bytes, quality })
     }
 }
 

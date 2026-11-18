@@ -177,6 +177,20 @@ pub trait ByteStream: Read + Send {
     fn start_offset_s(&self) -> f64 {
         0.0
     }
+
+    /// The quality this body REALLY delivers, when it knows better than the
+    /// request did.
+    ///
+    /// `None` — every existing body — means « the quality that was asked for »,
+    /// which is what `GET /api/stream/<id>?q=` always answers. A body that
+    /// serves a copy it already holds says so instead: a peer on the LAN serves
+    /// the file it has, so an Opus 320 request can be answered in FLAC
+    /// (`docs/agents/lan-nodes.md`, *Shared-crate changes*). The engine carries
+    /// it in [`EngineEvent::StreamComplete`] so the app publishes the finished
+    /// spool into the play cache under the quality the file really holds.
+    fn quality(&self) -> Option<Quality> {
+        None
+    }
 }
 
 /// Everything the engine needs from the app's network and cache layers.
@@ -359,7 +373,11 @@ pub(crate) struct HttpSource {
     probing: Arc<AtomicBool>,
     /// The track this body belongs to, for the completion event.
     id: String,
-    quality: Quality,
+    /// The quality this body really delivers: [`ByteStream::quality`] when the
+    /// body knows better than the request, the requested rung otherwise. It is
+    /// what [`EngineEvent::StreamComplete`] carries, so the app caches the file
+    /// under the quality it holds.
+    delivered: Quality,
     bus: Option<Arc<EventBus>>,
     /// The completed spool file is announced once.
     announced: bool,
@@ -389,6 +407,9 @@ impl HttpSource {
             spoolers,
         } = spec;
         let len = body.len_hint();
+        // What the body really serves; a body that says nothing is the server,
+        // which serves exactly the rung that was asked for.
+        let delivered = body.quality().unwrap_or(quality);
         let final_path = spool_path(dir, id, quality);
         let path = final_path.with_extension("part");
         let mut options = OpenOptions::new();
@@ -431,7 +452,7 @@ impl HttpSource {
             spooler: None,
             probing: Arc::new(AtomicBool::new(true)),
             id: id.to_string(),
-            quality,
+            delivered,
             bus,
             announced: false,
             publish,
@@ -618,7 +639,7 @@ impl HttpSource {
         {
             bus.emit(EngineEvent::StreamComplete {
                 id: self.id.clone(),
-                quality: self.quality,
+                quality: self.delivered,
                 path: final_path,
                 bytes,
             });
@@ -785,6 +806,131 @@ mod tests {
         fn len_hint(&self) -> Option<u64> {
             Some(self.data.len() as u64)
         }
+    }
+
+    /// A body that knows which quality it really serves: a peer that holds only
+    /// the FLAC, asked for Opus 320 (`ByteStream::quality`).
+    struct DeclaredBody {
+        data: Vec<u8>,
+        pos: usize,
+        quality: Option<Quality>,
+    }
+
+    impl Read for DeclaredBody {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let take = (self.data.len() - self.pos).min(buf.len()).min(8 * 1024);
+            if take == 0 {
+                return Ok(0);
+            }
+            buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+            self.pos += take;
+            Ok(take)
+        }
+    }
+
+    impl ByteStream for DeclaredBody {
+        fn len_hint(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+
+        fn quality(&self) -> Option<Quality> {
+            self.quality
+        }
+    }
+
+    /// Spool a whole 4 096-byte body through a real [`HttpSource`] and answer
+    /// every event it emitted, plus the directory it wrote in.
+    fn spool_a_body(
+        served: Option<Quality>,
+        requested: Quality,
+        name: &str,
+    ) -> (Vec<EngineEvent>, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("nz-audio-quality-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the spool directory");
+        let bus = EventBus::new();
+        let events = bus.subscribe();
+        let spoolers = Spoolers::default();
+        let mut source = HttpSource::new(
+            Box::new(DeclaredBody {
+                data: vec![0x42; 4096],
+                pos: 0,
+                quality: served,
+            }),
+            SourceSpec {
+                dir: &dir,
+                id: name,
+                quality: requested,
+                restart: None,
+                bus: Some(Arc::clone(&bus)),
+                ahead: 1024 * 1024,
+                publish: true,
+                stop: Arc::new(AtomicBool::new(false)),
+                spoolers: spoolers.clone(),
+            },
+        )
+        .expect("a source");
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes).expect("the whole body");
+        // The publication happens on the reading thread at EOF, so the event is
+        // already queued; joining the spooler keeps the directory quiet.
+        drop(source);
+        spoolers.join_all();
+        (events.try_iter().collect(), dir)
+    }
+
+    /// **LN5, the engine's half** (`docs/agents/lan-nodes.md`, *Shared-crate
+    /// changes*): the completion event names the quality the BODY served, so the
+    /// app caches the file under it — a peer that only holds the FLAC answers an
+    /// Opus 320 request with FLAC, and caching that under `OPUS_320` would make
+    /// the engine believe it holds a transcode it never had.
+    ///
+    /// Measured: the whole 4 096-byte body is announced as `Flac`, with the file
+    /// renamed into the spool exactly once.
+    #[test]
+    fn the_completion_event_carries_the_quality_the_body_really_served() {
+        let (events, dir) = spool_a_body(Some(Quality::Flac), Quality::Opus320, "served-flac");
+        let (quality, path, bytes) = events
+            .iter()
+            .find_map(|event| match event {
+                EngineEvent::StreamComplete {
+                    quality,
+                    path,
+                    bytes,
+                    ..
+                } => Some((*quality, path.clone(), *bytes)),
+                _ => None,
+            })
+            .expect("one StreamComplete for the whole body");
+        println!(
+            "corps annoncé {quality:?} (demandé OPUS_320), {bytes} octets, {}",
+            path.display()
+        );
+        assert_eq!(
+            quality,
+            Quality::Flac,
+            "the FLAC the body served, not the OPUS_320 it was asked for"
+        );
+        assert_eq!(bytes, 4096);
+        assert!(path.is_file(), "the spool was renamed into place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the same rule: a body that says nothing is the server,
+    /// which serves exactly the rung that was asked for — so every existing
+    /// opener keeps its behaviour (`tests/resume.rs`, the app's `ApiByteStream`).
+    #[test]
+    fn a_body_that_says_nothing_keeps_the_requested_quality() {
+        let (events, dir) = spool_a_body(None, Quality::Opus128, "served-asked");
+        let quality = events
+            .iter()
+            .find_map(|event| match event {
+                EngineEvent::StreamComplete { quality, .. } => Some(*quality),
+                _ => None,
+            })
+            .expect("one StreamComplete for the whole body");
+        assert_eq!(quality, Quality::Opus128);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Rule 1 on the device: a body is spooled at most `ahead` bytes in front
