@@ -147,6 +147,35 @@ pub const MAX_REDIRECTS: usize = 10;
 
 const USER_AGENT: &str = concat!("neezer-desktop/", env!("CARGO_PKG_VERSION"));
 
+/// What one attempt answered: a body, or a `304` to a conditional GET.
+///
+/// A `304` is a SUCCESS, not a failure: the server said « nothing changed » and
+/// sent no body, which is exactly the cheap answer a device asking again for the
+/// LAN roster wants (`Api::get_conditional`, `docs/agents/lan-nodes.md` *Trust
+/// chain*). Only a request that carried `If-None-Match` can receive one, so
+/// every other caller maps it to the `Http 304` it always got.
+enum Answer {
+    Body(Vec<u8>),
+    NotModified,
+}
+
+impl Answer {
+    /// The body, for the callers that never send `If-None-Match`.
+    fn into_body(self) -> Result<Vec<u8>, ApiError> {
+        match self {
+            Answer::Body(bytes) => Ok(bytes),
+            // Unreachable by construction (the header is only set by
+            // `Api::get_conditional`), and a plain `Http` error rather than a
+            // panic if a proxy ever answers a 304 to an unconditional GET.
+            Answer::NotModified => Err(ApiError::Http {
+                status: 304,
+                message: "not modified".to_owned(),
+                code: None,
+            }),
+        }
+    }
+}
+
 /// What an answer is read as. The retry policy and the failure classification
 /// are identical for both — a sleeve the server cannot serve is refused the
 /// same way a JSON route is — so only the `Accept` header differs.
@@ -563,8 +592,9 @@ impl Api {
         }
 
         match self
-            .fetch_want(Want::Json, lane, Method::GET, path, None, was_online)
+            .fetch_want(Want::Json, lane, Method::GET, path, None, was_online, None)
             .await
+            .and_then(Answer::into_body)
         {
             Ok(body) => {
                 let body = String::from_utf8_lossy(&body).into_owned();
@@ -608,6 +638,51 @@ impl Api {
         }
     }
 
+    /// A typed GET that asks the server whether anything changed: `If-None-Match`
+    /// in, `None` out for a `304` (nothing changed, **0 body bytes**).
+    ///
+    /// This is the LAN roster's cheap half (`docs/agents/lan-nodes.md`, *Trust
+    /// chain*: `GET /api/lan/roster` sets `"<roster>-<revocation>"` and answers
+    /// `304` when it still matches). It exists as its own entry point because the
+    /// offline response cache must not answer it — the durable copy of a trust
+    /// blob is `lan.sqlite` (`nz-lan`'s `Store`), not this cache — and because a
+    /// `304` is a success the other paths have no shape for.
+    ///
+    /// Everything else is [`Api::get`]: the same lane slot (so a `Bulk` sync
+    /// still yields to the tapped track), the same `X-NS-Background` header, the
+    /// same retry policy (three tries on a `User` GET, two on a background one,
+    /// and only on a connection failure or a transient 5xx), the same
+    /// `ApiError::Offline` when the link is dead. A dead link never serves a
+    /// cached body here: the caller already holds its own.
+    pub async fn get_conditional<T: DeserializeOwned>(
+        &self,
+        lane: Lane,
+        path: &str,
+        etag: &str,
+    ) -> Result<Option<T>, ApiError> {
+        let was_online = self.is_online();
+        match self
+            .fetch_want(
+                Want::Json,
+                lane,
+                Method::GET,
+                path,
+                None,
+                was_online,
+                Some(etag),
+            )
+            .await?
+        {
+            Answer::NotModified => Ok(None),
+            Answer::Body(body) => {
+                let body = String::from_utf8_lossy(&body);
+                serde_json::from_str::<T>(&body)
+                    .map(Some)
+                    .map_err(|err| ApiError::Decode(format!("{path}: {err}")))
+            }
+        }
+    }
+
     /// A mutation. NEVER retried: replaying a POST/PUT/PATCH/DELETE could
     /// double it (two playlists, two listens). `Ok(None)` is the server's `204`.
     pub async fn send<B: Serialize, T: DeserializeOwned>(
@@ -625,8 +700,17 @@ impl Api {
             None => None,
         };
         let answer = self
-            .fetch_want(Want::Json, lane, method, path, payload.as_deref(), false)
-            .await?;
+            .fetch_want(
+                Want::Json,
+                lane,
+                method,
+                path,
+                payload.as_deref(),
+                false,
+                None,
+            )
+            .await?
+            .into_body()?;
         if answer.is_empty() {
             return Ok(None);
         }
@@ -647,8 +731,9 @@ impl Api {
     /// no offline copy of its own — `nz-cache` keeps sleeves, not this cache.
     pub async fn bytes(&self, lane: Lane, path: &str) -> Result<Vec<u8>, ApiError> {
         let was_online = self.is_online();
-        self.fetch_want(Want::Bytes, lane, Method::GET, path, None, was_online)
-            .await
+        self.fetch_want(Want::Bytes, lane, Method::GET, path, None, was_online, None)
+            .await?
+            .into_body()
     }
 
     /// Whether the SERVER has this route at all: what an older server is
@@ -670,6 +755,7 @@ impl Api {
                 path,
                 None,
                 false,
+                None,
             )
             .await
         {
@@ -1078,6 +1164,10 @@ impl Api {
     /// a screen reads JSON, a sleeve is an image (`Api::bytes`). One retry
     /// policy for both, because the rules of rule 3 are about the request, not
     /// about what the answer is written in.
+    ///
+    /// `etag` is the conditional GET's `If-None-Match`; `None` asks for the
+    /// body unconditionally, like every caller before it did.
+    #[allow(clippy::too_many_arguments)] // one request, its body, its validator
     async fn fetch_want(
         &self,
         want: Want,
@@ -1086,7 +1176,8 @@ impl Api {
         path: &str,
         body: Option<&[u8]>,
         was_online: bool,
-    ) -> Result<Vec<u8>, ApiError> {
+        etag: Option<&str>,
+    ) -> Result<Answer, ApiError> {
         let attempts = if method == Method::GET {
             match lane {
                 // A GET started online gets the SPA's three tries on a
@@ -1104,7 +1195,10 @@ impl Api {
 
         let mut last = ApiError::Offline;
         for attempt in 0..attempts {
-            match self.attempt(want, lane, method.clone(), path, body).await {
+            match self
+                .attempt(want, lane, method.clone(), path, body, etag)
+                .await
+            {
                 Ok(bytes) => return Ok(bytes),
                 Err(err) => {
                     let retry_in = match &err {
@@ -1157,7 +1251,8 @@ impl Api {
         method: Method,
         path: &str,
         body: Option<&[u8]>,
-    ) -> Result<Vec<u8>, ApiError> {
+        etag: Option<&str>,
+    ) -> Result<Answer, ApiError> {
         let guard = self.gates.acquire(lane).await;
         let mut url = self.hop(self.endpoint(path))?;
         let mut method = method;
@@ -1170,6 +1265,9 @@ impl Api {
                 .timeout(ANSWER_TIMEOUT);
             if guard.lane().is_background() {
                 request = request.header(BACKGROUND_HEADER, "1");
+            }
+            if let Some(etag) = etag {
+                request = request.header(reqwest::header::IF_NONE_MATCH, etag);
             }
             if let Some(bytes) = body {
                 request = request
@@ -1203,6 +1301,13 @@ impl Api {
                 url = self.hop(next)?;
                 continue;
             }
+            // A conditional GET's `304` is the answer the caller asked for: the
+            // validator still matches, so there is no body to read and no byte
+            // to count (`Api::get_conditional`).
+            if status == 304 && etag.is_some() {
+                drop(guard);
+                return Ok(Answer::NotModified);
+            }
             let bytes = response.bytes().await.map_err(|err| {
                 if is_network_failure(&err) {
                     self.note_unreachable();
@@ -1220,7 +1325,7 @@ impl Api {
             drop(guard);
 
             if (200..300).contains(&status) {
-                return Ok(bytes);
+                return Ok(Answer::Body(bytes));
             }
             // A refusal is written in JSON whatever was asked for; a body that
             // is not text still yields the server's status and headers.
