@@ -2091,13 +2091,8 @@ inventory are the behaviour; port them, do not invent.
   (import is a background job: progress + causes, rule 2). Kotlin: `InviteEntry`, `OnboardingEntry`.
   Rows: an import of a large account shows progress and finishes with per-item causes; leaving and
   coming back resumes (server job).
-- **MB6 — Search.** FFI (`search.rs`): `search(q, scope) -> SearchResults { top: Option<TopResult>,
-  tracks: Arc<ListHandle>, albums, artists, playlists, podcasts, transcripts: Vec<TranscriptHit>,
-  youtube: Vec<TrackRow> }` with `lib/searchrank.js`'s ranking ported in Rust, `search_as_radio(q)`
-  (`queryradio.js`), recent searches in kv. Debounce 250 ms, ≥ 2 characters, previous request
-  cancelled on a new key (one in flight). Kotlin: `SearchEntry` with `ExplorerStylesSection()` (MB14's)
-  on the empty state. Rows: typing "daft punk" fast sends ≤ 3 requests (count); YouTube results inside
-  the same list, ON by default (webapp.md).
+- **MB6 — Search.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not port:
+  see « MB6 — Recherche » below.*
 - **MB7 — Artist, album, credits.** *Delivered 2026-11-18 — what it cost, what it taught, what it
   does not port: see « MB7 — Artiste, album, crédits » below.*
 - **MB8 — Library.** FFI (`library.rs`): `library_playlists() -> LibraryTree { folders, playlists }`,
@@ -2375,6 +2370,102 @@ render captures + 1 emulator capture), and this section.
 **Still owed to a later lot**: `nz-core::player`'s two instants on one clock (MB3b/MQ2) and
 `DownloadButton`'s Sillon styling (MB15 — the screen uses its stub, which the Material theme paints
 as a grey outline).
+
+### MB6 — Recherche (delivered 2026-11-18)
+
+**What landed.** The search, ported from `routes/Search.svelte` and the two pure rules it rests
+on — the ranking (`lib/searchrank.js`) and the query-radio (`lib/queryradio.js`) — both in Rust,
+so the phone shows the SPA's list for the same answer and the tests are the SPA's own.
+
+- **One settled query costs TWO requests, the SPA's two.** `GET /api/search` (one) and
+  `GET /api/youtube/search` (one, on its own 800 ms beat, only when the session offers the
+  fallback). The fallback is a second CALL and not a second parameter because the SPA has two
+  beats: a person who pauses mid-word pays for one search, not for one search plus one YouTube
+  query per pause. Measured on the counting server: **2 requests cold, 0 blocking warm**, and the
+  `search` row of `NzCore::stats()` holds the same 2.
+- **Typing « daft punk » fast is ONE request.** 250 ms debounce, and a new key cancels the read in
+  flight (`loadJob?.cancel()` — the FFI future is dropped, so one query is in flight at a time).
+  On the emulator: `input text "daft punk"` → **1** `/api/search` in the server's log; Enter on a
+  term the list already answers adds **0** — the SPA re-runs `run(term)` there, the phone does not
+  (same result, cheaper: the person is reading that list).
+- **The kept answer paints first.** `search-<account hash>-<scope>-<term hash>.json` in the CACHE
+  directory (the five recent terms are pruned): a warm visit shows what it saw with **0 blocking
+  requests**, and a dead link keeps it with « Hors ligne · version mémorisée » — `Offline` in zero
+  sockets, asserted at the peer.
+- **YouTube inside the SAME list, ON by default.** `rank_search_results` keeps the catalogue's
+  order, keeps library rows first, promotes a video only when it matches strictly closer than the
+  best catalogue answer (`YOUTUBE_MIN` 0.75 > `CATALOGUE_MIN` 0.5), drops an identical recording
+  (cosmetic decorations stripped) and appends the rest. The chip takes them out again for **0
+  requests**: `search(term, scope, fallback = false)` re-reads the kept answer.
+- **« Lancer la radio » costs 0 requests.** The answer on screen IS the opening queue and the
+  player's own refill tops it up one title at a time (`radio:track:<ref>` / `radio:artist:<id>` →
+  `GET /api/radio/track|artist/<id>`), which is exactly `queryradio.js`'s rule with the top-up the
+  phone already owns instead of the SPA's one `POST /api/radio/next`. The button appears at 30
+  distinct results across the tabs.
+- **The podcasts scope is ONE request**: `/api/transcripts/search` for the passages. Its
+  « Émissions » tab is ONE `/api/search/podcasts` — a deliberate difference: the SPA reuses the
+  library payload's `podcasts` for that tab, and the phone's two scopes are two answers on the disk,
+  so the tab is a `Scope` of its own rather than a tab that empties itself.
+
+**Measured on this machine** (API 35 x86_64, `-no-window -no-audio`, port 5680;
+`perf_api.py --serve --archived` on 5690 reached at `10.0.2.2`; 8 000 tracks):
+
+- **The screen, on the real server**: « fire » → **1 request, 25 386 bytes**, 25 titles, 23 artists,
+  25 albums, the radio offered (73 distinct results). « daft punk » → **1 request, 68 bytes** (this
+  synthetic library has no such title: an empty answer is 68 bytes). `NzCore::stats()` counts the
+  same requests under one `search` row; the fallback is not offered here (the bench has no provider
+  source), so this capture has no `YT` row — the weaving is proven by the counting-server tests and
+  the fixture screenshots.
+- **Rust**: `cargo test --workspace` **184 nz-core** (54 in `search`: 24 against a counting server —
+  the 2-request budget, the woven list, the three fallback failures, the transcript page, the shows
+  tab, the radio's 0, the recents, the chip's 0 — and the SPA's own `searchrank`/`queryradio`
+  cases) + **33 nz-ffi** (4 in `search`); `clippy -D warnings` and `fmt --check` clean.
+- **JVM**: `:feature:search:testDebugUnitTest` **42 tests** — `SearchModelTest` 21 (2 requests per
+  settled query on a VIRTUAL clock, one read in flight, one letter asks nothing, a link is an
+  import, cached-then-fresh, a failed refresh keeps the copy, cause + « Réessayer », the fallback's
+  beat and its failure, Enter's 0, a tab's 0, a scope's 1, `Unsupported` hides the scope, the
+  radio's 0 and one launch per burst, the chip's 0, the recents, a deep link, leaving),
+  `SearchBlocksTest` 11 (the page's order, block by block), and 10 screenshot renders.
+- **Look**: `docs/agents/screenshots/mobile/MB6/` — Encre and Papier at 360 dp and 600 dp, the empty
+  state and the podcasts scope at 360, Encre at 200 %, and **two headless-emulator captures of the
+  real screen** against the live server (« fire » with its 25 titles and « Lancer la radio »; the
+  empty page with « Récents »). The tabs mount 6 rows and 11 after a scroll on « Titres »: the
+  list is windowed like every other.
+
+**Rules a measurement taught** (each cost a crash or a wrong screenshot):
+
+- **`:designsystem`'s `asRowSource()` recursed forever, and this lot's capture is what found it.**
+  `ListWindow.kt:25` returned an object whose `override fun len() = len()` and
+  `window(start, count) = window(start, count)` resolve to THEMSELVES: the first screen to window a
+  real `ListHandle` died with `StackOverflowError` at
+  `ListWindowKt$asRowSource$1.len(ListWindow.kt:25)` (emulator-5680, 04:34:05). **No JVM test can
+  see it** — a `ListHandle` is a native object, and a fake implements the interface directly, which
+  is why `ListWindowTest` was green over a function that could only recurse. Fixed in **its own PR
+  (#321, merged first)**: the handle is captured in a local, and `RowSourceTest`
+  (`:designsystem`'s `androidTest`, discovered by `ci-emulator.sh`) builds the real object graph on
+  the device — it **failed with the same `StackOverflowError` on the old code** and passes now. The
+  search calls `asRowSource()` like every screen will; a self-calling function anywhere else in
+  `designsystem/`, `bridge/`, `app/` or `feature/` was scanned for and there is none.
+- **`TrackRowView` is a FIXED 56 dp** and at the 200 % font scale its title and artist OVERLAP. The
+  search draws its own row (`heightIn(min = 56.dp)`), which also carries the `YT` mark on the
+  artist line where a narrow row has no quality cell (`webapp.md`'s `.qinline`). The design system's
+  row needs the same `heightIn` before a screen with two lines in it ships.
+- **MB14's `ExplorerStylesSection` inherits `LocalContentColor`, which is BLACK at the root**: its
+  heading was invisible on Encre until the block was handed `Sillon.colors.tx`. A stub that draws
+  its own Material text owes the theme that local; a host can also provide it (this lot does).
+- **A source chip that appears and then vanishes is a flicker.** The fallback's availability is read
+  from the SESSION when the screen opens (`search_is_admin`, `youtube_available`), not from the
+  first answer — the chip was painted optimistically before the search and gone after it.
+- **The soft keyboard covers half the results.** Enter searches AND hides it (the SPA blurs the
+  box); the first live capture is what showed it.
+
+**Not ported, on purpose** (both named where they are drawn):
+
+- **A transcript passage's tap** — `Search.svelte#pickPassage` seeks into the moment and opens the
+  episode panel, which is MB13's (`/api/podcast/episode/<id>`, the transcript panel). Until it
+  lands the tap says so in a toast, and this lot's paragraph is the record.
+- **The local transcript search** (`lib/transcriptcache.js`, IndexedDB pages) — the phone has no
+  pages cache and the scope is server-only; a dead link answers `Offline` there.
 
 ### MB3c — Media service `:playback` (delivered 2026-11-18)
 
