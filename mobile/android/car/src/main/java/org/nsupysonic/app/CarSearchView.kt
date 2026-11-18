@@ -28,13 +28,13 @@ import androidx.core.graphics.ColorUtils
 import fr.neezer.mobile.bridge.NzErrors
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 /**
  * The car's search panel: a 52 dp field, a drawn keyboard, three results and a

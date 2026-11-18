@@ -130,7 +130,7 @@ impl NzCore {
         // `lib/car.js`'s own gate: a signed-out app would answer 401 on the
         // resolve, so say `false` before the request and let the card say
         // "Ouvre Neezer…".
-        if self.core().me().is_none() {
+        if !self.car_signed_in() {
             return false;
         }
         // `flow` is a STYLE, and none is the person's default: an empty style is
@@ -163,7 +163,7 @@ impl NzCore {
         if key.is_empty() || key.len() > MAX_ID || id.len() > MAX_ID {
             return false;
         }
-        if self.core().me().is_none() {
+        if !self.car_signed_in() {
             return false;
         }
         let context_id = if id.is_empty() { key } else { id };
@@ -214,11 +214,22 @@ impl NzCore {
 }
 
 impl NzCore {
-    // No helper: `car_play` reaches the process's ONE player through the
-    // `player()` accessor MB3c fixed (a second `PlayerApi` would play into
-    // another engine), and that call is infallible by contract — a runtime that
-    // could not start answers empty values with `error` set, never a panic on a
-    // click.
+    /// Whether this device holds a session: the JAR has a cookie for the
+    /// configured origin.
+    ///
+    /// It is deliberately NOT `me().is_some()`: a process the quick-settings
+    /// tile starts (the person taps the car mode with no activity, no screen)
+    /// never runs `restore()`, so `me` stays `None` while the cookie the last
+    /// launch saved is right there — and the first emulator run of this lot
+    /// answered "Ouvre Neezer pour lancer la musique" for a signed-in app.
+    /// `has_session` is the SPA's own `isSignedIn` (`get(user)`), which is what
+    /// `playFromCar` refused on.
+    fn car_signed_in(&self) -> bool {
+        self.core()
+            .api()
+            .map(|api| api.has_session())
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -398,6 +409,16 @@ mod tests {
         .expect("a core")
     }
 
+    /// Sets the server, and nothing else: the state of a process the tile
+    /// started (a server configured by a previous launch, no screen, no
+    /// `restore()`).
+    async fn core_without_restore(server: &Server, tag: &str) -> Arc<NzCore> {
+        let core = core(tag);
+        core.set_server(server.base.clone()).await.expect("server");
+        server.forget();
+        core
+    }
+
     /// Sets the server and signs in: the two calls `NzBridge` and MB4 make, so
     /// the catalogue is read with exactly the session the app has.
     async fn signed_in(server: &Server, tag: &str) -> Arc<NzCore> {
@@ -523,6 +544,31 @@ mod tests {
         assert!(!core.car_play("playlist".into(), "x".repeat(129)));
         assert!(!core.car_play_track(TrackRef::default()));
         core.shutdown();
+    }
+
+    /// The launch gate is the SESSION, not the person: a process the tile
+    /// started (no activity, so no `restore()`) holds the cookie and no `me`,
+    /// and it must still play. Measured on the emulator: the first run answered
+    /// "Ouvre Neezer pour lancer la musique" for a signed-in app.
+    #[tokio::test]
+    async fn a_process_that_never_restored_still_plays() {
+        let server = Server::start();
+        let core = core_without_restore(&server, "tile-only").await;
+        assert_eq!(core.core().me(), None, "nobody restored: no person in memory");
+        // The cookie the previous launch saved is in the jar.
+        let seeded = core.core().jar().seed(
+            &server.base,
+            "session=abc123",
+        );
+        assert_eq!(seeded, 1, "one cookie seeded");
+        assert!(
+            core.car_play("playlist".into(), "34b37fae-19e3-48b7-a976-e6496d9bf5c9".into()),
+            "a signed-in app plays even when no screen ever loaded"
+        );
+        // No `shutdown()` here: this test is the one that BUILDS the player, and
+        // shutting an engine down joins its threads — blocking that is refused
+        // inside an async test (`Cannot drop a runtime in a context where
+        // blocking is not allowed`). The process ends with the test.
     }
 
     /// The heart is the player's own answer, and its absence is the SPA's own

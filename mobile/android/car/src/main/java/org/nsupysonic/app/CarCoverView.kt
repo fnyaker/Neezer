@@ -19,13 +19,13 @@ import fr.neezer.mobile.bridge.NzBridge
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URI
+import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * A record sleeve for the car. It now shows the real cover when one is

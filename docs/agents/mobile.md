@@ -4308,63 +4308,101 @@ Fin : ne fusionne pas toi-même : pousse ta branche et `ao report --done` ; le p
 réunit les branches dans une PR, CI verte, rebase + diff --stat, merge, section MB23 réécrite.
 ```
 
-### MB24 — Car mode (wave 4)
+### MB24 — Car mode (delivered 2026-11-18)
 
-**Goal.** The car overlay exactly as android.md describes it, on the new player. **Depends on**:
-MB3c (and MB8 for the favourites counter route, MB6 for search). **Exclusive files**: `car/**`,
-`nz-ffi/src/car.rs`.
-**Contract.** Move the old car classes (`android/app/src/main/java/org/nsupysonic/app/Car*.kt`,
-`CarModeContract`, the JVM tests `Car*Test.kt`) into `:car` KEEPING their package
-`org.nsupysonic.app` (the manifest's component names, the tile, the person's preferences file).
-Change only the two seams: (1) `PlayerService.state()/onState/transport()` → a Media3
-`MediaController` bound to `NzMediaService` (state = its `Player`, transport = its commands);
-(2) `__nsCarPlay(kind, id, title, payload)` / `__nsCarFav()` → `car.rs`: `car_play(kind, id) ->
-bool` (`PlayEntity`/`PlayQueue`/favourites, the same kinds `KINDS` of `lib/car.js`) and
-`car_toggle_favorite() -> Option<bool>`; the catalogue (`CarPlaylistSource`) and covers (`CarCovers`)
-read through `NzCore` (cookie and allow-list in Rust) instead of `Net`/`CookieManager`. The pins, the
-24-pin cap, the Favoris tile and its light counter, triggers, motion, placement, the 2 s grace, the
-wake ladder, the job — unchanged.
-**Acceptance.** Every moved JVM test passes unchanged (count before/after in the PR); on the headless
-emulator: the tile starts the overlay, a pinned playlist plays through the new player, next/pause from
-the card work with the main activity finished, the overlay never appears over a non-navigation app
-when the GPS trigger is usable (the existing `CarVisibility` tests + one instrumented run).
-**Pitfalls.** Do not "improve" the car policies while moving them — they encode measured fixes.
+**What landed.** The old app's car mode, moved into `:car` under its OLD package
+`org.nsupysonic.app` (22 Kotlin files, their 8 JVM test files — 9 classes), with
+only its two seams changed:
 
-```text
-Tu es le worker du lot MB24 (mode voiture) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« MB24 », « Worker rules »), docs/agents/android.md EN ENTIER (toutes les
-sections car), puis android/app/src/main/java/org/nsupysonic/app/Car*.kt et webapp/src/lib/car.js.
-Objectif : déplacer le mode voiture dans le module :car en gardant le paquet org.nsupysonic.app et
-toutes ses politiques, et ne changer que ses deux jonctions (MediaController au lieu de PlayerService ;
-car.rs au lieu des crochets __nsCarPlay/__nsCarFav ; catalogue et pochettes via NzCore), selon MB24.
-Fichiers à toi seul : mobile/android/car/** et nz-ffi/src/car.rs.
-Acceptation : tous les tests JVM car déplacés passent sans changement (compte avant/après) ; tuile →
-overlay → playlist épinglée jouée par le nouveau lecteur, suivant/pause activité terminée, aucune
-apparition au-dessus d'une app non-GPS.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb24, PR « feat(mobile): MB24 car mode on the native player », CI verte,
-rebase + diff --stat, merge, section MB24 réécrite, `ao report --done`.
-```
+- **The player is a Media3 `MediaController`** on `NzMediaService` (`CarPlayer`),
+  built with the MAIN looper, rebuilt a second after a session death, and used for
+  exactly what the old `PlayerService.transport/state/onState` did: play/pause,
+  next, previous (Media3's own "past 3 s restarts the title"), seek, and the
+  `CarNow` the card paints (title, artist, album, cover from the
+  `neezer-cover:` artwork URI, position, duration, `isPlaying`). One player, the
+  process's own (CLAUDE.md): the car asks `NzCore.player()` for the heart's state
+  and never builds a second one.
+- **The two page hooks became `car.rs`**: `car_play(kind, id)` (`flow` →
+  `StartFlow`, `favorites`/`playlist`/`album`/`artist` → `PlayEntity`, the same
+  `KINDS` of `lib/car.js`), `car_play_track(TrackRef)` (the SPA's JSON payload was
+  a row: a `PlayQueue` of one, context `track`), `car_favorite()` and
+  `car_toggle_favorite()` (MB10's `set_track_favorite`, optimistic, answering the
+  new state), and `car_catalogue()` — `/api/me/playlists` + the light
+  `/api/me/favorite-ids` through `nz-core::library`, the session cookie in the
+  core's jar. Covers go through `Screens::cover_path` (Rust fetches and caches;
+  Android decodes the file).
+- **Unchanged on purpose**: FULL/MINI/ULTRA and their stored per-(app, size)
+  slots, the drag and its clamps, the 40–80 % fill alpha, the blur rule, the
+  trigger formula (`CarVisibility`), the sticky foreground tracker with its 2 s
+  grace, the speed thresholds (5 km/h, 5 s), the pins and their 24 ceiling, the
+  Favoris tile, the 700 ms/2-letter search, the wake ladder and the 15-minute job,
+  the settings screen, the tile, the notification. Each of those was a measured
+  fix (android.md), so the move renames nothing and re-tunes nothing.
+
+**The rule each seam had to learn** (all three cost a red run or a wrong screen):
+
+1. **A `MediaController` is called from its APPLICATION thread.** Every read and
+   command in `CarPlayer` runs on the main looper, and the controller is built
+   with `setApplicationLooper(Looper.getMainLooper())` — MB3c's own measurement,
+   met again here: the card's 1 Hz repaint is a main-thread read by construction.
+2. **The launch gate is the SESSION, not the person.** `car_play` first refused
+   when `Core::me()` was `None`; the quick-settings tile starts the process with
+   no activity, so nothing ever runs `restore()` and a signed-in app answered
+   "Ouvre Neezer pour lancer la musique" for its own playlist (measured on the
+   emulator, first run). The gate is now `Api::has_session()` — the jar's cookie,
+   which exists from the file — and `a_process_that_never_restored_still_plays`
+   holds it.
+3. **A test that builds the player must not call `shutdown()` from an async
+   test**: joining the engine's threads is a blocking drop, and tokio refuses it
+   inside a runtime ("Cannot drop a runtime in a context where blocking is not
+   allowed"). The test ends with the process instead; worker rule 5 is about the
+   app, not about a test's last line.
+
+**Measured.**
+
+| What | How | Number |
+|---|---|---|
+| The ported policies | `:car:testDebugUnitTest` | **70 tests**, 0 failures: visibility 8, foreground 12, motion 7, pins 7, placement 11, cover policy 10, fanout/format 3, catalogue causes/pins/count 5, watch 7 |
+| The two seams, Rust | `cargo test -p nz-ffi car::` | **8 tests**: catalogue 2 requests cold + the star count, a failed count leaving it unknown, a 401 as `Session`, no `/app` under `/api` (and a path refused as an origin), the kind/id bounds, the tile-only process, the heart |
+| The catalogue | perf_api, one panel open (`GET` count at the server) | **2 requests** (`/api/me/playlists`, `/api/me/favorite-ids`), **0** for 60 s after; the Favoris tile read its count ("4 titres aimés") without `/api/me/favorites` |
+| Covers | same run, panel + card | **1 request per distinct sleeve** (2 for the panel), **0** on the next repaint (`cover hit` in the journal) |
+| Search | the car keyboard, "STO" | **1** `GET /api/search?q=STO` for the settled query, none for one letter (700 ms debounce, 2-char floor kept) |
+| The heart | one tap on the card | **1** `POST /api/favorite`, the glyph filled from the optimistic answer |
+| The queue | the pinned playlist, activity NOT running | the session went **PLAYING**, metadata `Fire océan / Blue fire…`, `position=2493 ms` and `buffered=2493` after 2.5 s of a real FLAC stream; `next` moved `active item 0 → 1` with the new title, `pause` flipped the card's glyph and the state |
+| The visibility rule | GPS trigger ON, usage access granted, the LAUNCHER in front | **0 overlay windows**: the manual start never painted, the first decided state said "no navigation app" |
+| …and its positive branch | the same trigger with `com.android.gallery3d` configured and in front | the card attached over it, cover included |
+
+Device: API 35 x86_64 `-no-window -no-audio`, KVM, port 5580; `perf_api.py
+--tracks 24 --playlists 3 --favorites 4 --covers tests/assets/cover.jpg --audio
+tests/assets/issue133.flac` at `10.0.2.2:5590`. The setup screen is unreachable
+from the shell in this build (no route leads to it — MB4's own gap, reported),
+so the run seeded what a signed-in device has: `server.origin` in `kv`, the
+session cookie in `filesDir/neezer/session.json` (the jar's own format), and the
+`car` preferences file (triggers off for the manual card, one pin). `-no-audio`
+means no audible check here: the sound is MB3c's measured proof; what this run
+proves is that the card's commands reach the engine and the queue streams.
+
+**What was dropped, and where it lives now.** The kit's own Net plumbing went
+with the WebView: `CarPlaylistSource.endpointFor`/`favoritesEndpointFor` (an
+`Api` is built from an `Origin`, and `Origin::parse` refuses a path),
+`CarCovers`' disk cache, its SHA-256 file naming and its eviction tests
+(`nz-cache`'s 300 MB LRU does it), and `fetchFavoriteCount`'s JSON parse (the
+core's). That is **8 of the 78** JVM tests: 5 URL/count and 3 disk-cache. Each
+assertion exists on the side that now decides it — `nz-ffi`'s car tests for the
+route and the count, `nz-core`'s cover tests for the allow-list and the cache —
+and the 70 that remain are the ones the car still owns, passing unchanged.
+`coverAllowed` is kept as the FAST local half of the allow-list (it refuses junk
+before a JNI hop); the authority is Rust's `cover_path`, so a mistake there can
+only cost a refused cover, never a request to the person's home network.
+
+**Files.** `mobile/android/car/**` (the 22 ported files + `CarPlayer.kt`,
+`CarServer.kt`, their resources and manifest, its build file's three literal
+dependencies), `mobile/rust/crates/nz-ffi/src/car.rs`, this section.
+
+**Left to other lots** (none is a car rule): a Réglages entry for « Mode
+voiture » (`:feature/settings` is MB16's), a route to the setup screen (MB4's),
+`MainActivity.onResume → CarModeService.startIfEnabled` (`:app`'s), and the
+playlist page's « Épingler pour la voiture » (MB9's).
 
 ### MB25 — Android Auto (wave 4)
 

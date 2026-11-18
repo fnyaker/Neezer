@@ -26,13 +26,13 @@ import androidx.core.content.ContextCompat
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzErrors
 import fr.neezer.mobile.car.R
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import uniffi.nz_ffi.TrackRow
-import kotlin.math.abs
 
 /**
  * The car mode: a foreground service that owns the overlay window and the ONE
