@@ -582,15 +582,20 @@ fn a_file_that_is_not_a_model_is_refused() {
 /// 13.3× on the CPU-seconds it spent). The prototype's 44.9× and 13.9×,
 /// reproduced.
 ///
-/// The CPU floor is 5, not 12, because ggml is now built for x86-64-v2
-/// (`desktop/.cargo/config.toml`, docs/agents/desktop.md's *CPU floor*). The same
-/// 330 s excerpt of `ggml-tiny` measures **28.7×** with `-march=native` (AVX-512 on
-/// this laptop, 45.9 s of CPU) and **5.5×** at the v2 floor (241.8 s) — 5.2× the
-/// price, and it buys a binary that does not `SIGILL` on any x86-64 CPU made since
-/// 2008. Vulkan is untouched (**128.1×** against 127.5×, the same run) and it is
-/// the path a person uses; the CPU is the explained fallback, and 5× real time
-/// still transcribes an hour in eleven minutes. Raise this back the day the floor
-/// rises, or the day ggml's CPU variants (runtime dispatch) can ship.
+/// The CPU floor is 5, not 12, because this test runs the FLOOR engine binary —
+/// the one `CARGO_BIN_EXE_neezer-transcribe` is, built for x86-64-v2
+/// (`desktop/.cargo/config.toml`, docs/agents/desktop.md's *CPU floor*). That is
+/// the binary every x86-64 CPU can run, so it is the number that can be asserted
+/// anywhere; the app does not run it on a modern laptop: the supervisor starts the
+/// `neezer-transcribe-v3` child when the CPU answers AVX2+FMA+F16C, and that one
+/// measures **23.5×** (AVX-512 build: 28.7×) on the same 330 s excerpt.
+///
+/// The floor's own numbers, measured on the same excerpt: **28.7×** with
+/// `-march=native` (AVX-512 on this laptop, 45.9 s of CPU) and **5.0×** at the v2
+/// floor (262 s) — 5.7× the price of a binary that does not `SIGILL` on any x86-64
+/// CPU made since 2008, and the `-v3` child gives 4.7× of it back. Vulkan is
+/// untouched (**128.1×** against 127.5×, the same runs) and it is the path a person
+/// uses; the CPU is the explained fallback.
 #[test]
 fn the_engine_reaches_the_lots_speed_floors() {
     if std::env::var_os("NZ_WHISPER_SPEED").is_none() {

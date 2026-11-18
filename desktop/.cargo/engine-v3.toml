@@ -1,0 +1,26 @@
+# The `-v3` engine child's CMake flags — the SECOND variant of `neezer-transcribe`.
+#
+# `docs/agents/desktop.md` (*The CPU floor, and the child that picks its own ISA*)
+# explains why there are two: ggml's instruction set is fixed at build time, so a
+# single binary is either portable-and-slow (x86-64-v2: 5.4× real time on the CPU)
+# or fast-and-fragile (whatever the builder's CPU had). The engine already runs in a
+# CHILD process, so the supervisor picks the child that fits the CPU it is on:
+# `neezer-transcribe` for the floor, `neezer-transcribe-v3` built from THIS file when
+# the CPU answers `avx2 && fma && f16c` (Haswell 2013 / Excavator 2015 — measured
+# 28.7× real time, the number the level restores).
+#
+# It is passed with `--config .cargo/engine-v3.toml` by
+# `desktop/tools/build_engine_variants.sh` (and by every workflow that ships the two
+# binaries), into its OWN target directory: cargo has one build per dependency, never
+# two, so the two ISAs cannot share a `target/`.
+#
+# Only the five keys x86-64-v3 adds are restated; everything else — `GGML_NATIVE=OFF`,
+# `GGML_SSE42=ON`, every AVX-512 and AMX switch OFF — comes from `config.toml`, which
+# this file is merged ON TOP of (cargo's `--config` has the higher precedence). So the
+# v3 child is v3 and never becomes v4/AMX by accident.
+[env]
+GGML_AVX = { value = "ON", force = true }
+GGML_AVX2 = { value = "ON", force = true }
+GGML_FMA = { value = "ON", force = true }
+GGML_F16C = { value = "ON", force = true }
+GGML_BMI2 = { value = "ON", force = true }
