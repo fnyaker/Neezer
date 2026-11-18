@@ -51,6 +51,19 @@ pub const HASH_NICE: i32 = 10;
 /// shutdown never hangs behind the person's own traffic.
 const STOP_POLL: Duration = Duration::from_millis(250);
 
+/// What one file's attempt produced.
+enum Outcome {
+    /// The tag is stored; the next sweep will not see it again.
+    Hashed,
+    /// The file could not be read or its tag could not be written, at this exact
+    /// `(len, mtime)`. It is not retried until either moves: a file this process
+    /// may not read would otherwise be re-attempted in a tight loop, which is the
+    /// one way a background worker can eat a core (rule 1).
+    Failed { len: u64, mtime: i64 },
+    /// The worker was asked to stop mid-file.
+    Stopped,
+}
+
 /// What the hashing worker is doing, so a screen can say it and a test can wait
 /// on it instead of sleeping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +221,9 @@ fn run(
     };
     let mut events = index.events();
     let _running = Running(Arc::clone(&stop));
+    // A file this thread could not hash at a given `(len, mtime)`: skipped until
+    // one of the two moves, so a permission error costs one attempt, not a spin.
+    let mut failed: HashMap<PathBuf, (u64, i64)> = HashMap::new();
 
     while !stop.stopped() {
         // "I am about to read the inventory": a refresh that lands between this
@@ -215,7 +231,7 @@ fn run(
         let pending = {
             events.mark_unchanged();
             let tags = store.tags();
-            pending_paths(&index, &tags)
+            pending_paths(&index, &tags, &failed)
         };
         if pending.is_empty() {
             let _ = states.send(HashState::Idle);
@@ -235,7 +251,7 @@ fn run(
             if stop.stopped() {
                 return;
             }
-            let _ = hash_one(
+            match hash_one(
                 &index,
                 &store,
                 gates.as_ref(),
@@ -243,9 +259,12 @@ fn run(
                 &stop,
                 &states,
                 &path,
-            );
-            if stop.stopped() {
-                return;
+            ) {
+                Outcome::Hashed => {}
+                Outcome::Failed { len, mtime } => {
+                    failed.insert(path, (len, mtime));
+                }
+                Outcome::Stopped => return,
             }
         }
     }
@@ -253,11 +272,26 @@ fn run(
 
 /// The files whose stored `(len, mtime)` no longer match the one on disk — one
 /// `stat` per file, no read.
-fn pending_paths(index: &Index, tags: &HashMap<String, store::StoredTag>) -> Vec<PathBuf> {
+fn pending_paths(
+    index: &Index,
+    tags: &HashMap<String, store::StoredTag>,
+    failed: &HashMap<PathBuf, (u64, i64)>,
+) -> Vec<PathBuf> {
     index
         .local_paths()
         .into_iter()
-        .filter(|path| needs_hash(path, tags))
+        .filter(|path| {
+            if let Some((len, mtime)) = failed.get(path)
+                && let Ok(meta) = fs::metadata(path)
+                && meta.len() == *len
+                && file_mtime(&meta) == *mtime
+            {
+                // Already refused at exactly these bytes: a re-download or a
+                // re-encode changes one of the two and lets it back in.
+                return false;
+            }
+            needs_hash(path, tags)
+        })
         .collect()
 }
 
@@ -276,12 +310,12 @@ pub fn needs_hash(path: &Path, tags: &HashMap<String, store::StoredTag>) -> bool
         return false;
     }
     match tags.get(&store::key_of(path)) {
-        Some(tag) => tag.len != meta.len() || tag.mtime != mtime(&meta),
+        Some(tag) => tag.len != meta.len() || tag.mtime != file_mtime(&meta),
         None => true,
     }
 }
 
-fn mtime(meta: &fs::Metadata) -> i64 {
+fn file_mtime(meta: &fs::Metadata) -> i64 {
     // Nanoseconds, not seconds: a file rewritten within the same second with the
     // same length must still be rehashed, and the pair is the whole check.
     meta.modified()
@@ -300,27 +334,39 @@ fn hash_one(
     stop: &Stop,
     states: &watch::Sender<HashState>,
     path: &Path,
-) -> Option<()> {
-    let meta = fs::metadata(path).ok()?;
+) -> Outcome {
+    // "A file is being worked on" starts with the open, not with the first tile: a
+    // file this process may not read is still an attempt, and the state says so.
+    let _ = states.send(HashState::Hashing);
+    let Ok(meta) = fs::metadata(path) else {
+        // Gone between the inventory and here: nothing to hash, and nothing to
+        // remember (the next refresh takes it out of the index).
+        return Outcome::Hashed;
+    };
     if !meta.is_file() {
-        return None;
+        return Outcome::Hashed;
     }
     let len = meta.len();
-    let mtime = mtime(&meta);
-    let mut file = fs::File::open(path).ok()?;
+    let mtime = file_mtime(&meta);
+    let Ok(mut file) = fs::File::open(path) else {
+        debug!("nz-lan-hash: a local file could not be opened");
+        return Outcome::Failed { len, mtime };
+    };
     let mut context = Context::new(&SHA256);
     let mut buffer = vec![0u8; TILE_BYTES];
 
     loop {
         if stop.stopped() {
-            return None;
+            return Outcome::Stopped;
         }
         // Yield BEFORE reading the tile: while the person is being served, this
         // is where the worker waits.
         let _slot = match gates {
             Some(gates) => {
                 let _ = states.send(HashState::Waiting);
-                let slot = wait_for_gate(gates, runtime, stop)?;
+                let Some(slot) = wait_for_gate(gates, runtime, stop) else {
+                    return Outcome::Stopped;
+                };
                 let _ = states.send(HashState::Hashing);
                 Some(slot)
             }
@@ -333,7 +379,7 @@ fn hash_one(
             Ok(read) => read,
             Err(error) => {
                 debug!(%error, "nz-lan-hash: a local file could not be read");
-                return None;
+                return Outcome::Failed { len, mtime };
             }
         };
         if read == 0 {
@@ -345,11 +391,11 @@ fn hash_one(
     let digest = hex(context.finish().as_ref());
     if let Err(error) = store.put_tag(path, len, mtime, &digest) {
         debug!(%error, "nz-lan-hash: the tag was not stored");
-        return None;
+        return Outcome::Failed { len, mtime };
     }
     index.note_hashed();
     debug!(bytes = len, "nz-lan-hash: one local file hashed");
-    Some(())
+    Outcome::Hashed
 }
 
 /// Takes one `Bulk` slot, looking at the stop flag every [`STOP_POLL`] so a
@@ -441,7 +487,7 @@ mod tests {
         let meta = fs::metadata(&path).expect("meta");
         let tag = store::StoredTag {
             len: meta.len(),
-            mtime: mtime(&meta),
+            mtime: file_mtime(&meta),
             sha256: "00".repeat(32),
         };
         let mut tags = HashMap::new();
@@ -546,6 +592,80 @@ mod tests {
             stop.finished.load(Ordering::Acquire),
             "stop joins the thread"
         );
+    }
+
+    /// A file the process may not read is attempted ONCE: the worker goes back to
+    /// `Idle` instead of re-listing it for ever (the spin that eats a core).
+    ///
+    /// `chmod 000` is a no-op for root, so the test says so and returns rather than
+    /// asserting a permission error it cannot produce.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_not_retried_in_a_loop() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // SAFETY: `geteuid` reads the calling process's effective uid.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("root reads anything: the permission case cannot be tested here");
+            return;
+        }
+        let dir = TempDir::new("unreadable");
+        let cache = dir.cache();
+        let track = nz_model::TrackId::new("forbidden");
+        let partial = cache
+            .play_cache()
+            .reserve(&track, nz_model::Quality::Flac)
+            .expect("reserve");
+        fs::write(&partial, vec![1u8; 4096]).expect("bytes");
+        let published = cache
+            .play_cache()
+            .complete(&track, nz_model::Quality::Flac, 4096)
+            .expect("complete");
+        fs::set_permissions(&published, fs::Permissions::from_mode(0o000)).expect("chmod");
+
+        let store = Store::open(&dir.path.join("lan")).expect("store");
+        let index = Index::new(cache, "1".to_owned(), store.clone());
+        index.refresh();
+        assert_eq!(index.tracks(), 1, "the file is in the inventory");
+
+        let worker = Hashing::start(index.clone(), store.clone());
+        let mut state = worker.state();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        // It announces the attempt, then gives up on it and goes idle: two events,
+        // no clock read (the watchdogs only fire on a worker that spins).
+        for wanted in [HashState::Hashing, HashState::Idle] {
+            match runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(10),
+                    state.wait_for(|state| *state == wanted),
+                )
+                .await
+            }) {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => panic!("the worker's state channel closed: {error}"),
+                Err(_) => panic!("the worker never reached {wanted:?}: it is spinning"),
+            }
+        }
+        worker.stop();
+        assert!(
+            store.tag(&published).is_none(),
+            "a file that cannot be read has no tag"
+        );
+
+        // A readable file at the same path (the person fixed the permission) is
+        // hashed by the next worker: the failure is remembered per (len, mtime),
+        // not for ever.
+        fs::set_permissions(&published, fs::Permissions::from_mode(0o600)).expect("chmod back");
+        let worker = Hashing::start(index.clone(), store.clone());
+        let mut hashed = index.hashed();
+        runtime
+            .block_on(hashed.wait_for(|count| *count >= 1))
+            .expect("the worker hashed the file once it could read it");
+        worker.stop();
+        assert!(store.tag(&published).is_some());
     }
 
     /// The thread id of the caller (`gettid`), which is not the process id.

@@ -1228,13 +1228,13 @@ this file's header, not to this lot.
   serving or hashing slow its own playback.
 - **Files**: the LN4 row, unchanged — `desktop/crates/nz-lan/src/{store,index,hashing,scope,serve}.rs`
   and `tests/serve.rs`. It changes no shared type and no manifest, so neither `Cargo.lock` moved.
-- **What landed.** `lan.sqlite` (WAL, `PRAGMA user_version`, idempotent v1 + the boot repair path that
-  replays it when a table is missing, a newer file refused with its version in the cause) holding
+- **What landed.** `lan.sqlite` — WAL, `PRAGMA user_version`, an idempotent v1 plus the boot repair
+  path that replays it when a table is missing, a newer file refused with its version in the cause,
   `file_tag`/`peer_addr`/`trust`, the directory `0700` and the file `0600` because a credential lives
-  in it); the in-memory inventory with a version, a 64-change delta ring and a
-  per-track quality bitmask; the `nz-lan-hash` worker; `Scope::for_peer`/`from_share`/`allows`; the
-  responder with its serve budget and its single `NotFound` constructor; and 18 acceptance tests that
-  build no `Incoming` (LN4's tests drive `Server::answer`, LN6's transport feeds the same function).
+  in it. Then the in-memory inventory with a version, a 64-change delta ring and a per-track quality
+  bitmask; the `nz-lan-hash` worker; `Scope::for_peer`/`from_share`/`allows`; the responder with its
+  serve budget and its single `NotFound` constructor; and 18 acceptance tests that build no `Incoming`
+  (LN4's tests drive `Server::answer`, LN6's transport feeds the same function).
 - **What a later lot can rely on.**
   - `Store` is now a real handle (`Arc` inside, `Clone`, `Default` = unopened). `Store::tag`,
     `tag_row`, `tags`, `put_tag`, `forget_tag`, `put_trust`/`trust`/`trust_keys`/`forget_trust`,
@@ -1290,7 +1290,7 @@ this file's header, not to this lot.
   | inventory memory | **48 B/item**, 384 KB for 8 000 tracks (cap 64 B) | same run (`Index::memory`) |
   | hashing throughput | **1 778 MB/s** on 64 MiB (release, SHA-NI) | `cargo test -p nz-lan --release --test serve hashing_reaches -- --nocapture` |
   | hashing niceness | **+10** on `nz-lan-hash`, read back from `/proc/self/task/<tid>/stat` | `cargo test -p nz-lan --lib the_worker_hashes` |
-  | the crate's tests | **70 passed** (52 unit + 18 acceptance) | `cargo test -p nz-lan` |
+  | the crate's tests | **71 passed** (53 unit + 18 acceptance) | `cargo test -p nz-lan` |
   | a `Bulk` serve that waits for the person | ~1.1 s per test run (the gate's 1 s quiet) | `cargo test -p nz-lan --test serve a_bulk_serve_waits` |
   | the refusal's size | `{"t":"NotFound"}`, 18 bytes, for absent AND unshared | `cargo test -p nz-lan --test serve an_out_of_scope_request` |
   | `clippy -D warnings` on the crate | clean, `--all-targets` | `cargo clippy -p nz-lan --all-targets -- -D warnings` |
@@ -1307,6 +1307,7 @@ this file's header, not to this lot.
   | M6: no serve budget (99 of each) | `the_third_concurrent_play_is_busy_and_the_slot_comes_back` |
   | M7: a `Bulk` serve does not wait on the node's gates | `a_bulk_serve_waits_while_a_user_request_is_in_flight` |
   | M8: a set is advertised whatever its members' scope | `a_friend_sees_only_the_sets_they_can_see_whole` |
+  | M9: a file that cannot be read is re-attempted at once | `an_unreadable_file_is_not_retried_in_a_loop` |
 
 - **A residual, stated**: a `Cover` answer takes no serve slot and no lane, because the `Cover` frame
   carries no `Urgency` (LN0's shape, final) — the responder cannot tell a list's art from a tap's.
@@ -1328,6 +1329,12 @@ this file's header, not to this lot.
     file is a core kept for its length; taking it per 1 MiB tile is a mutex and a `Notify` per
     megabyte when nobody waits, and a real pause the moment the person taps something — 1 778 MB/s
     measured still, so the yield costs nothing measurable.
+  - **A worker that cannot do a job must remember that.** The first hashing loop re-listed a file it
+    had just failed to open (a `chmod 000` copy, a full disk on the tag write) and re-attempted it in a
+    tight loop — a core at 100 % for a file nobody can read, the exact thing rule 1 forbids. The
+    failure is now remembered per `(len, mtime)`: one attempt, then `Idle`, and a re-download or a
+    fixed permission lets it back in. The test waits for `Hashing` then a NEW `Idle`, which a spinning
+    worker never reaches (mutant M9).
   - **`Notify::notify_waiters` is not a stop signal.** The window between the worker reading its stop
     flag and registering `notified()` swallows the wake and `stop()` never returns (`cargo test` hung
     for 120 s). `notify_one` stores a permit for the waiter that is not there yet. A test that proves
