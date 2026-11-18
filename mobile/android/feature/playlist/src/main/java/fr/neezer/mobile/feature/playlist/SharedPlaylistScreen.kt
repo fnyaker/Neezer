@@ -39,7 +39,6 @@ import fr.neezer.mobile.designsystem.LoadFailed
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
-import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import kotlinx.coroutines.CoroutineDispatcher
@@ -107,8 +106,8 @@ fun SharedPlaylistScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
+    // The shell's own top bar names the route; a second one would double it.
     Column(modifier = modifier.fillMaxSize()) {
-        NzTopBar(title = state.data?.header?.title ?: "Playlist partagée", onBack = onBack)
         when {
             state.failure != null -> LoadFailed(
                 cause = state.failure,

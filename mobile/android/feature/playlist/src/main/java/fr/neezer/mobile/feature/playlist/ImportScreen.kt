@@ -39,7 +39,6 @@ import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzChip
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzSpacing
-import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import kotlinx.coroutines.CoroutineDispatcher
@@ -94,8 +93,8 @@ fun ImportEntry(url: String?, nav: NzNavigator, modifier: Modifier = Modifier) {
     LaunchedEffect(model, url) { model.start(url) }
     val state by model.state.collectAsState()
 
+    // The shell's own top bar names the route; a second one would double it.
     Column(modifier = modifier.fillMaxSize()) {
-        NzTopBar(title = "Importer", onBack = nav::back)
         when {
             state.failure != null && state.job == null -> LoadFailed(
                 cause = state.failure.orEmpty(),

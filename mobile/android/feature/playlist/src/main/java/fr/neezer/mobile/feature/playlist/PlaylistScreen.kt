@@ -60,7 +60,6 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
-import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import fr.neezer.mobile.designsystem.rememberListWindow
@@ -91,22 +90,11 @@ fun PlaylistScreen(
 ) {
     val colors = Sillon.colors
     Column(modifier = modifier.fillMaxSize()) {
-        NzTopBar(
-            // The band below carries the playlist's own title; the bar names the
-            // SCREEN (the SPA has no second heading, and a 200 % font scale made
-            // the long title wrap under the bar's own line).
-            title = "Playlist",
-            onBack = actions.back,
-            actions = {
-                if (state.canManage) {
-                    NzIconButton(
-                        glyph = NzGlyph.More,
-                        contentDescription = "Plus d'actions : exporter, collaborateurs, renommer, supprimer",
-                        onClick = actions.openMore,
-                    )
-                }
-            },
-        )
+        // No top bar here: the SHELL draws the phone's (`app/NavGraph.kt`'s
+        // Scaffold) and a second one showed two bars on the device — measured on
+        // the emulator capture (`mb9-emulateur-360dp.png` before the fix). The
+        // band below carries the playlist's title; the route's name is the
+        // shell's. Back is the system's, as every other screen.
         when {
             state.page == null && state.failure != null -> LoadFailed(
                 cause = state.failure,

@@ -2890,7 +2890,16 @@ panel, public page) plus the import job.
   failed, the public page).
 - **Look**: `docs/agents/screenshots/mobile/MB9/` — the band, the action line on one scrolling row,
   the windowed list, the suggestions, the edit rows with their grips and arrows, and the
-  read-only band, in both themes at both widths.
+  read-only band, in both themes at both widths — plus **one headless-emulator capture of the real
+  screen** (`mb9-emulateur-360dp.png`: the bench's own 4 000-title playlist, opened by
+  `neezer://playlist/<id>` against `perf_api.py` at `10.0.2.2:5690`).
+- **Smoothness, on the emulator** (`dumpsys gfxinfo org.nsupysonic.app`, 12 scripted swipes over
+  the 4 000-row list): **201 frames, 3 janky (1.49 %)**, p50 **23 ms**, p90 **29 ms**, p95
+  **31 ms**, p99 44 ms (GPU p50 19 ms on swiftshader). These are the SOFTWARE-GPU floor MQ1
+  recorded for this machine — the static shell read p95 19.4 ms and MB1's themed UI p95 50.6 ms —
+  so the lot's number to hold is **31 ms p95, below the shell's own 50.6 ms**, and the real-phone
+  p95 ≤ 16.7 ms stays MQ2's (a phone, not swiftshader). What the capture also shows is that the
+  screen composes **5 rows** of 4 000: the list is windowed, not copied.
 
 **Rules a measurement taught**:
 
@@ -2910,6 +2919,15 @@ panel, public page) plus the import job.
   version of the write path asked the network inside the same call that moved the row, so a tap
   left the list unchanged for one round trip. Splitting every mutation into an in-memory half and a
   network half is what made « a drag answers in the frame » true for removals and appends too.
+- **The shell draws the phone's top bar, so a screen must not.** The first device capture had TWO
+  bars — the shell's (« Playlist · Réglages », `app/NavGraph.kt`'s Scaffold) over this screen's own
+  (`‹ Playlist ⋯`). The screens here draw none: the band carries the title, the route's name is the
+  shell's, back is the system's. The Robolectric captures cannot show it (they draw the screen
+  alone), which is exactly why the emulator capture is in the acceptance.
+- **A cold-start app link crashes the SHELL** (`AppGraph.attach` → `openLink` → `getGraph()` before
+  `setGraph()`, `IllegalStateException` on `am start -a VIEW -d neezer://playlist/<id>` from a
+  stopped process). Worked around for the capture by launching the app first and sending the link
+  warm; **the fix belongs to `:app`** (MB0/MB2's file) and is reported, not patched here.
 
 **Not ported, on purpose** (each named where it is drawn):
 
