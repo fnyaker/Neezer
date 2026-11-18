@@ -1833,82 +1833,101 @@ enrolments and real friendships through the routes; `PYTHON=~/.cache/neezer-ln8/
   before the count was checked. `await stop()` is the call; on this shared machine a leaked bench is
   RAM, and the rule is to kill only one's own PIDs, by PID.
 
-### LN9 — Requester core: peers, decision, fetch (wave 3, effort high)
+### LN9 — Requester core: peers, decision, fetch (delivered 2026-11-18)
 
-- **Objective**: a node keeps an in-memory replica of each connected peer's inventory, decides the
-  source of any track in ≤ 1 ms without the network (tolerance included), and fetches a file or a
-  stream from a peer with resume, length and hash checks and a decoder probe.
-- **Files**: LN9 row. **Contracts**:
+**What landed.** The three files that make a tap instant and a transfer honest, and nothing
+else — no other file was touched:
 
-  ```rust
-  pub struct Candidate { pub peer: DevicePub, pub relation: Relation, pub copies: Vec<(nz_api::Quality, u64)>, pub rtt_ms: u32 }
-  #[derive(Clone)] pub struct Peers;
-  impl Peers {
-      pub fn new() -> Peers;
-      pub fn insert(&self, conn: PeerConn);  pub fn remove(&self, peer: &DevicePub);
-      pub fn get(&self, peer: &DevicePub) -> Option<PeerConn>;
-      pub async fn sync_inventory(&self, peer: &DevicePub) -> Result<(), LanError>;  // full or delta, paginated
-      pub fn candidates(&self, track: &str) -> Vec<Candidate>;
-      pub fn complete_for(&self, tracks: &[String]) -> Option<DevicePub>;
-      pub fn mark_bad(&self, peer: &DevicePub, track: &str);
-      pub fn views(&self) -> Vec<PeerView>;  pub fn memory(&self) -> usize;
-  }
-  pub fn decide(local: Option<PathBuf>, candidates: &[Candidate], wanted: nz_api::Quality, tolerated: &Tolerance,
-                server_reachable: bool, prefer: Option<DevicePub>) -> Source;          // pure, the table of *Choosing the source*
-  pub struct FetchPlan { pub peer: PeerConn, pub track: String, pub quality: nz_api::Quality, pub urgency: Urgency,
-                         pub from: u64, pub expect: Option<proto::FileTag> }
-  pub struct Fetched { pub len: u64, pub sha256: String, pub quality: nz_api::Quality }
-  pub async fn fetch_to_file(plan: FetchPlan, part: &Path, gates: &nz_api::lanes::Gates,
-                             stop: tokio::sync::watch::Receiver<bool>, progress: &mut (dyn FnMut(u64, u64) + Send))
-      -> Result<Fetched, LanError>;
-  pub struct PeerStream;  impl PeerStream { pub async fn open(plan: FetchPlan, gates: Arc<nz_api::lanes::Gates>) -> Result<PeerStream, LanError>;
-      pub fn len(&self) -> u64; pub fn quality(&self) -> nz_api::Quality; pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>, LanError>; }
-  pub fn probe(path: &Path, quality: nz_api::Quality, duration_s: Option<u32>) -> Result<(), LanError>; // symphonia: codec + duration ±2 s
-  ```
-- **Depends on**: LN4, LN6.
-- **Acceptance**: `decide` is exhaustively tested against the six-row table (every combination of
-  local / W present / in T / out of T / server reachable or not / no candidate: 48 cases, each
-  asserted) — **mutant**: swap rows 4 and 5 → tests fail; two real nodes (LN6 transport + LN4
-  serve, loopback): an 8 000-item inventory replicates in ≤ 400 KB, a change arrives as a delta
-  ≤ 2 KB; `Peers::memory()` ≤ 64 B/item; a 200 MB fetch ≥ 300 MB/s (release, printed); kill the
-  responder at 50 % → resume from the received offset with `expect`, final SHA-256 correct; the
-  responder's file replaced between the two → `NotFound` on resume → restart at 0 elsewhere; a peer
-  sending more than `len`, a wrong SHA-256, or a file whose probe fails → `BadFile`, nothing
-  published, `mark_bad`; a `Bulk` fetch takes the `Gates` (one Bulk transfer across server and LAN,
-  asserted with a concurrent `nz-api` Bulk request) and is throttled by `gates.throttle`; `Play`
-  never waits on them.
-- **Pitfalls**: a peer's inventory can be stale — the fetch answer is the truth; `len` checked
-  against the free space of the target's filesystem before writing (`libc::statvfs`; `libc` is in
-  both locks and LN0 lists it in nz-lan's manifest), refused with « espace disque insuffisant »;
-  count the bytes received, never trust `len` alone.
-- **Prompt**:
+- **`peers.rs`** — one replica of each connected peer's inventory, in memory and counted: one
+  entry per track (its id, plus a bit per quality and that copy's length — 20 B), sorted so a
+  lookup is a binary search. `sync_inventory` is one full pagination the first time (the
+  responder answers 4 000 items a page) and one delta on every version after; one sync at a
+  time per peer (an async mutex per connection, never held across the table's lock), and the
+  `since` is read AFTER that mutex so a sync that finished meanwhile is not replayed. The caps
+  bound what a peer can make this node KEEP, and they are checked before anything is stored:
+  64 pages per sync, 50 000 tracks per peer, 32 MiB counted for every replica together, 64
+  bytes per id (refused, never truncated), and a bad-track list capped at 4 096.
+- **`decide.rs`** — the six-row table, pure and allocation-free. The QUALITY is decided first
+  (the wanted rung if a peer has it, else the best tolerated one any peer has), then the peer
+  among those that can serve it, with the note's tie-break: own device, then the peer a
+  download is committed to (`prefer`), then the lowest RTT, then the device key (so two peers
+  that tie on everything still answer in a stable order).
+- **`fetch.rs`** — `fetch_to_file` (resume, length, SHA-256 over the WHOLE file, over-send
+  detection, free space read with `statvfs` before a byte is written), `PeerStream` (the same
+  request, chunk by chunk, for playback) and `probe` (symphonia: the codec the head named, and
+  the duration ±2 s).
 
-  > Tu implémentes le lot **LN9 — Requester core: peers, decision, fetch** du plan « nœuds LAN »
-  > (effort high). But : réplique en mémoire de l'inventaire de chaque pair connecté (octets comptés),
-  > décision de la source d'un titre en ≤ 1 ms SANS réseau selon le tableau de *Choosing the source*
-  > (qualités tolérées, serveur joignable ou non), récupération d'un fichier ou d'un flux depuis un
-  > pair avec reprise, contrôle de longueur et de SHA-256 et sonde du décodeur ; le transfert de fond
-  > passe par les MÊMES `Gates` que `nz-api` (règle 1). Lis *Choosing the source*, *Protocol
-  > messages*, *Rule 1 on the LAN*, *Measures* et la section LN9 de `docs/agents/lan-nodes.md`, puis
-  > `desktop/crates/nz-api/src/lanes.rs`. Fichiers exclusifs : la ligne LN9. Critères : la liste
-  > *Acceptance* de LN9.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**Rules a measurement taught.**
+
+- **A 400 KB inventory is arithmetically impossible: it is 480 KB.** The plan's "8 000 tracks
+  ≈ 320 KB" assumed 40 B per item. The FINAL frame (`proto.rs`, LN0) is
+  `{"track":"30000042","copies":[{"quality":"FLAC","len":16}]}` — **60 B** for a single-copy
+  track — so 8 000 items are **480 223 control bytes** over two pages, counted on the wire
+  (request frames and response heads, header included). What the measure is FOR still holds:
+  it is paid once per peer and version, a delta is **165 bytes**, and a tap afterwards costs
+  **0**. Do not re-open this: shrinking it means changing `proto.rs`, which LN0 made final.
+- **`tokio::fs::File` buffers writes, so an error path must FLUSH.** The first version
+  returned on a cancel or a refused over-send and dropped the handle: the last chunk (up to
+  2 MiB, the file's own buffer) was lost, and a resume from "the offset we reported" landed on
+  a file shorter than that offset. The transfer now flushes before it returns ANY outcome, and
+  `tests/fetch.rs` asserts the disk holds exactly what the progress callback last reported.
+  Every future transfer writer (LN11's downloader) inherits this.
+- **`Reply::body` caps its reads at the head's `len`, which is the FULL length.** On a resume
+  the body is `len - from` bytes, so that cap is `from` bytes too high — and a peer that keeps
+  sending past `len` cannot be told from one that ended cleanly (both are "cap not reached").
+  The transfer therefore opens the stream itself (`PeerConn::connection` + `codec`, the same
+  frames) and reads exactly `len - from` bytes, then probes ONE byte: a byte there is
+  `BadFile`, a clean FIN is the end. This is the only place outside `transport.rs` that
+  touches `connection()`, and the reason is written above it.
+- **A decision over sixteen replicas costs 11.8 µs, not 1 ms.** Measured: 1 000 decisions
+  (`candidates` + `decide`) over 16 peers × 8 000 tracks, **0** requests (the `decide` call
+  alone is 1.45 µs). The replica is 48 B per item, which is the 64 B budget with room;
+  sixteen peers are 6.1 MB.
+- **The decoder probe runs in the caller, not in the transfer.** `fetch_to_file` knows the
+  length and the tag, never the duration the metadata row carries, so it guarantees length and
+  SHA-256 and `probe` is a separate call the downloader makes before publishing (LN11). A
+  failed probe is `BadFile`, and `Peers::mark_bad` takes the peer out of the next decision for
+  that track only.
+- **A cancel is `LanError::Internal("transfert interrompu")`.** No `LanError` variant means
+  "the person asked", and `types.rs` is LN0's: the downloader that owns the queue (LN11)
+  matches that cause and records a PAUSE, never a failure to show.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, 2026-11-18, debug
+unless said otherwise):
+
+| Measure | Value | Command |
+|---|---|---|
+| an 8 000-item inventory, one full pass | **480 223** control bytes, 2 pages (60.0 B/item) | `cargo test -p nz-lan --test fetch an_eight_thousand -- --nocapture` |
+| one change, as a delta | **165** control bytes, 1 request | same |
+| an unchanged inventory, re-synced | **≤ 512** bytes (one empty delta) | same |
+| replica memory | **48.0 B/item** — 384 096 B for 8 000 tracks, 6 145 536 B for 16 × 8 000 | same, and `memory_is_capped_for_sixteen_peers_of_eight_thousand_tracks` |
+| a tap (decision) | **11.8 µs**, **0** requests, 16 replicas of 8 000 tracks | `cargo test -p nz-lan --test fetch memory_is_capped -- --nocapture` |
+| `decide` alone, 16 candidates | **1.45 µs** per call over 10 000 runs | `cargo test -p nz-lan --lib decide -- --nocapture` |
+| a 200 MiB fetch over loopback | **74 MB/s** debug; **450 MB/s** release | `cargo test -p nz-lan --test fetch a_two_hundred_megabyte -- --nocapture` and `--release` |
+| a `Play` fetch beside a capped `Bulk` one | **4.8 ms** for 256 KiB while 1 MiB is paced at 64 KiB/s and holds the one Bulk lane | `a_bulk_fetch_holds_the_one_bulk_lane_and_a_play_never_waits` |
+| the whole LN9 file | **11 tests**, 3.1 s debug (10.7 s with `--test-threads=1`) | `cargo test -p nz-lan --test fetch` |
+
+**Mutants run once, on purpose, and the tests failed as they must** (each was reverted
+immediately; `git status` was clean of them before the real commit):
+
+- `decide`: the server check hoisted ABOVE the tolerance (rows 4 and 5 in the wrong order) →
+  **5** tests fail, the 48-case table and `the_tolerance_decides_between_the_server_and_a_peer`
+  included.
+- the over-send probe removed → `a_peer_that_sends_more_than_its_length_is_a_bad_file` fails:
+  the fetch succeeds on 4 KiB of a peer that announced 4 KiB and sent 8 KiB.
+- the tag comparison dropped in `fetch_to_file` → `a_peer_that_lies_about_its_hash_is_a_bad_file`
+  fails.
+- `probe`'s codec check dropped → `a_file_the_decoder_refuses_is_never_published_and_the_peer_is_marked_bad`
+  fails on the Opus-as-FLAC case.
+- the `expect` check on a resume dropped → `a_peer_that_ignores_the_expected_tag_is_a_bad_file`
+  fails: a peer that answers `FetchOk` for another file would have its bytes appended.
+
+**What LN10 and LN11 can rely on.** `Peers::insert(conn)` on every authenticated connection
+(and on a reconnect: the replica is kept, and the next `sync_inventory` asks for the delta),
+`Peers::remove` on close, `Lan::decide` = `peers.candidates(track)` then `decide(…)` with
+`nz_api`'s `is_online()` for `server_reachable` and `peers.complete_for(&tracks)` for
+`prefer`. The opener takes `Urgency::Play`/`Prefetch` and never sees a gate; the downloader
+takes `Urgency::Bulk`, the app's ONE `Gates` (`Api::gates()`), and passes its `stop` watch.
 
 ### LN10 — The `Lan` service (wave 4, effort max)
 
