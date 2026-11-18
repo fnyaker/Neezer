@@ -20,11 +20,29 @@ interface NzRowSource {
     fun window(start: Int, count: Int): List<TrackRow>
 }
 
-/** The real `ListHandle` (a UniFFI object) as a source. */
-fun ListHandle.asRowSource(): NzRowSource = object : NzRowSource {
-    override fun len(): Int = len()
+/**
+ * The real `ListHandle` (a UniFFI object) as a source.
+ *
+ * The handle is CAPTURED in a local (`val handle = this`) and the object calls it
+ * THROUGH that name. Written as `= object : NzRowSource { override fun len() =
+ * len() }` — which is what this function used to be — every member resolves to
+ * ITSELF, because the object's own `len`/`window` shadow the extension receiver:
+ * the first screen that windowed a real handle died with `StackOverflowError`
+ * (`ListWindowKt$asRowSource$1.len` in a loop, emulator-5680, MB6). That it
+ * COMPILED at all was the tell: `len()` returned `Int` while `ListHandle.len()`
+ * returns `UInt`, so a call to the handle could never have type-checked — the
+ * resolution had to be the override. `RowSourceTest` on the device now holds it.
+ */
+fun ListHandle.asRowSource(): NzRowSource {
+    val handle = this
+    return object : NzRowSource {
+        override fun len(): Int = handle.len().toInt()
 
-    override fun window(start: Int, count: Int): List<TrackRow> = window(start, count)
+        override fun window(start: Int, count: Int): List<TrackRow> = handle.window(
+            start.coerceAtLeast(0).toUInt(),
+            count.coerceAtLeast(0).toUInt(),
+        )
+    }
 }
 
 /**

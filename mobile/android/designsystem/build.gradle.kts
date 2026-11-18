@@ -19,6 +19,10 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.minSdk.get().toInt()
+        // `RowSourceTest` is the module's ONE instrumented test: a `ListHandle` is
+        // a UniFFI object, so the JVM cannot build one, and the bug that test
+        // exists for (a row source that called itself) is invisible to a fake.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -95,6 +99,13 @@ dependencies {
     // Robolectric 4.18 + the Compose test rule runs both the semantics
     // assertions and the screenshots, with no change to the shared files.
     testImplementation(libs.junit)
+    // --- instrumented tests (the device) -------------------------------------
+    // One test, `RowSourceTest`: `rememberListWindow`'s adapter over a REAL
+    // `ListHandle`, which only exists on a device (JNA + `libnz_ffi.so`).
+    androidTestImplementation(libs.junit)
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("org.robolectric:robolectric:4.18")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
