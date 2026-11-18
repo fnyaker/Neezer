@@ -637,6 +637,16 @@ Waves that can run in parallel (disjoint files):
   `focus_node_id_in_rendered_frame(None)` returns the dispatch tree's root — above the view — so the
   binding is never found and `Ctrl+Q` does nothing, silently. Screen bindings (D7) go on an element
   that `track_focus`es and holds the focus.
+- **The rule, the cache key names the runner's CPU.** ggml is compiled with `-march=native`
+  (`GGML_NATIVE`'s default), so every object in `target/` belongs to the CPU that produced it, and
+  `Swatinem/rust-cache` keys on rustc, the lockfiles and `.cargo/config.toml` — never on the CPU.
+  Run **44240162634** restored (`full match: false`, a partial restore) an object built on a runner
+  with AVX-512 and the engine child died with `SIGILL (signal 4)` on the runner that got it, with
+  ggml's `AMX is not ready to be used!` in the log. Every cache step therefore computes
+  `sha256(model name | /proc/cpuinfo flags)` and passes it as **`prefix-key`** — in the prefix, not
+  in `key:`, because rust-cache falls back to a broader prefix on an exact miss and a `key:`-only
+  fingerprint would still restore another CPU's objects through that fallback. A runner model
+  nobody has seen before is a cold build, never a binary that traps.
 - **What it is now**: nine crates (`nz-model`, `nz-api`, `nz-cache`, `nz-player`, `nz-audio`,
   `nz-viz`, `nz-mpris`, `nz-transcribe`, `app`), one passing test each and the pins of *Workspace*
   above; `neezer-desktop` opens a themed window (`--self-test-quit-after-first-frame` prints
