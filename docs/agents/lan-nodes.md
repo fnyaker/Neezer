@@ -1680,6 +1680,14 @@ and an empty `Hello`.
   `"<roster serial>-<revocation serial>"` and an enrolment carries both numbers: deriving it costs
   nothing, while asking for it costs one full roster per device per day. Proven live: derived
   `"0-0"` → `304`, 0 bytes, against `neezer/webui/lan.py`.
+- **A fake server records the hit BEFORE it answers.** `tests/enroll.rs`'s fake wrote its answer
+  and then pushed the `Hit` into the shared log, so a client that already had the response could
+  look before the log was updated: `a_day_later_one_conditional_roster_request_answers_304` then read
+  `hits.len()` as **0** for a request that DID happen. Measured: **1 of 200** turns unfixed on an
+  idle machine, **4 of 200** pinned to one core (`taskset -c 0`), and the CI job that failed on
+  another PR with 22 of 23. Recording first makes the hit happen-before the response, which is the
+  only order where the log a client sees is the log it caused: **200/200** and **200/200** after.
+  No injectable clock or ETag was involved — the daily sync under test was correct.
 - **A test must not compute its boundary from the constant it is testing.** The renewal test's first
   version used `RENEW_BELOW_SECONDS` for "one second above / exactly at" — the mutant that moved the
   constant by one second **survived**, because the boundary moved with it. The test now spells
