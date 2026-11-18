@@ -2098,10 +2098,8 @@ inventory are the behaviour; port them, do not invent.
   cancelled on a new key (one in flight). Kotlin: `SearchEntry` with `ExplorerStylesSection()` (MB14's)
   on the empty state. Rows: typing "daft punk" fast sends ≤ 3 requests (count); YouTube results inside
   the same list, ON by default (webapp.md).
-- **MB7 — Artist, album, credits.** FFI (`entity.rs`): `artist(id)`, `album(id)`, `discography(id,
-  kind, cursor)`, `track_credits(id)`, `person_credits(name)`. Kotlin: `ArtistEntry`, `AlbumEntry`,
-  `CreditsEntry`, the credits sheet, `DownloadButton(kind="album", id)` (MB15's) on the album. Rows:
-  album → play → first sound measured through `output_stats()` once MB3b is merged (else noted).
+- **MB7 — Artist, album, credits.** *Delivered 2026-11-18 — what it cost, what it taught, what it
+  does not port: see « MB7 — Artiste, album, crédits » below.*
 - **MB8 — Library.** FFI (`library.rs`): `library_playlists() -> LibraryTree { folders, playlists }`,
   folder CRUD/move/order (optimistic), `favorites() -> Arc<ListHandle>` (8 000), `favorite_ids()`
   (light route, the car's counter), albums, artists, uploads (+ usage), dislikes, unavailable (+
@@ -2261,6 +2259,122 @@ request):
 - **The discovery SLIDER** — `DiscoverySlider.svelte` is MB14's; the hero's
   tuning chip opens the four `discovery.js` stops as chips, which is the same
   value set the slider snaps to.
+
+
+### MB7 — Artiste, album, crédits (delivered 2026-11-18)
+
+**What landed.** The three pages of the inventory — `routes/Artist.svelte`,
+`routes/Album.svelte`, `routes/Credits.svelte` and the credit components — ported to Rust + Compose,
+and the credits sheet every track menu will open.
+
+- **The core** (`nz-core::entity`): `wire.rs` reads the nine routes the SPA opens with (raw bodies,
+  parsed by the same converter a cached copy goes through), `store.rs` keeps each body per ACCOUNT
+  under the CACHE directory (the SPA's own `apicache.js` paths: `/artist/`, `/album/`,
+  `/credits/person`, `/track/<id>/credits`), and `testing.rs` is a counting loopback server that
+  speaks those routes, so the request budget is an assertion, not a hope. The artist page's
+  `discography` reads the groups as a MAP: `nz-model::DiscographyGroups` names four and would DROP
+  the provider's `featured` (« Apparaît dans »).
+- **The FFI** (`nz-ffi/src/entity.rs`): the contract's five methods plus the cached twins the screen
+  standard asks for — `cached_artist`/`artist`, `cached_discography`/`discography(id, kind, cursor)`
+  (`kind` = `on-deezer` for the provider's half), `cached_artist_tracks`/`artist_tracks`,
+  `cached_album`/`album`, `album_on_deezer`, `cached_track_credits`/`track_credits`,
+  `cached_person_credits`/`person_credits`, `person_credits_role`, and `set_entity_favorite`.
+  **The list tabs cross as `ListHandle`s** (artist tracks, an album's tracklist, a person's titles);
+  only bounded rows (a popular shelf, a related-artist row, one album's provider remainder) cross
+  as `Vec`.
+- **Kotlin** (`:feature/entity`): `ArtistModel`, `AlbumModel`, `PersonModel`, `TrackCreditsModel`
+  (plain Kotlin over `ArtistService`/`AlbumService`/`CreditsService`/`EntityPlayer`, so the JVM
+  proves every rule with fakes), `ArtistScreen`, `AlbumScreen`, `CreditsScreen`,
+  `TrackCreditsView` + `TrackCreditsSheet`, and the three entries wired in `EntityEntries.kt`.
+  **`TrackCreditsHost(track, onDismiss, nav)` is the door MB10's menu and MB11's panel open**; the
+  screen a person sees is a pure function of the state, and the sheet is the same component the
+  full-screen player's « À propos » shows.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, NDK 30.0.16248370; emulator
+API 35 x86_64 `-no-window -no-audio`, my own port, `tools/perf_api.py --serve` at `10.0.2.2:5750`):
+
+| What | How | Number |
+|---|---|---|
+| The pages' cold cost | `cargo test -p nz-core entity` (a counting server) | artist **3 requests / 1 996 B** (`/artist`, `/discography`, `/on-deezer`), album **2 / 946 B**, credits page **1**, track sheet **1**, « Titres » tab **1** (lazy), radio **1**, a role chip **0** |
+| A warm open | `cached_artist` / `cached_album` | **0 requests**, the same page (both halves of the discography included) |
+| A dead link | `set_network(None)` then `album()` | `Offline` in **0 sockets**, the copy still there |
+| Rust | `cargo test --workspace --locked` | **150** `nz-core` (20 `entity`) + **32** `nz-ffi` (3 `entity`), others unchanged; clippy `-D warnings` and fmt clean |
+| JVM | `:feature:entity:testDebugUnitTest` | **49 tests**: 25 model (cache, stale, cause+retry, one request per part, the double `Ready` trap, the heart's rollback, every player command) + 24 screenshots |
+| The look | `docs/agents/screenshots/mobile/MB7/` | **25 PNGs**: Encre/Papier at 360 and 600 dp, the 200 % font scale, the titles tab, the credits tab, the sheet, the failure card |
+| The device | `EntityDeviceTest` on the emulator (2 tests, rebased on PR #321), **its own loopback bench** | album page **2 requests / 714 B** (`/album/1`, `/on-deezer`), artist page **5 / 1 640 B**, « Radio » + both tabs in the tree; `Lire` → `position_s` **0.246 s**, **0 underrun**, buffer **500 ms**, **48 000 Hz** |
+| Tap → sound | `output_stats()` after the tap | `tap_ns=99 647 889 366`, `first_audible_ns=962 000 000`, position 0.246 s, 0 underruns — **the two instants are on DIFFERENT clocks** (see below) |
+| `libnz_ffi.so` | `build-android.sh` | arm64-v8a **10 152 776 B** (MB5: 9 587 912 → this lot **+564 864 B**), armeabi-v7a 6 899 048, x86_64 12 123 792; universal debug APK **46 510 429 B** |
+
+**Rules a measurement taught** (each cost a red test, a wrong image or a dead screen):
+
+- **A list lot's first real device run is the only thing that exercises a `ListHandle` adapter.**
+  `ListHandle.asRowSource()` used to call `len()`/`window()` on its own anonymous object instead of
+  on the handle — a `StackOverflowError` (`ListWindow.kt:25`, `at ...asRowSource$1.len`) that every
+  JVM test passed straight through, because the JVM tests fake the list. MB6 fixed it (PR #321),
+  this lot rebased on that, and the album page then drew its rows on the emulator. A list screen's
+  device run belongs to the lot's first pass, not to the last.
+- **A page's copy is keyed by the ROUTE argument, not the entity's canonical id.** The SPA's path is
+  `/artist/<what the URL says>`; the heart sends `favoriteEntity(kind, routeId, …)`. Writing the copy
+  under the canonical UUID while the page was opened by the provider id left a reopened page lying
+  about its own heart (`the_heart_flips_the_copy_first_and_rolls_back_when_refused`).
+- **The double `Ready` emission of `screenFlow` costs a request if a part is guarded on data.** A
+  warm open emits the copy and then the answer: the discography and the provider's half are guarded
+  on their JOB as well, or a cold artist page asks both twice (MB5 met the same trap with its styles).
+- **A semantics match precedes the SURFACE.** `uiAutomation.takeScreenshot()` right after a
+  `waitUntil` that proved the page loaded captured the SKELETONS twice (31 500 B against the loaded
+  page's 221 528 B), and a `settle()` of `waitForIdle` + a frame callback + 150 ms still did: the
+  compositor commits later than the tree. The committed device image is the one taken after the
+  sound was measured.
+- **A test APK whose `targetSdk` is below the device's gets Android's "built for an older version"
+  dialog over the very screen the test waits for** — it covered the page and the wait timed out. The
+  module's `defaultConfig` now states `targetSdk`.
+- **`mobile.yaml`'s emulator job runs EVERY module's `connectedDebugAndroidTest`.** The lot's first
+  device test took the bench's ids as instrumentation arguments and a `perf_api.py` on the host: CI
+  ran it without either and the job went red (`IllegalStateException: pass … album=<id>`). The test
+  now carries its own bench — a loopback server inside the app process (session, one artist, one
+  album, one stream) — and no argument: it is green on any emulator and still proves the page and the
+  sound. **A device test that only runs on one machine is a test that is red for everybody else.**
+- **The engine cannot decode WAV** (MB3c's own note: `symphonia` is built without the `wav` feature).
+  The bench's first stream was a generated WAV and the clock never moved — `no suitable format reader
+  found`. It serves a 10 s FLAC (41 065 B, ffmpeg, committed beside the test), and the same page then
+  played.
+- **`tap_ns` and `first_audible_ns` are not on the same clock, so `output_stats()` cannot report
+  tap → sound yet.** `tap_ns` is Android's `CLOCK_MONOTONIC` (Kotlin's `System.nanoTime`), while
+  `first_audible_ns` is the player's own milliseconds-since-start × 1e6 (`nz-core::player` sets it
+  from `now_ms()` on every `Started`). The device run proves what is real — the tap instant travelled
+  with the command, the engine reported the title started, the clock moved 0.255 s, 0 underruns —
+  and the difference is a follow-up in MB3b's file, not a reading of this lot.
+- **A fixed row height clips at 200 %.** MB1's `TrackRowView` is a 56 dp box: at a 200 % font scale
+  the artist's sub-line was cut in half. This lot's `EntityTrackRow` is `heightIn(min = 56.dp)` and
+  ellipsises each line (`softWrap = false`), and it carries the two things the SPA's album page needs
+  and that component has no switch for: the track NUMBER and no sleeve on every row.
+- **A wrapping action row breaks a label mid-word and a scrolling one hides a control.** « Téléchar /
+  ger » on two lines and the heart off the right edge at 360 dp were both measured; a `FlowRow` lays
+  the children on as many lines as they need at their own width (the SPA's own `flex-wrap`, and its
+  artist banner's « the actions scroll on one row » comment is the older behaviour).
+- **`nz-model::TrackArtist` drops the artist's ROW UUID on an album page**, and `entityRef` prefers
+  it (an upload's artist has no provider id at all, so the UUID is the only way to its page): one
+  extra parse of the small album body keeps the link.
+
+**Deliberate deviations from the plan paragraph.** `discography(id, kind, cursor)` answers the WHOLE
+grouped discography (or the provider's half) rather than one page of one group: the page draws the
+latest shelf, the album grid, the singles and « Apparaît dans » at once, the server sends the groups
+whole, and `cursor` is accepted and answered `None` until a paged discography exists. `album_on_deezer`
+is its own call (the SPA asks it after the page, and its refusal is a sentence on the page).
+
+**Not ported, on purpose** (each belongs to a lot that owns the component): « Exporter » (MB9's
+sheet), the admin « Donner un genre » (MB18's bulk sheet), the playing-row highlight (MB11 feeds
+`playingKey`; the parameter exists and is null today), and the sheet's opener (MB10's menu calls
+`TrackCreditsHost`).
+
+**Files.** `mobile/rust/crates/nz-core/src/entity/{mod,wire,store,testing}.rs`,
+`mobile/rust/crates/nz-ffi/src/entity.rs`, `mobile/android/feature/entity/**` (10 Kotlin files, 3 JVM
+test files, 1 instrumented test, its build file), `docs/agents/screenshots/mobile/MB7/` (25 device-safe
+render captures + 1 emulator capture), and this section.
+
+**Still owed to a later lot**: `nz-core::player`'s two instants on one clock (MB3b/MQ2) and
+`DownloadButton`'s Sillon styling (MB15 — the screen uses its stub, which the Material theme paints
+as a grey outline).
 
 ### MB3c — Media service `:playback` (delivered 2026-11-18)
 
