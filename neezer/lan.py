@@ -1008,7 +1008,7 @@ def _register_key(pubkey, device_id, not_after):
 # -- friends ------------------------------------------------------------------------------
 
 
-def _friend_json(user, friend):
+def _friend_json(user, friend, share_all):
     """One friend as the screen names them. ``user_id`` is the ACCOUNT's id (a
     UUID); ``subject`` is the LAN's own opaque name for them — the trust chain
     never uses the account id."""
@@ -1022,16 +1022,9 @@ def _friend_json(user, friend):
         "user_id": str(friend.id),
         "subject": subject_hex(friend),
         "name": friend.name,
-        "all": False,
-        "playlists": playlists,
+        "all": bool(share_all),
+        "playlists": [] if share_all else playlists,
     }
-
-
-def _friend_scope(user, friend):
-    row = LanFriend.get_or_none(
-        (LanFriend.owner == user) & (LanFriend.friend == friend)
-    )
-    return row.share_all if row is not None else False
 
 
 def friends_json(user):
@@ -1120,9 +1113,7 @@ def add_friend(user, name):
             LanFriend.create(owner=user, friend=target, share_all=False, created=now())
             bump_serial(user, target)
         logger.info("LAN friend added")
-    out = _friend_json(user, target)
-    out["all"] = _friend_scope(user, target)
-    return out
+    return _friend_json(user, target, False)
 
 
 def _readable_playlists(user, playlist_ids):
@@ -1231,9 +1222,7 @@ def set_scope(user, friend_id, *, all_=None, playlists=None):
                     owner=user, friend=target, playlist=playlist.id
                 )
         bump_serial(user, target)
-    out = _friend_json(user, target)
-    out["all"] = row.share_all
-    return out
+    return _friend_json(user, target, row.share_all)
 
 
 def remove_friend(user, friend_id):
