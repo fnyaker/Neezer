@@ -2314,7 +2314,7 @@ it pauses the queue for a source that is up.
 
 | Measure | Value | Command / test |
 |---|---|---|
-| the app's tests | **406 passed, 8 ignored, 0 failed**; **18** are this lot's | `cargo test -p neezer-desktop --bins` |
+| the app's tests | **407 passed, 8 ignored, 0 failed**; **19** are this lot's | `cargo test -p neezer-desktop --bins` |
 | an older server (no `/api/lan/status`) | `attach` answers `None`, **0** `nz-lan` threads, **no** `$data/neezer/lan` directory, and a revisit costs **0** extra request (the refusal is remembered) | `wiring::lan::tests::a_server_without_the_feature_starts_nothing_at_all` |
 | the section on an older server | the strip has **no** `tab-Lan`; the route answers « L'échange entre appareils proches » instead of painting | `screens::settings::ui::the_lan_section_is_its_screen_and_hidden_without_the_feature` |
 | a LAN-enabled server | the node runs (**≥ 1** `nz-lan` thread), binds a port, and an enrolment the server refuses puts its French cause in `key_error` | `wiring::lan::tests::a_lan_server_gets_a_node_that_says_where_its_key_stands` |
@@ -2325,6 +2325,7 @@ it pauses the queue for a source that is up.
 | the ring's memory | **5 248 B** for 64 rows (**82 B** a row: 56 B of row + 7 B of id + 19 B of name); the wiring counts **0** with no node and an empty ring | `the_wiring_memory_is_the_node_plus_one_bounded_ring` |
 | no node ⇒ the wrappers cost nothing | one `open` = one inner `open`, nothing recorded, `ready` unchanged | `without_a_node_the_opener_is_the_inner_one` |
 | the quit | the node is **still running** after `offline::shutdown_process` + `engine::shutdown_process`, and **0** `nz-lan` threads when `lan::shutdown_process` returns; idempotent | `the_quit_joins_the_node_after_the_worker_and_the_engine` |
+| the offline gate (#352) | the wrapper answers the fetcher's verdict: stub server up → `reachable`, no node and a dead link → not | `the_download_fetcher_answers_the_worker_s_reachability_question` |
 | the section's layout | three windows (2 560×1 600, 1 280×800, 660×800 = the 420 px panel's column): the column never overflows, and the two switches, the four quality boxes, `lan-copy-ufw` and `lan-renew` all have a box | `screens::settings::lan::ui::the_section_fits_the_three_windows` |
 | a click acts | one click on « Partager mes sons » writes `lan.serve = false`; one on Opus 64 adds `OPUS_64`; turning the last rung off is refused and the set keeps one | `…::a_click_writes_the_device_settings_and_forgets_nothing` |
 | the settings strip | **11** categories in **one** 33 px row at 1 280 px (the Lecture et son pane's last control then sits at y = 781.5 in an 800 px window) | `…::the_mouse_switches_sections_and_flips_a_setting` |
