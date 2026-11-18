@@ -3,6 +3,7 @@ package fr.neezer.mobile.app
 import android.app.Application
 import androidx.navigation.NavHostController
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.feature.nowplaying.NowPlayingState
 import uniffi.nz_ffi.AppLink
 import uniffi.nz_ffi.resolveLink
 
@@ -86,14 +87,14 @@ class AppGraph(private val application: Application) : NzNavigator {
         }
     }
 
-    /** The full-screen player (MB11 shows the sheet). */
+    /** The full-screen player: `:feature:nowplaying`'s own sheet (MB11). */
     override fun openPlayer() {
-        // MB11: openPlayer() raises the sheet's state in the core.
+        NowPlayingState.show()
     }
 
-    /** The queue editor (MB11). */
+    /** The queue editor, the player behind it, on the playing row (MB11). */
     override fun openQueue() {
-        // MB11: the queue route, scrolled to the current track.
+        NowPlayingState.openQueue()
     }
 
     /**
