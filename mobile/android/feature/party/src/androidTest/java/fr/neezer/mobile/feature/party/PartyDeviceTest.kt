@@ -84,7 +84,11 @@ class PartyDeviceTest {
         bench.forget()
 
         val card = runBlocking { api.peek(partyId) }
-        assertEquals("one request for a card", 1, bench.count())
+        assertEquals("one request for a card: ${bench.routes()}", 1, bench.count())
+        assertTrue(
+            "and it is the card's own route: ${bench.routes()}",
+            bench.routes()[0].startsWith("GET /api/party/$partyId"),
+        )
         assertTrue("the card arrived", card != null)
         assertEquals("Camille", card?.host)
         assertEquals(PartyPhase.LANDING, card?.phase)
@@ -216,8 +220,14 @@ private class PartyBench private constructor(
     private val port: Int get() = address.substringAfterLast(':').toInt()
 
     companion object {
-        const val LIVE = "b3VGv0dTkz3Wq7nH_Z1pQA"
-        const val GONE = "gone-party-id-0000000000"
+        /**
+         * The party this bench serves. UNIQUE per run: `nz-api` caches a `GET
+         * /api/party/<id>` (the SPA's own api cache), so a fixed id made the
+         * "cold" card cost 0 requests on the second run of the same install —
+         * measured, and the reason this is a value and not a constant.
+         */
+        val LIVE: String = "party" + System.currentTimeMillis().toString(36)
+        val GONE: String = "gone" + System.currentTimeMillis().toString(36)
 
         fun start(): PartyBench {
             val listener = ServerSocket(0)

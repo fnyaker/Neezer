@@ -401,7 +401,7 @@ fn the_party_costs_the_pages_requests_and_never_more() {
     let server = PartyServer::start();
     let core = Arc::new(TempCore::new("party-service").take().0);
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        .worker_threads(1)
         .enable_all()
         .build()
         .expect("a runtime for the scenario");
@@ -472,7 +472,9 @@ fn the_party_costs_the_pages_requests_and_never_more() {
             .expect("a missing party is not an error");
         assert!(missing.is_none(), "the peek answers nothing");
         assert_eq!(party.view().phase, Phase::Missing);
-        assert_eq!(server.count(), 1);
+        // The ROUTES, not a bare count: a count that grew would say nothing about
+        // what grew, and this bench is measured under a full parallel `cargo test`.
+        assert_eq!(server.routes(), vec![format!("GET /api/party/{GONE}")]);
         let bytes = server.body_bytes();
         println!("MEASURE party dead link: 1 request, {bytes} B, phase Missing");
     });

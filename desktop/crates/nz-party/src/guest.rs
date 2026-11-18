@@ -741,12 +741,7 @@ impl Guest {
             if retry.is_some_and(|at| at > Instant::now()) {
                 continue;
             }
-            let path = format!(
-                "/party/{}/chunk/{}?f=opus&sr=48000",
-                path_segment(&self.pid()),
-                path_segment(&track.id)
-            );
-            let path = format!("{path}/{chunk}");
+            let path = chunk_path(&self.pid(), &track.id, chunk);
             let api = Arc::clone(api);
             let this = self.clone();
             let rate = self.shared.rate.load(Ordering::Acquire) as u32;
@@ -974,6 +969,26 @@ fn handover_in_ms(state: &PartyState, shared: &Shared) -> Option<f64> {
 /// A poll's backoff: 1, 2, 4, 8 s, capped at 8 (`rule 3`: fail fast, no storm).
 pub fn backoff(failures: u32) -> Duration {
     Duration::from_millis(1_000 * (1_u64 << failures.min(3)))
+}
+
+/// The route one chunk is fetched from, exactly as the SPA builds it
+/// (`engine.js#fetchChunk`: `${base}/chunk/${id}/${k}?f=…&sr=…`) and as
+/// `neezer/webui/party.py#party_chunk` routes it
+/// (`/party/<pid>/chunk/<mid>/<int:k>`).
+///
+/// **The index is a PATH segment and the options are the QUERY.** The first
+/// version appended `?f=opus&sr=48000` and then `/{chunk}`, i.e.
+/// `/chunk/<mid>?f=opus&sr=48000/3`: no route matches that, and the first real
+/// client (MB20's phone, against `webapp/test/party/server.py`) answered 404 to
+/// EVERY chunk while the screen sat on « Chargement… ». The desktop never
+/// noticed because its benches serve chunks from a fixture, not from the route.
+pub fn chunk_path(pid: &str, track: &str, chunk: u64) -> String {
+    format!(
+        "/party/{}/chunk/{}/{}?f=opus&sr=48000",
+        path_segment(pid),
+        path_segment(track),
+        chunk
+    )
 }
 
 /// One path segment, percent-encoded the way the SPA's `encodeURIComponent`
