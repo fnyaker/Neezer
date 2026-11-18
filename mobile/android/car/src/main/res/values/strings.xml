@@ -1,8 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- :car's own labels: the tile and the settings activity are declared in THIS
-     module's manifest, so their strings live here (a library module cannot read
-     :app's resources). -->
+<!-- :car's own labels and messages: the tile, the service's notification and the
+     overlay all read them from THIS module (a library cannot read :app's
+     resources). Every string is the old app's, word for word: the car mode is
+     ported, not re-written (docs/agents/mobile.md, MB24). -->
 <resources>
     <string name="car_mode">Mode voiture</string>
     <string name="car_tile">Mode voiture</string>
+    <string name="car_channel">Mode voiture</string>
+    <string name="car_notification_title">Mode voiture</string>
+    <string name="car_notification_text">Prêt quand la route commence</string>
+    <string name="car_notification_settings">Réglages</string>
+    <string name="car_notification_stop">Arrêter</string>
+    <string name="car_overlay_blocked">Autorise « Afficher par-dessus les autres applis » pour le mode voiture.</string>
+    <string name="car_usage_blocked">Autorise l\'accès à l\'historique d\'utilisation pour détecter l\'app GPS.</string>
+    <string name="car_notification_active">Actif sur l\'écran</string>
+    <string name="car_notification_permission">Autorise « Afficher par-dessus les autres applis »</string>
+    <string name="car_no_player">Ouvre Neezer pour lancer la musique</string>
+    <string name="car_favorites_unavailable">Ouvre Neezer pour gérer les favoris</string>
+    <string name="car_favorites_launch_failed">Ouvre Neezer pour lancer tes favoris</string>
+    <string name="car_launched">Lecture : %1$s</string>
+    <string name="car_playlist_launched">Playlist lancée : %1$s</string>
+    <string name="car_settings_missing">Réglages du mode voiture indisponibles</string>
+    <string name="car_start_blocked">Mode voiture en attente</string>
+    <string name="car_start_blocked_text">Touche pour démarrer le mode voiture</string>
+    <string name="car_start_blocked_action">Démarrer</string>
+    <string name="car_position_reset">Positions réinitialisées</string>
+    <string name="car_position_reset_app">Position de %1$s réinitialisée</string>
+    <string name="car_pin_limit">Impossible d\'épingler : 24 playlists au maximum</string>
 </resources>

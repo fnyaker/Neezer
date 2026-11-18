@@ -8,6 +8,32 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- The car mode's own permissions: the overlay window, the usage access that
+         tells which app is in front (no AccessibilityService), the location for
+         the speed lock, the microphone for the voice search, Bluetooth to hear
+         the car radio, and the foreground types that keep all of that alive once
+         the activity is behind the map. `:app` declares the same union (MB0's
+         manifest), and a library that OWNS these components declares what it uses
+         so lint can see it: the merge makes them one set, and a module that only
+         borrowed `:app`'s copy failed lint's MissingPermission on its own code. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <application>
         <!-- The overlay itself: a foreground service, `specialUse` being the only
              Android 14 type that fits "draw a player over the navigation app". -->
