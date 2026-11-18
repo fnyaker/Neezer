@@ -3995,7 +3995,7 @@ styles, the genre stations — ported from `routes/Releases.svelte`, `routes/Rel
 
 | What | How | Numbers |
 |---|---|---|
-| Rust | `cargo test --workspace --locked` | **493 `nz-core` tests**, 50 of them this lot's (16 `recap` — the SPA's node suite ported — 10 `explorer`, 2 `wire`, 10 `mod`, 12 lot tests against a counting server); **83 `nz-ffi`** (4 discovery); `fmt` and `clippy -D warnings` clean |
+| Rust | `cargo test --workspace --locked` | **501 `nz-core` tests**, 50 of them this lot's (16 `recap` — the SPA's node suite ported — 10 `explorer`, 2 `wire`, 10 `mod`, 12 lot tests against a counting server); **86 `nz-ffi`** (4 discovery); `fmt` and `clippy -D warnings` clean |
 | The feed's counts | counting server | cold **2 requests / 1 256 B** (the fake's own feed), warm **0**; a dead link **0 sockets opened**; a refused feed is `Server{503}` |
 | A shelf page and a group | counting server | **0 requests** (the feed is in memory); an unknown shelf is `None` |
 | The years | counting server | **1** request, then **0**, then **1** again once the copy is ten minutes old (aged, never `sleep`ed) |
