@@ -4,6 +4,10 @@ useDefault = true
 [[rules]]
 id = "generic-api-key"
 [rules.allowlist]
-description = "A readable password in an older test fixture, not a credential"
+# Quiet9-Meadow: a readable password in an older test fixture, not a credential.
+# 4e5a4c43…: the PUBLIC LAN-credential test vector of docs/agents/lan-nodes.md
+# (signed by the published seed 00 01 … 1f, reproduced by tests on both sides);
+# it authenticates nothing on any real server.
+description = "Test fixtures and published test vectors, not credentials"
 regexTarget = "match"
-regexes = ['''Quiet9-Meadow''']
+regexes = ['''Quiet9-Meadow''', '''4e5a4c430156475aa75463474c''']

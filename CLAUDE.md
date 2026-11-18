@@ -125,6 +125,7 @@ green, merge without asking. No skipped or disabled test to get there.
 | `webapp/src/lib/viz/` (worlds, skins, shaders, scope, projector, eco mode) | [animations.md](docs/agents/animations.md) |
 | UI transitions: any enter/exit/move in `webapp/src`, `lib/motion.js`, motion tokens, the eco/reduced guard | [transitions.md](docs/agents/transitions.md) |
 | listen party, remote control | [party-remote.md](docs/agents/party-remote.md) |
+| LAN nodes: `desktop/crates/nz-lan` (peer exchange between the native apps), `/api/lan/*`, device credentials, trusted friends; its lot plan | [lan-nodes.md](docs/agents/lan-nodes.md) |
 | a task that spans several areas, or you delegate to a subagent | [orchestration.md](docs/agents/orchestration.md) |
 
 Documentation map: [docs/README.md](docs/README.md). Delivered architecture references:
