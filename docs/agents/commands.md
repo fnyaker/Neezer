@@ -164,13 +164,21 @@ cd desktop && xvfb-run -a ./target/debug/neezer-desktop --self-test-quit-after-f
 cd desktop && cargo run -p nz-transcribe -- --version   # the linked whisper.cpp build (Vulkan included)
 VULKAN_SDK=/path/to/vulkan-headers cargo build -p nz-transcribe   # whisper.cpp's CMake needs the Vulkan HEADERS,
                                                      # not only the loader (Arch: vulkan-headers + shaderc)
+desktop/tools/build_engine_v3.sh --release           # the x86-64-v3 engine child, `neezer-transcribe-v3`,
+                                                     # beside the floor one: a SECOND cargo build into
+                                                     # target/engine-v3 with desktop/.cargo/engine-v3.toml
+                                                     # (cargo builds one copy of a dependency per graph)
+cd desktop && cargo build --release && target/release/neezer-transcribe engine-program
+                                                     # which engine child THIS CPU gets, one line: the -v3 one
+                                                     # on AVX2+FMA+F16C, the floor binary everywhere else
 desktop/tools/check_cpu_floor.sh desktop/target/release/neezer-transcribe
-                                                     # the CPU floor (x86-64-v2, desktop/.cargo/config.toml): the
-                                                     # binary's census, ggml's OWN objects gated, then the binary
-                                                     # run under an emulated x86-64-v2 CPU (qemu-x86_64 -cpu
-                                                     # Nehalem, `qemu-user`; NZ_WHISPER_MODEL + NZ_WHISPER_AUDIO
-                                                     # for that last step, the crate's own fixture names). A ggml
-                                                     # built with -march=native SIGILLs here in under a second.
+                                                     # both floors at once: each binary's census, each variant's
+                                                     # ggml OWN objects gated at its level, each binary run under
+                                                     # an emulated CPU of its floor (qemu-x86_64 -cpu Nehalem /
+                                                     # -cpu Haswell, `qemu-user`; NZ_WHISPER_MODEL +
+                                                     # NZ_WHISPER_AUDIO for the speech, the crate's fixtures),
+                                                     # then the dispatch under both CPUs. A ggml built with
+                                                     # -march=native SIGILLs here in under a second.
 cd desktop && cargo clean -p whisper-rs-sys && cargo build -p nz-transcribe
                                                      # after editing desktop/.cargo/config.toml: cargo does not
                                                      # rebuild a dependency for a build-script environment change,

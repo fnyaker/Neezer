@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """Fail when code Neezer compiles needs more than the CPU floor it promises.
 
-`docs/agents/desktop.md` (*The CPU floor*) fixes that floor at **x86-64-v2**
-(SSE4.2 + POPCNT: every x86-64 CPU since Nehalem 2008 / Bulldozer 2011). whisper.cpp's
-CPU backend is the one part of the desktop stack whose instruction set is decided at
-BUILD time: ggml defaults to `GGML_NATIVE=ON`, i.e. `-march=native`, so one commit
-produces an AVX-512 binary on one builder and an SSE4.2 one on another — and
+`docs/agents/desktop.md` gives the desktop **two** engine binaries, each with its own
+floor, and this script checks either:
+
+- **x86-64-v2** (SSE4.2 + POPCNT: every x86-64 CPU since Nehalem 2008 / Bulldozer 2011)
+  — `neezer-transcribe`, the child every machine can run;
+- **x86-64-v3** (AVX, AVX2, FMA, F16C, BMI2: Haswell 2013 / Excavator 2015) —
+  `neezer-transcribe-v3`, which the supervisor starts when the CPU answers those three
+  features. Measured: 5.0× real time at v2, 23.5× at v3, on the same excerpt.
+
+whisper.cpp's CPU backend is the one part of the desktop stack whose instruction set is
+decided at BUILD time: ggml defaults to `GGML_NATIVE=ON`, i.e. `-march=native`, so one
+commit produces an AVX-512 binary on one builder and an SSE4.2 one on another — and
 Swatinem/rust-cache happily restores the first into a CI job running on the second.
-Measured in this repository: a ggml compiled on a Zen 4 laptop needs **104 220**
-AVX-512 instructions (EVEX) and dies with `SIGILL (signal 4)` under
-`qemu-x86_64 -cpu Nehalem`; the same build with the flags pinned below needs 0 and
-transcribes. `desktop/.cargo/config.toml` pins the cmake flags; this script is the
-CHECK that the pin really reached the compiler.
+Measured in this repository: a ggml compiled on a Zen 4 laptop needs **104 194** AVX-512
+instructions (EVEX) and dies with `SIGILL (signal 4)` under `qemu-x86_64 -cpu Nehalem`;
+the same build with the flags pinned in `desktop/.cargo/config.toml` needs 0 and
+transcribes. This script is the CHECK that the pin really reached the compiler.
 
 **What is gated.** Only the code this repository compiles itself — symbols matching
 `--gate` (`ggml*`, `whisper*` by default). Two dependencies legitimately contain
@@ -37,7 +43,10 @@ Usage:
     # The objects the flags actually reached (symbols present, the real gate):
     python3 desktop/tools/check_cpu_baseline.py \\
         desktop/target/release/build/whisper-rs-sys-*/out/build/ggml/src
-    # The binary a package ships (stripped: count everything, gate nothing):
+    # ...and the x86-64-v3 child's own objects, at ITS level:
+    python3 desktop/tools/check_cpu_baseline.py --baseline x86-64-v3 \\
+        desktop/target/engine-v3/release/build/whisper-rs-sys-*/out/build/ggml/src
+    # A binary a package ships (stripped: count everything, gate nothing):
     python3 desktop/tools/check_cpu_baseline.py --report desktop/target/release/neezer-transcribe
 
 Exit status: 0 inside the floor, 1 when gated code exceeds it, 2 when the input
@@ -71,7 +80,31 @@ DESCRIPTIONS = {
     "redundant": "lzcnt/tzcnt — bsr/bsf with an F3 prefix: safe on every x86-64",
 }
 INFORMATIONAL = {"avx2", "redundant"}
-GATED = [key for key in DESCRIPTIONS if key not in INFORMATIONAL]
+# The micro-architecture level each category belongs to. `2` is inside x86-64-v2
+# (nothing to declare), `3` is what x86-64-v3 adds on top (AVX, AVX2, FMA, F16C,
+# BMI2, MOVBE, LZCNT), `4` is everything above it (AVX-512, AES-NI, PCLMUL, MPX).
+LEVEL = {
+    "avx": 3,
+    "avx2": 3,
+    "fma": 3,
+    "f16c": 3,
+    "bmi2": 3,
+    "movbe": 3,
+    "avx512": 4,
+    "aes": 4,
+    "pclmul": 4,
+    "mpx": 4,
+}
+LEVELS = {"x86-64-v2": 2, "x86-64-v3": 3}
+
+
+def gated_categories(level: int) -> list[str]:
+    """The categories that exceed a floor of `level` (2 or 3)."""
+    return [
+        key
+        for key in DESCRIPTIONS
+        if key not in INFORMATIONAL and LEVEL.get(key, 4) > level
+    ]
 SAMPLE_ORDER = ["avx512", "avx", "fma", "f16c", "bmi2", "movbe", "aes", "pclmul", "mpx"]
 
 FMA = re.compile(r"^vfn?m(add|sub|addsub|subadd)")
@@ -227,7 +260,14 @@ def inputs(paths: list[str]) -> list[str]:
     return found
 
 
-def scan(path: str, symbols: Symbols, gate: tuple[str, ...], samples: int, ours_always: bool):
+def scan(
+    path: str,
+    symbols: Symbols,
+    gate: tuple[str, ...],
+    samples: int,
+    ours_always: bool,
+    gated_set: list[str],
+):
     counts = {key: 0 for key in DESCRIPTIONS}
     own = {key: 0 for key in DESCRIPTIONS}
     first: dict[str, str] = {}
@@ -259,7 +299,7 @@ def scan(path: str, symbols: Symbols, gate: tuple[str, ...], samples: int, ours_
             counts[category] += 1
             if ours:
                 own[category] += 1
-                if category in GATED:
+                if category in gated_set:
                     first.setdefault(category, f"{owner}  {line.strip()}")
     stderr = process.stderr.read() if process.stderr else ""
     code = process.wait()
@@ -276,8 +316,8 @@ def main() -> int:
     parser.add_argument(
         "--baseline",
         default="x86-64-v2",
-        help="the documented floor (only x86-64-v2 exists: changing it is a decision, "
-        "with its note and its measurement)",
+        help="the floor to enforce (the level of the binary being checked); a new "
+        "level is a decision, with its note, its measurement and its cache key",
     )
     parser.add_argument(
         "--gate",
@@ -292,11 +332,13 @@ def main() -> int:
     )
     parser.add_argument("--samples", type=int, default=2)
     args = parser.parse_args()
-    if args.baseline != "x86-64-v2":
+    if args.baseline not in LEVELS:
         sys.exit(
-            f"plancher inconnu : {args.baseline}. Le seul plancher documenté est "
-            "x86-64-v2 (docs/agents/desktop.md, *The CPU floor*)."
+            f"plancher inconnu : {args.baseline}. Les planchers documentés sont "
+            f"{', '.join(LEVELS)} (docs/agents/desktop.md, *The CPU floor*)."
         )
+    level = LEVELS[args.baseline]
+    gated_set = gated_categories(level)
     gate = tuple(part.strip() for part in args.gate.split(",") if part.strip())
 
     failed = False
@@ -308,11 +350,11 @@ def main() -> int:
         ours_always = path.endswith((".o", ".a"))
         symbols = Symbols(path)
         counts, own, first, instructions = scan(
-            path, symbols, gate, args.samples, ours_always
+            path, symbols, gate, args.samples, ours_always, gated_set
         )
         for key in DESCRIPTIONS:
             totals[key] += own[key]
-        gated = sum(own[key] for key in GATED)
+        gated = sum(own[key] for key in gated_set)
         print(f"{path} — {instructions} instructions, {gated} hors plancher")
         if not ours_always and not symbols and not args.report:
             print(
@@ -325,7 +367,7 @@ def main() -> int:
         for category, description in DESCRIPTIONS.items():
             count = counts[category]
             mine = own[category]
-            mark = "!!" if (category in GATED and mine) else "  "
+            mark = "!!" if (category in gated_set and mine) else "  "
             print(f"  {mark} {category:<9} {count:>8}  {description}")
             if mine != count:
                 print(f"        dont {mine} que l'on compile, {count - mine} en code dispatché (CPUID)")
@@ -333,7 +375,7 @@ def main() -> int:
                 print(f"        {first[category][:150]}")
         if args.report:
             print(f"  relevé seulement (--report) : {gated} instructions hors plancher,"
-                  f" dont {sum(totals[key] for key in GATED)} cumulées")
+                  f" dont {sum(totals[key] for key in gated_set)} cumulées")
         elif gated:
             failed = True
             print(f"  {path} dépasse {args.baseline} : {gated} instructions.")
