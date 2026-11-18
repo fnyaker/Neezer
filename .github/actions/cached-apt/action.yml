@@ -28,12 +28,17 @@ inputs:
 runs:
   using: composite
   steps:
-    # The key is (which line, which RUNNER IMAGE, which package list): a new
-    # image ships other preinstalled versions and a new list other .debs, and
-    # either one restored into the other would leave apt downloading the
-    # difference on every run of that image — a permanently half-cold cache. The
-    # list hashes itself, so nobody has to remember to bump anything.
-    - name: The package list and the runner image, as a cache key
+    # The key is the package list, hashed: it identifies the .deb SET, so an
+    # edited list is a new entry and nobody has to remember to bump a number.
+    #
+    # NOT the runner image, and that is a measurement, not a preference: in one
+    # run (44309607752) the four desktop jobs reported THREE `ImageVersion`s —
+    # 20261111.370.1 (`release binaries`), 20261111.127.1 (`cargo clippy`) and
+    # 20261116.376.1 (`floor`). The fleet runs several image builds at once, so
+    # an image-keyed cache would be four separate entries that a job on another
+    # image never finds. A package whose version moves between images is one or
+    # two .debs, downloaded again — cheaper than never sharing the cache.
+    - name: The package list, as a cache key
       id: key
       shell: bash
       env:
@@ -43,8 +48,7 @@ runs:
         list="$(printf '%s' "$APT_PACKAGES" | tr -s ' ' '\n' | sed '/^$/d' | sort |
           sha256sum | cut -c1-16)"
         echo "list=$list" >> "$GITHUB_OUTPUT"
-        echo "image=${ImageVersion:-none}" >> "$GITHUB_OUTPUT"
-        echo "line=${{ inputs.line }} image=${ImageVersion:-none} list=$list"
+        echo "line=${{ inputs.line }} list=$list image=${ImageVersion:-none}"
 
     # `Dir::Cache::archives` is where apt keeps the .debs it retrieved
     # (apt-get(8), FILES: "/var/cache/apt/archives/ — Storage area for retrieved
@@ -78,10 +82,7 @@ runs:
         # 116 MB of the repository's 10 GB, evicting the Rust caches the builds
         # need (docs.github.com, dependency caching, "Usage limits and eviction
         # policy").
-        key: apt-${{ inputs.line }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.list }}
-        restore-keys: |
-          apt-${{ inputs.line }}-${{ steps.key.outputs.image }}-
-          apt-${{ inputs.line }}-
+        key: apt-${{ inputs.line }}-${{ steps.key.outputs.list }}
 
     - name: Install the system packages
       shell: bash

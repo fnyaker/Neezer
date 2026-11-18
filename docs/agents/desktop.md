@@ -753,10 +753,12 @@ Waves that can run in parallel (disjoint files):
      (`.github/actions/cached-apt`, which points apt's `Dir::Cache::archives` at `$RUNNER_TEMP`
      because `actions/cache` restores as the runner user and `/var/cache/apt/archives` belongs to
      root). The `packages` input stays in the workflow: a package that stops building must be
-     readable where it is installed. The cache key is the package list **and the runner image**
-     (`ImageVersion`), so a new image never restores another one's `.deb`s and then downloads the
-     difference on every run; the cold path forces IPv4 and retries a stalled fetch, because the
-     slow job was one bad connection, not the archive.
+     readable where it is installed. The cache key is the package list, hashed — and not the
+     runner image, because one run's four jobs reported three different `ImageVersion`s. The path
+     is the glob `apt-archives/*.deb`: apt creates `partial/` and `lock` as root, and caching the
+     whole directory made every save fail on `tar: Permission denied`. The cold path forces IPv4 and
+     retries a stalled fetch — the archive served 20.8 MB/s to one job and 90.9 kB/s to another of
+     the same run, so the slow part is the connection, not the mirror.
   2. **The CPU-floor proof sat at the end of the test job.** `Build the x86-64-v3 and x86-64-v4
      engine children` (median **5.83 min**) and `Both CPU floors hold` (**4.15 min**) shared nothing
      with the suite but the target directory. They are the `floor` job now — moved, not dropped.

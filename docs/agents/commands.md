@@ -275,10 +275,14 @@ every rule's URLs against a fresh werkzeug compilation). CI runs nine workflows:
     `System dependencies` was the workflow's critical path — **median 22.2 / 20.4 / 16.4 min** per
     job over 8 successful runs — for a package set that never changes. Same run, same mirror: what
     varied was the CONNECTION, so the point is not to depend on it. The list still lives in the
-    workflow that installs it (release.yaml keeps its own): the action hashes it with the runner
-    IMAGE (`ImageVersion`) as the cache key — a new image or a new list is a new entry, and the four
-    jobs then download only the difference — and its cold path forces IPv4 and retries a stalled
-    fetch (`Acquire::ForceIPv4`, `Acquire::Retries`, `Acquire::http::Timeout`).
+    workflow that installs it (release.yaml keeps its own): the action hashes it as the cache key (and NOT the runner
+    image: in run 44309607752 the four jobs reported three different `ImageVersion`s, so an
+    image-keyed cache would never be shared), and its cold path forces IPv4 and retries a stalled
+    fetch (`Acquire::ForceIPv4`, `Acquire::Retries`, `Acquire::http::Timeout`). Two traps, both
+    measured and both fatal to the cache: apt creates `archives/partial/` and `archives/lock` as
+    ROOT, so caching the directory made every save die on `tar: … Permission denied` — the path is
+    the glob `apt-archives/*.deb`; and the archive served the same 116 MB at 20.8 MB/s to one job
+    and 90.9 kB/s to another of the same run, which is the connection, not the mirror.
   - **The CPU-floor proof is its own job** (`floor`). The two engine children plus
     `check_cpu_floor.sh` were the tail of `cargo test + window` (medians **5.83 + 4.15 min**) and
     share nothing with the suite but the target directory. Moved, not lightened: same steps, same
