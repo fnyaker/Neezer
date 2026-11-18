@@ -1467,49 +1467,109 @@ destructure it unchanged, and every other `ByteStream` (`ApiByteStream`, `Measur
   > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
   > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
 
-### LN8 — Web UI « Appareils et amis » (wave 2, effort high)
+### LN8 — Web UI « Appareils et amis » (delivered 2026-11-18)
 
-- **Objective**: rule 6 — everything configurable about the LAN exchange that lives on the server is
-  configurable from the SPA: my devices (rename, revoke), my trusted friends and what each sees, and
-  for admins the feature switch and the credential lifetime.
-- **Files**: LN8 row. **Contracts**: the *Server* routes. French copy, `Icon.svelte`, the SPA's
-  tokens, `LoadFailed.svelte` on failure, optimistic UI with rollback and « Réessayer ».
-- **Depends on**: LN1.
-- **Acceptance**: opening the section costs **2 requests** (`/api/lan/devices`, `/api/lan/friends`;
-  +1 `/api/lan/settings` for an admin), measured with `webapp/test/requests/run.mjs`; revoke and
-  rename answer in the same frame (optimistic) and roll back on failure; the friend picker lists the
-  person's playlists from the already-cached library (0 extra request when cached); a server without
-  the feature (`/api/lan/status` 404) hides the section entirely; `npm test` and `npm run build`
-  green; looked at in a desktop window, on a phone width and in the full-screen player's narrow side
-  panel (screenshots in `docs/agents/screenshots/lan/LN8/`), no default-looking widget.
-- **Prompt**:
+**What landed.** Réglages → « Appareils et amis », the one place a person acts on the LAN trust
+chain from a browser. Three blocks in one category: **Mes appareils** (name, platform, enrolment
+date, last seen, « cet appareil », rename, « Révoquer » behind a second tap), **Amis de confiance**
+(add by account name, « Tout partager » or a playlist picker, remove, plus the read-only « Qui
+partage avec vous »), and — administrators only — **Serveur**: the feature switch, the credential
+lifetime (7–90 days) and the server key's id with its renewal behind a second tap. Every mutation is
+optimistic, and every refusal puts the row back with its cause and « Réessayer ».
 
-  > Tu implémentes le lot **LN8 — Web UI « Appareils et amis »** du plan « nœuds LAN » (effort
-  > high). But (règle 6) : dans Réglages de la SPA, une section « Appareils et amis » — mes appareils
-  > inscrits (renommer, révoquer), mes amis de confiance et ce que chacun voit (« Tout partager » ou
-  > un choix de playlists), et pour un admin l'activation et la durée de validité des clés —,
-  > optimiste, avec la cause et « Réessayer » en cas d'échec, masquée sur un serveur sans la fonction.
-  > Lis *Server*, *Screens and Réglages* et la section LN8 de `docs/agents/lan-nodes.md`, puis
-  > `docs/agents/webapp.md` et `webapp/src/routes/Settings.svelte`. Fichiers exclusifs : la ligne LN8.
-  > Critères : la liste *Acceptance* de LN8 ; ouvre l'écran dans Chromium sans tête (bureau,
-  > téléphone, panneau étroit) et joins les captures.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- `webapp/src/lib/lan.js` — the routes of this note's *Server* table and the list edits the screen
+  rolls back with, in one place with no DOM in it, so `node --test` covers the wire and the words:
+  `lanFeature()` (the probe), `devices/friends/settings`, `renameDevice/revokeDevice`,
+  `addFriend/setFriendScope/removeFriend`, `saveSettings/renewKey`, `playlistChoices()`, and the
+  pure `renameDeviceIn/withoutDevice/withScope/withoutFriend/togglePlaylist/sharedPairs`, plus the
+  French words (`platformLabel`, `seenLabel`, `deviceDetail`, `sharedSummary`, `daysLabel`,
+  `keyLabel`).
+- `webapp/src/components/LanSettings.svelte` — the three cards. `LoadFailed` + « Réessayer » for the
+  section's own load; a cause line per row for a failed mutation; `role="switch"` with
+  `aria-checked` on the two switches; every icon-only control labelled; glyphs through `Icon.svelte`;
+  no emoji; the design system's `.card`, `.btn`, `.field`, `.chip` and a switch drawn the way
+  `webapp.md` draws one (`--btn`/`--onbtn` track, `--s2` + `--dim` when off).
+- `webapp/src/routes/Settings.svelte` — one import, one `onMount` probe, one nav entry in the
+  « Comptes & serveur » group and one `{#if tab === "lan"}` include. Nothing else.
+- `webapp/test/lan.test.mjs` (13 tests) and the screenshots under
+  `docs/agents/screenshots/lan/LN8/` (desktop, the picker, the server card, a phone at 390 px, the
+  player's 340 px panel width, and a server without the feature).
+
+**Two corrections to this plan, taken before merge.**
+
+1. **The test is `webapp/test/lan.test.mjs`, not `lan.test.js`.** `npm test` is
+   `node --test "test/*.test.mjs"`: a `.js` file at that path is never picked up, so the lot's whole
+   proof would have been dead weight in CI.
+2. **`enabled=false` must NOT hide the screen; only a server without the routes does.** The *Server*
+   table says « `enabled=false` hides the feature in every client », which is right for an app's
+   node. Applied to Réglages it contradicts rule 6: the administrator would have no door left to
+   switch the exchange back on. So the probe hides the category when `/api/lan/status` is not a 200
+   (an older server, or a session the routes are `NEVER` for), and `enabled=false` draws the section
+   with a banner that says so — the admin re-enables it from the « Serveur » card, everybody else is
+   told to ask them.
+
+**What a later lot can rely on.** `lanFeature()` answers `{supported, enabled, credential_days,
+keys, subject}` and remembers a DEFINITE answer for the page load only (a 404 is cached, a network
+failure is not, so a later Réglages visit tries again). `devices()` is the bare array of the route,
+`friends()` the `{shares_to, trusted_by}` object with `user_id` as the account UUID and `subject`
+separate, `settings()` `{enabled, credential_days}`; a refusal is `{status, message, code}` and
+`lan.cause()` is the same `failureCause` every other screen shows, so « HTTP 404 : Aucun compte de ce
+nom. » reads alike everywhere. `playlistChoices()` reads `/me/playlists` from the SPA's offline cache
+first and costs a request only on a cold one.
+
+**The numbers, each with its command** (this machine, `npm run build` before the bench,
+`~/.cache/ln8/bench.mjs` on `tools/perf_api.py --serve --tracks 400 --admin-users 5`, real Ed25519
+enrolments and real friendships through the routes; `PYTHON=~/.cache/neezer-ln8/venv/bin/python`):
+
+| Measure | Value | Where |
+|---|---|---|
+| Opening the section, admin | **3 requests** (`/api/lan/devices`, `/api/lan/friends`, `/api/lan/settings`) | bench, counted on `response` events under `/api/lan/` |
+| Opening it, non-admin | **2 requests** (devices, friends); **0** to `/api/lan/settings` | same bench, as `membre` |
+| The feature probe | **1 request per page load**, **0** on a second visit to the category | bench (`probe=1`, then 3 and only 3) |
+| Before the category is opened | **0** `/api/lan/*` requests | bench |
+| A server without the routes | `/api/lan/status` 404 → **0 further LAN requests**, **0** categories drawn | bench, status route answered 404 |
+| Rename, optimistic | new name painted **while its PATCH is held open** (0 console/frame work); on a 500 the old name returns with « erreur du serveur (HTTP 500 : Erreur serveur.) » and « Réessayer » | bench |
+| Friend picker | **0** requests on a cached library; **1 GET** cold | bench + `lan.test.mjs` |
+| Layout | **0 px** sideways overflow at 390 and 340 px; **0** control wider than the column; device rows stack their actions under the name | bench (`scrollWidth - clientWidth`, then a per-element right edge) |
+| `npm test` | **804 passed, 0 failed** (13 new) | `cd webapp && npm test` |
+| `npm run build` | green, **0 warning** naming `LanSettings.svelte` or `lib/lan.js` | `cd webapp && npm run build` |
+
+**Rules a measurement taught.**
+
+- **A `<button>` laid out with `display: flex` will not shrink its text.** The admin switch's
+  explanation and its title stayed on ONE line at 1280 px, the hint's last line running past the
+  card's content box: `justify-content: space-between` gave the text column its max-content width and
+  pushed the 44 px knob out. `display: grid; grid-template-columns: minmax(0, 1fr) auto` is what
+  constrains it (measured in the built app: `690px 44px` inside a 750 px row, the hint on its own
+  line). Text beside a fixed control is a grid, not a flex row that is hoped to wrap.
+- **The friend picker must `peek`, not `swr`.** `api.swr("/me/playlists")` always fires a network
+  call; the 0-request picker comes from `api.peek()` (a cache read that returns parsed JSON) with one
+  `api.get()` only when the cache is empty. `isCacheable` lists no `/lan/*` prefix, so no trust
+  payload ever lands in the device's offline copy.
+- **A refusal the server words itself is the cause to show.** `failureCause` composes
+  `HTTP <status> : <server's French sentence>`, which is what the person needs (« Aucun compte de ce
+  nom. », « Trop d'appareils enrôlés… »); a row-level error line is enough, and the destructive
+  actions need a second tap, not a red colour — this design system has none, and an accented
+  « Révoquer » read as the row's primary action.
+- **Only the CONFIRM step is accented.** The first « Révoquer »/« Retirer » is an ordinary ghost
+  button; the confirmation is the one that carries `--ac-text`. Colour is not the carrier of meaning
+  (§10) and the word is.
+- **The SPA scrolls inside its own box, so `fullPage: true` captures the viewport.** A screenshot
+  taken after clicking a picker showed the middle of the page with the header clipped. Move the mouse
+  into the content and wheel up (or zero every `scrollTop`) before the shot, and `scrollIntoViewIfNeeded`
+  for a shot of a block further down; the notice strip above the content is dismissed with its own
+  « Masquer » button rather than removed from the DOM.
+- **Bench a row that swaps its text for an input by INDEX.** « Renommer » replaces the name span with
+  a field, so `filter({ hasText: "Bureau" })` stops matching the moment the field opens; the row is
+  found by its position, then `nth()` holds for the assertion and for the rollback.
+- **Count only the requests being measured.** `page.on("response")` over everything counts the SPA's
+  own shell and `lib/net.js`'s `/api/me` probe; the numbers above filter on the `/api/lan/` prefix
+  (plus `/api/me/playlists` for the picker).
+- **`startServer()` returns `stop`, and it is not `stopServer`.** `await stopServer(stop)` takes the
+  returned *function* as if it were a `ChildProcess`, sees no `exitCode`, and resolves without
+  killing anything: ten `perf_api.py` servers (each holding a benchmark database) were still running
+  before the count was checked. `await stop()` is the call; on this shared machine a leaked bench is
+  RAM, and the rule is to kill only one's own PIDs, by PID.
 
 ### LN9 — Requester core: peers, decision, fetch (wave 3, effort high)
 
