@@ -35,6 +35,11 @@ fn path(core: &Core, owner: &str, parent: &str) -> PathBuf {
 }
 
 /// The node's copy, whatever its age, or `None` the first time.
+///
+/// An empty copy is NOT a hit: a list that holds nothing today may hold something
+/// after the next like or download, and asking once per browse of an empty node is
+/// the honest cost (the in-memory map in `AutoLibraryTree` still answers the
+/// second page of the same browse).
 pub(super) fn read(core: &Core, owner: &str, parent: &str) -> Option<Vec<Item>> {
     let body = std::fs::read(path(core, owner, parent)).ok()?;
     let items: Vec<Item> = serde_json::from_slice(&body).ok()?;

@@ -634,7 +634,7 @@ finds a contract wrong stops and asks; it never forks a parallel type.
 | MB22 | `nz-viz-gl/**`, `nz-ffi/src/worlds.rs` | `feature/worlds/**` | `mobile/tools/extract-worlds.mjs`, `mobile/android/feature/worlds/src/main/assets/viz/` |
 | MB23 | (per-world fixes inside `nz-viz-gl/src/worlds/<id>.rs` only) | — | `docs/agents/screenshots/mobile/MB23/` |
 | MB24 | `nz-ffi/src/car.rs` | `car/**` | — |
-| MB25 | `nz-ffi/src/auto.rs` | `playback/src/main/java/fr/neezer/mobile/playback/auto/**` | — |
+| MB25 | `nz-core/src/auto/**`, `nz-ffi/src/auto.rs` | `playback/src/main/java/fr/neezer/mobile/playback/auto/**` | — |
 | MQ2 | — | `baselineprofile/src/main/**/Journey*.kt` | `docs/agents/screenshots/mobile/MQ2/` |
 | MB-SWAP | — | `app/build.gradle.kts` (versioning only) | `.github/workflows/{release,android,mobile}.yaml`, `android/app/**` (removed), `android/README.md`, `docs/agents/android.md`, `CLAUDE.md`/`AGENTS.md` table row |
 
