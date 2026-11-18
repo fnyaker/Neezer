@@ -28,6 +28,7 @@ nz-analysis = { workspace = true }
 nz-offline = { workspace = true }
 nz-remote = { workspace = true }
 nz-party = { workspace = true }
+nz-lan = { workspace = true }
 appcore = { workspace = true }
 rhythm = { workspace = true }
 tokio = { workspace = true }

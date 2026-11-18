@@ -27,6 +27,7 @@ pub mod admin;
 pub mod auth;
 pub mod discovery;
 pub mod entities;
+pub mod lan;
 pub mod library;
 pub mod media;
 pub mod onboarding;

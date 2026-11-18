@@ -74,6 +74,28 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "6"
+# --- LAN nodes (nz-lan): the native apps exchanging audio on one Wi-Fi --------
+# `docs/agents/lan-nodes.md` (LN0) pins these three. The TLS provider is
+# aws-lc-rs THROUGHOUT — `quinn`'s `rustls-aws-lc-rs` feature, rcgen's
+# `aws_lc_rs` one — because rustls' `ring` feature alongside it would make the
+# process-default provider ambiguous and `ClientConfig::builder()` panics
+# (measured on the prototype: the note's *Pitfalls found by building*).
+# `quinn`, `quinn-proto` and `quinn-udp` are ALREADY in both `Cargo.lock`s (an
+# optional dependency nothing compiled), so `=0.11.12` adds no package.
+quinn = { version = "=0.11.12", default-features = false, features = [
+    "runtime-tokio",
+    "rustls-aws-lc-rs",
+    "log",
+] }
+rcgen = { version = "0.14", default-features = false, features = [
+    "crypto",
+    "aws_lc_rs",
+] }
+# Announcement and browsing (`_neezer-lan._udp.local.`). Optional in the crate's
+# own manifest: the Android build browses through the platform's NSD daemon, so
+# `default-features = false` must not compile mdns-sd at all.
+mdns-sd = "0.17"
+
 # --- local transcription ---------------------------------------------------
 whisper-rs = "0.16.0"
 hound = "3.5"

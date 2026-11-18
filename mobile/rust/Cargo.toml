@@ -71,6 +71,10 @@ nz-analysis = { path = "../../desktop/crates/nz-analysis" }
 nz-offline = { path = "../../desktop/crates/nz-offline" }
 nz-remote = { path = "../../desktop/crates/nz-remote" }
 nz-party = { path = "../../desktop/crates/nz-party" }
+# The LAN exchange between the native apps (`docs/agents/lan-nodes.md`). No
+# default features: the phone browses through `NsdManager`, so `mdns-sd` must not
+# be in this graph at all (`DiscoveryKind::External`).
+nz-lan = { path = "../../desktop/crates/nz-lan", default-features = false }
 appcore = { path = "../../webapp/appcore" }
 rhythm = { path = "../../webapp/rhythm" }
 
