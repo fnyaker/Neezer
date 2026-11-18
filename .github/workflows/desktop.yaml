@@ -236,6 +236,22 @@ jobs:
           free -m || true
           cat /proc/pressure/memory || true
           sudo dmesg --ctime | tail -60 || true
+      # Discovery is the one part of the LAN exchange a unit test cannot prove: it
+      # needs two processes, multicast on an interface, and a goodbye. `tools/netns.sh`
+      # gives them a user network namespace (`unshare -rn`) with a dummy interface —
+      # no sudo, no libvirt, and no route out, so the runner's network is untouched
+      # (docs/agents/lan-nodes.md, LN3). GitHub's Ubuntu 24.04 images restrict
+      # unprivileged user namespaces through AppArmor, so the sysctl goes first;
+      # `NZ_LAN_REQUIRE_NETNS=1` then turns "no namespace" into a FAILURE, where a
+      # developer machine gets the same situation as a printed skip. The step prints
+      # its measurements (discovery p50/p95, announce, goodbye) in the log.
+      - name: Discovery across two processes in a user network namespace
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          cargo test -p nz-lan --test discovery --locked \
+            the_netns_harness_finds_the_other_process -- --exact --nocapture
+        env:
+          NZ_LAN_REQUIRE_NETNS: "1"
       # v1.6.0 asked its own server for `/apihttps://huggingface.co/…` and every
       # model download in Réglages → Transcription locale was a 404. The suite
       # pins the URL's shape and the request target against a loopback server
