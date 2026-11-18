@@ -1138,14 +1138,6 @@ mod lot_tests {
         "GET /api/releases",
     ];
 
-    fn requests_for(core: &Core, tag: &str) -> u64 {
-        core.stats()
-            .into_iter()
-            .find(|row| row.tag == tag)
-            .map(|row| row.requests)
-            .unwrap_or(0)
-    }
-
     /// A cold home costs the SPA's SEVEN requests and not one more (measured on
     /// `Home.svelte`'s endpoint list — `webapp/test/requests/run.mjs` has no home
     /// bench), and a warm one costs ZERO: the snapshot is on the device.
