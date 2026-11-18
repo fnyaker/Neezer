@@ -7,7 +7,7 @@ import uniffi.nz_ffi.AlbumCardData
 import uniffi.nz_ffi.AlbumData
 import uniffi.nz_ffi.ArtistData
 import uniffi.nz_ffi.DiscographyData
-import uniffi.nz_ffi.ListHandle
+import fr.neezer.mobile.designsystem.asRowSource
 import uniffi.nz_ffi.PersonCreditsData
 import uniffi.nz_ffi.PersonRoleData
 import uniffi.nz_ffi.PlayContext
@@ -130,24 +130,6 @@ interface CreditsService {
     suspend fun personCreditsRole(name: String, role: String): NzRowSource?
 }
 
-/**
- * A `ListHandle` as a window source.
- *
- * NOT MB1's `asRowSource()`: that extension's methods call `len()`/`window()` on
- * the anonymous object itself instead of on the handle, so the first call is a
- * `StackOverflowError` — measured on the emulator by this lot's device test
- * (`ListWindow.kt:25`, `at ...asRowSource$1.len`). It never showed before because
- * no list lot had landed. The fix belongs to `:designsystem` (MB1's file, one
- * writer per file); this adapter is the same three lines with the receiver made
- * explicit, and it goes away when that file is fixed.
- */
-internal fun ListHandle.asEntitySource(): NzRowSource = object : NzRowSource {
-    override fun len(): Int = this@asEntitySource.len().toInt()
-
-    override fun window(start: Int, count: Int): List<TrackRow> =
-        this@asEntitySource.window(start.coerceAtLeast(0).toUInt(), count.coerceAtLeast(0).toUInt())
-}
-
 /** The one real implementation: this lot's `nz-ffi` methods. */
 class NzArtistService(private val screens: Screens) : ArtistService {
     override suspend fun cachedArtist(id: String): ArtistData? = screens.cachedArtist(id)
@@ -160,9 +142,9 @@ class NzArtistService(private val screens: Screens) : ArtistService {
         screens.discography(id, kind, null)
 
     override suspend fun cachedArtistTracks(id: String): NzRowSource? =
-        screens.cachedArtistTracks(id)?.asEntitySource()
+        screens.cachedArtistTracks(id)?.asRowSource()
 
-    override suspend fun artistTracks(id: String): NzRowSource = screens.artistTracks(id).asEntitySource()
+    override suspend fun artistTracks(id: String): NzRowSource = screens.artistTracks(id).asRowSource()
 
     override suspend fun artistRadio(id: String): List<TrackRow> = screens.artistRadio(id)
 
@@ -205,7 +187,7 @@ class NzAlbumService(private val screens: Screens) : AlbumService {
         library = page.library,
         nbTracks = page.nbTracks.toInt(),
         totalS = page.totalS.toInt(),
-        tracks = page.tracks.asEntitySource(),
+        tracks = page.tracks.asRowSource(),
     )
 }
 
@@ -221,13 +203,13 @@ class NzCreditsService(private val screens: Screens) : CreditsService {
     override suspend fun personCredits(name: String): PersonView = view(screens.personCredits(name))
 
     override suspend fun personCreditsRole(name: String, role: String): NzRowSource? =
-        screens.personCreditsRole(name, role)?.asEntitySource()
+        screens.personCreditsRole(name, role)?.asRowSource()
 
     private fun view(page: PersonCreditsData) = PersonView(
         name = page.name,
         roles = page.roles,
         count = page.count.toInt(),
-        tracks = page.tracks.asEntitySource(),
+        tracks = page.tracks.asRowSource(),
     )
 }
 
@@ -362,9 +344,11 @@ object EntityPlayerHolder {
 /**
  * The window a `LazyColumn` over an [NzRowSource] reads.
  *
- * `rememberListWindow` takes a `ListHandle`; the entity pages hold a source
- * (see [AlbumView]), and `ListWindow` itself takes the interface. Same policy,
- * same pages of 64, same fling rule (MB1's `ListWindowTest` holds it).
+ * `rememberListWindow` takes a `ListHandle`; these pages hold a SOURCE (see
+ * [AlbumView]) so `EntityModelTest` can fake a list — a `ListHandle` is a native
+ * pointer, and the screens' logic is proven on the JVM. The policy is MB1's own
+ * (`ListWindow`, pages of 64, the fling rule `ListWindowTest` holds); only the
+ * construction is here, exactly what `rememberListWindow` does after its adapter.
  */
 internal fun windowFor(source: NzRowSource, pageSize: Int = 64): ListWindow =
     ListWindow(source, pageSize)

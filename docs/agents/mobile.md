@@ -2301,18 +2301,18 @@ API 35 x86_64 `-no-window -no-audio`, my own port, `tools/perf_api.py --serve` a
 | Rust | `cargo test --workspace --locked` | **150** `nz-core` (20 `entity`) + **32** `nz-ffi` (3 `entity`), others unchanged; clippy `-D warnings` and fmt clean |
 | JVM | `:feature:entity:testDebugUnitTest` | **49 tests**: 25 model (cache, stale, cause+retry, one request per part, the double `Ready` trap, the heart's rollback, every player command) + 24 screenshots |
 | The look | `docs/agents/screenshots/mobile/MB7/` | **25 PNGs**: Encre/Papier at 360 and 600 dp, the 200 % font scale, the titles tab, the credits tab, the sheet, the failure card |
-| The device | `EntityDeviceTest` on the emulator (2 tests) | album page **3 requests / 10 752 B**, artist page **5 / 8 715 B**, « Radio » + both tabs in the tree; `Lire` → `position_s` **0.255 s**, **0 underruns**, buffer **500 ms**, **48 000 Hz** |
+| The device | `EntityDeviceTest` on the emulator (2 tests, on the rebased tree after PR #321) | album page **3 requests / 10 752 B**, artist page **5 / 8 715 B**, « Radio » + both tabs in the tree; `Lire` → `position_s` **0.255 s**, **0 underruns**, buffer **500 ms**, **48 000 Hz** |
 | Tap → sound | `output_stats()` after the tap | `tap_ns=1 433 325 662 690`, `first_audible_ns=2 208 000 000`, position 0.255 s, 0 underruns — **the two instants are on DIFFERENT clocks** (see below) |
 | `libnz_ffi.so` | `build-android.sh` | arm64-v8a **10 152 776 B** (MB5: 9 587 912 → this lot **+564 864 B**), armeabi-v7a 6 899 048, x86_64 12 123 792; universal debug APK **46 510 429 B** |
 
 **Rules a measurement taught** (each cost a red test, a wrong image or a dead screen):
 
-- **MB1's `ListHandle.asRowSource()` recurses and dies.** Its object calls `len()`/`window()` on
-  ITSELF, not on the handle: the first call is a `StackOverflowError` (`ListWindow.kt:25`,
-  `at ...asRowSource$1.len`) — measured on the emulator, where it killed the album page before its
-  first row. No list lot had landed yet, so nothing had ever called it. `:designsystem` is MB1's file
-  (one writer per file), so this lot carries `ListHandle.asEntitySource()` (the same three lines with
-  the receiver explicit) and the fix is owed there.
+- **A list lot's first real device run is the only thing that exercises a `ListHandle` adapter.**
+  `ListHandle.asRowSource()` used to call `len()`/`window()` on its own anonymous object instead of
+  on the handle — a `StackOverflowError` (`ListWindow.kt:25`, `at ...asRowSource$1.len`) that every
+  JVM test passed straight through, because the JVM tests fake the list. MB6 fixed it (PR #321),
+  this lot rebased on that, and the album page then drew its rows on the emulator. A list screen's
+  device run belongs to the lot's first pass, not to the last.
 - **A page's copy is keyed by the ROUTE argument, not the entity's canonical id.** The SPA's path is
   `/artist/<what the URL says>`; the heart sends `favoriteEntity(kind, routeId, …)`. Writing the copy
   under the canonical UUID while the page was opened by the provider id left a reopened page lying
@@ -2362,10 +2362,9 @@ sheet), the admin « Donner un genre » (MB18's bulk sheet), the playing-row hig
 test files, 1 instrumented test, its build file), `docs/agents/screenshots/mobile/MB7/` (25 device-safe
 render captures + 1 emulator capture), and this section.
 
-**Still owed to a later lot**: `:designsystem`'s `asRowSource()` (MB1 — until then every list lot
-needs its own adapter), `nz-core::player`'s two instants on one clock (MB3b/MQ2), `DownloadButton`'s
-Sillon styling (MB15 — the screen uses its stub, which the Material theme paints as a grey outline),
-and `ImageVector`s/tokens untouched.
+**Still owed to a later lot**: `nz-core::player`'s two instants on one clock (MB3b/MQ2) and
+`DownloadButton`'s Sillon styling (MB15 — the screen uses its stub, which the Material theme paints
+as a grey outline).
 
 ### MB3c — Media service `:playback` (delivered 2026-11-18)
 
