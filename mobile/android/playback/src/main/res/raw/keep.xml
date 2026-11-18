@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notification's small icon, `ic_stat_neezer`, is declared in `:app` (lot
+     LG1) and reached from THIS module by name (`resources.getIdentifier`), since a
+     library module cannot reference another module's `R` — the reason MB0 had to
+     move `deezer_login_title` into `:feature:setup`.
+
+     A name-only reference is invisible to the resource shrinker, so the release
+     build (`isShrinkResources = true`) would drop the drawable and the
+     notification would fall back to a framework glyph. `tools:keep` is the one
+     mechanism AAPT honours for exactly this. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/ic_stat_neezer" />
