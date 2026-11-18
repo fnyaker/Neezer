@@ -217,7 +217,11 @@ impl AudioSettings {
     pub fn clamped(mut self) -> AudioSettings {
         self.eq_db.resize(BANDS, 0.0);
         for band in &mut self.eq_db {
-            *band = band.clamp(-12.0, 12.0);
+            // ±16, which is what the chain can do and what the card draws:
+            // `graph.js#EQ_MIN_DB/EQ_MAX_DB` and `nscore::dsp::EQ_MIN_DB/
+            // EQ_MAX_DB` both say 16 (MB12 found this clamp discarding a +16
+            // fader down to +12 while the DSP would have taken all of it).
+            *band = band.clamp(-16.0, 16.0);
         }
         self.bass_db = self.bass_db.clamp(0.0, 15.0);
         self.balance = self.balance.clamp(-1.0, 1.0);
@@ -427,8 +431,9 @@ mod tests {
         .clamped();
         assert_eq!(wild.eq_db.len(), BANDS, "ten bands, whatever came in");
         assert!(
-            wild.eq_db[..4].iter().all(|band| *band == 12.0),
-            "the four that came in are clamped to the top band"
+            wild.eq_db[..4].iter().all(|band| *band == 16.0),
+            "the four that came in are clamped to the chain's ceiling, ±16 dB \
+             (`nscore::dsp::EQ_MAX_DB`, and what the card draws)"
         );
         assert!(
             wild.eq_db[4..].iter().all(|band| *band == 0.0),

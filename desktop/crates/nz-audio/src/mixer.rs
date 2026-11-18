@@ -67,6 +67,11 @@ pub struct MixerShared {
     /// ended. Written by the callback at an install, a gapless switch or the
     /// start of a fade, so the engine can name the track that is actually heard.
     current_generation: AtomicU64,
+    /// The equalizer card's meter (MB12): the last buffer's pre-limiter peak and
+    /// limiter reduction, f64 bits. Written by the callback only while the card
+    /// asked for it (`set_meter`), read by the engine from any thread.
+    meter_peak: AtomicU64,
+    meter_reduction: AtomicU64,
 }
 
 impl MixerShared {
@@ -79,6 +84,8 @@ impl MixerShared {
             muted: AtomicBool::new(false),
             paused: AtomicBool::new(true),
             current_generation: AtomicU64::new(0),
+            meter_peak: AtomicU64::new(f64::to_bits(nscore::dsp::METER_FLOOR_DB)),
+            meter_reduction: AtomicU64::new(0.0f64.to_bits()),
         }
     }
 
@@ -141,6 +148,22 @@ impl MixerShared {
     fn note_current(&self, generation: u64) {
         self.current_generation.store(generation, Ordering::Release);
     }
+
+    /// Publish one buffer's meter reading (MB12). Called by the callback, only
+    /// while the equalizer card asked for it: two stores, no arithmetic.
+    pub(crate) fn note_meter(&self, peak_db: f64, reduction_db: f64) {
+        self.meter_peak.store(peak_db.to_bits(), Ordering::Relaxed);
+        self.meter_reduction
+            .store(reduction_db.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The latest reading, as [`nscore::dsp::ChainMeter`].
+    pub fn meter(&self) -> nscore::dsp::ChainMeter {
+        nscore::dsp::ChainMeter {
+            peak_db: f64::from_bits(self.meter_peak.load(Ordering::Relaxed)),
+            reduction_db: f64::from_bits(self.meter_reduction.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 /// What the engine (or a test) tells the mixer. Every variant moves a voice in
@@ -153,6 +176,11 @@ pub(crate) enum MixerCmd {
     /// The trim end the server measured, arriving after the voice was built (the
     /// app asks for the bounds of the track it is playing as well as the next).
     SetCurrentEnd(Option<f64>),
+    /// The equalizer card's meter, on while that card is on screen (MB12).
+    Meter(bool),
+    /// One analysis subscription's producer (MB12): the visualiser and the
+    /// equalizer card each read their own ring, and neither steals frames.
+    TapAttach(crate::tap::TapSlot),
     /// Stop everything; the engine is going away.
     Shutdown,
 }
@@ -263,6 +291,11 @@ pub(crate) struct Mixer {
     /// The stream position (seconds) of the next frame this mixer writes. Unlike
     /// the media clock it never resets: it is what a party schedule is made of.
     stream_s: f64,
+    /// The equalizer card's meter is being watched: the master chain measures
+    /// its pre-limiter peak and the limiter's reduction, and this buffer's
+    /// reading is published. Off (`Meter(false)`, the default) the chain does
+    /// the arithmetic it did before MB12.
+    meter_on: bool,
 }
 
 impl Mixer {
@@ -305,6 +338,7 @@ impl Mixer {
                 reported_media: 0,
                 party: PartyVoice::new(party_rx, Arc::clone(&party_gain), party_own),
                 stream_s: 0.0,
+                meter_on: false,
             },
             cmd_tx,
             party_tx,
@@ -341,6 +375,13 @@ impl Mixer {
                             current.fade_end_s = end;
                         }
                     }
+                }
+                MixerCmd::Meter(on) => {
+                    self.meter_on = on;
+                    self.master.set_meter(on);
+                }
+                MixerCmd::TapAttach(slot) => {
+                    self.tap.attach(slot);
                 }
             }
         }
@@ -509,6 +550,12 @@ impl Mixer {
     /// analysis tap, then the ears (mono/balance).
     fn finish(&mut self, out: &mut [f32], frames: usize) {
         self.master.process(&mut out[..frames * 2], frames);
+        if self.meter_on {
+            // One buffer's reading, straight from the chain's own numbers
+            // (`saturation.js`), for the equalizer card that asked for it.
+            let meter = self.master.meter();
+            self.shared.note_meter(meter.peak_db, meter.reduction_db);
+        }
         let gain = if self.shared.muted() {
             0.0
         } else {

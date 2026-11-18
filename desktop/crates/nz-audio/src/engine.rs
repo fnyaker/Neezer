@@ -31,9 +31,10 @@ use crate::mixer::{MixerCmd, MixerShared};
 use crate::output::{self, ExternalSink, OfflineSink, Output, OutputChoice, OutputInfo};
 use crate::party::{PartyCmd, Segment};
 use crate::source::{Lane, Quality, SourceError, Spoolers, StreamOpener, spool_path};
-use crate::tap::{TAP_FRAMES, Tap, TapReader};
+use crate::tap::{TAP_FRAMES, Tap, TapReader, TapSlot, TapSubscription};
 use crate::trim::{self, Edges, Trim};
 use crate::voice::{VoiceConsumer, VoiceMeta, VoiceStatus};
+use nscore::dsp::{ChainMeter, METER_FLOOR_DB};
 
 /// Everything the engine needs to start. `sample_rate` is a preference: the
 /// device's own rate wins when it cannot do this one, and the decode threads
@@ -690,9 +691,48 @@ impl Engine {
     }
 
     /// The analysis tap: post-DSP stereo frames, dropped when the reader is
-    /// behind. One reader per engine — the app's analysis thread takes it once.
+    /// behind. ONE reader per engine — the app's analysis thread takes it once.
+    ///
+    /// A second view that wants the same sound asks for
+    /// [`Engine::subscribe_tap`] instead: since MB12 the tap carries counted
+    /// subscriptions, so the visualiser and the equalizer's card can both read
+    /// it without stealing each other's frames.
     pub fn tap(&self) -> Option<TapReader> {
         self.inner.tap.lock().expect("tap poisoned").take()
+    }
+
+    /// One countable subscription to the analysis tap ([`crate::tap`]): its own
+    /// ring, its own drop counter, and nothing pushed into it once it is
+    /// dropped (the mixer notices at the next buffer). `None` only when every
+    /// slot is taken or the engine is going away.
+    pub fn subscribe_tap(&self) -> Option<TapSubscription> {
+        if self.inner.shut.load(Ordering::SeqCst) {
+            return None;
+        }
+        let (slot, subscription) = TapSlot::pair(TAP_FRAMES);
+        // `send` retries for a bounded time and drops the command if the mixer
+        // stopped draining (the engine is going away): the subscription then
+        // simply receives nothing, and its `dropped()` stays 0.
+        self.inner.send(MixerCmd::TapAttach(slot));
+        Some(subscription)
+    }
+
+    /// Turns the equalizer card's meter on or off (MB12). Off by default, and
+    /// off costs the callback exactly nothing: the master chain skips the two
+    /// maxima and the two logarithms it would otherwise compute.
+    pub fn set_meter(&self, on: bool) {
+        self.inner.send(MixerCmd::Meter(on));
+        if !on {
+            // A card that left must not find a stale number when it comes back:
+            // forget the reading in the same call that stops measuring it.
+            self.inner.shared.note_meter(METER_FLOOR_DB, 0.0);
+        }
+    }
+
+    /// The last buffer's meter reading (`saturation.js`'s peak and limiter
+    /// reduction). Cheap: two atomic loads.
+    pub fn chain_meter(&self) -> ChainMeter {
+        self.inner.shared.meter()
     }
 
     /// Switch the output device without stopping the music: the mixer is handed

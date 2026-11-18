@@ -350,6 +350,16 @@ impl Master {
         self.chain.process(buf, frames);
     }
 
+    /// The equalizer card's meter, on only while that card is on screen (MB12).
+    pub(crate) fn set_meter(&mut self, on: bool) {
+        self.chain.set_meter(on);
+    }
+
+    /// The last buffer's pre-limiter peak and limiter reduction.
+    pub(crate) fn meter(&self) -> nscore::dsp::ChainMeter {
+        self.chain.meter()
+    }
+
     /// The chain's own filter, for the acceptance test: what the callback's
     /// output must match at a band's centre.
     #[cfg(test)]

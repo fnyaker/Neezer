@@ -329,8 +329,16 @@ impl PlayerApi {
         })
     }
 
-    fn player(&self) -> Option<&Arc<Player>> {
+    /// The player, `None` when the runtime or a thread could not start. Visible
+    /// to the crate so a lot's own `impl PlayerApi` block (MB12's effects) can
+    /// reach the engine it is asking, exactly as `Screens::core` does.
+    pub(crate) fn player(&self) -> Option<&Arc<Player>> {
         self.inner.as_ref().ok()
+    }
+
+    /// The core behind this player, for a lot's own `impl PlayerApi` block.
+    pub(crate) fn core_ref(&self) -> &Arc<nz_core::core::Core> {
+        &self.core
     }
 }
 
