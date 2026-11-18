@@ -163,7 +163,11 @@ jobs:
   test:
     name: cargo test + window
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # 60, not 40: since #329 the cache key names the runner's CPU, so a model this
+    # repository has never run on is a COLD build by design (~37 min measured on the
+    # first such run), and this job now also builds the two extra engine children
+    # (~5 min) and runs them on an emulated CPU. A warm run stays ~5-8 min.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: desktop
