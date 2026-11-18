@@ -617,7 +617,7 @@ impl Core {
             Ok::<ReleasesData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -637,7 +637,7 @@ impl Core {
             Ok::<(), CoreError>(())
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -660,7 +660,7 @@ impl Core {
             Ok::<ReleaseSettingsData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -688,7 +688,7 @@ impl Core {
             Ok::<ReleaseSettingsData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -706,7 +706,7 @@ impl Core {
             Ok::<ReleaseSettingsData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -769,7 +769,7 @@ impl Core {
             Ok::<RecapYearsData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -809,7 +809,7 @@ impl Core {
             Ok::<RecapData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -844,7 +844,7 @@ impl Core {
             Ok::<Vec<MoodRow>, CoreError>(rows)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -871,7 +871,7 @@ impl Core {
             })
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -913,7 +913,7 @@ impl Core {
             Ok::<ExplorerStylesData, CoreError>(data)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -941,7 +941,7 @@ impl Core {
             }
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -965,7 +965,7 @@ impl Core {
             }
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -996,7 +996,7 @@ impl Core {
             Ok::<Vec<StationRow>, CoreError>(rows)
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -1026,7 +1026,7 @@ impl Core {
             })
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -1044,7 +1044,7 @@ impl Core {
         let api = wire::tagged(self)?;
         let before = wire::totals(&api);
         let answer = wire::mute_artist(&api, provider, id).await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -1067,7 +1067,7 @@ impl Core {
             )
         }
         .await;
-        self.note_traffic(&api, before);
+        self.note_discovery_traffic(&api, before);
         answer
     }
 
@@ -1075,7 +1075,7 @@ impl Core {
 
     /// Books one screen-open's traffic in the core's meter, so `NzCore::stats()`
     /// answers what this screen cost without the UI counting anything itself.
-    fn note_traffic(&self, api: &Api, before: wire::Totals) {
+    fn note_discovery_traffic(&self, api: &Api, before: wire::Totals) {
         let after = wire::totals(api);
         let requests = after.requests.saturating_sub(before.requests);
         if requests == 0 {
