@@ -569,18 +569,28 @@ fn a_file_that_is_not_a_model_is_refused() {
 }
 
 /// The lot's throughput floors, on this machine, once the engine is warm:
-/// `ggml-base` ≥ 40× real time on Vulkan and ≥ 12× on the CPU.
+/// `ggml-tiny` ≥ 40× real time on Vulkan and ≥ 5× on the CPU.
 ///
 /// Warm is what a 600 s chunk sees: the model is loaded and the first GPU call
 /// (which compiles whisper.cpp's shaders) has happened, so the measurement runs
 /// the same 330 s of speech twice and times the second pass. `NZ_WHISPER_SPEED=1`
 /// because the CPU pass costs ~25 s.
 ///
-/// Measured 2026-11-16 (Rust 1.99.1, RADV 780M, ggml-base, 330 s of speech):
+/// Measured 2026-11-16 (Rust 1.99.1, RADV 780M, `ggml-base`, 330 s of speech):
 /// Vulkan **72.2×** (4.57 s; 45.0× while the machine was at load 25, because a
 /// starved CPU cannot feed the 780M) and CPU **13.1×** (25.18 s wall at load 10,
 /// 13.3× on the CPU-seconds it spent). The prototype's 44.9× and 13.9×,
 /// reproduced.
+///
+/// The CPU floor is 5, not 12, because ggml is now built for x86-64-v2
+/// (`desktop/.cargo/config.toml`, docs/agents/desktop.md's *CPU floor*). The same
+/// 330 s excerpt of `ggml-tiny` measures **28.7×** with `-march=native` (AVX-512 on
+/// this laptop, 45.9 s of CPU) and **5.5×** at the v2 floor (241.8 s) — 5.2× the
+/// price, and it buys a binary that does not `SIGILL` on any x86-64 CPU made since
+/// 2008. Vulkan is untouched (**128.1×** against 127.5×, the same run) and it is
+/// the path a person uses; the CPU is the explained fallback, and 5× real time
+/// still transcribes an hour in eleven minutes. Raise this back the day the floor
+/// rises, or the day ggml's CPU variants (runtime dispatch) can ship.
 #[test]
 fn the_engine_reaches_the_lots_speed_floors() {
     if std::env::var_os("NZ_WHISPER_SPEED").is_none() {
@@ -602,7 +612,7 @@ fn the_engine_reaches_the_lots_speed_floors() {
     }
     let audio_s = long.len() as f64 / 16_000.0;
 
-    for (cpu, floor) in [(false, 40.0), (true, 12.0)] {
+    for (cpu, floor) in [(false, 40.0), (true, 5.0)] {
         let mut config = EngineConfig::new(&model);
         config.cpu = cpu;
         // No VAD: the lot's floors are the prototype's, measured through
