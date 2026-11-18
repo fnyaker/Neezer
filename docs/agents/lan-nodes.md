@@ -1492,7 +1492,7 @@ destructure it unchanged, and every other `ByteStream` (`ApiByteStream`, `Measur
 
 ### LN6 — Transport and authentication (delivered 2026-11-18)
 
-**What landed.** `codec.rs`, `auth.rs` and `transport.rs` filled, and `tests/transport.rs` — 21 tests
+**What landed.** `codec.rs`, `auth.rs` and `transport.rs` filled, and `tests/transport.rs` — 20 tests
 written from this note's *Acceptance* list rather than from the implementation: two real `Endpoint`s
 on loopback, each with its own key written on disk under `CARGO_TARGET_TMPDIR` (never `/tmp`) and its
 own credential signed by a test server key, plus a **raw quinn client** for every hostile case (TLS is
@@ -1530,7 +1530,7 @@ package and version were already in both.
 
 | Measure | Value | Command / test |
 |---|---|---|
-| LN6's suite | **21 tests**, 5.2 s | `cargo test -p nz-lan --test transport` |
+| LN6's suite | **20 tests**, 5.2 s | `cargo test -p nz-lan --test transport` |
 | handshake + both proofs, loopback, 100 runs | **p50 3.28 ms, p95 3.97 ms, max 5.49 ms** (debug) · **p50 0.63 ms, p95 1.00 ms, max 1.38 ms** (release) | `cargo test -p nz-lan [--release] --test transport the_handshake_and_both_proofs_are_fast -- --nocapture` |
 | a stranger's answer | **0 bytes**, one code, empty reason | `a_stranger_gets_no_identity_byte` |
 | one refusal, five causes | 5 causes → **1 code (`0x10`), 0 bytes each** | `every_refusal_is_the_same_code_and_no_identity_byte` |

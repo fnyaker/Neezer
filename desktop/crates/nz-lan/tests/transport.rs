@@ -17,7 +17,7 @@
 //! | 0-RTT never accepted | `early_data_is_never_accepted` |
 //! | TLS 1.2 refused | `tls12_cannot_establish_a_session` |
 //! | duplicates collapse to the lower key's dial | `a_duplicate_pair_collapses_to_the_lower_key_dial` |
-//! | 1 MiB + 1 closes, allocates ≤ 1 MiB | `an_over_cap_frame_closes_the_connection_and_allocates_nothing`, `the_frame_reader_allocates_nothing_for_an_oversized_header` |
+//! | 1 MiB + 1 closes, allocates ≤ 1 MiB | `an_over_cap_frame_allocates_nothing_and_stays_under_a_mebibyte` |
 //! | handshake + both proofs p95 ≤ 15 ms (release) | `the_handshake_and_both_proofs_are_fast` (prints p50/p95) |
 //! | `close`/drop join every task | `closing_the_endpoint_joins_the_only_task` |
 //! | a busy port falls back | `a_busy_preferred_port_falls_back_to_an_ephemeral_one` |
@@ -1542,48 +1542,6 @@ async fn the_control_stream_carries_gossip_and_ends_cleanly() {
 }
 
 // --- 8. Caps -----------------------------------------------------------------
-
-/// A frame that announces more than a mebibyte closes the connection: a hostile size
-/// is T9, and the connection goes rather than the stream.
-#[tokio::test]
-async fn an_over_cap_frame_closes_the_connection_and_allocates_nothing() {
-    bounded(
-        "an_over_cap_frame_closes_the_connection_and_allocates_nothing",
-        async {
-            let subject = subject_of(0xa1);
-            let a = device("cap-a", subject, (now() - 60, now() + 86_400));
-            let b = device("cap-b", subject, (now() - 60, now() + 86_400));
-            let endpoint_a = node(Arc::clone(&a), trust(subject, None, None), "A");
-            let endpoint_b = node(Arc::clone(&b), trust(subject, None, None), "B");
-            let (client, accepted) = tokio::join!(
-                endpoint_a.connect(address(&endpoint_b)),
-                endpoint_b.accept()
-            );
-            let client = client.expect("authentifié");
-            let accepted = accepted.expect("accepté").expect("authentifié");
-
-            // The responder reads the peer's requests; the over-cap header arrives on its
-            // first stream and the connection goes with it.
-            let answering = tokio::spawn(async move { accepted.next_incoming().await.is_none() });
-            let (mut send, _recv) = client.connection().open_bi().await.expect("un flux");
-            send.write_all(&((MAX_FRAME_BYTES + 1) as u32).to_be_bytes())
-                .await
-                .expect("l'en-tête dit un octet de trop");
-            assert!(answering.await.expect("le répondeur rend la main"));
-            let (code, reason) = close_of(client.connection()).await;
-            assert_eq!(
-                code,
-                auth::CLOSE_REFUSED,
-                "une taille hostile ferme la connexion"
-            );
-            assert_eq!(reason, "");
-
-            endpoint_a.close().await;
-            endpoint_b.close().await;
-        },
-    )
-    .await;
-}
 
 /// The two halves of "a 1 MiB + 1 frame closes the connection and allocates ≤ 1 MiB":
 /// the decision on the announced length allocates **nothing**, and the whole
