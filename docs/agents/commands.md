@@ -164,21 +164,24 @@ cd desktop && xvfb-run -a ./target/debug/neezer-desktop --self-test-quit-after-f
 cd desktop && cargo run -p nz-transcribe -- --version   # the linked whisper.cpp build (Vulkan included)
 VULKAN_SDK=/path/to/vulkan-headers cargo build -p nz-transcribe   # whisper.cpp's CMake needs the Vulkan HEADERS,
                                                      # not only the loader (Arch: vulkan-headers + shaderc)
-desktop/tools/build_engine_v3.sh --release           # the x86-64-v3 engine child, `neezer-transcribe-v3`,
-                                                     # beside the floor one: a SECOND cargo build into
-                                                     # target/engine-v3 with desktop/.cargo/engine-v3.toml
-                                                     # (cargo builds one copy of a dependency per graph)
+desktop/tools/build_engine_variants.sh --release      # the x86-64-v3 and x86-64-v4 engine children,
+                                                     # `neezer-transcribe-v3` / `-v4`, beside the floor one:
+                                                     # one cargo build each into target/engine-<level> with
+                                                     # desktop/.cargo/engine-<level>.toml (cargo builds one
+                                                     # copy of a dependency per graph). `v3`/`v4` as arguments
+                                                     # to build only some of them.
 cd desktop && cargo build --release && target/release/neezer-transcribe engine-program
-                                                     # which engine child THIS CPU gets, one line: the -v3 one
-                                                     # on AVX2+FMA+F16C, the floor binary everywhere else
+                                                     # which engine child THIS CPU gets, one line: -v4 on
+                                                     # AVX512F/CD/BW/DQ/VL, else -v3 on AVX2+FMA+F16C, else
+                                                     # the floor binary
 desktop/tools/check_cpu_floor.sh desktop/target/release/neezer-transcribe
-                                                     # both floors at once: each binary's census, each variant's
-                                                     # ggml OWN objects gated at its level, each binary run under
-                                                     # an emulated CPU of its floor (qemu-x86_64 -cpu Nehalem /
-                                                     # -cpu Haswell, `qemu-user`; NZ_WHISPER_MODEL +
-                                                     # NZ_WHISPER_AUDIO for the speech, the crate's fixtures),
-                                                     # then the dispatch under both CPUs. A ggml built with
-                                                     # -march=native SIGILLs here in under a second.
+                                                     # every floor at once: each binary's census, each child's
+                                                     # ggml OWN objects gated at its level (v2/v3/v4), the floor
+                                                     # binary transcribing under an emulated Nehalem
+                                                     # (`qemu-user`; NZ_WHISPER_MODEL + NZ_WHISPER_AUDIO for
+                                                     # the speech, the crate's fixtures), each child natively,
+                                                     # then the dispatch under Nehalem/Haswell/Skylake-Server.
+                                                     # A ggml built with -march=native SIGILLs here in a second.
 cd desktop && cargo clean -p whisper-rs-sys && cargo build -p nz-transcribe
                                                      # after editing desktop/.cargo/config.toml: cargo does not
                                                      # rebuild a dependency for a build-script environment change,

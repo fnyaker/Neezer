@@ -70,6 +70,7 @@ install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe" "$appdir/usr/bin/neezer-tr
 # The x86-64-v3 engine child in the SAME directory: `supervisor::engine_program`
 # derives it from `current_exe()`, so a second directory would never be found.
 install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v3" "$appdir/usr/bin/neezer-transcribe-v3"
+install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v4" "$appdir/usr/bin/neezer-transcribe-v4"
 install -m 755 "$NEEZER_PACKAGING/appimage/AppRun" "$appdir/AppRun"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.desktop" "$appdir/neezer-desktop.desktop"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.desktop" \

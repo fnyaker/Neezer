@@ -1,0 +1,29 @@
+# The `-v4` engine child's CMake flags — the THIRD variant of `neezer-transcribe`.
+#
+# `docs/agents/desktop.md` (*The CPU floor, and the children that pick their own
+# ISA*) explains the ladder: ggml's instruction set is fixed at build time, so the
+# engine ships as three children and the supervisor starts the best one the CPU can
+# run. Measured on one 330 s excerpt of `ggml-tiny`, scored on CPU-seconds:
+#
+#   neezer-transcribe      x86-64-v2   5.0× real time   every x86-64 since 2008
+#   neezer-transcribe-v3   x86-64-v3  23.5×            Haswell 2013 / Excavator 2015
+#   neezer-transcribe-v4   x86-64-v4  26.7×            Skylake-Server 2017 / Zen 4 2022
+#   (-march=native on this Zen 4 laptop: 28.7× — what v4 recovers 92 % of)
+#
+# x86-64-v4 is AVX512**F**, **CD**, **BW**, **DQ** and **VL** and nothing else, which
+# is exactly what `GGML_AVX512=ON` passes to ggml (`-mavx512f -mavx512cd -mavx512vl
+# -mavx512dq -mavx512bw`, ggml/src/ggml-cpu/CMakeLists.txt). The extensions that are
+# NOT in v4 — VNNI, BF16, VBMI, IFMA, VPOPCNTDQ — stay OFF: a Zen 4 has some of them,
+# a Skylake-Server has others, and a child that needs one of them SIGILLs on the
+# other. `is_x86_feature_detected!` gates the child on the same five bits.
+#
+# Like `engine-v3.toml`, only the keys this level adds are restated; `GGML_NATIVE=OFF`
+# and every AVX-512 extension/AMX switch OFF come from `config.toml`, merged UNDER
+# this file by cargo's `--config`.
+[env]
+GGML_AVX = { value = "ON", force = true }
+GGML_AVX2 = { value = "ON", force = true }
+GGML_FMA = { value = "ON", force = true }
+GGML_F16C = { value = "ON", force = true }
+GGML_BMI2 = { value = "ON", force = true }
+GGML_AVX512 = { value = "ON", force = true }

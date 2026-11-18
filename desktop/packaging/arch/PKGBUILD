@@ -105,7 +105,7 @@ build() {
   # (docs/agents/desktop.md, *The CPU floor, and the child that picks its own ISA*).
   # It is a SECOND cargo build into `$srcdir/target/engine-v3`: cargo builds one
   # copy of a dependency per graph, so the two `GGML_*` sets cannot share a target.
-  NEEZER_FROZEN=1 tools/build_engine_v3.sh --release
+  NEEZER_FROZEN=1 tools/build_engine_variants.sh --release
 }
 
 # No `check()` on purpose: the workspace's suite starts the Python server
@@ -122,6 +122,8 @@ package() {
   # path from `current_exe()`.
   install -Dm755 "$srcdir/target/release/neezer-transcribe-v3" \
     "$pkgdir/usr/bin/neezer-transcribe-v3"
+  install -Dm755 "$srcdir/target/release/neezer-transcribe-v4" \
+    "$pkgdir/usr/bin/neezer-transcribe-v4"
   install -Dm644 "$_pkgdir/neezer-desktop.desktop" \
     "$pkgdir/usr/share/applications/neezer-desktop.desktop"
   install -Dm644 "$_pkgdir/neezer-desktop.svg" \

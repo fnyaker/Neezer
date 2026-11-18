@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Fail when code Neezer compiles needs more than the CPU floor it promises.
 
-`docs/agents/desktop.md` gives the desktop **two** engine binaries, each with its own
-floor, and this script checks either:
+`docs/agents/desktop.md` gives the desktop **three** engine binaries, each with its own
+floor, and this script checks any of them:
 
 - **x86-64-v2** (SSE4.2 + POPCNT: every x86-64 CPU since Nehalem 2008 / Bulldozer 2011)
   — `neezer-transcribe`, the child every machine can run;
 - **x86-64-v3** (AVX, AVX2, FMA, F16C, BMI2: Haswell 2013 / Excavator 2015) —
-  `neezer-transcribe-v3`, which the supervisor starts when the CPU answers those three
-  features. Measured: 5.0× real time at v2, 23.5× at v3, on the same excerpt.
+  `neezer-transcribe-v3`, started when the CPU answers those three features;
+- **x86-64-v4** (AVX512F/CD/BW/DQ/VL: Skylake-Server 2017 / Zen 4 2022) —
+  `neezer-transcribe-v4`, and its gate still refuses the extensions ABOVE v4 (VNNI,
+  BF16, VBMI, VBMI2, IFMA, VPOPCNTDQ, GFNI): a child that needed one of those would
+  `SIGILL` on a CPU that has v4 without it.
+
+Measured on one 330 s excerpt of `ggml-tiny`, scored on CPU-seconds: **5.0×** at v2,
+**23.5×** at v3, **26.7×** at v4 (a `-march=native` build on the same Zen 4: 28.7×).
 
 whisper.cpp's CPU backend is the one part of the desktop stack whose instruction set is
 decided at BUILD time: ggml defaults to `GGML_NATIVE=ON`, i.e. `-march=native`, so one
@@ -43,9 +49,11 @@ Usage:
     # The objects the flags actually reached (symbols present, the real gate):
     python3 desktop/tools/check_cpu_baseline.py \\
         desktop/target/release/build/whisper-rs-sys-*/out/build/ggml/src
-    # ...and the x86-64-v3 child's own objects, at ITS level:
+    # ...and each child's own objects, at ITS level:
     python3 desktop/tools/check_cpu_baseline.py --baseline x86-64-v3 \\
         desktop/target/engine-v3/release/build/whisper-rs-sys-*/out/build/ggml/src
+    python3 desktop/tools/check_cpu_baseline.py --baseline x86-64-v4 \\
+        desktop/target/engine-v4/release/build/whisper-rs-sys-*/out/build/ggml/src
     # A binary a package ships (stripped: count everything, gate nothing):
     python3 desktop/tools/check_cpu_baseline.py --report desktop/target/release/neezer-transcribe
 
@@ -66,7 +74,8 @@ import sys
 # Everything below is outside x86-64-v2 (SSE3, SSSE3, SSE4.1, SSE4.2 + POPCNT,
 # CX16, LAHF/SAHF). The ones marked `trap` raise #UD (SIGILL) on a CPU without them.
 DESCRIPTIONS = {
-    "avx512": "AVX-512 (EVEX prefix, %zmm, mask registers) — Intel 2017+ / AMD 2022+",
+    "avx512": "AVX-512 F/CD/BW/DQ/VL (x86-64-v4) — Skylake-Server 2017 / Zen 4 2022",
+    "avx512_ext": "AVX-512 extensions BEYOND v4 (VNNI, BF16, VBMI, VBMI2, IFMA, VPOPCNTDQ, GFNI)",
     "avx": "AVX (VEX prefix or %ymm) — Sandy Bridge 2011 / Bulldozer 2011",
     "fma": "FMA3 (vfmadd*) — Haswell 2013 / Piledriver 2012",
     "f16c": "F16C (vcvtph2ps / vcvtps2ph) — Ivy Bridge 2012",
@@ -91,11 +100,12 @@ LEVEL = {
     "bmi2": 3,
     "movbe": 3,
     "avx512": 4,
+    "avx512_ext": 5,
     "aes": 4,
     "pclmul": 4,
     "mpx": 4,
 }
-LEVELS = {"x86-64-v2": 2, "x86-64-v3": 3}
+LEVELS = {"x86-64-v2": 2, "x86-64-v3": 3, "x86-64-v4": 4}
 
 
 def gated_categories(level: int) -> list[str]:
@@ -129,9 +139,8 @@ AVX512_ONLY = {
     "vrcp14pd", "vrsqrt14ps", "vrsqrt14pd", "vgetexpps", "vgetexppd",
     "vgetmantps", "vgetmantpd", "vfixupimmps", "vfixupimmpd", "vreduceps",
     "vreducepd", "vrndscaleps", "vrndscalepd", "vfpclassps", "vfpclasspd",
-    "vdbpsadbw", "vpermb", "vpermw", "vpmultishiftqb", "vpdpbusd",
-    "vpdpbusds", "vpdpwssd", "vpdpwssds", "vpdpbssd", "vp2intersectd",
-    "vp2intersectq", "kmovb", "kmovw", "kmovd", "kmovq", "kandb", "kandw",
+    "vdbpsadbw", "vpermw", "vpermi2w", "vpermt2w",
+    "kmovb", "kmovw", "kmovd", "kmovq", "kandb", "kandw",
     "kandd", "kandq", "korb", "korw", "kord", "korq", "kxorb", "kxorw",
     "kxord", "kxorq", "knotb", "knotw", "knotd", "knotq", "kortestb",
     "kortestw", "kortestd", "kortestq", "ktestb", "ktestw", "ktestd",
@@ -139,6 +148,22 @@ AVX512_ONLY = {
     "kshiftrw", "kshiftrd", "kshiftrq", "kunpckbw", "kunpckwd", "kunpckdq",
     "kaddb", "kaddw", "kaddd", "kaddq",
 }
+# AVX-512 instructions that are NOT in x86-64-v4: a child built for v4 that used one
+# of these would SIGILL on a CPU that has F/BW/CD/DQ/VL but not the extension (a
+# Skylake-Server has no VNNI nor VBMI; a Zen 4 has VNNI/VBMI but no BF16 in every
+# SKU), which is why `engine-v4.toml` never turns one on.
+AVX512_EXT = {
+    "vpdpbusd", "vpdpbusds", "vpdpwssd", "vpdpwssds", "vpdpbssd",
+    "vdpbf16ps", "vcvtneps2bf16", "vcvtne2ps2bf16", "vcvtne2ps2bf16",
+    "vpermb", "vpermi2b", "vpermt2b",
+    "vpmultishiftqb", "vpshldd", "vpshldq", "vpshldw", "vpshrdd", "vpshrdq",
+    "vpshrdw", "vpcompressb", "vpcompressw", "vpexpandb", "vpexpandw",
+    "vpmadd52luq", "vpmadd52huq", "vpopcntb", "vpopcntw", "vpopcntd",
+    "vpopcntq", "vgf2p8affineqb", "vgf2p8affineinvqb", "vgf2p8mulb",
+    "vp2intersectd", "vp2intersectq", "sha1msg1", "sha1msg2", "sha1nexte",
+    "sha1rnds4", "sha256msg1", "sha256msg2", "sha256rnds2",
+}
+
 # VEX-prefixed mnemonics that are not vector instructions (VMX/SVM/system).
 NOT_AVX = {
     "verr", "verw", "vmread", "vmwrite", "vmptrld", "vmptrst", "vmclear",
@@ -180,6 +205,8 @@ def classify(raw: str, mnemonic: str, operands: str) -> list[str]:
         found.append("avx")
     if name in AVX512_ONLY:
         found.append("avx512")
+    if name in AVX512_EXT:
+        found.append("avx512_ext")
     if name in AVX2_ONLY:
         found.append("avx2")
     if FMA.match(name):

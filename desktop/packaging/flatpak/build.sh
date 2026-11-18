@@ -37,6 +37,7 @@ install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe" "$work/inputs/neezer-trans
 # The x86-64-v3 engine child in the SAME directory: `supervisor::engine_program`
 # derives it from `current_exe()`, so a second directory would never be found.
 install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v3" "$work/inputs/neezer-transcribe-v3"
+install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v4" "$work/inputs/neezer-transcribe-v4"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.desktop" "$work/inputs/neezer-desktop.desktop"
 # One line differs from the shared entry: inside the sandbox the window's
 # WM_CLASS is the sandbox's app id (`app/src/main.rs#flatpak_app_id`, which reads

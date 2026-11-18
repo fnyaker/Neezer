@@ -435,23 +435,28 @@ of its callers.
   covers the three CI jobs, `makepkg` and a developer's `cargo test`, with `force = true` so no
   shell can undo it. **It is not only a CI concern**: `release.yaml` builds the artefacts ONCE for
   five package formats, and they land on CPUs nobody chose.
-- **A portable binary is a slow one, so the app ships TWO engine children.** Measured on one 330 s
-  excerpt of `ggml-tiny`, best of two, scored on CPU-seconds: **28.7×** real time with
-  `-march=native` (AVX-512), **5.0×** at the v2 floor, **23.5×** for the `-v3` child (AVX2 + FMA +
-  F16C, `desktop/.cargo/engine-v3.toml`) — 4.7× of the 5.7× given back, with Vulkan untouched
-  (**128.1×** against **127.5×**). The engine is already a CHILD process (T3), so the dispatch is
-  one file and one CPUID test: `supervisor::engine_program` starts `<exe>-v3` when
-  `is_x86_feature_detected!` answers AVX2, FMA **and** F16C and that file is installed beside it,
-  and the floor binary everywhere else (pre-2013 CPUs, a `-v3` missing from a package, an explicit
-  `--engine-program`); `neezer-transcribe engine-program` prints the choice, which is how a test, a
-  support call and the CI see it. The child is built by
-  `desktop/tools/build_engine_v3.sh` into its own `target/engine-v3`: cargo builds ONE copy of a
-  dependency per graph, so two `GGML_*` sets cannot share a `target/`. **`GGML_CPU_ALL_VARIANTS`
-  would be the single-binary answer and is refused with the failure measured**: ggml stops at
-  `CMake Error at ggml/src/CMakeLists.txt:189: GGML_BACKEND_DL requires BUILD_SHARED_LIBS`, and
-  `whisper-rs-sys` hard-codes `BUILD_SHARED_LIBS=OFF` (its env pass-through only forwards
-  `WHISPER_*`/`GGML_*`/`CMAKE_*`) and links `static=ggml*` — a vendored fork plus a dozen
-  `ggml-cpu-*.so` in five package formats is a larger change than a second file.
+- **A portable binary is a slow one, so the app ships THREE engine children.** Measured on one
+  330 s excerpt of `ggml-tiny`, best of two, scored on CPU-seconds: **28.7×** real time with
+  `-march=native`, **5.0×** at the v2 floor, **23.5×** for the `-v3` child (AVX2 + FMA + F16C,
+  `desktop/.cargo/engine-v3.toml`) and **26.7×** for the `-v4` one (AVX512F/CD/BW/DQ/VL,
+  `desktop/.cargo/engine-v4.toml`) — 92 % of the native build's gap closed, with Vulkan untouched
+  (**128.1×** against **127.5×**). v4 is the five v4 bits and NOTHING more: VNNI, BF16, VBMI, VBMI2,
+  IFMA, VPOPCNTDQ and GFNI stay OFF, because a Zen 4 has some of them and a Skylake-Server others,
+  and a child that needed one would `SIGILL` on the other — the census **gates that too**
+  (`avx512_ext`, measured: it caught `vpermt2w`/`vpermi2w` in my own first list, which are
+  AVX512**BW**, i.e. v4). The engine is already a CHILD process (T3), so the dispatch is one file per
+  level and one CPUID test: `supervisor::engine_program` walks `Simd::variants()` best-first and
+  starts the first `<exe>-v4`/`<exe>-v3` that `is_x86_feature_detected!` allows **and** that is
+  installed and executable, the floor binary otherwise (pre-2013 CPUs, a child a package forgot, an
+  explicit `--engine-program`); `neezer-transcribe engine-program` prints the choice, which is how a
+  test, a support call and the CI see it. The children are built by
+  `desktop/tools/build_engine_variants.sh`, each into its own `target/engine-<level>`: cargo builds
+  ONE copy of a dependency per graph, so three `GGML_*` sets cannot share a `target/`.
+  **`GGML_CPU_ALL_VARIANTS` would be the single-binary answer and is refused with the failure
+  measured**: ggml stops at `CMake Error at ggml/src/CMakeLists.txt:189: GGML_BACKEND_DL requires
+  BUILD_SHARED_LIBS`, and `whisper-rs-sys` hard-codes `BUILD_SHARED_LIBS=OFF` (its env pass-through
+  only forwards `WHISPER_*`/`GGML_*`/`CMAKE_*`) and links `static=ggml*` — a vendored fork plus a
+  dozen `ggml-cpu-*.so` in five package formats is a larger change than two extra files.
   **Measured, the crash this exists for**: CI run **44234946582** lost the four
   `nz-transcribe --test engine` tests that run whisper (`a_missing_vulkan_driver…`,
   `language_auto…`, `cpu_and_vulkan…`, `the_engine_child…`) to `SIGILL (signal 4)` after
@@ -467,20 +472,25 @@ of its callers.
   objects, the floor binary transcribes under `qemu -cpu Nehalem` (**140 s** of emulation, release)
   and the `-v3` child natively on the same excerpt, and `engine-program` answers Nehalem with the
   floor binary and Haswell with the `-v3` one. **Cost**: the second
-  child is **+49 399 312 B installed** (a full copy of the sidecar, +6 912 B of code) against
-  **+7 114 988 B compressed with xz -9** (what a `.deb`'s data.tar carries) or **+8 232 128 B with
-  zstd -19** (the Arch package), measured on the two release binaries — a fallback the GPU path
-  never pays, and dropping the child is a one-line revert. A third (`-v4`, AVX-512) would buy the
-  last 18 % back (23.5× → 28.7×) on CPUs that have it, for the same +7 MB and a third build: not
-  in this lot, and it is the measured number to decide it on.
+  children cost **+49 399 312 B and +49 4xx xxx B installed** (a full copy of the sidecar each, a few
+  kB of code apart) against **+7 114 988 B compressed with xz -9** each (what a `.deb`'s data.tar
+  carries) or **+8 232 128 B with zstd -19** (the Arch package), measured on the release binaries —
+  a fallback the GPU path never pays, and dropping a level is a one-line revert.
 - **The check.** `desktop/tools/check_cpu_floor.sh <binary>` runs, in order: the census of each
   binary, each variant's ggml objects **gated at its own level**
-  (`check_cpu_baseline.py --baseline x86-64-v2|v3`, which reads the RAW BYTES because an EVEX and a
-  VEX `vpbroadcastq %rcx,%xmm0` print the same mnemonic), each binary transcribing real speech under
-  an emulated CPU of its floor (`qemu -cpu Nehalem`, `-cpu Haswell`), and the DISPATCH under both.
-  Both workflows run it on the binaries they ship. A `target/` older than the pin keeps the old
-  objects once more: `cargo clean -p whisper-rs-sys`, because cargo does not fingerprint a
-  dependency's build-script environment.
+  (`check_cpu_baseline.py --baseline x86-64-v2|v3|v4`, which reads the RAW BYTES because an EVEX and
+  a VEX `vpbroadcastq %rcx,%xmm0` print the same mnemonic), the floor binary transcribing real speech
+  under an emulated x86-64-v2 CPU (`qemu -cpu Nehalem` — 125 s of emulation for eleven seconds), each
+  child transcribing **natively** on a host that has its features (qemu's TCG emulates AVX2 through
+  helper calls: >10 min for the same eleven seconds, which no workflow can pay), and the DISPATCH
+  under one emulated CPU per level — `Nehalem` must answer the floor binary, `Haswell` the `-v3`
+  one — then on the REAL CPU, where the choice must match what this host's own `flags` say
+  (`-v4` on AVX512F/CD/BW/DQ/VL, else `-v3`, else the floor). QEMU's TCG has **no AVX-512 at all**
+  (measured: `-cpu Skylake-Server` and `-cpu max` both clear the five bits with "TCG doesn't support
+  requested feature"), so the v4 rung is proven natively and by `supervisor`'s unit test with an
+  injected `Simd`. Both workflows run it on the binaries they ship. A `target/`
+  older than the pin keeps the old objects once more: `cargo clean -p whisper-rs-sys`, because cargo
+  does not fingerprint a dependency's build-script environment.
 - **Models** — the server's ladder and file names (`ggml-large-v3-turbo-q8_0.bin` when ≥ 2.5 GB of
   free memory, else `…-q5_0.bin`, else `ggml-small.bin`), plus the Silero VAD GGML model. Nothing is
   downloaded without the person's click in Réglages → Transcription locale, which shows each size;

@@ -351,8 +351,8 @@ jobs:
       # where the CPU answers AVX2+FMA+F16C, and this job is where the pair is
       # exercised (docs/agents/desktop.md, *The CPU floor, and the child that picks
       # its own ISA*). ~2 min: a second whisper build, in its own target.
-      - name: Build the x86-64-v3 engine child
-        run: tools/build_engine_v3.sh --debug
+      - name: Build the x86-64-v3 and x86-64-v4 engine children
+        run: tools/build_engine_variants.sh --debug
       # WHY AN ENGINE CHILD COULD DIE, AND WHAT IT WAS BUILT FOR: the runner's CPU
       # against the ISA that reached ggml. Every `SIGILL` this job has had was the
       # two disagreeing (ggml compiles an AMX path under `__AMX_INT8__ &&
@@ -442,12 +442,12 @@ jobs:
           prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
-      - name: Build the x86-64-v3 engine child
-        run: tools/build_engine_v3.sh --release
+      - name: Build the x86-64-v3 and x86-64-v4 engine children
+        run: tools/build_engine_variants.sh --release
       - name: Binary sizes
         run: |
           du -h target/release/neezer-desktop target/release/neezer-transcribe \
-            target/release/neezer-transcribe-v3
+            target/release/neezer-transcribe-v3 target/release/neezer-transcribe-v4
       - name: Upload the binaries
         uses: actions/upload-artifact@v4
         with:
@@ -456,6 +456,7 @@ jobs:
             desktop/target/release/neezer-desktop
             desktop/target/release/neezer-transcribe
             desktop/target/release/neezer-transcribe-v3
+            desktop/target/release/neezer-transcribe-v4
           if-no-files-found: error
           retention-days: 7
 
