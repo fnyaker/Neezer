@@ -277,21 +277,28 @@ internal object VizDraw {
 
         val coarse = clamp(sqrt(max(1f, scope.size.width) / max(1f, cols.toFloat())), 1f, 2.2f)
         val coreW = clamp(min(lanes[0].span, lanes[1].span) * 0.013f, 1f, 2.2f) * coarse
+        // ONE PATH per channel per frame, stroked twice (halo, then beam). The
+        // first version rebuilt the same 500-segment path for every stroke — four
+        // builds a frame instead of two — and the CI runner's software rasteriser
+        // blew the 16.7 ms budget on the oscilloscope alone.
         val path = Path()
         lanes.forEachIndexed { channel, lane ->
             if (lane.len <= 2f || lane.span <= 1f) return@forEachIndexed
             val trace = if (channel == 0) frame.scopeA else frame.scopeB
+            tracePath(path, lane, trace, cols, scale)
             // The halo is what makes a one-pixel stroke read as light rather than
-            // as ink. Eco keeps the core and drops the halo (the flat grade).
+            // as ink. Eco keeps the beam and drops the halo (the flat grade), and
+            // the halo is 2.4 beams wide rather than 3.4: a fat antialiased stroke
+            // is the most expensive thing a software rasteriser draws.
             if (!eco) {
-                strokeLane(
-                    scope, path, lane, trace, cols, scale,
+                strokePath(
+                    scope, path,
                     if (channel == 0) halo else haloB,
-                    coreW * 3.4f, wash * HALO_BRIGHT * glow,
+                    coreW * 2.4f, wash * HALO_BRIGHT * glow,
                 )
             }
-            strokeLane(
-                scope, path, lane, trace, cols, scale,
+            strokePath(
+                scope, path,
                 if (channel == 0) core else coreB,
                 coreW, wash * CORE_BRIGHT,
             )
@@ -327,19 +334,14 @@ internal object VizDraw {
         }
     }
 
-    /** `scope.js#strokeLane`: max then min per column, so a dense column draws its true extent. */
-    private fun strokeLane(
-        scope: DrawScope,
+    /** `scope.js#strokeLane`'s geometry: max then min per column, so a dense column draws its true extent. */
+    private fun tracePath(
         path: Path,
         lane: Lane,
         trace: List<Float>,
         cols: Int,
         scale: Float,
-        colour: Color,
-        width: Float,
-        alpha: Float,
     ) {
-        if (alpha <= 0.002f) return
         path.reset()
         for (c in 0 until cols) {
             val t = if (cols == 1) 0f else c.toFloat() / (cols - 1)
@@ -352,6 +354,17 @@ internal object VizDraw {
             if (c == 0) path.moveTo(x1, y1) else path.lineTo(x1, y1)
             if (lo != hi) path.lineTo(bx + lane.vx * lo, by + lane.vy * lo)
         }
+    }
+
+    /** One stroke of a path already built: the halo and the beam share it. */
+    private fun strokePath(
+        scope: DrawScope,
+        path: Path,
+        colour: Color,
+        width: Float,
+        alpha: Float,
+    ) {
+        if (alpha <= 0.002f) return
         scope.drawPath(
             path = path,
             color = colour.copy(alpha = clamp(alpha, 0f, 1f)),
