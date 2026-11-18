@@ -1,6 +1,7 @@
 package fr.neezer.mobile.feature.discovery
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -35,7 +36,14 @@ class RecapModelTest {
             service = service,
             player = player,
             scope = CoroutineScope(dispatcher),
-            io = dispatcher,
+            // `Dispatchers.Unconfined`, NOT the test dispatcher: the model's
+            // `io` seam exists so the app keeps FFI calls off the main thread,
+            // and a `withContext` onto a TEST dispatcher is a task only
+            // `advanceUntilIdle` can run — measured on the CI runner (JDK 17),
+            // where the same six cases queued the continuation on a scheduler
+            // the test never advanced and the panel stayed `pending` for five
+            // seconds. Unconfined runs the block inline, on every machine.
+            io = Dispatchers.Unconfined,
             toast = toasts::record,
         )
         return Triple(model, service, player)
