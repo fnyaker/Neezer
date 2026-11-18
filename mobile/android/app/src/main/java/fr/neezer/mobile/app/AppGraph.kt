@@ -35,6 +35,9 @@ class AppGraph(private val application: Application) : NzNavigator {
         // (`IllegalStateException: You must call setGraph() before calling
         // getGraph()`), killing the app on a cold start from a shared link.
         // [openPendingLink] runs once, from the shell, after the graph exists.
+        // (MB14 measured the same crash from `neezer://releases` on
+        // emulator-5640; the orchestrator's own fix landed on master first, so
+        // this lot keeps master's shape and only its two `AppLink` branches.)
     }
 
     /**
@@ -97,6 +100,10 @@ class AppGraph(private val application: Application) : NzNavigator {
             is AppLink.Invite -> nav.navigate(Routes.Invite(link.code))
             is AppLink.Settings -> nav.navigate(Routes.Settings(link.section))
             is AppLink.Recap -> nav.navigate(Routes.Recap(link.year?.toInt()))
+            // MB14's two routes: the releases feed, and one shelf behind it (the
+            // door MB5 left out, and the page its cards open).
+            is AppLink.Releases -> nav.navigate(Routes.Releases) { launchSingleTop = true }
+            is AppLink.ReleaseShelf -> nav.navigate(Routes.ReleaseShelf(link.kind))
         }
     }
 
