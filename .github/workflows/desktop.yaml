@@ -153,7 +153,10 @@ jobs:
           # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
           # broader prefix, and a `key:`-only fingerprint would still restore another
           # CPU's objects through that fallback.
-          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
+          # ... and the floors the three engine children are built for: this
+          # entry cannot be reused after a floor change either (docs/agents/
+          # desktop.md, *The CPU floor*).
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -207,7 +210,10 @@ jobs:
           # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
           # broader prefix, and a `key:`-only fingerprint would still restore another
           # CPU's objects through that fallback.
-          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
+          # ... and the floors the three engine children are built for: this
+          # entry cannot be reused after a floor change either (docs/agents/
+          # desktop.md, *The CPU floor*).
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
       # The Python server comes FIRST: `cargo test` runs two benches that start
       # `tools/perf_api.py` themselves — `nz-api`'s session round trip (D2,
       # login → me → 401 on a real Flask cookie) and, later, `nz-transcribe`'s
@@ -341,6 +347,45 @@ jobs:
       - name: The transcription binary reports what it links
         run: ./target/debug/neezer-transcribe --version
 
+      # The x86-64-v3 engine child, beside the floor one: the supervisor starts it
+      # where the CPU answers AVX2+FMA+F16C, and this job is where the pair is
+      # exercised (docs/agents/desktop.md, *The CPU floor, and the child that picks
+      # its own ISA*). ~2 min: a second whisper build, in its own target.
+      - name: Build the x86-64-v3 engine child
+        run: tools/build_engine_v3.sh --debug
+      # WHY AN ENGINE CHILD COULD DIE, AND WHAT IT WAS BUILT FOR: the runner's CPU
+      # against the ISA that reached ggml. Every `SIGILL` this job has had was the
+      # two disagreeing (ggml compiles an AMX path under `__AMX_INT8__ &&
+      # __AVX512VNNI__` — the `AMX is not ready to be used!` line of run
+      # 44234946582). `always()` so a red run still says which side it died on.
+      - name: Why an engine child died — the runner's CPU and the ISA ggml got
+        if: always()
+        run: |
+          grep -m1 'model name' /proc/cpuinfo || true
+          flags="$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2)"
+          for flag in sse4_2 popcnt avx avx2 avx512f avx512vnni fma f16c bmi2 amx_tile; do
+            case " $flags " in *" $flag "*) printf '%s ' "$flag" ;; esac
+          done; echo
+          grep -hE '^GGML_(NATIVE|SSE42|AVX|AVX2|AVX512|FMA|F16C|BMI2|AMX)' \
+            target/debug/build/whisper-rs-sys-*/out/build/CMakeCache.txt || true
+          for tree in target/debug target/engine-v3/debug; do
+            if grep -qs -- '-march=native' "$tree"/build/whisper-rs-sys-*/out/build/compile_commands.json; then
+              echo "-march=native a atteint ggml dans $tree : c'est le défaut que" >&2
+              echo "desktop/.cargo/config.toml existe pour empêcher." >&2
+            fi
+          done
+      # The artefacts ship to laptops whose CPU is older than the runner's, so both
+      # floors are checked on the binaries this job just ran: each census, each
+      # variant's ggml objects gated at its own level, the floor binary transcribing
+      # under an EMULATED x86-64-v2 CPU, the `-v3` one natively, and the dispatch.
+      - name: Both CPU floors hold, and the dispatch picks right
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-user
+          tools/check_cpu_floor.sh target/debug/neezer-transcribe
+        env:
+          NZ_WHISPER_MODEL: ${{ runner.temp }}/whisper/ggml-tiny.bin
+          NZ_WHISPER_AUDIO: ${{ runner.temp }}/whisper/jfk.wav
+
   build:
     name: release binaries
     runs-on: ubuntu-24.04
@@ -391,12 +436,18 @@ jobs:
           # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
           # broader prefix, and a `key:`-only fingerprint would still restore another
           # CPU's objects through that fallback.
-          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
+          # ... and the floors the three engine children are built for: this
+          # entry cannot be reused after a floor change either (docs/agents/
+          # desktop.md, *The CPU floor*).
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
+      - name: Build the x86-64-v3 engine child
+        run: tools/build_engine_v3.sh --release
       - name: Binary sizes
         run: |
-          du -h target/release/neezer-desktop target/release/neezer-transcribe
+          du -h target/release/neezer-desktop target/release/neezer-transcribe \
+            target/release/neezer-transcribe-v3
       - name: Upload the binaries
         uses: actions/upload-artifact@v4
         with:
@@ -404,6 +455,7 @@ jobs:
           path: |
             desktop/target/release/neezer-desktop
             desktop/target/release/neezer-transcribe
+            desktop/target/release/neezer-transcribe-v3
           if-no-files-found: error
           retention-days: 7
 
