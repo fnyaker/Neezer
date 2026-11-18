@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Neezer, la lentille (monochrome)">
+  <!-- La lentille, couche monochrome : la meme geometrie, une seule couleur.
+       C'est le masque que le lanceur teinte ; il ne depend donc d'aucun theme. -->
+  <g id="mark">
+    <path fill="#ffffff" fill-rule="evenodd" d="M227.556 512.000A284.444 284.444 0 1 1 796.444 512.000A284.444 284.444 0 1 1 227.556 512.000Z M445.630 426.667A132.741 132.741 0 1 1 711.111 426.667A132.741 132.741 0 1 1 445.630 426.667Z M497.778 426.667A80.593 80.593 0 1 1 658.963 426.667A80.593 80.593 0 1 1 497.778 426.667Z"/>
+  </g>
+</svg>

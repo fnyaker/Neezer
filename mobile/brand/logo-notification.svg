@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-label="Neezer, la lentille (notification)">
+  <!-- Le glyphe de notification : la silhouette de la lentille, a sa taille
+       optique de 24 dp. Rien sous 2 dp (la gorge fait 3 dp, l'etiquette 6,4 dp),
+       blanc sur transparent, sans couleur. -->
+  <g id="mark">
+    <path fill="#ffffff" fill-rule="evenodd" d="M1.600 12.000A10.400 10.400 0 1 1 22.400 12.000A10.400 10.400 0 1 1 1.600 12.000Z M9.100 9.200A6.300 6.300 0 1 1 21.700 9.200A6.300 6.300 0 1 1 9.100 9.200Z M12.200 9.200A3.200 3.200 0 1 1 18.600 9.200A3.200 3.200 0 1 1 12.200 9.200Z"/>
+  </g>
+</svg>

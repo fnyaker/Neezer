@@ -3,43 +3,41 @@
 #
 #   mobile/brand/export.sh            writes every generated file
 #   mobile/brand/export.sh --check    exits 1 if a generated file has drifted
-#   mobile/brand/export.sh --master directions/c-wake.svg \
-#                         --mono directions/c-wake-mono.svg --glyph ...   (partial)
 #
-# NZ_RES and NZ_BRAND_OUT override where the resources and the PNGs go (the tests
-# export into a scratch tree, never into the app's own res/).
-#
-# Needs: python3 (stdlib only), and `rsvg-convert` (librsvg) — or `resvg` — for
+# Needs: python3 (stdlib only) and `rsvg-convert` (librsvg) — or `resvg` — for
 # the PNGs. No network, ever: this runs in CI and on a laptop with no link.
 #
-# What it reads (the only sources of truth):
-#   mobile/brand/logo.svg             1024 viewBox: <g id="ground"> and <g id="mark">
-#   mobile/brand/logo-mono.svg        1024 viewBox: the same geometry, one colour
-#   mobile/brand/logo-notification.svg  24 viewBox: the status-bar silhouette
+# The icon follows the theme, it is not a fixed black tile. Sillon's rule is
+# that a theme is a COLOUR PAIR, so the same geometry is drawn twice:
+#
+#   mobile/brand/logo.svg          Encre  (night): ink ground,  lemon disc, cream label
+#   mobile/brand/logo-papier.svg  Papier (day):   cream ground, ink disc,   lemon label
+#   mobile/brand/logo-mono.svg        the mask, one colour, no theme at all
+#   mobile/brand/logo-notification.svg the 24 dp status glyph
 #
 # What it writes:
-#   app/src/main/res/drawable/ic_launcher_foreground.xml   108 dp, viewport from logo.svg
-#   app/src/main/res/drawable/ic_launcher_monochrome.xml   the same paths, one colour
-#   app/src/main/res/drawable/ic_stat_neezer.xml           24 dp, white
-#   app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml     background + the two layers
-#   app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
-#   mobile/brand/play-store-512.png                        512×512, 32-bit, opaque
-#   mobile/brand/icon-108.png                              the composed 108 dp icon, for docs
+#   drawable/ic_launcher_background.xml          Papier ground   (day)
+#   drawable-night/ic_launcher_background.xml    Encre ground    (night)
+#   drawable/ic_launcher_foreground.xml          Papier mark     (day)
+#   drawable-night/ic_launcher_foreground.xml    Encre mark      (night)
+#   drawable/ic_launcher_monochrome.xml          the mask (Android 13+ themed icons)
+#   drawable/ic_stat_neezer.xml                  24 dp white silhouette
+#   mipmap-anydpi-v26/ic_launcher.xml + ic_launcher_round.xml
+#   mobile/brand/play-store-512(-papier).png     512×512, 32-bit, opaque
+#   mobile/brand/icon-encre-108.png, icon-papier-108.png
 #
-# The background is NOT a drawable: it is `@color/ic_launcher_background` in
-# `app/src/main/res/values/colors.xml` (#0C0C0B, Sillon's ink). That file belongs
-# to MB0; this script verifies it and refuses to run if it moved, rather than
-# editing a file LG1 does not own.
+# `values/colors.xml` belongs to MB0 and is never written here: the two grounds
+# are drawables this lot owns, so a theme variant needs no shared file.
 set -euo pipefail
-cd "$(dirname "$0")"
-
-BRAND="$(pwd)"
+BRAND=$(cd "$(dirname "$0")" && pwd)
 RES="${NZ_RES:-$BRAND/../android/app/src/main/res}"
 # The PNGs land beside the sources by default; the tests send them elsewhere so
 # the repository never carries a scratch render.
 PNG_OUT="${NZ_BRAND_OUT:-$BRAND}"
+
 CHECK=0
-MASTER="$BRAND/logo.svg"
+MASTER="$BRAND/logo.svg"                 # Encre, the night/primary variant
+MASTER_DAY="$BRAND/logo-papier.svg"      # Papier, the day variant
 MONO="$BRAND/logo-mono.svg"
 GLYPH="$BRAND/logo-notification.svg"
 
@@ -47,6 +45,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --check) CHECK=1 ;;
         --master) MASTER="$2"; shift ;;
+        --master-day) MASTER_DAY="$2"; shift ;;
         --mono) MONO="$2"; shift ;;
         --glyph) GLYPH="$2"; shift ;;
         *) echo "export.sh: unknown argument $1" >&2; exit 2 ;;
@@ -65,36 +64,31 @@ else
     exit 1
 fi
 
-# --- the background colour is MB0's file: verify, never edit -----------------
-BG=$(sed -n 's/.*name="ic_launcher_background">\(#[0-9A-Fa-f]\{6\}\)<.*/\1/p' \
-        "$RES/values/colors.xml" | head -1)
-if [ "$BG" != "#0C0C0B" ]; then
-    echo "export.sh: ic_launcher_background is '${BG:-missing}', expected #0C0C0B" >&2
-    echo "  (values/colors.xml belongs to MB0; LG1 does not edit it)" >&2
-    exit 1
-fi
-
-for f in "$MASTER" "$MONO" "$GLYPH"; do
+for f in "$MASTER" "$MASTER_DAY" "$MONO" "$GLYPH"; do
     [ -f "$f" ] || { echo "export.sh: missing source $f" >&2; exit 1; }
 done
 
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
 # --- SVG -> Android vector drawable ------------------------------------------
-# One <path> per drawn element, groups for a rotate(); anything the exporter
-# does not understand is a hard error (a silently dropped element is a wrong
-# icon, and wrong icons ship).
+# `$4` picks the layer: `mark` (everything but <g id="ground">) or `ground`
+# (only that group, full bleed). `$5` is a tint forced on every fill and stroke.
+# An element the exporter does not understand is a hard error: a silently
+# dropped element is a wrong icon, and a wrong icon ships.
 to_vector() {
-    local src="$1" width="$2" height="$3" tint="$4" out="$5" what="$6"
-    python3 - "$src" "$width" "$height" "$tint" "$out" "$what" <<'PY'
+    local src="$1" width="$2" height="$3" layer="$4" tint="$5" out="$6" what="$7"
+    python3 - "$src" "$width" "$height" "$layer" "$tint" "$out" "$what" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
-src, width, height, tint, out, what = sys.argv[1:7]
+src, width, height, layer, tint, out, what = sys.argv[1:8]
 NS = "{http://www.w3.org/2000/svg}"
 root = ET.parse(src).getroot()
 view = root.get("viewBox")
 if not view:
     sys.exit("export: %s has no viewBox" % src)
-vx, vy, vw, vh = (float(v) for v in view.replace(",", " ").split())
+vw, vh = (float(v) for v in view.replace(",", " ").split()[2:])
 
 lines = ['<?xml version="1.0" encoding="utf-8"?>',
          '<!-- GENERATED by mobile/brand/export.sh from %s (%s). Do not edit. -->'
@@ -120,8 +114,7 @@ def transform(el):
     return ang, (cx, cy)
 
 
-
-def shape_to_path(el, tag, src):
+def shape_to_path(el, tag):
     """circle/ellipse/rect -> pathData. Vector drawables only take paths."""
     def num(name, default=None):
         v = el.get(name)
@@ -155,12 +148,15 @@ def shape_to_path(el, tag, src):
                -(h - 2 * ry), rx, ry, rx, -ry))
 
 
-def emit(el, depth, in_group):
+def emit(el, depth, inside):
     pad = "    " + "    " * depth
     tag = el.tag.replace(NS, "")
     if tag == "g":
-        if el.get("id") == "ground":
-            return  # the background is @color/ic_launcher_background
+        is_ground = el.get("id") == "ground"
+        if layer == "ground" and not is_ground:
+            return
+        if layer == "mark" and is_ground:
+            return
         ang, pivot = transform(el)
         if ang is not None:
             lines.append(pad + '<group android:rotation="%g" android:pivotX="%g" '
@@ -170,16 +166,16 @@ def emit(el, depth, in_group):
             lines.append(pad + "</group>")
         else:
             for child in el:
-                emit(child, depth, in_group)
+                emit(child, depth, inside)
         return
     if tag not in ("path", "rect", "circle", "ellipse"):
         sys.exit("export: unsupported element <%s> in %s" % (tag, src))
-    d = el.get("d") if tag == "path" else shape_to_path(el, tag, src)
+    d = el.get("d") if tag == "path" else shape_to_path(el, tag)
     if not d:
         sys.exit("export: a <%s> without geometry in %s" % (tag, src))
     fill = el.get("fill", "#000000")
     stroke = el.get("stroke")
-    if tint:                      # a mask: one colour, both fill and stroke
+    if tint:
         if fill and fill != "none":
             fill = tint
         if stroke and stroke != "none":
@@ -206,22 +202,24 @@ def emit(el, depth, in_group):
 for child in root:
     emit(child, 0, False)
 lines.append("</vector>")
-body = "\n".join(lines) + "\n"
 with open(out, "w") as f:
-    f.write(body)
+    f.write("\n".join(lines) + "\n")
 PY
 }
 
 # --- the adaptive icon -------------------------------------------------------
+# <background> points at a drawable LG1 owns (so the day/night pair lives in
+# drawable/ and drawable-night/), never at MB0's @color/ic_launcher_background.
 adaptive() {
-    local name="$1"
-    cat > "$TMP/$name.xml" <<'XML'
+    cat > "$TMP/$1.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <!-- GENERATED by mobile/brand/export.sh. Do not edit.
-     108 dp canvas, the 66 dp safe circle for the foreground, a monochrome
-     layer for themed icons (Android 13+). unsupported: nothing else here. -->
+     Adaptive icon: 108 dp layers, the foreground staying inside the 66 dp safe
+     circle. The background is a drawable with a -night variant, so the icon
+     follows the theme instead of pinning one; the monochrome layer is what the
+     launcher tints for themed icons (Android 13+). -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background" />
+    <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
     <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>
@@ -229,33 +227,28 @@ XML
 }
 
 # --- write, or compare when --check -----------------------------------------
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-
-to_vector "$MASTER" 108dp 108dp "" "$TMP/ic_launcher_foreground.xml" "foreground"
-to_vector "$MONO" 108dp 108dp "#FFFFFFFF" "$TMP/ic_launcher_monochrome.xml" "monochrome"
-to_vector "$GLYPH" 24dp 24dp "#FFFFFFFF" "$TMP/ic_stat_neezer.xml" "notification"
+to_vector "$MASTER_DAY" 108dp 108dp mark  ""          "$TMP/ic_launcher_foreground.xml"        "foreground, Papier"
+to_vector "$MASTER"     108dp 108dp mark  ""          "$TMP/ic_launcher_foreground_night.xml"  "foreground, Encre"
+to_vector "$MASTER_DAY" 108dp 108dp ground ""         "$TMP/ic_launcher_background.xml"        "background, Papier"
+to_vector "$MASTER"     108dp 108dp ground ""         "$TMP/ic_launcher_background_night.xml"  "background, Encre"
+to_vector "$MONO"       108dp 108dp mark  "#FFFFFFFF" "$TMP/ic_launcher_monochrome.xml"        "monochrome"
+to_vector "$GLYPH"      24dp  24dp  mark  "#FFFFFFFF" "$TMP/ic_stat_neezer.xml"                "notification"
 
 adaptive ic_launcher
 adaptive ic_launcher_round
 
-if [ "$RASTER" = "rsvg-convert" ]; then
-    rsvg-convert -w 512 -h 512 -b "#0C0C0B" "$MASTER" -o "$TMP/play-store-512.png"
-else
-    "$RASTER" "$MASTER" -w 512 -h 512 --background "#0C0C0B" "$TMP/play-store-512.png"
-fi
-# 108 dp composite: the ground and the mark, as the launcher draws them
-python3 - "$MASTER" "$TMP/icon-108.png" "$RASTER" <<'PY'
-import subprocess
-import sys
-src, out, raster = sys.argv[1:4]
-if raster == "rsvg-convert":
-    subprocess.run(["rsvg-convert", "-w", "108", "-h", "108", "-b", "#0C0C0B",
-                    src, "-o", out], check=True)
-else:
-    subprocess.run([raster, src, "-w", "108", "-h", "108",
-                    "--background", "#0C0C0B", out], check=True)
-PY
+render_png() {
+    local src="$1" size="$2" out="$3" bg="$4"
+    if [ "$RASTER" = "rsvg-convert" ]; then
+        rsvg-convert -w "$size" -h "$size" -b "$bg" "$src" -o "$out"
+    else
+        "$RASTER" "$src" -w "$size" -h "$size" --background "$bg" "$out"
+    fi
+}
+render_png "$MASTER" 512 "$TMP/play-store-512.png" "#0C0C0B"
+render_png "$MASTER_DAY" 512 "$TMP/play-store-512-papier.png" "#F3F0E8"
+render_png "$MASTER" 108 "$TMP/icon-encre-108.png" "#0C0C0B"
+render_png "$MASTER_DAY" 108 "$TMP/icon-papier-108.png" "#F3F0E8"
 
 install_or_check() {
     local src="$1" dst="$2"
@@ -272,13 +265,19 @@ install_or_check() {
 }
 
 rc=0
-install_or_check "$TMP/ic_launcher_foreground.xml" "$RES/drawable/ic_launcher_foreground.xml" || rc=1
-install_or_check "$TMP/ic_launcher_monochrome.xml" "$RES/drawable/ic_launcher_monochrome.xml" || rc=1
-install_or_check "$TMP/ic_stat_neezer.xml" "$RES/drawable/ic_stat_neezer.xml" || rc=1
-install_or_check "$TMP/ic_launcher.xml" "$RES/mipmap-anydpi-v26/ic_launcher.xml" || rc=1
-install_or_check "$TMP/ic_launcher_round.xml" "$RES/mipmap-anydpi-v26/ic_launcher_round.xml" || rc=1
-install_or_check "$TMP/play-store-512.png" "$PNG_OUT/play-store-512.png" || rc=1
-install_or_check "$TMP/icon-108.png" "$PNG_OUT/icon-108.png" || rc=1
+D="$RES/drawable"
+install_or_check "$TMP/ic_launcher_foreground.xml"       "$D/ic_launcher_foreground.xml" || rc=1
+install_or_check "$TMP/ic_launcher_foreground_night.xml" "$D-night/ic_launcher_foreground.xml" || rc=1
+install_or_check "$TMP/ic_launcher_background.xml"       "$D/ic_launcher_background.xml" || rc=1
+install_or_check "$TMP/ic_launcher_background_night.xml" "$D-night/ic_launcher_background.xml" || rc=1
+install_or_check "$TMP/ic_launcher_monochrome.xml"       "$D/ic_launcher_monochrome.xml" || rc=1
+install_or_check "$TMP/ic_stat_neezer.xml"               "$D/ic_stat_neezer.xml" || rc=1
+install_or_check "$TMP/ic_launcher.xml"                  "$RES/mipmap-anydpi-v26/ic_launcher.xml" || rc=1
+install_or_check "$TMP/ic_launcher_round.xml"            "$RES/mipmap-anydpi-v26/ic_launcher_round.xml" || rc=1
+install_or_check "$TMP/play-store-512.png"               "$PNG_OUT/play-store-512.png" || rc=1
+install_or_check "$TMP/play-store-512-papier.png"        "$PNG_OUT/play-store-512-papier.png" || rc=1
+install_or_check "$TMP/icon-encre-108.png"               "$PNG_OUT/icon-encre-108.png" || rc=1
+install_or_check "$TMP/icon-papier-108.png"              "$PNG_OUT/icon-papier-108.png" || rc=1
 
 if [ "$CHECK" = 1 ] && [ "$rc" = 0 ]; then
     echo "export.sh: every generated resource matches its source"

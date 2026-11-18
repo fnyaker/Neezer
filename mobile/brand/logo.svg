@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Neezer, la lentille (Encre)">
+  <!-- La lentille, Encre : le fond, le disque, la gorge de la lentille et
+       l'etiquette. La gorge est un CREUX : c'est le fond qui la remplit. La geometrie ne change pas d'un theme a l'autre,
+       seuls les roles des trois couleurs changent — Sillon veut qu'un theme
+       soit une paire de couleurs. -->
+  <g id="ground"><rect width="1024" height="1024" fill="#0c0c0b"/></g>
+  <g id="mark">
+    <path fill="#d2ff3c" fill-rule="evenodd" d="M227.556 512.000A284.444 284.444 0 1 1 796.444 512.000A284.444 284.444 0 1 1 227.556 512.000Z M445.630 426.667A132.741 132.741 0 1 1 711.111 426.667A132.741 132.741 0 1 1 445.630 426.667Z M497.778 426.667A80.593 80.593 0 1 1 658.963 426.667A80.593 80.593 0 1 1 497.778 426.667Z"/>
+    <circle cx="578.370" cy="426.667" r="80.593" fill="#f3f0e8"/>
+  </g>
+</svg>
