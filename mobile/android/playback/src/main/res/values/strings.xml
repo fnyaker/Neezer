@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- :playback's own strings. A library module cannot read :app's resources
+     (docs/agents/mobile.md, MB0's "A library module cannot read :app's
+     resources"), and Media3 needs the CHANNEL's name as a resource id. French
+     copy, as every label the person reads. -->
+<resources>
+    <string name="nz_playback_channel">Lecture</string>
+</resources>

@@ -10,6 +10,17 @@
      contract the second. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- The permissions the SERVICE needs, declared where the service is: the
+         merger de-duplicates `:app`'s identical entries, and a module whose
+         foreground service type is `mediaPlayback` without the matching grant
+         dies at `startForeground` with a SecurityException. `:app` declares them
+         for the whole app; this module must stand on its own for its own
+         instrumented tests (whose APK merges only THIS manifest). WAKE_LOCK covers
+         the PARTIAL_WAKE_LOCK and the Wi-Fi lock the service holds. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application>
         <service
             android:name="fr.neezer.mobile.playback.NzMediaService"

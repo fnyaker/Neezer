@@ -2262,73 +2262,88 @@ request):
   tuning chip opens the four `discovery.js` stops as chips, which is the same
   value set the slider snaps to.
 
-### MB3c — Media service `:playback` (wave 3)
+### MB3c — Media service `:playback` (delivered 2026-11-18)
 
-**Goal.** Media3 owns the system surfaces; the player stays in Rust. **Depends on**: MB3a, MB3b.
-**Exclusive files**: `playback/**` except `AudioTrackPull.kt` and `playback/.../auto/**`.
-**Contract.** `NzMediaService : MediaLibraryService` (session = `MediaLibrarySession` over `NzPlayer`,
-callback delegating browse to `LibraryTrees.current` — a minimal root here, MB25 registers the full
-tree); `NzPlayer : SimpleBasePlayer(Looper.getMainLooper())`: `getState()` built from
-`PlayerSnapshot` (commands: play/pause, seek, next/prev, shuffle, repeat, set media items from a
-controller → `PlayEntity`/`PlayQueue`), the playlist exposed as a WINDOW (previous 1 + current +
-next 100 — Media3 rebuilds the list on every state, 4 000 items would cost a frame each time), the
-position through a `PositionSupplier` reading `PlayerApi.position()` (no tick), artwork through a
-`BitmapLoader` using `cover_path`; `handleX` methods → `PlayerApi.command(…, tapNs)` and return an
-immediate future. Audio focus (`AudioFocusRequestCompat`, `AUDIOFOCUS_GAIN`; loss → pause; transient
-→ pause, resume on gain if it was playing; can-duck → `set_ducked(true)`), `ACTION_AUDIO_BECOMING_NOISY`
-→ pause, `PARTIAL_WAKE_LOCK` while `Playing`/`Buffering`, a `WifiLock` (`WIFI_MODE_FULL_HIGH_PERF`)
-only while `snapshot.streaming`, screen on/off → `set_screen_on`, the battery-exemption offer once
-(only when a playback was killed by the system — a kv flag set at play, cleared at clean pause), the
-notification small icon `ic_stat_neezer`.
-**Acceptance.** Instrumented on the headless emulator, activity FINISHED: a `MediaController` (what
-the notification and the lock screen use) plays, pauses, skips, seeks — the snapshot follows within
-one state; `input keyevent 87/85` (headset next/play) works with the screen off; 30 min screen off +
-`deviceidle force-idle` over a 40-title queue of short perf_api tracks: every track change happens,
-**0 underruns**, 0 rebuffers on Wi-Fi (MQ1's audio mode), CPU time written; a second app taking audio
-focus pauses us and gives it back; the notification shows title/artist/artwork (screenshot via
-`screencap`).
-**Pitfalls.** `SimpleBasePlayer` on a non-main looper crashed the service when a controller
-connected (Media3 issue): main looper only, and nothing slow in `getState()` (it reads Rust's cached
-snapshot). Never start the foreground service from the background except through Media3's own
-play path.
+**What landed.** Media3 owns the system surfaces; the player stays in Rust. `NzMediaService`
+(`MediaLibraryService` + `MediaLibrarySession`) over `NzPlayer` (`SimpleBasePlayer`, main looper),
+the device output started from `:playback` (`PlayerApi::startOutput` over `nz-droid-audio`), audio
+focus, becoming-noisy, the wake and Wi-Fi locks, the screen on/off read-ahead, the once-only
+battery-exemption flag, the notification (`ic_stat_neezer`) and the artwork loader over Rust's
+cached cover. The facade holds no rule: `getState()` reads a pushed `PlayerSnapshot`, every command
+goes to `PlayerApi::command`.
 
-```text
-Tu es le worker du lot MB3c (service média) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« Research » lignes Media3, « Rule 1 », « Worker rules », « MB3c »),
-docs/agents/android.md (PlayerService, focus, notification, batterie), et la doc Media3
-SimpleBasePlayer / MediaLibraryService.
-Objectif : le module :playback (sauf AudioTrackPull.kt et auto/) selon la section MB3c : service
-MediaLibraryService, façade NzPlayer sur l'état Rust (fenêtre de 102 éléments, position par
-PositionSupplier, artwork via cover_path), focus audio, devenir-bruyant, verrous de veille et Wi-Fi,
-écran allumé/éteint, offre d'exemption batterie une seule fois.
-Fichiers à toi seul : mobile/android/playback/** sauf AudioTrackPull.kt et playback/.../auto/**.
-Acceptation : tests instrumentés de la section MB3c sur l'émulateur sans affichage (contrôleur avec
-activité terminée, touches casque écran éteint, 30 min écran éteint + Doze : tous les changements de
-titre, 0 sous-alimentation, temps CPU écrit ; focus audio rendu ; notification capturée).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb3c, PR « feat(mobile): MB3c Media3 service over the Rust player », CI verte,
-rebase + diff --stat, merge, section MB3c réécrite (mesures), `ao report --done`.
-```
+- **`NzPlayer`**: the playlist is a WINDOW of **102 rows** (`PlaybackWindow`: previous 1 + current
+  + next 100), rebuilt only when the current title leaves it — 4 000 `MediaItemData` per state would
+  cost a frame each time Media3 rebuilds its timeline. `getState()` never touches a Rust lock: the
+  snapshot is pushed by `PlayerListener` and cached, only the position is read live
+  (`PlayerApi::position()`, atomics). The queue handle is taken on the Rust thread that fired
+  `onQueueChanged`, never on the main looper.
+- **The output is process-scoped.** `Player::take_sink` hands the engine's sink out ONCE, so
+  `PlayerApi::startOutput` keeps the `OutputHandle` (and the engine's stream) for the whole process
+  and a recreated service ADOPTS it; `NzMediaService` stops nothing in `onDestroy`. Measured: with
+  the output tied to the service, a second service (Android recreates one at will) answered
+  "la sortie audio a déjà été prise" and the engine's clock stayed at 0 while the state said
+  PLAYING — a notification over silence.
+- **`NzCore::player()` is one player per process** (its own fix, PR before this lot): a `PlayerApi`
+  owns a `Player`, an engine and the sink, and the old constructor-per-call made the service and
+  the caller play into different engines (40 `GET /api/stream` served, `position()` at 0).
+- **`nz-core`'s `output_stats()` deliberately leaves `buffer_ms`/`performance_mode` to the FFI**
+  (MB3b: "nz-ffi owns the output on the device"): `PlayerApi::output_stats()` now fills them from
+  the `OutputHandle` — the HAL's own reads, never the request (`PowerSaving` may be refused, AAudio
+  may grant less than 500 ms).
+
+**The device facts this lot had to learn** (each cost a red run):
+
+- **`MediaController` calls must come from its application thread** (`IllegalStateException: Method
+  is called from a wrong thread`). An instrumented test is not the main looper: the controller is
+  built with `setApplicationLooper(Looper.getMainLooper())` and every call goes through
+  `runOnMainSync`.
+- **`NzBridge.install` is a main-thread call**: it reaches `ProcessLifecycleOwner`, which refuses
+  another thread. A test installs the core through `runOnMainSync`.
+- **The facade's PLAYING is optimistic** (MB3b's own lesson, met again): every sound assertion waits
+  on `PlayerApi::position()`, not on the state.
+- **`AUDIO_BECOMING_NOISY` is a protected broadcast**: neither an app nor `adb shell am broadcast`
+  may send it; the shell's `dumpsys activity broadcasts` is what a test can read (the receiver's
+  block names the action and the package). A dynamic receiver registered `RECEIVER_NOT_EXPORTED`
+  keeps other apps out, and the system's own protected broadcast still arrives.
+- **`input keyevent 85` (PLAY_PAUSE) does not reach a Media3 session on the API-35 emulator**, while
+  87 (NEXT) does; `cmd media_session dispatch headsethook` is the platform's own media-key path and
+  works with the screen off. Both are exercised.
+- **Deep idle has three preconditions the emulator does not meet by default**: `dumpsys battery
+  unplug` (a charging device never idles), `dumpsys deviceidle enable all` (the image ships deep idle
+  DISABLED: "Unable to go deep idle; not enabled"), screen off, then `force-idle`; and
+  `executeShellCommand` runs the command with NO shell, so `dumpsys deviceidle | grep mState` is
+  "Unknown command: |" — filter in Kotlin.
+- **The engine cannot decode WAV**: `symphonia` is built without the `wav` feature
+  (`desktop/Cargo.toml`: ogg, flac, mp3, isomp4, aac), so a WAV test fixture fails the probe with
+  "no suitable format reader found". The benches serve/play FLAC.
+
+**Measured on this machine** (API 35 x86_64, `-no-window -no-audio`, KVM, my own port; the bench is
+`~/.cache/neezer-mb3c/tone-server.py`, one 440 Hz FLAC per track at −9.03 dBFS, reached at
+`10.0.2.2:4711`):
+
+| What | How | Number |
+|---|---|---|
+| The rendered signal | `cargo test -p nz-ffi the_sink_renders_a_signal_and_not_silence` — the real player, the real FLAC, the sink the AAudio callback drains | **48 000 frames, RMS 0.3536 = −9.03 dBFS** (a half-scale sine is 0.3536) |
+| A controller with no activity | `NzMediaServiceTest` (7 tests, 21.3 s): play, pause, skip, seek through a `MediaController` | snapshot follows within one state; the engine's clock moves |
+| The queue advances by itself | 4 titles of 3 s, polled on the Rust snapshot | **4 titles** (`tone3-1..4`), 0 underruns, 0 rebuffers |
+| The device output | `output_stats()` after play | 48 000 Hz, **buffer 500 ms**, `performanceMode` read back, 0 xruns |
+| Headset keys, screen off | `input keyevent 223` then `cmd media_session dispatch next` / `headsethook`, and `input keyevent 87` | next changes the title, headsethook pauses and resumes |
+| Audio focus | a second `AUDIOFOCUS_GAIN_TRANSIENT` from the test | pauses; the gain resumes |
+| Becoming noisy | `dumpsys activity broadcasts` | the service's receiver names `AUDIO_BECOMING_NOISY` (protected: no app or shell may send it) |
+| The notification | `NotificationManager.activeNotifications` + a `screencap` | title "Titre n", artist "Artiste n", small icon, artwork decoded 512 px |
+| JVM policies | `:playback:testDebugUnitTest` | **22 tests** (window 5, queue edits 5, focus 5, locks 2, battery 5) |
+| Endurance | 40 titles of 45 s, screen off (`input keyevent 223`), Doze forced (`deviceidle enable all` + `force-idle`, `battery unplug`), 29.3 min | **40/40 titles**, **0 underrun**, **0 rebuffer**, **52 420 ms of CPU = 2.99 % of one core**, buffer 500 ms, 48 000 Hz |
+
+**Endurance, 30 minutes of screen off with Doze forced**: the test's own line, as it printed on the
+device — `MB3C-ENDURANCE titles=40/40 wall_s=1755 cpu_ms=52420 cpu_pct=2.986 underruns=0
+rebuffers=0 buffer_ms=500 rate=48000` (`OK (1 test)`, 1 755.6 s). 52 420 ms of CPU over 29.3 minutes is
+the engine's whole cost behind a locked screen.
+
+**Files.** `mobile/android/playback/**` (13 Kotlin files, 5 JVM tests, 2 instrumented tests, its
+manifest and resources, its build file's `androidTest` block), `mobile/rust/crates/nz-ffi/src/player.rs`
+(the output wiring MB3c owed), `mobile/rust/crates/nz-ffi/src/core.rs` (one player per process — a
+separate, prior PR), and this section.
 
 ### Screen lots, wave 3: MB9, MB11, MB12, MB13, MB14, MB15, MB16, MB17, MB19, MB20, MB21
 

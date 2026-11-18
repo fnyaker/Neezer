@@ -29,11 +29,19 @@
 //! the queue, the engine and every rule, and no device output — which is what
 //! `nz-droid-audio`'s own stub answers today (`Unavailable`).
 
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+// MB3c: the platform's output (below). `nz-droid-audio` is already a dependency
+// of this crate (it keeps the API-26 JNI entry points alive, MB3a); MB3c is what
+// finally STARTS it, so the sink `Player::take_sink` hands out has a consumer.
+use nz_droid_audio::Output as PlatformOutput;
+use nz_droid_audio::{DroidOutput, OutputPrefs, PullSession, output_for};
 
 use nz_core::player as core;
 use nz_core::player::{Player, PlayerError, Sink};
 
+use crate::errors::NzError;
 use crate::lists::ListHandle;
 
 /// What the transport is doing.
@@ -299,6 +307,13 @@ pub struct PlayerApi {
     core: Arc<nz_core::core::Core>,
     /// The one listener list, so `subscribe` replaces rather than doubles.
     listeners: OnceLock<()>,
+    /// The device output, which lives as long as the PROCESS: the engine's sink
+    /// is handed out once, and Android recreates a media service whenever it
+    /// likes (a swiped task, a low-memory kill of the service only). A second
+    /// `start_output` must adopt the running output, not fail — measured: the
+    /// recreated service answered "la sortie audio a déjà été prise" and the
+    /// engine's clock stayed at 0 while the state said PLAYING.
+    output: Mutex<Option<Arc<OutputHandle>>>,
 }
 
 impl PlayerApi {
@@ -310,6 +325,7 @@ impl PlayerApi {
             inner,
             core,
             listeners: OnceLock::new(),
+            output: Mutex::new(None),
         })
     }
 
@@ -434,22 +450,38 @@ impl PlayerApi {
         }
     }
 
+    /// The numbers Aide and the journal show. `nz-core` deliberately answers
+    /// `buffer_ms: 0` and an empty `performance_mode` ("leaves those two to
+    /// nz-ffi, which owns the output on the device", MB3b), and MB3c is what
+    /// fills them: they are the HAL's own reads, never the request — AAudio may
+    /// grant less than the 500 ms asked for, and `PowerSaving` may be refused.
     pub fn output_stats(&self) -> OutputStats {
-        match self.player() {
-            Some(player) => {
-                let stats = player.output_stats();
-                OutputStats {
-                    underruns: stats.underruns,
-                    rebuffers: stats.rebuffers,
-                    buffer_ms: stats.buffer_ms,
-                    sample_rate: stats.sample_rate,
-                    latency_ms: stats.latency_ms,
-                    performance_mode: stats.performance_mode,
-                    last_tap_ns: stats.last_tap_ns,
-                    last_first_audible_ns: stats.last_first_audible_ns,
-                }
-            }
-            None => OutputStats::default(),
+        let Some(player) = self.player() else {
+            return OutputStats::default();
+        };
+        let stats = player.output_stats();
+        let device = self
+            .output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (buffer_ms, sample_rate, performance_mode) = match device {
+            Some(handle) => (
+                handle.buffer_ms(),
+                handle.sample_rate(),
+                handle.performance_mode(),
+            ),
+            None => (stats.buffer_ms, stats.sample_rate, stats.performance_mode),
+        };
+        OutputStats {
+            underruns: stats.underruns,
+            rebuffers: stats.rebuffers,
+            buffer_ms,
+            sample_rate,
+            latency_ms: stats.latency_ms,
+            performance_mode,
+            last_tap_ns: stats.last_tap_ns,
+            last_first_audible_ns: stats.last_first_audible_ns,
         }
     }
 
@@ -497,6 +529,218 @@ impl PlayerApi {
     pub fn shutdown(&self) {
         if let Some(player) = self.player() {
             player.shutdown();
+        }
+    }
+}
+
+// --- MB3c: the platform's output ---------------------------------------
+//
+// `nz-core::player::Player` builds its engine with `Engine::new_external`: the
+// clock only moves when SOMETHING renders into the sink, and `Player::take_sink`
+// hands that sink out exactly once. On Android the renderer is
+// `nz-droid-audio` — AAudio on API >= 27, MB3a's Kotlin `AudioTrackPull` on 26 —
+// and until MB3c nothing called it, so a "play" moved the machine's flag and not
+// the engine's clock. `start_output` is that wiring, and it is the ONLY thing
+// this block does: no rule, no state, no queue.
+//
+// It answers a `Result` rather than an `Option` so a refused device reaches the
+// service with the French cause `nz-droid-audio` wrote (a silent `null` would
+// leave the person with a player that says "Lecture" over no sound).
+
+/// What is really rendering, once `PlayerApi::start_output` has run.
+enum OutputDevice {
+    /// API >= 27: AAudio owns the real-time thread and re-opens it by itself.
+    Aa(Box<DroidOutput>),
+    /// API 26: `AudioTrackPull.kt` pulls with `handle()`; the device's own
+    /// numbers arrive through its `nativeUnderruns` (MB3a).
+    Track,
+}
+
+/// The device output the media service holds for as long as it plays.
+///
+/// Started once per process (the sink is taken once), stopped when the service
+/// goes away. Every getter is a cheap read of `nz-droid-audio`'s published
+/// state: the service calls `underruns()` and `opens()` from its state loop and
+/// never blocks on a lock the real-time thread could hold.
+#[derive(uniffi::Object)]
+pub struct OutputHandle {
+    device: Mutex<Option<OutputDevice>>,
+    prefs: OutputPrefs,
+    /// The `Box<PullSession>` the API-26 path turned into a `long`; `0` on the
+    /// AAudio path.
+    handle: AtomicI64,
+    track: bool,
+}
+
+impl OutputHandle {
+    fn new(device: OutputDevice, prefs: OutputPrefs, handle: i64, track: bool) -> Self {
+        Self {
+            device: Mutex::new(Some(device)),
+            prefs,
+            handle: AtomicI64::new(handle),
+            track,
+        }
+    }
+
+    /// The AAudio output, when this handle has one.
+    fn with_aa<T>(&self, read: impl FnOnce(&DroidOutput) -> T) -> Option<T> {
+        let device = self
+            .device
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match device.as_ref() {
+            Some(OutputDevice::Aa(output)) => Some(read(output)),
+            _ => None,
+        }
+    }
+}
+
+#[uniffi::export]
+impl OutputHandle {
+    /// `true` on API 26: the caller builds an `AudioTrackPull` with `handle()`
+    /// and drives the device itself (AAudio can crash after close on Android
+    /// 8.0, Oboe #40).
+    pub fn needs_audio_track(&self) -> bool {
+        self.track
+    }
+
+    /// The `Box<PullSession>` for `AudioTrackPull`, `0` on the AAudio path or
+    /// after `stop()`. **The pull OWNS it**: its `close()` calls `nativeClose`,
+    /// which is the only free — this handle never frees it a second time.
+    pub fn handle(&self) -> i64 {
+        self.handle.load(Ordering::Acquire)
+    }
+
+    /// The rate the device really opened at (the voices are decoded at the
+    /// engine's rate, so this is `EngineConfig::sample_rate` on both paths).
+    pub fn sample_rate(&self) -> u32 {
+        self.with_aa(|output| output.info().sample_rate)
+            .unwrap_or(self.prefs.sample_rate)
+    }
+
+    /// The buffer the device really has, in milliseconds — never the request
+    /// (AAudio's capacity may cap it, MB3a).
+    pub fn buffer_ms(&self) -> u32 {
+        self.with_aa(DroidOutput::buffer_ms)
+            .unwrap_or(self.prefs.buffer_ms_min)
+    }
+
+    /// What the platform actually granted: `power-saving`, `low-latency`,
+    /// `none` (refused), `audio-track` on the API-26 path. Réglages shows this
+    /// number, so it is read back and never assumed.
+    pub fn performance_mode(&self) -> String {
+        self.with_aa(|output| output.performance_mode().to_string())
+            .unwrap_or_else(|| "audio-track".to_string())
+    }
+
+    /// The DEVICE's own xruns (AAudio's `getXRunCount` total; the API-26 pull
+    /// reports its total straight into the engine instead). The person's number
+    /// is `PlayerApi::output_stats().underruns`, which adds the mixer's own
+    /// starvations.
+    pub fn underruns(&self) -> u64 {
+        self.with_aa(DroidOutput::underruns).unwrap_or(0)
+    }
+
+    /// How many streams this output has opened: `1` after `start`, `2` after a
+    /// route change. The one count a reopen is proven by.
+    pub fn opens(&self) -> u64 {
+        self.with_aa(DroidOutput::opens).unwrap_or(0)
+    }
+
+    /// How many re-opens failed, and why — the cause a failed route change
+    /// leaves behind.
+    pub fn failures(&self) -> u64 {
+        self.with_aa(DroidOutput::failures).unwrap_or(0)
+    }
+
+    pub fn last_failure(&self) -> Option<String> {
+        self.with_aa(|output| output.last_failure()).flatten()
+    }
+
+    /// Close the stream and open a new one on the device that is there now.
+    /// **Returns once the new stream plays** (or stopped failing), so a route
+    /// change is an event, never a guess. `false` on the API-26 path, where the
+    /// pull's own `AudioDeviceCallback` re-opens its `AudioTrack`.
+    pub fn reopen(&self) -> bool {
+        self.with_aa(|output| output.reopen().is_ok())
+            .unwrap_or(false)
+    }
+
+    /// Close the device and JOIN its thread (AAudio's reopen thread borrows the
+    /// engine, worker rule 5). Idempotent. On the API-26 path the pull's
+    /// `close()` is the owner, so this only forgets the handle.
+    pub fn stop(&self) {
+        let device = self
+            .device
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(OutputDevice::Aa(output)) = device {
+            output.stop();
+        }
+        self.handle.store(0, Ordering::Release);
+    }
+}
+
+#[uniffi::export]
+impl PlayerApi {
+    /// Starts the platform's output, ONCE: the media service calls this when
+    /// the session is created and `stop()`s it when the service goes away.
+    ///
+    /// `sdk_int` is `Build.VERSION.SDK_INT`; `nz-droid-audio::output_for` is the
+    /// only place the AAudio/AudioTrack split is decided, so a caller cannot
+    /// pick AAudio on Android 8.0 by accident. A host build has no device at
+    /// all: it answers an error on the AAudio path (the tests use that), while
+    /// the API-26 path only builds the pull session and needs no device.
+    ///
+    /// The error is `Internal`: it is the device's own French cause, not
+    /// something the person did.
+    pub fn start_output(&self, sdk_int: u32) -> Result<Arc<OutputHandle>, NzError> {
+        let mut started = self
+            .output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // The output belongs to the process, not to the service that first asked
+        // for it: Android recreates a media service at will, and the second one
+        // must get the SAME stream (and its Kotlin pull) instead of a refusal.
+        if let Some(handle) = started.as_ref() {
+            return Ok(Arc::clone(handle));
+        }
+        let player = self.player().ok_or_else(|| NzError::Internal {
+            detail: "le lecteur n'a pas démarré : aucune sortie audio".into(),
+        })?;
+        // `take_sink` is the one-shot hand-over (MB3b): a second call is a bug,
+        // and it says so instead of rendering silence for ever.
+        let (engine, sink) = player.take_sink().ok_or_else(|| NzError::Internal {
+            detail: "la sortie audio a déjà été prise".into(),
+        })?;
+        let prefs = OutputPrefs::default();
+        match output_for(sdk_int) {
+            PlatformOutput::Aa => {
+                let output =
+                    DroidOutput::start(&engine, sink, prefs, sdk_int).map_err(|error| {
+                        NzError::Internal {
+                            detail: error.to_string(),
+                        }
+                    })?;
+                let handle = Arc::new(OutputHandle::new(
+                    OutputDevice::Aa(Box::new(output)),
+                    prefs,
+                    0,
+                    false,
+                ));
+                *started = Some(Arc::clone(&handle));
+                Ok(handle)
+            }
+            PlatformOutput::Track => {
+                let session = PullSession::new(&engine, sink, prefs).into_handle();
+                let handle = Arc::new(OutputHandle::new(OutputDevice::Track, prefs, session, true));
+                *started = Some(Arc::clone(&handle));
+                Ok(handle)
+            }
+            PlatformOutput::Unsupported => Err(NzError::Internal {
+                detail: format!("l'API {sdk_int} n'a pas de sortie audio (minSdk 26)"),
+            }),
         }
     }
 }
@@ -731,6 +975,277 @@ fn core_audio(audio: AudioSettings) -> core::AudioSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- the bench: a tone over loopback, and the sink's own samples --------
+
+    /// The tone this bench plays: MB3a's own FLAC fixture (440 Hz), because
+    /// symphonia is built WITHOUT the `wav` feature (`desktop/Cargo.toml`: ogg,
+    /// flac, mp3, isomp4, aac) — a WAV body fails the probe with "no suitable
+    /// format reader found", which is what the first version of this test
+    /// measured.
+    fn tone_flac() -> Vec<u8> {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../nz-droid-audio/tests/assets/sine.flac"
+        ))
+        .expect("the FLAC fixture")
+    }
+
+    /// The routes the player's opener uses, and nothing else.
+    struct ToneServer {
+        base: String,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl ToneServer {
+        fn start(flac: Vec<u8>) -> Self {
+            use std::io::Write as _;
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind the bench");
+            let base = format!(
+                "http://{}",
+                listener.local_addr().expect("the bench's address")
+            );
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopping = Arc::clone(&stop);
+            let thread = std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stopping.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(mut stream) = stream else { continue };
+                    let flac = flac.clone();
+                    std::thread::spawn(move || {
+                        use std::io::{BufRead, BufReader, Read};
+                        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                        let mut request = String::new();
+                        let _ = reader.read_line(&mut request);
+                        loop {
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0
+                                || line.trim().is_empty()
+                            {
+                                break;
+                            }
+                        }
+                        let target = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                        let (code, kind, body) = if target.starts_with("/api/version") {
+                            (200, "application/json", VERSION_BODY.as_bytes().to_vec())
+                        } else if target.contains("/ready") {
+                            (200, "application/json", b"{\"ready\":true}".to_vec())
+                        } else if target.starts_with("/api/stream/") {
+                            (200, "audio/flac", flac)
+                        } else {
+                            (200, "application/json", b"{}".to_vec())
+                        };
+                        let head = format!(
+                            "HTTP/1.1 {code} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(&body);
+                        let _ = stream.flush();
+                        let _ = reader.read(&mut [0u8; 0]);
+                    });
+                }
+            });
+            Self {
+                base,
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for ToneServer {
+        fn drop(&mut self) {
+            use std::net::TcpStream;
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect(self.base.trim_start_matches("http://"));
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    const VERSION_BODY: &str = r#"{"version":"9.9.9","build":"bench"}"#;
+
+    /// A real core over throwaway directories: the player only exists over one,
+    /// and `start_output` needs its cache for the engine's spool.
+    fn test_core(tag: &str) -> Arc<crate::core::NzCore> {
+        let path = std::env::temp_dir().join(format!(
+            "nz-ffi-output-{}-{tag}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(path.join("data")).expect("data");
+        std::fs::create_dir_all(path.join("cache")).expect("cache");
+        crate::core::NzCore::new(crate::core::CoreConfig {
+            data_dir: path.join("data").display().to_string(),
+            cache_dir: path.join("cache").display().to_string(),
+            app_version: "0.0.0".into(),
+            version_code: 2_000_001,
+            sdk_int: 35,
+            device_name: "test".into(),
+        })
+        .expect("the core")
+    }
+
+    /// A host has no AAudio at all, the failure names the driver, and the sink
+    /// is gone after a failed attempt (nothing was started to adopt).
+    #[test]
+    fn a_host_has_no_aaudio_and_a_failed_start_keeps_nothing() {
+        let core = test_core("aa");
+        let player = core.player();
+        let error = player
+            .start_output(35)
+            .err()
+            .expect("AAudio does not exist on a host");
+        assert!(
+            error.to_string().contains("AAudio"),
+            "the driver's own cause: {error}"
+        );
+        let again = player
+            .start_output(35)
+            .err()
+            .expect("the sink is gone for good");
+        assert!(
+            again.to_string().contains("déjà été prise"),
+            "a failed open consumed the sink: {again}"
+        );
+        core.shutdown();
+    }
+
+    /// The API-26 path needs NO device: it builds the pull session the Kotlin
+    /// thread drives, at the engine's rate and the 500 ms buffer MB3a measured,
+    /// and the handle is what `AudioTrackPull` renders into.
+    #[test]
+    fn the_api_26_pull_session_crosses_as_a_handle() {
+        let core = test_core("track");
+        let player = core.player();
+        let output = player.start_output(26).expect("the pull session");
+        assert!(output.needs_audio_track());
+        let handle = output.handle();
+        assert_ne!(handle, 0, "a live Box<PullSession>");
+        assert_eq!(output.sample_rate(), 48_000);
+        assert_eq!(output.buffer_ms(), 500);
+        assert_eq!(output.performance_mode(), "audio-track");
+        assert_eq!(output.opens(), 0, "no AAudio stream on this path");
+        assert!(!output.reopen(), "the pull re-opens its own AudioTrack");
+        // The Kotlin pull's `close()` is the free (`nativeClose`, MB3a); the
+        // test plays that role, so the session does not outlive it.
+        // SAFETY: the handle came from `into_handle` and is closed once.
+        unsafe { nz_droid_audio::close_handle(handle) };
+        output.stop();
+        assert_eq!(output.handle(), 0);
+        output.stop(); // idempotent
+        // The output belongs to the PROCESS: a recreated media service adopts it
+        // instead of being refused (which is what the device measured before
+        // this: a service recreated by Android got "déjà été prise" and the
+        // engine's clock stayed at 0 while the state said PLAYING).
+        let adopted = player.start_output(26).expect("the same output");
+        assert!(
+            Arc::ptr_eq(&adopted, &output),
+            "the SAME stream, not a new one"
+        );
+        core.shutdown();
+    }
+
+    /// **What the phone renders is not silence.** The same player, the same tone
+    /// the emulator's bench serves, drained through the very sink the AAudio
+    /// callback writes: the RMS of the rendered frames, in dBFS.
+    ///
+    /// Why here and not on the device: on Android the samples go straight from
+    /// `ExternalSink::render` into AAudio's real-time callback (API >= 27) or into
+    /// `AudioTrack` (26), and nothing hands them back to Kotlin — `AudioTrackPull`
+    /// owns its own loop and its natives are private. The DEVICE proves the other
+    /// half in `NzMediaServiceTest`: the stream opened at 48 kHz with a 500 ms
+    /// buffer, its clock advances at realtime, and it reports 0 underruns. A mixer
+    /// that rendered silence would still clock, which is why this number has to
+    /// come from the buffer itself.
+    #[test]
+    fn the_sink_renders_a_signal_and_not_silence() {
+        let server = ToneServer::start(tone_flac());
+        let core = test_core("rms");
+        let api = core.player();
+        let runtime = tokio::runtime::Runtime::new().expect("a runtime for the probe");
+        runtime
+            .block_on(core.set_server(server.base.clone()))
+            .expect("the bench answers /api/version");
+
+        let inner = api.player().expect("the player");
+        // The sink before the play: the engine renders only when someone drains
+        // it, exactly as the platform's callback does.
+        let (_engine, mut sink) = inner.take_sink().expect("the sink");
+        api.command(
+            PlayerCommand::PlayQueue {
+                tracks: vec![TrackRef {
+                    key: "tone3-1".into(),
+                    id: "tone3-1".into(),
+                    title: "Titre".into(),
+                    duration_s: 3,
+                    ..Default::default()
+                }],
+                start: 0,
+                context: None,
+            },
+            0,
+        );
+        api.command(PlayerCommand::Play, 0);
+
+        let mut buffer = vec![0f32; 960]; // 10 ms at 48 kHz
+        // Only the AUDIBLE part: the first buffers are the silence before the
+        // voice is installed, and averaging them in would dilute the number.
+        let mut body: Vec<f32> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while body.len() < 48_000 && std::time::Instant::now() < deadline {
+            sink.render(&mut buffer);
+            if body.is_empty() {
+                if buffer.iter().any(|sample| sample.abs() > 0.01) {
+                    body.extend_from_slice(&buffer);
+                }
+            } else {
+                body.extend_from_slice(&buffer);
+            }
+            // The decoder threads fill the ring in the background: a tight loop
+            // would drain it faster than it fills and measure starvations.
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let snap = api.snapshot();
+        assert!(
+            !body.is_empty(),
+            "the sink rendered nothing at all (state {:?}, error {:?}, len {})",
+            snap.state,
+            snap.error,
+            snap.len
+        );
+        let rms = (body
+            .iter()
+            .map(|sample| f64::from(*sample) * f64::from(*sample))
+            .sum::<f64>()
+            / body.len() as f64)
+            .sqrt();
+        let dbfs = 20.0 * rms.log10();
+        println!(
+            "MB3C-RMS samples={} rms={rms:.4} dbfs={dbfs:.2}",
+            body.len()
+        );
+        assert!(
+            rms > 0.2,
+            "the sink rendered {rms:.4} RMS: silence, or the wrong signal"
+        );
+        assert!(
+            dbfs > -20.0,
+            "the rendered signal is {dbfs:.2} dBFS, far below a half-scale tone"
+        );
+        api.shutdown();
+        core.shutdown();
+    }
 
     /// Every transport command crosses the boundary unchanged: a slide of
     /// controls that reaches a different variant is the bug this catches.
