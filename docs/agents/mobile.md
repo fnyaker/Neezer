@@ -3459,11 +3459,8 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   episodes (cursor), progress, auto-archive, markers, chapters, transcript (+ search,
   `transcriptcache.js`), start/stop server transcription + status. Kotlin: `PodcastsEntry`,
   `ShowEntry`, episode panel (chapters/sheet/ticks + transcript), `DownloadButton("show", id)`.
-- **MB14 — Discovery** [MB2]. FFI (`discovery.rs`): releases (two shelves, per-release list, seen,
-  settings, check), shelves, recap (years, stories, share image), moods, explorer styles, genre station,
-  mute artist, `/recommend`. Kotlin: `ReleasesEntry`, `ReleaseShelfEntry(kind)`, `RecapEntry(year)`
-  (stories, tap/hold, share), `ExplorerStylesSection()`. Rows: the recap story preloads only the next
-  slide's image (Prefetch lane), never the whole year.
+- **MB14 — Discovery** [MB2]. **Delivered 2026-11-18** — see *MB14 — Découverte* below for what it
+  does and what it measured.
 - **MB15 — Offline** [SC4, MB3b]: **delivered** — see *MB15 — Hors ligne* above.
 - **MB16 — Réglages, user sections** [MB2; hosts MB12's and MB15's sections]. **Delivered
   2026-11-18** — see *MB16 — Réglages, user sections* below for what it does and what it measured.
@@ -3941,6 +3938,158 @@ CI's sake, the desktop's own `nz-remote::host` + `nz_player` as the controlled p
 - The SPA's whole-app read-only browsing at `read` level: the SERVER enforces the four levels, and
   every screen already reads through the owner's session, so a `read` loan browses the owner's
   library with MB5–MB9's screens unchanged. Nothing extra to port.
+
+### MB14 — Découverte (delivered 2026-11-18)
+
+**What landed.** Nouveautés, the two release shelves, Récap, moods, Explorer and the ten parent
+styles, the genre stations — ported from `routes/Releases.svelte`, `routes/ReleaseShelf.svelte`,
+`routes/Recap.svelte`, `components/ExplorerStyles.svelte`, `lib/recap.js`, `lib/recapyears.js` and
+`lib/genrestation.js`, never re-invented.
+
+- **`nz-core/src/discovery/`**: `wire.rs` (this lot's routes, the counted traffic, the three JSON
+  snapshots), `recap.rs` (`lib/recap.js` function for function, with its node suite PORTED: the same
+  payload, the same expected strings, character for character — `8 540`, `1ᵉʳ janvier`, `juillet`),
+  `explorer.rs` (`parentStyles`, `stylesOf`, `filterStyles`/`flat`, `stationContext`,
+  `stationTracks`, the five breadths), `mod.rs` (the feed, the shelves, the per-release groups, the
+  deck's assembly, the mixes, the discovery/poll, the stations, the mute, `/recommend`) and
+  `testing.rs` (a counting loopback server for every route this lot reads).
+- **`nz-ffi/src/discovery.rs`**: `cached_releases`/`releases`/`releases_seen`,
+  `release_settings`/`save_release_settings`/`check_releases`, `release_shelf`,
+  `release_group_tracks`, `releases_tracks`, `cached_recap_years`/`recap_years`,
+  `cached_recap`/`recap`/`recap_top_tracks`, `discovery_moods`/`discovery_mood_tracks`,
+  `cached_explorer_styles`/`explorer_styles`, `explorer_discover`/`explorer_poll`,
+  `explorer_settings`, `cached_station_styles`/`station_styles`, `genre_station`, `mute_artist` and
+  `recommendations`. Every long list is a `ListHandle`; no server JSON crosses.
+- **`feature/discovery/`**: `ReleasesEntry`, `ReleaseShelfEntry(kind)`, `RecapEntry(year)` and
+  `ExplorerStylesSection()`, with one model per screen (`ReleasesModel`, `ReleaseShelfModel`,
+  `RecapModel`, `ExplorerModel`) over `DiscoveryService`/`PlayPort` ports, and a Kotlin-side wrapper
+  per FFI record that carries a handle (`ShelfPage`, `MoodMix`, `PlaylistTracks`, `Station`,
+  `DiscoverResult`, `RecapDeck`) — so a JVM test and a Robolectric render hold the same shapes with a
+  `PlainRows` instead of the `.so`.
+- **The door MB5 left out.** `AppLink::Releases` and `AppLink::ReleaseShelf { kind }` are new
+  variants (`nz-ffi/src/links.rs`, `nz-core/src/links/mod.rs`, `AppGraph.kt` — three files OUTSIDE
+  this lot's list, approved by the orchestrator before the first edit). `#/releases`,
+  `#/releases/artists` and `#/releases/discovery` now parse, `neezer://releases` too, and an unknown
+  shelf name is still `None` (never a guess).
+
+**The request budget — measured on the real 8 000-track bench** (`perf_api.py --serve` reached at
+`127.0.0.1:5595`, 2026-11-18) and, for the counts, on this lot's counting server:
+
+| Screen | Requests | Bytes | The SPA's own list |
+|---|---|---|---|
+| Nouveautés, cold, nothing unseen | 1 | `GET /releases` **116 835 B** (209 titles, 60 releases) | `Releases.svelte#loadReleasesFeed`: `api.swr("/releases")` |
+| Nouveautés, cold, an unseen badge | 2 | + `POST /releases/seen` **12 B** | the same file: `releasesSeen()` when `d.unseen` |
+| Nouveautés, warm | **0** | the device's snapshot, **2 928 counted bytes** | the module-scoped feed |
+| A shelf page / a release group, from a card | **0** | — | `ReleaseShelf.svelte` reads the same feed |
+| A shelf page from a deep link | 2 | 116 835 B + 0 | the page's own `loadReleasesFeed()` |
+| Récap, cold | 2 | `/recap/years` **85 B** + `/recap/2026` **1 039 B** | `Recap.svelte`: `loadRecapYears()` then `api.recap(year)` |
+| Récap, second open inside ten minutes | 1 | 1 039 B | `recapyears.js#TTL` |
+| Récap, a malformed year | **0** | — | `YEAR_RE`, before any call |
+| Explorer's tiles | 1 | `/explorer/styles` **110 B** (this bench has no history) | `ExplorerStyles.svelte#loadStyles` |
+| Explorer's all-stations list | 1 | `/flow/styles` **14 B** | `#loadStations`, ONCE per open |
+| One style's discovery | 1 POST + 1 GET per poll (2 s, 60 at most) | `{"style","level"}` out | `#discover` then `#schedule` |
+| A mood mix | 1 | `/moods/<id>` | `Home.svelte#playMood` |
+| `/recommend` | 1 | **67 B** | `discovery.js#settle` |
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`; JDK 21, Gradle 8.14.7):
+
+| What | How | Numbers |
+|---|---|---|
+| Rust | `cargo test --workspace --locked` | **493 `nz-core` tests**, 50 of them this lot's (16 `recap` — the SPA's node suite ported — 10 `explorer`, 2 `wire`, 10 `mod`, 12 lot tests against a counting server); **83 `nz-ffi`** (4 discovery); `fmt` and `clippy -D warnings` clean |
+| The feed's counts | counting server | cold **2 requests / 1 256 B** (the fake's own feed), warm **0**; a dead link **0 sockets opened**; a refused feed is `Server{503}` |
+| A shelf page and a group | counting server | **0 requests** (the feed is in memory); an unknown shelf is `None` |
+| The years | counting server | **1** request, then **0**, then **1** again once the copy is ten minutes old (aged, never `sleep`ed) |
+| The poll | counting server | ONE POST, then one GET per poll; `?style=Techno&level=3` on the wire; a `503` answers a NAMED WAIT (`Réessaie dans 5 s.`) |
+| Kotlin | `:feature:discovery:testDebugUnitTest` | **59 tests**: 35 model tests — 8 `ReleasesModelTest`, 6 `ReleaseShelfModelTest`, 9 `RecapModelTest`, 12 `ExplorerModelTest` (on `kotlinx-coroutines-test`'s virtual clock) — and **24 screenshot renders** (four screens × Encre/Papier × 360/600 dp, plus four at 200 %) |
+| Screenshots | Robolectric, NATIVE graphics | 24 PNGs under `docs/agents/screenshots/mobile/MB14/` — looked at, and **six real layout bugs fixed from them** |
+| The real app | emulator API 35 x86_64, `-no-window -no-audio`, own port 5640, the debug APK installed, `perf_api.py --serve` (8 000 tracks) on 5650 reached at `10.0.2.2` | three captures: `mb14-emulator-releases.png` (**Tout lire · 209**, **60 nouvelles sorties**, the shelf card with its six preview rows, « Toutes les sorties 60 »), `mb14-emulator-shelf.png` (the same card's page: **209 titres · 60 sorties · 12:03:03**, the sort chips, the windowed rows), `mb14-emulator-recap.png` (the bench has no listening history: the honest « Ton récap apparaîtra quand tu auras écouté quelques titres »). The shelf page painted from the feed with **0 requests**, as designed |
+| APK | `build-android.sh`'s three ABIs, stripped | `libnz_ffi.so` arm64-v8a **12 695 056 B**, armeabi-v7a **8 554 680 B**, x86_64 **14 998 360 B**. No delta is claimed against the last number this note recorded (MB7's 10 469 448 B): MB8–MB16 landed without one, so the growth is not this lot's to attribute — what IS this lot's is a record set and 30 methods, and the 9 MB ceiling *Measures* names was already exceeded at MB6 (MQ2's to reopen) |
+
+**Rules a measurement taught** (each one is what a later lot inherits):
+
+- **A record that carries a `ListHandle` cannot be faked, and its screen cannot be tested.** The
+  JVM tests cannot build a `ListHandle` (it is a native object), so `ReleaseShelfPage`,
+  `MoodTracksData`, `StationData`, `ExplorerPlaylistData` and `RecapData` each sit behind a Kotlin
+  wrapper (`ShelfPage`, `MoodMix`, `Station`, `PlaylistTracks`, `RecapDeck`) that carries a
+  `DiscoveryRows` — the real one wraps the handle, a fake wraps a `PlainRows`. That is why the four
+  models are plain Kotlin with no `.so`, and why the top titles travel as `recap_top_tracks(year)`
+  rather than inside the year's record.
+- **`LocalContentColor` is BLACK at the app's root, and every title this lot drew without an
+  explicit colour was invisible on Encre** — the first Nouveautés capture showed « Toutes les
+  sorties » and « Autres sorties » in black on black. Each screen now provides
+  `LocalContentColor = Sillon.colors.tx` once, and the MB6 note's rule (a screen owes its subtree
+  the theme's ink) is what it follows.
+- **`NzCard`'s content is a `Box`.** A card body written as three sibling children (a title row, an
+  action row, a list) COMPOSED THEM ON TOP OF EACH OTHER: the first capture showed « Lire » over the
+  release's title. A card's body is one `Column`.
+- **A fixed-height row clips at 200 %.** The group rows (`height(48.dp)`) and the preview rows
+  (`height(40.dp)`) cut their second line at the 200 % scale; they are `heightIn(min = …)` now, and
+  the group's action labels are short enough to survive it (« Masquer », « Les 2 titres » — `NzButton`
+  is one line by MB1's rule).
+- **A chart is a chart area, not a row of columns.** Drawing each month as a `Column` (bar + label)
+  inside one 96 dp row put the labels INSIDE the bars and let the busiest month overlap them; the
+  bars have their own 84 dp area, and — as the SPA does — no per-bar label (the busiest month is
+  named in words, and « juin »/« juil. » both cut to « jui » at 360 dp).
+- **The SPA's `flex-wrap` matters at 200 %.** The bar (« Tout lire » + the unseen pill) clipped
+  « 2 nouvelles sorties » on two lines; it is a `FlowRow` now, so the pill takes its own line.
+- **The bar's counted bytes belong to the tag, and `Meter::record` counts ONE request.** A cold
+  Nouveautés is one row of 2 requests for the `discovery` tag, the whole body's bytes on the first —
+  the same rule MB5 measured, restated because a 116 kB body would otherwise be booked as one byte
+  count per request.
+- **A COLD-start deep link crashed the app, and this lot's own route is what found it.**
+  `am start -a VIEW -d neezer://releases` on a dead process died with
+  `IllegalStateException: You must call setGraph() before calling getGraph()` at
+  `AppGraph.go` → `attach`: the pending link was opened during the same composition that had not
+  yet given the `NavHost` its graph. The link is now posted one main-thread turn later
+  (`Handler(Looper.getMainLooper()).post { openLink(url) }`, in `AppGraph.kt`, one of this lot's
+  three approved outside files). Measured before/after on emulator-5640: crash, then the screen.
+- **`removeFirst()` compiles against JAVA 21 and crashes on the runner's 17 — and the crash looks
+  like a hung model.** Six `ExplorerModelTest` cases were green here and red on CI for four pushes:
+  `discover()` reached the fake (`discoverPosts == 1`), the panel stayed `pending`, and `poll()`'s
+  launched coroutine did not even start. The cause was
+  `java.lang.NoSuchMethodError: 'java.lang.Object java.util.List.removeFirst()'`: Kotlin resolves
+  `MutableList.removeFirst()` to **JDK 21's member** when the tests are compiled on a 21 JDK (this
+  machine), and the CI runner's test JVM is 17, where only the stdlib extension existed. The fake
+  now uses `removeAt(0)`. Two consequences a later lot inherits: **compile the module's tests on the
+  runner's JDK (17) before believing a green local run** (`JAVA_HOME=<temurin-17>` reproduces it in
+  one minute), and note that a `NoSuchMethodError` is an `Error`, so it escapes a model's
+  `catch (Exception)`, cancels its scope, and every later `launch` on that scope is silently dead —
+  which is exactly what "the answer never came" looks like from outside.
+- **A model test waits on the STATE, and the state names what never happened.** `settle()` in
+  `DiscoveryFakes.kt` advances the virtual clock and yields until the predicate holds, with a
+  liveness ceiling; its failure message carries the whole `State`, which is how the bug above was
+  identified from a CI log. `testLogging.exceptionFormat = FULL` is in the module's build file for
+  the same reason (Gradle prints the class and the line by default).
+- **A discovery's `ready` with no playlist IS the "essayez un niveau plus large" answer.** The
+  server can say `state:"ready"` with an empty list; the panel treats it as `empty`, never a ready
+  sheet with no row (the first JVM run caught the model disagreeing with the FFI's own mapping).
+
+**Not ported, on purpose** (each named where it is drawn):
+
+- **The shelf card's « Ajouter aux favoris »** — the heart is MB10's `toggleEntityFavorite`, and
+  duplicating its optimistic/rollback rules here would fork the one action surface.
+- **The Récap poster's four sleeves** are the Sillon grooves, not the decoded covers: drawing the
+  images would decode four bitmaps to send one picture, and a groove is what the app draws when a
+  sleeve is not there. The six lines (the plan's copy, ellipsised at 38 characters), the year, the
+  share text and the 1080 × 1350 PNG are the SPA's own.
+- **`DiscoverySlider`** stays MB5's (`home`'s `save_discovery_level` owns the level); this lot's
+  réglages section links to it (MB16 hosts the section).
+- **The recap story's 7-second auto-advance** is the SCREEN's `LaunchedEffect` (suspended by a hold,
+  by the share sheet and on the last card), never a core timer, so a test drives `tap()` and nothing
+  waits on a clock.
+
+**Files.** `mobile/rust/crates/nz-core/src/discovery/**`,
+`mobile/rust/crates/nz-ffi/src/discovery.rs`, `mobile/android/feature/discovery/**`,
+`docs/agents/screenshots/mobile/MB14/*.png`, and this section — plus **three files outside the
+lot's list**, additive and approved before the first edit: `mobile/rust/crates/nz-ffi/src/links.rs`,
+`mobile/rust/crates/nz-core/src/links/mod.rs`, `mobile/android/app/src/main/java/fr/neezer/mobile/app/AppGraph.kt`
+(the two `AppLink` variants and their route).
+
+**Still owed** (named where it belongs): **the shelf route's title in the app bar** reads « Neezer » —
+`NavGraph.kt`'s `title()` has no case for `Routes.ReleaseShelf` and belongs to the shell (shared
+file); the door is the lot's, the label is not. MQ2 re-opens the `.so` ceiling (already past 9 MB at
+MB6). A populated Récap on the emulator needs a bench that seeds listening history — `perf_api.py`
+does not, so the deck is proven by the Robolectric renders and its Rust tests.
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).

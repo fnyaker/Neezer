@@ -37,6 +37,12 @@ pub enum AppLink {
     Invite { code: String },
     Settings { section: Option<String> },
     Recap { year: Option<u32> },
+    /// Nouveautés — the feed's own screen (`#/releases`). Added by MB14: it is
+    /// what makes the releases shelf reachable at all (MB5 left the door out on
+    /// purpose).
+    Releases,
+    /// One shelf of the feed (`#/releases/artists`, `#/releases/discovery`).
+    ReleaseShelf { kind: String },
 }
 
 /// Parses an incoming URL. `None` for anything this app does not open.
@@ -150,6 +156,14 @@ fn parse_route(route: &str) -> Option<AppLink> {
         (Some("recap"), [year]) => AppLink::Recap {
             year: year.parse::<u32>().ok(),
         },
+        // The SPA's two release routes (`App.svelte`'s table: `/releases`, then
+        // `/releases/artists` and `/releases/discovery`). A third shelf name is
+        // not a route this app has, and is refused rather than guessed.
+        (Some("releases"), []) => AppLink::Releases,
+        (Some("releases"), [kind]) => match *kind {
+            "artists" | "discovery" => AppLink::ReleaseShelf { kind: decode(kind) },
+            _ => return None,
+        },
         (Some("import"), []) => AppLink::Import {
             url: query_param(query, "url").map(decode).unwrap_or_default(),
         },
@@ -238,9 +252,9 @@ fn is_import_link(raw: &str) -> bool {
 /// Whether a bare string looks like one of this app's routes (so a tool may
 /// paste `album/42` without a leading slash).
 fn looks_like_route(raw: &str) -> bool {
-    const HEADS: [&str; 12] = [
+    const HEADS: [&str; 13] = [
         "home", "search", "artist", "album", "playlist", "track", "podcast", "credits", "settings",
-        "recap", "import", "party",
+        "recap", "import", "party", "releases",
     ];
     let head = raw.split('/').next().unwrap_or(raw);
     HEADS.contains(&head)
@@ -358,6 +372,20 @@ mod tests {
                     id: "3000168".into(),
                 },
             ),
+            ("https://neezer.example/app/#/releases", AppLink::Releases),
+            (
+                "https://neezer.example/app/#/releases/artists",
+                AppLink::ReleaseShelf {
+                    kind: "artists".into(),
+                },
+            ),
+            (
+                "https://neezer.example/app/#/releases/discovery",
+                AppLink::ReleaseShelf {
+                    kind: "discovery".into(),
+                },
+            ),
+            ("neezer://releases", AppLink::Releases),
         ];
         for (url, expected) in cases {
             assert_eq!(parse(url), Some(expected), "{url}");
@@ -463,6 +491,7 @@ mod tests {
             "https://neezer.example/app/#/genres",
             "https://neezer.example/app/#/album",
             "https://neezer.example/app/#/album/1/2",
+            "https://neezer.example/app/#/releases/favorites",
             "javascript:alert(1)",
             "https://neezer.example/unknown/route",
             "neezer://album",

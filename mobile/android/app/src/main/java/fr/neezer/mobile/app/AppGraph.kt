@@ -97,6 +97,10 @@ class AppGraph(private val application: Application) : NzNavigator {
             is AppLink.Invite -> nav.navigate(Routes.Invite(link.code))
             is AppLink.Settings -> nav.navigate(Routes.Settings(link.section))
             is AppLink.Recap -> nav.navigate(Routes.Recap(link.year?.toInt()))
+            // MB14's two routes: the releases feed, and one shelf behind it (the
+            // door MB5 left out, and the page its cards open).
+            is AppLink.Releases -> nav.navigate(Routes.Releases) { launchSingleTop = true }
+            is AppLink.ReleaseShelf -> nav.navigate(Routes.ReleaseShelf(link.kind))
         }
     }
 

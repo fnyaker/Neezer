@@ -25,6 +25,10 @@ pub enum AppLink {
     Invite { code: String },
     Settings { section: Option<String> },
     Recap { year: Option<u32> },
+    /// Nouveautés (MB14): the releases feed's own screen.
+    Releases,
+    /// One release shelf (MB14): `artists` or `discovery`.
+    ReleaseShelf { kind: String },
 }
 
 impl From<nz_core::links::AppLink> for AppLink {
@@ -46,6 +50,8 @@ impl From<nz_core::links::AppLink> for AppLink {
             Core::Invite { code } => AppLink::Invite { code },
             Core::Settings { section } => AppLink::Settings { section },
             Core::Recap { year } => AppLink::Recap { year },
+            Core::Releases => AppLink::Releases,
+            Core::ReleaseShelf { kind } => AppLink::ReleaseShelf { kind },
         }
     }
 }
@@ -86,6 +92,10 @@ mod tests {
             nz_core::links::AppLink::Invite { code: "c".into() },
             nz_core::links::AppLink::Settings { section: None },
             nz_core::links::AppLink::Recap { year: Some(2025) },
+            nz_core::links::AppLink::Releases,
+            nz_core::links::AppLink::ReleaseShelf {
+                kind: "artists".into(),
+            },
         ];
         for link in all {
             let record = AppLink::from(link.clone());
@@ -105,6 +115,18 @@ mod tests {
         assert_eq!(
             parse_app_link("https://neezer.example/app/#/library".into()),
             None
+        );
+        // MB14's two routes, from a link and from the app scheme: the door MB5
+        // could not open, and the shelf behind it.
+        assert_eq!(
+            parse_app_link("https://neezer.example/app/#/releases".into()),
+            Some(AppLink::Releases)
+        );
+        assert_eq!(
+            parse_app_link("neezer://releases/discovery".into()),
+            Some(AppLink::ReleaseShelf {
+                kind: "discovery".into()
+            })
         );
     }
 }
