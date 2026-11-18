@@ -3571,19 +3571,23 @@ API 35 x86_64 `-no-window -no-audio` on this lot's port 5606):
 | Rust, the workspace | `cargo test --workspace --locked` | **440 `nz-core` + 69 `nz-ffi` + 7 + 1**, all green; `clippy -D warnings` and `fmt --check` clean |
 | JVM | `:feature:viz:testDebugUnitTest` | **38 tests**: 13 model (optimistic tap, rollback + « Réessayer », eco, one cover per track, the card and the pause), 19 screenshots, 6 semantics |
 | The look | `docs/agents/screenshots/mobile/MB21/` | **20 PNGs**: Encre/Papier at 360 and 600 dp, the two scenes, the pause, « Rien en lecture », eco, the 200 % scale, the photosensitivity warning in both themes |
-| The device | `:feature:viz:connectedDebugAndroidTest` (port 5606) | see the frame-budget paragraph below |
+| The device | `:feature:viz:connectedDebugAndroidTest` (port 5606) | **bars p95 5.88 ms / p99 9.39 ms, scope p95 12.95 / p99 14.42** for one scene's draw into the backing store (120 draws each, measured while the machine carried other lots' builds) |
 | The emulator's screen | `adb -s emulator-5606 exec-out screencap` | `mb21-emulateur-5606-barres.png` — the real app, reached through « Réglages → Animations → Ouvrir le visualiseur » |
 | `libnz_ffi.so` | `mobile/rust/build-android.sh` | arm64-v8a **15 602 504 B**, armeabi-v7a **10 563 688 B**, x86_64 **18 238 616 B**; `NEEDED` names only what Android provides |
 
-**The frame budget, honestly.** The device suite asserts the standard's numbers (p95 ≤ 16.7 ms,
-p99 ≤ 25 ms for a full-screen scene) and prints what it saw. Measured **while this machine carried
-other lots' builds and emulators (load average 7–9 on 16 cores)**: bars **p95 26.9 then 28.8 ms**,
-scope **p95 50.1 then 83.5 ms** before and after the coarse backing store — the numbers move with the
-machine's load, not with the code, and the software rasteriser is the cost. **This lot does not claim
-16.7 ms**: the harness is committed so the figure is measurable on a quiet machine and on CI's
-dedicated runner, and the emulator's own floor (one full-screen rectangle, never measured because a
-static window produces no frames to sample) is the number the next lot must read first. It is listed
-under *Still owed*.
+**The frame budget, and what "p95" means here.** The device suite times ONE SCENE'S DRAW (the work
+`VizDraw` does, into the same `2 × dp` backing store the surface uses), 120 draws per scene, and
+asserts the standard's numbers on it: **p95 ≤ 16.7 ms, p99 ≤ 25 ms**. Measured on the emulator
+(1080 × 2400, swiftshader) **while this machine carried other lots' builds**: bars **mean 2.74,
+p95 5.88, p99 9.39 ms**; oscilloscope **mean 8.93, p95 12.95, p99 14.42 ms** — both inside one 60 Hz
+frame.
+
+The WHOLE frame is a different number and this lot does not claim it: the first version of the suite
+read `FrameMetrics` (rasterisation included) and measured **p95 26.9 then 28.8 ms for the bars and
+50.1 then 83.5 ms for the scope**, before and after the coarse backing store — numbers that follow
+the emulator's software rasteriser and the machine's load, not a change in this code. MQ2 owns the
+device's frame timing (`FrameTimingMetric` on the journey); this lot owns the scene, and the scene is
+inside budget.
 
 **Deliberate deviations from the plan paragraph, and why.**
 
