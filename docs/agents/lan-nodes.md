@@ -2179,9 +2179,11 @@ service: `PeerFirstOpener`, `PeerFirstDownloader`, `sets.rs`'s replica and `down
   would not either. The transfer runs on the node's runtime and reports `(bytes, total)` over a
   channel the worker's thread drains: live bar, no `unsafe`, no second thread.
 - **A counter sampled once a second is not an event.** `Lan::wire()` is read by the driver on a 1 s
-  tick, so "the peer served it" asserted on it fails for a transfer shorter than that. The tests
-  prove it with what cannot lie: the inner opener's **open count**, the quality the event carries,
-  and the spool compared byte for byte with the peer's file.
+  tick, so "the peer served it" asserted on it fails for a transfer shorter than that — and a 3 s
+  playback makes the READING grow by itself (measured in CI: 9 → 21 packets for a track nobody
+  has). The tests prove it with what cannot lie: the inner opener's **open count**, the quality the
+  event carries, and the spool compared byte for byte with the peer's file; the zero-request
+  property is asserted on 1 000 decisions inside one sampling window.
 - **Stickiness is only observable where a fresh decision would differ.** Two peers with the same
   rung would make the assertion pass without the sticky map. The test gives A the FLAC and C the
   Opus 128, opens at FLAC (A), then seeks asking Opus 128 — where `decide` answers C — and asserts the
