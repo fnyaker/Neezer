@@ -50,6 +50,9 @@ install -d "$stage/DEBIAN" \
 # the second chance for a person who moved it.
 install -m 755 "$NEEZER_BINARY_DIR/neezer-desktop" "$stage/usr/bin/neezer-desktop"
 install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe" "$stage/usr/bin/neezer-transcribe"
+# The x86-64-v3 engine child in the SAME directory: `supervisor::engine_program`
+# derives it from `current_exe()`, so a second directory would never be found.
+install -m 755 "$NEEZER_BINARY_DIR/neezer-transcribe-v3" "$stage/usr/bin/neezer-transcribe-v3"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.desktop" \
   "$stage/usr/share/applications/neezer-desktop.desktop"
 install -m 644 "$NEEZER_ASSETS/neezer-desktop.svg" \

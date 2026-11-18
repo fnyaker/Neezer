@@ -95,6 +95,10 @@ modules:
       # under its basename, so `inputs/x` arrives as `x`.
       - install -Dm755 neezer-desktop /app/bin/neezer-desktop
       - install -Dm755 neezer-transcribe /app/bin/neezer-transcribe
+      # The x86-64-v3 engine child, in the same /app/bin: the supervisor derives
+      # its path from `current_exe()`, so PATH and a second directory are both
+      # wrong (docs/agents/desktop.md, *The CPU floor*).
+      - install -Dm755 neezer-transcribe-v3 /app/bin/neezer-transcribe-v3
       - install -Dm644 neezer-desktop.desktop /app/share/applications/neezer-desktop.desktop
       - install -Dm644 neezer-desktop.svg /app/share/icons/hicolor/scalable/apps/neezer-desktop.svg
       - install -Dm644 LICENSE /app/share/licenses/fr.neezer.Desktop/LICENSE
@@ -103,6 +107,8 @@ modules:
         path: inputs/neezer-desktop
       - type: file
         path: inputs/neezer-transcribe
+      - type: file
+        path: inputs/neezer-transcribe-v3
       - type: file
         path: inputs/neezer-desktop.desktop
       - type: file

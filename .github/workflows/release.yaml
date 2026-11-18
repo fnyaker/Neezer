@@ -182,7 +182,7 @@ jobs:
       # has removed the build tree, so the objects cannot be gated here — the
       # `binaries` job gates them, and the binary's own run is what this proves
       # (docs/agents/desktop.md, *The CPU floor*).
-      - name: The packaged binary runs on an emulated x86-64-v2 CPU
+      - name: The packaged binaries keep their CPU floors and the dispatch picks right
         run: |
           set -euo pipefail
           pacman -S --noconfirm --needed qemu-user
@@ -197,9 +197,12 @@ jobs:
           echo "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  jfk.wav" \
             | sha256sum -c -
           cd "$RUNNER_TEMP/arch-pkg"
+          # Both engine binaries into ONE directory: `engine-program` compares
+          # `current_exe()` with the `-v3` sibling, so the dispatch can only be
+          # proven with the pair the package installs.
           bsdtar xf "$GITHUB_WORKSPACE"/desktop/packaging/arch/neezer-desktop-[0-9]*.pkg.tar.zst \
-            usr/bin/neezer-transcribe
-          chmod +x usr/bin/neezer-transcribe
+            usr/bin/neezer-transcribe usr/bin/neezer-transcribe-v3
+          chmod +x usr/bin/neezer-transcribe usr/bin/neezer-transcribe-v3
           cd "$GITHUB_WORKSPACE"
           NZ_WHISPER_MODEL="$RUNNER_TEMP/whisper/ggml-tiny.bin" \
           NZ_WHISPER_AUDIO="$RUNNER_TEMP/whisper/jfk.wav" \
@@ -296,8 +299,16 @@ jobs:
           prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
+      # The x86-64-v3 engine child, beside the floor one (docs/agents/desktop.md,
+      # *The CPU floor, and the child that picks its own ISA*): a second build into
+      # its own target, because cargo compiles one copy of a dependency per graph.
+      # It is what gives a Haswell-class laptop 23.5× real time instead of 5×.
+      - name: Build the x86-64-v3 engine child
+        run: tools/build_engine_v3.sh --release
       - name: Binary sizes
-        run: du -h target/release/neezer-desktop target/release/neezer-transcribe
+        run: |
+          du -h target/release/neezer-desktop target/release/neezer-transcribe \
+            target/release/neezer-transcribe-v3
       # WHAT IS SHIPPED, PROVEN ON WHAT IS SHIPPED. The artefact below is installed
       # by the .deb, the .rpm, the AppImage and the Flatpak on CPUs nobody chose,
       # and `-march=native` (ggml's default) is exactly a binary that SIGILLs on an
@@ -330,6 +341,7 @@ jobs:
           path: |
             desktop/target/release/neezer-desktop
             desktop/target/release/neezer-transcribe
+            desktop/target/release/neezer-transcribe-v3
           if-no-files-found: error
           retention-days: 7
 
@@ -374,7 +386,7 @@ jobs:
       # four jobs at once). One chmod here beats a package that cannot run its
       # own binaries.
       - name: Make the downloaded binaries executable
-        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe binaries/neezer-transcribe-v3
       # `readelf` (binutils) is what lib.sh reads the binaries' NEEDED sonames
       # and their glibc floor with; `dpkg-deb` is part of dpkg, already here.
       - name: Build tooling
@@ -443,7 +455,7 @@ jobs:
       # four jobs at once). One chmod here beats a package that cannot run its
       # own binaries.
       - name: Make the downloaded binaries executable
-        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe binaries/neezer-transcribe-v3
       - name: Build tooling
         run: dnf install -y rpm-build binutils >/dev/null
       - name: Build the package
@@ -502,7 +514,7 @@ jobs:
       # four jobs at once). One chmod here beats a package that cannot run its
       # own binaries.
       - name: Make the downloaded binaries executable
-        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe binaries/neezer-transcribe-v3
       # What the AppImage expects to find on the host, because it bundles none of
       # it: the graphics stack, PipeWire/ALSA, the Vulkan loader and a Vulkan
       # device (lavapipe on a runner), plus Xvfb for a display of our own.
@@ -571,7 +583,7 @@ jobs:
       # four jobs at once). One chmod here beats a package that cannot run its
       # own binaries.
       - name: Make the downloaded binaries executable
-        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe
+        run: chmod +x binaries/neezer-desktop binaries/neezer-transcribe binaries/neezer-transcribe-v3
       - name: flatpak and the runtime it is built against
         run: |
           sudo apt-get update

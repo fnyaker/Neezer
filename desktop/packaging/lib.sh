@@ -55,14 +55,17 @@ neezer_check_version() {
   fi
 }
 
-# The two binaries, and nothing else: a package that ships one of them is an
+# The three binaries, and nothing else: a package that ships one of them is an
 # app whose local transcription says "le binaire est introuvable" on every
-# episode (T2).
+# episode (T2). `neezer-transcribe-v3` is the x86-64-v3 engine child the supervisor
+# starts where the CPU can run it (docs/agents/desktop.md, *The CPU floor, and the
+# child that picks its own ISA*); without it every machine transcribes at the v2
+# floor's 5×, which is a working install and a silent 4.7× regression.
 neezer_check_binaries() {
   local name
-  for name in neezer-desktop neezer-transcribe; do
+  for name in neezer-desktop neezer-transcribe neezer-transcribe-v3; do
     [[ -f "$NEEZER_BINARY_DIR/$name" ]] ||
-      neezer_die "pas de binaire $name dans $NEEZER_BINARY_DIR (cargo build --release --workspace)"
+      neezer_die "pas de binaire $name dans $NEEZER_BINARY_DIR (cargo build --release --workspace && desktop/tools/build_engine_v3.sh --release)"
     # Told apart from "absent" on purpose: an artefact that came from
     # `actions/download-artifact` arrives without its executable bit, and the
     # message is the whole diagnosis.
@@ -93,7 +96,7 @@ neezer_needed() {
 neezer_glibc_floor() {
   local name
   {
-    for name in neezer-desktop neezer-transcribe; do
+    for name in neezer-desktop neezer-transcribe neezer-transcribe-v3; do
       readelf --version-info "$NEEZER_BINARY_DIR/$name" |
         grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//'
     done
@@ -127,7 +130,7 @@ neezer_soname_deb() {
 # Every soname both binaries need must be known above; anything else fails.
 neezer_check_needed() {
   local name soname unknown=0
-  for name in neezer-desktop neezer-transcribe; do
+  for name in neezer-desktop neezer-transcribe neezer-transcribe-v3; do
     while read -r soname; do
       [[ -n "$soname" ]] || continue
       neezer_soname_deb "$soname" >/dev/null ||
@@ -145,7 +148,7 @@ neezer_check_needed() {
 # sonames, deduplicated, in the table's order.
 neezer_deb_depends() {
   local name soname deps=() dep seen
-  for name in neezer-desktop neezer-transcribe; do
+  for name in neezer-desktop neezer-transcribe neezer-transcribe-v3; do
     while read -r soname; do
       [[ -n "$soname" ]] || continue
       dep="$(neezer_soname_deb "$soname")"
@@ -235,7 +238,9 @@ neezer_check_sidecar_installed() {
   [ -x "$app_dir/neezer-desktop" ] || neezer_die "$app_dir/neezer-desktop est absent"
   [ -x "$app_dir/neezer-transcribe" ] ||
     neezer_die "$app_dir/neezer-transcribe est absent : l'application ne trouvera pas son sidecar"
-  neezer_note "sidecar installé à côté de l'application : $app_dir/neezer-transcribe"
+  [ -x "$app_dir/neezer-transcribe-v3" ] ||
+    neezer_die "$app_dir/neezer-transcribe-v3 est absent : le CPU x86-64-v3 n'aurait pas son moteur"
+  neezer_note "sidecars installés à côté de l'application : $app_dir/neezer-transcribe (+ -v3)"
   neezer_note "version du sidecar : $($version_cmd --version | head -1)"
 }
 
