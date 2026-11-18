@@ -457,7 +457,10 @@ private fun NzLabelField(
             .fillMaxWidth()
             .background(colors.bg, RoundedCornerShape(NzRadius.chip))
             .padding(horizontal = NzSpacing.m, vertical = NzSpacing.s)
-            .heightIn(min = NzMinTouchTarget),
+            .heightIn(min = NzMinTouchTarget)
+            // A field whose only label is a placeholder is a field TalkBack reads
+            // as "modifiable" and nothing more.
+            .semantics { contentDescription = "Pour, le nom du lien (facultatif)" },
         decorationBox = { inner ->
             Box(contentAlignment = Alignment.CenterStart) {
                 if (value.isEmpty()) {
