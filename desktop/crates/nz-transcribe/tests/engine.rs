@@ -16,6 +16,12 @@
 //!   CPU) and assert the lot's floors.
 //!
 //! The numbers are written next to the assertions and repeated in the PR.
+//!
+//! Every failure message carries `nz_transcribe::error::ending` of the child —
+//! its exit code, or the SIGNAL that killed it — because `(None)` named none of
+//! the three causes a dead engine can have (a whisper refusal, a driver that
+//! segfaults, a runner that kills the process); CI run 44200808004 lost four of
+//! these tests to exactly that blindness.
 
 #![cfg(feature = "engine")]
 
@@ -87,8 +93,8 @@ fn run(args: &[&str], environment: &[(&str, &str)]) -> Output {
 fn document(path: &Path, output: &Output) -> Document {
     assert!(
         output.status.success(),
-        "neezer-transcribe a échoué ({:?})\nstdout: {}\nstderr: {}",
-        output.status.code(),
+        "neezer-transcribe a échoué ({})\nstdout: {}\nstderr: {}",
+        nz_transcribe::error::ending(&output.status),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -125,7 +131,11 @@ fn transcribe(
 /// the CPU.
 fn probe() -> (String, Option<String>) {
     let output = run(&["probe"], &[]);
-    assert!(output.status.success(), "{:?}", output.status);
+    assert!(
+        output.status.success(),
+        "probe : {}",
+        nz_transcribe::error::ending(&output.status)
+    );
     let value: serde_json::Value =
         serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("JSON");
     (
@@ -203,7 +213,11 @@ fn text(document: &Document) -> String {
 #[test]
 fn the_probe_speaks_the_control_line() {
     let output = run(&["probe"], &[]);
-    assert!(output.status.success(), "{:?}", output.status);
+    assert!(
+        output.status.success(),
+        "probe : {}",
+        nz_transcribe::error::ending(&output.status)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.matches('\n').count(), 1, "{stdout:?}");
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("JSON");
@@ -257,8 +271,8 @@ fn a_missing_vulkan_driver_falls_back_to_the_cpu_with_its_cause() {
     let output = run(&["probe"], &broken);
     assert!(
         output.status.success(),
-        "le probe a échoué au lieu de nommer la cause : {:?}\n{}",
-        output.status.code(),
+        "le probe a échoué au lieu de nommer la cause : {}\n{}",
+        nz_transcribe::error::ending(&output.status),
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value =
@@ -542,7 +556,12 @@ fn a_file_that_is_not_a_model_is_refused() {
         ],
         &[],
     );
-    assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        nz_transcribe::error::ending(&output.status)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("modèle trop petit"), "{stderr}");
     assert!(!dir.join("out.json").exists(), "aucun document écrit");

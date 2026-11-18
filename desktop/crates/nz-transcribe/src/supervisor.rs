@@ -1481,8 +1481,14 @@ fn run_engine(
     };
     let _ = fs::remove_file(pcm);
     if !status.success() {
-        let detail =
-            last_line(stderr).unwrap_or_else(|| format!("code {}", status.code().unwrap_or(-1)));
+        // How it ended comes FIRST: a child a signal killed wrote its last line
+        // before it died, and "SIGSEGV"/"SIGKILL" is the cause where "the last
+        // thing whisper printed" is not (`error::ending`, CI run 44200808004).
+        let ended = crate::error::ending(&status);
+        let detail = match last_line(stderr) {
+            Some(line) => format!("{ended} — {line}"),
+            None => ended,
+        };
         return Err(Error::Exit(detail));
     }
     let bytes = fs::read(out).map_err(|_| Error::BadJson)?;

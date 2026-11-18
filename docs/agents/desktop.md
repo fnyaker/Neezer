@@ -2721,6 +2721,26 @@ Waves that can run in parallel (disjoint files):
   `INTEGRATED_GPU` devices, and lavapipe reports `CPU`, so with the driver installed and working the
   probe still answered `no_vulkan_device` on the runner until the variable named device 0
   (measured in CI, run 43897207709).
+- **The rule, a dead engine NAMES ITS SIGNAL.** `ExitStatus::code()` answers `None` for a child a
+  signal killed, and both reports printed only that — `code -1` from the supervisor, `a échoué
+  (None)` from the engine bench — so a `SIGSEGV` inside ggml, the kernel's OOM killer (`SIGKILL`)
+  and a driver's `abort()` (`SIGABRT`) were one indistinguishable line, with the whisper log tail
+  (which names none of them) as the only detail. `error::ending` answers `SIGKILL (signal 9)`,
+  `code 1`, or `ni code ni signal` (Linux numbers, like the supervisor's own `SIGSTOP`/`SIGTERM`/
+  `SIGKILL` constants); the supervisor puts it **before** the log tail, and the bench uses it on
+  every child it spawns. Pinned by a test that spawns `/bin/sh -c 'kill -9 $$'`, `kill -ABRT $$`
+  and `exit 3`. Why it exists, measured: **CI run 44200808004** (master `d1a3c8b1`, 2026-11-17
+  23:50 UTC) lost `cargo test + window` on **4 engine tests**, each child dead ~1 s into the model
+  load with its stderr stopped at `whisper_model_load: n_langs = 99` — the last line before the
+  77 MB model buffer's allocation — and the report said only `(None)`. **The same tree passed the
+  same 8 tests on another runner 16 min later** (run 44203172479, 58 s; the fixtures' `sha256sum
+  -c` passed and the model printed its own hparams in both, so the cache, the URL and the code were
+  not the cause: the runner killed the children and nothing could say so). Never retry, skip or
+  widen a timeout for a run like that — read the signal, and fix what it names. Measured here for
+  scale (debug build, lavapipe): **403 MB peak RSS and 2 210 MB VM per child**, **1 608 MB RSS for
+  the four together** — under a tenth of a 16 GB runner, so the red run was not our own children
+  running out of memory — and **80 model loads in 20 rounds, 0 death**, plus 20 rounds of the 8
+  acceptance tests green.
 - **Pitfalls found by building**: the shader-cache trap below hit again — an aborted first build
   (no `VULKAN_SDK`) left `whisper-rs-sys`'s `OUT_DIR` in a state where the next build *compiles*
   and then fails at link on `get_rows_iq2_xxs_data`; `cargo clean -p whisper-rs-sys` with

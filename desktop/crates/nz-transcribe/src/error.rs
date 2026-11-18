@@ -59,9 +59,54 @@ pub enum Error {
     /// The engine outlived its deadline (`engine.TimedOut`).
     #[error("le moteur a dépassé son délai")]
     Timeout,
-    /// The engine exited non-zero; the payload is the last line it wrote.
-    #[error("le moteur s'est arrêté ({0})")]
+    /// The engine exited non-zero; the payload is [`ending`] plus the last line
+    /// it wrote, when there was one.
+    #[error("le moteur s'est arrêté : {0}")]
     Exit(String),
+}
+
+/// How a child process ended, in words: its exit code, or the signal that
+/// killed it.
+///
+/// `ExitStatus::code()` answers `None` for a process a signal killed, and both
+/// reports of a dead engine printed only that `None` — `code -1` in the
+/// supervisor, `a échoué (None)` in the engine bench. A segfault inside ggml
+/// (`SIGSEGV`), the kernel's OOM killer (`SIGKILL`), a driver's `abort()`
+/// (`SIGABRT`) and the deadline's own `SIGTERM` were therefore the same line,
+/// and the whisper log tail named none of them: CI run 44200808004 spent a red
+/// `cargo test + window` on exactly that. The numbers are Linux's, like the
+/// supervisor's `SIGSTOP`/`SIGTERM`/`SIGKILL` constants — the desktop app is
+/// Linux-only (Omarchy).
+pub fn ending(status: &std::process::ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
+
+    match (status.code(), status.signal()) {
+        (Some(code), _) => format!("code {code}"),
+        (None, Some(signal)) => format!("{} (signal {signal})", signal_name(signal)),
+        // Both `None` cannot happen on Linux; say so rather than print `None`.
+        (None, None) => "ni code ni signal".to_owned(),
+    }
+}
+
+/// The name of a Linux signal, for [`ending`].
+///
+/// Only the ones a whisper child can plausibly die of are named; anything else
+/// keeps its number, because a wrong name is worse than a number.
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        15 => "SIGTERM",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        _ => "signal inconnu",
+    }
 }
 
 impl Error {
@@ -186,5 +231,33 @@ mod tests {
             SidecarError::NotANumber { what: "end_ms" }.to_string(),
             "end_ms n'est pas un nombre"
         );
+    }
+
+    /// A child a signal killed says WHICH signal: `code()` answers `None` for it
+    /// and the reports printed that `None`, so a segfault in ggml, the kernel's
+    /// OOM killer and a driver's `abort()` were one indistinguishable line (CI
+    /// run 44200808004, 4 tests red on it).
+    ///
+    /// Measured: `/bin/sh -c 'kill -9 $$'` answers `SIGKILL (signal 9)` in one
+    /// spawn, and `exit 3` answers `code 3` — the two halves of `ending`.
+    #[test]
+    fn a_dead_child_names_its_signal() {
+        let killed = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -9 $$"])
+            .output()
+            .expect("spawn");
+        assert_eq!(super::ending(&killed.status), "SIGKILL (signal 9)");
+
+        let aborted = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -ABRT $$"])
+            .output()
+            .expect("spawn");
+        assert_eq!(super::ending(&aborted.status), "SIGABRT (signal 6)");
+
+        let exited = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 3"])
+            .output()
+            .expect("spawn");
+        assert_eq!(super::ending(&exited.status), "code 3");
     }
 }
