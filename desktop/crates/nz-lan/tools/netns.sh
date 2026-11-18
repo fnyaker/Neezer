@@ -11,6 +11,11 @@
 #   --binary PATH  the test binary to run. `cargo test --test discovery` hands its
 #                  own path over; without it this script builds the test itself.
 #
+# The LAN interface is a `dummy` device, or `lo` as a last resort (and then the IPv6
+# scope assertion is skipped with a printed reason). NZ_LAN_NETNS_DEVICE=auto|lo pins
+# it, for diagnosing a machine or a namespace where the `dummy` module is out of
+# reach.
+#
 # The kernel requirement is unprivileged user namespaces (`unshare -rn`). Arch
 # allows them. Ubuntu 24.04 restricts them through AppArmor, and the dedicated step
 # of .github/workflows/desktop.yaml lifts that first:
@@ -98,17 +103,21 @@ fi
 work="$target_dir/netns-ln3"
 mkdir -p "$work"
 
-# The namespace: `lo` for the two processes' control sockets, and ONE dummy
-# interface for the LAN — a machine with exactly one network interface, which is
-# what the app announces on. Multicast loops on an IPv4 `lo` but NOT on IPv6 (Linux
-# delivers a v4 multicast packet to a socket joined on `lo` and drops the v6 one:
-# measured, `/proc/net/snmp6` counts 3 out and 0 in), so the interface that carries
-# both families, with a link-local IPv6 address whose scope means something
-# (RFC 4007), is a dummy one.
+# The namespace: `lo` for the two processes' control sockets, and ONE interface for
+# the LAN — a machine with exactly one network interface, which is what the app
+# announces on. It must carry IPv6 multicast, and `lo` does not: Linux delivers an
+# IPv4 multicast packet to a socket joined on `lo` and drops the IPv6 one (measured:
+# `/proc/net/snmp6` counts 3 out and 0 in for the round trip that works over IPv4),
+# so the link-local address whose scope the test asserts (RFC 4007) would never
+# arrive. A `dummy` device loops both families (a `veth` end does not: measured, the
+# same announcement carries 10.42.0.1 only). Where the `dummy` module cannot be
+# loaded from a user namespace, the run falls back to `lo` — IPv4 discovery still
+# measured, IPv6 scope skipped with a printed reason.
 NZ_LAN_HARNESS_BINARY=$binary \
 NZ_LAN_HARNESS_RUNS=$runs \
 NZ_LAN_HARNESS_WORK=$work \
 NZ_LAN_HARNESS_REQUIRE=$require \
+NZ_LAN_HARNESS_DEVICE=${NZ_LAN_NETNS_DEVICE:-auto} \
     unshare -rn sh -s <<'INNER'
 set -eu
 
@@ -116,6 +125,7 @@ binary=$NZ_LAN_HARNESS_BINARY
 runs=$NZ_LAN_HARNESS_RUNS
 work=$NZ_LAN_HARNESS_WORK
 require=$NZ_LAN_HARNESS_REQUIRE
+device=$NZ_LAN_HARNESS_DEVICE
 
 announce_port=45940
 control_port=45941
@@ -124,23 +134,42 @@ witness_port=45943
 drop_port=45944
 
 ip link set lo up
-ip link add nz0 type dummy
-ip link set nz0 up
-ip addr add 10.42.0.1/24 dev nz0
-ip route add 224.0.0.0/4 dev nz0
+
+lan_if=
+if [ "$device" != "lo" ] && ip link add nz0 type dummy 2>/dev/null; then
+    lan_if=nz0
+fi
+
+if [ -n "$lan_if" ]; then
+    ip link set "$lan_if" up
+    ip addr add 10.42.0.1/24 dev "$lan_if"
+    ip route add 224.0.0.0/4 dev "$lan_if"
+else
+    lan_if=lo
+    ip link set lo multicast on
+    ip route add 224.0.0.0/4 dev lo
+fi
+
+# `lo` is the crate's loopback mode; a device of its own is the app's mode (every up,
+# non-loopback interface).
+loopback=0
+if [ "$lan_if" = "lo" ]; then
+    loopback=1
+fi
 
 ipv6=0
-if ip -6 addr add fe80::1/64 dev nz0 2>/dev/null; then
-    ip -6 route add ff00::/8 dev nz0 2>/dev/null || true
+if [ "$lan_if" != "lo" ] && ip -6 addr add fe80::1/64 dev "$lan_if" 2>/dev/null; then
+    ip -6 route add ff00::/8 dev "$lan_if" 2>/dev/null || true
     ipv6=1
 fi
 if [ "$ipv6" = "0" ]; then
-    if [ "$require" = "1" ]; then
-        echo "netns.sh: could not add a link-local IPv6 address to nz0, so the scope assertion cannot run" >&2
+    if [ "$lan_if" != "lo" ] && [ "$require" = "1" ]; then
+        echo "netns.sh: could not add a link-local IPv6 address to $lan_if, so the scope assertion cannot run" >&2
         exit 1
     fi
-    echo "NZLAN HARNESS NOTE no link-local IPv6 address in this namespace: the scope assertion is skipped"
+    echo "NZLAN HARNESS NOTE no IPv6 on the LAN interface ($lan_if): the link-local scope assertion is skipped"
 fi
+echo "NZLAN HARNESS DEVICE $lan_if loopback=$loopback ipv6=$ipv6"
 
 run=1
 while [ "$run" -le "$runs" ]; do
@@ -155,6 +184,7 @@ while [ "$run" -le "$runs" ]; do
     NZ_LAN_NETNS_CONTROL_PORT=$control_port \
     NZ_LAN_NETNS_WITNESS_PORT=$witness_port \
     NZ_LAN_NETNS_DROP_PORT=$drop_port \
+    NZ_LAN_NETNS_LOOPBACK=$loopback \
         "$binary" --exact netns_announcer --nocapture >"$fifo" 2>"$announce_log" &
     announcer=$!
     # Only this script's own child, and only if it outlives a failed run.
@@ -183,6 +213,7 @@ while [ "$run" -le "$runs" ]; do
     NZ_LAN_NETNS_ANNOUNCE_PORT=$announce_port \
     NZ_LAN_NETNS_CONTROL_PORT=$control_port \
     NZ_LAN_NETNS_BROWSE_PORT=$browse_port \
+    NZ_LAN_NETNS_LOOPBACK=$loopback \
     NZ_LAN_NETNS_IPV6=$ipv6 \
         "$binary" --exact netns_browser --nocapture >"$browse_log" 2>&1
     status=$?

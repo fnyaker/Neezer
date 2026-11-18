@@ -768,6 +768,11 @@ a mock of itself. Three rungs, cheapest first:
    `--runs N` (20 by default) and `--binary PATH` (what `cargo test` hands its own test) are the whole
    interface; the logs and the FIFO live under `target/netns-ln3/`, never `/tmp`.
 
+   Where the `dummy` module cannot be loaded from a user namespace the script falls back to `lo` and
+   asks the roles for the crate's loopback mode (`NZ_LAN_NETNS_LOOPBACK=1`): IPv4 discovery is then
+   still measured, and the IPv6 scope assertion prints why it is skipped (`ipv6=0`). A `veth` end is
+   not a fallback: measured, its announcement carries the IPv4 address only.
+
    Measured on this machine, 20 runs, debug build: `browse start → Found` **p50 0 ms, p95 0 ms**;
    `start → resolvable by another daemon` **p50 856 ms, max 1 024 ms** (RFC 6762 §8.1 probing: three
    queries 250 ms apart); `stop() → the peer's Lost` **p50 1 000 ms, max 1 001 ms**. Arch allows

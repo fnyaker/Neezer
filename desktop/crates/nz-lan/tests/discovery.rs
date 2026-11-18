@@ -151,6 +151,12 @@ fn is_role(wanted: &str, name: &str) -> bool {
     }
 }
 
+/// Whether the harness told this process to use the loopback mode: it does that when
+/// the namespace's `dummy` device could not be created and it fell back to `lo`.
+fn loopback_mode() -> bool {
+    std::env::var("NZ_LAN_NETNS_LOOPBACK").is_ok_and(|value| value == "1")
+}
+
 fn env_u16(key: &str, default: u16) -> u16 {
     std::env::var(key)
         .ok()
@@ -316,8 +322,11 @@ fn netns_announcer() {
     let rt = runtime();
     // The APP's interface policy (every up, non-loopback interface): inside the
     // namespace that is the one dummy interface `tools/netns.sh` brings up, which is
-    // exactly "a machine on one network".
-    let discovery = MdnsDiscovery::new(false).expect("a discovery");
+    // exactly "a machine on one network". On a machine (or a namespace) where that
+    // device cannot be created, the harness falls back to `lo` and asks for the
+    // loopback mode instead.
+    let loopback = loopback_mode();
+    let discovery = MdnsDiscovery::new(loopback).expect("a discovery");
     let announced = Instant::now();
     discovery.start(announce_port).expect("announcing");
     // The announcer plays the peer the browser watches, so it does not read its own
@@ -328,7 +337,7 @@ fn netns_announcer() {
     // announcement reached the wire: it is a different browse, so it cannot be
     // handed our own registration by the daemon that made it. `READY` is that
     // event — there is no sleep anywhere in this test.
-    let witness = MdnsDiscovery::new(false).expect("a witness discovery");
+    let witness = MdnsDiscovery::new(loopback).expect("a witness discovery");
     witness.start(witness_port).expect("the witness announcing");
     let mut witnessed = witness.events();
     let (addr, instance) = wait_found(&rt, &mut witnessed, announce_port, None, PHASE_TIMEOUT)
@@ -368,7 +377,7 @@ fn netns_announcer() {
 
     // `Drop` stops what it started, with no explicit `stop()`.
     {
-        let thrown_away = MdnsDiscovery::new(false).expect("a discovery");
+        let thrown_away = MdnsDiscovery::new(loopback).expect("a discovery");
         thrown_away.start(drop_port).expect("announcing");
         println!(
             "NZLAN THROWN_AWAY port={}",
@@ -401,22 +410,30 @@ fn netns_browser() {
         .expect("the announcer's command port");
 
     let rt = runtime();
-    let mut wire = WireWatcher::start(announce_port).expect("the raw browse for the record");
-    let discovery = MdnsDiscovery::new(false).expect("a discovery");
+    let loopback = loopback_mode();
+    let mut wire =
+        WireWatcher::start(announce_port, loopback).expect("the raw browse for the record");
+    let discovery = MdnsDiscovery::new(loopback).expect("a discovery");
     discovery
         .start(browse_port)
         .expect("announcing and browsing");
     let mut events = discovery.events();
 
-    // A discovery restricted to `lo` must NEVER see an announcement made on a real
-    // interface: `true` is "loopback only", not "loopback as well" (worker rule 8 —
-    // a test must not touch the machine's own network). This one runs for the whole
-    // run, so the check at the end costs no extra wait.
-    let loopback_only = MdnsDiscovery::new(true).expect("a loopback-only discovery");
-    loopback_only
-        .start(loopback_probe_port())
-        .expect("announcing on loopback only");
-    let mut loopback_events = loopback_only.events();
+    // On a real interface, the other half of the interface policy is proven too: a
+    // discovery restricted to `lo` must NEVER see an announcement made on a LAN
+    // interface (`true` is "loopback only", not "loopback as well" — worker rule 8).
+    // It runs for the whole run, so the check at the end costs no extra wait. In the
+    // `lo` fallback the discovery under test IS the loopback one: nothing to compare.
+    let mut loopback_only_events = None;
+    let mut loopback_only = None;
+    if !loopback {
+        let probe = MdnsDiscovery::new(true).expect("a loopback-only discovery");
+        probe
+            .start(loopback_probe_port())
+            .expect("announcing on loopback only");
+        loopback_only_events = Some(probe.events());
+        loopback_only = Some(probe);
+    }
 
     // The acceptance's measurement: the time from the browse being started to the
     // first `Found` for the announcer's port.
@@ -520,20 +537,23 @@ fn netns_browser() {
     println!("NZLAN LOST_MS={}", goodbye.as_millis());
 
     // The negative half of the interface policy (see the top of this test).
-    let mut leaked = Vec::new();
-    while let Ok(event) = loopback_events.try_recv() {
-        if let DiscoveryEvent::Found { addr, .. } = event
-            && addr.port() == announce_port
-        {
-            leaked.push(addr);
+    if let Some(mut probe_events) = loopback_only_events {
+        let mut leaked = Vec::new();
+        while let Ok(event) = probe_events.try_recv() {
+            if let DiscoveryEvent::Found { addr, .. } = event
+                && addr.port() == announce_port
+            {
+                leaked.push(addr);
+            }
         }
+        assert!(
+            leaked.is_empty(),
+            "a loopback-only discovery saw the LAN announcement at {leaked:?}"
+        );
     }
-    assert!(
-        leaked.is_empty(),
-        "a loopback-only discovery saw the LAN announcement at {leaked:?}"
-    );
-
-    loopback_only.stop();
+    if let Some(probe) = loopback_only {
+        probe.stop();
+    }
     discovery.stop();
     wire.stop();
     println!("NZLAN BROWSER_OK");
@@ -644,14 +664,23 @@ struct WireWatcher {
 
 #[cfg(feature = "mdns")]
 impl WireWatcher {
-    /// Browses with the app's interface policy (every up, non-loopback interface)
-    /// and records every resolution whose port is the announcer's.
-    fn start(port: u16) -> Result<WireWatcher, String> {
+    /// Browses with the same interface policy as the discovery under test and records
+    /// every resolution whose port is the announcer's.
+    fn start(port: u16, loopback: bool) -> Result<WireWatcher, String> {
         use mdns_sd::IfKind;
         let daemon = mdns_sd::ServiceDaemon::new().map_err(|error| error.to_string())?;
-        daemon
-            .disable_interface(vec![IfKind::LoopbackV4, IfKind::LoopbackV6])
-            .map_err(|error| error.to_string())?;
+        if loopback {
+            daemon
+                .disable_interface(IfKind::All)
+                .map_err(|error| error.to_string())?;
+            daemon
+                .enable_interface(vec![IfKind::LoopbackV4, IfKind::LoopbackV6])
+                .map_err(|error| error.to_string())?;
+        } else {
+            daemon
+                .disable_interface(vec![IfKind::LoopbackV4, IfKind::LoopbackV6])
+                .map_err(|error| error.to_string())?;
+        }
         let browse = daemon
             .browse(nz_lan::discovery::SERVICE_TYPE)
             .map_err(|error| error.to_string())?;
