@@ -3312,12 +3312,8 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
 - **MB15 — Offline** [SC4, MB3b]: **delivered** — see *MB15 — Hors ligne* above.
 - **MB16 — Réglages, user sections** [MB2; hosts MB12's and MB15's sections]. **Delivered
   2026-11-18** — see *MB16 — Réglages, user sections* below for what it does and what it measured.
-- **MB17 — Réglages, admin** [MB16]. FFI (`admin.rs`): users dashboard, invites, server (archive status,
-  rules, cleanup preview/run, storage, quotas, migrate, analysis plan/backfill/schedule, credits/enrich/
-  similar backfills, automatch run/cancel/settings, transcription settings + workers, job failures with
-  causes, cache flush, Deezer status). Long jobs show progress and causes (rule 2) and resume. Kotlin:
-  `AdminSections()`. Rows: a checklist against the SPA's admin components; no admin entry for a
-  non-admin (`/api/me`'s `user.admin`).
+- **MB17 — Réglages, admin** [MB16]: **delivered** — see *MB17 — Réglages, admin* below for what it
+  does, what it measured, and the one line of MB16's screen it had to change.
 - **MB19 — Remote control** [SC5, MB3b]. FFI (`remote.rs`): `RemoteApi` over `nz-remote` (be
   controlled: links create/revoke/list, host loop; control: claim `/rc/<token>`, the remote player's
   state, commands), `RemoteEnded{restored}` handling. Kotlin: `RemoteButton()`, the sheet, the banner,
@@ -3451,6 +3447,127 @@ both were red before this lot's second push): `mobile/tools/ci-emulator.sh` prov
 swipes to *Assistance* (`scroll_to_text`, a bounded gesture — never a sleep) and reads
 « Noyau (Rust) » there; `:app`'s `ShellSmokeTest.settingsShowsTheRustVersion` does the same with
 Compose semantics (`performScrollToNode`). Both are SHARED files, edited here and declared in the PR.
+
+### MB17 — Réglages, admin (delivered 2026-11-18)
+
+**What landed.** The SPA's two administrator pages, ported: the account table and its
+invitations, and every server-wide card — archive, migration, MusicBrainz facts, credits,
+archiving rules, cleanup (preview before delete), storage and cache, the upload quota, the
+analysis plan and its backfill, the neighbours, the auto-match, transcription, and the
+Deezer verdict.
+
+- **`nz-core/src/admin/`**: `wire.rs` (the routes, the counted traffic, the device's copy in
+  `admin-<hash>.json`), `view.rs` (the screen-shaped payloads — `nz-ffi` carries no
+  `serde_json`), `mod.rs` (the `Core` methods and the closed vocabularies a write may use),
+  `testing.rs` (a STATEFUL loopback server: a job starts, the next poll sees it running).
+- **`nz-ffi/src/admin.rs`**: an `impl Screens` block (MB0's file, no shared edit) with
+  `cached_x()`/`x()` per card, one-field writes (`admin_save_rule("on_fav_album", "true")`,
+  `admin_save_quota(25.0)`, `admin_save_transcribe("max_minutes", "30")`), the job starts and
+  their polls, and `AdminIdentity` — `/api/me`'s `user.admin`, read from the session, zero
+  requests.
+- **`feature/admin/`**: `AdminSections(section)` (the two pages, the sheets, the cards),
+  `AdminModel` (one state machine over an `AdminService` port), `AdminCopy` (the SPA's own
+  French, and `guardMessage`), `AdminParts` (card, gauge, switch row, chips, the
+  `JobFailures` block).
+
+**Rules a measurement taught** (each one is what a later lot inherits):
+
+- **The admin gate needs the SESSION, not `/access` — and the shell never restored it.** On a
+  phone the Réglages list is a ROUTE of its own, so a fresh `SettingsModel` has neither
+  `/access` nor `/settings`: the two administrator categories were never drawn until *Sources*
+  had been opened once, and a fresh launch could not reach this lot's pages at all. Measured on
+  the emulator, with the log proving `Core::me()` was `None` for the whole process because
+  nothing called `restore()`. Two seams close it: `NzApplication` calls `restore()` once at
+  launch (`/api/me`, on the IO scope, never the first frame), and `SettingsModel` reads
+  `user.admin` from the session (`sessionAdmin`) instead of waiting for a card. With both, the
+  emulator walk reached *Utilisateurs* and *Serveur*.
+- **`paused` is a WORD on `/api/analysis/backfill`, and `nz-model` types it `bool`.** A job
+  waiting on the throttle sends `"listening"`, which makes the WHOLE payload unreadable — at
+  the exact moment a person looks at it. The route is read as `Value`, the word split out, and
+  the counters handed to `AnalysisBackfill` (rule 7: a renamed counter costs a card, not a page).
+- **A `409` loses its code, and that is fine — the server's message IS the sentence.**
+  `nz-api`'s `Conflict` keeps the message and drops `code`, so `last_admin` arrives as
+  « Impossible : c'est le dernier administrateur actif. » — exactly what
+  `adminusers.js#REFUSALS` would have produced. `AdminCopy.guardMessage` therefore prefers a
+  code when it can read one (`403`, `404`, `429` keep it in the detail), and otherwise shows
+  the server's own sentence rather than inventing one.
+- **A job's failures are a SAMPLE, and the card must say so.** The server keeps at most 40
+  rows (`FAILURE_SAMPLE_MAX`) but counts every one: the block prints the ranked tally, the
+  rows it holds, and « … et N autres non détaillés » — a count without its cause was the reason
+  this ledger exists in the first place.
+- **Two pills in a `Row` are wider than a phone at a 200 % font scale.** Measured in this
+  lot's first captures: the second button was CLIPPED by the card's edge (not ellipsized — cut).
+  Every multi-button row is a `FlowRow`, and the labels were shortened until the primary action
+  stops ellipsizing (« Tout archiver », « Mettre à niveau », « Compléter les faits »).
+- **A switch row is already 64 dp; adding padding makes a settings list airy.** `NzSwitch`
+  carries a 48 dp minimum target plus its own 8 dp of padding, so the row must not add another
+  (`heightIn`, no vertical padding). The first *Serveur* capture had 72 dp per rule.
+- **The failure block belongs to the ACCOUNTS read, not to the table.** `/admin/users` can fail
+  while `/admin/invites` succeeds, and the invites then fill the rows: a block keyed on
+  `rows.isEmpty()` never appeared (this lot's own failure capture showed the bug).
+- **The parent scrolls, so the account table is a bounded pager, not a `LazyColumn`.** Réglages
+  wraps a category in `verticalScroll`, and a `LazyColumn` there measures at an infinite height.
+  The list is the SPA's own cap — 250 rows, 25 per page, the search running on the SERVER — so
+  it never becomes the 4 000-row list `ListHandle` exists for.
+
+**The checklist against the SPA's admin components** (every card, and where it lives now):
+
+| SPA | Mobile |
+|---|---|
+| `AdminUsers`: count line, search (2 characters, 300 ms), six filters, « Charger plus », 250-row cap | *Utilisateurs*, all of it; the search and the cursor go to the server |
+| The account sheet: role, state, last login, mail, uploads/playlists, self-guard | the account sheet; the actions are the same four, the name confirmation included |
+| `InviteSheet`: note (64), four durations, link shown once, copy, revoke, renew | the invite sheet, link and token included; `InviteSheet`'s duration picker |
+| `Settings.svelte` *Archive du serveur* (four scopes, gauge, last pass) | *Archive du serveur* |
+| *Mise à niveau des fichiers* (indeterminate gauge, counters) | *Mise à niveau des fichiers* |
+| `EnrichBackfill` (coverage, force, methods) | *Faits complétés par MusicBrainz* |
+| `CreditsBackfill` (gauge, sources, force) | *Crédits des titres* |
+| `JobFailures` (folded, ranked causes, sample, copy) | `JobFailuresBlock`, on every job card |
+| *Règles d'archivage* (7 events, artist scope + N, chapters) | *Règles d'archivage*, one field per decision |
+| *Nettoyage automatique* (threshold, age, protections, order, preview, free now) | *Nettoyage automatique* — preview first, the run asks nothing |
+| *Stockage serveur* (disk gauge, four counters, archive path, flush) | *Stockage serveur* |
+| *Quota d'upload* | the quota card |
+| `GenreLibrary`'s upkeep card (plan, three stages, where, nightly window, force, stop) | *Analyse de la bibliothèque* |
+| `SimilarRebuild` | *Voisins sonores* |
+| `AutomatchPanel` (switch, run, cancel, replaced with their score, misses) | *Remplacement automatique* |
+| `TranscribeSettings` (switch, reason, language, durations, budget, search, model, probe) | *Transcription des podcasts* |
+| The ARL card's `Tester` + the masked hint + its source | *Compte Deezer (ARL)*, never the credential |
+| `$user?.admin` gating in `Settings.svelte` | the session's `user.admin`; a member draws a sentence and opens no socket |
+| *(the SPA has no equivalent)* | — |
+
+**Measured** (this machine, JDK 21, Gradle 8.14.7, Rust 1.99.1, `CARGO_BUILD_JOBS=4`; the
+emulator API 35 x86_64, `-no-window -no-audio`, own port 5620, `tools/perf_api.py` on 5630):
+
+| What | How | Numbers |
+|---|---|---|
+| Rust | `cargo test --workspace --locked` | **356 `nz-core` tests** (27 of them this lot's), 57 `nz-ffi` (2 this lot's), 7 `nz-droid-audio`, all green; `fmt` and `clippy -D warnings` clean |
+| A cold *Utilisateurs* | fake server, counted | **2 requests, 470 bytes in** — `/admin/users` + `/admin/invites`, the SPA's own two |
+| A warm *Utilisateurs* | same, held at a gate | **0 requests**: the device's copy paints while the link is still out |
+| A cold *Serveur* | same | **12 requests, 3 195 bytes in** — the SPA's ten (`/settings`, `/deezer/status`, `/storage`, `/archive/rules`, `/archive/cleanup/preview`, `/archive/status`, `/archive/migrate`, `/enrich/backfill`, `/credits/backfill`, `/transcribe/settings`) plus the upkeep card's two (`/analysis/plan`, `/analysis/backfill`) |
+| A warm *Serveur* | same | **0 requests**, every card from the copy |
+| A job | start, then the poll | the start answers at once; the poll is **1 read every 1.5 s while `running`**, and **0 after it ends** (the test advances the clock and counts) |
+| A refused role | 409 `last_admin` | the row is put back and the sentence shown; **0 rows changed** |
+| Kotlin | `:feature:admin:testDebugUnitTest` | **39 tests**: 17 `AdminModelTest` (the two counts, the four card states, the debounce, the cursor, the optimistic writes and their rollbacks, the job poll, one-field writes) and 22 Robolectric screenshots |
+| Screenshots | Robolectric, NATIVE graphics | **22 PNGs** under `docs/agents/screenshots/mobile/MB17/` (Encre/Papier at 360 and 600 dp, the 200 % scale, the account sheet, the invite link, a failed table, a member's page, the opened failure block) — looked at, and four layout bugs fixed from them (a clipped button row at 200 %, a 72 dp switch row, the failure block that never appeared, a count line wrapped mid-phrase) |
+| The real app | emulator, own port 5620, the debug APK over `tools/perf_api.py` (60 tracks) | three captures: `mb17-emulator-users.png` (the table, its filters and 1 real account), `mb17-emulator-server.png` (archive, migration, MusicBrainz), `mb17-emulator-server-jobs.png` (auto-match and transcription, with the server's own reason « La transcription n'est pas disponible sur ce serveur »). The walk is what found the admin gate: the two categories were unreachable until the session was restored |
+| `libnz_ffi.so` | `build-android.sh` | arm64-v8a **12 857 032 B**, armeabi-v7a 8 672 744 B, x86_64 15 176 080 B (the 9 MB ceiling is MQ2's, and MB3a already reported it) |
+
+**Files.** `mobile/rust/crates/nz-core/src/admin/**`, `mobile/rust/crates/nz-ffi/src/admin.rs`,
+`mobile/android/feature/admin/**` (module, sources and tests),
+`docs/agents/screenshots/mobile/MB17/*.png`, and this section. **Outside the lot's list, all
+declared in the PR**: `feature/settings/.../SettingsEntry.kt` (the delivery arm
+`AdminSections(section)` — without the id both categories drew the same page; approved by the
+orchestrator), `feature/settings/.../SettingsModel.kt` (`sessionAdmin`, the gate above) and
+`:app`'s `NzApplication.kt` (`restore()` at launch, without which `Core::me()` is `None` for
+the process).
+
+**Still owed** (named where it belongs): the Macrobenchmark frames for a 250-row table and the
+server page (MQ2's). The account table is a plain `Column` because Réglages scrolls it (a
+`LazyColumn` there measures at an infinite height): at 250 rows it is fine, and a server with
+thousands of accounts is meant to be SEARCHED — MQ2 should measure the scroll and say whether
+that holds. `Analyse → Cet ordinateur` switches the server's own setting but this app is not a
+measuring client (MB18 owns the studio's worker). A fresh install still has no door to the
+server setup (MB2/MB4, and MQ2's whole journey): this lot's emulator walk had to seed the
+session through the app's own files, which is how the gate bug above was found.
 
 ### Ready prompts for the screen lots
 One per lot of the two *Screen lots* lists above, complete (rules included).

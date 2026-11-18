@@ -1185,6 +1185,10 @@ mod tests {
             .expect("the tag is counted");
         assert_eq!(counted.requests, 2, "NzCore::stats() says what it cost");
         assert!(counted.bytes_in > 0);
+        println!(
+            "MB17 cold *Utilisateurs*: {} requests, {} bytes in, {} bytes out",
+            counted.requests, counted.bytes_in, counted.bytes_out
+        );
 
         // --- warm: the device's copy paints, no request ----------------------
         server.forget();
@@ -1408,6 +1412,10 @@ mod tests {
             .find(|row| row.tag == TAG_ADMIN)
             .expect("counted");
         assert_eq!(counted.requests, 12);
+        println!(
+            "MB17 cold *Serveur*: {} requests, {} bytes in, {} bytes out",
+            counted.requests, counted.bytes_in, counted.bytes_out
+        );
 
         server.forget();
         assert!(core.cached_admin_server_card().is_some());
