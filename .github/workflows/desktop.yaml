@@ -131,10 +131,29 @@ jobs:
           ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
             "$RUNNER_TEMP/vk/lib/libvulkan.so"
           echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      # ggml is compiled with `-march=native` (its `GGML_NATIVE` default), so the
+      # objects in `target/` belong to the CPU that produced them — and this cache
+      # never looked at the CPU: run 44240162634 restored (`full match: false`, a
+      # partial restore) an object built on a runner with AVX-512, and the engine
+      # child died with `SIGILL (signal 4)` on the runner that got it. The
+      # fingerprint is the model and the flags line, hashed: another runner model is
+      # another cache, never a binary that traps.
+      - name: The runner's CPU, as a cache key
+        id: cpu
+        run: |
+          model="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
+          flags="$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | sed 's/^ *//')"
+          fingerprint="$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-16)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "CPU: $model (empreinte $fingerprint)"
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
+          # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
+          # broader prefix, and a `key:`-only fingerprint would still restore another
+          # CPU's objects through that fallback.
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -166,10 +185,29 @@ jobs:
           ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
             "$RUNNER_TEMP/vk/lib/libvulkan.so"
           echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      # ggml is compiled with `-march=native` (its `GGML_NATIVE` default), so the
+      # objects in `target/` belong to the CPU that produced them — and this cache
+      # never looked at the CPU: run 44240162634 restored (`full match: false`, a
+      # partial restore) an object built on a runner with AVX-512, and the engine
+      # child died with `SIGILL (signal 4)` on the runner that got it. The
+      # fingerprint is the model and the flags line, hashed: another runner model is
+      # another cache, never a binary that traps.
+      - name: The runner's CPU, as a cache key
+        id: cpu
+        run: |
+          model="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
+          flags="$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | sed 's/^ *//')"
+          fingerprint="$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-16)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "CPU: $model (empreinte $fingerprint)"
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
+          # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
+          # broader prefix, and a `key:`-only fingerprint would still restore another
+          # CPU's objects through that fallback.
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
       # The Python server comes FIRST: `cargo test` runs two benches that start
       # `tools/perf_api.py` themselves — `nz-api`'s session round trip (D2,
       # login → me → 401 on a real Flask cookie) and, later, `nz-transcribe`'s
@@ -331,10 +369,29 @@ jobs:
           ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
             "$RUNNER_TEMP/vk/lib/libvulkan.so"
           echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      # ggml is compiled with `-march=native` (its `GGML_NATIVE` default), so the
+      # objects in `target/` belong to the CPU that produced them — and this cache
+      # never looked at the CPU: run 44240162634 restored (`full match: false`, a
+      # partial restore) an object built on a runner with AVX-512, and the engine
+      # child died with `SIGILL (signal 4)` on the runner that got it. The
+      # fingerprint is the model and the flags line, hashed: another runner model is
+      # another cache, never a binary that traps.
+      - name: The runner's CPU, as a cache key
+        id: cpu
+        run: |
+          model="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
+          flags="$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | sed 's/^ *//')"
+          fingerprint="$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-16)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "CPU: $model (empreinte $fingerprint)"
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
+          # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
+          # broader prefix, and a `key:`-only fingerprint would still restore another
+          # CPU's objects through that fallback.
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
       - name: Binary sizes
