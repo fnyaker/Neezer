@@ -986,6 +986,26 @@ impl Player {
         *self.lock_route() = route;
     }
 
+    /// A counted subscription to the engine's analysis tap (MB12): the
+    /// visualiser and the equalizer card each read their own ring, so both can
+    /// be on screen at once and neither takes the other's frames. The frames are
+    /// post-DSP and pre-pan (`nz_audio::tap`).
+    pub fn subscribe_tap(&self) -> Option<nz_audio::TapSubscription> {
+        self.engine.subscribe_tap()
+    }
+
+    /// The equalizer card's meter, on while that card is on screen. Off, the
+    /// output callback does exactly the arithmetic it did before (MB12).
+    pub fn set_meter(&self, on: bool) {
+        self.engine.set_meter(on);
+    }
+
+    /// The last buffer's pre-limiter peak and limiter reduction: the two numbers
+    /// `saturation.js` shows, measured by the chain that makes them.
+    pub fn chain_meter(&self) -> nz_audio::ChainMeter {
+        self.engine.chain_meter()
+    }
+
     pub fn route(&self) -> AudioRoute {
         self.lock_route().clone()
     }

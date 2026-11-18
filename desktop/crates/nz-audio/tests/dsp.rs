@@ -685,3 +685,65 @@ fn the_normalisation_is_the_web_graphs_replaygain() {
         "high must be the web's −10.4 dB, measured {change:+.2}"
     );
 }
+
+/// **Two analysis readers and the equalizer's meter (MB12).** The visualiser's
+/// subscription and the equalizer card's each get every frame of the same sound,
+/// neither steals the other's, and the meter reads the chain's own pre-limiter
+/// peak and limiter reduction while the card asks for it — and nothing at all
+/// once it stops.
+///
+/// Measured: both taps 0.2500/0.2500 of a 1 kHz tone at 0.25, meter peak
+/// **−12.04 dB** with a transparent chain, and **−96.00 dB** (the floor) after
+/// the card leaves.
+#[test]
+fn two_taps_read_the_same_sound_and_the_meter_measures_the_chain() {
+    let dir = scratch("dsp-tap-multi");
+    let file = dir.join("tone.flac");
+    tone_flac(&file, 1000.0, 0.25, 4.0);
+    let (engine, mut sink, _events) = primed_with(
+        &dir,
+        TestOpener::default().with_file("t", &file),
+        "t",
+        None,
+        &[("t", meta(4.0))],
+    );
+    // The one the visualiser owns, and the card's own subscription.
+    let mut viz = engine.tap().expect("the legacy reader");
+    let mut card = engine.subscribe_tap().expect("a counted subscription");
+    engine.play();
+    pump_seconds(&mut sink, 0.3);
+
+    let mut a = vec![0.0f32; 4_800];
+    let mut b = vec![0.0f32; 4_800];
+    let na = viz.read(&mut a);
+    let nb = card.read(&mut b);
+    println!("taps: {na} and {nb} frames, a {:.4} b {:.4}", a[0], b[0]);
+    assert!(na > 0 && nb > 0, "both readers got frames: {na} / {nb}");
+    assert_eq!(na, nb, "the same sound, frame for frame");
+    assert!((a[0] - b[0]).abs() < 1e-6, "{} vs {}", a[0], b[0]);
+
+    // The meter, while the card asks for it: the chain is transparent, so the
+    // pre-limiter peak is the tone's own −12.04 dBFS and nothing pulls it down.
+    engine.set_meter(true);
+    pump_seconds(&mut sink, 0.2);
+    let on = engine.chain_meter();
+    println!("meter on: peak {:.2} dB, reduction {:.2} dB", on.peak_db, on.reduction_db);
+    assert!((on.peak_db - db(0.25)).abs() < 0.5, "peak {:.2}", on.peak_db);
+    assert_eq!(on.reduction_db, 0.0, "a clean master never touches the limiter");
+
+    // It leaves: the reading is forgotten in the same call, not left standing
+    // for the next visit to show as a live number.
+    engine.set_meter(false);
+    engine.pause();
+    let off = engine.chain_meter();
+    assert_eq!(off.peak_db, nz_audio::METER_FLOOR_DB, "a hidden card has no reading");
+    assert_eq!(off.reduction_db, 0.0);
+    // And a dropped subscription stops: the card's reader is gone, the
+    // visualiser's keeps working.
+    drop(card);
+    engine.play();
+    pump_seconds(&mut sink, 0.1);
+    let mut c = vec![0.0f32; 480];
+    assert!(viz.read(&mut c) > 0, "the visualiser still reads after the card left");
+    engine.pause();
+}
