@@ -362,9 +362,8 @@
       {#if devices.length}<span class="count muted">{devices.length}</span>{/if}
     </div>
     <p class="muted sub">
-      Chaque appareil s'inscrit tout seul au premier contact avec le serveur, puis échange ses sons
-      avec vos autres appareils sur le même réseau. Révoquer un appareil le coupe chez tous vos
-      appareils&nbsp;: il devra se réinscrire.
+      Chaque appareil s'inscrit seul au premier contact, puis échange ses sons avec les vôtres sur le
+      réseau local.
     </p>
 
     {#if !devices.length}
@@ -404,7 +403,14 @@
                   {#if lan.deviceState(d) === "current"}<span class="tag">cet appareil</span>{/if}
                   {#if lan.deviceState(d) === "revoked"}<span class="tag tag-off">révoqué</span>{/if}
                 </span>
-                <span class="meta muted">{lan.deviceDetail(d, now)}</span>
+                <span class="meta muted">
+                  {#each lan.deviceSegments(d, now) as fact, i}
+                    <!-- The dot is GLUED to the segment it introduces: a
+                         separator of its own could end a line alone. The
+                         enrolment date is the fact a narrow column drops. -->
+                    <span class="seg" class:wide-only={fact.kind === "enrolled"}>{i > 0 ? "· " : ""}{fact.text}</span>
+                  {/each}
+                </span>
               {/if}
             </div>
             <div class="acts">
@@ -415,6 +421,7 @@
                   Confirmer la révocation
                 </button>
                 <button class="btn btn-sm btn-ghost" on:click={() => (confirming = null)}>Annuler</button>
+                <span class="confirm-hint muted small">Il devra se réinscrire.</span>
               {:else}
                 <button
                   class="btn btn-sm btn-ghost"
@@ -450,9 +457,7 @@
   <section class="card">
     <h2>Amis de confiance</h2>
     <p class="muted sub">
-      Un ami de confiance peut prendre vos sons sur ses propres appareils, et seulement ce que vous
-      lui ouvrez&nbsp;: tout ce que vous avez en local, ou les listes de lecture que vous cochez.
-      Vous ne voyez que ses appareils à lui, jamais son compte.
+      Un ami de confiance prend vos sons sur ses appareils, et seulement ce que vous lui ouvrez.
     </p>
 
     <form class="add" on:submit|preventDefault={addFriend}>
@@ -680,6 +685,31 @@
 {/if}
 
 <style>
+  /* The cards carry Réglages' inner gabarit: 22 px of padding, 16 px of gap to
+     the next card, a 16 px/600 title and a 0.85 rem subtitle (Settings.svelte's
+     own `.card`, `.card h2`, `.sub`). Svelte scopes CSS per component, so those
+     rules do not reach these sections: without this block the title and every
+     paragraph sat flush against the card's border while the rows were indented. */
+  .card {
+    padding: 22px;
+    margin-bottom: 16px;
+  }
+  .card:last-of-type {
+    margin-bottom: 0;
+  }
+  h2 {
+    margin: 0 0 8px;
+    font-family: var(--font-body);
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 1.3;
+  }
+  .sub {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 4px 0 14px;
+  }
   .head {
     display: flex;
     align-items: baseline;
@@ -724,7 +754,9 @@
     grid-template-columns: 34px minmax(0, 1fr);
     align-items: center;
     gap: 4px 12px;
-    padding: 12px 4px;
+    /* No horizontal inset: the glyph starts on the card's own content edge, in
+       line with the title above it. */
+    padding: 12px 0;
   }
   .member + .member {
     border-top: 1px solid var(--ln);
@@ -758,9 +790,25 @@
     font-weight: 600;
     overflow-wrap: anywhere;
   }
+  /* One fact per segment, each unbreakable: at 340 px the line wraps between
+     "inscrit le 18 nov. 2026" and "vu il y a 1 min", never through one of them
+     ("vu il y / a 1 min" was what a plain text run did). */
   .meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 5px;
     font-size: 0.82rem;
-    overflow-wrap: anywhere;
+  }
+  .seg {
+    white-space: nowrap;
+  }
+  /* Three facts do not fit a phone's column: the enrolment date goes first, so
+     a row keeps the platform and the last sighting on one line each. */
+  @media (max-width: 760px) {
+    .wide-only {
+      display: none;
+    }
   }
   .tag {
     font-size: 0.68rem;
@@ -793,6 +841,10 @@
   }
   .danger:hover:not(:disabled) {
     background: var(--s2);
+  }
+  .confirm-hint {
+    flex-basis: 100%;
+    text-align: right;
   }
   .rename {
     display: flex;

@@ -217,9 +217,13 @@ export function platformLabel(platform) {
   }
 }
 
-/** The glyph of one platform (Icon.svelte names). */
+/**
+ * The glyph of one platform (Icon.svelte names): a screen for a computer, a
+ * phone for a handset. `ios` does not say whether it is an iPhone or an iPad,
+ * so it gets the phone too rather than a glyph that would guess wrong.
+ */
 export function platformIcon(platform) {
-  return platform === "desktop" ? "monitor" : "cast";
+  return platform === "desktop" ? "monitor" : "smartphone";
 }
 
 /** "current" | "revoked" | "enrolled" — what a device row's state is called. */
@@ -259,14 +263,29 @@ export function enrolledLabel(iso) {
   return new Date(at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** One device's second line: its platform, when it enrolled, when it was seen. */
-export function deviceDetail(device, now = Date.now()) {
-  if (!device) return "";
-  const parts = [platformLabel(device.platform)];
+/**
+ * One device's second line, FACT by fact: the platform, when it enrolled, when
+ * it was last seen. Each `kind` lets the screen decide where a fact is worth
+ * its line — the enrolment date is the first to go in a narrow column — and
+ * every segment is rendered unbreakable, so "vu il y a 1 min" is never cut.
+ */
+export function deviceSegments(device, now = Date.now()) {
+  if (!device) return [];
+  const out = [{ kind: "platform", text: platformLabel(device.platform) }];
   const since = enrolledLabel(device.created);
-  if (since) parts.push(`inscrit le ${since}`);
-  parts.push(deviceState(device) === "revoked" ? "révoqué" : seenLabel(device.last_seen, now));
-  return parts.join(" · ");
+  if (since) out.push({ kind: "enrolled", text: `inscrit le ${since}` });
+  out.push({
+    kind: "seen",
+    text: deviceState(device) === "revoked" ? "révoqué" : seenLabel(device.last_seen, now),
+  });
+  return out;
+}
+
+/** The same line as one string, for tests and any plain-text use. */
+export function deviceDetail(device, now = Date.now()) {
+  return deviceSegments(device, now)
+    .map((fact) => fact.text)
+    .join(" · ");
 }
 
 /** What a friend is allowed to see, in one line. */

@@ -114,6 +114,9 @@
     <rect x="2" y="3" width="20" height="14" rx="2" />
     <path d="M8 21h8" />
     <path d="M12 17v4" />
+  {:else if name === "smartphone"}
+    <rect x="5" y="2" width="14" height="20" rx="2" />
+    <path d="M12 18h.01" />
   {:else if name === "cast"}
     <path d="M2 16.1A5 5 0 0 1 5.9 20" />
     <path d="M2 12.05A9 9 0 0 1 9.95 20" />

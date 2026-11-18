@@ -60,9 +60,10 @@ function stubFetch({ fail = false } = {}) {
     };
   };
 }
-// lib/api.js reads `navigator.onLine` to decide whether a failed call is worth
-// retrying; Node 26 exposes `navigator` as a getter, so it is redefined.
-Object.defineProperty(globalThis, "navigator", { value: { onLine: true }, configurable: true });
+// `navigator.onLine` is what lib/api.js reads to decide whether a failed call
+// is worth retrying. Node's own `navigator` has no `onLine`, which is exactly
+// the browser case that retries: no shim, so the module under test is the one
+// the person runs.
 stubFetch();
 
 test("names, states and dates read in French", () => {
@@ -71,6 +72,10 @@ test("names, states and dates read in French", () => {
   assert.equal(lan.platformLabel("ios"), "iPhone ou iPad");
   assert.equal(lan.platformLabel("browser"), "browser");
   assert.equal(lan.platformLabel(null), "Appareil");
+
+  assert.equal(lan.platformIcon("desktop"), "monitor");
+  assert.equal(lan.platformIcon("android"), "smartphone");
+  assert.equal(lan.platformIcon("ios"), "smartphone");
 
   assert.equal(lan.deviceState({ current: true }), "current");
   assert.equal(lan.deviceState({ revoked: "2026-11-01T10:00:00Z" }), "revoked");
@@ -92,6 +97,14 @@ test("names, states and dates read in French", () => {
   };
   const detail = lan.deviceDetail(device, NOW);
   assert.match(detail, /^Téléphone Android · inscrit le 12 nov\. 2026 · vu il y a 2 min$/);
+  // The screen renders one SEGMENT per fact and breaks between them, so a
+  // narrow column can never cut "vu il y a 2 min" in two.
+  assert.deepEqual(lan.deviceSegments(device, NOW), [
+    { kind: "platform", text: "Téléphone Android" },
+    { kind: "enrolled", text: "inscrit le 12 nov. 2026" },
+    { kind: "seen", text: "vu il y a 2 min" },
+  ]);
+  assert.deepEqual(lan.deviceSegments(null, NOW), []);
   assert.match(lan.deviceDetail({ ...device, revoked: "2026-11-17T09:00:00Z" }, NOW), /· révoqué$/);
 });
 

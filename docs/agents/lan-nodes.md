@@ -1488,7 +1488,9 @@ optimistic, and every refusal puts the row back with its cause and « Réessayer
   section's own load; a cause line per row for a failed mutation; `role="switch"` with
   `aria-checked` on the two switches; every icon-only control labelled; glyphs through `Icon.svelte`;
   no emoji; the design system's `.card`, `.btn`, `.field`, `.chip` and a switch drawn the way
-  `webapp.md` draws one (`--btn`/`--onbtn` track, `--s2` + `--dim` when off).
+  `webapp.md` draws one (`--btn`/`--onbtn` track, `--s2` + `--dim` when off). The device glyph is the
+  platform's: a screen for a computer, a handset for Android and iOS (`smartphone` was added to
+  `Icon.svelte` — no existing glyph said "phone", and `cast` said the wrong thing).
 - `webapp/src/routes/Settings.svelte` — one import, one `onMount` probe, one nav entry in the
   « Comptes & serveur » group and one `{#if tab === "lan"}` include. Nothing else.
 - `webapp/test/lan.test.mjs` (13 tests) and the screenshots under
@@ -1531,11 +1533,26 @@ enrolments and real friendships through the routes; `PYTHON=~/.cache/neezer-ln8/
 | Rename, optimistic | new name painted **while its PATCH is held open** (0 console/frame work); on a 500 the old name returns with « erreur du serveur (HTTP 500 : Erreur serveur.) » and « Réessayer » | bench |
 | Friend picker | **0** requests on a cached library; **1 GET** cold | bench + `lan.test.mjs` |
 | Layout | **0 px** sideways overflow at 390 and 340 px; **0** control wider than the column; device rows stack their actions under the name | bench (`scrollWidth - clientWidth`, then a per-element right edge) |
+| The card's inner gabarit | **22 px** from the border to the title in all three cards (Réglages' own padding) | bench, `title.left - card.left - 1` |
+| The device line | **0** meta segment cut across lines; **3 lines** of explanation before the first device at 340 px (4 before this pass) | bench, `getClientRects().length > 1` per segment, then the paragraph's height / line-height |
+| The last card under the mini player | ends **32 px above** it on a phone (676 ≤ 708) and **28 px** at 340 px (636 ≤ 664) | bench, `scrollIntoViewIfNeeded` then the two rects |
 | `npm test` | **804 passed, 0 failed** (13 new) | `cd webapp && npm test` |
 | `npm run build` | green, **0 warning** naming `LanSettings.svelte` or `lib/lan.js` | `cd webapp && npm run build` |
 
 **Rules a measurement taught.**
 
+- **A child component's `.card` inherits NOTHING from the screen that renders it.** Svelte scopes
+  CSS per component, so `Settings.svelte`'s `.card` (22 px of padding, 16 px/600 title, 0.85 rem
+  subtitle) never reached `LanSettings.svelte`'s sections: measured on the first phone capture, the
+  title and the paragraph sat **flush against the card's border (0 px)** while the rows were
+  indented. The gabarit has to be repeated in the card's own component — same numbers, same tokens —
+  and the bench now asserts `22` on every card.
+- **A line of facts is a row of unbreakable segments, not a sentence.** "vu il y a 1 min" came out as
+  "vu il y / a 1 min" at 340 px. Each fact is its own nowrap span and the line wraps between them
+  (`display: flex; flex-wrap: wrap`), the separator glued to the NEXT segment so it can never end a
+  line alone; and the enrolment date — the least useful of the three on a phone — is the fact a
+  narrow column drops (`@media (max-width: 760px)`), which took the paragraph above the first device
+  from 4 lines to 3.
 - **A `<button>` laid out with `display: flex` will not shrink its text.** The admin switch's
   explanation and its title stayed on ONE line at 1280 px, the hint's last line running past the
   card's content box: `justify-content: space-between` gave the text column its max-content width and
