@@ -2513,6 +2513,19 @@ and one branch, `SettingsSections.kt` the « Sur vos appareils » slot, `feature
   below API 33 and `registerServiceInfoCallback` from 34 (the one-shot resolve is its fallback),
   8 addresses per resolution, 64 instances/resolves queued at most, `nz-<10 hex>` names re-drawn at
   every start, TXT exactly `v=1`.
+- **`LanNsd`'s threading: three threads write its tables, one lock guards them, and the platform is
+  never called with it held.** The discovery/registration listeners run on `NsdManager`'s thread, the
+  `ServiceInfoCallback`s on the `neezer-nsd` executor, `start`/`stop` on the host's — and
+  `unregisterServiceInfoCallback` invokes `onServiceInfoCallbackUnregistered()` **before it returns**,
+  which writes `callbacks`. Iterating that map with `forEach` in `stop()` therefore died with a
+  `java.util.ConcurrentModificationException` on the emulator (PR #365, `LanNsdTest`'s
+  `a_second_node_on_the_same_device…`). `lockObj` now guards `callbacks`, `known`, the resolve
+  `queue`, `resolving`, `registration`/`discovery` and `retries`; `stop()` snapshots and clears under
+  it, then unregisters outside it, and the core (`onFound`/`onLost`) is called outside it too (it can
+  call back into `stop()`). `LanNsdUnitTest` holds it on the JVM, where Robolectric's
+  `ShadowNsdManager` has the same synchronous callback: 3 live callbacks + `stop()` throws on the old
+  code, and 200 register/stop handovers with a second thread withdrawing the callback (25 per
+  handover) never fail.
 - **`LanActivityScheduler` + `LanHost`** — the three counted flags (foreground from
   `ProcessLifecycleOwner`, playing from `PlayerListener`, downloads from MB15's public
   `OfflineHost`), one 60 s grace, then `LanNsd.stop()` and `setActive(false,false,false)`; the node

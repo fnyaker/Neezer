@@ -39,9 +39,21 @@ import kotlinx.coroutines.flow.update
  *   immediately (a metrics-free FFI call); nothing here parses a name into a
  *   path, and a resolution's address list is capped at [MAX_ADDRESSES].
  *
+ * **Three threads write this class's bookkeeping** and nothing else does: the
+ * thread that calls [start]/[stop], `NsdManager`'s own thread (the discovery and
+ * registration listeners), and the [callbackExecutor] (the `ServiceInfoCallback`s
+ * from API 34). Every field below is therefore touched under [lockObj] only, and
+ * **the platform is never called while the lock is held**: `unregisterServiceInfoCallback`
+ * invokes `onServiceInfoCallbackUnregistered()` synchronously on some builds, which
+ * writes [callbacks] — doing that inside `callbacks.forEach` threw the
+ * `ConcurrentModificationException` that took the emulator's `LanNsdTest` down.
+ * [stop] snapshots and clears under the lock, then unregisters outside it.
+ *
  * The NSD bookkeeping is Android's, so this class is exercised on the device
- * (`LanNsdTest`, emulator) — the JVM suite covers [randomInstanceName] and the
- * queue's policy through [resolveQueueCapacity], which is all of it that is pure.
+ * (`LanNsdTest`, emulator) — the JVM suite pins [randomInstanceName], the queue's
+ * policy through [resolveQueueCapacity], and the lock discipline above through
+ * `LanNsdUnitTest` (Robolectric's `ShadowNsdManager` calls
+ * `onServiceInfoCallbackUnregistered` exactly like the device does).
  */
 class LanNsd(
     private val context: Context,
@@ -76,13 +88,24 @@ class LanNsd(
         }
     }
 
+    /**
+     * The one lock over the NSD bookkeeping. `synchronized` (not a `ReentrantLock`)
+     * on purpose: a listener callback may re-enter ([stop] from
+     * `onStartDiscoveryFailed`, [deliver] → `onFound` → the host's own path), and
+     * the JVM lock is reentrant per thread.
+     */
+    private val lockObj = Any()
+
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
+
+    @Volatile
     private var lock: WifiManager.MulticastLock? = null
 
     /** One resolution at a time below API 34; the queue is capped by [MAX_QUEUED]. */
     private val queue = ArrayDeque<NsdServiceInfo>()
     private var resolving: NsdManager.ResolveListener? = null
+    private var starting = false
 
     /** From API 34: one `ServiceInfoCallback` per discovered service. */
     private val callbacks = mutableMapOf<String, NsdManager.ServiceInfoCallback>()
@@ -98,52 +121,72 @@ class LanNsd(
             _state.update { it.copy(lastError = "port à annoncer invalide : $port") }
             return
         }
-        if (registration != null) return
-        val manager = nsd ?: run {
+        synchronized(lockObj) {
+            if (registration != null || starting) return
+            starting = true
+        }
+        val manager = nsd
+        if (manager == null) {
+            synchronized(lockObj) { starting = false }
             _state.update { it.copy(lastError = "Ce téléphone n'a pas de découverte de services (NsdManager).") }
             return
         }
-        // The lock comes FIRST: on API 26–32 (and an un-updated 33) the platform
-        // only takes it for a foreground service, so an announcement made before
-        // it would never leave the phone.
-        acquireLock()
-        register(manager, port)
-        browse(manager)
+        try {
+            // The lock comes FIRST: on API 26–32 (and an un-updated 33) the platform
+            // only takes it for a foreground service, so an announcement made before
+            // it would never leave the phone.
+            acquireLock()
+            register(manager, port)
+            browse(manager)
+        } finally {
+            synchronized(lockObj) { starting = false }
+        }
     }
 
     /** Stops browsing and announcing and RELEASES the lock. Safe twice. */
     fun stop() {
         val manager = nsd
-        try {
-            discovery?.let { listener -> runCatching { manager?.stopServiceDiscovery(listener) } }
-        } finally {
+        // Assigned under the lock, read outside it: the platform is never called
+        // while the lock is held.
+        var browse: NsdManager.DiscoveryListener? = null
+        var announce: NsdManager.RegistrationListener? = null
+        var unregister: List<NsdManager.ServiceInfoCallback> = emptyList()
+        synchronized(lockObj) {
+            browse = discovery
+            announce = registration
             discovery = null
-            try {
-                registration?.let { listener -> runCatching { manager?.unregisterService(listener) } }
-            } finally {
-                registration = null
-                // A resolve in flight has no stop on every API: dropping the
-                // listener is enough, its late answer finds no state to update.
-                resolving = null
-                queue.clear()
-                if (Build.VERSION.SDK_INT >= 34 && manager != null) {
-                    callbacks.forEach { (_, callback) ->
-                        runCatching { manager.unregisterServiceInfoCallback(callback) }
-                    }
+            registration = null
+            starting = false
+            // A resolve in flight has no stop on every API: dropping the
+            // listener is enough, its late answer finds no state to update.
+            resolving = null
+            queue.clear()
+            // Snapshot and clear BEFORE the platform is called: the
+            // unregistration callback removes its own entry, so a `forEach` over
+            // the live map is the ConcurrentModificationException this guards.
+            unregister = if (Build.VERSION.SDK_INT >= 34) callbacks.values.toList() else emptyList()
+            callbacks.clear()
+            known.clear()
+        }
+        try {
+            runCatching { browse?.let { manager?.stopServiceDiscovery(it) } }
+            runCatching { announce?.let { manager?.unregisterService(it) } }
+            if (Build.VERSION.SDK_INT >= 34 && manager != null) {
+                unregister.forEach { callback ->
+                    runCatching { manager.unregisterServiceInfoCallback(callback) }
                 }
-                callbacks.clear()
-                known.clear()
-                releaseLock()
-                _state.update {
-                    it.copy(advertising = false, browsing = false, lockHeld = false, advertisedPort = 0)
-                }
+            }
+        } finally {
+            releaseLock()
+            _state.update {
+                it.copy(advertising = false, browsing = false, lockHeld = false, advertisedPort = 0)
             }
         }
     }
 
     /** The port really announced (the platform accepts it, `advertisedPort()` chose it). */
     val isRunning: Boolean
-        get() = registration != null || discovery != null
+        get() = synchronized(lockObj) { registration != null || discovery != null }
 
     val lockIsHeld: Boolean
         get() = lock?.isHeld == true
@@ -159,8 +202,10 @@ class LanNsd(
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
-                registration = this
-                retries = 0
+                synchronized(lockObj) {
+                    registration = this
+                    retries = 0
+                }
                 _state.update {
                     it.copy(
                         advertising = true,
@@ -173,10 +218,17 @@ class LanNsd(
             override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
                 // A name conflict is the one failure worth one more draw
                 // (RFC 6762 §8.1: probe, and on a clash, announce another name).
-                if (retries < MAX_NAME_RETRIES) {
-                    retries++
+                val redraw = synchronized(lockObj) {
+                    if (retries < MAX_NAME_RETRIES) {
+                        retries++
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (redraw) {
                     runCatching { manager.registerService(info.copyForRetry(), NsdManager.PROTOCOL_DNS_SD, this) }
-                        .onSuccess { registration = this }
+                        .onSuccess { synchronized(lockObj) { registration = this } }
                         .onFailure { fail(it) }
                 } else {
                     fail(IllegalStateException("l'annonce a échoué (code $errorCode)"))
@@ -187,10 +239,10 @@ class LanNsd(
 
             override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) = Unit
         }
-        registration = listener
+        synchronized(lockObj) { registration = listener }
         runCatching { manager.registerService(service, NsdManager.PROTOCOL_DNS_SD, listener) }
             .onFailure { failure ->
-                registration = null
+                synchronized(lockObj) { if (registration === listener) registration = null }
                 fail(failure)
             }
     }
@@ -225,10 +277,10 @@ class LanNsd(
                 forget(info.serviceName)
             }
         }
-        discovery = listener
+        synchronized(lockObj) { discovery = listener }
         runCatching { manager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener) }
             .onFailure { failure ->
-                discovery = null
+                synchronized(lockObj) { if (discovery === listener) discovery = null }
                 fail(failure)
             }
     }
@@ -245,35 +297,47 @@ class LanNsd(
 
     /** One resolution at a time; the rest wait (capped, never unbounded). */
     private fun enqueue(manager: NsdManager, info: NsdServiceInfo) {
-        if (resolving != null) {
-            if (queue.size >= MAX_QUEUED) return
-            queue.addLast(info)
-            return
+        val resolveNow = synchronized(lockObj) {
+            if (resolving != null) {
+                if (queue.size < MAX_QUEUED) queue.addLast(info)
+                false
+            } else {
+                true
+            }
         }
-        resolveNext(manager, info)
+        if (resolveNow) resolveNext(manager, info)
     }
 
     private fun resolveNext(manager: NsdManager, info: NsdServiceInfo) {
         val listener = object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                resolving = null
-                // A failed resolution is not a peer: the core is not told, and the
-                // queue goes on (one hint lost, never a stall).
-                pump(manager)
-            }
+            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = finished(manager)
 
             override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                resolving = null
-                deliver(serviceInfo)
-                pump(manager)
+                finished(manager) { deliver(serviceInfo) }
             }
         }
-        resolving = listener
+        synchronized(lockObj) { resolving = listener }
         runCatching { resolveOne(manager, info, listener) }
-            .onFailure {
-                resolving = null
-                pump(manager)
-            }
+            .onFailure { finished(manager) }
+    }
+
+    /**
+     * The platform answered (or refused) the one resolve in flight: the queue goes
+     * on. A failed resolution is not a peer — the core is not told, and one lost
+     * hint never stalls the queue.
+     */
+    private fun finished(manager: NsdManager, then: (() -> Unit)? = null) {
+        synchronized(lockObj) { resolving = null }
+        then?.invoke()
+        pump(manager)
+    }
+
+    private fun pump(manager: NsdManager) {
+        val next = synchronized(lockObj) {
+            if (resolving != null) return
+            queue.removeFirstOrNull()
+        } ?: return
+        resolveNext(manager, next)
     }
 
     /**
@@ -289,12 +353,6 @@ class LanNsd(
         }
     }
 
-    private fun pump(manager: NsdManager) {
-        if (resolving != null) return
-        val next = queue.removeFirstOrNull() ?: return
-        resolveNext(manager, next)
-    }
-
     /**
      * API 34's live callback: a discovered service's addresses stay up to date,
      * which is what the note's *Android discovery* names. Guarded at the call
@@ -302,11 +360,9 @@ class LanNsd(
      */
     @androidx.annotation.RequiresApi(34)
     private fun monitor(manager: NsdManager, info: NsdServiceInfo) {
-        if (callbacks.containsKey(info.serviceName)) return
-        if (callbacks.size >= MAX_QUEUED) return
         val callback = object : NsdManager.ServiceInfoCallback {
             override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-                callbacks.remove(info.serviceName)
+                synchronized(lockObj) { callbacks.remove(info.serviceName) }
                 // A device whose extension refused the live callback still
                 // resolves: the one-shot call is deprecated, not gone.
                 enqueue(manager, info)
@@ -321,12 +377,16 @@ class LanNsd(
             }
 
             override fun onServiceInfoCallbackUnregistered() {
-                callbacks.remove(info.serviceName)
+                synchronized(lockObj) { callbacks.remove(info.serviceName) }
             }
         }
-        callbacks[info.serviceName] = callback
+        synchronized(lockObj) {
+            if (callbacks.containsKey(info.serviceName)) return
+            if (callbacks.size >= MAX_QUEUED) return
+            callbacks[info.serviceName] = callback
+        }
         runCatching { manager.registerServiceInfoCallback(info, callbackExecutor, callback) }
-            .onFailure { callbacks.remove(info.serviceName) }
+            .onFailure { synchronized(lockObj) { callbacks.remove(info.serviceName, callback) } }
     }
 
     /**
@@ -339,10 +399,14 @@ class LanNsd(
         if (port <= 0 || port > 65535) return
         val hosts = addressesOf(info).take(MAX_ADDRESSES)
         if (hosts.isEmpty()) return
+        // The core is called OUTSIDE the lock: it is another thread's code and it
+        // may call straight back into this class (a `stop()` on a refused peer).
         hosts.forEach { host -> onFound(host, port) }
         val first = hosts.first()
-        known[info.serviceName] = first to port
-        if (known.size > MAX_QUEUED) known.remove(known.keys.first())
+        synchronized(lockObj) {
+            known[info.serviceName] = first to port
+            if (known.size > MAX_QUEUED) known.remove(known.keys.first())
+        }
         val key = "$first:$port"
         _state.update {
             if (key in it.resolved) it else it.copy(resolved = (it.resolved + key).take(MAX_QUEUED))
@@ -350,7 +414,7 @@ class LanNsd(
     }
 
     private fun forget(name: String) {
-        val last = known.remove(name) ?: return
+        val last = synchronized(lockObj) { known.remove(name) } ?: return
         onLost(last.first, last.second)
     }
 
