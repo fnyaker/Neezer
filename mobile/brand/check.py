@@ -51,7 +51,7 @@ import tempfile
 # non fiable : pas de DTD, pas d'entité externe, aucune socket ouverte. Le
 # scanner XXE de Semgrep ne s'applique donc pas à ce fichier — marqué faux
 # positif plutôt que d'ajouter une dépendance hors stdlib au script.
-import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml
+import xml.etree.ElementTree as ET  # nosemgrep
 
 import numpy as np
 
@@ -71,7 +71,7 @@ def _render(svg_path, size, strip_ground, out_png):
     src = svg_path
     tmp = None
     if strip_ground:
-        tree = ET.parse(svg_path)  # nosemgrep: python.lang.security.use-defused-xml-parse
+        tree = ET.parse(svg_path)  # nosemgrep
         _drop_group(tree.getroot(), "ground")
         tmp = out_png + ".svg"
         tree.write(tmp, encoding="utf-8", xml_declaration=False)
@@ -195,7 +195,7 @@ def contrast(a, b):
 
 def _layers(svg_path):
     """Les couleurs du fond et des formes, séparément."""
-    tree = ET.parse(svg_path)  # nosemgrep: python.lang.security.use-defused-xml-parse
+    tree = ET.parse(svg_path)  # nosemgrep
     ground, marks, colours = [], [], []
     for el in tree.getroot().iter():
         for attr in ("fill", "stroke"):
@@ -273,7 +273,7 @@ def _variant(svg_path, work, tag):
 
 def _touching_pairs(svg_path, size=1080, reach=2):
     """Les couples de couleurs qui se touchent, et leur contraste WCAG."""
-    tree = ET.parse(svg_path)  # nosemgrep: python.lang.security.use-defused-xml-parse
+    tree = ET.parse(svg_path)  # nosemgrep
     colours = []
     for el in tree.getroot().iter():
         for attr in ("fill", "stroke"):
