@@ -826,6 +826,59 @@ class UpgradeFrom20261123TestCase(_ExternalDatabaseTestCase):
         self.assertEqual(User.select().count(), 2)
 
 
+class LanKeyOnTheRealEngineTestCase(_ExternalDatabaseTestCase):
+    """The LAN key lives in `Meta` and is written by an update-then-insert
+    fallback (`neezer.lan._meta_set`), because PostgreSQL has no `REPLACE` and
+    an `IntegrityError` inside the outer transaction poisons it there. That
+    path, and the sealed seed, are exactly what a SQLite test cannot prove."""
+
+    def test_the_sealed_seed_and_its_upsert_work_on_this_engine(self):
+        from neezer import lan
+
+        alice, bob = _seed_users()
+        lan._reset_for_tests()
+        try:
+            first = lan.lan_key()
+            stored = Meta.get(Meta.key == lan.META_SEED).value
+            self.assertTrue(stored.startswith("gcm:"))
+            self.assertNotIn(first.seed.hex(), stored)
+            self.assertEqual(len(Meta.select().where(Meta.key == lan.META_SEED)), 1)
+
+            # Writing the SAME row again goes through the update branch: no
+            # duplicate key, no second row.
+            lan.set_credential_days(7)
+            lan.set_credential_days(14)
+            self.assertEqual(lan.credential_days(), 14)
+            self.assertEqual(
+                Meta.select().where(Meta.key == lan.META_CRED_DAYS).count(), 1
+            )
+            lan.set_enabled(False)
+            lan.set_enabled(True)
+            self.assertTrue(lan.enabled())
+
+            # A fresh process view reads the same key back (the seed survived).
+            lan._reset_for_tests()
+            self.assertEqual(lan.lan_key().kid, first.kid)
+
+            # A rotation keeps the previous key, sealed, with its end date.
+            rotated = lan.rotate()
+            self.assertNotEqual(rotated.kid, first.kid)
+            self.assertEqual(
+                [key["kid"] for key in lan.status_keys()],
+                [rotated.kid.hex(), first.kid.hex()],
+            )
+            self.assertEqual(lan.previous_key().kid, first.kid)
+
+            # And the revocation serial is written by the same upsert.
+            from neezer.lan import _bump_revocation_serial
+
+            self.assertEqual(_bump_revocation_serial(), 1)
+            self.assertEqual(_bump_revocation_serial(), 2)
+            self.assertEqual(lan.revocation_serial(), 2)
+        finally:
+            lan._reset_for_tests()
+
+
 class UniqueKeysTestCase(_ExternalDatabaseTestCase):
     """The folded name and the invitation's token hash are the two unique keys
     the account lot relies on, and each must be enforced by the engine itself."""
