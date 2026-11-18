@@ -1119,6 +1119,28 @@ mod tests {
         assert!(view.archive_library);
     }
 
+    /// **A credential never becomes part of a card.** The route's own body has no
+    /// `arl` field (the server sends the masked hint only), and this asserts the
+    /// stronger property the screen relies on: a body that DID carry one is read
+    /// into the shared model, whose `ServerDeezerSettings` has no field for it,
+    /// so nothing of the secret can reach `AdminServerCard` — the struct has
+    /// nowhere to put it (rule 6 and *Security*: the ARL is write-only).
+    #[test]
+    fn a_credential_in_the_servers_answer_never_reaches_a_card() {
+        let settings: ServerSettings = serde_json::from_str(
+            r#"{"upload_quota_gb":0,
+                "deezer":{"enabled":true,"arl_set":true,"arl_source":"database",
+                          "arl_hint":"…a1b2","archive_dir_set":true,
+                          "arl":"SECRET-ARL-VALUE"}}"#,
+        )
+        .expect("the server's settings");
+        let card = ServerCardView::of(&settings, None);
+        assert_eq!(card.arl_hint.as_deref(), Some("…a1b2"));
+        assert!(card.arl_set);
+        let rendered = format!("{card:?}");
+        assert!(!rendered.contains("SECRET-ARL-VALUE"), "{rendered}");
+    }
+
     /// The transcription settings: the engine's verdict, the model's size and the
     /// queue's own split ("2 en cours" = running + leased).
     #[test]

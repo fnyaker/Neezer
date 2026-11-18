@@ -1451,12 +1451,7 @@ private fun DeezerCard(model: AdminModel, state: AdminModel.State) {
                 ok = card.statusOk,
             )
             Text(
-                text = if (card.arlSet) {
-                    "ARL actif ${card.arlHint ?: ""} · source : " +
-                        (if (card.arlSource == "database") "saisi ici" else "configuration serveur")
-                } else {
-                    "Aucun ARL configuré"
-                },
+                text = AdminCopy.arlLine(card),
                 style = Sillon.type.bodySmall,
                 color = Sillon.colors.dim,
             )

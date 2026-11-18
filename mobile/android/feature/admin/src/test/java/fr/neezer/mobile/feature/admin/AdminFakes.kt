@@ -364,6 +364,11 @@ class FakeAdminService(
         return AdminIdentity(id = "u-1", name = name, admin = admin)
     }
 
+    override suspend fun restoreSession(): Boolean {
+        record("restoreSession")
+        return admin
+    }
+
     override fun cachedUsers(): AdminUsersPage? = copy
 
     override suspend fun users(q: String, after: String?, limit: UInt): AdminUsersPage {

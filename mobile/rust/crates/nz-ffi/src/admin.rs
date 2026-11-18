@@ -835,14 +835,24 @@ impl Screens {
     // --- who is asking -----------------------------------------------------
 
     /// Who is signed in, from the session the core restored: **no request**, and
-    /// `None` before a login. A member sees no admin entry at all (the server
-    /// would refuse every route below).
+    /// `None` before a login — or after a launch that could not reach the server
+    /// (offline), which is what [`Screens::admin_restore_session`] is for. A
+    /// member sees no admin entry at all (the server would refuse every route
+    /// below).
     pub fn admin_identity(&self) -> Option<AdminIdentity> {
         self.core().me().map(|me| AdminIdentity {
             id: me.user.id.to_string(),
             name: me.user.name,
             admin: me.user.admin,
         })
+    }
+
+    /// `GET /api/me` — re-reads the session INTO the core (the setup's own
+    /// `restore()`). One request, and only when a screen found no session in
+    /// memory: a launch made offline leaves it empty, and this is how the
+    /// administrator categories come back once the link is.
+    pub async fn admin_restore_session(&self) -> bool {
+        matches!(self.core().restore().await, Ok(Some(_)))
     }
 
     // --- people ------------------------------------------------------------
@@ -1089,10 +1099,7 @@ impl Screens {
 
     /// `POST /api/archive/backfill` — `all`, `favorites`, `playlists` or
     /// `podcasts` (`AdminCopy.ARCHIVE_SCOPES`). Only ever adds.
-    pub async fn admin_start_archive(
-        &self,
-        scope: String,
-    ) -> Result<AdminArchiveStatus, NzError> {
+    pub async fn admin_start_archive(&self, scope: String) -> Result<AdminArchiveStatus, NzError> {
         self.core()
             .admin_start_archive(&scope)
             .await

@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 import uniffi.nz_ffi.AdminInviteRow
+import uniffi.nz_ffi.AdminServerCard
 import uniffi.nz_ffi.AdminUserRow
 import uniffi.nz_ffi.NzException
 
@@ -277,11 +278,24 @@ object AdminCopy {
         }
     }
 
+    /**
+     * The ARL card's line, and the WHOLE of what this app knows about the
+     * credential: the server's masked hint and where it comes from, never the
+     * ARL itself — `AdminServerCard` has no field that could carry it, so the
+     * value cannot be drawn, logged or screenshotted by mistake.
+     */
+    fun arlLine(card: AdminServerCard?): String = when {
+        card == null -> ""
+        !card.arlSet -> "Aucun ARL configuré"
+        else -> "ARL actif ${card.arlHint ?: ""} · source : " +
+            (if (card.arlSource == "database") "saisi ici" else "configuration serveur")
+    }
+
     /** `format.js#bytes` — what a gauge says, in Ko/Mo/Go. */
     fun bytes(count: ULong): String {
         val value = count.toDouble()
         return when {
-            value >= 1024.0 * 1024 * 1024 * 1024 -> "%.2f To".format(Locale.FRENCH, value / (1024.0 * 1024 * 1024 * 1024))
+            value >= 1024.0 * 1024 * 1024 * 1024 -> "%.1f To".format(Locale.FRENCH, value / (1024.0 * 1024 * 1024 * 1024))
             value >= 1024.0 * 1024 * 1024 -> "%.1f Go".format(Locale.FRENCH, value / (1024.0 * 1024 * 1024))
             value >= 1024.0 * 1024 -> "%.0f Mo".format(Locale.FRENCH, value / (1024.0 * 1024))
             value >= 1024.0 -> "%.0f Ko".format(Locale.FRENCH, value / 1024)

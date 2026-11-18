@@ -38,6 +38,14 @@ interface AdminService {
     /** `/api/me`'s `user.admin`, lu de la session : **zéro requête**. */
     fun identity(): AdminIdentity?
 
+    /**
+     * `GET /api/me` : relit la session DANS le noyau. Une requête, et seulement
+     * quand un écran n'a trouvé aucune session en mémoire (un lancement hors
+     * ligne la laisse vide) — c'est ainsi que les catégories d'administration
+     * reviennent quand le réseau revient. Hors ligne : `false`, zéro socket.
+     */
+    suspend fun restoreSession(): Boolean
+
     // -- les comptes --------------------------------------------------------
     fun cachedUsers(): AdminUsersPage?
     suspend fun users(q: String, after: String?, limit: UInt): AdminUsersPage
@@ -113,6 +121,8 @@ interface AdminService {
 /** La seule implémentation réelle : les méthodes de ce lot dans `nz-ffi`. */
 class NzAdminService(private val screens: uniffi.nz_ffi.Screens) : AdminService {
     override fun identity(): AdminIdentity? = screens.adminIdentity()
+
+    override suspend fun restoreSession(): Boolean = screens.adminRestoreSession()
 
     override fun cachedUsers(): AdminUsersPage? = screens.cachedAdminUsers()
 

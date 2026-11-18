@@ -130,10 +130,20 @@ class SettingsModel(
     /** The device's own settings, before any section asks for anything. */
     fun start() {
         if (!state.sessionAdmin) {
-            state = state.copy(
-                sessionAdmin = runCatching { fr.neezer.mobile.feature.admin.AppAdmin.service()?.identity()?.admin }
-                    .getOrNull() == true,
-            )
+            val identity = runCatching { fr.neezer.mobile.feature.admin.AppAdmin.service()?.identity() }
+                .getOrNull()
+            state = state.copy(sessionAdmin = identity?.admin == true)
+            // No session in memory: a launch made offline left it empty. One
+            // `/api/me` (zero sockets offline) — and the categories are back as
+            // soon as the link is, on this visit or the next.
+            if (identity == null) {
+                scope.launch {
+                    val restored = runCatching {
+                        fr.neezer.mobile.feature.admin.AppAdmin.service()?.restoreSession()
+                    }.getOrNull() == true
+                    if (restored) state = state.copy(sessionAdmin = true)
+                }
+            }
         }
         if (state.settings == null) {
             state = state.copy(settings = runCatching { service.settings() }.getOrNull())

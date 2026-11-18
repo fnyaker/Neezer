@@ -3505,6 +3505,17 @@ Deezer verdict.
 - **The failure block belongs to the ACCOUNTS read, not to the table.** `/admin/users` can fail
   while `/admin/invites` succeeds, and the invites then fill the rows: a block keyed on
   `rows.isEmpty()` never appeared (this lot's own failure capture showed the bug).
+- **A restore that fails must not swallow itself, and the menu must come back.** `NzApplication`
+  keeps ONE process-wide scope (`SupervisorJob` + IO) for the core calls that outlive a screen, and
+  a failed `/api/me` is logged with its cause and nothing else — no cookie, no token, no body. Off
+  the link the app keeps working from the device; `SettingsModel` asks for the session again
+  (`/api/me`, zero sockets offline) whenever it finds none in memory, so the administrator
+  categories reappear on the next Réglages visit once the link is back.
+- **An identifier is WRITE-ONLY, and that is a shape, not a habit.** `AdminServerCard` has no field
+  that could carry the ARL: the server sends the masked hint (`…a1b2`) and its origin, the card
+  draws exactly that, and a test reads the same body WITH an `arl` field to prove the value cannot
+  reach a card (it never leaves the shared model, which has no field for it). Nothing here is
+  logged, and the committed captures were scanned for tokens: **25 PNGs, none carrying one**.
 - **The parent scrolls, so the account table is a bounded pager, not a `LazyColumn`.** Réglages
   wraps a category in `verticalScroll`, and a `LazyColumn` there measures at an infinite height.
   The list is the SPA's own cap — 250 rows, 25 per page, the search running on the SERVER — so
@@ -3539,15 +3550,16 @@ emulator API 35 x86_64, `-no-window -no-audio`, own port 5620, `tools/perf_api.p
 
 | What | How | Numbers |
 |---|---|---|
-| Rust | `cargo test --workspace --locked` | **356 `nz-core` tests** (27 of them this lot's), 57 `nz-ffi` (2 this lot's), 7 `nz-droid-audio`, all green; `fmt` and `clippy -D warnings` clean |
+| Rust | `cargo test --workspace --locked` | **357 `nz-core` tests** (28 of them this lot's), 57 `nz-ffi` (2 this lot's), 7 `nz-droid-audio`, all green; `fmt` and `clippy -D warnings` clean |
 | A cold *Utilisateurs* | fake server, counted | **2 requests, 470 bytes in** — `/admin/users` + `/admin/invites`, the SPA's own two |
 | A warm *Utilisateurs* | same, held at a gate | **0 requests**: the device's copy paints while the link is still out |
 | A cold *Serveur* | same | **12 requests, 3 195 bytes in** — the SPA's ten (`/settings`, `/deezer/status`, `/storage`, `/archive/rules`, `/archive/cleanup/preview`, `/archive/status`, `/archive/migrate`, `/enrich/backfill`, `/credits/backfill`, `/transcribe/settings`) plus the upkeep card's two (`/analysis/plan`, `/analysis/backfill`) |
 | A warm *Serveur* | same | **0 requests**, every card from the copy |
+| Each page, per theme | the acceptance's captures | *Utilisateurs* and *Serveur*, **Encre and Papier**, at 360 and 600 dp — the 22 Robolectric PNGs, plus the 200 % scale, the sheets, a failed table, a member's page and the opened failure block |
 | A job | start, then the poll | the start answers at once; the poll is **1 read every 1.5 s while `running`**, and **0 after it ends** (the test advances the clock and counts) |
 | A refused role | 409 `last_admin` | the row is put back and the sentence shown; **0 rows changed** |
-| Kotlin | `:feature:admin:testDebugUnitTest` | **39 tests**: 17 `AdminModelTest` (the two counts, the four card states, the debounce, the cursor, the optimistic writes and their rollbacks, the job poll, one-field writes) and 22 Robolectric screenshots |
-| Screenshots | Robolectric, NATIVE graphics | **22 PNGs** under `docs/agents/screenshots/mobile/MB17/` (Encre/Papier at 360 and 600 dp, the 200 % scale, the account sheet, the invite link, a failed table, a member's page, the opened failure block) — looked at, and four layout bugs fixed from them (a clipped button row at 200 %, a 72 dp switch row, the failure block that never appeared, a count line wrapped mid-phrase) |
+| Kotlin | `:feature:admin:testDebugUnitTest` | **47 tests**: 17 `AdminModelTest` (the two counts, the four card states, the debounce, the cursor, the optimistic writes and their rollbacks, the job poll, one-field writes), 8 `AdminCopyTest` (the ARL line and the card's field list, the gauges, the counts, the filters, the failure text, the auto-match reasons) and 22 Robolectric screenshots |
+| Screenshots | Robolectric, NATIVE graphics | **22 PNGs** under `docs/agents/screenshots/mobile/MB17/` (Encre/Papier at 360 and 600 dp, the 200 % scale, the account sheet, the invite link, a failed table, a member's page, the opened failure block) — looked at, and four layout bugs fixed from them (a clipped button row at 200 %, a 72 dp switch row, the failure block that never appeared, a count line wrapped mid-phrase). A scan of all 25 committed PNGs (with the three emulator ones) found **no token, no ARL, no cookie** |
 | The real app | emulator, own port 5620, the debug APK over `tools/perf_api.py` (60 tracks) | three captures: `mb17-emulator-users.png` (the table, its filters and 1 real account), `mb17-emulator-server.png` (archive, migration, MusicBrainz), `mb17-emulator-server-jobs.png` (auto-match and transcription, with the server's own reason « La transcription n'est pas disponible sur ce serveur »). The walk is what found the admin gate: the two categories were unreachable until the session was restored |
 | `libnz_ffi.so` | `build-android.sh` | arm64-v8a **12 857 032 B**, armeabi-v7a 8 672 744 B, x86_64 15 176 080 B (the 9 MB ceiling is MQ2's, and MB3a already reported it) |
 
