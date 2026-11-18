@@ -280,21 +280,15 @@ async fn login_me_and_401_round_trip_against_the_bench() {
 /// is `Some(true)`, `/no-such-route-at-all` is `Some(false)`, and the probe
 /// costs one request each.
 ///
-/// **`PENDING_SERVER_ROUTES` is the one exception, and it names features one by
-/// one.** A client feature and its server route can land in different lots, and
-/// a bench that demanded `Some(true)` for every feature then went red on a base
-/// where the client was right and the route was simply not written yet:
-/// `Feature::Lan` probes `/lan/status`, which **LN1** registers
-/// (`docs/agents/lan-nodes.md`). LN1 removes `Feature::Lan` from this list and
-/// the loop below requires `Some(true)` for it again — so the exemption can
-/// never rot into "no feature's route is checked".
+/// **Every feature's route is required, with no exemption list.** LN0 landed
+/// `Feature::Lan` one wave before `/api/lan/status` existed and named it in a
+/// `PENDING_SERVER_ROUTES` list so this bench could stay green; LN1 registers
+/// the route and deleted that list, so the loop below is back to requiring
+/// `Some(true)` for every `Feature::ALL`. A feature added in the future the same
+/// way gets the same one-lot exemption, never a weaker "any answer".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_optional_route_is_told_apart_from_a_missing_one() {
     use nz_api::features::Feature;
-
-    /// Features whose route the server does not have YET. Empty is the shipped
-    /// state; each entry names the lot that empties it.
-    const PENDING_SERVER_ROUTES: &[Feature] = &[Feature::Lan];
 
     let bench = Bench::start();
     let api = client(&bench);
@@ -302,21 +296,8 @@ async fn an_optional_route_is_told_apart_from_a_missing_one() {
 
     for feature in Feature::ALL {
         let path = feature.probe();
-        let answer = api.has_route(path).await;
-        if PENDING_SERVER_ROUTES.contains(&feature) {
-            // A definite `404`, not a doubt: the route really is absent, which
-            // is the answer an older server gives and the one `has_route` must
-            // classify as "no such feature".
-            assert_eq!(
-                answer,
-                Some(false),
-                "{feature:?}: {path} is not registered yet (LN1 removes it from \
-                 PENDING_SERVER_ROUTES)"
-            );
-            continue;
-        }
         assert_eq!(
-            answer,
+            api.has_route(path).await,
             Some(true),
             "{feature:?}: {path} exists on this server"
         );
