@@ -2938,10 +2938,12 @@ panel, public page) plus the import job.
   (`‹ Playlist ⋯`). The screens here draw none: the band carries the title, the route's name is the
   shell's, back is the system's. The Robolectric captures cannot show it (they draw the screen
   alone), which is exactly why the emulator capture is in the acceptance.
-- **A cold-start app link crashes the SHELL** (`AppGraph.attach` → `openLink` → `getGraph()` before
-  `setGraph()`, `IllegalStateException` on `am start -a VIEW -d neezer://playlist/<id>` from a
-  stopped process). Worked around for the capture by launching the app first and sending the link
-  warm; **the fix belongs to `:app`** (MB0/MB2's file) and is reported, not patched here.
+- **A cold-start app link used to crash the SHELL** (`AppGraph.attach` → `openLink` → `getGraph()`
+  before `setGraph()`: `IllegalStateException` on `am start -a VIEW -d neezer://playlist/<id>` from
+  a stopped process, found while capturing this screen). Fixed in `:app` — `attach` no longer
+  navigates, the kept link opens from the shell's effect once the graph exists
+  (`AppLinkColdStartTest` holds both the cold and the warm door), which is why the capture above
+  can open the page by link at all.
 
 **Not ported, on purpose** (each named where it is drawn):
 
