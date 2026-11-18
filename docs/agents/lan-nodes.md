@@ -1531,7 +1531,7 @@ package and version were already in both.
 | Measure | Value | Command / test |
 |---|---|---|
 | LN6's suite | **20 tests**, 5.2 s | `cargo test -p nz-lan --test transport` |
-| handshake + both proofs, loopback, 100 runs | **p50 3.28 ms, p95 3.97 ms, max 5.49 ms** (debug) · **p50 0.63 ms, p95 1.00 ms, max 1.38 ms** (release) | `cargo test -p nz-lan [--release] --test transport the_handshake_and_both_proofs_are_fast -- --nocapture` |
+| handshake + both proofs, loopback, 100 runs | **release: p50 0.63–0.90 ms, p95 1.00–1.35 ms** · debug: p50 3.3–6.2 ms, p95 4.0–9.0 ms (two runs each; the debug spread is this machine's load, which is why the debug assertion is a 1 s ceiling and the note's number is the release one) | `cargo test -p nz-lan [--release] --test transport the_handshake_and_both_proofs_are_fast -- --nocapture` |
 | a stranger's answer | **0 bytes**, one code, empty reason | `a_stranger_gets_no_identity_byte` |
 | one refusal, five causes | 5 causes → **1 code (`0x10`), 0 bytes each** | `every_refusal_is_the_same_code_and_no_identity_byte` |
 | the pre-auth budget | refused at **exactly 2 s** of virtual time, and on a header over **2 KiB** (0 s spent) | `the_responder_closes_two_seconds_without_a_valid_auth`, `the_responder_refuses_more_than_two_kib_before_auth` |
