@@ -149,6 +149,23 @@ pub fn shutdown() {
     }
 }
 
+/// Re-points the worker at the fetcher LN13 wraps, once the LAN node exists.
+///
+/// Called by `nz_core::lan::LanCore::start`, from a runtime context (every FFI
+/// `async fn` is): `configure` needs a `Handle` for the downloader's lanes, and a
+/// caller outside one leaves the worker as it is rather than panicking on
+/// Kotlin's main thread.
+pub fn reconfigure() {
+    let Some(service) = get() else {
+        return;
+    };
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    *lock(&service.inner.configured) = None;
+    service.configure();
+}
+
 impl Offline {
     /// Start a service over `core`'s cache. Public so a test owns its own (the
     /// process's one is [`attach`]'s).
@@ -187,6 +204,13 @@ impl Offline {
         &self.inner.core
     }
 
+    /// The `nz-offline` worker itself, for nz-lan's playlist download (LN13):
+    /// « Télécharger » on « Sur vos appareils » queues jobs in the same queue the
+    /// downloads screen draws.
+    pub fn worker(&self) -> &nz_offline::Offline {
+        &self.inner.worker
+    }
+
     /// Stop the loop, join it, then stop `nz-bulk` and join it. Idempotent.
     pub fn shutdown(&self) {
         self.inner.stop.store(true, Ordering::Release);
@@ -223,10 +247,14 @@ impl Offline {
         // `TAG_NONE` only, so a download can never inflate the rate it is
         // throttled by (rule 1).
         let tagged = Arc::new(api.with_tag(TAG_DOWNLOAD));
-        let downloader = Arc::new(nz_offline::ApiDownloader::new(
+        let plain: Arc<dyn nz_offline::Downloader> = Arc::new(nz_offline::ApiDownloader::new(
             tagged,
             tokio::runtime::Handle::current(),
         ));
+        // LN13: a peer is asked before the server once the LAN node exists, and
+        // its fetcher is `Bulk` on the SAME gates this worker already obeys
+        // (docs/agents/lan-nodes.md, *Downloads and playlists*).
+        let downloader = crate::lan::peer_downloader(Arc::clone(&plain)).unwrap_or(plain);
         self.inner
             .worker
             .configure_with(Arc::clone(&api), downloader);

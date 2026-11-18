@@ -722,6 +722,13 @@ impl Player {
             Arc::clone(&streaming),
             gone_tx,
         ));
+        // LN13: the engine takes its opener ONCE, and the phone builds its player
+        // from the first screen — before the LAN node can exist (a node enrols
+        // against the session's client). `PlayerSource` is that stable opener: the
+        // server's own until a node exists, a peer asked first from then on
+        // (docs/agents/lan-nodes.md, *Mobile FFI*).
+        let source =
+            crate::lan::PlayerSource::new(Arc::clone(&opener) as Arc<dyn nz_audio::StreamOpener>);
         let config = EngineConfig {
             sample_rate: 48_000,
             volume: 1.0,
@@ -729,7 +736,7 @@ impl Player {
             read_ahead_bytes: READ_AHEAD_ON_BYTES,
             ..EngineConfig::default()
         };
-        let (engine, sink) = Engine::new_external(config, Arc::clone(&opener) as Arc<_>);
+        let (engine, sink) = Engine::new_external(config, source);
         let store = Store::new(core.cache());
         let audio = store.load_audio();
         let (mut state, restore_effects) = match store.load_queue() {

@@ -38,6 +38,12 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# LN13's "10 min idle with the paused clock": `tokio::time::pause`/`advance` are
+# `test-util`'s, and a real ten-minute window is not a test. A dev-dependency
+# only, so `libnz_ffi.so` is byte-for-byte what it was (the lot measures it) and
+# neither `Cargo.lock` moves. Approved by the orchestrator, and the same line
+# `desktop/crates/nz-lan/Cargo.toml` already has.
+tokio = { workspace = true, features = ["test-util"] }
 # `core/server.rs`'s end-to-end test of the pin: two self-signed leaves on the
 # loopback, the pin that accepts the first, and the ordinary request that refuses
 # the second. The very crate version `reqwest`'s `rustls` feature already builds
