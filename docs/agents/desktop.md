@@ -156,6 +156,7 @@ Every choice below was checked against several sources and then **built together
 desktop/
   Cargo.toml            # [workspace] resolver = "3", edition 2024, rust-version 1.89
   Cargo.lock            # committed
+  .cargo/config.toml    # the CPU floor: ggml is built for x86-64-v2, never -march=native
   crates/
     nz-model/           # the server's JSON as Rust types (serde, tolerant)        — no I/O
     nz-api/             # HTTP client, session, lanes (rule 1), errors, endpoints  — tokio + reqwest
@@ -422,6 +423,45 @@ of its callers.
   speed: "Transcription sur le processeur : aucun GPU Vulkan utilisable (<cause>). Environ 3× plus
   lent." (measured ratio, 44.9× vs 13.9×). Causes are named: `no_vulkan_loader`,
   `no_vulkan_device`, `gpu_init_failed`, `gpu_out_of_memory`, `user_forced_cpu`.
+- **The CPU floor is x86-64-v2, pinned where every build sees it.** ggml's `GGML_NATIVE`
+  defaults to ON, i.e. `-march=native`, so ONE commit produces an AVX-512 binary on one builder and
+  an SSE4.2 one on another — and `Swatinem/rust-cache` keys on rustc, the lockfiles and
+  `.cargo/config.toml`, never on the CPU, so the first gets restored into a job running on the
+  second. `desktop/.cargo/config.toml` sets `GGML_NATIVE=OFF` **and** names every ISA above v2 OFF
+  (`GGML_AVX`/`AVX2`/`AVX_VNNI`/`AVX512*`/`FMA`/`F16C`/`BMI2`/`AMX_*`) with `GGML_SSE42=ON`:
+  `GGML_NATIVE=OFF` alone flips ggml's `INS_ENB` to ON and gives x86-64-v3 under another name
+  (whisper.cpp#4103 and its fix #4111; llama.cpp/lemonade #3898 names the same trap). `whisper-rs-sys`
+  0.15 forwards every `GGML_*` environment variable to CMake, so that one file covers the three CI
+  jobs, `makepkg` and a developer's `cargo test`, with `force = true` so no shell can undo it. **It
+  is not only a CI concern**: `release.yaml`'s `binaries` job builds the two executables ONCE for the
+  `.deb`, `.rpm`, AppImage and Flatpak, the `arch` job builds the fifth, and all five land on a CPU
+  nobody chose.
+  **Measured**: CI run **44234946582** lost the four `nz-transcribe --test engine` tests that run
+  whisper (`a_missing_vulkan_driver…`, `language_auto…`, `cpu_and_vulkan…`, `the_engine_child…`) to
+  `SIGILL (signal 4)` after `whisper_model_load: n_langs = 99`, and its log carried
+  `AMX is not ready to be used!` — a line ggml compiles only under `__AMX_INT8__ && __AVX512VNNI__`
+  (`ggml-cpu/ggml-cpu.cpp`), so the cached object came from an AMX-capable runner and ran on one
+  without it. whisper.cpp#4103 found the same signature on a Zen 2: an EVEX `vpbroadcastq
+  %rcx,%xmm0` in `ggml_backend_cpu_get_extra_buffer_types`, i.e. before any compute. Here, before the
+  pin: **24 364** instructions above the floor in `libggml-cpu.a` (**8 040** AVX-512, **15 806** AVX,
+  420 FMA, 42 F16C, 56 BMI2), **104 194** EVEX in `neezer-transcribe`, and `qemu-x86_64 -cpu Nehalem
+  neezer-transcribe file jfk.wav …` dies in **0.7 s** on the first VEX instruction,
+  `vmovdqa 0x30(%rsp),%xmm0` in `ggml_cpu_init` (exit 132). After it: **0** in ggml's objects, the
+  same qemu run transcribes its one line ("And so my fellow Americans ask not what your country can
+  do for you…") in **95 s** of emulation, and the CPU pass costs **5.5×** real time where the native
+  build measured **28.7×** (same 330 s of `ggml-tiny`, best of two, scored on CPU-seconds) — **5.2×
+  the price, paid on the fallback only**: Vulkan measured **128.1×** after against **127.5×** before,
+  and Vulkan is the fast path. `GGML_CPU_ALL_VARIANTS` (runtime dispatch) was evaluated and refused:
+  ggml requires `GGML_BACKEND_DL`, which requires `BUILD_SHARED_LIBS`, and `whisper-rs-sys` links
+  `static=ggml*` with shared libs forced OFF — it would mean a dozen `ggml-cpu-*.so` beside the
+  binary in five package formats (OpenBLAS, whose kernels dispatch at runtime by themselves, is the
+  other way back to the 28.7×, at the price of a new runtime dependency in all five).
+  `desktop/tools/check_cpu_floor.sh <binary>` is the check — the census, ggml's own objects **gated**,
+  then the binary under `qemu -cpu Nehalem` — and both workflows run it on the binaries they ship
+  (`check_cpu_baseline.py` reads the raw instruction bytes because an EVEX and a VEX
+  `vpbroadcastq %rcx,%xmm0` print the same mnemonic). A `target/` older than the pin keeps the old
+  objects once more: `cargo clean -p whisper-rs-sys`, because cargo does not fingerprint a
+  dependency's build-script environment.
 - **Models** — the server's ladder and file names (`ggml-large-v3-turbo-q8_0.bin` when ≥ 2.5 GB of
   free memory, else `…-q5_0.bin`, else `ggml-small.bin`), plus the Silero VAD GGML model. Nothing is
   downloaded without the person's click in Réglages → Transcription locale, which shows each size;
