@@ -1,0 +1,449 @@
+package fr.neezer.mobile.feature.podcasts
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import fr.neezer.mobile.bridge.NzBridge
+import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.CoverImage
+import fr.neezer.mobile.designsystem.EmptyState
+import fr.neezer.mobile.designsystem.Icon
+import fr.neezer.mobile.designsystem.LoadFailed
+import fr.neezer.mobile.designsystem.NzCard
+import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzMinTouchTarget
+import fr.neezer.mobile.designsystem.NzRadius
+import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.NzSkeletonKind
+import fr.neezer.mobile.designsystem.Skeleton
+import uniffi.nz_ffi.AppLink
+import uniffi.nz_ffi.ShowData
+
+/**
+ * Podcasts — lot MB13 (docs/agents/mobile.md, feature inventory).
+ *
+ * The subscriptions (`routes/Podcasts.svelte` ported): a grid of the shows this
+ * server holds, a search field that waits 300 ms and then asks the provider's
+ * catalogue once, a card that subscribes on a tap, and a pasted Deezer URL that
+ * subscribes on Enter. Adding is ONE request, and the show it answers is opened
+ * straight away — the person's tap lands on what they added.
+ *
+ * The search field only exists for an administrator (`$isAdmin && CAN_KEEP` in
+ * the SPA): subscribing is a server-side decision, and a member sees the field
+ * without a power to use it would be a lie. The card hides the grid while a
+ * search is on, exactly as the SPA does.
+ */
+@Composable
+fun PodcastsEntry(
+    nav: NzNavigator,
+    modifier: Modifier = Modifier,
+    /** The seam a JVM test and a render use; the app passes nothing. */
+    service: PodcastService? = AppPodcasts.service(),
+    isAdmin: Boolean = AppPodcasts.isAdmin(),
+) {
+    val scope = rememberCoroutineScope()
+    val model = remember(service, scope) {
+        service?.let { PodcastsModel(it, scope) }
+    }
+    LaunchedEffect(model) { model?.start() }
+    if (model == null) {
+        CoreUnavailable(modifier = modifier)
+        return
+    }
+    val state by model.state.collectAsState()
+
+    // A successful subscribe opens the show it answered, and a failure is a
+    // toast with the cause — never a silent button.
+    LaunchedEffect(state.openShow) {
+        state.openShow?.let { id ->
+            model.consumeOpen()
+            nav.go(AppLink.Podcast(id))
+        }
+    }
+
+    PodcastsScreen(
+        state = state,
+        actions = PodcastsActions(
+            retry = model::retry,
+            setQuery = model::setQuery,
+            retrySearch = model::retrySearch,
+            submitLink = model::submitLink,
+            subscribe = model::subscribeCard,
+            openShow = { id -> nav.go(AppLink.Podcast(id)) },
+            consumeMessage = model::consumeMessage,
+        ),
+        isAdmin = isAdmin,
+        modifier = modifier,
+    )
+}
+
+/** What the screen may ask of its model — one function per gesture. */
+data class PodcastsActions(
+    val retry: () -> Unit,
+    val setQuery: (String) -> Unit,
+    val retrySearch: () -> Unit,
+    val submitLink: () -> Unit,
+    val subscribe: (ShowData) -> Unit,
+    val openShow: (String) -> Unit,
+    val consumeMessage: () -> Unit,
+)
+
+/**
+ * The screen itself: a pure function of the model's state, so a screenshot and a
+ * JVM test render exactly what the app draws.
+ */
+@Composable
+fun PodcastsScreen(
+    state: PodcastsModel.State,
+    actions: PodcastsActions,
+    isAdmin: Boolean,
+    modifier: Modifier = Modifier,
+    toast: @Composable (String) -> Unit = {},
+) {
+    val colors = Sillon.colors
+    Box(modifier.fillMaxSize().background(colors.bg)) {
+        Column(Modifier.fillMaxSize()) {
+            if (isAdmin) {
+                PodcastSearchField(
+                    value = state.query,
+                    onValueChange = actions.setQuery,
+                    onSubmit = actions.submitLink,
+                    onClear = { actions.setQuery("") },
+                    modifier = Modifier.padding(
+                        start = NzSpacing.pageX,
+                        end = NzSpacing.pageX,
+                        top = NzSpacing.m,
+                    ),
+                )
+            }
+
+            if (state.stale && state.shows.isNotEmpty()) {
+                Text(
+                    text = PodcastsCopy.STALE,
+                    style = Sillon.type.bodySmall,
+                    color = colors.dim,
+                    modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.xs),
+                )
+            }
+
+            when {
+                state.loading && state.shows.isEmpty() && !state.searchActive -> {
+                    Skeleton(
+                        modifier = Modifier.padding(NzSpacing.pageX),
+                        kind = NzSkeletonKind.Shelf,
+                        count = 6,
+                    )
+                }
+                state.failure != null && state.shows.isEmpty() -> {
+                    LoadFailed(
+                        cause = state.failure,
+                        onRetry = actions.retry,
+                        modifier = Modifier.padding(NzSpacing.pageX),
+                        title = "Les podcasts n'ont pas pu être chargés",
+                    )
+                }
+                state.searchActive -> SearchResults(state, actions)
+                state.shows.isEmpty() -> {
+                    EmptyState(
+                        title = "Aucun abonnement",
+                        body = if (isAdmin) {
+                            "${PodcastsCopy.NO_SUBSCRIPTION} ${PodcastsCopy.NO_SUBSCRIPTION_HINT}"
+                        } else {
+                            PodcastsCopy.NO_SUBSCRIPTION
+                        },
+                        glyph = NzGlyph.Mic,
+                    )
+                }
+                else -> ShowGrid(
+                    shows = state.shows,
+                    onOpen = actions.openShow,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        state.message?.let { message ->
+            toast(message)
+            LaunchedEffect(message) { actions.consumeMessage() }
+        }
+    }
+}
+
+/** The results of a search, with its three states (`runSearch`'s outcomes). */
+@Composable
+private fun SearchResults(state: PodcastsModel.State, actions: PodcastsActions) {
+    val colors = Sillon.colors
+    Column(Modifier.fillMaxSize()) {
+        when {
+            state.searching && state.results.isEmpty() -> {
+                Skeleton(
+                    modifier = Modifier.padding(NzSpacing.pageX),
+                    kind = NzSkeletonKind.List,
+                    count = 4,
+                )
+            }
+            state.searchFailure != null -> {
+                LoadFailed(
+                    cause = state.searchFailure,
+                    onRetry = actions.retrySearch,
+                    modifier = Modifier.padding(NzSpacing.pageX),
+                    title = "La recherche a échoué",
+                )
+            }
+            state.results.isEmpty() -> {
+                Text(
+                    text = PodcastsCopy.noSearchResult(state.trimmedQuery),
+                    style = Sillon.type.body,
+                    color = colors.dim,
+                    modifier = Modifier.padding(
+                        start = NzSpacing.pageX,
+                        end = NzSpacing.pageX,
+                        top = NzSpacing.l,
+                    ),
+                )
+            }
+            else -> {
+                Text(
+                    text = "Résultats",
+                    style = Sillon.type.titleSmall,
+                    color = colors.tx,
+                    modifier = Modifier.padding(
+                        start = NzSpacing.pageX,
+                        end = NzSpacing.pageX,
+                        top = NzSpacing.m,
+                        bottom = NzSpacing.s,
+                    ),
+                )
+                ShowGrid(
+                    shows = state.results,
+                    onOpen = actions.openShow,
+                    onSubscribe = actions.subscribe,
+                    subscribing = state.subscribing,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/** The grid of show cards (`Podcasts.svelte`'s `.grid`, 160 px cells). */
+@Composable
+private fun ShowGrid(
+    shows: List<ShowData>,
+    onOpen: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    onSubscribe: ((ShowData) -> Unit)? = null,
+    subscribing: String? = null,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 160.dp),
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(
+            start = NzSpacing.pageX,
+            end = NzSpacing.pageX,
+            top = NzSpacing.s,
+            bottom = NzSpacing.pageY,
+        ),
+        horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
+    ) {
+        items(shows, key = { it.id.ifEmpty { it.deezerId ?: it.title } }) { show ->
+            ShowCard(
+                show = show,
+                onOpen = { onOpen(show.id.ifEmpty { show.deezerId ?: show.id }) },
+                onSubscribe = onSubscribe?.let { { it(show) } },
+                busy = subscribing != null && subscribing == (show.deezerId ?: show.id),
+            )
+        }
+    }
+}
+
+/** One card: the sleeve, the name, the count, and « Abonné » or « S'abonner ». */
+@Composable
+private fun ShowCard(
+    show: ShowData,
+    onOpen: () -> Unit,
+    onSubscribe: (() -> Unit)?,
+    busy: Boolean,
+) {
+    val colors = Sillon.colors
+    val shape = RoundedCornerShape(NzRadius.card)
+    NzCard(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = if (onSubscribe != null) onSubscribe else onOpen,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+            CoverImage(
+                url = show.cover,
+                sizeDp = 120.dp,
+                seed = show.id.ifEmpty { show.deezerId ?: show.title },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            Text(
+                text = show.title,
+                style = Sillon.type.label,
+                color = colors.tx,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+            ) {
+                Text(
+                    text = PodcastsCopy.episodeCount(show.episodeCount.toInt()),
+                    style = Sillon.type.bodySmall,
+                    color = colors.dim,
+                    maxLines = 1,
+                )
+                if (show.autoArchive) {
+                    Icon(glyph = NzGlyph.Archive, size = 12.dp, tint = colors.dim)
+                }
+            }
+            if (onSubscribe != null) {
+                // A catalogue card subscribes; « Abonné » already is one.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(NzMinTouchTarget)
+                        .clickable(role = Role.Button, onClick = onSubscribe)
+                        .semantics {
+                            contentDescription = "S'abonner à ${show.title}"
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+                ) {
+                    Icon(
+                        glyph = if (busy) NzGlyph.Refresh else NzGlyph.Plus,
+                        size = 16.dp,
+                        tint = colors.btn,
+                    )
+                    Text(
+                        text = if (busy) "Ajout…" else "S'abonner",
+                        style = Sillon.type.label,
+                        color = colors.btn,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The search field: a pill, Sillon's colours, 48 dp, and Enter submits a link. */
+@Composable
+private fun PodcastSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = Sillon.colors
+    val shape = RoundedCornerShape(NzRadius.chip)
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = Sillon.type.body.copy(color = colors.tx),
+        cursorBrush = SolidColor(colors.acText),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            imeAction = androidx.compose.ui.text.input.ImeAction.Search,
+        ),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+            onSearch = { onSubmit() },
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(NzMinTouchTarget)
+            .semantics { contentDescription = "Chercher un podcast" },
+        decorationBox = { inner ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.s1, shape)
+                    .border(1.dp, colors.ln, shape)
+                    .padding(horizontal = NzSpacing.m),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+            ) {
+                Icon(glyph = NzGlyph.Search, size = 16.dp, tint = colors.dim)
+                Box(Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "Nom du podcast ou lien Deezer…",
+                            style = Sillon.type.body,
+                            color = colors.dim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    inner()
+                }
+                if (value.isNotEmpty()) {
+                    NzIconButton(
+                        glyph = NzGlyph.Close,
+                        contentDescription = "Effacer la recherche",
+                        onClick = onClear,
+                        size = 14.dp,
+                    )
+                }
+            }
+        },
+    )
+}
+
+/** The build could not load the native core: the screen says so (rule 3). */
+@Composable
+internal fun CoreUnavailable(modifier: Modifier = Modifier) {
+    val colors = Sillon.colors
+    Column(
+        modifier = modifier.fillMaxSize().padding(NzSpacing.pageX),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
+    ) {
+        Spacer(Modifier.height(NzSpacing.m))
+        Text(text = "Podcasts", style = Sillon.type.title, color = colors.tx)
+        Text(
+            text = "Le noyau de l'application n'a pas pu être chargé : les podcasts sont indisponibles.",
+            style = Sillon.type.body,
+            color = colors.dim,
+        )
+        Text(
+            text = NzBridge.failure ?: "cause inconnue",
+            style = Sillon.type.bodySmall,
+            color = colors.dim,
+        )
+    }
+}
