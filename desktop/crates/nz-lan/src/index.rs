@@ -374,10 +374,9 @@ impl Index {
         let mut items = self.build_items(rows);
         self.forget_stale_tags(&tags, &items);
 
-        let digest = sets
-            .as_ref()
-            .map(|sets| sets_fingerprint(sets))
-            .unwrap_or(0);
+        // `None` when the read failed: a locked database must not look like an
+        // edit, or every peer would re-ask its `Sets` pages for nothing.
+        let digest = sets.as_ref().ok().map(|sets| sets_fingerprint(sets));
         let (changed, version, sets_changed, sets_version, bytes) = {
             let mut data = self.inner.data.write().unwrap_or_else(|e| e.into_inner());
             let (added, removed) = diff(&data.items, &items);
@@ -406,7 +405,9 @@ impl Index {
             // A set edit (a title, a member) is a new version even when no file
             // moved, which is what makes a peer re-ask its `Sets` pages.
             let mut sets_changed = false;
-            if digest != data.sets_digest {
+            if let Some(digest) = digest
+                && digest != data.sets_digest
+            {
                 data.sets_digest = digest;
                 data.sets_version += 1;
                 sets_changed = true;
