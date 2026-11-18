@@ -625,7 +625,8 @@ pub struct Roster { pub kid: Kid, pub subject: Subject, pub serial: u64, pub iss
 pub struct Share { pub subject: Subject, pub all: bool, pub playlists: Vec<SharedPlaylist> }
 pub struct SharedPlaylist { pub id: String, pub title: String, pub tracks: Vec<String> }
 pub struct Truster { pub subject: Subject, pub name: String }
-impl Roster { pub fn decode_verify(json: &[u8], keys: &TrustKeys) -> Result<Self, CredError>; }
+impl Roster { pub fn decode_verify(json: &[u8], keys: &TrustKeys) -> Result<Self, CredError>;
+              pub fn raw_signed(&self) -> Vec<u8>; }   // raw() = the signed body; raw_signed() = the {"body","sig"} envelope to gossip
 pub fn auth_message(role: Role, exporter: &[u8; 32]) -> Vec<u8>;   // b"neezer-lan/1 auth\0" ‖ role ‖ exporter
 pub enum Role { Initiator, Responder }
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
@@ -640,6 +641,8 @@ impl DeviceKey {
     pub fn public(&self) -> DevicePub;
     pub fn sign(&self, msg: &[u8]) -> [u8; 64];
     pub fn enroll_proof(&self, subject_hex: &str, at: i64) -> [u8; 64];
+        // b"neezer-lan/1 enroll\0" ‖ subject_hex ‖ pubkey_hex (lowercase) ‖ str(at) — `at` is DECIMAL:
+        // the two neighbours are strings, and this note writes `i64` where it means the binary encoding
 }
 
 // nz-lan/src/service.rs — the one handle the apps hold
@@ -1059,52 +1062,86 @@ corrected here with the number that proved it):
   > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
   > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
 
-### LN2 — Trust codec and device key (wave 1, effort max)
+### LN2 — Trust codec and device key (delivered 2026-11-18)
 
-- **Objective**: `cred.rs` decodes and verifies credentials, revocation lists and rosters exactly as
-  the server encodes them; `keys.rs` creates, loads, rotates and wipes the device key safely.
-- **Files**: LN2 row. **Contracts**: `cred.rs` and `keys.rs` in *Contracts*; layouts and domain
-  strings in *Trust chain*. Ed25519 and SHA-256 through `aws-lc-rs` (`signature::Ed25519KeyPair::
-  from_seed_unchecked`, `UnparsedPublicKey::new(&ED25519, …)`), no other crypto crate.
-- **Depends on**: LN0.
-- **Acceptance**: the three test vectors decode, verify and re-encode byte for byte; each
-  `CredError` variant has a test with a mutant input that triggers it (flip every byte of the
-  credential in turn: 154 mutants, **154 refused**); skew: `not_before − 600` accepted, `− 601`
-  refused, same at the end; a revocation list with unsorted or duplicated entries is refused; a roster
-  with 65 friends or 20 001 ids → `Caps`; `decode` of 1 MiB of random bytes allocates nothing
-  proportional to the input (count with a capped reader); `device.key` is created with mode `0600`
-  atomically (write temp + fsync + rename; a crash mid-write leaves the old key — tested by a
-  truncated temp file), `wipe` removes it; `auth_message` matches the vector; zero `unsafe`.
-- **Pitfalls**: verify the signature over the EXACT received bytes, never over a re-serialisation;
-  compare with constant-time equality where secrets are involved (none here are secret, but keep
-  `aws-lc-rs`'s verify, no hand-rolled compare); i64 big-endian for the dates.
-- **Prompt**:
+**What landed.** `cred.rs` and `keys.rs` filled, and `tests/cred.rs` (19 tests) written from the
+note's tables rather than from the decoder: the three test vectors are copied into the test with their
+layouts and domain strings written out again, so a drift on either side (the Python encoder, this
+decoder) breaks it. `Credential::decode/verify`, `Revocations::decode_verify`, `Roster::decode_verify`
+and `auth_message` verify over the **exact bytes received**; `DeviceKey::load_or_create/rotate/wipe`
+persist a 32-byte seed in `device.key` at `0600` through temp file + `fsync` + rename. Ed25519 and
+SHA-256 through `aws-lc-rs` only, **no dependency added** (base64 and hex are decoded in `cred.rs`: the
+strictness needed — one spelling of one body — was not something a crate should own), zero `unsafe` in
+both files (asserted by a test that reads the sources).
 
-  > Tu implémentes le lot **LN2 — Trust codec and device key** du plan « nœuds LAN » (effort max :
-  > cryptographie). But : `desktop/crates/nz-lan/src/cred.rs` décode et vérifie attestation, liste de
-  > révocation et roster exactement comme le serveur les encode (dispositions et chaînes de domaine
-  > de *Trust chain*), et `keys.rs` crée, charge, fait tourner et efface la clé d'appareil (fichier
-  > `device.key` 0600, écriture atomique). Ed25519 et SHA-256 par `aws-lc-rs` uniquement. Les trois
-  > vecteurs de test de la note sont tes tests de référence. Lis *Trust chain*, *Threat model*,
-  > *Contracts* et la section LN2 de `docs/agents/lan-nodes.md`. Fichiers exclusifs : la ligne LN2.
-  > Critères : la liste *Acceptance* de LN2 (154 mutants refusés, etc.).
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**What a later lot can rely on.**
+
+- `Credential::decode` answers length → magic → version → reserved flags, in that order, before any
+  signature work; `verify(keys, revoked, now)` then checks `kid` known → signature → window
+  (`not_before − 600 ≤ now ≤ not_after + 600`, saturating arithmetic) → not revoked.
+- `Revocations::decode_verify` checks the entry cap **before** computing the length that follows from
+  it (a `count` of `0xFFFFFFFF` would otherwise overflow), then the exact length, then the signature,
+  then canonical order: the keys must be **strictly ascending**.
+- `Roster::raw()` is the signed **body**; `Roster::raw_signed()` is the `{"body","sig"}` envelope, and
+  that is what `Control::Roster` carries, base64-encoded. (LN0's comment on `raw()` said "ready to
+  gossip"; the body alone is not.)
+- `DeviceKey` is the only door to a key, `KEY_FILE` names the file, and `enroll_proof(subject_hex, at)`
+  signs `at` as **decimal text** (below).
+- Every cause stays local: `CredError` is for the log and the tests, `LanError::Refused` for the wire.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, debug, 2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| the package's tests | **63 passed** (44 unit + 19 integration) | `cargo test -p nz-lan --locked` |
+| the integration suite | **1.09 s**, including 100 key rotations with `fsync` | `cargo test -p nz-lan --test cred` |
+| one-byte mutants of the credential | **154 mutants, 154 refused, 0 accepted** (the intact vector is accepted first, as the control) | `every_single_byte_flip_of_the_vector_is_refused` |
+| `CredError` variants | **11 variants, 11 inputs that trigger them** | `every_refusal_variant_has_an_input_that_triggers_it` |
+| allocations for 1 MiB refused | **0 bytes** from `decode` and `decode_verify`; the control (a copy of the same buffer) counts **1 048 576** | `decode_allocates_nothing_for_a_bad_length` |
+| a decoded credential | **240 bytes** on the stack, **0 bytes** of heap | `a_decoded_credential_is_a_fixed_size_and_allocates_nothing` |
+| a revocation list at its cap | **131 169** signed bytes (33 + 32 × 4 096 + 64) + **131 072** for the key array = **262 241 counted bytes** | `an_unsorted_or_duplicated_revocation_list_is_refused` |
+| rosters at their caps | **8 083 B** for 64 friends, **180 334 B** for 20 000 track ids, both accepted; 65 friends / 20 001 ids / > 4 MiB → `Caps` | `a_roster_at_its_caps_is_accepted_and_one_over_is_refused` |
+| the key file | 32 bytes, `0600`, directory `0700`, one file after 100 rotations, **0 partial reads** | `the_key_file_is_a_0600_seed_created_atomically_rotated_and_wiped`, `a_reader_never_sees_half_a_key_while_it_rotates` |
+| lints and format | clippy **0 warning**, rustfmt **0 diff** | `cargo clippy -p nz-lan --all-targets --locked`, `cargo fmt --check` |
+
+Twelve deliberate mutants of the implementation were run once each, and each turned the test that
+owns the property red before the file was restored byte for byte: the signature check, the reserved
+flags, the revocation lookup, the skew constant (`600` → `599`), the ascending order, the friends'
+cap, the roster's "exact bytes" (verifying the base64 instead of the body), the `0600` mode, the
+atomic write (delete then recreate), the damaged-key refusal, the revocation cap (`4 096` → `4 097`)
+and the role in `auth_message`.
+
+**Rules a measurement taught.**
+
+- **"Verify, then parse" is not implementable for a roster.** The `kid` that names the verifying key
+  lives *inside* the body being verified, so the order is: minimal parse of `kid` → verify the exact
+  bytes → parse the whole body → caps. What the rule is really after (never build a model from
+  unauthenticated bytes) is kept; the literal wording is not, and this section is the correction.
+- **A non-canonical revocation list is refused as `CredError::Signature`.** The enum is in this note's
+  *Contracts* block, which only the lot that owns the contract may edit, and the semantics fit: a blob
+  whose keys are not strictly ascending cannot be the one the Python encoder emitted, so no verifier may
+  normalise it into acceptance. `Signature`'s doc says so.
+- **`at` in the enrol proof is `str(at)`, decimal.** The formula writes its two neighbours as hex
+  strings and writes `i64` wherever it means the binary encoding (`not_before`, `not_after`);
+  `the_enroll_proof_signs_the_note_message` verifies the proof over this message **and** asserts that
+  the same proof does *not* verify over an 8-byte big-endian `at`, so LN1 and LN7 cannot silently pick
+  the other reading. On LN1's request the line is also spelled in *Contracts* (under `keys.rs`), so
+  LN7 finds it where it reads the surface.
+- **A counting `GlobalAlloc` is the only way to measure "allocates nothing"**, and it costs one
+  `unsafe impl` — in the test file. Keeping it there is what lets `cred.rs`/`keys.rs` stay at zero
+  `unsafe` and still answer the acceptance with a number instead of an opinion.
+- **A restored file keeps its old mtime, and cargo then skips the rebuild.** `cp -p`/`copy2` put the
+  backup's timestamp back, so a mutant campaign sees the *mutant's* verdict on a "restored" tree: the
+  caps mutant looked green after its revert until every restore was followed by `touch` (measured: the
+  restored tree failed `the_caps_are_the_note_numbers` with `4097`). Any mutant script must restore
+  **and** touch.
+- **The envelope is parsed before the body, so its `sig` length is checked first**: a garbage body with
+  a 3-byte signature answers `Length`, not `Json`. The test states that order, because a reviewer will
+  otherwise read it as the wrong error.
+
+The note's top *Status* line still says "LN0 delivered, the rest planned"; it belongs to whoever owns
+this file's header, not to this lot.
+
 
 ### LN3 — Discovery and the netns harness (wave 1, effort high)
 
