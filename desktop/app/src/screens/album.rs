@@ -427,11 +427,20 @@ impl Screen {
     /// lane, behind whatever the person is listening to (rule 1 — the worker's
     /// own gates, not this screen's).
     fn download(&mut self, cx: &mut Context<Self>) {
-        let title = self
-            .page
-            .ready()
-            .map(|page| page.album.title.clone())
-            .unwrap_or_default();
+        let Some(page) = self.page.ready() else {
+            // A page still loading has no rows yet, and « aucun titre de cet
+            // album n'est dans la bibliothèque » would be a verdict about the
+            // LIBRARY when the truth is about the CLOCK (rule 2). Found by the
+            // download test's race: `t` pressed before the answer told the
+            // person an album of three titles had none.
+            self.notice(
+                ToastKind::Info,
+                "L'album se charge encore : réessayez dans un instant.",
+                cx,
+            );
+            return;
+        };
+        let title = page.album.title.clone();
         let Some(service) = self.downloads.service().cloned() else {
             self.notice(
                 ToastKind::Error,
@@ -1227,7 +1236,7 @@ mod tests {
         .expect("a store");
         let offline = crate::wiring::offline::Offline::start(cache);
         let route = Route::Album { id: "9".into() };
-        let (_screen, cx) = cx.add_window_view({
+        let (screen, cx) = cx.add_window_view({
             let state = state.clone();
             let route = route.clone();
             let offline = offline.clone();
@@ -1238,7 +1247,16 @@ mod tests {
         cx.update(|_, cx| {
             state.update(cx, |state, _| state.nav.replace(route.clone()));
         });
-        stub::until(&runtime, cx, "the album's answer", |_| true);
+        // WAIT for what the verb acts on. This used to be
+        // `until(…, "the album's answer", |_| true)`, whose predicate is always
+        // true: it returned after one pump, so `t` sometimes reached a page with
+        // no rows, the app answered « Aucun titre de cet album n'est dans la
+        // bibliothèque » (its own rule 2 warning, on the screen) and the
+        // assertion below read that as "the verb did nothing". A quiet machine
+        // won that race; a loaded one did not.
+        stub::until(&runtime, cx, "the album's answer", |cx| {
+            screen.read(cx).page.ready().is_some() && !screen.read(cx).list.rows().is_empty()
+        });
 
         cx.update(|window, cx| {
             window.dispatch_action(Box::new(DownloadSelection), cx);
@@ -1302,7 +1320,13 @@ mod tests {
             ("/api/stream/row-0", audio.clone()),
             ("/api/stream/row-1", audio.clone()),
             ("/api/stream/row-2", audio),
-        ]);
+        ])
+        // The album's answer takes 150 ms, so "the rows are there" is never a
+        // race the machine can win for the test: an action dispatched before
+        // the answer queues NOTHING (the app warns on the page), and a test
+        // that does not wait would fail here every time — deterministically,
+        // on any runner.
+        .slow("/api/album/9", std::time::Duration::from_millis(150));
         let (state, runtime) = stub::logged_in(cx, &stub);
         let dir = temp_dir("album-requests");
         let cache = nz_cache::Cache::open_with_cache_dir(&dir, dir.join("cache")).expect("a store");
@@ -1310,7 +1334,7 @@ mod tests {
         let api = cx.update(|cx| state.read(cx).api.clone().expect("a client"));
         offline.configure(api, runtime.handle().clone());
         let route = Route::Album { id: "9".into() };
-        let (_screen, cx) = cx.add_window_view({
+        let (screen, cx) = cx.add_window_view({
             let state = state.clone();
             let route = route.clone();
             let offline = offline.clone();
@@ -1319,7 +1343,10 @@ mod tests {
         cx.update(|_, cx| {
             state.update(cx, |state, _| state.nav.replace(route.clone()));
         });
-        stub::until(&runtime, cx, "the album's answer", |_| true);
+        // Wait for the ANSWER and its rows before asking (`t` acts on rows).
+        stub::until(&runtime, cx, "the album's answer", |cx| {
+            screen.read(cx).page.ready().is_some() && !screen.read(cx).list.rows().is_empty()
+        });
 
         cx.update(|window, cx| {
             window.dispatch_action(Box::new(DownloadSelection), cx);
@@ -1365,6 +1392,84 @@ mod tests {
         }
     }
 
+    /// **`t` on an album that is still loading says so, and queues nothing.**
+    ///
+    /// The answer takes 300 ms, so the key really is pressed first. The app used
+    /// to answer « Aucun titre de cet album n'est dans la bibliothèque » for an
+    /// album of three titles — its rows had not arrived — which is a verdict
+    /// about the LIBRARY where the truth is about the CLOCK (rule 2); that is
+    /// exactly what the download test's race produced. Once the answer lands,
+    /// the same key queues all three.
+    #[gpui::test]
+    async fn asking_for_an_album_that_is_still_loading_says_so_and_queues_nothing(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let body = album_body(3, true);
+        let stub = stub::Stub::start_bytes(&[
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+            ("/api/album/9", body.into_bytes()),
+            ("/api/stream/row-0", b"OggS-a".to_vec()),
+            ("/api/stream/row-1", b"OggS-b".to_vec()),
+            ("/api/stream/row-2", b"OggS-c".to_vec()),
+        ])
+        .slow("/api/album/9", std::time::Duration::from_millis(300));
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let dir = temp_dir("album-loading");
+        let cache = nz_cache::Cache::open_with_cache_dir(&dir, dir.join("cache")).expect("a store");
+        let offline = crate::wiring::offline::Offline::start(cache);
+        let api = cx.update(|cx| state.read(cx).api.clone().expect("a client"));
+        offline.configure(api, runtime.handle().clone());
+        let route = Route::Album { id: "9".into() };
+        let (screen, cx) = cx.add_window_view({
+            let state = state.clone();
+            let route = route.clone();
+            let offline = offline.clone();
+            move |_window, cx| Screen::with_downloads(route, state, Some(offline), cx)
+        });
+        cx.update(|_, cx| {
+            state.update(cx, |state, _| state.nav.replace(route.clone()));
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(DownloadSelection), cx);
+        });
+        cx.run_until_parked();
+        let said: Vec<String> = cx.update(|_, cx| {
+            state
+                .read(cx)
+                .toasts
+                .items()
+                .iter()
+                .map(|toast| toast.message.to_string())
+                .collect()
+        });
+        assert!(
+            said.iter().any(|message| message.contains("encore")),
+            "a page that is still loading says so: {said:?}"
+        );
+        assert!(
+            !said.iter().any(|message| message.contains("Aucun titre")),
+            "never a verdict on the library before the answer: {said:?}"
+        );
+        assert!(
+            offline.snapshot().sets.is_empty(),
+            "nothing is queued from a page with no rows: {:?}",
+            offline.snapshot().sets
+        );
+
+        // The answer lands; the same key now queues the album.
+        stub::until(&runtime, cx, "the album's rows", |cx| {
+            screen.read(cx).page.ready().is_some() && !screen.read(cx).list.rows().is_empty()
+        });
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(DownloadSelection), cx);
+        });
+        let snapshot = wait_for_downloads(&runtime, cx, &offline, 3);
+        assert_eq!(snapshot.progress.done, 3, "{snapshot:?}");
+    }
+
     /// Pump until `done` tracks landed — and **stop on the first failure, with
     /// its cause**.
     ///
@@ -1380,23 +1485,22 @@ mod tests {
         done: usize,
     ) -> crate::wiring::offline::Snapshot {
         let deadline = std::time::Instant::now() + crate::testwait::WAIT;
-        let mut last = offline.snapshot();
-        loop {
+        let last = loop {
             // The test thread is the network thread (D7's rule): a real worker
             // thread may not wake a GPUI task.
             runtime.block_on(async {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             });
             cx.run_until_parked();
-            last = offline.snapshot();
+            let last = offline.snapshot();
             if last.progress.done >= done || !last.failures.is_empty() {
-                break;
+                break last;
             }
             assert!(
                 std::time::Instant::now() < deadline,
                 "the downloads never landed: {last:?}"
             );
-        }
+        };
         assert!(
             last.failures.is_empty(),
             "a download failed instead of landing: {:?} (état {:?}, {} fait(s), \

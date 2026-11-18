@@ -524,6 +524,11 @@ pub mod stub {
 
     struct Inner {
         routes: HashMap<String, Vec<u8>>,
+        /// How long a path takes to answer. The server is serial, so a slow
+        /// path holds the others behind it: that is the point — a test that
+        /// depends on "the screen has its answer before I act" can then prove
+        /// it waits, instead of winning a race on a quiet machine.
+        delays: HashMap<String, std::time::Duration>,
         hits: Vec<Hit>,
         closed: AtomicBool,
     }
@@ -557,6 +562,7 @@ pub mod stub {
             }
             let inner = Arc::new(Mutex::new(Inner {
                 routes: table,
+                delays: HashMap::new(),
                 hits: Vec::new(),
                 closed: AtomicBool::new(false),
             }));
@@ -574,6 +580,17 @@ pub mod stub {
                 base: format!("http://{address}"),
                 inner,
             }
+        }
+
+        /// Make `path` take `delay` before it answers, so a test that acts on
+        /// what the answer carries has to WAIT for it (see `Inner::delays`).
+        pub fn slow(self, path: &str, delay: std::time::Duration) -> Self {
+            self.inner
+                .lock()
+                .expect("stub")
+                .delays
+                .insert(path.to_owned(), delay);
+            self
         }
 
         pub fn base(&self) -> String {
@@ -763,7 +780,13 @@ pub mod stub {
                 path: path.clone(),
                 query: query.clone(),
             });
-            inner.routes.get(&path).cloned()
+            let delay = inner.delays.get(&path).copied();
+            let body = inner.routes.get(&path).cloned();
+            drop(inner);
+            if let Some(delay) = delay {
+                std::thread::sleep(delay);
+            }
+            body
         };
         let (status, body) = match body {
             Some(body) => ("200 OK", body),

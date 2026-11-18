@@ -113,6 +113,24 @@ Every choice below was checked against several sources and then **built together
   (that is the guard working), and **~2-4 % of runs under two pinned cores and two hogs stall past
   60 s on BOTH budgets** — a pre-existing hard stall in that test's stub/worker, not a deadline
   problem, so a bigger budget cannot be expected to remove it.
+- **A wait's predicate must be the condition the test ACTS on — and a slow stub is how you prove
+  it does.** `stub::until(…, "the album's answer", |_| true)` is not a wait: the predicate is always
+  true, so it returns after ONE pump, and every action after it is a race with the answer. The Album
+  download test dispatched `t` on a page whose rows had not arrived, so the app did exactly what it
+  documents — « Aucun titre de cet album n'est dans la bibliothèque » on the page, **nothing
+  queued** — and the test then waited for three downloads that could never start: **2-4 %** of turns
+  with two pinned cores and two hogs, up to **5/20** under a `CPUQuota=8%` cgroup, and its only
+  message was « timed out waiting for three downloads ». What settled it was printing the worker's
+  snapshot on timeout — `state: Idle, sets: [], pending: 0, version: 1`, i.e. the click never
+  reached the queue — then waiting for `page.ready()` **and** a non-empty row list. `Stub::slow`
+  (150 ms on `/api/album/9`) makes the old predicate fail **2 of 2** turns on any machine, so the
+  race is pinned deterministically instead of being sampled: the fixed test ran **500/500** under
+  the same quota, and the sibling keyboard test (`t`/`Maj+T`, same one-pump wait) **100/100**. The
+  race also convicted the app: `t` on an album **still loading** answered « Aucun titre de cet album
+  n'est dans la bibliothèque » — a verdict on the LIBRARY where the truth was the CLOCK (rule 2), on
+  an album of three titles — so `Screen::download` now says « L'album se charge encore : réessayez
+  dans un instant. » and queues nothing (`asking_for_an_album_that_is_still_loading_says_so_and_
+  queues_nothing`, 50/50 under the same quota).
 - **A GPUI test cannot be woken from a real OS thread, and the Omarchy theme observer is one — so a
   test must never watch the person's configuration.** `gpui_omarchy::init` starts
   `Theme::follow_system`, which watches `$HOME/.config/omarchy` (and its ancestors) with
