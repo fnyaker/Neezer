@@ -16,9 +16,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.designsystem.NzMotionLevel
@@ -93,7 +96,7 @@ abstract class OfflineScreenshotBase(private val widthDp: Int) {
                 CompositionLocalProvider(
                     LocalDensity provides Density(density.density, fontScale),
                 ) {
-                    Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    Box(Modifier.fillMaxSize().background(Sillon.colors.bg).clipToBounds()) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -172,6 +175,31 @@ abstract class OfflineScreenshotBase(private val widthDp: Int) {
         state = galleryState(),
     ) {
         DownloadButtonStateGallery()
+    }
+
+    /**
+     * **TalkBack**: every control of the section carries a French name, and the
+     * two that say something the pixels cannot (the switch's sentence, a
+     * failure's cause) carry it in their label. A control a screen reader cannot
+     * name is a control half the people cannot use.
+     */
+    @Test
+    fun every_control_is_named_for_a_screen_reader() {
+        install()
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                Column(Modifier.fillMaxWidth().padding(NzSpacing.pageX)) {
+                    OfflineSettingsSection()
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("Ne lire que les titres téléchargés").assertExists()
+        rule.onNodeWithText("Pause").assertExists()
+        rule.onNodeWithText("Tout réessayer").assertExists()
+        rule.onNodeWithText("Titres téléchargés").assertExists()
+        // The failures are read, not just counted: each sentence is a node.
+        rule.onNodeWithText("Titre 7 — le serveur prépare ce titre").assertExists()
     }
 
     /** The four states the button has, as the worker would report them. */

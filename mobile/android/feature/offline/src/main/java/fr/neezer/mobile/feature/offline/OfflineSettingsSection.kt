@@ -112,20 +112,20 @@ private fun QueueCard(model: DownloadsModel, state: DownloadsModel.State) {
     if (active.isEmpty()) return
     NzCard(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = state.worker.ifEmpty { "File de téléchargement" },
-                    style = Sillon.type.titleSmall,
-                    color = Sillon.colors.tx,
-                    modifier = Modifier.weight(1f),
-                )
-                NzButton(
-                    text = if (state.paused) "Reprendre" else "Pause",
-                    onClick = { if (state.paused) model.resume() else model.pause() },
-                    kind = NzButtonKind.Ghost,
-                    glyph = if (state.paused) NzGlyph.Play else NzGlyph.Pause,
-                )
-            }
+            // The worker's sentence on its own line, the controls under it: at
+            // 200 % a sentence beside a button broke mid-word (measured on the
+            // device: « Téléchargemen / t en cours »).
+            Text(
+                text = state.worker.ifEmpty { "File de téléchargement" },
+                style = Sillon.type.titleSmall,
+                color = Sillon.colors.tx,
+            )
+            NzButton(
+                text = if (state.paused) "Reprendre" else "Pause",
+                onClick = { if (state.paused) model.resume() else model.pause() },
+                kind = NzButtonKind.Ghost,
+                glyph = if (state.paused) NzGlyph.Play else NzGlyph.Pause,
+            )
             active.forEach { set -> SetRowView(model, set) }
             state.note?.let { note ->
                 Text(note, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
@@ -161,21 +161,22 @@ private fun SetRowView(model: DownloadsModel, set: SetProgress) {
             },
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = set.title.ifEmpty { set.context },
-                style = Sillon.type.bodySmall,
-                color = colors.tx,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = if (set.failed > 0u) "$done / $total · ${set.failed} échec(s)" else "$done / $total",
-                style = Sillon.type.mono,
-                color = colors.dim,
-            )
-        }
+        // The title, then the counts on their own line: side by side they
+        // touched at 200 % (« Nuit194 / 200 ») and an ellipsis ate the title.
+        Text(
+            text = set.title.ifEmpty { set.context },
+            style = Sillon.type.bodySmall,
+            color = colors.tx,
+        )
+        Text(
+            text = if (set.failed > 0u) {
+                "$done / $total · ${set.failed} échec(s)"
+            } else {
+                "$done / $total"
+            },
+            style = Sillon.type.mono,
+            color = colors.dim,
+        )
         // The rail: a 6 dp well with the fill on it, and enough air above it
         // that it is read as a progress bar and never as an underline of the
         // title (measured on Papier, where the well is the page's own cream).

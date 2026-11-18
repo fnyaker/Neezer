@@ -1,7 +1,6 @@
 package fr.neezer.mobile.feature.offline
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,8 +14,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Density
@@ -89,11 +92,21 @@ class OfflineCaptureTest {
         content: @Composable () -> Unit,
     ) {
         val model = install()
+        // The window's own background is the theme's ground: the test activity's
+        // default light grey showed through under the compiled section and read
+        // as a band across the capture (measured: the region below the content
+        // was `#EDEDED` under a white title).
+        val windowGround = Sillon.theme(theme).bg.toArgb()
+        rule.activity.runOnUiThread {
+            rule.activity.window.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(windowGround),
+            )
+        }
         rule.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
                 NzTheme(kind = theme, motion = NzMotionLevel.Full) {
-                    Box(Modifier.fillMaxSize().background(Sillon.colors.bg).testTag("capture")) {
+                    Box(Modifier.fillMaxSize().background(Sillon.colors.bg).clipToBounds().testTag("capture")) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -111,10 +124,29 @@ class OfflineCaptureTest {
         // The model must have been read by now: a screen painted from nothing
         // would be a screenshot of an empty page.
         check(model.state.value.version > 0uL) { "the section painted nothing" }
-        val view = rule.activity.window.decorView
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        rule.runOnUiThread { view.draw(canvas) }
+        // The COMPOSED node, not the window: `captureToImage` reads the node's
+        // own bounds and clips to them, so the activity's window background can
+        // never appear as a grey band under the section (measured: the decor
+        // view's background showed through where the content ended).
+        val full = rule.onNodeWithTag("capture").captureToImage().asAndroidBitmap()
+        // The decor is the activity's window: below the section's ground the
+        // window's own background shows as a band. Crop it away — the image is
+        // the SCREEN, not the window handle (a row is kept while anything in it
+        // differs from the band's own colour).
+        val ground = Sillon.theme(theme).bg.toArgb()
+        var bottom = full.height - 1
+        while (bottom > 0) {
+            var empty = true
+            for (x in 0 until full.width step 4) {
+                if (full.getPixel(x, bottom) != ground) {
+                    empty = false
+                    break
+                }
+            }
+            if (!empty) break
+            bottom -= 1
+        }
+        val bitmap = Bitmap.createBitmap(full, 0, 0, full.width, (bottom + 1).coerceAtLeast(1))
         val dir = File(
             InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
             "mb15-screenshots",
@@ -142,9 +174,12 @@ class OfflineCaptureTest {
     fun the_download_button_states_render_on_the_device() {
         capture("boutons.png", NzThemeKind.Encre) {
             Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                // Absent, running, done and failed: the fake carries the three
+                // contexts below, and `playlist:1` is a context nobody queued.
                 DownloadButton(context = "playlist:1")
                 DownloadButton(context = "playlist:42")
                 DownloadButton(context = "album:404")
+                DownloadButton(context = "show:9")
             }
         }
         rule.onNodeWithTag("capture").assertExists()
@@ -232,12 +267,36 @@ private fun deviceState(): OfflineState = OfflineState(
                 "Wild Is the Wind — Deezer : titre indisponible (404)",
             ),
         ),
+        SetProgress(
+            context = "album:404",
+            title = "Album complet",
+            kind = "album",
+            id = "404",
+            done = 12u,
+            total = 12u,
+            failed = 0u,
+            running = false,
+            paused = false,
+            failures = emptyList(),
+        ),
+        SetProgress(
+            context = "show:9",
+            title = "Podcast",
+            kind = "show",
+            id = "9",
+            done = 12u,
+            total = 20u,
+            failed = 2u,
+            running = false,
+            paused = false,
+            failures = listOf("Épisode 7 — le flux ne répond pas"),
+        ),
     ),
     settings = OfflineSettings("OPUS_320", true, 1024L * 1024 * 1024),
     storage = StorageReport(
-        downloadsBytes = 1_480uL * 1024 * 1024,
-        cacheBytes = 12uL * 1024 * 1024,
-        coversBytes = 3uL * 1024 * 1024,
+        downloadsBytes = 1_480uL * 1024uL * 1024uL,
+        cacheBytes = 12uL * 1024uL * 1024uL,
+        coversBytes = 3uL * 1024uL * 1024uL,
         tracks = 194u,
         freeBytes = 0uL,
     ),
