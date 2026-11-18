@@ -292,6 +292,151 @@ class NowPlayingDeviceTest {
         device.waitForIdle()
     }
 
+    /**
+     * **Le délai entre le tap et le son** (règle 1), sur UNE horloge.
+     *
+     * `PlayerApi::output_stats()` porte `last_tap_ns` (l'instant que Kotlin lui
+     * passe) et `last_first_audible_ns` — mais MB3b/MB7 ont mesuré que les deux
+     * sont sur des horloges DIFFÉRENTES (le second est l'horloge interne du
+     * lecteur, en ms depuis son démarrage). Leur différence n'est donc pas une
+     * durée, et cette PR ne la présente pas comme telle.
+     *
+     * La méthode retenue : **`SystemClock.elapsedRealtimeNanos()` des deux
+     * côtés**. `t0` est pris au moment du tap, sur la ligne de la file qui joue
+     * (le tap pilote la file : `Jump`/`Next`) ; `t1` est l'instant où la POSITION
+     * DU MOTEUR quitte zéro, c'est-à-dire le premier échantillon rendu dans le
+     * sink (le moteur avance son horloge en rendant). Une horloge, un chiffre,
+     * 20 essais, p50 et max.
+     *
+     * Ce que ce chiffre INCLUT : le trajet de la commande, l'ouverture du flux
+     * (ici un FLAC de 41 065 B sur la boucle locale, donc pas de réseau réel),
+     * le remplissage du tampon du moteur. Ce qu'il n'inclut PAS : la latence du
+     * HAL audio, que `output_stats().latency_ms` rapporte séparément (500 ms de
+     * tampon sur cet émulateur) — le son est entendu jusqu'à cette valeur APRÈS
+     * le premier échantillon rendu, et c'est MQ2 qui doit mesurer le délai
+     * perçu, sur un vrai téléphone.
+     */
+    @Test
+    fun theTapToSoundDelayIsMeasuredOnOneClock() {
+        val bench = Bench.start()
+        val core = install(bench)
+        val player = core.player()
+        player.startOutput(Build.VERSION.SDK_INT.toUInt())
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        wake(device)
+
+        val rows = listOf("9001", "9002").map { key ->
+            TrackRef(
+                key = key,
+                id = key,
+                title = "Titre $key",
+                artists = "Artiste",
+                album = "Album",
+                albumId = "501",
+                artistId = null,
+                cover = null,
+                durationS = 10u,
+                episode = false,
+                liked = false,
+            )
+        }
+        player.command(PlayerCommand.PlayQueue(tracks = rows, start = 0u, context = PlayContext("queue", "bench")), 0uL)
+        // The first title plays once, so the engine, the sink and the spool are
+        // warm: the 20 trials measure the TAP, not the first-open of the engine.
+        player.command(PlayerCommand.Play, android.os.SystemClock.elapsedRealtimeNanos().toULong())
+        val ready = CountDownLatch(1)
+        val watchdog = thread(isDaemon = true) {
+            repeat(30) {
+                if (player.position().positionS > 0.05) {
+                    ready.countDown()
+                    return@thread
+                }
+                Thread.sleep(1000)
+            }
+        }
+        assertTrue(
+            "the engine never started: state=${player.snapshot().state} ${player.snapshot().error} " +
+                "${player.snapshot().fault} routes=${bench.routes} stats=${player.outputStats()}",
+            ready.await(32, TimeUnit.SECONDS),
+        )
+        watchdog.interrupt()
+
+        val samples = mutableListOf<Double>()
+        repeat(20) { trial ->
+            // Back to silence and to the start, waiting for the STATE (an event).
+            player.command(PlayerCommand.Pause, 0uL)
+            // « Not playing » rather than « PAUSED »: a title that ends, a stream
+            // that faults and a clean pause all leave the transport stopped for a
+            // different reason, and only one of them is PAUSED.
+            awaitPlayer(10_000) {
+                when (player.snapshot().state) {
+                    uniffi.nz_ffi.PlayState.PAUSED,
+                    uniffi.nz_ffi.PlayState.STOPPED,
+                    uniffi.nz_ffi.PlayState.ENDED,
+                    -> true
+                    else -> false
+                }
+            }
+            player.command(PlayerCommand.Seek(0.0), 0uL)
+            awaitPlayer(10_000) { player.position().positionS < 0.05 }
+
+            // THE tap: on the playing row (odd trials) or on « Suivant » (even).
+            // THE tap: the person taps a row of the queue, alternating between the
+            // two titles (a `Next` on the last row of a two-title queue would end
+            // the queue — measured: trial 2 rendered nothing).
+            val tap = android.os.SystemClock.elapsedRealtimeNanos()
+            val index = trial % 2
+            player.command(
+                PlayerCommand.Jump(index.toUInt(), rows[index].key),
+                tap.toULong(),
+            )
+            // t1: the first rendered sample, on the SAME clock.
+            val deadline = android.os.SystemClock.elapsedRealtimeNanos() + 15_000_000_000L
+            var rendered = 0.0
+            while (android.os.SystemClock.elapsedRealtimeNanos() < deadline) {
+                if (player.position().positionS > 0.0) {
+                    rendered = (android.os.SystemClock.elapsedRealtimeNanos() - tap) / 1_000_000.0
+                    break
+                }
+                Thread.yield()
+            }
+            assertTrue("trial $trial never rendered a sample", rendered > 0.0)
+            samples += rendered
+        }
+
+        val sorted = samples.sorted()
+        val p50 = sorted[sorted.size / 2]
+        val stats = player.outputStats()
+        println(
+            "MEASURE mb11 tap->sound: n=${samples.size} p50=${"%.1f".format(p50)}ms " +
+                "max=${"%.1f".format(sorted.last())}ms latency_ms=${stats.latencyMs} " +
+                "buffer_ms=${stats.bufferMs} underruns=${stats.underruns} " +
+                "(tap_ns=${stats.lastTapNs} first_audible_ns=${stats.lastFirstAudibleNs}, deux horloges)",
+        )
+        assertTrue("p50 ${p50}ms over the plan's 1.5 s", p50 <= 1500.0)
+        assertTrue("max ${sorted.last()}ms over the plan's 1.5 s", sorted.last() <= 1500.0)
+        assertEquals("no underrun while the taps opened streams", 0uL, stats.underruns)
+        bench.close()
+    }
+
+    /**
+     * Waits for the player's own state, on the ENGINE's thread — not on Compose
+     * (this test has no composition). A bounded poll of a value the player
+     * publishes is the only event there is here; nothing is asserted on it.
+     */
+    private var lastState: String = ""
+
+    private fun awaitPlayer(timeoutMs: Long, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val player = NowPlayingCore.player()
+        while (System.currentTimeMillis() < deadline) {
+            lastState = "${player?.snapshot()?.state} err=${player?.snapshot()?.error}"
+            if (condition()) return
+            Thread.yield()
+        }
+        throw AssertionError("the player never reached the expected state ($lastState)")
+    }
+
     // -- the plumbing ---------------------------------------------------------
 
     /** The core over the bench, once per process (a phone installs one). */
@@ -412,11 +557,16 @@ class NowPlayingDeviceTest {
                 val method = parts.getOrNull(0).orEmpty()
                 val path = parts.getOrNull(1).orEmpty().substringBefore('?')
                 routes += "$method $path"
-                val (status, body) = answer(path)
-                val bytes = body.toByteArray()
+                val (answered, body) = answer(path)
+                // The tone is served here and not by `answer()`: its body is
+                // BYTES, not a JSON string.
+                val audio = path.startsWith("/api/stream/") && !path.endsWith("/ready")
+                val status = if (audio) 200 else answered
+                val bytes = if (audio) tone else body.toByteArray()
                 val head = buildString {
                     append("HTTP/1.1 $status X\r\n")
-                    append("Content-Type: application/json\r\n")
+                    append("Content-Type: ${if (audio) "audio/flac" else "application/json"}\r\n")
+                    if (audio) append("Accept-Ranges: bytes\r\n")
                     append("Content-Length: ${bytes.size}\r\n")
                     if (path == "/api/login") append("Set-Cookie: session=good; Path=/\r\n")
                     append("Connection: close\r\n\r\n")
@@ -428,11 +578,18 @@ class NowPlayingDeviceTest {
             }
         }
 
-        private fun answer(path: String): Pair<Int, String> = when (path) {
-            "/api/version" -> 200 to """{"version":"9.9.9","build":"bench"}"""
-            "/api/login", "/api/me" -> 200 to ME
-            "/api/lyrics/$KEY" -> 200 to LYRICS
-            "/api/radio/track/$KEY" -> 200 to RADIO
+        /** The tone: 10 s of a 440 Hz FLAC (MB7's own fixture, copied here). */
+        val tone: ByteArray = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("tone.flac").use { it.readBytes() }
+
+        private fun answer(path: String): Pair<Int, String> = when {
+            path.startsWith("/api/stream/") && path.endsWith("/ready") ->
+                200 to """{"ready":true,"ranges":"bytes","bytes":${tone.size},"cached":false,"offset":true,"streaming":false}"""
+
+            path == "/api/version" -> 200 to """{"version":"9.9.9","build":"bench"}"""
+            path == "/api/login" || path == "/api/me" -> 200 to ME
+            path == "/api/lyrics/$KEY" -> 200 to LYRICS
+            path == "/api/radio/track/$KEY" -> 200 to RADIO
             else -> 404 to """{"error":"not found"}"""
         }
 

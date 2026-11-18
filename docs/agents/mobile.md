@@ -3318,6 +3318,23 @@ badge, a podcast's rate — and the data behind them, in Rust.
   (1 request / 214 B, then 0 requests and 0 sockets, `Offline` in 0 sockets), the device
   (`NowPlayingDeviceTest`: `routes=[GET /api/lyrics/9001]`, `NetStats(tag=nowplaying, requests=1,
   bytesIn=214)`, then `routes=[]`), and the JVM (the copy is the FIRST `Ready`, marked `stale`).
+- **« Tap → son » se mesure sur UNE horloge, jamais sur les deux du lecteur.**
+  `output_stats()` porte `last_tap_ns` (l'instant que Kotlin lui passe) et
+  `last_first_audible_ns` — et MB3b/MB7 ont mesuré que le second est l'horloge
+  INTERNE du lecteur (ms depuis son démarrage) : leur différence n'est pas une
+  durée. La mesure de ce lot prend donc `SystemClock.elapsedRealtimeNanos()` au
+  tap et le même appel au premier échantillon RENDU (la position du moteur quitte
+  zéro : le moteur avance son horloge en rendant), 20 taps sur des lignes de la
+  file : **p50 737,6 ms, max 749,7 ms** (première série : 755,2 / 981,3) sur
+  l'émulateur, **0 underrun**, tampon 500 ms — et `latency_ms` (500) est la part
+  du HAL, que le son entendu ajoute APRÈS le premier échantillon rendu.
+- **Un titre téléchargé se lit sur le disque par CE lecteur** : MB3b's
+  `ServerOpener::local` demande d'abord `Downloads::local`, puis la play cache,
+  puis le réseau (`nz-core/src/player/source.rs`). La preuve de bout en bout
+  (mode avion → le titre joue) n'a PAS pu être faite : `offline_attach` de MB15 est
+  exporté sans `async_runtime = "tokio"` et rend « there is no reactor running »
+  sur l'appareil (mesuré), si bien que `OfflineCore.api()` avale l'échec et
+  qu'aucun téléchargement ne peut être créé — c'est le fichier de MB15.
 - **`position()` is a frame's work, and a frame that draws nothing touches no binding.** The sheet's
   rail reads it once per visible frame, the mini bar at the SPA's own 4 Hz, and
   `PositionTicker.frame(drawn)` answers `null` otherwise. Device: **6 reads while the player draws,
@@ -3376,6 +3393,7 @@ emulator API 35 x86_64 `-no-window -no-audio` on this lot's own port 5660):
 | The device: the words | `NowPlayingDeviceTest` (loopback bench in the app process) | **1 request / 214 B** cold, **0** from the copy, the radio **1** |
 | The device: the queue | 4 000 real rows (`PlayerCommand.PlayQueue`), scrolled to row 1201 | rows **4 000**, reached **1201**, the screenshot above; **frames not measured** (see the rule) |
 | The device: screen off | `UiDevice.sleep()` + ON_STOP, then forced frames | **6** `position()` calls while drawing, **0** more asleep |
+| The device: **tap → son** | 20 taps on queue rows, one clock (`elapsedRealtimeNanos`), first RENDERED sample | **p50 737,6 ms, max 749,7 ms**, 0 underrun, `latency_ms` 500 (the HAL's own part) |
 | `libnz_ffi.so` | `build-android.sh` (release, stripped) | arm64-v8a **11 203 016 B**, armeabi-v7a **7 566 440 B**, x86_64 **13 304 976 B**; `NEEDED` names only what Android provides |
 
 **Deliberate deviations from the plan paragraph, and why.**
@@ -3394,7 +3412,11 @@ emulator API 35 x86_64 `-no-window -no-audio` on this lot's own port 5660):
 - The queue crosses as `NzRowSource` (`ListHandle.asRowSource()`) rather than a raw handle, so a JVM
   test can hold a 4 000-row queue without a `.so`; the window is still `:designsystem`'s `ListWindow`.
 
-**Still owed, and to whom.** The frame budget of a 4 000-row fling on real hardware: MQ2's
+**Still owed, and to whom.** MB15's `offline_attach` needs `#[uniffi::export(async_runtime = "tokio")]`
+(it runs on the JVM tests' own runtime but fails on a device: "there is no reactor running"), and
+`OfflineCore.api()` should not swallow that failure — until then the airplane-mode download cannot be
+created and this lot's disk-play path is proven only by MB3b's `ServerOpener::local` (which has no test
+of its own). The frame budget of a 4 000-row fling on real hardware: MQ2's
 `ScrollBenchmark#queueScroll4000` (MQ1's file, inactive until a screen paints the queue — the queue is
 reachable now that `openQueue()` opens it). A podcast's own panel (chapters, description, transcript)
 is MB13's; until it lands the player offers no « À propos » for an episode. `VizApi`'s strip (MB21)
@@ -4639,132 +4661,4 @@ Règles (non négociables, apprises sur l'app desktop) :
   scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
 Fin : branche <ta-branche>/swap, PR « feat(mobile): MB-SWAP ship the native app as neezer.apk », CI verte,
 rebase + diff --stat, merge, `ao report --done`.
-```### MB11 — Now playing (delivered 2026-11-18)
-
-**What landed.** The player a person lives in: the mini bar above the phone's tab bar, the
-full-screen sheet (a thumb column on a phone; reading columns from the SPA's own 900/1100 dp
-breakpoints), the queue editor, the words, the lyric card, « À propos », the sleep timer, the quality
-badge, a podcast's rate — and the data behind them, in Rust.
-
-- **The core** (`nz-core::nowplaying`): `wire.rs` reads the two routes this area owns
-  (`GET /api/lyrics/<id>`, `GET /api/radio/track/<id>`) as raw bodies, so a remembered answer and a
-  live one go through the same converter; `store.rs` keeps the lyrics body per ACCOUNT under the
-  CACHE directory, hashed (`nowplaying-<account>-lyrics-<fnv1a>.json`, `.part` + rename);
-  `card.rs` is the pure half of `lib/lyriccard.js` (which lines a card offers, which one it opens
-  on, a tap's two refusals, lyric order, the file's name); `speed.rs` is `lib/speed.js` (a rate per
-  SHOW in the kv store, 0,5–4 believed, 1 forgets it).
-- **The FFI** (`nz-ffi/src/nowplaying.rs`): `cached_lyrics`/`lyrics`, `similar_tracks` (a
-  `ListHandle`), the five card rules, the eight speed rungs and the speed calls. The block carries
-  `#[uniffi::export(async_runtime = "tokio")]` — see the reactor rule below.
-- **Kotlin** (`:feature/nowplaying`): `NowPlayingModel` (transport, queue edits, quality, sleep,
-  speed, the counted position read), `LyricsModel` (the words, the active line, the card's
-  selection), `AboutModel` (credits + similar), `PlayerSurface`/`PlayerColumn`, `QueueSheet` +
-  `QueueEditor`, `LyricsSheet`/`LyricsView`, `LyricCardSheet` + `LyricCardPainter`, `AboutSheet`,
-  the three menus, `MiniPlayer`, `NowPlayingHost`, `NowPlayingState` (the sheet the shell toggles),
-  `PlayerFeed` (one subscription to the player, process-wide), `CoverPalette` (the sleeve's colours).
-
-**Rules a measurement taught** (each one a rule a later lot inherits; the numbers are this lot's):
-
-- **An `impl Screens` block with `async fn`s must carry `async_runtime = "tokio"`, or the DEVICE
-  answers "there is no reactor running".** MB0's note only said the attribute is *refused* on a
-  block with no async method; the other half is that a block WITH one needs it. The JVM suites never
-  saw it (they call the core directly), the instrumented test died on its first `lyrics()` call.
-  Measured on the emulator, then fixed: 1 request / 214 B.
-- **The words wait for the AUDIO, not for the track.** `lib/lyrics.js` fetches on `playable`, and a
-  lyrics request racing its own stream spends the first second of a mobile link on words nobody is
-  looking at. `LyricsModel.onTrack` asks only when the snapshot says `PLAYING` *and* somebody has
-  the player open: **1 request, never 2** (`a_track_change_empties_the_words`).
-- **One request cold, ZERO warm, and a dead link opens no socket.** Proven three times — Rust
-  (1 request / 214 B, then 0 requests and 0 sockets, `Offline` in 0 sockets), the device
-  (`NowPlayingDeviceTest`: `routes=[GET /api/lyrics/9001]`, `NetStats(tag=nowplaying, requests=1,
-  bytesIn=214)`, then `routes=[]`), and the JVM (the copy is the FIRST `Ready`, marked `stale`).
-- **`position()` is a frame's work, and a frame that draws nothing touches no binding.** The sheet's
-  rail reads it once per visible frame, the mini bar at the SPA's own 4 Hz, and
-  `PositionTicker.frame(drawn)` answers `null` otherwise. Device: **6 reads while the player draws,
-  0 more** after the lifecycle left STARTED, and **0 more** with the device asleep
-  (`UiDevice.sleep()`, ON_STOP — events, never a clock).
-- **A Compose TEST activity is not a rendering subject.** `dumpsys gfxinfo <test-pkg> framestats`
-  reported **0–7 frames** for a whole fling session, and `UiDevice.swipe` moved nothing while
-  `performTouchInput`/`performScrollToIndex` did: the frame budget of a 4 000-row fling therefore
-  belongs to the app-level bench (MQ1's `ScrollBenchmark#queueScroll4000`, now reachable through
-  `NzNavigator.openQueue()`) and to MQ2, and this lot reports it as **not measured** rather than
-  printing a number about the test host. The device test proves what it can: 4 000 real rows, the
-  list reaching row 1201 of 4 000, and the screenshot of it.
-- **A queue row's gesture never depends on the row being mounted.** The list is
-  `ListHandle → asRowSource() → ListWindow` (64-row pages); a drag's target is the finger's distance
-  over the row height, and only what is AFTER the playhead can move or be removed — refused in the
-  MODEL as well as drawn without controls, so a gesture and the model cannot disagree.
-- **The quality badge offers the FIVE rungs the player can load**, not the SPA's six: the desktop
-  made the same call (D14a) and the reason is the same — `nz_audio::Quality` has no 256/192.
-- **The card's PIXELS are Android's, its RULES are Rust's.** The canvas needs the font's real
-  metrics, and the mobile Rust workspace has neither a text rasteriser nor an image encoder while
-  the two shared manifests are closed to a feature lot (worker rule 3). So the SPA's geometry,
-  palette and wrap are ported to `Canvas` (**1080 × 1350**, a real PNG, **899 929 B**), and
-  everything a person can FEEL stayed in Rust, held by `card.rs`'s tests. Same reason for the
-  sleeve's palette (`coverpalette.js#analyse` is ported to `CoverPalette`, and lifts nothing:
-  `:designsystem` already calls `nzReadableInk`).
-- **`full_credits(key)` is NOT a new FFI method.** MB7 already answers `/api/track/<id>/credits` and
-  owns the sheet; MB11's « À propos » shows the same data through `track_credits` (its cache first),
-  so one page keeps one route and one component.
-- **A labelled Material button is not a thumb-row door.** MB0's `PartyButton()`/`RemoteButton()`
-  bodies are `OutlinedButton`s with a label: five 44 dp targets do not fit beside two of them on a
-  360 dp phone, and rule 5 forbids a default widget on a Sillon surface. The doors are SLOTS
-  (`PlayerSurface(party = …, remote = …)`, the visualiser's strip reserved above the transport),
-  empty until MB19/MB20/MB21 hand back their real components.
-- **The header at 200 % is the chips' width, not the label's.** At font scale 2 the « EN LECTURE »
-  label squeezed the moon chip into the title on a 360 dp phone: the phone header keeps only the line
-  with information in it (what the player is DOING). The committed
-  `mb11-encre-360dp-lecteur-font200.png` is the picture that caught it.
-- **A `StateFlow.value` read inside a composition is a lint ERROR, and it is right.** The screenshot
-  bench reads the model's state OUTSIDE the content lambda (a still image observes nothing), and the
-  device test collects it. Ten `StateFlowValueCalledInComposition` errors were the first lint run.
-- **A Compose test cannot wait for idle while a `withFrameNanos` loop writes state every frame.**
-  The player's rail does exactly that, so its device test drives `mainClock.advanceTimeByFrame()`
-  with `autoAdvance = false`, set BEFORE `setContent` (which itself waits for idle).
-
-**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, NDK 30.0.16248370; the
-emulator API 35 x86_64 `-no-window -no-audio` on this lot's own port 5660):
-
-| What | How | Number |
-|---|---|---|
-| The words' cost | `cargo test -p nz-core nowplaying` (a counting loopback bench) | **1 request / 214 B** cold, **0 requests / 0 sockets** warm, `Offline` in **0 sockets**, a `500` keeps its status |
-| The card's rules | `cargo test` + `LyricCardTest` (JVM) | the two refusals (`min`, `max`), lyric order over tap order, `neezer-beyonce-deja-vu.png`, a `♪` keeps its index |
-| Rust | `cargo test --workspace --locked` | **22 new tests** (18 `nz-core::nowplaying`, 4 `nz-ffi::nowplaying`); workspace **304 + 7 + 52**, all green; clippy `-D warnings` and fmt clean |
-| JVM | `:feature:nowplaying:testDebugUnitTest` | **69 tests**: 15 model (transport, queue refusals, quality, sleep, speed, the counted read, the words' trigger) + 9 lyrics/card + 5 about + 5 card pixels + 35 screenshots |
-| The look | `docs/agents/screenshots/mobile/MB11/` | **32 PNGs**: Encre/Papier at 360, 600 and 1280 dp, the 200 % font scale, the queue, the words (with and without), « À propos », the card, and the **emulator's own screen** of the 4 000-row queue |
-| Lint | `:feature:nowplaying:lintDebug` | 0 errors |
-| The device: the words | `NowPlayingDeviceTest` (loopback bench in the app process) | **1 request / 214 B** cold, **0** from the copy, the radio **1** |
-| The device: the queue | 4 000 real rows (`PlayerCommand.PlayQueue`), scrolled to row 1201 | rows **4 000**, reached **1201**, the screenshot above; **frames not measured** (see the rule) |
-| The device: screen off | `UiDevice.sleep()` + ON_STOP, then forced frames | **6** `position()` calls while drawing, **0** more asleep |
-| `libnz_ffi.so` | `build-android.sh` (release, stripped) | arm64-v8a **11 203 016 B**, armeabi-v7a **7 566 440 B**, x86_64 **13 304 976 B**; `NEEDED` names only what Android provides |
-
-**Deliberate deviations from the plan paragraph, and why.**
-
-- The lyric card's PNG is drawn in Kotlin rather than returned by Rust (`lyric_card`): no text
-  rasteriser and no image encoder in the mobile Rust workspace, and the shared manifests are not a
-  feature lot's to edit. The RULES stayed in Rust, which is what `lib/lyriccard.js` owns.
-- The sleeve's accent (`coverpalette.js` in Rust) is `CoverPalette` in Kotlin for the same reason;
-  its consumer in this lot is the card, and Pochette's `--cover-ac` is MB16's theme wiring
-  (`NzTheme(coverAccent = …)` already lifts it in `:designsystem`).
-- `full_credits(key)` is MB7's `track_credits` (one page, one route, one component).
-- Five quality rungs (the desktop's rule), not the SPA's six.
-- `PartyButton`/`RemoteButton`/`VizSurface` are slots, empty until their lots land (rule 5).
-- `:app`'s `AppGraph.openPlayer()`/`openQueue()` now call `NowPlayingState` — two lines, in the two
-  stubs MB0 left with exactly that comment (a shared file, declared in the PR).
-- The queue crosses as `NzRowSource` (`ListHandle.asRowSource()`) rather than a raw handle, so a JVM
-  test can hold a 4 000-row queue without a `.so`; the window is still `:designsystem`'s `ListWindow`.
-
-**Still owed, and to whom.** The frame budget of a 4 000-row fling on real hardware: MQ2's
-`ScrollBenchmark#queueScroll4000` (MQ1's file, inactive until a screen paints the queue — the queue is
-reachable now that `openQueue()` opens it). A podcast's own panel (chapters, description, transcript)
-is MB13's; until it lands the player offers no « À propos » for an episode. `VizApi`'s strip (MB21)
-has its place reserved above the transport. The lyric card's faces are resolved by resource NAME
-(lint's `DiscouragedApi`): `:designsystem` exposes Compose `FontFamily`s, not `Typeface`s, and a
-`Typeface` helper is a line in a file this lot does not own.
-
-**Files.** `mobile/rust/crates/nz-core/src/nowplaying/**` (6 files), `mobile/rust/crates/nz-ffi/src/nowplaying.rs`,
-`mobile/android/feature/nowplaying/**` (14 Kotlin files, 5 JVM suites, 1 instrumented test, its
-manifest and its `res/xml`), `mobile/android/app/.../AppGraph.kt` (two lines), and this section.
-
-
-
+```
