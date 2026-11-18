@@ -2416,10 +2416,11 @@ so the phone shows the SPA's list for the same answer and the tests are the SPA'
   same requests under one `search` row; the fallback is not offered here (the bench has no provider
   source), so this capture has no `YT` row — the weaving is proven by the counting-server tests and
   the fixture screenshots.
-- **Rust**: `cargo test --workspace` **184 nz-core** (54 in `search`: 24 against a counting server —
-  the 2-request budget, the woven list, the three fallback failures, the transcript page, the shows
-  tab, the radio's 0, the recents, the chip's 0 — and the SPA's own `searchrank`/`queryradio`
-  cases) + **33 nz-ffi** (4 in `search`); `clippy -D warnings` and `fmt --check` clean.
+- **Rust**: `cargo test --workspace` **184 nz-core** (54 in `search`: 16 `rank` — the SPA's own
+  `searchrank` cases one for one — 11 `radio`, 4 `link`, 5 `wire`, 7 `mod` and **11 against a
+  counting server**: the 2-request budget, the woven list, the three fallback failures, the
+  transcript page, the shows tab, the radio's 0, the recents, the chip's 0) + **33 nz-ffi** (4 in
+  `search`); `clippy -D warnings` and `fmt --check` clean.
 - **JVM**: `:feature:search:testDebugUnitTest` **42 tests** — `SearchModelTest` 21 (2 requests per
   settled query on a VIRTUAL clock, one read in flight, one letter asks nothing, a link is an
   import, cached-then-fresh, a failed refresh keeps the copy, cause + « Réessayer », the fallback's
