@@ -254,7 +254,7 @@ Note: the upstream `tests/` are unittest-based; there is no pytest config.
 argon2 for cheap parameters (hashing was half the wall clock; `tests.managers.test_manager_user`
 pins the production defaults), and it compiles each distinct werkzeug URL builder once per process
 instead of once per rule per app (~95% of every `create_application`; `tests.test_harness` checks
-every rule's URLs against a fresh werkzeug compilation). CI runs seven workflows:
+every rule's URLs against a fresh werkzeug compilation). CI runs nine workflows:
 - `tests.yaml` — three jobs, not a version matrix: **image** (Python 3.13, what the Docker image
   ships, with numpy, `NS_REQUIRE_FFMPEG=1`, under coverage, and the image's OWN ffmpeg binary —
   the job reads the pinned `FROM mwader/static-ffmpeg…` line out of the Dockerfile and copies
@@ -265,6 +265,30 @@ every rule's URLs against a fresh werkzeug compilation). CI runs seven workflows
   ffmpeg or numpy must RUN in the image job — a skip there is the suite testing less than it
   claims.
 - `webapp.yaml` — `npm ci`, `npm test`, `npm run build`.
+- `desktop.yaml` — the GPUI workspace in **independent jobs** (`fmt`, `clippy`, `test`, `floor`,
+  `build`, `audit`, no `needs` between them): the workflow lasts its LONGEST job, never the sum, so
+  work that shares nothing with the suite gets its own job rather than a place at the end of
+  another. Two measured rules:
+  - **Install the system packages from a cache of their `.deb` files**
+    (`.github/actions/cached-apt`, `Dir::Cache::archives` — apt-get(8), FILES). The same 116 MB came
+    down at **87 and 120 kB/s** in two jobs and **12.4 MB/s** in a third of run 44278965583, so
+    `System dependencies` was the workflow's critical path — **median 22.2 / 20.4 / 16.4 min** per
+    job over 8 successful runs — for a package set that never changes. Same run, same mirror: what
+    varied was the CONNECTION, so the point is not to depend on it. The list still lives in the
+    workflow that installs it (release.yaml keeps its own): the action hashes it as the cache key (and NOT the runner
+    image: in run 44309607752 the four jobs reported three different `ImageVersion`s, so an
+    image-keyed cache would never be shared), and its cold path forces IPv4 and retries a stalled
+    fetch (`Acquire::ForceIPv4`, `Acquire::Retries`, `Acquire::http::Timeout`). Two traps, both
+    measured and both fatal to the cache: apt creates `archives/partial/` and `archives/lock` as
+    ROOT, so caching the directory made every save die on `tar: … Permission denied` — the path is
+    the glob `apt-archives/*.deb`; and the archive served the same 116 MB at 20.8 MB/s to one job
+    and 90.9 kB/s to another of the same run, which is the connection, not the mirror.
+  - **The CPU-floor proof is its own job** (`floor`). The two engine children plus
+    `check_cpu_floor.sh` were the tail of `cargo test + window` (medians **5.83 + 4.15 min**) and
+    share nothing with the suite but the target directory. Moved, not lightened: same steps, same
+    binaries, same assertions. Its Rust cache has its own key on purpose — the two jobs hold
+    different artifacts (`target/engine-v3`, `-v4`), and one shared entry would be overwritten by
+    whichever job finished last.
 - `docker.yaml` — a PR builds amd64 only (no QEMU) and runs `docker/smoke.sh` on it; master and
   `v*` tags smoke-test amd64, then build and push both architectures. **ffmpeg in the image is a
   static build** (one file, no shared library): the apt layer that installed Debian's package was

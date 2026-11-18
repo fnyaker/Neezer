@@ -740,7 +740,28 @@ Waves that can run in parallel (disjoint files):
   above; `neezer-desktop` opens a themed window (`--self-test-quit-after-first-frame` prints
   `first_frame_ms=<n>`) and `neezer-transcribe --version` prints the whisper.cpp build it links.
   `.github/workflows/desktop.yaml` runs `fmt`, `clippy`, `test` (+ the real window under Xvfb),
-  `build` (release, both binaries, uploaded) and `audit`.
+  `floor` (the engine children and the CPU-floor proof) `build` (release, both binaries, uploaded)
+  and `audit` — six INDEPENDENT jobs, so the workflow lasts its longest job and never the sum.
+- **The rule, two things make this workflow slow and neither is the code (measured 2026-11-18, 8
+  successful runs).**
+  1. **The apt download, not the build.** `System dependencies` was the critical path: **median
+     22.15 min** in `cargo test + window`, **20.38 min** in `cargo clippy`, **16.43 min** in
+     `release binaries`, for 116 MB that never changes. Run **44278965583** is the proof it is the
+     network and not the runner: the same 116 MB in the same run at **12.4 MB/s (9 s)** in `release
+     binaries`, **86.9 kB/s (22 min 19 s)** in `cargo clippy` and **120 kB/s (16 min 12 s)** in
+     `cargo test + window`. Every job now installs from a cache of the `.deb` files
+     (`.github/actions/cached-apt`, which points apt's `Dir::Cache::archives` at `$RUNNER_TEMP`
+     because `actions/cache` restores as the runner user and `/var/cache/apt/archives` belongs to
+     root). The `packages` input stays in the workflow: a package that stops building must be
+     readable where it is installed. The cache key is the package list, hashed — and not the
+     runner image, because one run's four jobs reported three different `ImageVersion`s. The path
+     is the glob `apt-archives/*.deb`: apt creates `partial/` and `lock` as root, and caching the
+     whole directory made every save fail on `tar: Permission denied`. The cold path forces IPv4 and
+     retries a stalled fetch — the archive served 20.8 MB/s to one job and 90.9 kB/s to another of
+     the same run, so the slow part is the connection, not the mirror.
+  2. **The CPU-floor proof sat at the end of the test job.** `Build the x86-64-v3 and x86-64-v4
+     engine children` (median **5.83 min**) and `Both CPU floors hold` (**4.15 min**) shared nothing
+     with the suite but the target directory. They are the `floor` job now — moved, not dropped.
 - **Measured** (this machine: 16 threads, Rust 1.99.1, RADV 780M, Hyprland; CI: `ubuntu-24.04`,
   Xvfb + lavapipe):
   - `cargo test --workspace`: **12 tests, 0 failed**; `cargo fmt --all --check` and

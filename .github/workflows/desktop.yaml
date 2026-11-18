@@ -15,6 +15,19 @@ name: Desktop
 # Paths: the app links the repository's Rust crates (webapp/rhythm,
 # webapp/appcore, android/nscore), and it speaks the server's /api surface, so
 # a change there re-runs this workflow too.
+#
+# The jobs are independent and run together (GitHub runs every job without a
+# `needs` at the same time), so the workflow's duration is its LONGEST job, not
+# the sum:
+#
+#   fmt, audit   seconds
+#   clippy       the workspace, linted (debug profile)
+#   test         the workspace's suite + the real window under Xvfb + the API
+#                and transcription benches
+#   floor        the engine children (x86-64-v3/v4) and the CPU-floor proof —
+#                its own job since 2026-11-18: it was ~10 min of `test`'s
+#                critical path and shares nothing with it but the target dir
+#   build        the release binaries (uploaded)
 
 on:
   push:
@@ -30,6 +43,9 @@ on:
       - neezer/transcribe/**
       - tools/perf_api.py
       - .github/workflows/desktop.yaml
+      # The composite action the `System dependencies` steps call: a change to it
+      # is a change to what every job installs.
+      - .github/actions/**
   pull_request:
     paths:
       - desktop/**
@@ -41,6 +57,9 @@ on:
       - neezer/transcribe/**
       - tools/perf_api.py
       - .github/workflows/desktop.yaml
+      # The composite action the `System dependencies` steps call: a change to it
+      # is a change to what every job installs.
+      - .github/actions/**
   workflow_dispatch:
 
 concurrency:
@@ -64,6 +83,10 @@ env:
   # It is the only encoder in the stack, and the runner image is not a contract.
   # (A comment INSIDE the folded `>` block below becomes a package name: apt
   # tried to install "seam)," and failed every job. Keep comments out here.)
+  #
+  # This list is the cache key of every `System dependencies` step
+  # (`.github/actions/cached-apt` hashes it, with the runner image): changing it
+  # is a new cache, and the four jobs download only the difference.
   APT_DEPS: >
     build-essential clang cmake pkg-config
     libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev
@@ -113,9 +136,10 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $APT_DEPS
+        uses: ./.github/actions/cached-apt
+        with:
+          line: desktop
+          packages: ${{ env.APT_DEPS }}
       # whisper.cpp's CMake build needs the Vulkan HEADERS on the include path;
       # on Linux `whisper-rs-sys` does not read VULKAN_SDK itself, CMake's
       # `FindVulkan` does. CI keeps them in $RUNNER_TEMP so no system package
@@ -165,8 +189,10 @@ jobs:
     runs-on: ubuntu-24.04
     # 60, not 40: since #329 the cache key names the runner's CPU, so a model this
     # repository has never run on is a COLD build by design (~37 min measured on the
-    # first such run), and this job now also builds the two extra engine children
-    # (~5 min) and runs them on an emulated CPU. A warm run stays ~5-8 min.
+    # first such run, engine children included). Those children and the CPU-floor
+    # proof moved to the `floor` job on 2026-11-18 (~10 min off this job's path);
+    # the timeout keeps its headroom rather than tracking the warm number, because
+    # a too-tight one turns a cold run into a red one.
     timeout-minutes: 60
     defaults:
       run:
@@ -179,9 +205,10 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $APT_DEPS
+        uses: ./.github/actions/cached-apt
+        with:
+          line: desktop
+          packages: ${{ env.APT_DEPS }}
       - name: Vulkan headers for whisper.cpp
         run: |
           curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \
@@ -351,10 +378,119 @@ jobs:
       - name: The transcription binary reports what it links
         run: ./target/debug/neezer-transcribe --version
 
-      # The x86-64-v3 engine child, beside the floor one: the supervisor starts it
-      # where the CPU answers AVX2+FMA+F16C, and this job is where the pair is
-      # exercised (docs/agents/desktop.md, *The CPU floor, and the child that picks
-      # its own ISA*). ~2 min: a second whisper build, in its own target.
+  # The engine children and the CPU-floor proof, on their own since 2026-11-18.
+  #
+  # WHY THIS IS A JOB AND NOT THE TAIL OF `cargo test + window`: nothing here
+  # shares anything with the suite except the target directory, and it was ~10
+  # min of that job's critical path (`Build the x86-64-v3 and x86-64-v4 engine
+  # children` median 5.83 min + `Both CPU floors hold` median 4.15 min, over 8
+  # successful runs). Every job without a `needs` runs at the same time, so the
+  # workflow is now its longest job (~18 min, `release binaries`) instead of the
+  # sum. EVERY step below is unchanged, on the same binaries, with the same
+  # assertions: this is a move, not a lighter check.
+  #
+  # It keeps its OWN Rust cache (no `shared-key`): the two jobs hold different
+  # artifacts (this one adds `target/engine-v3` and `-v4`), and one shared entry
+  # would be overwritten by whichever job finished last, so the children would
+  # be rebuilt cold half the time. The cost is one cold run, once.
+  floor:
+    name: CPU floor (engine children)
+    runs-on: ubuntu-24.04
+    # 60 like `cargo test + window`, for the same reason: a cache miss on a
+    # runner model this repository has never seen is a COLD build by design
+    # (~37 min measured before the floor work moved here; ~20 min for this job
+    # alone), so the timeout must not turn that into a red run.
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: System dependencies
+        uses: ./.github/actions/cached-apt
+        with:
+          line: desktop
+          packages: ${{ env.APT_DEPS }}
+      # whisper.cpp's CMake build needs the Vulkan HEADERS on the include path;
+      # on Linux `whisper-rs-sys` does not read VULKAN_SDK itself, CMake's
+      # `FindVulkan` does. CI keeps them in $RUNNER_TEMP so no system package
+      # is required (Arch's `vulkan-headers` + `shaderc` are the local
+      # equivalents).
+      - name: Vulkan headers for whisper.cpp
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \
+            https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.333.tar.gz
+          mkdir -p "$RUNNER_TEMP/vk"
+          tar xzf "$RUNNER_TEMP/vk.tar.gz" -C "$RUNNER_TEMP/vk" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/vk/lib"
+          ln -sf "$(ldconfig -p | awk '/libvulkan\.so\.1 /{print $NF; exit}')" \
+            "$RUNNER_TEMP/vk/lib/libvulkan.so"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+      # ggml is compiled with `-march=native` (its `GGML_NATIVE` default), so the
+      # objects in `target/` belong to the CPU that produced them — and this cache
+      # never looked at the CPU: run 44240162634 restored (`full match: false`, a
+      # partial restore) an object built on a runner with AVX-512, and the engine
+      # child died with `SIGILL (signal 4)` on the runner that got it. The
+      # fingerprint is the model and the flags line, hashed: another runner model is
+      # another cache, never a binary that traps.
+      - name: The runner's CPU, as a cache key
+        id: cpu
+        run: |
+          model="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
+          flags="$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2 | tr -s ' ' | sed 's/^ *//')"
+          fingerprint="$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-16)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "CPU: $model (empreinte $fingerprint)"
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
+          # broader prefix, and a `key:`-only fingerprint would still restore another
+          # CPU's objects through that fallback.
+          # ... and the floors the three engine children are built for: this
+          # entry cannot be reused after a floor change either (docs/agents/
+          # desktop.md, *The CPU floor*).
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
+      # Local transcription is proven on a REAL model, not a stub: eleven seconds
+      # of speech (whisper.cpp's `jfk.wav`, at the tag this build vendors) go
+      # through `neezer-transcribe file` on the CPU and on `lavapipe` (the
+      # software Vulkan device `mesa-vulkan-drivers` installs), and the two
+      # transcripts must be identical. `ggml-tiny` is 78 MB, so it is cached by
+      # its pinned sizes and hashes: a bumped model is a new key, never a silent
+      # change, and both files are checked with `sha256sum -c` on every run.
+      - name: Cache the transcription fixtures
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/whisper
+          key: whisper-fixtures-tiny-be07e048-59dfb9a4
+      - name: Fetch the transcription fixtures (SHA-256 pinned)
+        run: |
+          mkdir -p "$RUNNER_TEMP/whisper"
+          cd "$RUNNER_TEMP/whisper"
+          test -f ggml-tiny.bin || curl -sSLo ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          test -f jfk.wav || curl -sSLo jfk.wav \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.8.3/samples/jfk.wav
+          echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  ggml-tiny.bin" \
+            | sha256sum -c -
+          echo "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  jfk.wav" \
+            | sha256sum -c -
+      # The floor binary the census, the emulated run and the dispatch all read.
+      # `cargo test` builds the test harnesses, not the binaries themselves.
+      - name: Build the debug binaries
+        run: cargo build --workspace --locked
+
+      # The x86-64-v3 and x86-64-v4 engine children, beside the floor one: the
+      # supervisor starts the best child the CPU can run, and this job is where
+      # the three are exercised (docs/agents/desktop.md, *The CPU floor, and the
+      # child that picks its own ISA*). ~2 min each: a second whisper build, in
+      # its own target.
       - name: Build the x86-64-v3 and x86-64-v4 engine children
         run: tools/build_engine_variants.sh --debug
       # WHY AN ENGINE CHILD COULD DIE, AND WHAT IT WAS BUILT FOR: the runner's CPU
@@ -379,7 +515,7 @@ jobs:
             fi
           done
       # The artefacts ship to laptops whose CPU is older than the runner's, so both
-      # floors are checked on the binaries this job just ran: each census, each
+      # floors are checked on the binaries this job just built: each census, each
       # variant's ggml objects gated at its own level, the floor binary transcribing
       # under an EMULATED x86-64-v2 CPU, the `-v3` one natively, and the dispatch.
       - name: Both CPU floors hold, and the dispatch picks right
@@ -405,9 +541,10 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $APT_DEPS
+        uses: ./.github/actions/cached-apt
+        with:
+          line: desktop
+          packages: ${{ env.APT_DEPS }}
       - name: Vulkan headers for whisper.cpp
         run: |
           curl -sSL -o "$RUNNER_TEMP/vk.tar.gz" \

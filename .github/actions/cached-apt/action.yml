@@ -1,0 +1,121 @@
+name: Cached apt packages
+description: >-
+  Install a job's system packages from a cache of the .deb files they are made
+  of, and make the cold path survivable when the archive connection is bad.
+
+  Measured before this existed, desktop.yaml run 44278965583: the same 116 MB of
+  packages came down at 12.4 MB/s in the `release binaries` job (9 s) and at
+  86.9 kB/s in `cargo clippy` (22 min 19 s) and 120 kB/s in
+  `cargo test + window` (16 min 12 s) — `System dependencies` was the workflow's
+  critical path (median 22.15 / 20.38 / 16.43 min per job over 8 successful
+  runs) for a package set that never changes. Same run, same mirror: what varied
+  is the CONNECTION, not the archive, so the fix is not to depend on it.
+
+inputs:
+  packages:
+    description: >-
+      The packages to install, space separated on one line. Kept in the calling
+      workflow, never here: a package that stops building there must be readable
+      on its own (release.yaml, `binaries`).
+    required: true
+  line:
+    description: >-
+      Which cache line this job belongs to (`desktop`, `release`). Restores the
+      most recent entry of that line, so adding one package downloads one
+      package instead of the whole set.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # The key is the package list, hashed: it identifies the .deb SET, so an
+    # edited list is a new entry and nobody has to remember to bump a number.
+    #
+    # NOT the runner image, and that is a measurement, not a preference: in one
+    # run (44309607752) the four desktop jobs reported THREE `ImageVersion`s —
+    # 20261111.370.1 (`release binaries`), 20261111.127.1 (`cargo clippy`) and
+    # 20261116.376.1 (`floor`). The fleet runs several image builds at once, so
+    # an image-keyed cache would be four separate entries that a job on another
+    # image never finds. A package whose version moves between images is one or
+    # two .debs, downloaded again — cheaper than never sharing the cache.
+    - name: The package list, as a cache key
+      id: key
+      shell: bash
+      env:
+        APT_PACKAGES: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        list="$(printf '%s' "$APT_PACKAGES" | tr -s ' ' '\n' | sed '/^$/d' | sort |
+          sha256sum | cut -c1-16)"
+        echo "list=$list" >> "$GITHUB_OUTPUT"
+        echo "line=${{ inputs.line }} list=$list image=${ImageVersion:-none}"
+
+    # `Dir::Cache::archives` is where apt keeps the .debs it retrieved
+    # (apt-get(8), FILES: "/var/cache/apt/archives/ — Storage area for retrieved
+    # package files. Configuration Item: Dir::Cache::Archives") and it looks
+    # there before opening a connection, so a restored set costs no download at
+    # all. Pointed at $RUNNER_TEMP because actions/cache restores as the runner
+    # user and /var/cache/apt/archives belongs to root.
+    #
+    # ONLY THE `.deb` FILES ARE CACHED (`*.deb`, a glob the cache action
+    # documents), NOT the directory: apt runs under sudo, so it creates
+    # `archives/partial/` and `archives/lock` as ROOT, and the runner user cannot
+    # read those — the first version of this action cached the directory and
+    # every save died with
+    #   tar: ../../_temp/apt-archives/partial: Cannot open: Permission denied
+    #   ##[warning]Failed to save
+    # so no cache ever existed and every run paid the download: runs 44301318230
+    # and 44306714250 both logged "Cache not found for input keys: apt-desktop-…"
+    # and fetched 116 MB again.
+    - name: The cache directory
+      shell: bash
+      run: mkdir -p "$RUNNER_TEMP/apt-archives"
+
+    - name: Restore the downloaded packages
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/apt-archives/*.deb
+        # A STATIC key on purpose (actions/cache: "You cannot change the
+        # contents of an existing cache. Instead, you can create a new cache
+        # with a new key"): one upload, then every run and job restores it
+        # forever. A rolling key would re-upload 116 MB per job per run — 4 x
+        # 116 MB of the repository's 10 GB, evicting the Rust caches the builds
+        # need (docs.github.com, dependency caching, "Usage limits and eviction
+        # policy").
+        key: apt-${{ inputs.line }}-${{ steps.key.outputs.list }}
+
+    - name: Install the system packages
+      shell: bash
+      env:
+        APT_PACKAGES: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        cache="$RUNNER_TEMP/apt-archives"
+        mkdir -p "$cache/partial"
+        # The indexes are re-read every run either way: they are what tells apt
+        # which version it wants, and a stale index would install a version the
+        # archive no longer serves (apt then fails, where a fresh one downloads).
+        sudo apt-get update
+        # A cold cache still meets the archive once, so the two ways a *single
+        # connection* fails are handled rather than paid:
+        #   - `Acquire::ForceIPv4` removes a broken IPv6 route, the usual reason
+        #     a fast mirror serves a runner at dial-up speed (apt.conf(5), THE
+        #     ACQUIRE GROUP);
+        #   - `Acquire::Retries` retries the files that stall or truncate, and
+        #     `Acquire::http::Timeout` turns "connected but silent" into a retry
+        #     (apt.conf(5): "Number of retries to perform").
+        # None of this makes a slow mirror fast. What makes it never matter again
+        # is the cache above: one cold run per (image, package list), ever.
+        sudo apt-get \
+          -o Dir::Cache::archives="$cache/" \
+          -o APT::Keep-Downloaded-Packages=true \
+          -o Acquire::ForceIPv4=true \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          install -y --no-install-recommends $APT_PACKAGES
+        # `apt-get install` deletes the .deb unless asked not to; without this
+        # the cache the post step saves would be empty and every run cold. The
+        # chmod is what the save needs: apt wrote them as root.
+        sudo chmod a+r "$cache"/*.deb 2>/dev/null || true
+        echo "apt cache: $(find "$cache" -maxdepth 1 -name '*.deb' | wc -l) .deb, \
+        $(du -sh "$cache" 2>/dev/null | cut -f1)"
