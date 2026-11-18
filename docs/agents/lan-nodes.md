@@ -1221,83 +1221,123 @@ this file's header, not to this lot.
   > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
   > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
 
-### LN4 — Index, hashing, scope, serve (wave 1, effort max)
+### LN4 — Index, hashing, scope, serve (delivered 2026-11-18)
 
-- **Objective**: a node knows what it has (downloads + complete play-cache files, per quality, with
-  a SHA-256), answers peers' requests within their scope and its own serve limits, and never lets
-  serving slow its own playback.
-- **Files**: LN4 row. **Contracts**:
+- **Objective** (met): a node knows what it has (downloads + complete play-cache files, per quality,
+  with a SHA-256), answers a peer inside that peer's scope and its own serve limits, and never lets
+  serving or hashing slow its own playback.
+- **Files**: the LN4 row, unchanged — `desktop/crates/nz-lan/src/{store,index,hashing,scope,serve}.rs`
+  and `tests/serve.rs`. It changes no shared type and no manifest, so neither `Cargo.lock` moved.
+- **What landed.** `lan.sqlite` (WAL, `PRAGMA user_version`, idempotent v1 + the boot repair path that
+  replays it when a table is missing, a newer file refused with its version in the cause) holding
+  `file_tag`/`peer_addr`/`trust`; the in-memory inventory with a version, a 64-change delta ring and a
+  per-track quality bitmask; the `nz-lan-hash` worker; `Scope::for_peer`/`from_share`/`allows`; the
+  responder with its serve budget and its single `NotFound` constructor; and 18 acceptance tests that
+  build no `Incoming` (LN4's tests drive `Server::answer`, LN6's transport feeds the same function).
+- **What a later lot can rely on.**
+  - `Store` is now a real handle (`Arc` inside, `Clone`, `Default` = unopened). `Store::tag`,
+    `tag_row`, `tags`, `put_tag`, `forget_tag`, `put_trust`/`trust`/`trust_keys`/`forget_trust`,
+    `put_peer_addr`/`peer_addrs`/`forget_peers`. An unopened store answers "nothing stored" and writes
+    nothing; `Store::db_path`/`dir` answer `None`. LN7's `enroll`/`gossip` and LN3's last-known
+    addresses read these and nothing else.
+  - `Index::refresh` is the only writer (four statements, whatever the library's size), `events()`
+    fires on an inventory change, `sets_version()` moves on a set edit, `local`/`best_local`/`cover`/
+    `local_paths`/`statements`/`tracks`/`memory` are the readers, and `hashed()` is the hashing
+    progress signal. `refresh` is idempotent: no change, no version bump.
+  - `Hashing::start_with(index, store, gates)` is the service's entry point (`start` keeps its declared
+    two-argument shape for a node without gates); `state()` reports `Idle`/`Waiting`/`Hashing`.
+  - `Server::answer(scope, &Request) -> Answer { head, body, .. }` is the decision,
+    `Server::handle` the whole request; the serve slot and the `Bulk` lane are held by the `Answer`
+    until the bytes are written, so a peer that hangs up frees them.
+  - `Scope::is_own`/`is_all` answer "everything I have" (what a set's own art needs), not "this id".
+- **Three additions to the note's contract** (each additive, each with its reason):
+  1. **`Hashing::start_with`** — `start(index, store)` has no room for the gate, and a worker that
+     never sees `Api::gates()` cannot yield. The declared `start` stays; the service uses
+     `start_with`.
+  2. **`Index::best_local`** and `Fetch`'s fallback to it — the responder answers the asked-for
+     quality when it has it and otherwise the best copy it has, and `FetchOk.quality` names what was
+     actually served (which is what LN5's `ByteStream::quality` records). `Index::local` stays exact.
+  3. **`pub const Store`** — LN0's placeholders in `enroll.rs`/`gossip.rs` use `&Store` as a VALUE
+     (a unit struct). A handle cannot be a unit struct, so the same name is also a const: the unopened
+     store. Those two files keep compiling untouched until LN7 replaces them.
+- **Where a divergence from the plan is deliberate, and why:**
+  - **A `Sets` page carries 8 sets, not 64.** The note's 64 was a cap, and it does not fit: 64 sets
+    each holding a 4 000-track playlist is ~3 MB of JSON against a 1 MiB frame. Eight worst-case sets
+    are 384 KB, and the page also stops at 768 KiB of estimate.
+  - **`Meta`'s refusal is `{"t":"Meta","rows":[]}`, not `NotFound`.** A `Meta` request names up to 200
+    ids; refusing the whole call for one unshared id would be wrong. The criterion (no information
+    from the refusal) holds in the form that matters: the frame for an unshared id and the frame for
+    an id nothing knows are byte-identical, which is what the test compares.
+  - **A restricted friend gets no set `cover`**, only the art of the sets they can see whole (and of
+    the tracks in their scope). `Scope` carries the union of the shared tracks, not playlist ids, so
+    "a set they can see whole" is the only rule the signed roster actually supports.
+  - **The paused clock is not used**: `start_paused` needs tokio's `test-util`, which this lot's
+    manifest does not enable and does not own. The `Bulk` wait is proven by the future's own state
+    (one poll ⇒ pending, then completion after the guard is released) and the hashing pause by the
+    worker's own `Waiting` event — both event-driven, neither reading the clock.
+- **The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, 2026-11-18):
 
-  ```rust
-  pub struct Store;  impl Store { pub fn open(dir: &Path) -> Result<Store, LanError>; /* file_tag, peer_addr, trust */ }
-  pub struct LocalFile { pub path: PathBuf, pub quality: nz_api::Quality, pub len: u64, pub tag: Option<proto::FileTag> }
-  #[derive(Clone)] pub struct Index;
-  impl Index {
-      pub fn new(cache: nz_cache::Cache, owner: String, store: Store) -> Index;
-      pub fn refresh(&self);                                   // re-read nz-cache, bump version on change
-      pub fn version(&self) -> u64;  pub fn sets_version(&self) -> u64;
-      pub fn events(&self) -> tokio::sync::watch::Receiver<u64>;
-      pub fn inventory(&self, scope: &Scope, since: Option<u64>, page: u32) -> proto::Response;
-      pub fn sets(&self, scope: &Scope, page: u32) -> proto::Response;
-      pub fn meta(&self, scope: &Scope, tracks: &[String]) -> proto::Response;
-      pub fn local(&self, track: &str, quality: nz_api::Quality) -> Option<LocalFile>;
-      pub fn cover(&self, scope: &Scope, url: &str) -> Option<PathBuf>;
-      pub fn memory(&self) -> usize;
-  }
-  pub struct Hashing;  impl Hashing { pub fn start(index: Index, store: Store) -> Hashing; pub fn stop(self); } // thread "nz-lan-hash", nice +10, joined
-  #[derive(Clone)] pub enum Scope { Own, Friend { all: bool, tracks: Arc<HashSet<String>> } }
-  impl Scope { pub fn for_peer(peer: &Subject, mine: &Subject, roster: Option<&Roster>) -> Option<Scope>;
-               pub fn allows(&self, track: &str) -> bool; }
-  pub struct ServeLimits { pub play: usize, pub prefetch: usize, pub bulk: usize }   // 2, 1, 1
-  #[derive(Clone)] pub struct Server;
-  impl Server { pub fn new(index: Index, gates: Arc<nz_api::lanes::Gates>, limits: ServeLimits) -> Server;
-                pub async fn handle(&self, scope: &Scope, incoming: Incoming) -> Result<u64, LanError>;
-                pub fn counts(&self) -> (usize, usize, usize); }
-  ```
-- **Depends on**: LN0 (tests use `Incoming` fakes built in the test file, not the transport).
-- **Acceptance**: an 8 000-track cache indexed in ≤ 200 ms (counted SQL statements ≤ 5),
-  `Index::memory()` ≤ 64 B per item; an inventory page for `Scope::Own` lists every complete file
-  and nothing `.part`; for `Scope::Friend` only allowed tracks — **mutant**: remove the scope filter
-  → the friend test fails; an out-of-scope `Fetch`/`Meta`/`Cover` returns the byte-identical
-  `NotFound` frame of an absent track (compared bytes); `Fetch` serves from `from`, refuses `from >
-  len`, answers `NotFound` when `expect` differs; limits: the 3rd concurrent `Play` → `Busy`; a `Bulk`
-  serve waits while the node's own `Gates` show a `User` request in flight (event-driven test with
-  the paused clock); the hashing thread is niced (+10, read back from `/proc/self/task/*/stat`),
-  hashes ≥ 500 MB/s (release, reported) and pauses while a `User` request is in flight; rehash only
-  when `(len, mtime)` change; `delta` since a version ≤ 64 changes old, `full` otherwise.
-- **Pitfalls**: never return a path from the wire; the play cache can evict a file between the
-  inventory and the fetch — `NotFound`, not an error; `Meta` sources: `nz-offline`'s labels
-  (`LABELS_KEY`) and the API cache bodies the set pages left (read `nz-cache/src/api_cache.rs`;
-  document which fields come from where); covers only for URLs referenced by an allowed track.
-- **Prompt**:
+  | Measure | Value | Command |
+  |---|---|---|
+  | an 8 000-track cache indexed | **23.8 ms** release, **51.0 ms** debug | `cargo test -p nz-lan --release --test serve the_eight_thousand -- --nocapture` |
+  | statements to index it | **4** (downloads, play cache, tags, sets) — the cap is 5 | same run (`Index::statements`) |
+  | inventory memory | **48 B/item**, 384 KB for 8 000 tracks (cap 64 B) | same run (`Index::memory`) |
+  | hashing throughput | **1 778 MB/s** on 64 MiB (release, SHA-NI) | `cargo test -p nz-lan --release --test serve hashing_reaches -- --nocapture` |
+  | hashing niceness | **+10** on `nz-lan-hash`, read back from `/proc/self/task/<tid>/stat` | `cargo test -p nz-lan --lib the_worker_hashes` |
+  | the crate's tests | **69 passed** (51 unit + 18 acceptance) | `cargo test -p nz-lan` |
+  | a `Bulk` serve that waits for the person | ~1.1 s per test run (the gate's 1 s quiet) | `cargo test -p nz-lan --test serve a_bulk_serve_waits` |
+  | the refusal's size | `{"t":"NotFound"}`, 18 bytes, for absent AND unshared | `cargo test -p nz-lan --test serve an_out_of_scope_request` |
+  | `clippy -D warnings` on the crate | clean, `--all-targets` | `cargo clippy -p nz-lan --all-targets -- -D warnings` |
 
-  > Tu implémentes le lot **LN4 — Index, hashing, scope, serve** du plan « nœuds LAN » (effort max :
-  > autorisation). But : le nœud sait ce qu'il a (téléchargements + fichiers complets du cache de
-  > lecture, par qualité, avec SHA-256 calculé en fond, thread renicé +10), répond aux requêtes des
-  > pairs DANS LEUR PORTÉE (un ami ne voit que ce qu'on lui partage ; hors portée = la même réponse
-  > octet pour octet qu'un titre absent) et dans ses limites de service, sans jamais ralentir sa
-  > propre lecture (les `Gates` de `nz-api`). Lis *Authorisation and scope*, *Protocol messages*,
-  > *Rule 1 on the LAN*, *Device storage*, *Threat model* et la section LN4 de
-  > `docs/agents/lan-nodes.md`, puis `desktop/crates/nz-cache/src/{downloads,play_cache,covers,api_cache,kv}.rs`
-  > et `desktop/crates/nz-offline/src/settings.rs` (les libellés). Fichiers exclusifs : la ligne LN4.
-  > Critères : la liste *Acceptance* de LN4.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **Mutants, each run once and each RED** (`target/mutants` copies restored after each run):
+
+  | Mutant | Test that caught it |
+  |---|---|
+  | M1: no scope filter in `Index::inventory` | `a_friend_sees_only_the_tracks_shared_with_them` |
+  | M2: out-of-scope `Fetch` answered `Error{code:"scope"}` | `an_out_of_scope_request_is_the_byte_identical_frame_of_an_absent_one` |
+  | M3: the hashing worker ignores its gate | `hashing_waits_while_a_user_request_is_in_flight` |
+  | M4: a resume onto a different `expect` tag is accepted | `a_fetch_serves_from_the_asked_offset_and_refuses_a_bad_one` |
+  | M5: no cover scope check | `a_friend_gets_only_the_art_of_the_sets_they_see_whole` |
+  | M6: no serve budget (99 of each) | `the_third_concurrent_play_is_busy_and_the_slot_comes_back` |
+  | M7: a `Bulk` serve does not wait on the node's gates | `a_bulk_serve_waits_while_a_user_request_is_in_flight` |
+
+- **Rules a measurement taught.**
+  - **A stored path costs double what the file costs to find.** 8 000 `PathBuf`s (24 B + a ~40-byte
+    allocation each) were 90 B/item against the 64 B cap; deriving `nz-cache`'s name from
+    `(track, quality)` and keeping only a quality bitmask, four `u32` lengths and the id is 48 B/item
+    (23.8 ms release). The derivation is checked, never trusted: `refresh` compares it with the `file`
+    column it just read and leaves a mismatch out with one log line, and
+    `the_index_derives_the_names_nz_cache_writes` holds it on real files. **Memory is a schema
+    decision, not a compaction pass.**
+  - **A `u32` length is the right width and the right failure mode**: a file over 4 GiB is refused
+    (not truncated), and a track is never that long — while 64 hex characters of SHA-256 per file
+    would have been 512 KB more than the whole inventory. The tag is read from `lan.sqlite` on the one
+    `Fetch` that needs it (one indexed row).
+  - **A gate decides admission, not pre-emption** (`nz_api::lanes`). Holding a `Bulk` slot for a whole
+    file is a core kept for its length; taking it per 1 MiB tile is a mutex and a `Notify` per
+    megabyte when nobody waits, and a real pause the moment the person taps something — 1 778 MB/s
+    measured still, so the yield costs nothing measurable.
+  - **`Notify::notify_waiters` is not a stop signal.** The window between the worker reading its stop
+    flag and registering `notified()` swallows the wake and `stop()` never returns (`cargo test` hung
+    for 120 s). `notify_one` stores a permit for the waiter that is not there yet. A test that proves
+    "the thread is over" reads a flag the worker sets on its way out, not a `/proc` entry or a channel
+    that may still hold an unseen value.
+  - **`tokio::time::timeout` must be built INSIDE `block_on`.** Building it first asks the current
+    runtime for a timer, and a plain `std::thread` has none: `there is no reactor running` panics the
+    hashing worker (and the same mistake in a test). Every timer in a thread that owns its runtime is
+    created inside the `block_on` that awaits it.
+  - **A serve slot is owned by the answer, so a test that reads two answers holds two slots** — the
+    third `Play` of a naive test is `Busy`, not a bug. Freed by dropping the `Answer` (or its `head`),
+    which is also what makes "a peer hangs up" free its slot.
+  - **`Meta`'s metadata is not in memory**: the album, its id, the duration, the art and `explicit`
+    come from the `/playlist/<id>` and `/album/<id>` bodies the set pages left in the API cache, read
+    for the ≤ 200 ids a request names (one `download_members` query says which sets to parse). Titles
+    and artists come from `nz-offline`'s `downloads.labels`. A track no body knows answers its labels
+    only — never a guessed album.
+  - **A restricted friend's covers are built once per (scope, sets version)**, from the sets whose
+    members are all in scope: walking their 20 000 ids per cover request would let a peer spend this
+    device's CPU by asking in a loop, and the set of cover URLs is a few hundred at most.
+
 
 ### LN5 — Shared-crate adaptations (delivered 2026-11-18)
 
