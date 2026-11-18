@@ -36,7 +36,7 @@ use nz_core::library as library_core;
 
 use crate::core::NzCore;
 use crate::errors::NzError;
-use crate::player::{PlayerCommand, PlayContext, TrackRef};
+use crate::player::{PlayContext, PlayerCommand, TrackRef};
 
 /// The longest id or key `lib/car.js` accepted; anything longer is refused
 /// before it becomes a request (`KINDS`' own bounds kept).
@@ -95,10 +95,7 @@ impl NzCore {
     /// failure is swallowed: a missing counter must not blank the panel.
     pub async fn car_catalogue(&self) -> Result<CarCatalogue, NzError> {
         let core = self.core();
-        let tree = core
-            .library_playlists()
-            .await
-            .map_err(NzError::from)?;
+        let tree = core.library_playlists().await.map_err(NzError::from)?;
         let favorites = core
             .favorite_ids()
             .await
@@ -136,7 +133,8 @@ impl NzCore {
         // `flow` is a STYLE, and none is the person's default: an empty style is
         // what `StartFlow` with no style means.
         if kind == "flow" {
-            self.player().command(PlayerCommand::StartFlow { style: None }, 0);
+            self.player()
+                .command(PlayerCommand::StartFlow { style: None }, 0);
             return true;
         }
         if id.is_empty() {
@@ -329,9 +327,7 @@ mod tests {
 
         // `nz-api` sends `/api/…` on the wire; the log names it as the person
         // would read it in a journal.
-        log.lock()
-            .expect("log")
-            .push(format!("{method} {route}"));
+        log.lock().expect("log").push(format!("{method} {route}"));
 
         // The library's routes are `login_required` on the real server: a
         // request without the session cookie is a 401, which is the cause the
@@ -348,9 +344,7 @@ mod tests {
             ("401 Unauthorized", "{}".to_owned(), false)
         } else {
             match (method.as_str(), route.as_str()) {
-                ("GET", "/api/version") => {
-                    ("200 OK", r#"{"version":"1.9.9"}"#.to_owned(), false)
-                }
+                ("GET", "/api/version") => ("200 OK", r#"{"version":"1.9.9"}"#.to_owned(), false),
                 ("POST", "/api/login") => (
                     "200 OK",
                     r#"{"user":{"id":"u1","name":"Nadia","admin":false}}"#.to_owned(),
@@ -446,10 +440,16 @@ mod tests {
             "the panel reads the catalogue and the light count, in that order"
         );
         assert_eq!(catalogue.playlists.len(), 2);
-        assert_eq!(catalogue.playlists[0].id, "0b7d5f3a-9c2e-4b41-8d6f-1a2b3c4d5e6f");
+        assert_eq!(
+            catalogue.playlists[0].id,
+            "0b7d5f3a-9c2e-4b41-8d6f-1a2b3c4d5e6f"
+        );
         assert_eq!(catalogue.playlists[0].title, "Voiture");
         assert_eq!(catalogue.playlists[0].nb_tracks, 42);
-        assert_eq!(catalogue.playlists[0].cover.as_deref(), Some("/api/cover/abc"));
+        assert_eq!(
+            catalogue.playlists[0].cover.as_deref(),
+            Some("/api/cover/abc")
+        );
         assert_eq!(
             catalogue.playlists[0].deezer_id.as_deref(),
             Some("908622995"),
@@ -538,7 +538,10 @@ mod tests {
         // `playFromCar` refused one without a session.
         assert!(!core.car_play("playlist".into(), "p1".into()));
         assert!(!core.car_play("podcast".into(), "x".into()));
-        assert!(!core.car_play("track".into(), "x".into()), "a track needs its row");
+        assert!(
+            !core.car_play("track".into(), "x".into()),
+            "a track needs its row"
+        );
         assert!(!core.car_play("flow".into(), String::new()));
         assert!(!core.car_play("playlist".into(), "   ".into()));
         assert!(!core.car_play("playlist".into(), "x".repeat(129)));
@@ -554,15 +557,19 @@ mod tests {
     async fn a_process_that_never_restored_still_plays() {
         let server = Server::start();
         let core = core_without_restore(&server, "tile-only").await;
-        assert_eq!(core.core().me(), None, "nobody restored: no person in memory");
-        // The cookie the previous launch saved is in the jar.
-        let seeded = core.core().jar().seed(
-            &server.base,
-            "session=abc123",
+        assert_eq!(
+            core.core().me(),
+            None,
+            "nobody restored: no person in memory"
         );
+        // The cookie the previous launch saved is in the jar.
+        let seeded = core.core().jar().seed(&server.base, "session=abc123");
         assert_eq!(seeded, 1, "one cookie seeded");
         assert!(
-            core.car_play("playlist".into(), "34b37fae-19e3-48b7-a976-e6496d9bf5c9".into()),
+            core.car_play(
+                "playlist".into(),
+                "34b37fae-19e3-48b7-a976-e6496d9bf5c9".into()
+            ),
             "a signed-in app plays even when no screen ever loaded"
         );
         // No `shutdown()` here: this test is the one that BUILDS the player, and
