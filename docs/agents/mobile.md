@@ -497,7 +497,7 @@ CI: the `mobile.yaml` workflow enables KVM on the runner (udev rule, the documen
 recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator against
 `tools/perf_api.py --serve` reached at `10.0.2.2`.
 
-**Two measured rules around that CI (2026-11-18).**
+**Three measured rules around that CI (2026-11-18).**
 
 - **`cancel-in-progress` is for pull requests only** (`${{ github.event_name == 'pull_request' }}`),
   like every other workflow here. It was `true` for every event, so a push to `master` killed the run
@@ -509,6 +509,17 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
   fleet lives in permanent LRU eviction: `mobile-apk-…` is missing exactly when a run asks for it,
   and every "cache" experiment here measures eviction, not the change. Shrinking the entries that
   exist (the desktop's `target/` caches are ~7 GB of them) is the prerequisite to any cache work.
+- **The `emulator` job never builds Rust: it receives the library and the bindings.** `apk` uploads
+  `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` (three ABIs) and `bridge/build/generated/uniffi`
+  as the `neezer-mobile-native` artifact; `emulator` downloads it into `mobile/android/bridge`, and
+  `ci-emulator.sh` — which sees them (`native_artifacts_present`) — passes `-PskipRust` and skips
+  the NDK/cargo-ndk install. Same instrumented tasks either way; a machine without the artifact
+  keeps the old path and builds what it needs. Measured on run 44368850444: `Smoke` spent
+  **12 min 30 s of cargo** (18:48:36 → 19:01:03) rebuilding a tree the `apk` job had just built,
+  plus the NDK/cargo-ndk install, while the emulator's four vCPUs waited. **The three Gradle steps
+  of `apk` are one invocation** (`testDebugUnitTest lintDebug assembleRelease`): `--no-daemon` pays a
+  JVM and a Kotlin+AGP configuration phase per call, and run 44368850444 paid it three times
+  (3.52 + 2.38 + 4.23 = 10.13 min).
 
 ### Measures (every lot that touches what they measure writes them in its PR)
 

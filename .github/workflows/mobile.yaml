@@ -179,20 +179,42 @@ jobs:
             esac
           done
 
-      - name: JVM tests
-        run: gradle -p mobile/android testDebugUnitTest -PskipRust --no-daemon
+      # THE NATIVE LIBRARY AND THE KOTLIN BINDINGS, HANDED TO THE `emulator` JOB.
+      #
+      # Measured on run 44368850444: that job's `Smoke` spent 12 min 30 s
+      # (18:48:36 → 19:01:03) recompiling the whole Rust tree from cold — it had
+      # neither the `.so` nor the bindings this job had just built — while the
+      # emulator's four vCPUs sat waiting, then ~2 min recompiling the Kotlin
+      # debug variants. The two paths below are what `build-android.sh` produces
+      # (`jniLibs` for the three ABIs, the UniFFI Kotlin), and `-PskipRust` is
+      # the property `:bridge`'s build script already has for exactly this.
+      #
+      # 27 MB, one upload and one download: a 12-minute build it removes.
+      - name: Upload the native library and the bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: neezer-mobile-native
+          path: |
+            mobile/android/bridge/src/main/jniLibs
+            mobile/android/bridge/build/generated/uniffi
+          if-no-files-found: error
+          retention-days: 7
 
+      # THREE TASKS, ONE GRADLE INVOCATION. `--no-daemon` pays a JVM plus the
+      # whole configuration phase (Kotlin + AGP) on every call, and the three
+      # steps were paying it three times: measured on run 44368850444, JVM tests
+      # 3.52 min + lint 2.38 + assemble 4.23 = 10.13 min of Gradle for one build
+      # graph. The tasks, their order and their failure semantics are unchanged:
       # `assembleRelease` alone only runs `lintVitalRelease`, which ignores an
-      # error-level check (the old app's lesson, android.yaml): ask for the full
-      # debug lint explicitly.
-      - name: Lint
-        run: gradle -p mobile/android lintDebug -PskipRust --no-daemon
-
-      - name: Assemble the release APK
+      # error-level check (the old app's lesson, android.yaml), so the full
+      # `lintDebug` is still asked for explicitly, and a red test or lint error
+      # still stops the job before an APK exists.
+      - name: The JVM suite, the lint and the release APK
         env:
           VERSION_CODE: ${{ github.run_number }}
         run: |
-          gradle -p mobile/android assembleRelease -PskipRust --no-daemon
+          gradle -p mobile/android testDebugUnitTest lintDebug assembleRelease \
+            -PskipRust --no-daemon
           find mobile/android/app/build/outputs/apk -name '*.apk'
 
       # An APK that cannot be proven is not published: a truncated archive opens
@@ -289,6 +311,31 @@ jobs:
         with:
           name: neezer-mobile-apk
           path: mobile/android/app/build/outputs/apk/release
+
+      # The `apk` job's `libnz_ffi.so` (three ABIs) and its generated UniFFI
+      # Kotlin, put back where `:bridge` reads them. `ci-emulator.sh` then passes
+      # `-PskipRust` and does not install the NDK/cargo-ndk: the instrumented
+      # tests still build their own debug variants, they just stop rebuilding the
+      # Rust tree that was already built (12 min 30 s of run 44368850444).
+      - uses: actions/download-artifact@v4
+        if: steps.harness.outputs.present == 'true'
+        with:
+          name: neezer-mobile-native
+          path: mobile/android/bridge
+
+      # The same guard the `apk` job ran, on the files that actually arrived: a
+      # library that needs a `.so` the APK does not carry makes the app die at
+      # `System.loadLibrary`, and an artifact is a copy — prove the copy.
+      - name: The handed-over native library is the one the tests will load
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          mobile/rust/build-android.sh --check-libs mobile/android/bridge/src/main/jniLibs
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            printf '   %-12s %8s bytes\n' "$abi" \
+              "$(stat -c %s "mobile/android/bridge/src/main/jniLibs/$abi/libnz_ffi.so")"
+          done
+          test "$(find mobile/android/bridge/build/generated/uniffi -name '*.kt' | wc -l)" -gt 0
 
       - name: Install the SDK, the image and the AVD
         if: steps.harness.outputs.present == 'true'
