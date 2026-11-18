@@ -58,6 +58,19 @@ enum Msg {
     Cover(String, Option<PathBuf>),
 }
 
+/// The ids this page's rows stream under, in the engine's own spelling
+/// (`nz_player::track_ref`: the row id first, the Deezer number otherwise) — what
+/// `Lan::best_peer_for` compares against a peer's inventory.
+fn track_refs(tracks: &[Track]) -> Vec<String> {
+    tracks
+        .iter()
+        .filter_map(|track| {
+            nz_player::track_ref(track.id.as_deref(), Some(track.deezer_id.as_str()))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 /// Row height in edit mode: taller than a plain row because it carries the two
 /// move buttons and the removal (a 44 px target is the minimum a finger wants).
 const EDIT_ROW: f32 = 64.;
@@ -112,6 +125,11 @@ pub struct Screen {
     /// The banner's own sleeve, at the size the banner is drawn (`Class::Card`):
     /// one image, so it may be crisp where a row may not.
     banner: Rc<RefCell<Covers>>,
+    /// « Disponible complète sur PC » (LN12): the peer that holds every track of
+    /// this page, and the node version it was read at. One `best_peer_for` call
+    /// per page load and per node change, never per frame.
+    peer_owner: Option<String>,
+    peer_version: u64,
     events: Sender<Msg>,
     _subscriptions: Vec<Subscription>,
 }
@@ -158,6 +176,8 @@ impl Screen {
             downloads,
             rows: Rc::new(Rows::default()),
             rows_version: u64::MAX,
+            peer_owner: None,
+            peer_version: u64::MAX,
             events,
             _subscriptions: Vec::new(),
         };
@@ -428,6 +448,10 @@ impl Screen {
     fn adopt(&mut self, page: PlaylistPage, cx: &mut Context<Self>) {
         self.tracks = page.tracks.clone();
         self.page = Loaded::Ready(page);
+        // LN12: the header's « Disponible complète sur PC ». One in-memory pass
+        // over the replica here (a page load, not a frame).
+        self.peer_version = crate::wiring::lan::version();
+        self.peer_owner = crate::wiring::lan::best_peer_name(&track_refs(&self.tracks));
         self.recompute();
         self.clamp_selection();
         self.sync_download_set(cx);
@@ -1645,6 +1669,20 @@ impl Render for Screen {
         // The downloads control: one state for the page, one chip per row. The
         // rows are resolved ONCE per published version, never per row.
         let download_state = self.download_state();
+        // LN12: a peer may have connected (or gone) since this page loaded. The
+        // version compare keeps the `best_peer_for` pass out of the frame; a
+        // recorded peer that left is re-decided at the next change.
+        let lan_version = crate::wiring::lan::version();
+        if lan_version != self.peer_version {
+            self.peer_version = lan_version;
+            let stale = self
+                .peer_owner
+                .as_deref()
+                .is_some_and(|name| !crate::wiring::lan::peer_named(name));
+            if self.peer_owner.is_none() || stale {
+                self.peer_owner = crate::wiring::lan::best_peer_name(&track_refs(&self.tracks));
+            }
+        }
         let version = self.downloads.get().version;
         if version != self.rows_version {
             self.rows = Rc::new(Rows::build(self.downloads.get()));
@@ -1730,6 +1768,27 @@ impl Render for Screen {
                     .text_color(theme::secondary(cx))
                     .child(facts),
             );
+        // LN12: « Disponible complète sur PC » — no per-row badge, the shared
+        // track list stays untouched (the note's rule: rule 4's windowed lists).
+        if let Some(owner) = self.peer_owner.clone() {
+            meta = meta.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(rems(0.375))
+                    .child(
+                        icon(IconName::Laptop)
+                            .size(rems(0.875))
+                            .text_color(theme::accent(cx)),
+                    )
+                    .child(
+                        div()
+                            .text_size(rems(0.6875))
+                            .text_color(theme::accent(cx))
+                            .child(format!("Disponible complète sur {owner}")),
+                    ),
+            );
+        }
         if self.renaming {
             let fields: Vec<AnyElement> =
                 [self.rename_title.clone(), self.rename_description.clone()]

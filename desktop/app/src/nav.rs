@@ -82,6 +82,7 @@ pub enum SettingsSection {
     Users,
     Server,
     Transcribe,
+    Lan,
     Help,
     Shortcuts,
 }
@@ -101,6 +102,7 @@ impl SettingsSection {
             SettingsSection::Users => "utilisateurs",
             SettingsSection::Server => "serveur",
             SettingsSection::Transcribe => "transcription-locale",
+            SettingsSection::Lan => "appareils-a-proximite",
             SettingsSection::Help => "assistance",
             SettingsSection::Shortcuts => "raccourcis",
         }
@@ -118,6 +120,7 @@ impl SettingsSection {
             "utilisateurs" => SettingsSection::Users,
             "serveur" => SettingsSection::Server,
             "transcription-locale" => SettingsSection::Transcribe,
+            "appareils-a-proximite" => SettingsSection::Lan,
             "assistance" => SettingsSection::Help,
             "raccourcis" => SettingsSection::Shortcuts,
             _ => return None,
@@ -136,19 +139,23 @@ impl SettingsSection {
             SettingsSection::Users => "Utilisateurs",
             SettingsSection::Server => "Serveur",
             SettingsSection::Transcribe => "Transcription locale",
+            SettingsSection::Lan => "Appareils à proximité",
             SettingsSection::Help => "Assistance",
             SettingsSection::Shortcuts => "Raccourcis",
         }
     }
 
     /// The sections a non-admin sees, in the order the SPA lists them.
-    pub const USER: [SettingsSection; 10] = [
+    pub const USER: [SettingsSection; 11] = [
         SettingsSection::Playback,
         SettingsSection::Appearance,
         SettingsSection::Viz,
         SettingsSection::Downloads,
         SettingsSection::Discovery,
         SettingsSection::Sources,
+        // The SPA's own place for its « Appareils et amis » category: after the
+        // sources, before the account (LN8, `routes/Settings.svelte#SECTIONS`).
+        SettingsSection::Lan,
         SettingsSection::Account,
         SettingsSection::Transcribe,
         SettingsSection::Help,
@@ -373,6 +380,12 @@ impl Route {
             Route::Settings {
                 section: SettingsSection::Transcribe,
             } => Some(crate::state::Feature::Transcription),
+            // « Appareils à proximité » is the LAN's Réglages section: an older
+            // server has no `/api/lan/*`, and the route says so instead of
+            // painting a section that could never work (D17).
+            Route::Settings {
+                section: SettingsSection::Lan,
+            } => Some(crate::state::Feature::Lan),
             // NOT `Library { tab: Folders }`: the Bibliothèque exists on an
             // older server, only its folder tab does not, and replacing the
             // whole screen would hide the playlists with it. The library's tab

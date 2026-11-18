@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod engine;
 pub mod events;
 pub mod instance;
+pub mod lan;
 pub mod mpris;
 pub mod net;
 pub mod offline;

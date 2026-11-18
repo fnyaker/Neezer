@@ -407,7 +407,12 @@ pub fn spawn_audio(
     let spawned = std::thread::Builder::new()
         .name("nz-audio-start".to_owned())
         .spawn(move || {
-            let opener = Arc::new(NetOpener::new(api, runtime, cache.clone()));
+            // The LAN node starts before this opener is wrapped: the probe and
+            // the index read are this thread's job (never the GPUI one), and the
+            // wrapper is transparent until the node lands (`wiring::lan`).
+            crate::wiring::lan::start_in_background(Arc::clone(&api), cache.clone());
+            let opener =
+                crate::wiring::lan::opener(Arc::new(NetOpener::new(api, runtime, cache.clone())));
             // A 48 kHz preference: the device's own rate wins when it cannot do
             // this one, and the decode threads resample.
             let config = EngineConfig {

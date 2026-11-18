@@ -4400,6 +4400,7 @@ dependencies = [
  "nz-api",
  "nz-audio",
  "nz-cache",
+ "nz-lan",
  "nz-model",
  "nz-mpris",
  "nz-offline",

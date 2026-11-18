@@ -36,6 +36,10 @@ nz-analysis = { path = "../crates/nz-analysis" }
 nz-offline = { path = "../crates/nz-offline" }
 nz-remote = { path = "../crates/nz-remote" }
 nz-party = { path = "../crates/nz-party" }
+# The LAN node (LN12): the app is one of the person's devices, and this crate is
+# the transport, the trust chain and the APIs behind it
+# (`docs/agents/lan-nodes.md`).
+nz-lan = { path = "../crates/nz-lan" }
 # Local transcription: the app reads the sidecar, the model pins, the token path
 # and the control words. `default-features = false` keeps whisper.cpp, Vulkan and
 # the decoders out of the graphical binary — they belong to the

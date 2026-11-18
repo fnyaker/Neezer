@@ -2249,52 +2249,136 @@ the fetcher's own verdict is what decides, whatever the link says
 while the server was the only source; the moment a peer can serve, asking the link becomes the bug —
 it pauses the queue for a source that is up.
 
-### LN12 — Desktop wiring and screens (wave 6, effort high)
+### LN12 — Desktop wiring and screens (delivered 2026-11-18)
 
-- **Objective**: the desktop app is a node: `Lan` starts after login on a server that has the
-  feature, the opener and the downloader are wrapped, Réglages → « Appareils à proximité » and « Sur
-  vos appareils » exist, the playlist page and the now-playing view say where a track comes from.
-- **Files**: LN12 row. **Contracts**: *Screens and Réglages*; the desktop's keyboard rule (every
-  action has a key, listed in the `?` overlay); D17's « an older server hides the feature ».
-- **Depends on**: LN11.
-- **Acceptance**: an older server (no `/api/lan/status`) → no section, no badge, no thread named
-  `nz-lan` (asserted); login on a LAN-enabled server → enrolled in the background, the section shows
-  the key's validity; two desktop processes in the netns (Xvfb, never the user's display) find each
-  other and the second plays a track only the first has (`Lu depuis <nom> (FLAC)`); « Sur vos
-  appareils » lists the other's sets and « Télécharger » on two of them fills the downloads screen;
-  every click answers in the same frame (optimistic), the firewall line copies the exact
-  `sudo ufw allow 45910/udp`; the app's quit joins `Lan` after the engine and the offline worker
-  (D13's shutdown test extended); screenshots at 2560×1600, 1280×800 and the 420 px side panel in
-  `docs/agents/screenshots/lan/LN12/`.
-- **Prompt**:
+**What landed.** The desktop app is a node, and the two screens that make it one.
 
-  > Tu implémentes le lot **LN12 — Desktop wiring and screens** du plan « nœuds LAN » (effort high).
-  > But : l'app desktop devient un nœud — `Lan` démarre après la connexion sur un serveur qui a la
-  > fonction (sinon rien ne s'affiche ni ne tourne), l'opener et le downloader sont enveloppés,
-  > Réglages → « Appareils à proximité » (interrupteurs, qualités tolérées, appareils vus et inscrits,
-  > amis de confiance et leur portée, port et ligne `ufw`, état de la clé) et « Sur vos appareils »
-  > existent, la page de playlist et le lecteur disent d'où vient le son ; l'arrêt joint `Lan` après le
-  > moteur et le travailleur hors ligne. Lis *Screens and Réglages*, *Rule 1 on the LAN*, la section
-  > LN12 de `docs/agents/lan-nodes.md`, puis `docs/agents/desktop.md` (*Architecture*, *D13*, *D14a*,
-  > *D17*, *D18*) et les fichiers qu'elle nomme. Fichiers exclusifs : la ligne LN12. Critères : la
-  > liste *Acceptance* de LN12 ; regarde l'app sous Xvfb aux trois tailles et joins les captures.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **`wiring/lan.rs`** — the process's [`Lan`]: `attach` (blocking; the probe, `lan.sqlite` and the
+  index read), `start_in_background` (the ONE call site, `wiring::engine::spawn_audio`, i.e.
+  `AppState::start_audio` at a login or a restore), `save_settings` (persist in `nz-cache`'s `kv`
+  **and** apply to the running node, so a click that lands while the node is still starting is not
+  forgotten), `snapshot`/`version` (0 requests), `peer_sets`/`download_sets`, `best_peer_name`,
+  `key_line`, `french_date`, `firewall_line`, and the two wrappers: [`LanOpener`] and
+  [`LanDownloader`].
+- **The wrappers are transparent until the node exists, then peer-first.** `LanOpener` asks
+  [`current`] on each `open`/`ready` and builds LN11's `PeerFirstOpener` once per node generation;
+  before that every method is the inner opener's (**0 ms added**, the note's « No peer has it »
+  row). `LanDownloader` does the same around `ApiDownloader`, and **delegates `reachable()`** — the
+  gate #352 added to `Downloader`: without a node the answer is the server's own link, with a node
+  it is « the server OR a connected peer ». This is what makes the login instant: the probe and the
+  SQLite read happen on a `nz-lan-start` thread, and neither the engine nor the worker waits for it.
+- **`screens/settings/lan.rs`** — Réglages → « Appareils à proximité », its own screen like
+  Téléchargements (seven cards: cet appareil + la ligne `ufw`, les deux interrupteurs, les quatre
+  qualités, les appareils connectés avec leurs échanges, mes appareils, les amis de confiance,
+  avancé). One timer (500 ms) compares `lan::version()` and re-reads the snapshot only when it
+  moved; the three server lists (`/lan/devices`, `/lan/friends`, `/me/playlists`) are asked ONCE per
+  open on `nz-net`, through the screen's own channel.
+- **`screens/peer_sets.rs`** — « Sur vos appareils », mounted in Réglages → Téléchargements (one
+  `.child` there): each peer's sets with track count, size and « complet », multi-select, and
+  `nz_lan::sets::download_peer_sets` on « Télécharger ». It draws **nothing** when this app is not a
+  node.
+- **The playlist header** and **En lecture** say where the sound comes from: `Lan::best_peer_for`
+  once per page load (and per node change), and « Lu depuis PC (FLAC) » from the ring below.
+- **The quit joins the node LAST** (`main.rs`'s `NetRuntime::drop`): offline, engine, then `Lan`.
+
+**Additions to the plan's surface** (each additive, each with its reason):
+
+1. **A served-source ring, `wiring/lan::record_served` + `source_line`.** LN11's correction says
+   there is no `LanEvent::Served`; the opener wrapper therefore records `(track → peer name,
+   quality)` **at each successful peer `open`**, reading the name from the snapshot then (a peer may
+   disconnect while its track plays). Bounded to 64 rows (`SERVED_LIMIT`), oldest out first.
+2. **`Lan::port` is passed through, `0` included.** LN10's `Lan::start` overrides the stored port
+   with `LanConfig.port`; the app passes the device's own setting so « 0 = any » (and a test's
+   ephemeral port) is honoured rather than silently replaced by 45910.
+3. **Three files the plan's LN12 row did not list, approved by the orchestrator before the edit and
+   declared in the PR**: `desktop/app/Cargo.toml` (the `nz-lan` dependency — no crate the app
+   already depended on re-exports it), `desktop/app/src/nav.rs` (`SettingsSection::Lan`, its slug,
+   its title, and its place in `USER` — where the SPA puts « Appareils et amis »: after Sources,
+   before Compte), and `desktop/app/src/main.rs` (one call in `NetRuntime::drop`, plus the three
+   glyphs `Laptop`, `Radar`, `Smartphone` in `SHELL_ICONS` **and** the `icon_assets!` list — the two
+   lists are separate, and a glyph in one only renders nothing).
+
+**Where a divergence from the plan is deliberate:**
+
+- **The section is a `delegated` screen, so the category strip is not drawn while it is open** —
+  exactly like Téléchargements, Utilisateurs and Serveur (D14a's shape). The breadcrumb above stays
+  (« Réglages · Appareils à proximité », with the back arrow), and the tab strip is one row again on
+  the other sections.
+- **The `ufw` line lives in the first card, beside the port it opens**, not in « Avancé ». It is the
+  one thing the person must run on this machine, and at 1 280×800 « Avancé » is below the fold: a
+  screenshot found it, not a test (the note's rule 5: what the person cannot see is not there).
+- **A device's `last_seen` is printed as a day** (« vu le 18 nov. 2026 ») through a small parser; the
+  server sends an ISO instant and printing it raw was the first version of the row.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=2`, debug, 2026-11-18):
+
+| Measure | Value | Command / test |
+|---|---|---|
+| the app's tests | **407 passed, 8 ignored, 0 failed**; **19** are this lot's | `cargo test -p neezer-desktop --bins` |
+| an older server (no `/api/lan/status`) | `attach` answers `None`, **0** `nz-lan` threads, **no** `$data/neezer/lan` directory, and a revisit costs **0** extra request (the refusal is remembered) | `wiring::lan::tests::a_server_without_the_feature_starts_nothing_at_all` |
+| the section on an older server | the strip has **no** `tab-Lan`; the route answers « L'échange entre appareils proches » instead of painting | `screens::settings::ui::the_lan_section_is_its_screen_and_hidden_without_the_feature` |
+| a LAN-enabled server | the node runs (**≥ 1** `nz-lan` thread), binds a port, and an enrolment the server refuses puts its French cause in `key_error` | `wiring::lan::tests::a_lan_server_gets_a_node_that_says_where_its_key_stands` |
+| enrolment + « Clé valable jusqu'au 18 décembre 2026 » | **end to end**: a fake server signing LN1's credential with the note's LAN seed, the app under Xvfb inside `unshare -rn`, state « Enregistré — recherche des appareils » | the capture `docs/agents/screenshots/lan/LN12/appareils-a-proximite-2560x1600.png` (no test: a signing fake is LN10's, in `nz-lan/tests/service.rs`) |
+| the key line | « Clé valable jusqu'au 15 janvier 2027 » for `1 800 000 000`, and the CAUSE when a renewal failed | `the_key_line_is_a_date_or_the_cause_never_an_empty_state` |
+| the `ufw` line | `sudo ufw allow 45910/udp`, and `… 38462/udp` when the node fell back | `the_firewall_line_names_the_port_really_bound` |
+| the source line | « Lu depuis PC (FLAC) », « Lu depuis Téléphone (Opus 320) »; the ring holds **64** rows and forgets older ones | `the_source_line_names_the_peer_and_the_quality` |
+| the ring's memory | **5 248 B** for 64 rows (**82 B** a row: 56 B of row + 7 B of id + 19 B of name); the wiring counts **0** with no node and an empty ring | `the_wiring_memory_is_the_node_plus_one_bounded_ring` |
+| no node ⇒ the wrappers cost nothing | one `open` = one inner `open`, nothing recorded, `ready` unchanged | `without_a_node_the_opener_is_the_inner_one` |
+| the quit | the node is **still running** after `offline::shutdown_process` + `engine::shutdown_process`, and **0** `nz-lan` threads when `lan::shutdown_process` returns; idempotent | `the_quit_joins_the_node_after_the_worker_and_the_engine` |
+| the offline gate (#352) | the wrapper answers the fetcher's verdict: stub server up → `reachable`, no node and a dead link → not | `the_download_fetcher_answers_the_worker_s_reachability_question` |
+| the section's layout | three windows (2 560×1 600, 1 280×800, 660×800 = the 420 px panel's column): the column never overflows, and the two switches, the four quality boxes, `lan-copy-ufw` and `lan-renew` all have a box | `screens::settings::lan::ui::the_section_fits_the_three_windows` |
+| a click acts | one click on « Partager mes sons » writes `lan.serve = false`; one on Opus 64 adds `OPUS_64`; turning the last rung off is refused and the set keeps one | `…::a_click_writes_the_device_settings_and_forgets_nothing` |
+| the settings strip | **11** categories in **one** 33 px row at 1 280 px (the Lecture et son pane's last control then sits at y = 781.5 in an 800 px window) | `…::the_mouse_switches_sections_and_flips_a_setting` |
+| « Sur vos appareils » | not drawn at all without a node; a 4 000-track set keeps **no** track id in the row, and its key is the `"<peer hex>:<kind>:<ident>"` triple (never a path) | `screens::peer_sets::tests::*` |
+| the screen-build bench (D7's guard) | **1 837 456 B** for 2 000 builds (budget 2 097 152) | `cargo test -p neezer-desktop --bins -- app::mouse::building_a_screen --nocapture` |
+| lints, format | `clippy --all-targets -- -D warnings` and `cargo fmt --check` clean | the CI commands |
+| the locks | **neither** `Cargo.lock` moved (`nz-lan` was already a workspace member) | `git status desktop/Cargo.lock mobile/rust/Cargo.lock` |
+
+**Rules a measurement taught.**
+
+- **A per-screen allocation is a leak the shell's own bench catches, not this lot's tests.**
+  `wiring::offline::attach` re-wrapped the fetcher on every call, and it is called from every screen
+  that watches the worker: D7's `building_a_screen_a_thousand_times_keeps_nothing` read **3 469 456 B**
+  for 2 000 builds against a **2 097 152 B** budget (baseline **1 822 327 B**). Two more findings came
+  out of the same bisect: `Offline::start(store)` does **not** publish the process singleton
+  (`Offline::ensure`/`get` do), so a hand-rolled "ensure" created a whole worker per call; and a
+  wrapper must be installed **once per session** (`install_downloader`, comparing server and owner
+  without allocating) because `ensure` re-installs the plain fetcher on every call.
+- **An eleventh settings category takes a row, and that row is 32 px the panes do not have.** At
+  1 280×800 the Lecture et son pane ends at y = 780 with ten tabs; the wrapped strip pushed its
+  « Mono » switch to y = 812 — **outside the window**, so a real click did nothing. The chips are
+  drawn at `rems(0.6875)` with `px(rems(0.4375))` now, the strip is **33 px** (one row), and the
+  switch is back at 781.5. A layout regression of one row is invisible in a screenshot of Réglages
+  and fatal to a control at the bottom of a pane.
+- **`debug_bounds` only sees `debug_selector`, not `.id()`.** The delegated area had an `id` and no
+  selector, so "the section is its own screen" could not be asserted until the selector was added.
+- **`LanSnapshot::default()` is `Off`, and that is the wrong sentence for "no node yet".** A device
+  whose node has not started (or a build whose server has no feature) must read « pas encore
+  enregistré », never « désactivé » — the screen builds `NotEnrolled` explicitly when
+  `lan::snapshot()` is `None`.
+- **The port a snapshot names before an endpoint exists is the SETTING, not a bound socket.** With
+  `lan.port = 0` (a test's ephemeral port) an unenrolled node reports `0`; the card says « choisi par
+  le système » and the firewall line then follows the port the node really bound once it has one.
+- **A fake server's `/api/lan/enroll` answering `404` means "no such feature" to the node** (it stops
+  and forgets the screen), so a test of a *failed renewal* must answer `5xx`: the cause then lands in
+  `key_error`, which is what « Réglages » prints.
+- **The `icon_assets!` list and `SHELL_ICONS` are two lists.** A glyph added to one and not the other
+  compiles, renders **nothing**, and fails `every_icon_name_used_in_the_app_is_in_the_bundle` — the
+  check that exists because an invisible button keeps its hit box.
+
+**What a later lot can rely on.**
+
+- `wiring::lan::{attach, start_in_background, current, snapshot, version, save_settings,
+  peer_sets, download_sets, best_peer_name, peer_named, source_line, record_served, key_line,
+  french_date, firewall_line, memory, shutdown_process}`; `install_downloader` is called by
+  `wiring::offline::attach` and must stay the only installer.
+- The ring and the two wrappers are bounded and transparent without a node, so a screen or a test can
+  call `source_line`/`peer_named` unconditionally.
+- **The offline gate is #352's, merged during this lot**: `Downloader::reachable()` replaced the
+  `Api::is_online()` check in `service::run`, so a queue runs on a trip when a peer holds the files.
+  This lot only has to *answer* it (`LanDownloader::reachable`), and « Sur vos appareils » keeps one
+  sentence for the case that still exists — the worker `Offline` means neither the server nor any
+  connected peer has the tracks (`the_download_fetcher_answers_the_worker_s_reachability_question`).
 
 ### LN13 — Mobile core and FFI (delivered 2026-11-18)
 

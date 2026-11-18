@@ -25,6 +25,7 @@ pub mod appearance;
 pub mod discovery;
 pub mod downloads;
 pub mod help;
+pub mod lan;
 pub mod playback;
 pub mod server;
 pub mod shortcuts;
@@ -553,6 +554,13 @@ impl Screen {
             ),
             SettingsSection::Downloads => Some(
                 cx.new(|cx| downloads::Screen::new(section, state.clone(), cx))
+                    .into(),
+            ),
+            // « Appareils à proximité » (LN12): its own screen, like the three
+            // above — the LAN has seven cards and its own polling, and this page
+            // is a column of the person's device settings.
+            SettingsSection::Lan => Some(
+                cx.new(|cx| lan::Screen::new(section, state.clone(), cx))
                     .into(),
             ),
             _ => None,
@@ -1239,6 +1247,8 @@ impl Screen {
         let needle = fold(&self.query_cache);
         let admin = self.is_admin(cx);
         let mut strip = div()
+            .id("settings-strip")
+            .debug_selector(|| "settings-strip".to_owned())
             .flex()
             .flex_wrap()
             .items_center()
@@ -1253,6 +1263,18 @@ impl Screen {
             if matches!(section, SettingsSection::Users | SettingsSection::Server) && !admin {
                 continue;
             }
+            // An older server has no `/api/lan/*`: the section is not drawn at
+            // all (LN12's acceptance: no section, no badge), and a route reached
+            // by a link says which feature is missing (D17).
+            if *section == SettingsSection::Lan
+                && self
+                    .state
+                    .read(cx)
+                    .features
+                    .hidden(crate::state::Feature::Lan)
+            {
+                continue;
+            }
             let title = section.title();
             if !needle.is_empty() && !fold(title).contains(&needle) {
                 continue;
@@ -1265,6 +1287,13 @@ impl Screen {
                     *section == self.section,
                     cx,
                 )
+                // Eleven categories fit ONE row at 1 280 px, which is what the
+                // Lecture et son pane needs (its 25 controls reach y = 780 in an
+                // 800 px window). Measured: at the default chip size the strip
+                // wrapped and cost 32 px, pushing the Mono switch to y = 812 —
+                // outside the window (LN12 found it: `the_mouse_switches…`).
+                .text_size(rems(0.6875))
+                .px(rems(0.4375))
                 .debug_selector(move || format!("tab-{section:?}"))
                 .on_click(cx.listener(move |this, _, _, cx| this.open(*section, cx))),
             );
@@ -1318,6 +1347,7 @@ impl gpui_kit::Render for Screen {
         if let Some(view) = &self.delegated {
             return div()
                 .id("settings-delegated")
+                .debug_selector(|| "settings-delegated".to_owned())
                 .size_full()
                 .child(view.clone());
         }
@@ -1440,6 +1470,7 @@ pub fn section_hint(section: SettingsSection) -> &'static str {
         SettingsSection::Users => "Comptes, rôles et invitations",
         SettingsSection::Server => "Archive, nettoyage, stockage, transcription",
         SettingsSection::Transcribe => "Le GPU de ce PC, les modèles, les workers",
+        SettingsSection::Lan => "Vos appareils sur le même réseau, et ce que vous partagez",
         SettingsSection::Help => "Diagnostic et état de l'application",
         SettingsSection::Shortcuts => "Tout ce que le clavier sait faire",
     }
@@ -1712,13 +1743,16 @@ mod tests {
     }
 
     #[test]
-    fn the_user_sections_are_the_ten_the_strip_offers() {
+    fn the_user_sections_are_the_eleven_the_strip_offers() {
         // The SPA's non-admin categories, in its own order
-        // (`routes/Settings.svelte#SECTIONS`).
-        assert_eq!(SettingsSection::USER.len(), 10);
+        // (`routes/Settings.svelte#SECTIONS`), with LN12's « Appareils à
+        // proximité » where the SPA puts its « Appareils et amis »: after the
+        // sources, before the account.
+        assert_eq!(SettingsSection::USER.len(), 11);
         assert_eq!(SettingsSection::USER[0], SettingsSection::Playback);
         assert_eq!(SettingsSection::USER[1], SettingsSection::Appearance);
-        assert_eq!(SettingsSection::USER[9], SettingsSection::Shortcuts);
+        assert_eq!(SettingsSection::USER[6], SettingsSection::Lan);
+        assert_eq!(SettingsSection::USER[10], SettingsSection::Shortcuts);
         for section in SettingsSection::USER {
             assert!(
                 !section_hint(section).is_empty(),
@@ -1937,6 +1971,87 @@ mod ui {
         drop(host);
     }
 
+    /// **« Appareils à proximité » is its own screen, and an older server does
+    /// not show it at all** (LN12's acceptance: an older server ⇒ no section, no
+    /// badge).
+    ///
+    /// The section is a variant of `SettingsSection` like every other, so the
+    /// page must (a) hand it to `lan::Screen`, and (b) not draw its tab at all
+    /// when `nz-api`'s feature probe answered that `/api/lan/status` is missing.
+    /// Both are asserted here, on the page's own strip.
+    #[gpui::test]
+    async fn the_lan_section_is_its_screen_and_hidden_without_the_feature(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::state::{Feature, Features};
+
+        cx.update(|cx| {
+            crate::theme::init(cx);
+            crate::keymap::install(cx);
+        });
+        let dir = temp_dir("lan-section");
+        let state = signed_in(cx, false, &dir);
+        // First: a server that has the feature (nothing is hidden).
+        let host_state = state.clone();
+        let (host, cx) = cx.add_window_view(move |_window, cx| Host {
+            screen: cx.new(|cx| Screen::new(SettingsSection::Playback, host_state.clone(), cx)),
+            focus: cx.focus_handle(),
+            anchored: false,
+        });
+        at_laptop(cx);
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("tab-Lan").is_some(),
+            "the strip carries « Appareils à proximité » on a server that has it"
+        );
+        cx.update(|_, cx| host.update(cx, |host, cx| host.show(SettingsSection::Lan, &state, cx)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("settings-lan").is_some(),
+            "Réglages → Appareils à proximité paints the LAN screen, not the stub"
+        );
+        assert!(
+            cx.debug_bounds("settings-delegated").is_some(),
+            "it is the section's own screen (the delegated area)"
+        );
+
+        // Then: an older server, which answered `404` on `/api/lan/status`.
+        state.update(cx, |state, _| {
+            state.features = Features::from_missing([Feature::Lan]);
+        });
+        cx.update(|_, cx| {
+            host.update(cx, |host, cx| {
+                host.show(SettingsSection::Playback, &state, cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("tab-Lan").is_none(),
+            "no section at all when the server has no /api/lan/*"
+        );
+        // ... and the route, reached by a link, says which feature is missing
+        // instead of painting a screen that cannot work (D17's rule).
+        assert_eq!(
+            Features::from_missing([Feature::Lan]).absent(&Route::Settings {
+                section: SettingsSection::Lan
+            }),
+            Some("L'échange entre appareils proches")
+        );
+        drop(host);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     /// Every section a person can open, at the three sizes: the body never
     /// leaves the window sideways and never grows past it vertically (it
     /// scrolls instead), and the root is exactly the window. Each PANE too.
@@ -1975,6 +2090,7 @@ mod ui {
                 if *section == SettingsSection::Viz
                     || *section == SettingsSection::Downloads
                     || *section == SettingsSection::Transcribe
+                    || *section == SettingsSection::Lan
                 {
                     // Its OWN screen (`delegated`), or T4's transcribe column:
                     // not this page's layout.
@@ -2405,10 +2521,11 @@ mod ui {
                 cx.run_until_parked();
                 // The delegated sections are their own screens: their root is
                 // their own id, and the page's card frame is not theirs.
-                let painted = if *section == SettingsSection::Downloads {
-                    cx.debug_bounds("settings-downloads").is_some()
-                } else {
-                    cx.debug_bounds("settings-screen").is_some()
+                let painted = match section {
+                    SettingsSection::Downloads => cx.debug_bounds("settings-downloads").is_some(),
+                    // LN12's section is its own screen too.
+                    SettingsSection::Lan => cx.debug_bounds("settings-lan").is_some(),
+                    _ => cx.debug_bounds("settings-screen").is_some(),
                 };
                 assert!(painted, "{section:?} did not paint");
             }

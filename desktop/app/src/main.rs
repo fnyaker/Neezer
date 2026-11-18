@@ -204,6 +204,14 @@ impl Drop for NetRuntime {
     fn drop(&mut self) {
         crate::wiring::offline::shutdown_process();
         crate::wiring::engine::shutdown_process();
+        // The LAN node goes AFTER both: `nz-bulk` and the engine's threads drive
+        // `nz-net`, while `nz-lan` owns its own runtime whose tasks are the
+        // peers' requests (and `nz-lan`'s adapters run on those two). Joining it
+        // last means nothing of the node is left inside a runtime that is about
+        // to stop, and the reverse order would leave a peer's fetch holding a
+        // thread the engine already abandoned. Measured: 0 `nz-lan` and 0
+        // `nz-lan-hash` threads when this returns (`wiring::lan`'s bench).
+        crate::wiring::lan::shutdown_process();
         // The transcription supervisor is a child process: stopped and joined
         // here so no whisper process outlives the window (T4).
         if let Some(service) = crate::wiring::transcribe::started() {
@@ -297,6 +305,7 @@ gpui_kit::assets::icon_assets!(
         Keyboard,
         KeyboardMusic,
         Languages,
+        Laptop,
         Leaf,
         Library,
         LibraryBig,
@@ -330,6 +339,7 @@ gpui_kit::assets::icon_assets!(
         Rabbit,
         Radio,
         RadioTower,
+        Radar,
         RefreshCw,
         Repeat,
         Repeat1,
@@ -352,6 +362,7 @@ gpui_kit::assets::icon_assets!(
         SkipForward,
         SlidersHorizontal,
         SlidersVertical,
+        Smartphone,
         Sparkles,
         Speaker,
         SquareCheckBig,
@@ -449,6 +460,7 @@ const SHELL_ICONS: &[gpui_kit::assets::IconName] = &[
     gpui_kit::assets::IconName::Keyboard,
     gpui_kit::assets::IconName::KeyboardMusic,
     gpui_kit::assets::IconName::Languages,
+    gpui_kit::assets::IconName::Laptop,
     gpui_kit::assets::IconName::Leaf,
     gpui_kit::assets::IconName::Library,
     gpui_kit::assets::IconName::LibraryBig,
@@ -482,6 +494,7 @@ const SHELL_ICONS: &[gpui_kit::assets::IconName] = &[
     gpui_kit::assets::IconName::Rabbit,
     gpui_kit::assets::IconName::Radio,
     gpui_kit::assets::IconName::RadioTower,
+    gpui_kit::assets::IconName::Radar,
     gpui_kit::assets::IconName::RefreshCw,
     gpui_kit::assets::IconName::Repeat,
     gpui_kit::assets::IconName::Repeat1,
@@ -504,6 +517,7 @@ const SHELL_ICONS: &[gpui_kit::assets::IconName] = &[
     gpui_kit::assets::IconName::SkipForward,
     gpui_kit::assets::IconName::SlidersHorizontal,
     gpui_kit::assets::IconName::SlidersVertical,
+    gpui_kit::assets::IconName::Smartphone,
     gpui_kit::assets::IconName::Sparkles,
     gpui_kit::assets::IconName::Speaker,
     gpui_kit::assets::IconName::SquareCheckBig,
