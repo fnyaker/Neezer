@@ -174,6 +174,37 @@ jobs:
             echo "namcap reported an error" >&2
             exit 1
           fi
+      # The Arch package is the Omarchy path — the laptop this app is FOR — and
+      # `makepkg` compiles ggml from the same tree with the same
+      # `desktop/.cargo/config.toml`, so the floor is checked on the file that
+      # installs: `usr/bin/neezer-transcribe`, extracted from the package itself
+      # and run under an emulated x86-64-v2 CPU. `--no-ggml`: `makepkg --clean`
+      # has removed the build tree, so the objects cannot be gated here — the
+      # `binaries` job gates them, and the binary's own run is what this proves
+      # (docs/agents/desktop.md, *The CPU floor*).
+      - name: The packaged binary runs on an emulated x86-64-v2 CPU
+        run: |
+          set -euo pipefail
+          pacman -S --noconfirm --needed qemu-user
+          mkdir -p "$RUNNER_TEMP/whisper" "$RUNNER_TEMP/arch-pkg"
+          cd "$RUNNER_TEMP/whisper"
+          test -f ggml-tiny.bin || curl -sSLo ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          test -f jfk.wav || curl -sSLo jfk.wav \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.8.3/samples/jfk.wav
+          echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  ggml-tiny.bin" \
+            | sha256sum -c -
+          echo "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  jfk.wav" \
+            | sha256sum -c -
+          cd "$RUNNER_TEMP/arch-pkg"
+          bsdtar xf "$GITHUB_WORKSPACE"/desktop/packaging/arch/neezer-desktop-[0-9]*.pkg.tar.zst \
+            usr/bin/neezer-transcribe
+          chmod +x usr/bin/neezer-transcribe
+          cd "$GITHUB_WORKSPACE"
+          NZ_WHISPER_MODEL="$RUNNER_TEMP/whisper/ggml-tiny.bin" \
+          NZ_WHISPER_AUDIO="$RUNNER_TEMP/whisper/jfk.wav" \
+            desktop/tools/check_cpu_floor.sh "$RUNNER_TEMP/arch-pkg/usr/bin/neezer-transcribe" \
+            --no-ggml
       - name: Upload the package
         uses: actions/upload-artifact@v4
         with:
@@ -258,13 +289,40 @@ jobs:
         with:
           workspaces: desktop
           # IN THE PREFIX, not in `key:`: on an exact miss rust-cache falls back to a
-          # broader prefix, and a `key:`-only fingerprint would still restore another
-          # CPU's objects through that fallback.
-          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}
+          # broader prefix, and a `key:`-only name would still restore another CPU's —
+          # or another ISA floor's — objects through that fallback. Both identities are
+          # here: the runner's CPU (#329's fingerprint) and the floors the engine
+          # children are built for (docs/agents/desktop.md, *The CPU floor*).
+          prefix-key: v0-rust-cpu-${{ steps.cpu.outputs.fingerprint }}-ggml-x86-64-v2-v3-v4
       - name: Build the two binaries
         run: cargo build --release --locked --workspace
       - name: Binary sizes
         run: du -h target/release/neezer-desktop target/release/neezer-transcribe
+      # WHAT IS SHIPPED, PROVEN ON WHAT IS SHIPPED. The artefact below is installed
+      # by the .deb, the .rpm, the AppImage and the Flatpak on CPUs nobody chose,
+      # and `-march=native` (ggml's default) is exactly a binary that SIGILLs on an
+      # older one. `desktop/.cargo/config.toml` pins the floor; this runs the three
+      # checks of `desktop/tools/check_cpu_floor.sh` on this exact file: the census,
+      # ggml's own objects gated at x86-64-v2, and the binary itself transcribing
+      # eleven real seconds of speech under an EMULATED x86-64-v2 CPU (Nehalem).
+      - name: The CPU floor holds on the binary the packages ship
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends qemu-user
+          mkdir -p "$RUNNER_TEMP/whisper"
+          cd "$RUNNER_TEMP/whisper"
+          test -f ggml-tiny.bin || curl -sSLo ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          test -f jfk.wav || curl -sSLo jfk.wav \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.8.3/samples/jfk.wav
+          echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  ggml-tiny.bin" \
+            | sha256sum -c -
+          echo "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  jfk.wav" \
+            | sha256sum -c -
+          cd "$GITHUB_WORKSPACE/desktop"
+          NZ_WHISPER_MODEL="$RUNNER_TEMP/whisper/ggml-tiny.bin" \
+          NZ_WHISPER_AUDIO="$RUNNER_TEMP/whisper/jfk.wav" \
+            tools/check_cpu_floor.sh target/release/neezer-transcribe
       - name: Upload the binaries every package installs
         uses: actions/upload-artifact@v4
         with:
