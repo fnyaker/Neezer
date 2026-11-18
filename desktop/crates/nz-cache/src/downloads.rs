@@ -387,34 +387,93 @@ impl<'a> Downloads<'a> {
 
     /// Publishes a reserved download: `.part` renamed into place, length read
     /// back, state done. The file is playable afterwards and only afterwards.
+    ///
+    /// The quality is the one the row was RESERVED at — the server's path, where
+    /// what was asked for is what arrives. A source that knows better calls
+    /// [`Downloads::complete_as`].
     pub fn complete(&self, owner: &str, track: &TrackId, bytes: u64) -> Result<PathBuf> {
-        let (file, quality) = self
-            .cache
-            .read(|conn| {
-                self.cache.query_optional(
-                    conn,
-                    "SELECT file, quality FROM downloads WHERE owner = ?1 AND track = ?2",
-                    params![owner, track.as_str()],
-                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
-                )
-            })?
-            .ok_or_else(|| {
-                IoError::new(
-                    ErrorKind::NotFound,
-                    format!("aucun téléchargement pour {track}"),
-                )
-            })?;
-
+        let (file, reserved) = self.reservation(owner, track)?;
         let Some(file) = file else {
             return Err(
                 IoError::new(ErrorKind::NotFound, format!("aucun fichier pour {track}")).into(),
             );
         };
+        let Some(quality) = parse_quality(&reserved) else {
+            return Err(IoError::new(
+                ErrorKind::NotFound,
+                format!("réservation absente pour {track}"),
+            )
+            .into());
+        };
+        self.publish(owner, track, bytes, quality, Some(quality), Some(file))
+    }
+
+    /// Publishes a reserved download under the quality the source REALLY
+    /// delivered, and answers the file's path.
+    ///
+    /// A peer on the LAN serves the copy it holds: a row reserved at Opus 320 can
+    /// come back as FLAC. The row then NAMES the FLAC file — the name is the
+    /// digest of `(track, quality)`, so the store answers `Flac` to
+    /// [`Downloads::local`] and the screen prints the rung the file really is
+    /// (`docs/agents/lan-nodes.md`, *Shared-crate changes*). Everything else is
+    /// `complete`: the `.part` is renamed, never trusted before, and the length
+    /// is read back from the published file.
+    pub fn complete_as(
+        &self,
+        owner: &str,
+        track: &TrackId,
+        bytes: u64,
+        quality: Quality,
+    ) -> Result<PathBuf> {
+        let (file, reserved) = self.reservation(owner, track)?;
+        self.publish(owner, track, bytes, quality, parse_quality(&reserved), file)
+    }
+
+    /// The row's stored file name and quality word — what [`Downloads::reserve`]
+    /// wrote — or `NotFound` when the track has no row at all.
+    fn reservation(&self, owner: &str, track: &TrackId) -> Result<(Option<String>, String)> {
+        let row = self.cache.read(|conn| {
+            self.cache.query_optional(
+                conn,
+                "SELECT file, quality FROM downloads WHERE owner = ?1 AND track = ?2",
+                params![owner, track.as_str()],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+            )
+        })?;
+        Ok(row.ok_or_else(|| {
+            IoError::new(
+                ErrorKind::NotFound,
+                format!("aucun téléchargement pour {track}"),
+            )
+        })?)
+    }
+
+    /// Rename the `.part` the reservation wrote into the file of `delivered`,
+    /// update the row, and answer the path.
+    ///
+    /// `reserved` is the quality the `.part` is named for, `stored` the name the
+    /// row holds now: when the two disagree, the stored one is a name nothing
+    /// reads any more (the reservation's own, absent from disk, or a file a
+    /// re-download replaced), and leaving it would be invisible litter.
+    fn publish(
+        &self,
+        owner: &str,
+        track: &TrackId,
+        bytes: u64,
+        delivered: Quality,
+        reserved: Option<Quality>,
+        stored: Option<String>,
+    ) -> Result<PathBuf> {
         let container = self.cache.offline_dir();
-        let target = container.join(&file);
-        if let Some(quality) = parse_quality(&quality) {
-            let partial = container.join(format!("{}.part", track_digest(track, quality)));
-            if partial.is_file() {
+        let name = format!(
+            "{}.{}",
+            track_digest(track, delivered),
+            quality_name(delivered)
+        );
+        let target = container.join(&name);
+        if let Some(reserved) = reserved {
+            let partial = container.join(format!("{}.part", track_digest(track, reserved)));
+            if partial.is_file() && partial != target {
                 fs::rename(&partial, &target)?;
             }
         }
@@ -435,13 +494,24 @@ impl<'a> Downloads<'a> {
                 "completed download: storing the file's own length"
             );
         }
+        if let Some(stored) = stored
+            && stored != name
+        {
+            let _ = fs::remove_file(container.join(stored));
+        }
 
         self.cache.write(|cache, conn| {
             cache.exec(
                 conn,
-                "UPDATE downloads SET bytes = ?3, state = 'done', error = NULL \
-                 WHERE owner = ?1 AND track = ?2",
-                params![owner, track.as_str(), length as i64],
+                "UPDATE downloads SET quality = ?3, file = ?4, bytes = ?5, state = 'done', \
+                 error = NULL WHERE owner = ?1 AND track = ?2",
+                params![
+                    owner,
+                    track.as_str(),
+                    quality_name(delivered),
+                    name,
+                    length as i64
+                ],
             )?;
             Ok(())
         })?;
@@ -664,6 +734,54 @@ mod tests {
         assert!(cache.downloads().is_downloaded("42", &track));
         assert_eq!(cache.downloads().progress("42")?.done, 1);
         assert_eq!(cache.downloads().progress("42")?.bytes, 1234);
+        Ok(())
+    }
+
+    /// **LN5**: a row reserved at Opus 320 whose source delivered FLAC is
+    /// published — and NAMED — as FLAC. The name is the FLAC digest, no `.part`
+    /// survives, and [`Downloads::local`] answers the rung the file really is:
+    /// what the downloads screen prints, and what the engine's play cache and the
+    /// LAN index will key on (`docs/agents/lan-nodes.md`, *Shared-crate
+    /// changes*).
+    ///
+    /// Measured: one published file of 4 096 bytes named `<digest(FLAC)>.FLAC`,
+    /// zero `.part`, `local` = `(that file, Flac)`.
+    #[test]
+    fn a_download_delivered_in_flac_is_published_as_flac() -> Result<()> {
+        let dir = TempDir::new("dl-delivered");
+        let cache = dir.open();
+        let track = TrackId::new("3135556");
+
+        let partial = cache.downloads().reserve("42", &track, Quality::Opus320)?;
+        fs::write(&partial, vec![7u8; 4096])?;
+        let published = cache
+            .downloads()
+            .complete_as("42", &track, 4096, Quality::Flac)?;
+
+        let name = published
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .expect("a file name");
+        assert_eq!(
+            name,
+            format!("{}.FLAC", crate::track_digest(&track, Quality::Flac)),
+            "the file is named for the quality it really is"
+        );
+        assert!(!partial.exists(), "the .part was renamed, not copied");
+        assert_eq!(
+            cache.downloads().local("42", &track)?,
+            Some((published, Quality::Flac))
+        );
+        assert_eq!(cache.downloads().progress("42")?.bytes, 4096);
+        let files: Vec<String> = fs::read_dir(cache.offline_dir())?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            files,
+            vec![name],
+            "one published file: no .part and no stray name of the same bytes"
+        );
         Ok(())
     }
 

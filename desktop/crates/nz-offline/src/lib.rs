@@ -25,8 +25,11 @@
 //!   publishes one cloned value off the UI thread; a view takes a mutex and
 //!   compares a version. [`service::Offline::events`] is the same signal for a
 //!   consumer that would rather wait than poll.
-//! - **A file is published by rename once complete** ([`download::Downloader`]).
-//!   The store reserves a `.part`, a fetcher fills it, `complete` renames it; a
+//! - **A file is published by rename once complete, under the quality it really
+//!   is** ([`download::Downloader`]). The store reserves a `.part`, a fetcher
+//!   fills it and reports [`download::Fetched`] — the bytes AND the quality those
+//!   bytes are, which is not always the requested one: a peer on the LAN serves
+//!   the copy it holds — and `complete_as` renames it under that quality. A
 //!   `.part` is never listed, and an interrupted row is `active` for the next
 //!   start (rule 2).
 //!
@@ -49,7 +52,7 @@ pub mod settings;
 pub mod state;
 pub mod testing;
 
-pub use download::{ApiDownloader, Downloader, Outcome, Progress, Stop};
+pub use download::{ApiDownloader, Downloader, Fetched, Outcome, Progress, Stop};
 pub use service::{
     Offline, keep_downloaded, keep_downloaded_with, local_path, note_stream_bytes, settings,
     shutdown_process,

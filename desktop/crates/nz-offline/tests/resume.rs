@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use nz_api::{Api, Quality, SessionJar, TrackId};
 use nz_cache::Cache;
-use nz_offline::{ApiDownloader, Choice, Downloader, Offline, Outcome, Progress, Stop};
+use nz_offline::{ApiDownloader, Choice, Downloader, Fetched, Offline, Outcome, Progress, Stop};
 
 /// The body every archived track serves, in bytes: 3 s of silence at 25 kHz,
 /// mono, 16-bit — about 4.7 s on the lane's 64 kB/s floor, long enough to stop
@@ -261,7 +261,7 @@ impl Downloader for Counting {
         part: &Path,
         stop: &Stop,
         progress: &mut dyn Progress,
-    ) -> Result<u64, Outcome> {
+    ) -> Result<Fetched, Outcome> {
         let id = track.as_str().to_owned();
         *self
             .counts
@@ -277,7 +277,7 @@ impl Downloader for Counting {
         };
         let outcome = self.inner.fetch(track, quality, part, stop, &mut counted);
         let bytes = match &outcome {
-            Ok(bytes) => *bytes,
+            Ok(fetched) => fetched.bytes,
             // An interrupted body keeps its `.part`: what it holds is what came
             // over the wire before the stop.
             Err(Outcome::Interrupted) => {
