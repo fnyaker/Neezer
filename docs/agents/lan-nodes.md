@@ -1305,6 +1305,7 @@ this file's header, not to this lot.
   | M5: no cover scope check | `a_friend_gets_only_the_art_of_the_sets_they_see_whole` |
   | M6: no serve budget (99 of each) | `the_third_concurrent_play_is_busy_and_the_slot_comes_back` |
   | M7: a `Bulk` serve does not wait on the node's gates | `a_bulk_serve_waits_while_a_user_request_is_in_flight` |
+  | M8: a set is advertised whatever its members' scope | `a_friend_sees_only_the_sets_they_can_see_whole` |
 
 - **A residual, stated**: a `Cover` answer takes no serve slot and no lane, because the `Cover` frame
   carries no `Urgency` (LN0's shape, final) — the responder cannot tell a list's art from a tap's.
@@ -1343,6 +1344,13 @@ this file's header, not to this lot.
     for the ≤ 200 ids a request names (one `download_members` query says which sets to parse). Titles
     and artists come from `nz-offline`'s `downloads.labels`. A track no body knows answers its labels
     only — never a guessed album.
+  - **A page bound that is computed from what a page HAPPENS to send skips sets.** The first `Sets`
+    page builder stopped at 768 KiB of estimated JSON and answered `last = false`; the peer then asked
+    page+1, which starts at `page × PAGE_SETS` — so every set after the cut was lost, silently. The
+    bound is now computed from the set list's own `tracks` counts (one statement, no member read) into
+    deterministic page slices, with a 43-byte-per-id estimate and 8 sets per page: a page that passes
+    it is under 512 KB of JSON, no set is ever skipped, and a page past the end answers "nothing
+    follows" instead of inviting one more request for ever.
   - **A restricted friend's covers are built once per (scope, sets version)**, from the sets whose
     members are all in scope: walking their 20 000 ids per cover request would let a peer spend this
     device's CPU by asking in a loop, and the set of cover URLs is a few hundred at most.

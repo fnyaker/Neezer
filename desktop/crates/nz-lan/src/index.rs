@@ -82,9 +82,18 @@ const MAX_VISIBLE_COVERS: usize = 4_096;
 /// How many set bodies one `Meta` request parses (a bound on CPU the peer chose).
 const MAX_META_SETS: usize = 32;
 
-/// How much a `Sets` page may weigh before it stops adding sets (`last = false`
-/// for the rest), leaving room for the frame's own tag under the 1 MiB cap.
-const SETS_PAGE_BYTES: usize = 768 * 1024;
+/// How much a `Sets` page may weigh, ESTIMATED from the sets' own counts before a
+/// member is read, leaving room for the frame's tag under the 1 MiB cap.
+///
+/// The estimate assumes a 40-byte track id (a row UUID is 36): a page that passes
+/// it is under 512 KB of real JSON, and the boundaries come from the `tracks`
+/// count alone — so a page is a deterministic slice of the set list and no set is
+/// ever skipped between two pages.
+const SETS_PAGE_BYTES: usize = 512 * 1024;
+
+/// What one member of a set costs on the wire, for the estimate above: its id
+/// plus quotes, a comma and slack.
+const SET_BYTES_PER_TRACK: usize = 43;
 
 /// The qualities a peer can be served, in the order the bits of [`Copies`] use.
 const WIRE_QUALITIES: [proto::WireQuality; 4] = [
@@ -529,21 +538,24 @@ impl Index {
     /// peer's `Sets` page, asked once.
     pub fn sets(&self, scope: &Scope, page: u32) -> proto::Response {
         let version = self.sets_version();
-        let rows = self.set_rows();
-        let start = (page as usize).saturating_mul(PAGE_SETS);
+        let Some(all) = self.inner.cache.downloads().sets(&self.inner.owner).ok() else {
+            return proto::Response::Sets {
+                version,
+                page,
+                last: true,
+                sets: Vec::new(),
+            };
+        };
+        let (start, end, last) = page_bounds(&all, page);
         let mut sets = Vec::new();
-        let mut last = true;
-        let mut bytes = 0usize;
-        for (kind, ident, title) in rows.iter().skip(start) {
-            if sets.len() == PAGE_SETS || bytes >= SETS_PAGE_BYTES {
-                last = false;
-                break;
-            }
-            let members = self.set_members(kind, ident);
+        for summary in &all[start..end] {
+            let members = self.set_members(&summary.kind, &summary.ident);
             let mut visible = true;
             let mut local = 0u32;
             let mut tracks = Vec::with_capacity(members.len());
             for track in &members {
+                // A set the friend cannot see whole is not advertised at all: half
+                // a playlist would tell them what they were not shared (T7).
                 if !scope.allows(track) {
                     visible = false;
                     break;
@@ -556,22 +568,20 @@ impl Index {
             if !visible {
                 continue;
             }
-            let set = proto::SetInfo {
-                kind: kind.to_string(),
-                ident: ident.to_string(),
-                title: title.to_string(),
+            sets.push(proto::SetInfo {
+                kind: summary.kind.clone(),
+                ident: summary.ident.clone(),
+                title: summary.title.clone(),
                 // A friend who sees only some of my tracks must not be handed the
                 // playlist's own art for a list they cannot see whole; my own
                 // devices, and a friend I share everything with, get it.
                 cover: (scope.is_own() || scope.is_all())
-                    .then(|| self.set_cover(kind, ident))
+                    .then(|| self.set_cover(&summary.kind, &summary.ident))
                     .flatten(),
                 local,
                 complete: !tracks.is_empty() && local as usize == tracks.len(),
                 tracks,
-            };
-            bytes += estimated_size(&set);
-            sets.push(set);
+            });
         }
         proto::Response::Sets {
             version,
@@ -1347,21 +1357,54 @@ fn sets_fingerprint(sets: &[nz_cache::DownloadSet]) -> u64 {
     hash
 }
 
+/// Which slice of the set list one `Sets` page carries: bounded by
+/// [`PAGE_SETS`] and by [`SETS_PAGE_BYTES`], computed from the sets' own track
+/// counts, and the same for every caller of the same page (so two pages never
+/// overlap and none is skipped).
+fn page_bounds(sets: &[nz_cache::DownloadSet], page: u32) -> (usize, usize, bool) {
+    if page == u32::MAX {
+        // A page a hostile peer invented: the empty tail, with no walk at all.
+        return (sets.len(), sets.len(), true);
+    }
+    let mut wanted = page as usize;
+    let mut start = 0usize;
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    for (index, set) in sets.iter().enumerate() {
+        let size = 64
+            + set.kind.len()
+            + set.ident.len()
+            + set.title.len()
+            + set.tracks.saturating_mul(SET_BYTES_PER_TRACK);
+        if count > 0 && (count == PAGE_SETS || bytes + size > SETS_PAGE_BYTES) {
+            if wanted == 0 {
+                // The page ends here because it is full: the sets after it are the
+                // NEXT page's, never dropped.
+                return (start, index, false);
+            }
+            wanted -= 1;
+            start = index;
+            count = 0;
+            bytes = 0;
+        }
+        count += 1;
+        bytes += size;
+    }
+    // Below PAGE_SETS and under the byte bound: this page is the last of the
+    // list — and so is a page past the end, which is empty and says "nothing
+    // follows" rather than inviting another request for ever.
+    let end = sets.len();
+    if wanted > 0 {
+        (end, end, true)
+    } else {
+        (start, end, true)
+    }
+}
+
 /// Rounds a counted byte length up to the 8-byte alignment an allocation gives it,
 /// so a count never looks smaller than the bytes it names.
 fn align8(bytes: usize) -> usize {
     (bytes + 7) & !7
-}
-
-/// A `Sets` answer's wire size, estimated: the codec serialises it once and the
-/// page must fit a frame. An id costs its length plus its quotes and comma.
-fn estimated_size(set: &proto::SetInfo) -> usize {
-    let tracks: usize = set.tracks.iter().map(|track| track.len() + 3).sum();
-    64 + set.kind.len()
-        + set.ident.len()
-        + set.title.len()
-        + tracks
-        + set.cover.as_ref().map_or(0, String::len)
 }
 
 /// Opens the read-only connection to `nz-cache`'s file.

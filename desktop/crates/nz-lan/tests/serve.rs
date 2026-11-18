@@ -1009,6 +1009,39 @@ fn a_friend_sees_only_the_sets_they_can_see_whole() {
         .expect("rename");
     index.refresh();
     assert_eq!(index.sets_version(), 2);
+
+    // Paging: ten tiny sets are 8 on the first page and 2 on the second, and no
+    // set is skipped between them (the page bound is computed from the set list,
+    // not from what one page happened to send).
+    for n in 0..10 {
+        fixture
+            .cache
+            .downloads()
+            .add_set(
+                OWNER,
+                "album",
+                &format!("al{n}"),
+                &format!("Album {n}"),
+                &[],
+            )
+            .expect("set");
+    }
+    index.refresh();
+    let Response::Sets { sets, last, .. } = index.sets(&Scope::Own, 0) else {
+        panic!("a sets page");
+    };
+    assert_eq!(sets.len(), 8, "the first page is full");
+    assert!(!last, "and more follows");
+    let Response::Sets { sets, last, .. } = index.sets(&Scope::Own, 1) else {
+        panic!("a sets page");
+    };
+    assert_eq!(sets.len(), 4, "12 sets: 4 remain");
+    assert!(last, "nothing follows the last page");
+    // Past the end: an empty page that says so, never a panic.
+    let Response::Sets { sets, last, .. } = index.sets(&Scope::Own, u32::MAX) else {
+        panic!("a sets page");
+    };
+    assert!(sets.is_empty() && last);
 }
 
 /// `Meta`: only in-scope tracks, screen-shaped, and each field from the place the
