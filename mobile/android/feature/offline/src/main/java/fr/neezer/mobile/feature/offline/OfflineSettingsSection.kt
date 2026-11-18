@@ -48,6 +48,7 @@ import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
+import fr.neezer.mobile.designsystem.NzSegmented
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.QualityBadge
@@ -74,16 +75,36 @@ import uniffi.nz_ffi.SetProgress
  * requests (the SPA's own number for this section).
  */
 @Composable
-fun OfflineSettingsSection(modifier: Modifier = Modifier) {
+fun OfflineSettingsSection(
+    modifier: Modifier = Modifier,
+    /**
+     * The offline page's SECOND tab, when the caller has one (LN14's « Sur vos
+     * appareils »: the sets the connected devices expose). The tab strip and its
+     * state live here — this module owns the page — and the CONTENT is the
+     * caller's composable, so the peers' list is written once, in its own lot.
+     * A caller that passes nothing (a JVM test, a build without LN14) draws the
+     * downloads only, exactly as before.
+     */
+    peerSets: (@Composable () -> Unit)? = null,
+) {
     val model = remember { OfflineHost.model() }
     val state by model.state.collectAsState()
     LaunchedEffect(model) { model.start() }
 
     var downloadsOpen by rememberSaveable { mutableStateOf(false) }
+    // 0 = « Téléchargements », 1 = the caller's second tab.
+    var tab by rememberSaveable { mutableStateOf(0) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(NzSpacing.l)) {
+        if (peerSets != null && !downloadsOpen) {
+            NzSegmented(
+                options = listOf("Téléchargements", "Sur vos appareils"),
+                selectedIndex = tab,
+                onSelect = { tab = it },
+            )
+        }
         when {
-            state.failure != null && state.version == 0uL -> LoadFailed(
+            state.failure != null && state.version == 0uL && tab == 0 -> LoadFailed(
                 cause = state.failure!!,
                 onRetry = model::refresh,
                 title = "Téléchargements indisponibles",
@@ -93,6 +114,8 @@ fun OfflineSettingsSection(modifier: Modifier = Modifier) {
                 model = model,
                 onBack = { downloadsOpen = false },
             )
+
+            tab == 1 && peerSets != null -> peerSets()
 
             else -> {
                 QueueCard(model, state)
