@@ -1,0 +1,77 @@
+name: Cached apt packages
+description: >-
+  Install a job's system packages from a cache of the .deb files they are made
+  of, so no job pays the Ubuntu archive download twice.
+
+  Measured before this existed, desktop.yaml run 44278965583: the same 116 MB of
+  packages came down at 12.4 MB/s in the `release binaries` job (9 s) and at
+  86.9 kB/s in `cargo clippy` (22 min 19 s) and 120 kB/s in
+  `cargo test + window` (16 min 12 s) — `System dependencies` was the workflow's
+  critical path (median 22.15 / 20.38 / 16.43 min per job over 8 successful
+  runs) for a package set that never changes.
+
+inputs:
+  packages:
+    description: >-
+      The packages to install, space separated on one line. Kept in the calling
+      workflow, never here: a package that stops building there must be readable
+      on its own (release.yaml, `binaries`).
+    required: true
+  line:
+    description: >-
+      Which cache line this job belongs to (`desktop`, `release`). Restores the
+      most recent entry of that line, so adding one package downloads one
+      package.
+    required: true
+  revision:
+    description: >-
+      Bump when the package list above changes (`v1` -> `v2`): the .debs of a
+      previous list are already up to date and are restored, the new ones come
+      down once. The archive's own version bumps need no bump: apt fetches the
+      few .debs whose version moved.
+    required: false
+    default: v1
+
+runs:
+  using: composite
+  steps:
+    # `Dir::Cache::archives` is where apt keeps the .debs it retrieved
+    # (apt-get(8), FILES: "/var/cache/apt/archives/ — Storage area for retrieved
+    # package files. Configuration Item: Dir::Cache::Archives") and it looks
+    # there before opening a connection, so a restored set costs no download at
+    # all. Pointed at $RUNNER_TEMP because actions/cache restores as the runner
+    # user and /var/cache/apt/archives belongs to root.
+    - name: Restore the downloaded packages
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        # A STATIC key on purpose (actions/cache: "You cannot change the
+        # contents of an existing cache. Instead, you can create a new cache
+        # with a new key"): one upload, then every run and job restores it
+        # forever. A rolling key would re-upload 116 MB per job per run — 4 x
+        # 116 MB of the repository's 10 GB, evicting the Rust caches the builds
+        # need (docs.github.com, dependency caching, "Usage limits and eviction
+        # policy").
+        key: apt-${{ inputs.line }}-${{ inputs.revision }}
+        restore-keys: apt-${{ inputs.line }}-
+
+    - name: Install the system packages
+      shell: bash
+      env:
+        APT_PACKAGES: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        cache="$RUNNER_TEMP/apt-archives"
+        mkdir -p "$cache/partial"
+        # The indexes are re-read every run either way: they are what tells apt
+        # which version it wants, and a stale index would install a version the
+        # archive no longer serves (apt then fails, where a fresh one downloads).
+        sudo apt-get update
+        sudo apt-get \
+          -o Dir::Cache::archives="$cache/" \
+          -o APT::Keep-Downloaded-Packages=true \
+          install -y --no-install-recommends $APT_PACKAGES
+        # `apt-get install` deletes the .deb unless asked not to; without this
+        # the cache the post step saves would be empty and every run cold.
+        echo "apt cache: $(find "$cache" -maxdepth 1 -name '*.deb' | wc -l) .deb, \
+        $(du -sh "$cache" | cut -f1)"
