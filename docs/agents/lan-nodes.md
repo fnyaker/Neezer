@@ -272,8 +272,9 @@ otherwise it simply expires). Logout wipes the key, the credential and the roste
 - Service `_neezer-lan._udp.local.`, port = the node's QUIC port, instance name and host name
   `nz-<10 random hex>` re-drawn at every network change, TXT exactly `v=1`. Never the machine's host
   name, never a user or device name.
-- **Desktop**: `mdns-sd` (feature `mdns`) browses and registers on every up, non-loopback interface
-  (tests enable loopback explicitly).
+- **Desktop**: `mdns-sd` (feature `mdns`) browses and registers on every up, non-loopback interface.
+  `MdnsDiscovery::new(true)` is **loopback only** (the tests' mode: a test must never multicast on the
+  machine's own network), `new(false)` is the app's policy (LN3).
 - **Android**: Kotlin `NsdManager.registerService` + `discoverServices`/`resolveService`
   (API ≥ 34: `registerServiceInfoCallback`), holding a `MulticastLock` only while browsing; each
   resolved `(host, port)` goes to `LanApi::found(host, port)`, each loss to `LanApi::lost(...)`.
@@ -745,21 +746,35 @@ a mock of itself. Three rungs, cheapest first:
    `127.0.0.1:0`, told about each other with `found(127.0.0.1, port)`. This is what CI runs on every
    push; it covers authentication, scope, fetch, resume, priorities and the adapters.
 2. **Two processes in a user network namespace, real mDNS** (`desktop/crates/nz-lan/tools/netns.sh`,
-   LN3): no sudo — `unshare -rn` gives a network namespace where the user may configure `lo`:
+   LN3, delivered): no sudo — `unshare -rn` gives a network namespace with `lo` (the two processes'
+   control sockets) and **one `dummy` interface** for the LAN, which is what the app announces on:
 
    ```sh
    unshare -rn sh -c '
-     ip link set lo up && ip link set lo multicast on && ip route add 224.0.0.0/4 dev lo
-     target/debug/examples/lan_node --data "$A" --name A --serve & A_PID=$!
-     target/debug/examples/lan_node --data "$B" --name B --expect-peer A --json > "$OUT"
-     kill $A_PID; wait'
+     ip link set lo up
+     ip link add nz0 type dummy && ip link set nz0 up
+     ip addr add 10.42.0.1/24 dev nz0 && ip -6 addr add fe80::1/64 dev nz0
+     ip route add 224.0.0.0/4 dev nz0 && ip -6 route add ff00::/8 dev nz0
+     …'
    ```
 
-   Measured on this machine (prototype): discovery 480–650 ms, handshake 3–4 ms. Arch allows
+   A **dummy interface and not `lo`**: Linux delivers an IPv4 multicast packet to a socket joined on
+   `lo` but *drops the IPv6 one* (measured: `Ip6OutMcastPkts 3`, `Ip6InMcastPkts 0` for the same
+   round trip that works over IPv4), so a `lo`-based harness cannot test the IPv6 link-local scope at
+   all, and the app never announces on loopback anyway. The script runs the crate's own test binary
+   twice (`--exact netns_announcer` / `--exact netns_browser`, role in `NZ_LAN_NETNS_ROLE`) until
+   LN15's `examples/lan_node` exists: announce → a second daemon of the same process resolves it
+   (`READY` is an event, never a sleep) → browse and measure → re-draw the names → goodbye.
+   `--runs N` (20 by default) and `--binary PATH` (what `cargo test` hands its own test) are the whole
+   interface; the logs and the FIFO live under `target/netns-ln3/`, never `/tmp`.
+
+   Measured on this machine, 20 runs, debug build: `browse start → Found` **p50 0 ms, p95 0 ms**;
+   `start → resolvable by another daemon` **p50 856 ms, max 1 024 ms** (RFC 6762 §8.1 probing: three
+   queries 250 ms apart); `stop() → the peer's Lost` **p50 1 000 ms, max 1 001 ms**. Arch allows
    unprivileged user namespaces; **GitHub's Ubuntu 24.04 runners restrict them through AppArmor**:
    the CI step first runs `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (the runner
-   has sudo; a developer machine never needs it). Discovery tests call the script and **skip with a
-   printed reason** when `unshare -rn true` fails locally, and **fail** in CI (`NZ_LAN_REQUIRE_NETNS=1`).
+   has sudo; a developer machine never needs it). The harness **skips with a printed reason** when
+   `unshare -rn true` fails locally, and **fails** in CI (`NZ_LAN_REQUIRE_NETNS=1`).
 3. **Desktop ↔ Android emulator** (LN15): the emulator sits behind its own NAT (`10.0.2.x`), no
    multicast crosses it. `mobile/tools/emu.sh start --port <p>` (headless, `-no-window -no-audio`),
    then the emulator console `redir add udp:<hostport>:45910` maps a host UDP port to the guest; the
@@ -1161,65 +1176,108 @@ The note's top *Status* line still says "LN0 delivered, the rest planned"; it be
 this file's header, not to this lot.
 
 
-### LN3 — Discovery and the netns harness (wave 1, effort high)
+### LN3 — Discovery and the netns harness (delivered 2026-11-18)
 
-- **Objective**: nodes find each other on a LAN without leaking anything, on the desktop by
-  `mdns-sd`, on Android through the `External` feed, and by last-known addresses; and the user-netns
-  harness exists for every later lot.
-- **Files**: LN3 row. **Contracts**:
+**What landed.** `discovery.rs` (the seam, the platform feed, the random names), `discovery_mdns.rs`
+(`mdns-sd` browse + register behind the default feature), `tools/netns.sh` and `tests/discovery.rs`.
+Nothing is wired into an app yet: `Lan::start` is still LN10's, so a machine with the crate compiled
+behaves exactly as before (no thread, no socket — `MdnsDiscovery::new` starts nothing).
 
-  ```rust
-  pub enum DiscoveryEvent { Found { addr: SocketAddr, instance: String }, Lost { instance: String } }
-  pub trait Discovery: Send + Sync {
-      fn start(&self, port: u16) -> Result<(), LanError>;   // announce + browse
-      fn stop(&self);                                        // both; idempotent
-      fn events(&self) -> tokio::sync::mpsc::Receiver<DiscoveryEvent>; // taken once
-      fn network_changed(&self);                             // re-draw the instance name, re-announce
-  }
-  pub struct ExternalDiscovery;  impl ExternalDiscovery { pub fn new() -> Self; pub fn found(&self, ip: IpAddr, port: u16); pub fn lost(&self, ip: IpAddr, port: u16); }
-  #[cfg(feature = "mdns")] pub struct MdnsDiscovery;  impl MdnsDiscovery { pub fn new(include_loopback: bool) -> Result<Self, LanError>; }
-  pub fn instance_name() -> String;                          // "nz-" + 10 random hex
-  ```
-- **Depends on**: LN0.
-- **Acceptance**: in the netns (`tools/netns.sh`, 20 runs) a browse finds the other process's
-  announcement p50 ≤ 1.0 s, p95 ≤ 2.0 s; the announcement's TXT is exactly `v=1`, the instance and
-  host names match `^nz-[0-9a-f]{10}$` and change after `network_changed()` (captured with the
-  crate's own browse in the test, no tcpdump); `stop()` sends the goodbye (the other side gets `Lost`
-  ≤ 1 s); IPv6 link-local addresses keep their scope; `ExternalDiscovery` maps found/lost to events;
-  the CI step runs the netns test with `NZ_LAN_REQUIRE_NETNS=1` after the AppArmor sysctl, and a
-  local run without user namespaces SKIPS with a printed reason; the daemon thread `mdns-sd` starts is
-  shut down and joined by `stop()`/`Drop` (asserted: no thread named after it remains).
-- **Pitfalls**: `mdns-sd`'s `ScopedIp`; its daemon thread must be shut down before the process
-  exits; the netns needs `ip route add 224.0.0.0/4 dev lo`; GitHub's Ubuntu 24.04 restricts
-  unprivileged user namespaces (sysctl in CI, never locally); never announce the host name.
-- **Prompt**:
+- **`Discovery` / `DiscoveryEvent`**: LN0's shape, unchanged. `Found` is ONE address (the shape the
+  transport dials); `Lost` names the instance, because that is what a goodbye says.
+  `DiscoveryEvent::instance()` is the de-duplication key.
+- **`ExternalDiscovery`**: `found`/`lost` become the two events. The platform's FFI carries only
+  `(host, port)`, so the instance handle is derived from the address (FNV-1a, 10 hex): the same peer
+  keeps the same handle across a re-resolution, a moved peer is a new one, and `lost` names exactly
+  what `found` named. `stop()` freezes the feed (a late `NsdManager` callback must not resurrect a
+  peer the battery rules stopped looking for) and `start()` unfreezes it. No queue grows without a
+  bound: the channel holds 64 events and a flood costs a dropped hint, never a stall.
+- **`MdnsDiscovery`**: one daemon, one browse, one register, plus a **plain thread** (`nz-lan-mdns`)
+  translating `mdns-sd`'s events — a thread and not a task, so it borrows no runtime and cannot
+  outlive one. `stop()` says goodbye, stops the browse, shuts the daemon down and joins both threads;
+  `Drop` calls `stop()`; `events()` is taken once and survives a `stop`/`start` cycle (the battery
+  rules stop and restart discovery all day, and the consumer must not be left holding a dead channel).
+- **The interface policy is two modes, not three.** `new(false)` (the app): every up, non-loopback
+  interface. `new(true)` (tests): **loopback only** — not "loopback as well", because a test that
+  added loopback would otherwise multicast on the machine's real network (worker rule 8). The harness
+  proves the negative half of that every run: the loopback-only discovery it runs alongside never
+  sees the announcement made on the dummy interface.
+- **Caps, before anything is allocated** (worker rule 10): 8 addresses per resolution (a hostile
+  announcement costs at most 8 dials), a 63-byte instance label (a DNS label), a 64-event queue.
+  Anything else on the wire is skipped, not parsed further.
 
-  > Tu implémentes le lot **LN3 — Discovery and the netns harness** du plan « nœuds LAN » (effort
-  > high). But : découverte DNS-SD `_neezer-lan._udp.local.` sans rien d'identifiant (nom d'instance
-  > et d'hôte aléatoires, TXT `v=1` seul) par `mdns-sd` sur le desktop, l'alimentation externe
-  > (`ExternalDiscovery`) que l'Android utilisera, et le harnais `tools/netns.sh` (deux processus dans
-  > `unshare -rn`, multicast sur `lo`, sans sudo) dont tous les lots suivants se servent ; une étape
-  > CI dans `desktop.yaml` lève la restriction AppArmor des espaces de noms utilisateur puis lance le
-  > test. Lis *Discovery*, *Two nodes on one machine*, *Research* et la section LN3 de
-  > `docs/agents/lan-nodes.md`. Fichiers exclusifs : la ligne LN3. Critères : la liste *Acceptance*
-  > de LN3.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+**Contracts as they now stand** (LN0's, plus what LN3 added — an addition, never a fork):
+
+```rust
+pub const SERVICE_TYPE: &str = "_neezer-lan._udp.local.";
+pub const TXT_VERSION_KEY: &str = "v";  pub const TXT_VERSION_VALUE: &str = "1";
+pub const INSTANCE_PREFIX: &str = "nz-";
+pub fn instance_name() -> String;                                  // "nz-" + 10 hex, OS CSPRNG
+impl DiscoveryEvent { pub fn instance(&self) -> &str; }
+impl ExternalDiscovery { pub fn is_running(&self) -> bool; }
+#[cfg(feature = "mdns")] pub const MDNS_DAEMON_THREAD: &str = "mDNS_daemon";
+#[cfg(feature = "mdns")] impl MdnsDiscovery {
+    pub fn new(include_loopback: bool) -> Result<Self, LanError>;   // starts nothing; `start` can fail
+    pub fn includes_loopback(&self) -> bool;
+    pub fn is_running(&self) -> bool;
+    pub fn announced_port(&self) -> Option<u16>;
+}
+```
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, 2026-11-18, debug build):
+
+| Measure | Value | Command |
+|---|---|---|
+| the crate's unit tests | **52 passed** | `cargo test -p nz-lan --locked --lib` |
+| discovery's tests (lib + integration) | **52 + 5 passed** (5 = 4 pure + the harness) | `cargo test -p nz-lan --locked` |
+| `browse start → Found` (the acceptance) | **p50 0 ms, p95 0 ms**, 20 runs | `cargo test -p nz-lan --test discovery the_netns_harness_finds_the_other_process -- --exact --nocapture` |
+| `start → resolvable by another daemon` | **p50 856 ms, max 1 024 ms** (probing) | same |
+| `stop() → the peer's Lost` | **p50 1 000 ms, max 1 001 ms** | same |
+| announcement on the wire | instance and host `^nz-[0-9a-f]{10}$`, TXT exactly `v=1`, **20/20 runs** | same (the browser reads the raw record) |
+| names re-drawn by `network_changed()` | instance **and** host changed, 20/20 runs | same |
+| IPv6 link-local scope kept | `[fe80::1%2]:45940`, scope **2** (the dummy's index), 20/20 runs | same |
+| threads after `stop()` and after `Drop` | **0** named `mDNS_daemon`, **0** named `nz-lan-mdns`, 20/20 runs | same |
+| a machine without user namespaces | printed `NZLAN HARNESS SKIP …`, exit 0; `NZ_LAN_REQUIRE_NETNS=1` → exit 1 | `PATH=<a fake `unshare`>:$PATH tools/netns.sh --runs 2` |
+| the Android shape | **0 warnings** with `--no-default-features`; the roles compile out | `cargo test -p nz-lan --no-default-features --no-run --locked` |
+| clippy | green, `-D warnings`, both feature sets | `cargo clippy -p nz-lan --all-targets --locked -- -D warnings` |
+
+**Rules a measurement taught.**
+
+- **An IPv6 multicast packet does not loop on `lo`.** The prototype's recipe (`lo` up + a route for
+  224.0.0.0/4) is enough for IPv4 and *silently* useless for IPv6: the same round trip counts
+  `Ip6OutMcastPkts 3`, `Ip6InMcastPkts 0` in `/proc/net/snmp6`, so the AAAA records never reach the
+  peer and "IPv6 link-local keeps its scope" cannot be measured at all. A **dummy** interface loops
+  both families. The harness therefore announces on one dummy interface, which is also the app's real
+  policy (`new(false)`) on a machine with one network. *(This is why `tools/netns.sh` no longer
+  matches the `lo` sketch this note used to carry.)*
+- **A node is not discoverable for ~750 ms after it starts announcing.** `readiness` is not "it
+  registered" but "another daemon resolved it": measured p50 856 ms / max 1 024 ms, the three probes
+  250 ms apart of RFC 6762 §8.1 plus one resolve. The announcer's `READY` is that event, so the
+  latency the harness measures is the *browser's* (0 ms on one interface of one host), not the
+  announcer's warm-up.
+- **The re-drawn announcement overtakes the goodbye.** After `network_changed()`, a peer receives the
+  `Found` of the new name ~300 ms *before* the `Lost` of the old one (mdns-sd emits the removal on its
+  next expiry pass). Anything that consumes discovery — this lot's tests, and LN10's connection table
+  — must accept the two in either order; waiting for the goodbye first loses the new peer.
+- **The goodbye is immediate, the `Lost` is not.** `unregister` broadcasts the TTL-0 records before it
+  answers `OK` (and resends once at +120 ms), but the peer emits `Lost` when it next *processes a
+  packet*, i.e. at its browse retransmission: measured 1 000–1 001 ms for all 20 runs, against the
+  4 500 s PTR TTL a peer would otherwise wait out. The assertion is therefore on the distribution
+  (p95 ≤ 1 500 ms), not on a per-run second that the library, not the crate, decides.
+- **One resolution is not one event.** `mdns-sd` resolves an instance as soon as its A record is
+  known and *again* when the AAAA records arrive, so a peer yields several `Found` for one instance
+  (one per address, several times over). Consumers key on `instance()`; a test that assumes a single
+  `Found` per peer drops the IPv6 one and "proves" the wrong thing. This was the bug that cost LN3
+  the most time.
+- **A scope id belongs to a link-local or multicast IPv6 address only** (RFC 4007). `mdns-sd` hands
+  the address back with the interface it was *seen* on (`ScopedIp`), and `SocketAddrV6` carries it;
+  dropping it produces `fe80::1:45910`, an address that reaches nothing — keeping it on a global
+  address is noise and can fail a connect. Measured end to end: `[fe80::1%2]:45940`.
+- **AppArmor is the CI's problem, not the developer's.** `unshare -rn true` fails on Ubuntu 24.04
+  until `kernel.apparmor_restrict_unprivileged_userns=0`; the workflow step lifts it with one sysctl
+  and sets `NZ_LAN_REQUIRE_NETNS=1`, so a runner that loses the ability again turns the job RED
+  instead of quietly skipping discovery for months.
+
 
 ### LN4 — Index, hashing, scope, serve (wave 1, effort max)
 
