@@ -2184,12 +2184,25 @@ SPA keeps in `lib/flow.js` and `lib/discovery.js`.
   « Tes artistes », the Récap card « Ton année 2026, en cours · 10 800 écoutes ·
   37 400 minutes »). The window captures are cropped to their content, so the
   PNG is the page and not an empty display.
-- **Sizes**: `libnz_ffi.so` arm64-v8a **9 532 216 B**, armeabi-v7a 6 480 080 B,
-  x86_64 11 446 472 B (MB4: 6 356 480 / 4 413 880 / 6 925 840 — the +3.2 MB on
-  arm64 is the analysis/playback stack MB3b linked, not this lot's 24 records).
-  Debug APK 44 495 317 B before the libc++ workaround, 71 539 055 B with the
-  NDK's `libc++_shared.so` dropped in by hand for the screenshot (nothing
-  committed: `build-android.sh` belongs to MB3c's fix, PR #309).
+- **The screen's marker, a contract**: the home's root carries
+  `contentDescription = "Accueil Neezer"` (`HomeScreen.kt#HOME_MARKER`), in EVERY
+  state — hero, skeletons, a failed load with no server — and independent of the
+  clock. `mobile/tools/ci-emulator.sh` waits for that node after tapping
+  Accueil, instead of the MB0 stub's sentence which this lot removed. Measured
+  on a FRESH install with no server, at two clock settings: 09:10 Wednesday
+  gives `content-desc="Accueil Neezer"`, « BONJOUR · MERCREDI »,
+  « Quelle énergie ce matin ? », « L'accueil n'a pas pu se charger » and
+  « Réessayer »; 22:30 Thursday gives the SAME marker, the SAME page and a
+  greeting that changed to « BONJOUR · JEUDI ». A needle taken from the greeting
+  or from the masthead's « ce matin » would therefore be a clock in disguise
+  (the SPA keeps that copy fixed — the weekday above it is the real date), which
+  is why the marker is a literal and not a sentence.
+- **Sizes**: `libnz_ffi.so` arm64-v8a **9 587 912 B**, armeabi-v7a 6 517 224 B,
+  x86_64 11 506 576 B, and their `NEEDED` list is the system's alone
+  (`libdl liblog libm libc`) — PR #309's static C++ link, which this lot's
+  screen rebuilds and runs. MB4 was 6 356 480 / 4 413 880 / 6 925 840; the
+  +3.2 MB on arm64 is the analysis/playback stack MB3b linked, not this lot's
+  records.
 
 **Rules a measurement taught** (each cost a wrong build or a silent extra
 request):

@@ -140,19 +140,35 @@ fun HomeScreen(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            // The screen's own marker, for the smoke (`mobile/tools/ci-emulator.sh`)
+            // and for TalkBack: present in EVERY state — hero, skeletons, a
+            // failed load — and independent of the clock. `HomeHero`'s greeting
+            // names the weekday and the person, so it can never be a stable
+            // needle; this can (`Home.svelte`'s masthead, "Quelle énergie ce
+            // matin ?", is fixed copy but reads like a time of day).
+            .semantics { contentDescription = HOME_MARKER }
             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.xl),
     ) {
+        // The hero is drawn in EVERY state, like `Home.svelte` (HomeHero sits
+        // above the sections, never inside them): the day's one decision is the
+        // page, and a section that failed is a block below it, not a screen that
+        // replaces it.
+        HomeHero(state, actions)
+        if (state.tuneOpen) TunePanel(state, actions)
+
         val data = state.data
         when (val screen = state.screen) {
-            is fr.neezer.mobile.bridge.ScreenState.Failed -> LoadFailed(
-                cause = screen.cause,
-                onRetry = { actions.retry() },
-                title = "L'accueil n'a pas pu se charger",
-            )
+            is fr.neezer.mobile.bridge.ScreenState.Failed -> {
+                LoadFailed(
+                    cause = screen.cause,
+                    onRetry = { actions.retry() },
+                    title = "L'accueil n'a pas pu se charger",
+                )
+                StylePicker(state, actions)
+                FlowControls(state, actions)
+            }
             else -> {
-                HomeHero(state, actions)
-                if (state.tuneOpen) TunePanel(state, actions)
                 if (data == null) {
                     // First paint with nothing yet: a shelf and a list, never an
                     // empty page (Skeleton.svelte's rule).
@@ -1152,6 +1168,15 @@ private fun EmptyHome(state: HomeModel.State, actions: HomeActions) {
 }
 
 // -- small helpers ------------------------------------------------------------
+
+/**
+ * What the home is called, for the headless smoke and for a screen reader: one
+ * fixed string, never a greeting. It is a CONTRACT with
+ * `mobile/tools/ci-emulator.sh`, which taps the Accueil tab and then waits for
+ * this node, and with every later lot that changes what the home draws: keep it
+ * on the root.
+ */
+const val HOME_MARKER = "Accueil Neezer"
 
 /** `flow.js#PICK_AHEAD`, in the sentence `FlowUpNext` writes. */
 private const val PICK_AHEAD_S = 20

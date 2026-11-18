@@ -279,7 +279,12 @@ check_door() {
 check_door "Rechercher" "Titres, albums, artistes, playlists et podcasts"
 check_door "Bibliothèque" "Playlists et dossiers, favoris"
 check_door "Podcasts" "Les abonnements, la recherche"
-check_door "Accueil" "Le hero, la reprise, les humeurs"
+# Accueil draws a STABLE marker (`HomeScreen.kt`'s `HOME_MARKER`, a
+# contentDescription on the screen's root) instead of its MB0 stub text: the
+# home's own copy names the weekday and the person, so a needle taken from it
+# would fail in the evening or on another account. The marker is on the root in
+# every state — hero, skeletons, a failed load with no server configured.
+check_door "Accueil" "Accueil Neezer"
 
 # Réglages, and the one line that proves the whole chain Kotlin -> JNA -> Rust:
 # the version comes from `nz_version()`, not from a Kotlin constant.
