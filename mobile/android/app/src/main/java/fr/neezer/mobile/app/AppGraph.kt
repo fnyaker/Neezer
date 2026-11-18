@@ -35,6 +35,9 @@ class AppGraph(private val application: Application) : NzNavigator {
         // (`IllegalStateException: You must call setGraph() before calling
         // getGraph()`), killing the app on a cold start from a shared link.
         // [openPendingLink] runs once, from the shell, after the graph exists.
+        // (MB14 measured the same crash from `neezer://releases` on
+        // emulator-5640; the orchestrator's own fix landed on master first, so
+        // this lot keeps master's shape and only its two `AppLink` branches.)
     }
 
     /**
