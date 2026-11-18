@@ -803,6 +803,75 @@ mod tests {
             .collect()
     }
 
+    /// **The chain's arithmetic is the one it had BEFORE the meter (MB12), bit for
+    /// bit.** The lot's diff reflowed 24 one-line statements (rustfmt) and added
+    /// the meter; nothing in the EQ, the shelf, the two compressors or the
+    /// limiter may have moved, and this holds it to the old chain's own output.
+    ///
+    /// The golden below is `git show 6a88a6ff^:android/nscore/src/dsp.rs`'s output
+    /// for this exact signal and these settings, captured by running the old chain
+    /// and the merged one side by side (4 800 frames, 9 600 samples, **0 samples
+    /// differing in their bits**). Zero tolerance: a reformat cannot fail this,
+    /// but a changed coefficient, rounding or order does.
+    #[test]
+    fn the_chain_is_bit_identical_to_the_one_before_the_meter() {
+        const GOLDEN: [u32; 32] = [0, 1040419161, 1027391800, 1040415844, 1035377860, 1039610621, 1040250635, 1041354486, 1042980745, 1041421535, 1045412988, 1041622218, 1047564325, 1042767718, 1049160359, 1043559509, 1050178817, 1044575807, 1051147809, 1045986784, 1052119323, 1047242352, 1053043770, 1048540620, 1053909956, 1049238739, 1054711470, 1049848652, 1055406580, 1050436832, 1055974701, 1051012905];
+        let frames = 4_800usize;
+        let mut chain = Chain::new(48_000.0, 2);
+        for (band, db) in [6.0, 5.0, -3.0, 2.0, 9.0, 0.0, -6.0, 3.0, 0.0, 4.0]
+            .into_iter()
+            .enumerate()
+        {
+            chain.set_eq(band, db);
+        }
+        chain.set_bass(9.0);
+        chain.set_gain_db(-3.0, 0.0);
+        chain.fade_to(0.6, 0.0);
+        // The same deterministic signal the capture used: two tones, a burst every
+        // 2 000 frames, and a quiet last quarter.
+        let mut buffer = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            let t = i as f64 / 48_000.0;
+            let tone = 0.40 * (core::f64::consts::TAU * 62.0 * t).sin()
+                + 0.25 * (core::f64::consts::TAU * 1_000.0 * t).sin();
+            let burst = if (i / 2_000) % 3 == 1 { 0.55 } else { 0.0 };
+            let quiet = if i > frames * 3 / 4 { 0.02 } else { 1.0 };
+            buffer.push(((tone + burst) * quiet) as f32);
+            buffer.push(((0.30 * (core::f64::consts::TAU * 125.0 * t).sin() + 0.1) * quiet) as f32);
+        }
+        chain.process(&mut buffer, frames);
+        let found: Vec<u32> = buffer.iter().take(32).map(|s| s.to_bits()).collect();
+        assert_eq!(
+            found, GOLDEN,
+            "the chain's samples moved: a coefficient, a rounding or an order changed"
+        );
+        // And the meter being OFF by default is what keeps that true: the same
+        // buffer with the card asking for readings still produces the same sound.
+        let mut metered = Chain::new(48_000.0, 2);
+        for (band, db) in [6.0, 5.0, -3.0, 2.0, 9.0, 0.0, -6.0, 3.0, 0.0, 4.0]
+            .into_iter()
+            .enumerate()
+        {
+            metered.set_eq(band, db);
+        }
+        metered.set_bass(9.0);
+        metered.set_gain_db(-3.0, 0.0);
+        metered.fade_to(0.6, 0.0);
+        metered.set_meter(true);
+        let mut again = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            let t = i as f64 / 48_000.0;
+            let tone = 0.40 * (core::f64::consts::TAU * 62.0 * t).sin()
+                + 0.25 * (core::f64::consts::TAU * 1_000.0 * t).sin();
+            let burst = if (i / 2_000) % 3 == 1 { 0.55 } else { 0.0 };
+            let quiet = if i > frames * 3 / 4 { 0.02 } else { 1.0 };
+            again.push(((tone + burst) * quiet) as f32);
+            again.push(((0.30 * (core::f64::consts::TAU * 125.0 * t).sin() + 0.1) * quiet) as f32);
+        }
+        metered.process(&mut again, frames);
+        assert_eq!(again, buffer, "reading the meter must not change a sample");
+    }
+
     /// **Off by default, and off costs nothing**: the same block through the same
     /// chain produces the same samples with the meter on, so turning the card on
     /// cannot change what the person hears.

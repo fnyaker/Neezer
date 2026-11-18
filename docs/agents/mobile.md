@@ -4032,6 +4032,12 @@ TapSubscription: read(&mut [f32]) -> usize      // FRAMES written, interleaved s
 - **A fader changes the sound in the NEXT buffer.** Measured on the rendered sink: the first sample
   that differs from the un-EQ'd reference is **sample 0 of the very next buffer** (`Chat::process`
   reads the engine's atomics at the top of every callback).
+- **The chain's arithmetic is bit-identical to the one before the meter.** The lot's diff reflowed
+  24 one-line statements and added the meter; running the pre-MB12 `Chain` and the merged one side
+  by side on the same 4 800-frame signal (two tones, a burst, a quiet tail) with the EQ, the bass
+  lift, the gain ramp and the fade all engaged gave **0 of 9 600 samples differing in their bits**
+  (`the_chain_is_bit_identical_to_the_one_before_the_meter`, zero tolerance: a reformat cannot fail
+  it, a moved coefficient cannot pass it).
 - **The limiter's reduction is what was measured, not what its curve asks.** A +16 dB band on a
   −12 dBFS tone reads **+3.96 dBFS pre-limiter** and only **0.89 dB of reduction**: a 2 ms attack
   with no look-ahead lets each cycle's crest over, exactly as Web Audio's does (the SPA measured
@@ -4060,7 +4066,7 @@ TapSubscription: read(&mut [f32]) -> usize      // FRAMES written, interleaved s
 | What | How | Numbers |
 |---|---|---|
 | Rust, the lot | `cargo test -p nz-core audiofx` | **35 tests** (risk 6, presets 6, pan 4, output 6, meter 3, service 10) |
-| Rust, the crates | `cargo test --offline --workspace` (mobile) and `-p nz-audio` (desktop) | **381** `nz-core`, **62** `nz-ffi`, **72 + 9** `nz-audio`, **15** `nscore` — all green; `clippy -D warnings` clean on every crate this lot touched |
+| Rust, the crates | `cargo test --offline --workspace` (mobile) and `-p nz-audio` (desktop) | **381** `nz-core`, **62** `nz-ffi`, **72 + 9** `nz-audio`, **16** `nscore` — all green; `clippy -D warnings` clean on every crate this lot touched |
 | The meter's cost | 2 000 buffers of 480 frames, release, chain engaged | **+3.7 ns/frame** (off 69.1, on 72.8) — 0.018 % of one core; **0** when the card is closed |
 | A fader | offline engine, rendered sink, 480-frame buffers | the first differing sample is **sample 0 of the next buffer** |
 | The tap, two readers | `nz-audio/tests/dsp.rs`, real FLAC | both subscriptions got **2 400 frames**, identical to 1e-6 (0.2500/0.2500); the meter read **−12.04 dB**, then **−96.00 dB** (the floor) after the card left |
