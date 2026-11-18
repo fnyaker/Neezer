@@ -52,10 +52,25 @@ runs:
     # there before opening a connection, so a restored set costs no download at
     # all. Pointed at $RUNNER_TEMP because actions/cache restores as the runner
     # user and /var/cache/apt/archives belongs to root.
+    #
+    # ONLY THE `.deb` FILES ARE CACHED (`*.deb`, a glob the cache action
+    # documents), NOT the directory: apt runs under sudo, so it creates
+    # `archives/partial/` and `archives/lock` as ROOT, and the runner user cannot
+    # read those — the first version of this action cached the directory and
+    # every save died with
+    #   tar: ../../_temp/apt-archives/partial: Cannot open: Permission denied
+    #   ##[warning]Failed to save
+    # so no cache ever existed and every run paid the download: runs 44301318230
+    # and 44306714250 both logged "Cache not found for input keys: apt-desktop-…"
+    # and fetched 116 MB again.
+    - name: The cache directory
+      shell: bash
+      run: mkdir -p "$RUNNER_TEMP/apt-archives"
+
     - name: Restore the downloaded packages
       uses: actions/cache@v4
       with:
-        path: ${{ runner.temp }}/apt-archives
+        path: ${{ runner.temp }}/apt-archives/*.deb
         # A STATIC key on purpose (actions/cache: "You cannot change the
         # contents of an existing cache. Instead, you can create a new cache
         # with a new key"): one upload, then every run and job restores it
@@ -87,8 +102,7 @@ runs:
         #     ACQUIRE GROUP);
         #   - `Acquire::Retries` retries the files that stall or truncate, and
         #     `Acquire::http::Timeout` turns "connected but silent" into a retry
-        #     (apt.conf(5): "Number of retries to perform"; "the connection as
-        #     well as the data timeout").
+        #     (apt.conf(5): "Number of retries to perform").
         # None of this makes a slow mirror fast. What makes it never matter again
         # is the cache above: one cold run per (image, package list), ever.
         sudo apt-get \
@@ -99,6 +113,8 @@ runs:
           -o Acquire::http::Timeout=30 \
           install -y --no-install-recommends $APT_PACKAGES
         # `apt-get install` deletes the .deb unless asked not to; without this
-        # the cache the post step saves would be empty and every run cold.
+        # the cache the post step saves would be empty and every run cold. The
+        # chmod is what the save needs: apt wrote them as root.
+        sudo chmod a+r "$cache"/*.deb 2>/dev/null || true
         echo "apt cache: $(find "$cache" -maxdepth 1 -name '*.deb' | wc -l) .deb, \
-        $(du -sh "$cache" | cut -f1)"
+        $(du -sh "$cache" 2>/dev/null | cut -f1)"
