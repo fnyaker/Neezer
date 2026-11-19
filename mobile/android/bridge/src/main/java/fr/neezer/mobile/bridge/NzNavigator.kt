@@ -24,4 +24,14 @@ interface NzNavigator {
 
     /** The queue editor, scrolled to the current track. */
     fun openQueue()
+
+    /**
+     * The full-screen visualiser (MB21), opened from « Réglages → Animations » —
+     * the SPA's own door (`VisualizerSettings.svelte#openScreen`).
+     *
+     * A DEFAULT, and it does nothing: an interface a dozen lots' test doubles
+     * implement must not gain an abstract member for one screen. `:app`'s
+     * `AppGraph` overrides it; every other implementation keeps compiling.
+     */
+    fun openViz() {}
 }

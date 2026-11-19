@@ -388,7 +388,11 @@ impl NzCore {
     }
 
     pub fn viz(&self) -> Arc<VizApi> {
-        Arc::new(VizApi)
+        // MB21: the visualiser owns an analysis thread and a subscription on the
+        // audio tap, so it is ONE per process like the player (MB3b's rule), built
+        // over this core. A one-line seam in MB2's merged file, declared out of
+        // this lot's list in the PR, exactly as `player()` was.
+        VizApi::shared(Arc::clone(&self.core), self.player())
     }
 
     pub fn settings(&self) -> Arc<SettingsApi> {

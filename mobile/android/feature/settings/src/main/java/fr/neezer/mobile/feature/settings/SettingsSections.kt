@@ -302,10 +302,31 @@ private fun colourHex(color: Color): String {
     return String.format("%06X", value)
 }
 
-/** « Animations » : the eco switch and the knobs of the visualiser. */
+/**
+ * « Animations » : the eco switch, the knobs of the visualiser, and MB21's door to
+ * the full-screen scene.
+ *
+ * The door is the SPA's own (`VisualizerSettings.svelte#openScreen` →
+ * `openProjector()`): the settings choose what the scene draws, and one button
+ * opens it. `onOpen` is null in a screenshot test, which then shows the card
+ * without a control that could do nothing.
+ */
 @Composable
-internal fun VizSection(model: SettingsModel, state: SettingsModel.State) {
+internal fun VizSection(model: SettingsModel, state: SettingsModel.State, onOpen: (() -> Unit)? = null) {
     val settings = state.settings ?: return
+    if (onOpen != null) {
+        SettingsCard(
+            title = "Écran d'animation",
+            subtitle = "Le visualiseur plein écran, sur ce que le lecteur joue en ce moment.",
+        ) {
+            NzButton(
+                text = "Ouvrir le visualiseur",
+                onClick = onOpen,
+                glyph = NzGlyph.Maximize,
+                kind = NzButtonKind.Secondary,
+            )
+        }
+    }
     SettingsCard(
         title = "Mode éco",
         subtitle = "Coupe toutes les animations et le fond animé. La lecture et les indicateurs d'état restent.",
