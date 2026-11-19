@@ -2674,10 +2674,10 @@ first.
   device's inventory and sets in that case and still forgets them when the device is really gone, the
   redial is skipped, and `snapshot()` lists only the devices the node HOLDS a connection to. The
   replica alone was not enough: a decision taken in the window then named a connection that was
-  already closed, and the opener fell back to the server — 8 of 20 runs failed that way until
-  `live_candidates` filtered a decision's candidates to the peers whose connection is still open.
-  The unit test pins the four cases; the netns harness's 20 runs then reported **0 retries, 0
-  failed fetches** (2 retries before, 8 with the replica kept but the decision unfiltered).
+  already closed, and the opener opened nothing and fell back to the server — the harness showed it
+  as failed fetches until `live_candidates` filtered a decision's candidates to the peers whose
+  connection is still open. The unit test pins the four cases; the netns harness's 20 runs then
+  reported **0 retries and 0 failed fetches** (2 retries before the change).
 - **A raw peer that authenticates must also send `Hello`.** Stopping at `AuthOk` makes the responder
   close at `HELLO_DEADLINE` and answer `Err(Refused)`, so a control that "succeeded" reads as a
   broken fixture (measured: `le pair authentifié: Refused` with the `AuthOk` already received).
