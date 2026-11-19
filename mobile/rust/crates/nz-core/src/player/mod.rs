@@ -1036,6 +1036,20 @@ impl Player {
         self.emit_change();
     }
 
+    /// The engine's scheduled-PCM channel: what a listen-party GUEST plays
+    /// (MB20, `nz_audio::PartyChannel`).
+    ///
+    /// It is the one path into the mixer's party voice, and it is deliberately
+    /// the PLAYER's engine: a guest schedules its six-second chunks on the
+    /// output clock this engine reports, the sound goes through the person's own
+    /// DSP chain and output, and [`nz_audio::PartyChannel::take_over`] leaves
+    /// their queue in place while somebody else's music plays. A second engine
+    /// would be a second output, which is what "the player is the singleton"
+    /// forbids (CLAUDE.md).
+    pub fn party(&self) -> nz_audio::PartyChannel {
+        self.engine.party()
+    }
+
     /// The platform's pull sink and the engine that feeds it, taken ONCE: on
     /// Android by `DroidOutput` (AAudio, or the API-26 `AudioTrack`), on the host
     /// by the tests, which render by hand.

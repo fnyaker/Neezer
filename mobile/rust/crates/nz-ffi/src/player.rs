@@ -340,6 +340,15 @@ impl PlayerApi {
     pub(crate) fn core_ref(&self) -> &Arc<nz_core::core::Core> {
         &self.core
     }
+
+    /// The ONE player of the process, for MB20's party service.
+    ///
+    /// `pub(crate)` on purpose: `Arc<Player>` is not a UniFFI type and must never
+    /// cross the boundary — a party is driven HERE, in Rust (rule 1: the output
+    /// callback keeps no JNI), and Kotlin only sees the view.
+    pub(crate) fn player_handle(&self) -> Option<Arc<Player>> {
+        self.player().cloned()
+    }
 }
 
 #[uniffi::export]

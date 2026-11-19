@@ -3495,10 +3495,8 @@ Dependencies in brackets; prompts in *Ready prompts for the screen lots*.
   does, what it measured, and the one line of MB16's screen it had to change.
 - **MB19 — Remote control.** *Delivered 2026-11-18 — what it cost, what it taught, what it does not
   port: see « MB19 — Télécommande » below.*
-- **MB20 — Listen party** [SC6, MB3b]. FFI (`party.rs`): `PartyApi` over `nz-party` (host, join
-  `/party/<id>`, leave, members). The guest's sync reads `Engine::output_clock()` (SC2's latency).
-  Kotlin: `PartyButton()`, `PartySheet`, `PartyEntry(id)`. Rows: two emulators (one host, one guest)
-  on perf_api: the guest's position stays within the SPA's tolerance (party-remote.md) for 5 min.
+- **MB20 — Soirée d'écoute**: **delivered** — see *MB20 — Soirée d'écoute* below for what it does,
+  what it measured and what it does not port.
 - **MB21 — Visualiser: bars and oscilloscope** [SC1, MB3b]. FFI (`viz.rs`): `VizApi { set_visible(view,
   bool), frame() -> VizFrame /* bars heights, scope samples, palette */ }` over `nz-analysis` + `nz-viz`
   (the tap runs only while a view is visible). Kotlin: `VizSurface(mode)` on a Compose `Canvas`
@@ -3619,6 +3617,113 @@ public composable of this module, taking the episode and a `PodcastService`); th
 « Réessayez dans N s » countdown on a `429` search is not drawn (the cause is, in French); a real
 phone for the touch targets and the 200 % font on a released build; `Core::memory()` counts the
 show's rows through the `lists` registry, not the device copies on disk.
+
+### MB20 — Soirée d'écoute (delivered 2026-11-18)
+
+**What landed.** The SPA's listen party, ported: `components/PartySheet.svelte` (the host's side —
+the three arguments, the link with its QR, `Copier`/`Partager`, who is listening with each guest's
+own sync figure, this device's clock, `Terminer` armed on the first press) and `routes/Party.svelte`
+(the guest — the landing card, the live view with the room's playhead, the status line, `Ensuite`,
+the volume and the *Décalage* card, and the two dead-link pages plus « Rejoindre à nouveau »).
+
+- **`nz-core::party/`** starts `nz-party` (SC6) over the phone's own pieces and never re-implements
+  its rules. `mod.rs` is the service (attach, state, host/join/leave, the pulse thread, the store of
+  the listener's three values, the peek and its copy); `host.rs` is the ONE thing a crate cannot
+  know — how to read `nz_core::player::Player` into `nz_party::host::Snapshot` (four hot reads a
+  quarter of a second: the state, the engine's position, the person's audio settings and the output
+  clock's generation); `guest.rs` is the landing card's read, the seat, and the two refusals a person
+  can meet (`429` « Cette party est complète », `404` « Cette party n'existe plus »); `store.rs` is
+  what the device remembers (`party.name`, `party.volume`, `party.latency`, and the card's last
+  answer under `party.peek`).
+- **`nz-ffi/src/party.rs`**: `PartyRole`, `PartyPhase`, `PartyTrackData`, `PartyMemberData`,
+  `PartyStateData` (with the SENTENCES the shared crate wrote — `status`, `inviteLine`, `liveLine`,
+  `nextLine`, `titleLine`, `audience`, `phaseTitle`, `phaseBody`, `progress`), `PartyPrefs`, the
+  `PartyListener` callback, and one `impl PartyApi` block. `PartyApi` holds no state: it is MB0's
+  unit struct, and `attach(core, player)` binds the process's ONE service — MB15's `offlineAttach`
+  seam, for the same reason.
+- **Kotlin** (`:feature:party`): `PartyCore` (the seam, plus `AndroidPartyShare`), `PartyModel` (the
+  sheet), `PartyGuestModel` (the card and the room), `PartySheet`, `PartyGuestScreen`, `PartyQr`,
+  `PartyButton` (a Sillon glyph, not MB0's labelled `OutlinedButton`: five 48 dp targets do not fit
+  on a 360 dp phone — MB11's measurement), `PartyEntry(id)` (the route a link opens), `PartyCopy`
+  (every screen-owned sentence).
+
+**Two seams, declared out of the lot's list.** `Player::party()` (nz-core, one accessor) and
+`PlayerApi::player_handle()` (nz-ffi, `pub(crate)`) are what let the guest play through the PLAYER's
+engine: `nz_audio::PartyChannel` schedules on the output clock the engine reports, goes through the
+person's DSP chain and output, and `take_over` leaves their queue in place. A second engine would be
+a second output, which is what "the player is the singleton" forbids. Both are additive and change no
+behaviour; the party itself lives entirely in this lot's files.
+
+**What a measurement taught** (each one cost a red test or a wrong capture):
+
+- **A `StateFlow.value` read inside a composition is a lint error, and the screenshot bench is the
+  one place it bites.** The party's captures read the model's state OUTSIDE `setContent` (a still
+  image observes nothing), so the sheet and the guest screen are driven from a fake service and
+  painted from its last value.
+- **A `withFrameMillis` loop makes `waitForIdle` wait for ever.** The guest's playhead is read each
+  frame the screen draws (that is the SPA's 250 ms playhead, done right), so `PartyGuestScreen` takes
+  `liveReads`: `true` in the app, `false` in the bench, which then paints the position Rust last
+  pushed. MB11 hit the same wall with the player's rail.
+- **A screen that reloads on composition discards a live session.** `PartyEntry`'s first version
+  called `model.load()` from a `LaunchedEffect`, so a rotation (or the bench) threw away a joined
+  party and went back to the card. It now loads only a model still in `IDLE`.
+- **Side by side, the invite card truncated its own buttons.** At 360 dp the QR (120 dp) left two
+  95 dp buttons, and the first capture read « P… » and « C… ». Below 480 dp the card is a COLUMN
+  (`PartySheet.svelte`'s own `max-width: 640px` rule): the QR centred at 148 dp, the link, then the
+  two buttons full width.
+- **The guest needs no ACCOUNT, only a server.** `Core::api()` errors on "no origin", not on "no
+  session", and the party routes are public: somebody who opens a link on a phone that never logged
+  in hears the room. The app's setup screen is the only thing that must have run.
+- **The server's own `/clock` is `time.monotonic() + _EPOCH`, not the wall clock.** A test host that
+  publishes `t` from `System.currentTimeMillis()` is refused (« invalid anchor », more than ten
+  minutes from the server's clock) — the acceptance's publisher probes `/api/party/<id>/clock` and
+  offsets before it writes a line.
+- **A URL with the chunk index after the query is a 404 on every seam.** `nz-party`'s guest built
+  `/party/<pid>/chunk/<mid>?f=opus&sr=48000/3`; the first real client (this lot) found it. The
+  shared crate is fixed in the same PR (one `format!`, plus a test that asserts the route's shape).
+  Measured: before it, every chunk was a `404` and the guest sat on « Chargement… »; after it, the
+  guest plays.
+
+**Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, emulator API 35 x86_64
+`-no-window -no-audio` on this lot's own port 5586, `webapp/test/party/server.py` on the host):
+
+| What | How | Number |
+|---|---|---|
+| A card, cold | `cargo test -p nz-core party` (the fake counts requests and RESPONSE bytes) | **1 request, 278 B** |
+| A card, warm | `cached_peek` after the same party was opened | **0 request**, 278 B read from the device |
+| A dead link | `peek` of an id the server never had | **1 request, 21 B**, phase `Missing` |
+| Offline | `set_network(None)` then `peek` | **0 request, 0 socket**, the cause `Offline`, the copy still answers |
+| The rule-7 probe | `supported()` | **1 request** (`OPTIONS /api/party/mine`) |
+| Hosting | `host()` | **1 request** (`POST /api/party`) + its clock probes |
+| The first line | the host's own publish | **1 request, 232 B**, the anchor `{t, p}` present |
+| Ending it | `leave()` as a host | **1 request** (`DELETE /api/party/<id>`) |
+| Joining | `join()` | **2 requests** (the card + the seat) |
+| Leaving | `leave()` as a guest | **1 request** |
+| Rust | `cargo test --workspace --locked` | **+20 tests** (`nz-core::party` 15, `nz-ffi::party` 5) |
+| JVM | `:feature:party:testDebugUnitTest` | **37 tests**: 22 model (the sheet's start/end/copy/share/probe/trim, the guest's card/live/leave/rejoin/volume/trim/push) + 15 captures |
+| The look | `docs/agents/screenshots/mobile/MB20/` | **15 PNGs**: Encre/Papier at 360 and 600 dp, the 200 % scale, the sheet's two faces, the guest's card and room, and the dead link |
+| Lint | `:feature:party:lintDebug` | 0 errors |
+| The device: the room | `PartyDeviceTest` + the real party server (`webapp/test/party/server.py`), 5 min | **1 189 samples `Calé sur bench · ±0.1–0.7 ms`** (first sync ±15.2 ms), **0 offline, 0 host lost**, **2 handovers** costing one « Chargement… » each (worst **755 ms**, one chunk), 9 state changes |
+| The device: the card | `PartyDeviceTest` (loopback bench in the app process) | **1 request, 645 B** cold, **0** from the copy, 1 for a dead link (`Missing`), 1 `OPTIONS` |
+
+**Deliberate deviations, and why.**
+
+- `PartyButton` is a glyph, not MB0's labelled `OutlinedButton`: the row it lives in has two other
+  doors and five 48 dp targets on a 360 dp phone (rule 5, MB11's measurement).
+- The QR is ZXing's matrix drawn on Compose's canvas (`PartyQr.kt`), on a white ground: the SPA's
+  `qrcode-generator` has no Kotlin twin, and a QR is a machine-readable mark that keeps its two
+  colours in both themes.
+- The guest's volume is a hand-drawn horizontal fader, not a Material `Slider`: a default-looking
+  widget on a Sillon surface is what rule 5 forbids.
+- `PartySheet` offers no « animée depuis un autre écran » note: the phone has no second tab, and a
+  party is one per device by construction (`Host::begin` and `Guest::start` are exclusive on it).
+
+**Still owed, and to whom.** The two-device run (two PHONES, both audible, compared on a shared
+clock) is MQ2's: this lot proves the guest's own sync on one device against a real server, and the
+sample-exact comparison of what two devices PLAY is SC6's two-engines bench (p50 0.0 ms, worst
+0.0 ms over 26 clicks) — the phone runs that same planner and adds the real output clock to it. A
+real phone for the 200 % font and the touch targets on a released build; the QR at 360 dp on a
+device (the capture is 148 dp on a 320 dp card).
 
 ### MB16 — Réglages, user sections (delivered 2026-11-18)
 

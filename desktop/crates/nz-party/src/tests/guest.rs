@@ -7,7 +7,7 @@ use std::time::Duration;
 use nz_api::{Api, Lane};
 use nz_model::PartyState;
 
-use crate::guest::decode_chunk;
+use crate::guest::{chunk_path, decode_chunk};
 use crate::planner::{LEAD_S, LOOKAHEAD, Planner, Situation};
 use crate::timeline::{
     CHUNK_S, Correction, KEEP_MS, OVERLAP_S, SEAM_MS, Timeline, WAIT_MAX_MS, chunk_index,
@@ -17,6 +17,34 @@ use crate::timeline::{
 
 fn state_of(body: &str) -> PartyState {
     serde_json::from_str(body).expect("the server's own payload")
+}
+
+/// **The chunk route, character for character.** `engine.js#fetchChunk` asks
+/// `${base}/chunk/${id}/${k}?f=${fmt}&sr=${rate}` and the server routes
+/// `/party/<pid>/chunk/<mid>/<int:k>`: the index is a PATH segment. The first
+/// version had it after the query (`?f=opus&sr=48000/3`), which no route matches
+/// — measured on the real server, every chunk was a `404`. This test fails on
+/// that shape (the string differs in the two places) and passes on this one.
+#[test]
+fn a_chunk_is_fetched_from_the_route_the_server_registers() {
+    assert_eq!(
+        chunk_path("b3VGv0dTkz3Wq7nH_Z1pQA", "3000001", 7),
+        "/party/b3VGv0dTkz3Wq7nH_Z1pQA/chunk/3000001/7?f=opus&sr=48000"
+    );
+    // What the server's route takes: the index BEFORE the `?`, the options after.
+    let path = chunk_path("p1", "3000001", 3);
+    let (route, query) = path.split_once('?').expect("a query");
+    assert!(route.ends_with("/chunk/3000001/3"), "{route}");
+    assert_eq!(query, "f=opus&sr=48000");
+    assert!(
+        !query.contains('/'),
+        "no path segment after the query: {query}"
+    );
+    // An id that needs escaping is escaped in the PATH, never in the options.
+    assert_eq!(
+        chunk_path("p 1", "a/b", 0),
+        "/party/p%201/chunk/a%2Fb/0?f=opus&sr=48000"
+    );
 }
 
 #[test]
