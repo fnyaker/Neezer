@@ -8,11 +8,11 @@ rules apply here. Other areas: [docs/agents/](./). The apps that become nodes ar
 groups and access are [providers.md](providers.md); the existing pairing-by-link (remote control,
 party, public playlist) is [party-remote.md](party-remote.md).
 
-**Status (2026-11-18): LN0 delivered, the rest planned.** LN0 landed every contract and every stub
-(`nz-lan`, `Feature::Lan`, `Api::gates()`, the `nz-model` payloads, the Android module and routes) with
-no behaviour; nothing else of this exists in code yet. This note is the plan the coding lots follow, in
-order (*The lots*). Each lot, when it lands, replaces its plan paragraph by what was learned (rule, why,
-number) — a delivered lot is not a changelog.
+**Status (2026-11-18): every lot delivered, LN0 to LN15.** The LAN exchange exists in code and on
+three devices (desktop, phone, emulator), its threat model is proven by 22 mutants and its journey
+measured — see each lot's section below, which is what was learned (rule, why, number), never a
+changelog. The sections above are the contracts the lots wrote; where a measurement corrected one,
+the correction is stated in the section that found it.
 
 ## The need
 
@@ -98,7 +98,11 @@ device's key and credential; the person's bandwidth, battery and CPU (rule 1).
 person's own devices while their credentials are valid and not revoked; a trusted friend, **only**
 for what the person shared with them.
 
-**Adversaries and what each must NOT achieve** (each line is a test in lot LN15):
+**Adversaries and what each must NOT achieve** (each line is a test: M1–M22 live in
+`desktop/crates/nz-lan/tests/security.rs` — the file's header says which test owns which line — with
+`tests/fetch.rs` (M14, M15), `tests/transport.rs` (M18) and `tests/test_lan_routes.py` (M21); each
+test was run once against a deliberately broken copy of the code it guards, and went RED — LN15's
+section lists the campaign):
 
 | # | Adversary | Must not | How it is stopped |
 |---|---|---|---|
@@ -2605,59 +2609,101 @@ MB2's file): `NzCore::shutdown` does not stop the LAN service, so a process that
 free the port); it must run **before** `NzBridge.shutdown()`. One line in `NzBridge.shutdown`,
 owned by the bridge lot.
 
-### LN15 — Security audit, mutants, the two-node journey measured (wave 8, effort max)
+### LN15 — Security audit, mutants, the two-node journey measured (delivered 2026-11-18)
 
-- **Objective**: prove the threat model on the real code with two real nodes, measure the whole
-  journey against *Measures*, and leave the harness in the repository.
-- **Files**: LN15 row.
-- **Mutants** (each a test that passes on the real code and FAILS on a deliberately broken copy,
-  run once each and listed in the PR): M1 unknown `kid`; M2 expired by 601 s; M3 not yet valid; M4
-  one flipped byte in the credential; M5 revoked key; M6 proof over another connection's exporter
-  (replay); M7 responder proof replayed as initiator (reflection); M8 another account's device, not a
-  friend → refused, **0 bytes** of identity written; M9 a friend's out-of-scope `Fetch`/`Meta`/
-  `Cover`/`Sets` → byte-identical to absent; M10 a friend's inventory contains only shared tracks;
-  M11 a 1 MiB + 1 frame; M12 `from > len`; M13 resume with another `FileTag`; M14 more bytes than
-  `len`; M15 wrong SHA-256 → not published, peer marked bad; M16 forged roster gossiped → ignored;
-  M17 lower-serial revocation list → ignored; M18 0-RTT offered → none accepted; M19 a responder that
-  never sends `AuthOk` → the initiator gives up at 2 s having sent no request; M20 a stranger
-  initiator → the responder writes 0 application bytes; M21 a remote-control session calling every
-  `/api/lan/*` route → refused; M22 a friend removed on the server → refused by the owner's devices
-  after their next roster sync, and by a device that only met another of the owner's devices
-  (roster gossip).
-- **Journey** (desktop↔desktop in the netns with `examples/lan_node`; desktop↔emulator): every row of
-  *Measures* measured and written into this note and the PR; the travel scenario end to end: PC with
-  2 000 downloaded tracks, phone empty, same LAN, server unreachable (the netns has no route to it):
-  the phone downloads three playlists from the PC with covers and metadata, plays them with the PC
-  gone, and back online with Opus 64-only copies in T it changes nothing (decided per track, as
-  specified).
-- **Depends on**: every LN lot.
-- **Prompt**:
+**What landed.** The threat model, proven on the real code and measured end to end, plus the
+harness that lets two PROCESSES do what one test cannot.
 
-  > Tu implémentes le lot **LN15 — Security audit, mutants, the two-node journey measured** du plan
-  > « nœuds LAN » (effort max : sécurité). But : prouver le modèle de menace sur le vrai code avec deux
-  > vrais nœuds (les mutants M1 à M22 de la note, chacun lancé une fois contre une copie cassée
-  > exprès), mesurer tout le parcours selon *Measures* (bureau↔bureau dans `unshare -rn`, bureau↔
-  > émulateur sans fenêtre) dont le scénario du voyage serveur injoignable, laisser le harnais
-  > (`examples/lan_node.rs`, `tools/two_nodes.sh`) dans le dépôt, et écrire les nombres mesurés et le
-  > tableau final du modèle de menace dans `docs/agents/lan-nodes.md`. Lis toute la note, puis
-  > `docs/agents/testing.md` et `docs/agents/commands.md`. Fichiers exclusifs : la ligne LN15.
-  >
-  > **Règles (obligatoires, tirées des lots précédents) :**
-  > - Lis d'abord `CLAUDE.md`, puis `docs/agents/lan-nodes.md` EN ENTIER, puis les notes que cite ton lot.
-  > - Git non interactif : `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true` ; `git commit -m`, `git merge --no-edit`, jamais `rebase -i`. **Jamais `git stash`** (pile partagée entre worktrees) : une commit WIP à la place.
-  > - **Un seul écrivain par fichier** : ne touche QUE les fichiers exclusifs de ton lot (*File ownership*). Besoin d'un autre fichier, ou contrat faux face au code : arrête-toi, `ao report --needs-input`, n'édite pas. Respecte les contrats de la note à la lettre ; si l'un est corrigé après accord, corrige la note dans la même PR.
-  > - Type partagé ou manifeste d'une crate partagée (`desktop/crates/*`) modifié : mets à jour **les deux** `Cargo.lock` (`desktop/` et `mobile/rust/`) et attends **les deux** CI vertes (`desktop` et `mobile`).
-  > - Mémoire mesurée en **octets comptés** (`Lan::memory()` ou l'équivalent du lot), jamais par la RSS d'un processus partagé.
-  > - Un thread qui emprunte un runtime tokio est **joint avant l'arrêt** de ce runtime.
-  > - Tests sur des **événements** (canal, `watch`, changement d'état, horloge tokio en pause), jamais sur l'horloge murale ni un `sleep`.
-  > - **Jamais l'affichage, le son ni le réseau de l'utilisateur** : Xvfb pour une fenêtre, `mobile/tools/emu.sh` (sans fenêtre ni son) pour l'émulateur, `adb -s emulator-<port>` toujours, tests LAN sur loopback ou dans `unshare -rn`, ports réservés à ton lot (45910 + 10 × ton numéro de lot), tue seulement tes propres PID.
-  > - **Rien de gros dans `/tmp`** (tmpfs = RAM) : builds, données de test et journaux sous `target/` du worktree, `~/.cache` ou `~/.local/share`. `CARGO_BUILD_JOBS=4`, un seul cargo à la fois.
-  > - Sécurité : un refus ne révèle rien (même code, même chemin), toute taille ou tout compte venu du réseau est plafonné avant allocation, rien du réseau ne devient un chemin, aucune clé, attestation, roster ni cookie dans les journaux. Chaque test de sécurité est lancé une fois contre un mutant (code cassé exprès) et doit alors échouer.
-  > - Règle 1 : chaque octet a sa priorité (`Lane` / `Urgency`), le travail de fond cède à la lecture. Copie française, pas d'emoji, jetons du design system.
-  > - Mesure chaque critère d'acceptation ; écris les nombres (avec la commande) dans la PR et à côté des assertions.
-  > - Avant de fusionner : `git fetch origin && git rebase origin/master`, puis `git diff --stat origin/master...HEAD` ne doit lister QUE les fichiers de ton lot (et sa section de la note) ; sinon base périmée ou édition parasite : corrige avant.
-  > - Branche dans l'espace de branches de ta session Orchestrator. PR : résumé, sources, mesures, risques. CI **entièrement** verte (chaque job de chaque workflow, journaux de `security.yaml` lus, chaque nouvelle alerte corrigée). **Une PR verte se fusionne sans attendre ni demander.**
-  > - Fin : remplace la section de ton lot dans `docs/agents/lan-nodes.md` par ce que tu as appris (règle, pourquoi, nombre mesuré), fusionne, puis `ao report --done`.
+- **`desktop/crates/nz-lan/examples/lan_node.rs`** — a headless node: the real `Lan`, the real
+  transport, the real fetch path (LN11's `PeerFirstDownloader` with a fetcher that has no server),
+  nothing of an app. It bootstraps the run's trust chain itself (`--init-trust` draws one LAN key
+  seed and one subject per run; `--trust-dir` reads them), seeds a library (`--seed-file` +
+  `--seed-copies`, `--seed-track`), dials (`--peer`), fetches (`--fetch`), and prints `NZLAN …`
+  events: `READY port=…`, `PEER ms=…`, `DECIDED … peer:FLAC`, `FETCHED track bytes=… sha256=… ms=…`,
+  `MEMORY`, `WIRE`, `DONE`. No key, credential, roster or cookie is printed; the device's PUBLIC key
+  is the only identity that appears.
+- **`desktop/crates/nz-lan/tools/two_nodes.sh`** — rung 2 of *Two nodes on one machine*: two
+  `lan_node` processes inside `unshare -rn` on a dummy interface with real mDNS, ports
+  **46060/46061**, a PC holding **2 000** downloaded tracks and an empty phone that takes one, 20
+  runs by default, `--throughput` for one big file, `--binary` to reuse a build. Skips with a printed
+  reason where user namespaces are unavailable and FAILS when `NZ_LAN_REQUIRE_NETNS=1` (LN3's rule).
+  Nothing in `/tmp`; only its own PIDs are killed.
+- **`desktop/crates/nz-lan/tests/security.rs`** — 11 tests, one per line of the *Threat model*
+  (M1–M22, the table at the top of the file says which test owns which line), built on two real
+  `Endpoint`s and a raw quinn peer for everything a well-behaved node would refuse to say.
+- **`desktop/crates/nz-lan/tests/journey.rs`** — the trip: 2 000 tracks on the PC, an empty phone, the
+  server unreachable, three playlists taken from the PC with their titles, artists and pinned
+  sleeves, played with the PC gone; then the tolerance decided per track.
+
+**One seam outside the lot's files, declared in the PR**: `NzBridge.shutdown` now stops the LAN node
+before the core (`core?.lan().stop()`). The note's earlier line said `LanHost.shutdown()`, which
+`:bridge` cannot call: `:feature:lan` already depends on `:bridge`, so the dependency would be a
+cycle. `NzCore::lan()` + `LanApi::stop()` are LN13's own FFI doors, `stop()` is synchronous, and it
+is what joins `nz-lan` (and its hasher) and frees the UDP port — the hole LN14 reported. NSD and the
+activity observers belong to the feature module and a stopping process does not need them stopped
+first.
+
+**The numbers, each with its command** (`desktop/`, `CARGO_BUILD_JOBS=4`, debug unless said,
+2026-11-18):
+
+| Measure | Value | Command |
+|---|---|---|
+| the security suite | **11 tests**, 2.15 s | `cargo test -p nz-lan --test security --locked` |
+| the journey suite | **2 tests**, 48.1 s | `cargo test -p nz-lan --test journey --locked` |
+| a broken credential | **6 causes** (unknown `kid`, a self-signed forgery, expired 1 h, valid in 1 h, one flipped byte, a revoked key) → **1** code `0x10`, an empty reason, **0 application bytes** EACH; the intact device is accepted (control) | `… --test security --exact every_broken_credential_is_refused_without_one_identity_byte` |
+| a replayed / reflected proof | 0 bytes, `Refused`, one code; the same peer's own proof over its own connection completes the exchange | `… --exact a_proof_from_another_connection_is_refused` |
+| a silent responder (M19) | the initiator gives up at **2.003 s**, **1** frame received (its `Auth`), **0** request streams, 0 bytes back | `… --exact a_responder_that_never_answers_costs_two_seconds_and_no_request` |
+| mutants | **22 mutants, 22 killed, 0 survived** — each run once, file restored byte for byte AND `touch`ed (LN2's lesson) | `python3 target/ln15-mutants.py` (working material) |
+| discovery, netns, 20 runs, 2 000 tracks | **p50 519 ms, p95 626 ms, max 640 ms** (browse start → `PeerView` connected); the LAST-KNOWN address on the same pair **3–7 ms** | `crates/nz-lan/tools/two_nodes.sh --runs 20 --tracks 2000` |
+| a track taken from the PC over the netns | 14 617 B in **p50 18 ms, max 27 ms** | same |
+| first contact with a 2 000-track PC | the PC's OWN quinn counters: **237 383 B** out, **21 092 B** in (TLS + the inventory + the served file) | same, the `PC NZLAN WIRE` column |
+| the phone's replica of 2 000 tracks + 3 sets | **128 850 B** counted = **64.4 B/item** | same (`NZLAN MEMORY`) |
+| the trip, in-process | 2 000 tracks + 3 sets replicated: **130 037 B** counted (64 B/track); the 24 tracks of three playlists taken in **45 ms** with **0** server fetches; tap → first sample with the PC off **1.09 ms**; the journey's own counters **26 403 B** out / **608 225 B** in | `cargo test -p nz-lan --test journey --exact the_trip_takes_three_playlists_from_the_pc_and_plays_them_with_the_pc_gone -- --nocapture` |
+| the tolerance, per track | Opus 64 only: online → `Server(FLAC)`; offline → `Peer(Opus 64)`; Opus 64 tolerated online → `Peer(Opus 64)`; a track nobody has → `Server(FLAC)` | `… --exact an_opus_64_only_copy_is_decided_per_track` |
+| desktop ↔ emulator | the phone (emulator API 35 x86_64, headless) dialled the host at `10.0.2.2:46060`: peer in **263 ms**, RTT **1 ms**, the PC's 2 tracks replicated, the 14 617 B file in **6 ms**, **sha256 identical** to the PC's copy; the harness binary's `NEEDED` = `libdl`/`libm`/`libc` | `target/ln15-emulator.sh` (working material) with `adb -s emulator-5640` |
+
+**Rules a measurement taught.**
+
+- **Two nodes on one LAN dial each other, and the duplicate rule then costs a replica.** The
+  announcement reaches both, both dial, the lower `device_pub`'s dial survives and the loser's
+  connection closes: the peer's replica is dropped until the next sync (one `Bulk` quiet window,
+  ≥ 1 s). Measured in **2 of 20** runs — a `DECIDED peer:Flac` followed by a fetch with no source.
+  A download decided inside that window falls back to the server, which on a trip is nothing:
+  **this is a real weakness of `service.rs`'s duplicate path** (a duplicate close must not forget the
+  surviving connection's replica), reported here rather than patched because that file is LN10's.
+  The harness re-decides per track (3 attempts, event-driven) exactly as the product's queue does.
+- **A raw peer that authenticates must also send `Hello`.** Stopping at `AuthOk` makes the responder
+  close at `HELLO_DEADLINE` and answer `Err(Refused)`, so a control that "succeeded" reads as a
+  broken fixture (measured: `le pair authentifié: Refused` with the `AuthOk` already received).
+- **A raw responder that drops its `SendStream` resets the stream.** quinn sends `RESET_STREAM` when
+  a `SendStream` is dropped without `finish()`, so the initiator's `connect` answered `Refused` at
+  **2.9 ms** instead of waiting its 2 s deadline; the rogue side must HOLD the stream.
+- **`Reply::body` cannot read a resume.** Its `remaining` is the head's `len`, the WHOLE file, so a
+  reader of `len` bytes on a `from > 0` answer waits one byte past the FIN and reads `PeerGone`
+  (measured twice: at the head and at the body). LN9's transfer opens the stream itself; a test that
+  reads a resume takes the same door and reads exactly `len − from`.
+- **`Lan::set_settings` is a command to the driver, not a write.** A `decide` right after it uses the
+  OLD tolerance; the test waits for the node's own events (`apply_settings` touches the view) — one
+  event, no timer.
+- **A track in three set pages answers ONE cover.** `Meta` is per track, so three playlists whose
+  members are the same tracks pin one sleeve; giving each playlist its own eight tracks (out of the
+  2 000) is what makes three lists look like three lists offline.
+- **The LAN index re-reads `nz-cache` on its own 5 s timer.** A download is `Local` for the node one
+  refresh later (`REFRESH_EVERY`), so "the phone plays what it took" waits for the index version,
+  never for a sleep.
+- **`cargo ndk` by hand links the SHARED libc++ — on an example too.** The pushed binary died with
+  `CANNOT LINK EXECUTABLE … "libc++_shared.so" not found`; the project's recipe
+  (`CXXSTDLIB=c++_static`, `-C link-arg=-lc++abi`, `build-android.sh`'s) gives a binary whose
+  `NEEDED` is `libdl`/`libm`/`libc`.
+- **The emulator's `redir` is not a LAN.** `adb emu redir add udp:46062:46061` listens on the host,
+  but the guest (eth0 `10.0.2.15` AND wlan0 `10.0.2.21`) never received the datagram: the
+  phone→host direction (`10.0.2.2`) is measured and is the journey's, the host→phone one is NOT
+  measurable on this AVD and the note's escape hatch applies (a real phone over `adb`). Reported
+  rather than papered over.
+- **A guest's interface list is what says whether `redir` can work.** The AVD answers on eth0
+  (`10.0.2.15`) AND wlan0 (`10.0.2.21`); the console's UDP forward is bound to the host side (seen in
+  `ss -lunp`) and still delivered nothing, so `adb shell ip -4 addr` is the first thing to read
+  before blaming the node.
 
 ## Not in this plan (said, so nobody adds it by accident)
 

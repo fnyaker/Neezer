@@ -142,6 +142,14 @@ object NzBridge {
     fun shutdown() {
         NetworkWatcher.stop()
         ForegroundWatcher.stop()
+        // The LAN node first (LN15): `LanApi::stop` joins `nz-lan` and its hasher and
+        // frees the UDP port, which `NzCore::shutdown` alone left to the process
+        // exit (the hole LN14 reported). It is the FFI's own door and not
+        // `LanHost.shutdown()` because this module cannot depend on `:feature:lan`
+        // (`:feature:lan` depends on `:bridge`): NSD and the activity observers are
+        // the feature module's, and a process that is stopping does not need them
+        // stopped first.
+        core?.lan()?.stop()
         core?.shutdown()
         core = null
     }
