@@ -70,7 +70,7 @@ use crate::proto;
 use crate::serve::{ServeLimits, Server};
 use crate::settings;
 use crate::store::{Store, StoredPeer};
-use crate::transport::{Endpoint, Identity, PeerConn, SharedTrust, TrustState};
+use crate::transport::{CLOSE_DUPLICATE, Endpoint, Identity, PeerConn, SharedTrust, TrustState};
 use crate::types::{DevicePub, LanError, Relation, Source, Tolerance, Urgency};
 
 /// What the app gives `Lan` once, at login.
@@ -626,6 +626,13 @@ enum Internal {
     Closed {
         peer: DevicePub,
         connection: usize,
+        /// Whether the transport closed it because it COLLAPSED a pair (both
+        /// devices dialled each other): the same device is still here, on the
+        /// survivor, so its replicas must not be forgotten. LN15 measured the cost
+        /// of forgetting them: two of twenty netns runs lost the inventory for one
+        /// `Bulk` window, and a download decided inside it fell back to a server
+        /// that was not there.
+        duplicate: bool,
     },
     Note(String, Box<LanError>),
 }
@@ -886,7 +893,24 @@ impl Lan {
             .view
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let peers = self.inner.peers.views();
+        // Only the devices this node HOLDS a connection to. A replica outlives a
+        // close on purpose (a duplicate collapse keeps it for the survivor, and a
+        // reconnect syncs it as a delta instead of ~480 KB of full pages), so the
+        // peer list reads the connection map and not the replica's keys: a screen
+        // never draws a device the node is not talking to (LN15).
+        let peers: Vec<PeerView> = {
+            let conns = self
+                .inner
+                .conns
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.inner
+                .peers
+                .views()
+                .into_iter()
+                .filter(|peer| conns.contains_key(&peer.device_pub))
+                .collect()
+        };
         let state = match view.state {
             LanState::Off | LanState::Unsupported | LanState::NotEnrolled => view.state,
             _ => {
@@ -936,7 +960,7 @@ impl Lan {
         let _ = urgency;
         let settings = self.settings();
         let local = self.inner.index.best_local(track).map(|file| file.path);
-        let candidates = self.inner.peers.candidates(track);
+        let candidates = live_candidates(&self.inner.peers, track);
         decide_source(
             local,
             &candidates,
@@ -957,7 +981,7 @@ impl Lan {
     pub(crate) fn decide_download(&self, track: &str, wanted: nz_api::Quality) -> Source {
         let settings = self.settings();
         let local = self.inner.index.best_local(track).map(|file| file.path);
-        let candidates = self.inner.peers.candidates(track);
+        let candidates = live_candidates(&self.inner.peers, track);
         decide_source(
             local,
             &candidates,
@@ -2114,7 +2138,11 @@ impl Driver {
                     self.shared.touch();
                 }
             },
-            Internal::Closed { peer, connection } => {
+            Internal::Closed {
+                peer,
+                connection,
+                duplicate,
+            } => {
                 let current = {
                     let conns = self
                         .shared
@@ -2123,33 +2151,31 @@ impl Driver {
                         .unwrap_or_else(|error| error.into_inner());
                     conns.get(&peer).map(|conn| conn.connection().stable_id())
                 };
-                match current {
-                    Some(id) if id == connection => {
-                        let drained = self
-                            .shared
-                            .conns
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .remove(&peer);
-                        if let Some(conn) = drained {
-                            // The close's own datagrams belong to this connection:
-                            // read them once more, so the total is what really left.
-                            self.sample_connection(&conn);
-                        }
-                        self.shared.peers.remove(&peer);
-                        self.shared.sets.remove(&peer);
-                        self.shared.touch();
+                // The connection leaves the map when it IS the one the map holds (or
+                // the map is already empty, a sleep having drained it). The
+                // REPLICAS are a separate question: a duplicate loser's device is
+                // still here on the survivor, so forgetting them would cost a full
+                // re-sync (one `Bulk` quiet window, ≥ 1 s) during which a download
+                // decided for that peer falls back to the server — and to nothing at
+                // all on a trip (measured 2 of 20 netns runs, LN15).
+                if current == Some(connection) || current.is_none() {
+                    let drained = self
+                        .shared
+                        .conns
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(&peer);
+                    if let Some(conn) = drained {
+                        // The close's own datagrams belong to this connection: read
+                        // them once more, so the total is what really left.
+                        self.sample_connection(&conn);
                     }
-                    // The connection this loop belonged to is already gone (a sleep
-                    // drained it): its replica must go with it.
-                    None => {
-                        self.shared.peers.remove(&peer);
-                        self.shared.sets.remove(&peer);
-                        self.shared.touch();
-                    }
-                    // A newer connection of the same device is live: leave it alone.
-                    Some(_) => {}
                 }
+                if close_forgets_replica(duplicate, current, connection) {
+                    self.shared.peers.remove(&peer);
+                    self.shared.sets.remove(&peer);
+                }
+                self.shared.touch();
                 // An idle connection dies after `IDLE_TIMEOUT` (LN6 keeps no
                 // keep-alive: a phone with the screen off must not ping). While the
                 // app is active the node re-establishes it — ONE handshake, and only
@@ -2163,7 +2189,7 @@ impl Driver {
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .contains_key(&peer);
-                if gone && self.active() && self.shared.settings_now().enabled {
+                if gone && !duplicate && self.active() && self.shared.settings_now().enabled {
                     self.dial_known(tasks);
                 }
             }
@@ -2361,7 +2387,74 @@ async fn serve_loop(
             }
         }
     }
-    let _ = internal.send(Internal::Closed { peer, connection });
+    let _ = internal.send(Internal::Closed {
+        peer,
+        connection,
+        duplicate: closed_as_duplicate(&conn),
+    });
+}
+
+/// Whether this connection ended because the transport COLLAPSED a duplicate pair.
+///
+/// The loser of the pair is closed by [`crate::transport::ConnTable`] with
+/// [`CLOSE_DUPLICATE`], and its `close_reason` carries that code on both ends. The
+/// caller uses it to keep the device's replicas: the survivor is the same device,
+/// one handshake away (LN15's measurement).
+fn closed_as_duplicate(conn: &PeerConn) -> bool {
+    match conn.connection().close_reason() {
+        Some(quinn::ConnectionError::ApplicationClosed(close)) => {
+            close.error_code == quinn::VarInt::from_u32(CLOSE_DUPLICATE)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a connection's close must FORGET the device's replicas (its inventory
+/// and its sets).
+///
+/// - the closed connection is still the one the node holds, or the node holds none
+///   (a sleep drained it): the device is gone, so its replicas go with it;
+/// - a duplicate loser does NOT forget them: the transport collapsed a pair, and the
+///   same device is one handshake away on the survivor. Forgetting them costs a full
+///   re-sync (one `Bulk` quiet window, ≥ 1 s) during which a download decided for
+///   that peer falls back to the server — and to nothing at all on a trip; measured
+///   2 of 20 netns runs before this rule (LN15);
+/// - a NEWER connection of the same device is current: leave it alone (LN10).
+///
+/// A peer that closes with `0x12` without having been collapsed keeps its last
+/// inventory in memory until its next connection or a `forget`; it cannot be served
+/// from (the connection is gone, a fetch fails and marks it bad for that track), the
+/// snapshot lists no device without a live connection, and its replica is replaced on
+/// reconnect.
+fn close_forgets_replica(duplicate: bool, current: Option<usize>, connection: usize) -> bool {
+    if duplicate {
+        return false;
+    }
+    match current {
+        Some(id) => id == connection,
+        None => true,
+    }
+}
+
+/// The candidates a decision may use, which are the peers whose replica holds the
+/// track AND whose connection is still open.
+///
+/// A replica outlives a duplicate collapse until the survivor is admitted (LN15), so
+/// a decision taken in that window would offer a connection that is already closed:
+/// the opener then opens nothing and falls back to the server — and on a trip there
+/// is no server to fall back to. Measured as a failed fetch in 8 of 20 netns runs
+/// before this filter. `close_reason()` is `None` while the connection lives, so the
+/// check costs one lock per candidate on the tap path and never a request.
+fn live_candidates(peers: &Peers, track: &str) -> Vec<crate::peers::Candidate> {
+    peers
+        .candidates(track)
+        .into_iter()
+        .filter(|candidate| {
+            peers
+                .get(&candidate.peer)
+                .is_some_and(|conn| conn.connection().close_reason().is_none())
+        })
+        .collect()
 }
 
 /// Reads the peer's control stream: gossip on connect, and the two version notices
@@ -2444,7 +2537,11 @@ async fn control_loop(
             _ => {}
         }
     }
-    let _ = internal.send(Internal::Closed { peer, connection });
+    let _ = internal.send(Internal::Closed {
+        peer,
+        connection,
+        duplicate: closed_as_duplicate(&conn),
+    });
 }
 
 /// Replicates one peer's inventory. The caller holds the `Bulk` lane: this is
@@ -2654,5 +2751,46 @@ mod tests {
         let id = transfers.rows.first().expect("une ligne").0;
         transfers.end(id, 42);
         assert!(!transfers.rows().iter().any(|row| row.track == first));
+    }
+    /// LN15's rule: the loser of a duplicate pair does NOT cost the device its
+    /// replicas. The same device is one handshake away on the survivor, and
+    /// forgetting the inventory costs a full re-sync (one `Bulk` quiet window)
+    /// during which a download decided for that peer falls back to the server — and
+    /// to nothing at all on a trip. Measured 2 of 20 netns runs before this rule.
+    ///
+    /// Every other close keeps its own behaviour: the device is gone, so its
+    /// replicas go with it, and a NEWER connection (a reconnect that already landed)
+    /// is never disturbed.
+    #[test]
+    fn a_duplicate_close_keeps_the_replicas_and_a_real_one_forgets_them() {
+        // A duplicate loser, in each of the three states the map can be in.
+        assert!(
+            !close_forgets_replica(true, Some(7), 7),
+            "le doublon courant garde la réplique"
+        );
+        assert!(
+            !close_forgets_replica(true, Some(8), 7),
+            "un doublon dépassé ne touche pas la connexion survivante"
+        );
+        assert!(
+            !close_forgets_replica(true, None, 7),
+            "un doublon après un sommeil garde la réplique du survivant"
+        );
+        // A plain close of the current connection: the device is gone.
+        assert!(close_forgets_replica(false, Some(7), 7));
+        // …and of a connection the map no longer holds (a sleep drained it).
+        assert!(close_forgets_replica(false, None, 7));
+        // A newer connection is live: leave it alone (LN10's rule).
+        assert!(!close_forgets_replica(false, Some(8), 7));
+    }
+
+    /// The code the duplicate rule is written against is the transport's own, and it
+    /// is not one of the two refusal codes: a duplicate is "the pair is already
+    /// connected", never "do not dial me again for ten minutes".
+    #[test]
+    fn the_duplicate_close_code_is_the_transports_and_not_a_refusal() {
+        assert_eq!(CLOSE_DUPLICATE, 0x12);
+        assert_ne!(CLOSE_DUPLICATE, crate::auth::CLOSE_REFUSED);
+        assert_ne!(CLOSE_DUPLICATE, crate::auth::CLOSE_WRONG_MAJOR);
     }
 }

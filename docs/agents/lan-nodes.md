@@ -2664,14 +2664,20 @@ first.
 
 **Rules a measurement taught.**
 
-- **Two nodes on one LAN dial each other, and the duplicate rule then costs a replica.** The
+- **Two nodes on one LAN dial each other, and the duplicate rule used to cost a replica.** The
   announcement reaches both, both dial, the lower `device_pub`'s dial survives and the loser's
-  connection closes: the peer's replica is dropped until the next sync (one `Bulk` quiet window,
-  ≥ 1 s). Measured in **2 of 20** runs — a `DECIDED peer:Flac` followed by a fetch with no source.
-  A download decided inside that window falls back to the server, which on a trip is nothing:
-  **this is a real weakness of `service.rs`'s duplicate path** (a duplicate close must not forget the
-  surviving connection's replica), reported here rather than patched because that file is LN10's.
-  The harness re-decides per track (3 attempts, event-driven) exactly as the product's queue does.
+  connection closes. In **2 of 20** runs the loser's close took the peer's whole replica with it, and
+  the next sync waited one `Bulk` quiet window (≥ 1 s): a `DECIDED peer:Flac` followed by a fetch
+  with no source, and a download decided inside that window fell back to the server — on a trip, to
+  nothing. **Fixed in the follow-up**: `Internal::Closed` now carries whether the close was a
+  DUPLICATE (quinn's own `0x12` on the closed connection), the pure `close_forgets_replica` keeps the
+  device's inventory and sets in that case and still forgets them when the device is really gone, the
+  redial is skipped, and `snapshot()` lists only the devices the node HOLDS a connection to. The
+  replica alone was not enough: a decision taken in the window then named a connection that was
+  already closed, and the opener opened nothing and fell back to the server — the harness showed it
+  as failed fetches until `live_candidates` filtered a decision's candidates to the peers whose
+  connection is still open. The unit test pins the four cases; the netns harness's 20 runs then
+  reported **0 retries and 0 failed fetches** (2 retries before the change).
 - **A raw peer that authenticates must also send `Hello`.** Stopping at `AuthOk` makes the responder
   close at `HELLO_DEADLINE` and answer `Err(Refused)`, so a control that "succeeded" reads as a
   broken fixture (measured: `le pair authentifié: Refused` with the `AuthOk` already received).
