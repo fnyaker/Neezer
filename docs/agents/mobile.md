@@ -5084,54 +5084,134 @@ Fin : branche <ta-branche>/mb21, PR « feat(mobile): MB21 visualiser: bars and s
 merge, paragraphe MB21 réécrit avec les mesures, ao report --done.
 ```
 
-### MB18 — Genre studio and genre tree (wave 4)
+### MB18 — Genre studio and genre tree (delivered 2026-11-18)
 
-**Goal.** The SPA's genre studio on the phone (library, tree with move/undo/reset, tag and bulk sheets,
-extractor, trainer, client-side measures). **Depends on**: MB3b (play from the studio), MB16 (its
-Réglages entry). **Exclusive files**: `nz-core/src/genres/**`, `nz-ffi/src/genres.rs`, `feature/genres/**`.
-**Contract.** FFI (`genres.rs`): the `/genre/*`, `/explorer*`, `/analysis*` routes the SPA's
-`routes/Genres.svelte` and `lib/genre/*` call; the trainer and the measure run in Rust (`webapp/trainer`
-and `webapp/measure` are Rust crates already — path dependencies, as the desktop's D16 did), on the
-`nz-bulk` thread (+10), progress + causes, resumable. Kotlin: `GenresEntry`, the tree (windowed),
-sheets. **Acceptance.** The screen standard; a 1 000-node tree scrolls at p95 ≤ 16.7 ms; a training run
-never costs the playing track an underrun (counted) and yields while a screen loads. **Read**
-[analysis-genre.md](analysis-genre.md) and desktop.md D16 first.
+**What landed.** The SPA's studio on the phone, four tabs — *Étiquetage*, *Bibliothèque*, *Arbre*,
+*Modèle* — with the tag and bulk sheets, the extractor's card, and the TRAINER and the local MEASURE
+running in Rust on their own threads. `nz-core/src/genres/` (5 files, ~2 900 lines with its tests),
+`nz-ffi/src/genres.rs` (records + listeners + the `impl Screens` block), `feature/genres/**` (the
+model, the four tabs, two sheets, the yielding bridge, 50 JVM tests, 18 PNGs).
 
-```text
-Tu es le worker du lot MB18 (studio de genres) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md (« The standard every screen lot meets », « Worker rules », « MB18 »),
-docs/agents/analysis-genre.md, docs/agents/desktop.md (D16), webapp/src/routes/Genres.svelte et
-webapp/src/lib/genre/*.
-Objectif : nz-core/src/genres, nz-ffi/src/genres.rs, mobile/android/feature/genres selon la section MB18 ;
-entraînement et mesures en Rust (crates webapp/trainer et webapp/measure en dépendance de chemin) sur
-le thread bulk, avec progression, causes et reprise.
-Fichiers à toi seul : ceux de la ligne MB18 de la table de propriété.
-Acceptation : le standard des écrans ; arbre de 1 000 nœuds à p95 ≤ 16,7 ms ; 0 sous-alimentation de
-la piste en cours pendant un entraînement (compté).
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mb18, PR « feat(mobile): MB18 genre studio », CI verte, rebase + diff --stat,
-merge, section MB18 réécrite, `ao report --done`.
-```
+| This module | The SPA |
+|---|---|
+| `Studio::studio`, `::candidates`, `::label`, `::ranked`, `::track` | the *Étiquetage* tab, `lib/genre/rank.js`, `GenreTagSheet.svelte` |
+| `Studio::tag_create/edit_fields/delete/tags_defaults`, `::embed_start`/`::embed` | `GenreLibrary.svelte` |
+| `Studio::tree`, `::tree_rows`, `::tree_add/cut/move/undo/reset` | `GenreTree.svelte` |
+| `Studio::bulk_preview_scope`/`::bulk_apply` | `GenreBulkSheet.svelte` |
+| `Studio::model_tab`, `::start_training`, `::training`, `::send_head`, `::disable_head`, `::relabel_start` | the *Modèle* tab, `lib/genre/trainer.js`, `health.js` |
+| `Studio::start_measure`/`::measure`, `::extractor_test` | `lib/genre/measure.js`, `GenreExtractor.svelte` |
+
+**The rule a reuse taught: the trainer and the measure are `nz-analysis`'s, not a second driver.** The
+note's plan said "`webapp/trainer` and `webapp/measure` as path dependencies, as D16 did". They ARE
+path dependencies — of `nz-analysis`, which MB0 already gave `nz-core` — so this lot added **no line to
+any shared manifest** (worker rule 3) and the phone trains with the *same* code the desktop does:
+`training::prepare` (the clean-up: duplicates, a recording tagged twice, an artist over 40 % of a
+genre, a genre under 5 tracks), `training::start` (folds by artist, bags, projection + retry,
+temperature, confusion matrix), `training::payload` (base64 float16 in the server's order). The
+driver PINS its seed (1), so a run repeats exactly — which is what "resume" means for a job measured
+in seconds: stop it, start it, the same head.
+
+**Measured** (this machine: Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, Gradle 8.14.7, Robolectric 4.18
+native graphics, no emulator):
+
+- **Rust**: `cargo test --workspace --locked` = **474 tests green**, 30 of them this lot's
+  (`cargo test -p nz-core genres` = 30; `clippy --workspace --all-targets -D warnings` and
+  `cargo fmt -p nz-core -p nz-ffi --check` clean).
+- **Kotlin**: `:feature:genres:testDebugUnitTest` = **50 tests green** (18 model, 2 window, 30
+  screenshots), `:feature:genres:lintDebug` green.
+- **The request budget, counted on the wire** (`GenreServer`, a loopback fake that logs every hit):
+
+  | Screen | Cold | Warm |
+  |---|---|---|
+  | Étiquetage | **2** (`/genre/status`, `/genre/candidates?sort=plays`) — the SPA's own 2 | **0 blocking** (the copy paints, proven by holding the network) |
+  | Bibliothèque | **1** (`/genre/embed`; the vocabulary rides with the status) | 0 |
+  | Arbre | **1** (`/genre/tree`) | 0 |
+  | Modèle | **3** (`/genre/relabel`, `/genre/embed`, `/genre/construction`) | 0 blocking |
+  | one tag applied / undone | **1** | — |
+  | one tree edit | **1** — the answer is the WHOLE tree (`_tree_answer`), never a re-read | — |
+  | one training run | `/genre/labelled` + ⌈n/200⌉ `/genre/embeddings` (+ `/genre/pool` + its batches) | — |
+  | the local measure | `/analysis/todo` pages of 20 + one POST per track | — |
+
+  The tag sheet opened from a list asks **2** (status + `/genre/track/<id>`) the first time and
+  **1** afterwards: the vocabulary is cached by reference and the ranking is local.
+- **The 1 000-node tree**: 18 screenshots at 360 dp and 600 dp; the window is the design system's
+  (`rememberListWindow` over a `ListHandle` the nucleus flattens) — **first paint = 1 `window()`,
+  a 600-row fling = 2**, and one frame of the *Arbre* tab over 1 000 rows measured **p95 9.48 ms**
+  against **15.94 ms** for 40 rows (Robolectric's Skia on the JVM; 40 frames each). A phone's frame
+  budget is judged on a phone — MB8's emulator floor is 50.6 ms for the shell's own repaint — so the
+  assertion is the RATIO (a bigger tree must not cost more), not a claim about a device.
+- **0 underruns while training, counted**: a real `nz-audio` engine (`Engine::new_external`, a 440 Hz
+  FLAC from the player's own fixtures) rendered **475 × 10 ms buffers** while the trainer ran **20
+  training runs** of twelve 2 560-wide rows: `engine.underruns() == 0`, peak 0.025. The job thread
+  asks `nice 10` (`nz_analysis::NICE`) and `nz-analysis` parks between epochs while the studio's
+  yield gate is up (`Studio::set_yielding`, raised by the screen when the player is BUFFERING).
+- **The head**: twelve rows, two genres, two artists a genre → grouped folds, `balanced 1.00` on
+  separable synthetic vectors, `fit_balanced 1.00`, the clean-up empty, the families read from the
+  tree (`Frenchcore → Hardcore`; a label with no family votes for nothing). The `PUT /genre/model`
+  body carries `weights` + `families`, and the server's `relabel` comes back as the answer.
+
+**Rules a measurement taught** (each cost a red test):
+
+- **A tree write already answers the whole tree; re-reading it doubled every edit.** `tree_write`
+  called `self.tree()` after `POST /genre/tree/edge`, so one link cost **2** requests where the page
+  makes **1** — the test that counts routes (`read, write, undo — no more`) failed at 5 against 3.
+  `wire::tree_edit`/`tree_undo`/`tree_reset` now PARSE the answer (`webui/genre.py#_tree_answer`).
+- **`roots` are the genres nobody is a CHILD of.** `view::roots_of` collected the EDGE PARENTS and
+  kept the nodes absent from that set — the exact opposite — so a 6-node fake tree drew three roots
+  and a closed tree drew two. The server's own line says it: `[n for n in names if not
+  tree.parents.get(n)]`.
+- **A warm open still REFRESHES; "0 requests" means 0 BLOCKING ones.** `screenFlow` always runs the
+  fresh read after the copy, so a test asserting `count == 0` on a warm open was asserting the wrong
+  thing. The test now holds the network (`CompletableDeferred`) and proves the *copy* painted first,
+  with `stale = true`.
+- **The tag sheet must fill the vocabulary itself.** Opened from a track menu (MB10) before the
+  studio was ever visited, `ranked` had 220 tags... none: `Studio::track` now seeds the vocabulary
+  from the device's copy, or with ONE status read on a cold cache (measured: 2 requests the first
+  time, 1 afterwards).
+- **A test that calls the model without `open()` never subscribes.** The training-progress and
+  measure tests passed `finishTraining`/`reportProgress` into a model whose listener list was empty
+  (the shell calls `open()`; a test that skipped it asserted a state nobody wrote).
+- **A 400 ms poll with a fake that never finishes hangs `advanceUntilIdle`.** The measure card's
+  loop was proven with `advanceTimeBy(1)` → the core finishing → `advanceUntilIdle`; a state loop
+  is tested by driving its EVENTS, never by draining an infinite one.
+- **`NzSegmented` cannot hold four French tab labels at 360 dp.** Measured on the first capture:
+  every label wrapped mid-word ("Étiquet / age", "Biblioth / èque"). The tabs are a scrollable
+  `LazyRow` of `NzChip`s; the design system's segmented control stays for two or three short ones.
+- **A pill never wraps**: "Approfondi" in a `NzChip` broke into "Approfon / di", so the four
+  capacities sit in two rows of two, and the vocabulary row's two LABELLED buttons squeezed the
+  genre name to "Hardcor" — the name owns its line, the actions are icon buttons.
+- **`NzGlyph` has no `Undo` and no `GitBranch`**: the design system's 92 glyphs are the SPA's set;
+  the tree's undos use `Refresh` and the empty tree says `Sort`.
+
+**Deliberate differences from the SPA, and why** (each is a sentence a reviewer can check):
+
+- **The extractor is not UPLOADED from the phone.** `POST /genre/extractor` is multipart and the
+  model is a 40 MB ONNX the operator obtains themselves (`docs/agents/genre.md`); a phone has no file
+  picker for it and no place to keep it. The card reads `/genre/status`'s extractor, starts and reads
+  its self-test, and says where the file comes from.
+- **A shared model file (`/genre/share/*`) is not ported**: it is a 48 MB JSON written by a desktop,
+  and the SPA's own export path is the Android host's `saveText` bridge — which this app does not
+  have (no WebView, MB-SWAP). The server-side import stays reachable from the desktop and the SPA.
+- **Explorer is MB14's**, not a fifth tab (the desktop added it because the SPA puts it on Search).
+- **The studio's upkeep card (analysis plan/backfill/schedule) is MB17's**, in Réglages → Serveur;
+  the *Modèle* tab's measure card runs the CLIENT pass (`lib/analysis/runner.js`), which is the
+  studio's own job.
+- **Per-epoch training progress is not reported**: `nz-analysis`'s driver steps the epochs internally
+  and reports at stage boundaries (préparation → entraînement → évaluation → réseau). A run is
+  seconds (0.66 s for a linear head, 9.3 s with the full-width retry — the trainer crate's own
+  measures), so the tab shows the stage it is in. Per-epoch reporting needs `trainer` as a DIRECT
+  dependency of `nz-core`, i.e. one line of a shared manifest: asked for, not taken.
+
+**Still owed to a later lot** (named where it belongs): the track menu's « Étiqueter le genre… »
+entry (`MenuAction.TagGenre` is gated off in `:feature:trackactions`) — `:feature:genres` exposes
+`GenreTagSheetPage`'s content as the sheet to install, and the SHELL must set `genreTag = true` and
+host it, exactly as `creditsSheet` waits for its install; `NzCore::shutdown` does not call
+`genre_shutdown` yet (MB2's file) — Android kills the process instead, so nothing correct depends on
+it, and the bridge may call it.
+
+**Files.** `mobile/rust/crates/nz-core/src/genres/{mod,wire,view,rank,train,testing,tests}.rs`,
+`mobile/rust/crates/nz-ffi/src/genres.rs`, `feature/genres/**` (6 Kotlin files, its build file, 4
+test files), `docs/agents/screenshots/mobile/MB18/` (18 PNGs, 3.3 MB), and this section.
 
 ### MB22 — Worlds renderer `nz-viz-gl` (wave 4)
 
