@@ -3573,7 +3573,7 @@ API 35 x86_64 `-no-window -no-audio` on this lot's port 5606):
 | Rust, the workspace | `cargo test --workspace --locked` | **570 `nz-core` + 92 `nz-ffi` + 7 + 1** (on MB12's merged tap), all green; `clippy -D warnings` and `fmt --check` clean |
 | JVM | `:feature:viz:testDebugUnitTest` | **38 tests**: 13 model (optimistic tap, rollback + « Réessayer », eco, one cover per track, the card and the pause), 19 screenshots, 6 semantics |
 | The look | `docs/agents/screenshots/mobile/MB21/` | **20 PNGs**: Encre/Papier at 360 and 600 dp, the two scenes, the pause, « Rien en lecture », eco, the 200 % scale, the photosensitivity warning in both themes |
-| The device | `:feature:viz:connectedDebugAndroidTest` (port 5606) | **bars p95 2.29 ms / p99 2.53, scope p95 8.80 / p99 10.21** for one scene's draw into the backing store (120 draws each, DEBUG build, measured while the machine carried other lots' builds) |
+| The device | `:feature:viz:connectedDebugAndroidTest` (port 5606) | **bars p95 2.14 ms / p99 2.34, scope p95 8.08 / p99 8.92** for one scene's draw into the backing store (120 draws each, DEBUG build, measured while the machine carried other lots' builds) |
 | The emulator's screen | `adb -s emulator-5606 exec-out screencap` | `mb21-emulateur-5606-barres.png` — the real app, reached through « Réglages → Animations → Ouvrir le visualiseur » |
 | `libnz_ffi.so` | `mobile/rust/build-android.sh` | arm64-v8a **15 602 504 B**, armeabi-v7a **10 563 688 B**, x86_64 **18 238 616 B**; `NEEDED` names only what Android provides |
 
@@ -3581,12 +3581,15 @@ API 35 x86_64 `-no-window -no-audio` on this lot's port 5606):
 `VizDraw` does, into the same `2 × dp` backing store the surface uses), 120 draws per scene, and
 asserts the standard's numbers on it: **p95 ≤ 16.7 ms, p99 ≤ 25 ms**. Measured on the emulator
 (1080 × 2400, swiftshader, DEBUG build — the build the instrumented task compiles, so a lower bound of
-what ships) **while this machine carried other lots' builds**: bars **mean 1.31, p95 2.29, p99 2.53
-ms**; oscilloscope **mean 7.13, p95 8.80, p99 10.21 ms** — both inside one 60 Hz frame with margin.
+what ships) **while this machine carried other lots' builds**: bars **mean 1.32, p95 2.14, p99 2.34
+ms**; oscilloscope **mean 7.28, p95 8.08, p99 8.92 ms** — both inside one 60 Hz frame with margin.
 The scope was the tight one, and the fix was the shape of the work: **one path per channel per frame,
 stroked twice** (halo 2.4 beams wide, then the beam) instead of rebuilding the same 500-segment path
 for every stroke — four builds a frame became two, and the CI runner's rasteriser stopped failing the
-budget (measured 12.95 → 8.80 ms p95 on the same scene).
+budget (measured 12.95 → 8.80 ms p95 on the same scene). The scope's remaining cost was the SPA's
+**radial** smoked-glass background: at 6 % lightness a flat fill is the same picture, and it is one
+fill instead of per-pixel gradient maths — 8.80 → 8.08 ms here, and the difference on the runner was
+the CI failure itself.
 
 The WHOLE frame is a different number and this lot does not claim it: the first version of the suite
 read `FrameMetrics` (rasterisation included) and measured **p95 26.9 then 28.8 ms for the bars and

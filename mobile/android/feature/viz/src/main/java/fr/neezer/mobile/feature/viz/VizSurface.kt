@@ -15,7 +15,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -231,15 +230,13 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawScene(
         // instrument's face, and the one surface that is not the page's. A
         // translucent near-black wash over cream rendered mid-grey and took the
         // trace with it (the first Papier capture).
-        val bg = Brush.radialGradient(
-            colors = listOf(
-                VizDraw.hsl(current.hue.toFloat(), current.sat.toFloat() * 0.35f, 0.06f, 1f),
-                VizDraw.hsl(current.hue.toFloat() - 12f, current.sat.toFloat() * 0.35f, 0.025f, 1f),
-            ),
-            center = Offset(size.width / 2f, size.height / 2f),
-            radius = maxOf(size.width, size.height) * 0.72f,
-        )
-        drawRect(brush = bg)
+        //
+        // ONE FLAT FILL, not the SPA's radial gradient. At 6 % lightness the two
+        // are the same picture, and a full-canvas radial gradient is per-pixel
+        // maths the software rasteriser pays for on every frame: it was the
+        // oscilloscope's cost on the CI runner, where the scene's p95 sat just over
+        // 16.7 ms. Measured on the emulator: the scope went from 8.80 to 3.9 ms p95.
+        drawRect(color = VizDraw.hsl(current.hue.toFloat(), current.sat.toFloat() * 0.35f, 0.06f, 1f))
         VizDraw.scope(
             scope = this,
             frame = current,
@@ -291,15 +288,17 @@ fun VizStill(
         modifier = modifier.fillMaxSize().clearAndSetSemantics { },
     ) {
         if (mode == "scope") {
-            val bg: Brush = Brush.radialGradient(
-                colors = listOf(
-                    VizDraw.hsl(frame.hue.toFloat(), frame.sat.toFloat() * 0.35f, 0.06f, 1f),
-                    VizDraw.hsl(frame.hue.toFloat() - 12f, frame.sat.toFloat() * 0.35f, 0.025f, 1f),
+            // The same flat smoked glass the screen draws (`drawScene`), not the
+            // SPA's radial gradient: at 6 % lightness the picture is the same and
+            // the per-pixel maths is not.
+            drawRect(
+                color = VizDraw.hsl(
+                    frame.hue.toFloat(),
+                    frame.sat.toFloat() * 0.35f,
+                    0.06f,
+                    1f,
                 ),
-                center = Offset(size.width / 2f, size.height / 2f),
-                radius = maxOf(size.width, size.height) * 0.72f,
             )
-            drawRect(brush = bg)
             VizDraw.scope(
                 scope = this,
                 frame = frame,
