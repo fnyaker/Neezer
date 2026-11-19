@@ -560,8 +560,21 @@ mod tests {
         let sender = core.player();
         let reader = core.player();
         // The threads this test's player brought: the ones that may go.
-        let mine: std::collections::BTreeSet<u64> =
+        //
+        // A spawned thread takes its name INSIDE itself (`prctl(PR_SET_NAME)`), so a
+        // read that lands between `spawn` and that call sees the parent's name and
+        // misses it — measured on loaded CI runners, where this census ran before the
+        // child had been scheduled and the test failed with "the player started no
+        // thread" while the same suite was 95/95 green locally. Wait for the ids to
+        // appear, bounded, the way `nz-lan`'s `thread_by_name` does: a player that
+        // never starts one still fails, and the bound is the deadline written below.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut mine: std::collections::BTreeSet<u64> =
             player_thread_ids().difference(&before).copied().collect();
+        while mine.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            mine = player_thread_ids().difference(&before).copied().collect();
+        }
         assert!(!mine.is_empty(), "the player started no thread");
         assert!(Arc::ptr_eq(&sender, &reader));
 
