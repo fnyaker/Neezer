@@ -105,7 +105,7 @@ class PartyDeviceTest {
         bench.forget()
         val missing = runBlocking { api.peek(PartyBench.GONE) }
         assertTrue("nothing for a dead link", missing == null)
-        assertEquals(1, bench.count())
+        assertEquals("a dead link is one request: ${bench.routes()}", 1, bench.count())
         println("MEASURE device party dead link: 1 request, phase ${api.state().phase}")
 
         // The rule-7 probe: one OPTIONS, and the door is drawn.
@@ -324,13 +324,19 @@ private class PartyBench private constructor(
             }
             val bodyBytes = answer.toByteArray()
             val cookie = if (path == "/api/login") "Set-Cookie: session=good; Path=/\r\n" else ""
+            // RECORD BEFORE ANSWERING. The count is read by the test the moment
+            // the client returns, and the response is flushed first: appending
+            // after the write lost the race under load and reported 0 requests
+            // for a request that had been served (run 45253172024's rerun and
+            // the Mobile run of PR #379, both `expected:<1> but was:<0>` on the
+            // dead-link step). The bench states what it was offered, then answers.
+            log.add(request to bodyBytes.size)
             val head = "HTTP/1.1 $status X\r\nContent-Type: application/json\r\n" +
                 "Content-Length: ${bodyBytes.size}\r\n${cookie}Connection: close\r\n\r\n"
             val out: OutputStream = socket.getOutputStream()
             out.write(head.toByteArray())
             out.write(bodyBytes)
             out.flush()
-            log.add(request to bodyBytes.size)
         }
     }
 }
