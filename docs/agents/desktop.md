@@ -663,8 +663,8 @@ the app keep" (`app/src/testmem.rs`).
   client whose redirect policy never leaves `https` except for loopback.
   Measured on one page's four sleeves (one local, three provider addresses):
   **4 files, 100 % displayed, 1 request each, 0** requests reach
-  `/api/cover/http…`; the old path displayed **1 of 4 (25 %)** and spent three
-  404s per provider address. `a_provider_sleeve_is_fetched_from_its_own_host_and_kept`
+  `/api/cover/http…`; the old path displayed **1 of 4 (25 %)** and spent a 404
+  on each provider address. `a_provider_sleeve_is_fetched_from_its_own_host_and_kept`
   holds it, and the second visit makes **0** requests (the device's cover store
   answers).
 - **The rule, a sleeve queue loses nothing and refuses without a storm**
