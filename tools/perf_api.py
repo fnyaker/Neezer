@@ -1040,6 +1040,75 @@ def make_archived(app, clusters=40):
         similar.drop_index()
 
 
+def seed_releases(app, count):
+    """``count`` recent releases for the artists 'bench' already follows.
+
+    The shipped ``GET /api/releases`` is capped at 120 cards and 400 titles
+    (``discover.RELEASES_MAX`` / ``RELEASE_TRACKS_MAX``). A page that lags
+    "because of the number of items" has to be measured above that cap, so the
+    bench lifts BOTH **in its own process only** (the constants are read at
+    request time, and ``_user_releases``'s default ``limit`` was bound when the
+    module loaded) and seeds the rows a much bigger watcher would have found.
+    The server contract itself is untouched: a shipped server still answers 120.
+    """
+    from neezer.db import Album, Artist, ArtistRelease, StarredArtist
+    from neezer.webui import discover as discover_module
+
+    r = random.Random(11)
+    with app.app_context():
+        discover_module.RELEASES_MAX = count
+        discover_module.RELEASE_TRACKS_MAX = count
+        discover_module._user_releases.__defaults__ = (count, False)
+        artists = list(
+            Artist.select()
+            .join(StarredArtist, on=(StarredArtist.starred == Artist.id))
+            .where(Artist.deezer_id.is_null(False))
+            .distinct()
+            .limit(60)
+        )
+        if not artists:
+            raise SystemExit("--releases needs 'bench' to follow some artists")
+        # The cards' sleeves: the library's own albums (with `--covers` they all
+        # carry the real JPEG), so a client that asks for a few thousand release
+        # covers is measurable instead of painting placeholders. Deezer is off,
+        # and a release ref has no archived file.
+        sleeves = [f"/api/cover/{album.id}" for album in Album.select().limit(40)]
+        today = datetime.date.today()
+        rows = []
+        for k in range(count):
+            artist = artists[k % len(artists)]
+            hits = [
+                {
+                    "r": str(7_000_000 + k * 4 + j),
+                    "t": title(r),
+                    "d": r.randint(120, 300),
+                    "e": False,
+                    "a": [[artist.deezer_id, artist.name]],
+                }
+                for j in range(1 + k % 3)
+            ]
+            rows.append(
+                {
+                    "provider": "deezer",
+                    "ref": str(6_000_000 + k),
+                    "artist_ref": artist.deezer_id,
+                    "artist_name": artist.name,
+                    "title": f"{title(r)} {k}",
+                    "kind": "album" if len(hits) > 1 else "single",
+                    # Inside the 30-day window `_user_releases` asks for.
+                    "released": (today - datetime.timedelta(days=k % 30)).isoformat(),
+                    "nb_tracks": len(hits),
+                    "tracks": json.dumps(hits),
+                    "cover": sleeves[k % len(sleeves)] if sleeves else None,
+                    "found": datetime.datetime.now(),
+                }
+            )
+        for start in range(0, len(rows), 500):
+            ArtistRelease.insert_many(rows[start : start + 500]).execute()
+    print(f"  {count} releases for the feed", file=sys.stderr)
+    return count
+
+
 def seed_covers(app, jpeg_path):
     """Give every album a REAL ``cover.jpg``, so the client's sleeve path is measurable.
 
@@ -1162,6 +1231,15 @@ def main():
         "lists a row and PUT /api/me/accounts/<id> can be exercised; no "
         "provider is ever called",
     )
+    ap.add_argument(
+        "--releases",
+        type=int,
+        default=0,
+        metavar="N",
+        help="seed N recent releases and lift the per-payload cap IN THIS BENCH "
+        "PROCESS, so a client's Nouveautés page is measured on a few thousand "
+        "releases; the shipped server still answers its own 120",
+    )
     args = ap.parse_args()
 
     work = tempfile.mkdtemp(prefix="nsperf-")
@@ -1241,6 +1319,9 @@ def main():
     if args.seed_provider_account:
         print("seeding a provider account…", file=sys.stderr)
         ids["account"] = seed_provider_account(app)
+    if args.releases:
+        print(f"seeding {args.releases} releases…", file=sys.stderr)
+        ids["releases"] = seed_releases(app, args.releases)
     # Each request opens its own connection (web.py), as the server does.
     from neezer.db import close_connection
 
