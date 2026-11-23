@@ -66,6 +66,7 @@ class NzMediaService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        started = true
         setMediaNotificationProvider(notificationProvider())
         val exemption = BatteryExemption(SharedPreferencesFlags(this))
         // Before the player exists: a flag left behind by a killed process is
@@ -120,7 +121,6 @@ class NzMediaService : MediaLibraryService() {
     private fun buildPlayer(): Boolean {
         val core = NzBridge.core ?: return false
         val playerApi = core.player()
-        startOutput(playerApi)
 
         val player = NzPlayer(playerApi)
         player.onSnapshot = ::follow
@@ -227,6 +227,12 @@ class NzMediaService : MediaLibraryService() {
     private fun follow(snapshot: PlayerSnapshot) {
         val playing = snapshot.state == PlayState.PLAYING || snapshot.state == PlayState.BUFFERING
         if (playing) {
+            // The device output, opened the FIRST time this process has
+            // something to play — never at service creation. An app someone
+            // opened to browse holds no audio stream, and a stream opened for a
+            // screen that plays nothing is battery the plan's rule 1 puts behind
+            // the person's own tap. `startOutput` is idempotent (MB3c).
+            if (output == null) api?.let(::startOutput)
             // The flag is what proves a system kill (it never calls onDestroy).
             battery?.notePlaying()
             focus?.request()
@@ -364,6 +370,33 @@ class NzMediaService : MediaLibraryService() {
 
         /** One notification, updated in place (the old app's id stayed too). */
         const val NOTIFICATION_ID = 0x4E5A
+
+        /**
+         * Whether this process has created the media service. The app's own
+         * launch starts it (`MainActivity`), because the service IS the phone's
+         * player surface: the session, the notification, the lock screen, the
+         * headset keys, the car and another device's remote all reach the engine
+         * through it. A test reads this instead of guessing.
+         */
+        @Volatile
+        var started: Boolean = false
+            private set
+
+        /**
+         * Starts the media service from the app's own process.
+         *
+         * NOT `startForegroundService`: Media3 only takes the foreground when
+         * something plays, and a foreground service that never calls
+         * `startForeground` is killed with an ANR. A plain `startService` from a
+         * visible activity is what a media app does; the car, a notification
+         * action or a browser create the service through their own bind when the
+         * app is not in front.
+         */
+        fun start(context: Context) {
+            val intent = Intent(context, NzMediaService::class.java)
+            runCatching { context.startService(intent) }
+                .onFailure { Log.w(TAG, "le service média n'a pas démarré : ${it.message}") }
+        }
 
         /**
          * The device's French cause when the output could not open, for Aide

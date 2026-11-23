@@ -30,6 +30,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // The phone's player surface: the session, the notification, the lock
+        // screen, the headset keys, the car and a remote device all reach the
+        // engine through ONE service, and nothing else starts it (measured: a tap
+        // loaded the queue and opened no output — MB3c's service was only ever
+        // created by its own tests). Started with the activity whose shell draws
+        // every play control; the output itself opens on the first title that
+        // plays, not here (see `NzMediaService.follow`).
+        fr.neezer.mobile.playback.NzMediaService.start(this)
         graph = AppGraph(application)
 
         // BEFORE the first frame, and never inside one: the device's theme, its
