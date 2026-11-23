@@ -835,7 +835,7 @@ impl Api {
                 .timeout(ANSWER_TIMEOUT);
             self.stats.request(&self.tag, 0);
             let answer = match request.send().await {
-                Ok(response) => {
+                Ok(mut response) => {
                     let status = response.status().as_u16();
                     if (200..300).contains(&status) {
                         response.bytes().await.map_err(|error| {
@@ -850,8 +850,18 @@ impl Api {
                             }
                         })
                     } else {
-                        let body = response.text().await.unwrap_or_default();
-                        Err(external_error(status, &body))
+                        // At most 512 bytes of a refusal: the message a person
+                        // may see, never a body of unknown size from a host
+                        // nobody here administers.
+                        let mut body = Vec::new();
+                        while let Ok(Some(chunk)) = response.chunk().await {
+                            body.extend_from_slice(&chunk);
+                            if body.len() >= 512 {
+                                break;
+                            }
+                        }
+                        let text = String::from_utf8_lossy(&body[..body.len().min(512)]);
+                        Err(external_error(status, &text))
                     }
                 }
                 Err(error) => {
