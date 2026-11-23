@@ -680,7 +680,10 @@ the app keep" (`app/src/testmem.rs`).
   no slot free → **8 in flight, 12 waiting**, then all 20 answered with **20**
   requests; two paints inside the window cost **1** request, one after it **2**
   (`eight_covers_are_in_flight_and_the_rest_wait_in_the_order_asked`,
-  `a_refused_sleeve_waits_before_asking_again`).
+  `a_refused_sleeve_waits_before_asking_again`). **The disk read comes before
+  the online test**: an offline ask keeps what the device already has (the
+  sleeve paints, **0** requests) and a miss keeps its placeholder
+  (`an_offline_screen_still_paints_the_sleeves_it_kept`).
 - **The rule, one decode per screenful and no decode for what is below the fold.** A visible row
   asks for exactly one sleeve (`want`, at most `MAX_IN_FLIGHT` = 8 requests in flight), the file
   it gets is the 128 px copy (`Covers::rows`), and the journey test counts it: 18 visible rows
