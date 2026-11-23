@@ -229,12 +229,26 @@ async fn the_snapshot_is_one_clone_and_the_listener_only_hears_changes() {
     b.lan.subscribe(Arc::new(Counter(Arc::clone(&seen))));
     enrolled(&b.lan).await;
     // The enrolment's own publication: the listener is wired, and once it lands
-    // the node has nothing left to say.
+    // the node has nothing left to say. It can land in two steps (the state,
+    // then the server's answer), so wait for a short SILENT window on the node's
+    // own event channel before freezing the clock: what the assertion below
+    // measures must be a timer, not a change already on its way. A node with a
+    // timer would keep waking the channel and fail the assertion anyway.
     until("l'inscription a été annoncée", &b.lan, || {
         seen.load(Ordering::SeqCst) >= 1
     })
     .await;
-    let quiet = seen.load(Ordering::SeqCst);
+    let mut events = b.lan.events();
+    let mut quiet = seen.load(Ordering::SeqCst);
+    for _ in 0..20 {
+        if tokio::time::timeout(Duration::from_millis(250), events.changed())
+            .await
+            .is_err()
+        {
+            break;
+        }
+        quiet = seen.load(Ordering::SeqCst);
+    }
 
     // 10 minutes of a PAUSED clock: no event, because nothing changed.
     tokio::time::pause();

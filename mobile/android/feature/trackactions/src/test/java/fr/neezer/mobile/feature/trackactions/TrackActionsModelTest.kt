@@ -239,7 +239,12 @@ class TrackActionsModelTest {
 
         override suspend fun shareLink(kind: String, id: String): String {
             failShare?.let { throw it }
-            return "https://neezer.local/api/share/file/$id"
+            // A title is the public page; an episode is still the archived file.
+            return if (kind == "episode") {
+                "https://neezer.local/api/share/file/$id"
+            } else {
+                "https://neezer.local/t/track-token"
+            }
         }
     }
 
@@ -687,7 +692,7 @@ class TrackActionsModelTest {
         harness.model.share()
         assertEquals(1, harness.sharer.shared.size)
         val (link, title) = harness.sharer.shared.single()
-        assertTrue(link.endsWith("/api/share/file/${TrackActionsFixtures.ID}"))
+        assertTrue(link.endsWith("/t/track-token"))
         assertTrue(title.contains("Ouverture"))
         assertEquals(1, harness.closed)
     }

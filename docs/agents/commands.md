@@ -130,6 +130,9 @@ cd webapp && node test/vizdirect/run.mjs [FADE=1]   # the animations on the DIRE
 cd webapp && node test/download/run.mjs              # a playlist downloading on a shared 256 kbit/s link (LINK=bytes/s) while a track is
                                                      # launched: it must start as fast as on an idle link, play without a stall, and the downloads finish
 cd webapp && node test/import/run.mjs [--phone]       # a shared playlist link: pasted into the search, read, played, kept
+cd webapp && node test/share/run.mjs                # sharing a TRACK as a link: the sheet opens on Lien (1 GET, 0 waveform,
+                                                     # 0 gain, 1 POST), a guest page with OG/oEmbed/twitter tags, 0 audio bytes
+                                                     # before play, Opus stream, embed mode, 390 px, Settings revoke (needs a build)
 cd webapp && node test/requests/run.mjs             # what playing costs in requests: a track the server refuses (Deezer off) is
                                                      # retried at a human pace, not 70 times a second; a missing cover is asked once
 cd webapp && node test/fullscreen/run.mjs           # the desktop full-screen player from 641x900 to 1920x1080: every control on screen,

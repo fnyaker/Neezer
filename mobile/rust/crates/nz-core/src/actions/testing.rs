@@ -324,6 +324,13 @@ fn answer_for(method: &str, route: &str, path: &str, body: &str) -> (u16, String
                 "kept":[{"id":"deezer:9002","reason":"playable"}],"missing":[],"done":2,"total":2}"#,
         ),
         ("DELETE", route) if route.starts_with("/api/local/") => ok(r#"{"ok":true}"#),
+        ("GET", route) if route.starts_with("/api/track/") && route.ends_with("/share") => {
+            ok(r#"{"link":null}"#)
+        }
+        ("POST", route) if route.starts_with("/api/track/") && route.ends_with("/share") => {
+            ok(r#"{"link":{"id":"track-share","token":"track-token",
+                "url":"/t/track-token","created":"2026-11-18T10:00:00","expires":null}}"#)
+        }
         ("GET", route) if route.ends_with("/share") => ok(r#"{"link":null}"#),
         ("POST", route) if route.ends_with("/share") => ok(
             r#"{"link":{"token":"tok-1","url":"/shared/playlist/tok-1","created":"2026-11-18T10:00:00"}}"#,

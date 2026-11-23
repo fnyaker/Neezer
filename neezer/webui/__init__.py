@@ -6084,6 +6084,7 @@ from . import accessapi  # noqa: E402,F401  isort:skip
 from . import myaccounts  # noqa: E402,F401  isort:skip
 from . import sourcesapi  # noqa: E402,F401  isort:skip
 from . import playlist_share  # noqa: E402,F401  isort:skip
+from . import trackshare  # noqa: E402,F401  isort:skip
 from . import genre_radio  # noqa: E402,F401  isort:skip
 from . import history  # noqa: E402,F401  isort:skip
 from . import recap  # noqa: E402,F401  isort:skip

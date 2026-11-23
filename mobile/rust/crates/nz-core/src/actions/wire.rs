@@ -170,6 +170,29 @@ pub(super) async fn playlist_share_link(api: &Api, id: &str) -> Result<String, C
     Ok(absolute_hint(&link.url, &link.token))
 }
 
+/// `GET /api/track/<id>/share` then, only when there is no live link, `POST`
+/// — the public page of ONE track. The server's one-link-per-track rule is
+/// what makes a second open cost one GET and no new grant.
+pub(super) async fn track_share_link(api: &Api, id: &str) -> Result<String, CoreError> {
+    let existing = api.track_share(id).await?;
+    if let Some(link) = existing.link.filter(|link| !link.url.is_empty()) {
+        return Ok(link.url);
+    }
+    let created = api.create_track_share(id).await?;
+    let link = created.link.ok_or_else(|| CoreError::Invalid {
+        detail: "le serveur n'a pas rendu de lien de partage".to_owned(),
+    })?;
+    if link.url.is_empty() {
+        if link.token.is_empty() {
+            return Err(CoreError::Invalid {
+                detail: "le serveur n'a pas rendu d'adresse de partage".to_owned(),
+            });
+        }
+        return Ok(format!("/t/{}", seg(&link.token)));
+    }
+    Ok(link.url)
+}
+
 /// The address a share answer carries, made whole: the server sends a page path
 /// (`/pl/<token>`, `/shared/playlist/<token>`), and what a person pastes into a
 /// message is an absolute URL — [`Core::share_link`] prefixes the origin.

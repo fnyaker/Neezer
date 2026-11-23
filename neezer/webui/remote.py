@@ -181,6 +181,16 @@ POLICY = {
     "shared_playlist": "queue",
     "shared_playlist_cover": "queue",
     "shared_playlist_stream": "queue",
+    # a public TRACK link: making and cutting it is the owner's own hand; the
+    # public page/stream/cover/oEmbed carry their own capability and no session.
+    "track_share": NEVER,
+    "track_share_create": NEVER,
+    "track_share_revoke": NEVER,
+    "track_shares_list": NEVER,
+    "track_share_delete": NEVER,
+    "shared_track_cover": "queue",
+    "shared_track_stream": "queue",
+    "oembed": "read",
     # reading the library
     "search": "read",
     "search_podcasts": "read",

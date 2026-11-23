@@ -3033,7 +3033,7 @@ NDK 30.0.16248370; emulator API 35 x86_64 `-no-window -no-audio` on port 5660):
 | The replacement sheet | `replace_candidates` | **1 GET**; a typed search **1 GET** with `q=` and `fallbacks=1`; `replace` **1 POST** then the job's status |
 | A bulk deletion | `delete_tracks` | **1 POST** + status, and each kept title with its cause (`playable`) |
 | Deleting an upload | `delete_uploads(2 keys)` | **1 DELETE each**, each keeping its own refusal |
-| A share address | `share_link` | playlist **1 GET then 1 POST** the first time, **1 GET** after; a title **0 requests** |
+| A share address | `share_link` | playlist **1 GET then 1 POST** the first time, **1 GET** after; a title **1 GET then 1 POST** the first time, **1 GET** after; an episode **0** (the file route) |
 | Rust | `cargo test --workspace --locked` | **182** `nz-core` (32 `actions`) + **38** `nz-ffi` (6 `actions`); clippy `-D warnings`, `fmt --check` clean |
 | JVM | `:feature:trackactions:testDebugUnitTest` | **49** tests: 23 model (0-request menu, the rollback + « Réessayer », the copy-then-answer picker, a tick that never adds twice, the replacement's one read/one commit, each player command, sharing) + 26 renders |
 | The look | `docs/agents/screenshots/mobile/MB10/` | **26 PNGs**: the menu, its accordion, the episode's menu, Encre/Papier at 360 and 600 dp, 200 % scale, the picker (copy, offline, failure), the replacement sheet (candidates, empty, failure) |
@@ -3099,9 +3099,11 @@ NDK 30.0.16248370; emulator API 35 x86_64 `-no-window -no-audio` on port 5660):
   ids; the menu offers the entry only when the SURFACE passes them
   (`MenuContext.artists`), because a link that leads nowhere is worse than none
   (`lib/entity.js`'s own rule). « Aller à l'album » always works (`album_id`).
-- **The share is a LINK, not a clip.** The SPA's sheet cuts an excerpt on a
-  waveform; the phone hands out `GET /api/share/file/<id>` (the whole archived
-  file) or the playlist's public page, through Android's own share sheet.
+- **The share is a LINK, not a file.** The phone hands out the title's public
+  page (`/t/<token>`: an Opus player and a rich preview, minted from the title's
+  row) or the playlist's public page, through Android's own share sheet. A
+  podcast episode is not a `Track` row, so it keeps
+  `GET /api/share/file/<id>` (the archived file).
 - **`delete_uploads` is not in the menu.** The SPA has no upload-delete entry
   (only the unavailable list's bulk deletion, which this lot also exposes as
   `delete_tracks`); the method exists for MB8's « Mes fichiers » list, which is

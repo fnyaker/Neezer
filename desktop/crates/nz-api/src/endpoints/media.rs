@@ -6,9 +6,12 @@
 //! one from the server root. They are paths, not requests: nothing here touches
 //! the network.
 
+use reqwest::Method;
+
 use crate::client::{Api, Quality, TrackId, encode};
 use crate::error::ApiError;
 use crate::lanes::Lane;
+use nz_model::TrackShare;
 
 impl Api {
     /// `/api/stream/<id>?q=&start=` — the SPA's `api.streamUrl`.
@@ -73,6 +76,21 @@ impl Api {
         self.get(Lane::User, &format!("/share/waveform/{}", encode(id)))
             .await
             .map(|fresh| fresh.value)
+    }
+
+    /// `GET /api/track/<id>/share` — the live public link, or `link: null`.
+    pub async fn track_share(&self, id: &str) -> Result<TrackShare, ApiError> {
+        self.get_value(&format!("/track/{}/share", encode(id)))
+            .await
+    }
+
+    /// `POST /api/track/<id>/share` — mint (or reuse) the public link. The
+    /// server archives the title on this action, so the first call may take a
+    /// moment; the answer is the same shape as the read.
+    pub async fn create_track_share(&self, id: &str) -> Result<TrackShare, ApiError> {
+        let path = format!("/track/{}/share", encode(id));
+        self.send_json(Method::POST, &path, &serde_json::json!({}))
+            .await
     }
 }
 

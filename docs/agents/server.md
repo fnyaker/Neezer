@@ -954,6 +954,26 @@ per (token, IP), `no-store` + `noindex` everywhere. A 4 000-title page costs **5
 and 10.2 kB gzip; Range works. `remote.POLICY`: the owner routes are `NEVER`, the public ones
 `queue`.
 
+**A public TRACK link** (`webui/trackshare.py`, table `track_share` schema `20261125`, page
+`/t/<token>` in `spa.py`) is the share sheet's default, because a chat is a bad place to send an
+audio file. The token is the same `<id>.<hmac>` capability; **one track only** (no route accepts a
+media id from the visitor), one live link per track, and revoking it is dead on the next request
+(including a disabled owner). The **server** renders the page, not the SPA: a preview bot does not
+run JavaScript, and the recipient may be on a slow phone. Measured in `webapp/test/share/run.mjs` on
+the built app and a real server: **12 390 B raw / 4 096 B gzip** of HTML, **one cover** (400 px;
+640 px for the card) and **zero audio bytes until the play button** (`preload="none"` plus a
+`data-src` assigned on click). The page is one public `GET` plus the cover; the Open Graph tags
+(`music.song`, `og:audio` on the Opus stream, `og:image`), the oEmbed `rich` answer
+(`/api/oembed?url=…`, 480×180 iframe at `?embed=1`) and the Twitter player fields are what the apps
+read. The **public stream is Opus only** (128 kbit/s default, `q=OPUS_64..320`), from the archived
+file through the normal transcode cache — never the FLAC, never an MP3 straight from Deezer, and no
+provider call on any public route (a missing file is a 409). Creating the link archives the track on
+the owner's own foreground action, like the file sheet; the default life is 30 days (`ttl: null` =
+forever). 120 stream requests / 10 min per (token, IP) and 240 page/cover requests, `no-store` +
+`noindex` + `no-referrer`, a per-response nonce CSP (`frame-ancestors 'none'` except the embed page).
+Réglages → Compte lists the caller's live links and cuts them (`/api/track-shares`). `remote.POLICY`:
+the owner routes are `NEVER`, the public page/stream/cover/oEmbed carry their own capability.
+
 **Cleanup** (`neezer/deezer/cleanup.py`) is the **only** code in the project that deletes archived
 audio. It is off by default, needs a free-space floor (`clean_min_free_gb`) to do anything, and is
 event-driven like the rest — `prefetch._check_space` looks right after a download, the one moment the

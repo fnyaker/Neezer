@@ -285,3 +285,16 @@ def playlist_share_link(token: str):
         og_type="<meta property='og:type' content='music.playlist'>",
         referrer=True,
     )
+
+
+# A public track link IS the page (no redirect into the SPA): a messaging app's
+# preview bot does not run JavaScript, and a phone on a slow link must not load
+# the whole app for one song. The module renders the Open Graph/oEmbed tags, the
+# player and the dead-link page; a malformed, forged, revoked and expired token
+# all get the SAME calm answer.
+@spa.route("/t/<token>")
+@spa.route("/app/t/<token>")
+def track_share_link(token: str):
+    from .trackshare import track_page
+
+    return track_page(token.strip())
