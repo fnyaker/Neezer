@@ -36,7 +36,8 @@ use gpui_omarchy::{
 use nz_api::{Api, ApiError, Lane, Method};
 use nz_model::{
     ArchiveRuleSet, ArchiveRules, ArchiveStatus, CleanupPreview, CreditsBackfill, JobStatus,
-    MigrateStatus, ServerSettings, Storage, TranscribeSettings,
+    MigrateStatus, ServerSettings, Storage, TranscribeMachine, TranscribeSettings,
+    TranscribeWorkers,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -269,12 +270,16 @@ pub(super) fn language_label(code: &str) -> String {
     }
 }
 
-/// `lib/transcript.js#reasonText`: why the server's engine is unavailable.
+/// `lib/transcript.js#reasonText`: why the server cannot transcribe.
 pub(super) fn transcribe_reason(reason: &str) -> String {
     match reason {
         "disabled" => "La transcription est désactivée sur ce serveur.".to_owned(),
         "engine_missing" => {
             "Le moteur de transcription n'est pas installé sur le serveur.".to_owned()
+        }
+        "no_worker" => {
+            "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur."
+                .to_owned()
         }
         "model_missing" => "Le modèle de transcription est introuvable sur le serveur.".to_owned(),
         "model_invalid" => {
@@ -282,6 +287,56 @@ pub(super) fn transcribe_reason(reason: &str) -> String {
         }
         _ => "La transcription n'est pas configurée sur ce serveur.".to_owned(),
     }
+}
+
+/// `lib/transcript.js#destinationText`: where a queued episode will run.
+///
+/// A PC that is offline right now still counts — the queue accepts the episode
+/// and the PC claims it when it comes back — so the sentence says "hors ligne
+/// pour l'instant", never that nothing can run.
+pub(super) fn destination_text(destination: Option<&str>, workers: &TranscribeWorkers) -> String {
+    match destination {
+        Some("server") => "Sur ce serveur".to_owned(),
+        Some("external") => "Dans le conteneur de transcription".to_owned(),
+        Some("workers") => {
+            if workers.enrolled == 1 {
+                if workers.online > 0 {
+                    "Sur l'ordinateur enrôlé, en ligne".to_owned()
+                } else {
+                    "Sur l'ordinateur enrôlé, hors ligne pour l'instant".to_owned()
+                }
+            } else {
+                format!(
+                    "Sur {} ordinateurs enrôlés, {} en ligne",
+                    workers.enrolled, workers.online
+                )
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+/// `lib/transcript.js#machinesText`: « Bureau (en ligne), Portable (hors ligne) ».
+pub(super) fn machines_text(machines: &[TranscribeMachine]) -> String {
+    machines
+        .iter()
+        .map(|machine| {
+            let name = if machine.name.is_empty() {
+                "ordinateur"
+            } else {
+                machine.name.as_str()
+            };
+            format!(
+                "{name} ({})",
+                if machine.online {
+                    "en ligne"
+                } else {
+                    "hors ligne"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A month name, for the absolute dates these screens show.
@@ -980,16 +1035,31 @@ impl Screen {
                             restore_transcribe(settings, key, previous);
                         }
                         let message = match (error.code(), key) {
-                            (Some(code), "enabled")
-                                if code == "unavailable" || code == "disabled" =>
-                            {
-                                let reason = transcribe_reason(
-                                    self.transcribe
-                                        .as_ref()
-                                        .and_then(|settings| settings.reason.as_deref())
-                                        .unwrap_or("disabled"),
-                                );
-                                format!("Impossible d'activer : {reason}")
+                            (Some("unavailable"), "enabled") => {
+                                // The server's own sentence names the gate: it
+                                // is the only one that knows whether there is no
+                                // engine, no enrolled PC, or both. The card's own
+                                // `reason` is the *old* verdict, so reading it
+                                // here put the wrong cause on screen.
+                                let cause = match &error {
+                                    ApiError::Conflict { message, .. }
+                                        if !message.trim().is_empty() =>
+                                    {
+                                        let mut chars = message.trim().chars();
+                                        match chars.next() {
+                                            Some(first) => {
+                                                first.to_uppercase().collect::<String>()
+                                                    + chars.as_str()
+                                            }
+                                            None => String::new(),
+                                        }
+                                    }
+                                    _ => transcribe_reason("no_worker"),
+                                };
+                                format!("Impossible d'activer : {cause}")
+                            }
+                            (Some("disabled"), "enabled") => {
+                                format!("Impossible d'activer : {}", transcribe_reason("disabled"))
                             }
                             _ => format!("Réglage non enregistré : {}", error.cause_fr()),
                         };
@@ -2658,12 +2728,21 @@ impl Screen {
             .as_deref()
             .map(transcribe_reason)
             .unwrap_or_default();
+        let destination = settings.destination.clone();
+        let local_engine = destination.as_deref() == Some("server");
+        let on_workers = destination.as_deref() == Some("workers");
         let mut card = self
             .card("server-transcribe", "Transcription des podcasts", cx)
             .child(self.sub(
-                "Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun audio \
-                 n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque épisode se \
-                 demande depuis sa page.",
+                if on_workers {
+                    "Le texte est produit sur l'ordinateur enrôlé, à partir des fichiers archivés \
+                     du serveur. Aucun audio n'est envoyé à un tiers. Rien n'est transcrit \
+                     automatiquement : chaque épisode se demande depuis sa page."
+                } else {
+                    "Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun \
+                     audio n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque \
+                     épisode se demande depuis sa page."
+                },
                 cx,
             ));
 
@@ -2797,9 +2876,21 @@ impl Screen {
         card = card.child(chips);
 
         let mut facts = div().flex().flex_col().gap(rems(0.125)).mt(rems(0.25));
+        let route = destination_text(destination.as_deref(), &settings.workers);
+        if !route.is_empty() {
+            facts = facts.child(self.fact_line("Exécution", route, cx));
+        }
+        let machines = machines_text(&settings.machines);
+        if !machines.is_empty() {
+            facts = facts.child(self.fact_line("Appareils", machines, cx));
+        }
         let engine = settings.engine.clone().unwrap_or_default();
         facts = facts.child(self.fact_line(
-            "Moteur",
+            if local_engine {
+                "Moteur"
+            } else {
+                "Moteur local"
+            },
             format!(
                 "{}{} — {}",
                 if engine.name.is_empty() {
@@ -2836,7 +2927,7 @@ impl Screen {
                 cx,
             ));
         }
-        if settings.threads > 0 {
+        if settings.threads > 0 && local_engine {
             facts = facts.child(self.fact_line(
                 "Calcul",
                 format!("{} fils de calcul sur ce serveur", settings.threads),
@@ -2890,6 +2981,14 @@ impl Screen {
                         .child("Le moteur reste désactivé tant que le serveur n'est pas prêt.")
                 }),
         );
+
+        if on_workers && settings.workers.enrolled > 0 && settings.workers.online == 0 {
+            card = card.child(self.hint(
+                "L'ordinateur enrôlé est hors ligne : la file attend son retour, les épisodes \
+                 déjà demandés ne sont pas perdus.",
+                cx,
+            ));
+        }
 
         card = card.child(self.render_workers(window, cx));
         card
@@ -3910,6 +4009,67 @@ mod tests {
         assert_eq!(
             transcribe_reason("engine_missing"),
             "Le moteur de transcription n'est pas installé sur le serveur."
+        );
+        assert_eq!(
+            transcribe_reason("no_worker"),
+            "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur."
+        );
+    }
+
+    /// Where a queued episode runs, and the state of the PC that runs it. An
+    /// offline PC still counts (the queue accepts, the PC claims later), so the
+    /// sentence never says nothing can run.
+    #[test]
+    fn the_card_says_where_a_job_will_run_and_which_pc_is_offline() {
+        let none = TranscribeWorkers::default();
+        assert_eq!(destination_text(Some("server"), &none), "Sur ce serveur");
+        assert_eq!(
+            destination_text(Some("external"), &none),
+            "Dans le conteneur de transcription"
+        );
+        let one_online = TranscribeWorkers {
+            enrolled: 1,
+            online: 1,
+        };
+        assert_eq!(
+            destination_text(Some("workers"), &one_online),
+            "Sur l'ordinateur enrôlé, en ligne"
+        );
+        let one_offline = TranscribeWorkers {
+            enrolled: 1,
+            online: 0,
+        };
+        assert_eq!(
+            destination_text(Some("workers"), &one_offline),
+            "Sur l'ordinateur enrôlé, hors ligne pour l'instant"
+        );
+        let two = TranscribeWorkers {
+            enrolled: 2,
+            online: 1,
+        };
+        assert_eq!(
+            destination_text(Some("workers"), &two),
+            "Sur 2 ordinateurs enrôlés, 1 en ligne"
+        );
+        assert_eq!(destination_text(None, &none), "");
+
+        assert_eq!(machines_text(&[]), "");
+        assert_eq!(
+            machines_text(&[
+                TranscribeMachine {
+                    name: "Bureau".into(),
+                    kind: "client".into(),
+                    online: true,
+                    last_seen: None,
+                },
+                TranscribeMachine {
+                    name: String::new(),
+                    kind: "client".into(),
+                    online: false,
+                    last_seen: None,
+                },
+            ]),
+            "Bureau (en ligne), ordinateur (hors ligne)"
         );
     }
 

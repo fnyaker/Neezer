@@ -781,8 +781,13 @@ pub struct TranscribeView {
     pub enabled: bool,
     /// `server` or `external`.
     pub runner: Option<String>,
-    /// Why it is off (`no_model`, `disabled`, …) — the server's word.
+    /// Why it is off (`no_worker`, `disabled`, …) — the server's word.
     pub reason: Option<String>,
+    /// Where a queued episode will run: `server`, `external` or `workers`.
+    pub destination: Option<String>,
+    /// How many enrolled devices may claim a job, and how many are here now.
+    pub workers_enrolled: u32,
+    pub workers_online: u32,
     pub language: String,
     /// The languages the picker offers, `auto` first.
     pub languages: Vec<String>,
@@ -814,6 +819,9 @@ impl From<&TranscribeSettings> for TranscribeView {
             enabled: settings.enabled,
             runner: settings.runner.clone(),
             reason: settings.reason.clone(),
+            destination: settings.destination.clone(),
+            workers_enrolled: settings.workers.enrolled,
+            workers_online: settings.workers.online,
             language: settings.language.clone(),
             languages: settings.languages.clone(),
             max_minutes: settings.max_minutes,
@@ -1148,6 +1156,7 @@ mod tests {
         let settings: TranscribeSettings = serde_json::from_str(
             r#"{"available":true,"enabled":true,"language":"fr","languages":["auto","fr","en"],
                 "daily_minutes":60,"max_minutes":180,"threads":4,"search_segments":100000,
+                "destination":"server","workers":{"enrolled":0,"online":0},
                 "engine":{"name":"whisper.cpp","ok":true,"version":"1.7.4"},
                 "model":{"name":"ggml-small.bin","ok":true,"size_mb":466},
                 "queue":{"queued":3,"leased":1,"running":1,"ready":9,"error":2,
@@ -1156,6 +1165,8 @@ mod tests {
         .expect("the transcription settings");
         let view = TranscribeView::from(&settings);
         assert!(view.available);
+        assert_eq!(view.destination.as_deref(), Some("server"));
+        assert_eq!(view.workers_enrolled, 0);
         assert_eq!(view.engine_name.as_deref(), Some("whisper.cpp"));
         assert_eq!(view.engine_version.as_deref(), Some("1.7.4"));
         assert_eq!(view.model_size_mb, 466);
@@ -1163,5 +1174,26 @@ mod tests {
         assert_eq!(view.queued, 3);
         assert_eq!(view.errored, 2);
         assert_eq!(view.languages.first().map(String::as_str), Some("auto"));
+    }
+
+    /// The card says WHERE a job runs: a server with no engine and one enrolled
+    /// PC is available, and the PC's offline state is shown, not hidden.
+    #[test]
+    fn the_transcription_settings_say_where_a_job_will_run() {
+        let settings: TranscribeSettings = serde_json::from_str(
+            r#"{"available":true,"enabled":true,"language":"fr","languages":["fr"],
+                "daily_minutes":60,"max_minutes":180,"threads":0,"search_segments":1000,
+                "destination":"workers","workers":{"enrolled":2,"online":1},
+                "machines":[{"name":"Bureau","kind":"client","online":true,
+                             "last_seen":"2026-11-23T10:00:00"}],
+                "engine":{"name":"whisper.cpp","ok":false},
+                "model":{"name":null,"ok":false,"size_mb":0},"queue":{}}"#,
+        )
+        .expect("the transcription settings");
+        let view = TranscribeView::from(&settings);
+        assert!(view.available);
+        assert_eq!(view.destination.as_deref(), Some("workers"));
+        assert_eq!((view.workers_enrolled, view.workers_online), (2, 1));
+        assert!(!view.engine_ok);
     }
 }

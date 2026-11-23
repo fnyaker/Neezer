@@ -153,6 +153,9 @@
     if (code === "no_duration") return "La durée de l'épisode est inconnue ; impossible de la borner.";
     if (code === "queue_full") return "La file de transcription est pleine.";
     if (code === "already_running") return "Cet épisode est déjà en cours de transcription.";
+    if (code === "no_worker") {
+      return "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur.";
+    }
     return (error && error.body && error.body.error) || (error && error.message) || "La transcription n'a pas pu démarrer.";
   }
 

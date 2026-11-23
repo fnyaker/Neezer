@@ -1312,11 +1312,42 @@ class ConfigTestCase(_Base):
         episode = self.episode()
         with self.assertRaises(job.QueueError) as caught:
             job.enqueue(episode.id, app=self.config)
-        self.assertEqual(caught.exception.code, "engine_missing")
+        self.assertEqual(caught.exception.code, "no_worker")
+        self.assertIn("ordinateur", str(caught.exception))
         channel = self.channel(auto_transcribe=True)
         auto_episode = self.episode(number=2, channel=channel)
         skipped = job.auto_enqueue(auto_episode, app=self.config)
-        self.assertEqual(skipped["reason"], "engine_missing")
+        self.assertEqual(skipped["reason"], "no_worker")
+
+    def test_an_enrolled_pc_carries_the_queue_when_the_server_has_no_engine(self):
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, bin=None)
+        TranscribeWorker.create(name="Bureau", kind="client", token="pending")
+        episode = self.episode()
+        # It is queued, not run: the PC claims it over the worker protocol.
+        out = job.enqueue(episode.id, app=self.config)
+        self.assertEqual(out["status"], "queued")
+        self.assertEqual(PodcastTranscript.get().status, "queued")
+
+        # The automatic backlog is not skipped either: a new archived episode of
+        # a marked show must reach the PC.
+        channel = self.channel(auto_transcribe=True, title="Auto")
+        auto_episode = self.episode(number=2, channel=channel)
+        queued = job.auto_enqueue(auto_episode, app=self.config)
+        self.assertEqual(queued["status"], "queued", queued)
+
+        # And ``resume_auto`` refills what a restart interrupted.
+        PodcastTranscript.update(status="queued").execute()
+        self.assertGreaterEqual(job.resume_auto(self.config), 0)
+
+    def test_a_revoked_pc_does_not_carry_the_queue(self):
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, bin=None)
+        worker = TranscribeWorker.create(name="Bureau", kind="client", token="pending")
+        worker.revoked = now()
+        worker.save()
+        episode = self.episode()
+        with self.assertRaises(job.QueueError) as caught:
+            job.enqueue(episode.id, app=self.config)
+        self.assertEqual(caught.exception.code, "no_worker")
 
 
 class RebuildTestCase(_Base):

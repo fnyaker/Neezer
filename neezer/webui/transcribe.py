@@ -304,13 +304,48 @@ def _progress(status, duration_ms, done_ms, episode_id):
     return max(0.0, min(1.0, int(done_ms or 0) / duration))
 
 
-def _availability(values, paths):
-    if not values["enabled"]:
-        return False, "disabled"
+def _readiness(values, paths, report=None):
+    """(available, reason, destination, report): will a queued episode ever run?
+
+    One place answers it for the status payload, the settings payload and the
+    activation route, so the three can never disagree. The local engine is not
+    the only place transcription can happen: an enrolled device (a PC on the
+    LAN, the sidecar container) claims the queue over the worker protocol, and
+    its own engine, model and ffmpeg are the ones that matter. **Enrolment is
+    what counts, never liveness** — a PC that is off at this second claims the
+    queued episode when it comes back, and a failure to reach it is not a
+    verdict about it.
+    """
+    report = report if report is not None else job.workers_report()
     if values["runner"] == "external":
-        return True, None
-    verdict = engine.quick_check(paths)
-    return bool(verdict["ok"]), verdict["reason"]
+        destination = "external"
+    elif engine.quick_check(paths)["ok"]:
+        destination = "server"
+    elif report["enrolled"]:
+        destination = "workers"
+    else:
+        destination = None
+    if not values["enabled"]:
+        return False, "disabled", destination, report
+    if destination is None:
+        return False, "no_worker", None, report
+    return True, None, destination, report
+
+
+def _workers_payload(report):
+    return {"enrolled": int(report["enrolled"]), "online": int(report["online"])}
+
+
+#: What a refused activation says, per gate. The SPA, the desktop and the phone
+#: print their own sentence from the `reason` code; this message is what an API
+#: client and a log read.
+READINESS_MESSAGES = {
+    "disabled": "la transcription est désactivée",
+    "no_worker": (
+        "aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas "
+        "de moteur"
+    ),
+}
 
 
 def _queue_counts():
@@ -356,12 +391,14 @@ def _status_payload():
     app = _app()
     values = settings.load(app)
     paths = settings.paths(app)
-    available, reason = _availability(values, paths)
+    available, reason, destination, report = _readiness(values, paths)
     payload = {
         "enabled": bool(values["enabled"]),
         "available": bool(available),
         "reason": reason,
         "runner": values["runner"],
+        "destination": destination,
+        "workers": _workers_payload(report),
         "language": values["language"],
         "max_minutes": values["max_minutes"],
         "daily_minutes": values["daily_minutes"],
@@ -378,8 +415,9 @@ def _settings_payload(fresh=False):
     app = _app()
     values = settings.load(app)
     paths = settings.paths(app)
+    report = job.workers_report()
+    available, reason, destination, _report = _readiness(values, paths, report)
     verdict = engine.probe(paths) if fresh else engine.quick_check(paths)
-    available, reason = _availability(values, paths)
     model_bytes = int(verdict.get("model_bytes") or 0)
     engine_ok = (
         bool(paths.get("bin"))
@@ -397,6 +435,11 @@ def _settings_payload(fresh=False):
         "runner": values["runner"],
         "available": bool(available),
         "reason": reason,
+        "destination": destination,
+        "workers": _workers_payload(report),
+        # The machines themselves are for the admin card alone: the status
+        # payload (any account) carries the counts and never a hostname.
+        "machines": list(report["machines"]),
         "engine": {
             "name": engine.FORMAT_ENGINE,
             "version": verdict.get("version"),
@@ -636,14 +679,22 @@ def transcribe_settings():
                 f"{key} doit être compris entre {low} et {high}", code=key
             )
         updates[key] = str(value)
-    if data.get("enabled") is True and settings.runner(_app()) == "inline":
-        verdict = engine.quick_check(settings.paths(_app()))
-        if not verdict["ok"]:
+    if data.get("enabled") is True:
+        # Activation is allowed on capacity, not on the local engine: a server
+        # with no whisper.cpp but an enrolled PC (even one that is off right
+        # now) will serve every queued episode -- the PC claims it.
+        values = dict(settings.load(_app()), enabled=True)
+        available, reason, _destination, _report = _readiness(
+            values, settings.paths(_app())
+        )
+        if not available:
             raise _Rejected(
-                verdict["message"] or "le moteur de transcription est indisponible",
+                READINESS_MESSAGES.get(
+                    reason, "le moteur de transcription est indisponible"
+                ),
                 code="unavailable",
                 status=409,
-                extra={"reason": verdict["reason"]},
+                extra={"reason": reason},
             )
     if not updates:
         raise _Rejected("aucun réglage")

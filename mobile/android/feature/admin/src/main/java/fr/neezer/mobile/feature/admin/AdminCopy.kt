@@ -365,13 +365,36 @@ object AdminCopy {
     /** `TranscribeSettings.svelte#reasonText`, by the server's own word. */
     fun transcribeReason(reason: String?): String = when (reason) {
         null, "" -> ""
-        "no_model" -> "Aucun modèle installé sur le serveur"
         "disabled" -> "La transcription est désactivée sur ce serveur"
+        "engine_missing" -> "Le moteur de transcription n'est pas installé sur le serveur"
+        "no_worker" -> "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur"
+        "model_missing" -> "Le modèle de transcription est introuvable sur le serveur"
+        "model_invalid" -> "Le fichier de modèle n'est pas un modèle whisper.cpp valide"
+        // Older payloads and older servers used these names; keep them readable.
+        "no_model" -> "Aucun modèle installé sur le serveur"
         "unavailable" -> "Ce serveur ne peut pas transcrire"
         "no_engine" -> "Le moteur de transcription est absent"
         else -> reason
     }
 
+    /**
+     * Où la transcription tournera, et l'état du PC enrôlé
+     * (`lib/transcript.js#destinationText`). Un PC hors ligne compte quand même :
+     * la file accepte l'épisode et le PC le réclame à son retour.
+     */
+    fun transcribeDestination(destination: String?, enrolled: Int, online: Int): String =
+        when (destination) {
+            "server" -> "Sur ce serveur"
+            "external" -> "Dans le conteneur de transcription"
+            "workers" ->
+                if (enrolled == 1) {
+                    if (online > 0) "Sur l'ordinateur enrôlé, en ligne"
+                    else "Sur l'ordinateur enrôlé, hors ligne pour l'instant"
+                } else {
+                    "Sur $enrolled ordinateurs enrôlés, $online en ligne"
+                }
+            else -> ""
+        }
     fun languageLabel(code: String): String = when (code) {
         "auto" -> "Détection automatique"
         "fr" -> "Français"

@@ -778,6 +778,11 @@ pub struct AdminTranscribe {
     pub enabled: bool,
     pub runner: Option<String>,
     pub reason: Option<String>,
+    /// `server`, `external` or `workers`: where a queued episode will run.
+    pub destination: Option<String>,
+    /// Enrolled devices that may claim a job, and how many are online now.
+    pub workers_enrolled: u32,
+    pub workers_online: u32,
     pub language: String,
     pub languages: Vec<String>,
     pub max_minutes: u32,
@@ -806,6 +811,9 @@ impl From<core_admin::TranscribeView> for AdminTranscribe {
             enabled: settings.enabled,
             runner: settings.runner,
             reason: settings.reason,
+            destination: settings.destination,
+            workers_enrolled: settings.workers_enrolled,
+            workers_online: settings.workers_online,
             language: settings.language,
             languages: settings.languages,
             max_minutes: settings.max_minutes,

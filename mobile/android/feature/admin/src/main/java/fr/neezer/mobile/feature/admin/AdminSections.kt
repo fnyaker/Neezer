@@ -1349,11 +1349,17 @@ private fun AutomatchBody(model: AdminModel, status: uniffi.nz_ffi.AdminAutomatc
 @Composable
 private fun TranscribeCard(model: AdminModel, state: AdminModel.State) {
     val section = state.transcribe
+    val settings = section.data
+    val onWorkers = settings?.destination == "workers"
     AdminCard(
         title = "Transcription des podcasts",
-        subtitle = "Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun audio n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque épisode se demande depuis sa page.",
+        subtitle = if (onWorkers) {
+            "Le texte est produit sur l'ordinateur enrôlé, à partir des fichiers archivés du serveur. Aucun audio n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque épisode se demande depuis sa page."
+        } else {
+            "Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun audio n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque épisode se demande depuis sa page."
+        },
     ) {
-        section.data?.let { settings -> TranscribeBody(model, settings, section.loading) }
+        settings?.let { TranscribeBody(model, it, section.loading) }
         section.failure?.let { AdminCardFailure(it, { model.retryCard("transcribe") }) }
     }
 }
@@ -1363,6 +1369,13 @@ private fun TranscribeBody(model: AdminModel, settings: AdminTranscribe, probing
     if (!settings.available) {
         AdminHint("La transcription n'est pas disponible sur ce serveur.", warn = true)
     }
+    AdminCopy.transcribeDestination(
+        settings.destination,
+        settings.workersEnrolled.toInt(),
+        settings.workersOnline.toInt(),
+    )
+        .takeIf { it.isNotEmpty() }
+        ?.let { AdminHint("Exécution : $it.") }
     AdminSwitchRow(
         title = "Transcrire les podcasts",
         hint = "Le moteur reste désactivé tant que cette option est fermée.",
@@ -1407,7 +1420,8 @@ private fun TranscribeBody(model: AdminModel, settings: AdminTranscribe, probing
     )
     settings.engineName?.let { name ->
         AdminHint(
-            "Moteur : $name" + (settings.engineVersion?.let { " $it" } ?: "") +
+            (if (settings.destination == "server") "Moteur : " else "Moteur local : ") + name +
+                (settings.engineVersion?.let { " $it" } ?: "") +
                 " — " + (if (settings.engineOk) "trouvé" else "absent"),
         )
     }
@@ -1418,7 +1432,12 @@ private fun TranscribeBody(model: AdminModel, settings: AdminTranscribe, probing
                 " — " + (if (settings.modelOk) "valide" else "invalide"),
         )
     }
-    if (settings.threads > 0u) AdminHint("${settings.threads} fils de calcul sur ce serveur.")
+    if (settings.threads > 0u && settings.destination == "server") {
+        AdminHint("${settings.threads} fils de calcul sur ce serveur.")
+    }
+    if (settings.workersEnrolled > 0u && settings.workersOnline == 0u) {
+        AdminHint("L'ordinateur enrôlé est hors ligne : la file attend son retour.", warn = true)
+    }
     if (settings.runningNow > 0u || settings.queued > 0u) {
         AdminHint("File : ${settings.runningNow} en cours, ${settings.queued} en attente.")
     }

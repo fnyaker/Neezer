@@ -4,11 +4,13 @@ import { get } from "svelte/store";
 import { fakeIndexedDB } from "./fakeidb.mjs";
 import {
   batchOptions,
+  destinationText,
   excerptAround,
   foldText,
   highlightParts,
   hitEpisode,
   languageLabel,
+  machinesText,
   pageInfo,
   pageKey,
   panelRequest,
@@ -149,6 +151,49 @@ test("reasonText names each cause and never claims a configuration", () => {
   assert.match(reasonText("model_missing"), /modèle/);
   assert.match(reasonText("model_invalid"), /whisper\.cpp/);
   assert.match(reasonText(null), /n'est pas configurée/);
+});
+
+test("reasonText says when nothing can run the queue at all", () => {
+  // The reported bug: a server with no whisper.cpp refused activation even
+  // though an enrolled PC was there. The gate now names both halves, so the
+  // sentence must too.
+  assert.match(reasonText("no_worker"), /Aucun ordinateur n'est enrôlé/);
+  assert.match(reasonText("no_worker"), /serveur n'a pas de moteur/);
+});
+
+test("destinationText says where a queued episode will run", () => {
+  assert.equal(destinationText("server", { enrolled: 0, online: 0 }), "Sur ce serveur");
+  assert.equal(
+    destinationText("external", { enrolled: 1, online: 1 }),
+    "Dans le conteneur de transcription",
+  );
+  assert.equal(
+    destinationText("workers", { enrolled: 1, online: 1 }),
+    "Sur l'ordinateur enrôlé, en ligne",
+  );
+  // An unreachable PC is not a verdict: the queue still accepts, so the
+  // sentence says the PC is offline right now, never that nothing runs.
+  assert.equal(
+    destinationText("workers", { enrolled: 1, online: 0 }),
+    "Sur l'ordinateur enrôlé, hors ligne pour l'instant",
+  );
+  assert.equal(
+    destinationText("workers", { enrolled: 2, online: 1 }),
+    "Sur 2 ordinateurs enrôlés, 1 en ligne",
+  );
+  assert.equal(destinationText(null, null), "");
+});
+
+test("machinesText lists each PC and its state, never an empty line", () => {
+  assert.equal(machinesText(null), "");
+  assert.equal(machinesText([]), "");
+  assert.equal(
+    machinesText([
+      { name: "Bureau", online: true },
+      { name: "Portable", online: false },
+    ]),
+    "Bureau (en ligne), Portable (hors ligne)",
+  );
 });
 
 test("a hit becomes a playable episode without another request", () => {

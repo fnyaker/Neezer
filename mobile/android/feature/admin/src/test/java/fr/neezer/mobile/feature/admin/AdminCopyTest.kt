@@ -115,4 +115,33 @@ class AdminCopyTest {
         assertEquals("une cause inconnue", AdminCopy.automatchReason("une cause inconnue"))
         assertEquals("99,5 %", AdminCopy.percent(0.995))
     }
+
+    /** The reported bug: a server with no engine and no enrolled PC refused with
+     *  a sentence that named neither half, and the card printed the raw code for
+     *  `engine_missing`. */
+    @Test
+    fun the_transcription_card_names_the_gate_and_the_pc() {
+        assertEquals(
+            "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur",
+            AdminCopy.transcribeReason("no_worker"),
+        )
+        assertEquals(
+            "Le moteur de transcription n'est pas installé sur le serveur",
+            AdminCopy.transcribeReason("engine_missing"),
+        )
+        assertEquals(
+            "Sur l'ordinateur enrôlé, hors ligne pour l'instant",
+            AdminCopy.transcribeDestination("workers", enrolled = 1, online = 0),
+        )
+        assertEquals(
+            "Sur l'ordinateur enrôlé, en ligne",
+            AdminCopy.transcribeDestination("workers", enrolled = 1, online = 1),
+        )
+        assertEquals(
+            "Sur 2 ordinateurs enrôlés, 1 en ligne",
+            AdminCopy.transcribeDestination("workers", enrolled = 2, online = 1),
+        )
+        assertEquals("Sur ce serveur", AdminCopy.transcribeDestination("server", 0, 0))
+        assertEquals("", AdminCopy.transcribeDestination(null, 0, 0))
+    }
 }

@@ -210,10 +210,22 @@ def invalidate():
 
 
 def available(app=None):
+    """Whether a queued episode can ever run, and why not.
+
+    The local engine is one place transcription can happen, not the only one: an
+    enrolled device (a PC on the LAN, the sidecar container) claims the queue
+    over the worker protocol. Enrolment is what counts, never liveness.
+    """
     values = load(app)
     if not values["enabled"]:
         return False, "disabled"
     if values["runner"] == "external":
         return True, None
     verdict = engine.quick_check(paths(app))
-    return bool(verdict["ok"]), verdict["reason"]
+    if verdict["ok"]:
+        return True, None
+    from . import job
+
+    if job.worker_ready():
+        return True, None
+    return False, "no_worker"
