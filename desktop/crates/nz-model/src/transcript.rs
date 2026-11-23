@@ -169,6 +169,31 @@ pub struct TranscribeQueue {
     pub budget_used_ms: u64,
 }
 
+/// How many enrolled devices may claim a queued episode, and how many of them
+/// claimed or heartbeat recently. The same shape in `/api/transcribe/status`
+/// (any account, counts only) and `/api/transcribe/settings` (admin).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TranscribeWorkers {
+    #[serde(default)]
+    pub enrolled: u32,
+    #[serde(default)]
+    pub online: u32,
+}
+
+/// One enrolled device as the admin card names it (`/api/transcribe/settings`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TranscribeMachine {
+    #[serde(default)]
+    pub name: String,
+    /// `"client"` (a person's PC) or `"server"` (the sidecar container).
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub online: bool,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+}
+
 /// `/api/transcribe/status` — what the server's transcription is doing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TranscribeStatus {
@@ -180,9 +205,14 @@ pub struct TranscribeStatus {
     /// waits for an enrolled worker (the desktop can be that worker).
     #[serde(default)]
     pub runner: Option<String>,
-    /// Why transcription is off, when it is (`"no_model"`, `"disabled"`, …).
+    /// Why transcription is off, when it is (`"no_worker"`, `"disabled"`, …).
     #[serde(default)]
     pub reason: Option<String>,
+    /// Where a queued episode will run: `"server"`, `"external"` or `"workers"`.
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub workers: TranscribeWorkers,
     #[serde(default)]
     pub language: String,
     #[serde(default)]
@@ -232,6 +262,14 @@ pub struct TranscribeSettings {
     pub runner: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
+    /// Where a queued episode will run: `"server"`, `"external"` or `"workers"`.
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub workers: TranscribeWorkers,
+    /// The enrolled devices, named — the admin card alone reads this list.
+    #[serde(default)]
+    pub machines: Vec<TranscribeMachine>,
     #[serde(default)]
     pub language: String,
     /// The languages the picker offers, `"auto"` first.
@@ -284,5 +322,50 @@ mod tests {
         .expect("no transcript");
         assert_eq!(page.status, "none");
         assert!(page.error.is_none());
+    }
+
+    /// The server's settings card now says WHERE a job will run and names the
+    /// enrolled PCs; a server one version behind (no `destination`/`workers`)
+    /// must still parse, and a status payload (counts, no machines) must too.
+    #[test]
+    fn the_settings_and_status_say_where_a_job_will_run() {
+        let settings: TranscribeSettings = serde_json::from_str(
+            r#"{"available":true,"enabled":true,"runner":"inline","reason":null,
+                "destination":"workers","workers":{"enrolled":2,"online":1},
+                "machines":[{"name":"Bureau","kind":"client","online":true,
+                             "last_seen":"2026-11-23T10:00:00"},
+                            {"name":"Portable","kind":"client","online":false,
+                             "last_seen":null}],
+                "language":"fr","languages":["auto","fr"],"max_minutes":360,
+                "daily_minutes":120,"search_segments":1200000,"threads":4,
+                "queue":{"queued":1},"engine":{"name":"whisper.cpp","ok":false},
+                "model":{"name":"ggml-small.bin","ok":false,"size_mb":0}}"#,
+        )
+        .expect("settings payload");
+        assert_eq!(settings.destination.as_deref(), Some("workers"));
+        assert_eq!(settings.workers.enrolled, 2);
+        assert_eq!(settings.workers.online, 1);
+        assert_eq!(settings.machines.len(), 2);
+        assert!(!settings.machines[1].online);
+
+        let status: TranscribeStatus = serde_json::from_str(
+            r#"{"enabled":true,"available":true,"reason":null,"runner":"inline",
+                "destination":"workers","workers":{"enrolled":1,"online":0},
+                "language":"fr","model":null,"daily_minutes":120,"max_minutes":360,
+                "search_segments":1200000,"queue":{},"last_error":null}"#,
+        )
+        .expect("status payload");
+        assert_eq!(status.destination.as_deref(), Some("workers"));
+        assert_eq!(status.workers.online, 0);
+
+        let old: TranscribeSettings = serde_json::from_str(
+            r#"{"available":true,"enabled":false,"reason":null,"language":"fr",
+                "languages":[],"max_minutes":360,"daily_minutes":120,
+                "search_segments":1200000,"threads":0,"queue":{}}"#,
+        )
+        .expect("a server one version behind");
+        assert!(old.destination.is_none());
+        assert_eq!(old.workers.enrolled, 0);
+        assert!(old.machines.is_empty());
     }
 }

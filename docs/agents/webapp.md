@@ -705,7 +705,12 @@ About panel on the Transcription segment at the hit's timecode (`panelRequest` i
 desktop/mobile shell with `segToken`, expiring after 3 s); the episode page has the same jump. The
 global Space shortcut ignores interactive targets (`button/a/input/textarea/select/[role=button]/
 [contenteditable]`). Settings carries the admin transcription card (enabled, language, limits,
-search scope, engine/model probe) and the two chapter switches. Measured: 0/1/0 requests on a ready
+search scope, engine/model probe) and the two chapter switches. The card says **where** a job will
+run (`destinationText`: « Sur ce serveur », « Dans le conteneur de transcription », « Sur
+l'ordinateur enrôlé, en ligne / hors ligne pour l'instant ») and names the enrolled PCs with their
+state (`machines`, admin payload only); the local engine fact becomes « Moteur local » whenever the
+job runs elsewhere, and an offline PC adds « la file attend son retour » instead of pretending
+nothing can run (`reasonText('no_worker')` is reserved for *no engine AND no PC*). Measured: 0/1/0 requests on a ready
 transcript, 1 GET per page/search, 1 poll per 10.5 s while running, 200 lines at 390/641/1440 with no
 sideways overflow, 44 px controls.
 

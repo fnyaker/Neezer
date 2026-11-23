@@ -65,6 +65,10 @@ pub fn reason_text(reason: &str) -> String {
         "engine_missing" => {
             "Le moteur de transcription n'est pas installé sur le serveur.".to_owned()
         }
+        "no_worker" => {
+            "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur."
+                .to_owned()
+        }
         "model_missing" => "Le modèle de transcription est introuvable sur le serveur.".to_owned(),
         "model_invalid" => {
             "Le fichier de modèle n'est pas un modèle whisper.cpp valide.".to_owned()
@@ -625,6 +629,7 @@ mod tests {
         for reason in [
             "disabled",
             "engine_missing",
+            "no_worker",
             "model_missing",
             "model_invalid",
             "something_else",

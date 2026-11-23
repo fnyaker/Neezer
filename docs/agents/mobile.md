@@ -4073,6 +4073,7 @@ Deezer verdict.
 | `SimilarRebuild` | *Voisins sonores* |
 | `AutomatchPanel` (switch, run, cancel, replaced with their score, misses) | *Remplacement automatique* |
 | `TranscribeSettings` (switch, reason, language, durations, budget, search, model, probe) | *Transcription des podcasts* |
+| `TranscribeSettings.destination` + `workers {enrolled, online}` | *Transcription des podcasts* prints « Exécution : … » (the server's `destinationText`): on the server, in the container, or on the enrolled PC — « hors ligne pour l'instant » when the PC is away, never « rien ne peut tourner ». `reason = no_worker` is the only sentence that means *no engine AND no PC* |
 | The ARL card's `Tester` + the masked hint + its source | *Compte Deezer (ARL)*, never the credential |
 | `$user?.admin` gating in `Settings.svelte` | the session's `user.admin`; a member draws a sentence and opens no socket |
 | *(the SPA has no equivalent)* | — |

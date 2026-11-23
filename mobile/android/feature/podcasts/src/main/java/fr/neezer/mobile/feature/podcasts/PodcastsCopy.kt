@@ -79,6 +79,7 @@ object PodcastsCopy {
         null, "" -> "La transcription n'est pas configurée sur ce serveur."
         "disabled" -> "La transcription est désactivée sur ce serveur."
         "engine_missing" -> "Le moteur de transcription n'est pas installé sur le serveur."
+        "no_worker" -> "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur."
         "model_missing" -> "Le modèle de transcription est introuvable sur le serveur."
         "model_invalid" -> "Le fichier de modèle n'est pas un modèle whisper.cpp valide."
         else -> "La transcription n'est pas configurée sur ce serveur."
@@ -91,6 +92,7 @@ object PodcastsCopy {
         "no_duration" -> "La durée de l'épisode est inconnue ; impossible de la borner."
         "queue_full" -> "La file de transcription est pleine."
         "already_running" -> "Cet épisode est déjà en cours de transcription."
+        "no_worker" -> "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur."
         else -> "La transcription n'a pas pu démarrer."
     }
 

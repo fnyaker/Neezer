@@ -53,6 +53,11 @@ QUEUE_MAX = 20
 LEASE_SECONDS = 15 * 60
 HEARTBEAT_WRITE_SECONDS = 60
 LEASE_ATTEMPTS = 3
+#: How recently a device must have claimed or heartbeat to read as "en ligne".
+#: A worker claims every 5 s while idle (``worker.POLL_SECONDS`` here and in
+#: ``nz-transcribe``'s protocol): 120 s is 24 missed claims, so a wifi hiccup
+#: never flips a PC to offline and a PC that went away is offline in two minutes.
+ONLINE_SECONDS = 120
 MAX_BYTES = 1 << 30
 CHUNK_MS = engine.CHUNK_SECONDS * 1000
 OVERLAP_MS = engine.OVERLAP_SECONDS * 1000
@@ -212,9 +217,15 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
     duration = _check_limits(episode, path, values)
     if values["runner"] == "inline":
         verdict = engine.quick_check(settings.paths(app))
-        if not verdict["ok"]:
+        if not verdict["ok"] and not worker_ready():
+            # No local engine and no enrolled device: nothing would ever claim
+            # this row. The gate's own code is `no_worker` (the UI turns it into
+            # one sentence that names both halves); the engine's verdict stays
+            # the detail, so an operator still reads "moteur introuvable".
             raise QueueError(
-                verdict["reason"], verdict["message"], detail=verdict["message"]
+                "no_worker",
+                "aucun moteur local ni ordinateur enrôlé pour transcrire",
+                detail=verdict["message"],
             )
 
     explicit = engine.normalize_language(language) if language else None
@@ -344,10 +355,10 @@ def auto_enqueue(episode, app=None):
             return {"status": "skipped", "reason": "queue_full", "episode_id": str(episode.id)}
         if values["runner"] == "inline":
             verdict = engine.quick_check(settings.paths(app))
-            if not verdict["ok"]:
+            if not verdict["ok"] and not worker_ready():
                 return {
                     "status": "skipped",
-                    "reason": verdict["reason"],
+                    "reason": "no_worker",
                     "episode_id": str(episode.id),
                 }
         limit = int(values["daily_minutes"] or 0) * 60_000
@@ -496,6 +507,79 @@ def _live_server_lease():
         )
         .exists()
     )
+
+
+def enrolled_workers():
+    """The devices an admin enrolled that may still claim work.
+
+    A base that is not ready answers an empty list instead of raising: this is a
+    verdict about capacity, never a reason to fail a request (a settings page or
+    a podcast panel must still paint on a server whose base is being repaired).
+    """
+    try:
+        return list(
+            TranscribeWorker.select()
+            .where(
+                (TranscribeWorker.enabled == True)  # noqa: E712
+                & TranscribeWorker.revoked.is_null()
+            )
+            .order_by(TranscribeWorker.created)
+        )
+    except Exception:
+        logger.debug("could not read the enrolled transcription workers", exc_info=True)
+        return []
+
+
+def worker_ready():
+    """True when at least one enrolled device may claim a queued episode.
+
+    This is the gate that lets a server with **no** local whisper.cpp still
+    accept work: the queue is what the enrolled PC reads, and the engine is on
+    that PC. A device that is off right now still counts, because enrolment --
+    not liveness -- is what makes a queued episode runnable; the PC claims it
+    when it comes back.
+    """
+    try:
+        return (
+            TranscribeWorker.select()
+            .where(
+                (TranscribeWorker.enabled == True)  # noqa: E712
+                & TranscribeWorker.revoked.is_null()
+            )
+            .exists()
+        )
+    except Exception:
+        logger.debug("could not read the enrolled transcription workers", exc_info=True)
+        return False
+
+
+def workers_report(at=None):
+    """How many enrolled devices may claim work, and which of them are here.
+
+    ``online`` is ``last_seen`` within ``ONLINE_SECONDS``; a device that has
+    never claimed nor heartbeat is offline. Offline is a state to *show*, never
+    a verdict about the device: the UI prints it, the queue keeps accepting
+    episodes.
+    """
+    moment = at or now()
+    machines = []
+    online = 0
+    for row in enrolled_workers():
+        seen = row.last_seen
+        try:
+            here = seen is not None and (moment - seen).total_seconds() <= ONLINE_SECONDS
+        except TypeError:
+            here = False
+        online += 1 if here else 0
+        machines.append(
+            {
+                "name": row.name,
+                "kind": row.kind,
+                "online": here,
+                "last_seen": seen.isoformat() if seen is not None else None,
+            }
+        )
+    return {"enrolled": len(machines), "online": online, "machines": machines}
 
 
 def _claim_atomic():
@@ -1265,9 +1349,10 @@ def queue_status(app=None):
     if available and values["runner"] == "inline":
         from . import runner as _runner
 
-        if _runner.workers() > 1:
+        if _runner.workers() > 1 and not worker_ready():
             # The inline runner refuses a multi-worker deployment: the queue
-            # would sit there with nothing to move it.
+            # would sit there with nothing to move it — unless an enrolled PC
+            # claims it, which the worker protocol allows whatever the runner.
             available, reason = False, "multi_worker"
     return {
         "enabled": values["enabled"],
@@ -1399,7 +1484,11 @@ def resume_auto(app=None):
     values = settings.load(app)
     if not values["enabled"]:
         return 0
-    if values["runner"] == "inline" and not engine.quick_check(settings.paths(app))["ok"]:
+    if (
+        values["runner"] == "inline"
+        and not engine.quick_check(settings.paths(app))["ok"]
+        and not worker_ready()
+    ):
         return 0
     channels = list(
         PodcastChannel.select().where(PodcastChannel.auto_transcribe == True)  # noqa: E712

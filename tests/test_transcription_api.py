@@ -32,6 +32,7 @@ from neezer.db import (
     PodcastEpisode,
     PodcastTranscript,
     PodcastTranscriptSegment,
+    TranscribeWorker,
     release_database,
 )
 from neezer.deezer import workload
@@ -497,9 +498,185 @@ class TranscriptionApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         body = response.get_json()
         self.assertEqual(body["code"], "unavailable")
-        self.assertEqual(body["reason"], "engine_missing")
+        # No local engine AND no enrolled device: the gate names both halves,
+        # because either one alone would be enough to run the queue.
+        self.assertEqual(body["reason"], "no_worker")
+        self.assertIn("ordinateur", body["error"])
         self.assertFalse(Meta.select().where(Meta.key == "tr.enabled").exists())
         self.assertFalse(settings.load(self.app)["enabled"])
+
+    def enroll(self, name="Bureau", kind="client"):
+        response = self.client.post(
+            "/api/transcribe/workers", json={"name": name, "kind": kind}
+        )
+        self.assertEqual(response.status_code, 201, response.get_json())
+        return response.get_json()["worker"], response.get_json()["token"]
+
+    def test_an_enrolled_pc_lets_the_admin_activate_without_a_local_engine(self):
+        """The reported bug: activation only asked the LOCAL engine."""
+        self.app.config["TRANSCRIBE"]["enabled"] = False
+        self.app.config["TRANSCRIBE"]["bin"] = None
+        engine.clear_probe_cache()
+        worker, _token = self.enroll()
+        # Enrolled, never connected: an unreachable PC is not a verdict.
+        self.assertIsNone(TranscribeWorker.get_by_id(worker["id"]).last_seen)
+        response = self.client.put(
+            "/api/transcribe/settings", json={"enabled": True}
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        body = response.get_json()
+        self.assertTrue(body["enabled"])
+        self.assertTrue(body["available"])
+        self.assertIsNone(body["reason"])
+        self.assertEqual(body["destination"], "workers")
+        self.assertEqual(body["workers"], {"enrolled": 1, "online": 0})
+        self.assertEqual(len(body["machines"]), 1)
+        self.assertEqual(body["machines"][0]["name"], "Bureau")
+        self.assertFalse(body["machines"][0]["online"])
+        self.assertTrue(settings.load(self.app)["enabled"])
+
+    def test_the_pc_state_is_online_only_while_it_keeps_claiming(self):
+        self.app.config["TRANSCRIBE"]["bin"] = None
+        engine.clear_probe_cache()
+        worker, _token = self.enroll()
+        row = TranscribeWorker.get_by_id(worker["id"])
+        row.last_seen = datetime.now().replace(microsecond=0)
+        row.save()
+        body = self.client.get("/api/transcribe/settings").get_json()
+        self.assertTrue(body["machines"][0]["online"])
+        self.assertEqual(body["workers"], {"enrolled": 1, "online": 1})
+        row.last_seen = datetime.now().replace(microsecond=0) - timedelta(
+            seconds=job.ONLINE_SECONDS + 1
+        )
+        row.save()
+        body = self.client.get("/api/transcribe/settings").get_json()
+        self.assertFalse(body["machines"][0]["online"])
+        self.assertEqual(body["workers"], {"enrolled": 1, "online": 0})
+        # Offline changes the sentence, never the verdict: the PC claims the
+        # queued episode when it comes back.
+        self.assertTrue(body["available"])
+        self.assertEqual(body["destination"], "workers")
+
+    def test_a_revoked_or_disabled_pc_does_not_make_the_feature_available(self):
+        self.app.config["TRANSCRIBE"]["bin"] = None
+        engine.clear_probe_cache()
+        worker, _token = self.enroll()
+        revoked = self.client.delete("/api/transcribe/workers/" + worker["id"])
+        self.assertEqual(revoked.status_code, 200)
+        response = self.client.put(
+            "/api/transcribe/settings", json={"enabled": True}
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["reason"], "no_worker")
+        self.assertEqual(
+            self.client.get("/api/transcribe/settings").get_json()["workers"],
+            {"enrolled": 0, "online": 0},
+        )
+
+        worker, _token = self.enroll("Portable")
+        row = TranscribeWorker.get_by_id(worker["id"])
+        row.enabled = False
+        row.save()
+        response = self.client.put(
+            "/api/transcribe/settings", json={"enabled": True}
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["reason"], "no_worker")
+
+    def test_the_public_status_says_where_a_job_will_run_and_no_hostname(self):
+        self.app.config["TRANSCRIBE"]["bin"] = None
+        engine.clear_probe_cache()
+        self.enroll("Bureau-de-Nyaker")
+        admin = self.client.get("/api/transcribe/status").get_json()
+        self.assertTrue(admin["available"])
+        self.assertEqual(admin["destination"], "workers")
+        self.assertEqual(admin["workers"], {"enrolled": 1, "online": 0})
+        # A hostname is the admin card's business: the status route is open to
+        # every account.
+        self.assertNotIn("Bureau-de-Nyaker", json.dumps(admin))
+        bob = self.user_client.get("/api/transcribe/status").get_json()
+        self.assertEqual(bob["destination"], "workers")
+        self.assertNotIn("Bureau-de-Nyaker", json.dumps(bob))
+
+    def test_a_local_engine_still_wins_when_it_exists(self):
+        body = self.client.get("/api/transcribe/settings").get_json()
+        self.assertEqual(body["destination"], "server")
+        self.assertEqual(body["workers"], {"enrolled": 0, "online": 0})
+
+    def test_the_whole_flow_runs_on_an_enrolled_pc_with_no_local_engine(self):
+        """Activation, enqueue, claim, chunk, complete: all of it on the PC."""
+        self.app.config["TRANSCRIBE"]["bin"] = None
+        engine.clear_probe_cache()
+        worker, token = self.enroll()
+        response = self.client.put(
+            "/api/transcribe/settings", json={"enabled": True}
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+
+        channel = self.channel()
+        episode = self.episode(channel, duration=600)
+        started = self.client.post(
+            "/api/podcast/episode/%s/transcribe" % episode.id, json={}
+        )
+        self.assertEqual(started.status_code, 202, started.get_json())
+        self.assertEqual(PodcastTranscript.get().status, "queued")
+
+        anonymous = self.app.test_client()
+        claimed = anonymous.post(
+            "/api/transcribe/worker/claim",
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(claimed.status_code, 200, claimed.get_json())
+        claim = claimed.get_json()
+        self.assertEqual(claim["episode_id"], str(episode.id))
+        self.assertEqual(claim["duration_ms"], 600_000)
+        headers = {
+            "Authorization": "Bearer " + token,
+            "X-NS-Lease": claim["lease"],
+        }
+        chunk = anonymous.post(
+            "/api/transcribe/worker/%s/chunk" % episode.id,
+            json={
+                "start_ms": 0,
+                "duration_ms": 600_000,
+                "language": "fr",
+                "segments": [
+                    {"start_ms": 1000, "end_ms": 4000, "text": "Bonjour."}
+                ],
+            },
+            headers=headers,
+        )
+        self.assertEqual(chunk.status_code, 200, chunk.get_json())
+        done = anonymous.post(
+            "/api/transcribe/worker/%s/complete" % episode.id,
+            json={
+                "language": "fr",
+                "engine": "whisper.cpp",
+                "model": "ggml-small.bin",
+            },
+            headers=headers,
+        )
+        self.assertEqual(done.status_code, 200, done.get_json())
+        row = PodcastTranscript.get()
+        self.assertEqual(row.status, "ready")
+        self.assertEqual(row.source, "client")
+        self.assertEqual(row.worker_name, worker["name"])
+        self.assertEqual(PodcastTranscriptSegment.select().count(), 1)
+        # The PC that just claimed is online now.
+        status = self.client.get("/api/transcribe/status").get_json()
+        self.assertEqual(status["workers"], {"enrolled": 1, "online": 1})
+
+    def test_no_engine_and_no_pc_refuses_a_start_by_name(self):
+        self.app.config["TRANSCRIBE"]["bin"] = None
+        engine.clear_probe_cache()
+        channel = self.channel()
+        episode = self.episode(channel, duration=600)
+        response = self.client.post(
+            "/api/podcast/episode/%s/transcribe" % episode.id, json={}
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "no_worker")
+        self.assertEqual(PodcastTranscript.select().count(), 0)
 
     def test_put_never_starts_a_job(self):
         with mock.patch.object(job, "enqueue") as enqueue, mock.patch.object(

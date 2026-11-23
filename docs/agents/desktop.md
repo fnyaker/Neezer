@@ -2366,6 +2366,16 @@ Waves that can run in parallel (disjoint files):
   never becomes a route. The SPA has no worker screen at all: these three routes
   (`GET|POST /api/transcribe/workers`, `DELETE …/<id>`) existed on the server
   with no client, and this lot is their first.
+- **The rule, the card says where the job runs, and the refusal comes from the
+  server**: the transcription card reads the server's `destination`
+  (`server|external|workers`), `workers {enrolled, online}` and `machines`
+  (`nz_model::TranscribeSettings`, one struct shared with the phone) and prints
+  « Exécution » / « Appareils » with each PC's state. The local engine line is
+  labelled « Moteur local » as soon as the job runs elsewhere, and an offline PC
+  adds « la file attend son retour » — enrolment, not liveness, is the verdict.
+  A refused activation prints the **server's own sentence** (`ApiError`'s body
+  `error`), not the card's stale `reason`: the old code rebuilt it from the
+  settings it still had and could name the wrong cause.
 - **Why some payloads are read as raw JSON, and the contract corrections**:
   - `/enrich/backfill` answers the shared `libjob` snapshot **plus** its
     coverage, but `nz_model::EnrichStatus` (D1) typed only the coverage half, so

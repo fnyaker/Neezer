@@ -35,6 +35,8 @@ export function reasonText(reason) {
       return "La transcription est désactivée sur ce serveur.";
     case "engine_missing":
       return "Le moteur de transcription n'est pas installé sur le serveur.";
+    case "no_worker":
+      return "Aucun ordinateur n'est enrôlé pour transcrire, et le serveur n'a pas de moteur.";
     case "model_missing":
       return "Le modèle de transcription est introuvable sur le serveur.";
     case "model_invalid":
@@ -42,6 +44,46 @@ export function reasonText(reason) {
     default:
       return "La transcription n'est pas configurée sur ce serveur.";
   }
+}
+
+/**
+ * Where a queued episode will actually run, in one sentence.
+ *
+ * `destination` is the server's own word: `server` (the local engine),
+ * `external` (the sidecar container) or `workers` (an enrolled device). A PC
+ * that is offline right now still counts — the queue accepts the episode and
+ * the PC claims it when it comes back — so the sentence says "hors ligne pour
+ * l'instant" instead of pretending nothing can run.
+ */
+export function destinationText(destination, workers) {
+  const enrolled = Math.max(0, Number(workers && workers.enrolled) || 0);
+  const online = Math.max(0, Number(workers && workers.online) || 0);
+  switch (destination) {
+    case "server":
+      return "Sur ce serveur";
+    case "external":
+      return "Dans le conteneur de transcription";
+    case "workers":
+      if (enrolled === 1) {
+        return online
+          ? "Sur l'ordinateur enrôlé, en ligne"
+          : "Sur l'ordinateur enrôlé, hors ligne pour l'instant";
+      }
+      return `Sur ${enrolled} ordinateurs enrôlés, ${online} en ligne`;
+    default:
+      return "";
+  }
+}
+
+/** « Bureau (en ligne), Portable (hors ligne) », from the admin payload. */
+export function machinesText(machines) {
+  if (!Array.isArray(machines) || !machines.length) return "";
+  return machines
+    .map((machine) => {
+      const name = (machine && machine.name) || "ordinateur";
+      return `${name} (${machine && machine.online ? "en ligne" : "hors ligne"})`;
+    })
+    .join(", ");
 }
 
 export function isActiveStatus(status) {

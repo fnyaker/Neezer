@@ -4,8 +4,10 @@
   import { bytes as fmtBytes } from "../lib/format.js";
   import {
     LANGUAGES,
+    destinationText,
     languageLabel,
     loadTranscribeSettings,
+    machinesText,
     reasonText,
     transcribeSettings,
   } from "../lib/transcript.js";
@@ -24,6 +26,12 @@
   $: unavailable = $transcribeSettings.state === "error" && !$transcribeSettings.supported;
   $: failed = $transcribeSettings.state === "error" && $transcribeSettings.supported && !data;
   $: reason = data && data.available === false ? reasonText(data.reason) : "";
+  $: destination = (data && data.destination) || "";
+  $: onAWorker = destination === "workers";
+  $: machineText = data ? machinesText(data.machines) : "";
+  $: workerOffline =
+    onAWorker && data && data.workers && Number(data.workers.enrolled) > 0 &&
+    Number(data.workers.online) === 0;
 
   onMount(() => {
     loadTranscribeSettings();
@@ -95,16 +103,16 @@
     if (!engine) return "Moteur inconnu";
     const name = engine.name || "whisper.cpp";
     const version = engine.version ? ` ${engine.version}` : "";
-    return `Moteur : ${name}${version} — ${engine.ok ? "trouvé" : "absent"}`;
+    return `${name}${version} — ${engine.ok ? "trouvé" : "absent"}`;
   }
 
   function modelText(model) {
-    if (!model) return "Modèle : inconnu";
+    if (!model) return "inconnu";
     const name = model.name || "aucun modèle configuré";
     const size = model.size_mb ? ` · ${fmtBytes(model.size_mb * 1024 * 1024)}` : "";
     const state =
       !model.name ? " — introuvable" : model.ok ? " — valide" : " — invalide";
-    return `Modèle : ${name}${size}${state}`;
+    return `${name}${size}${state}`;
   }
 
   function queueText(queue) {
@@ -121,9 +129,13 @@
 <section class="card">
   <h2>Transcription des podcasts</h2>
   <p class="sub">
-    Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun audio n'est envoyé
-    à un tiers. Rien n'est transcrit automatiquement : chaque épisode se demande depuis sa page ou
-    depuis le lecteur.
+    {#if onAWorker}
+      Le texte est produit sur l'ordinateur enrôlé, à partir des fichiers archivés du serveur.
+    {:else}
+      Le texte est produit sur ce serveur, à partir des fichiers archivés.
+    {/if}
+    Aucun audio n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque épisode se
+    demande depuis sa page ou depuis le lecteur.
   </p>
 
   {#if loading}
@@ -247,11 +259,19 @@
     </div>
 
     <dl class="facts">
-      <dt>Moteur</dt>
+      {#if destinationText(destination, data.workers)}
+        <dt>Exécution</dt>
+        <dd>{destinationText(destination, data.workers)}</dd>
+      {/if}
+      {#if machineText}
+        <dt>Appareils</dt>
+        <dd>{machineText}</dd>
+      {/if}
+      <dt>{destination === "server" ? "Moteur" : "Moteur local"}</dt>
       <dd>{engineText(data.engine)}</dd>
       <dt>Modèle</dt>
       <dd>{modelText(data.model)}</dd>
-      {#if data.threads}
+      {#if data.threads && destination === "server"}
         <dt>Calcul</dt>
         <dd>{data.threads} fils de calcul sur ce serveur</dd>
       {/if}
@@ -267,6 +287,9 @@
       </button>
       {#if data.available !== false}
         <span class="state ok"><Icon name="check" size={14} /> Prêt à transcrire</span>
+        {#if workerOffline}
+          <span class="state">L'ordinateur enrôlé est hors ligne : la file attend son retour.</span>
+        {/if}
       {/if}
     </div>
   {/if}
