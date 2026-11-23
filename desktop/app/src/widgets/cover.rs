@@ -150,6 +150,10 @@ pub struct Covers {
 struct Waiting {
     url: String,
     px: u32,
+    /// The link at the moment the paint asked: an offline ask reads the disk
+    /// and nothing else (a sleeve already fetched still paints, a miss keeps
+    /// its placeholder without a doomed request).
+    online: bool,
     api: Arc<nz_api::Api>,
     cache: nz_cache::Cache,
     runtime: tokio::runtime::Handle,
@@ -282,13 +286,11 @@ impl Covers {
         let (Some(api), Some(cache)) = (state.api.clone(), state.cache.clone()) else {
             return;
         };
-        if !state.online {
-            return;
-        }
         self.refused.remove(url);
         let job = Waiting {
             url: url.to_owned(),
             px: self.class.px(),
+            online: state.online,
             api,
             cache,
             runtime: state.runtime.clone(),
@@ -310,13 +312,14 @@ impl Covers {
         let Waiting {
             url,
             px,
+            online,
             api,
             cache,
             runtime,
             done,
         } = job;
         runtime.spawn(async move {
-            let answer = fetch(&api, &cache, &url, px).await;
+            let answer = fetch(&api, &cache, &url, px, online).await;
             done(answer);
         });
     }
@@ -439,11 +442,22 @@ impl Covers {
 /// A sleeve's bytes, from the disk first and from wherever [`source`] points
 /// second, then the file this screen draws (`Class`), never hidden by a
 /// downscale that failed.
-async fn fetch(api: &nz_api::Api, cache: &nz_cache::Cache, url: &str, px: u32) -> Option<PathBuf> {
+async fn fetch(
+    api: &nz_api::Api,
+    cache: &nz_cache::Cache,
+    url: &str,
+    px: u32,
+    online: bool,
+) -> Option<PathBuf> {
     // The file may already be there from an earlier visit (`nz-cache` keeps
-    // sleeves): one SQLite read on the network thread, no request.
+    // sleeves): one SQLite read on the network thread, no request — and it is
+    // the ONLY thing an offline ask does (rule 3: what was fetched once is
+    // kept, and a screen with no link paints its covers).
     if let Some(original) = cache.covers().file(url) {
         return ready(cache, url, px, original);
+    }
+    if !online {
+        return None;
     }
     let bytes = match source(url) {
         Source::Api(path) => api.bytes(Lane::User, path).await,
@@ -1123,6 +1137,45 @@ mod tests {
             })
             .sum();
         assert_eq!(asked, 20, "one request per sleeve, no fan-out");
+
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// **The rule, offline still shows what it kept.** A sleeve already on the
+    /// device is painted with the link down, and the disk read happens BEFORE
+    /// the online check, so an offline screen makes **0** requests and still
+    /// draws its covers (rule 3: what was fetched once is kept).
+    #[gpui::test]
+    async fn an_offline_screen_still_paints_the_sleeves_it_kept(cx: &mut gpui::TestAppContext) {
+        let jpeg = sleeve_jpeg();
+        let stub = Stub::start_bytes(&[
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let url = "/api/cover/9";
+        // What an earlier visit left on the device.
+        cx.update(|cx| {
+            let cache = state.read(cx).cache.clone().expect("a cache");
+            cache.covers().put(url, &jpeg).expect("stored");
+        });
+        cx.update(|cx| state.update(cx, |state, _| state.online = false));
+
+        let answers: Answers = Arc::new(Mutex::new(Vec::new()));
+        let mut covers = Covers::new();
+        ask(cx, &state, &mut covers, &answers, url);
+        wait_for(
+            &runtime,
+            cx,
+            &mut covers,
+            &answers,
+            "the kept sleeve",
+            |covers| covers.in_flight() == 0,
+        );
+        let file = covers.file(url).expect("the kept sleeve paints");
+        assert!(file.is_file(), "{}", file.display());
+        assert_eq!(stub.count(url), 0, "offline: the disk, never the network");
 
         runtime.shutdown_background();
         stub.stop();
