@@ -1584,7 +1584,10 @@ Waves that can run in parallel (disjoint files):
   (`widgets::page_scroll`) pins both halves, and
   `the_wheel_over_pour_toi_leaves_the_page_alone` (`screens::home`) pins it on
   the screen the person reported. **A bounded list placed in a page must be
-  wrapped**; the wrapper is `size_full`, so give it the band's height.
+  wrapped**; the wrapper is `size_full`, so give it the band's height. A tiny
+  diagnostic that only shows its NEWEST lines (the genre extractor's test log,
+  twelve reversed lines in 6 rem) clips with `overflow_hidden` instead of
+  becoming a second scroller.
 - **The rule, a page's TAIL is bounded and its list keeps the window** (v1.6.1). A tail is a
   second list at the bottom of a page: the provider's half under an album's tracks (« Disponible
   sur Deezer ») and the suggestions under a playlist (« Titres recommandés »). Unbounded, the

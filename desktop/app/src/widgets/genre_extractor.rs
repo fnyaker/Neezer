@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use gpui_kit::{
     AnyElement, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement as _, Styled, div, rems,
+    SharedString, Styled, div, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon};
 use nz_api::SessionJar;
@@ -327,13 +327,17 @@ pub fn view<V: Render>(
             );
         }
         if !card.test_progress.is_empty() {
+            // The newest lines first, clipped: this box lives in the genre
+            // studio's own scroller, and a second scrollable there moved both
+            // by the same wheel notch (`page_scroll`'s rule). The twelve lines
+            // are a diagnostic, not something to scroll back through.
             let mut lines = div()
                 .id("genre-extractor-test-lines")
                 .flex()
                 .flex_col()
                 .gap(rems(0.125))
                 .max_h(rems(6.))
-                .overflow_y_scroll();
+                .overflow_hidden();
             for line in card.test_progress.iter().rev().take(12) {
                 lines = lines.child(
                     div()
