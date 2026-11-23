@@ -38,11 +38,15 @@ object PlayerFeed {
      * (MB3c's measurement), never a second instance built here.
      */
     fun install(port: PlayerPort, subscribe: ((PlayerListener) -> Unit)?) {
+        // The FIRST install owns the feed: the process has one player (MB3c), and
+        // a later caller with a different port (a feature's own holder, a test's
+        // fake) must not replace what the whole shell is already reading — the
+        // bar and the sheet would then disagree on which player they show.
+        if (!installed.compareAndSet(false, true)) return
         this.port = port
         // The first snapshot NOW, so a screen opened before any change still has
         // the queue and the title instead of an empty player.
         _snapshot.value = runCatching { port.snapshot() }.getOrNull()
-        if (!installed.compareAndSet(false, true)) return
         val sink = object : PlayerListener {
             override fun onSnapshot(snapshot: PlayerSnapshot) {
                 // ONLY a state write: this runs on a RUST thread, and calling back
@@ -66,6 +70,19 @@ object PlayerFeed {
             }
         }
         runCatching { subscribe?.invoke(sink) }
+    }
+
+    /**
+     * A TEST's player replaces the feed's port — never called by the app.
+     *
+     * The process has ONE player and one feed (the bar and the sheet must not
+     * disagree); a test that needs its own player therefore has to take the feed
+     * over, and this is that door, named so a search for it finds every caller
+     * (one, in `androidTest`).
+     */
+    internal fun usePortForTest(port: PlayerPort, subscribe: ((PlayerListener) -> Unit)?) {
+        installed.set(false)
+        install(port, subscribe)
     }
 
     private val _queueVersion = MutableStateFlow(0L)

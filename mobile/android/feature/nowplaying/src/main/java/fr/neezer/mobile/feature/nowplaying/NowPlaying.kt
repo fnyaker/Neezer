@@ -51,8 +51,12 @@ import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState.Pane
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import uniffi.nz_ffi.PlayState
 import uniffi.nz_ffi.PlayerCommand
 import uniffi.nz_ffi.PlayerListener
@@ -194,23 +198,13 @@ fun NowPlayingHost(nav: NzNavigator, modifier: Modifier = Modifier) {
         service?.let { AboutModel(it, scope) }
     }
     val card = remember(lyrics) { CardSheetState() }
-
     val playerPort = remember { NowPlayingCore.player()?.let(::NzPlayerPort) ?: NoPlayerPort }
-    LaunchedEffect(model) {
-        PlayerFeed.install(playerPort, subscribe = { listener -> subscribePlayer(listener) })
-        model.refresh()
-    }
-    LaunchedEffect(model, playerPort) {
-        PlayerFeed.snapshot.filterNotNull().collect { snapshot ->
-            model.onSnapshot(snapshot)
-            // A podcast's rate: the show's own, applied to the engine — on THIS
-            // thread (never inside the Rust callback that pushed the snapshot).
-            PodcastSpeed.reconcile(playerPort, snapshot)
-        }
-    }
-    LaunchedEffect(model) {
-        PlayerFeed.queueVersion.collect { model.onQueueChanged(it) }
-    }
+
+    // Nothing is installed here any more: [NowPlayingSession] owns the ONE model
+    // and its single subscription to [PlayerFeed]. A host that installed its own
+    // feed and its own model was why the mini bar never moved: it built a SECOND
+    // model, read `player.snapshot()` once at composition and never collected
+    // the feed (measured 2026-11-23: session PLAYING at 2 000 ms, bar absent).
 
     val now = state.current
     val opened = NowPlayingState.open
@@ -347,20 +341,58 @@ internal fun subscribePlayer(listener: PlayerListener) {
 }
 
 /**
- * The model the two hosts share, built per composition scope: it holds no rule of
- * its own, and a second instance would only mean a second `StateFlow` over the
- * same player.
+ * The ONE player model of the process — the mini bar and the full-screen player
+ * read the same `StateFlow`, fed by the same [PlayerFeed] subscription.
+ *
+ * Why a singleton and not one per composition: the bar is composed in the shell
+ * at every launch and the sheet only when somebody opens it, so two models meant
+ * two states — and the bar's copy, built before anything played, never heard a
+ * change (measured 2026-11-23: the session said PLAYING at 2 000 ms while the
+ * bar stayed absent, which also made the full-screen player unreachable from a
+ * phone). One holder, one feed, one state: a second surface can only disagree if
+ * it invents its own.
+ *
+ * The subscription is installed HERE and not in a composable's `LaunchedEffect`:
+ * an effect is cancelled with its composition (the sheet closes, the bar
+ * recomposes), and a player that stops being observed when a screen goes away is
+ * the old app's frozen-page bug with extra steps.
  */
-@Composable
-private fun rememberNowPlaying(): NowPlayingModel {
-    val scope = rememberCoroutineScope()
-    val service = remember { NowPlayingCore.service() }
-    val port = remember { NowPlayingCore.player()?.let(::NzPlayerPort) ?: NoPlayerPort }
-    val fallback = remember { NoService }
-    return remember(port, service) {
-        NowPlayingModel(port, service ?: fallback, scope)
+internal object NowPlayingSession {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** The one model, built on first use (no core → a silent player). */
+    val model: NowPlayingModel by lazy {
+        // The feed's port IS the process's player: install it first (a no-op when
+        // a test already owns the feed) and build the model on what the feed
+        // holds. Building it on `NowPlayingCore.player()` instead made the bar a
+        // second reader of a different object, and `refresh()` then overwrote the
+        // feed's first snapshot with an empty one (measured: a PLAYING snapshot
+        // installed before composition vanished).
+        NowPlayingCore.player()?.let(::NzPlayerPort)?.let { port ->
+            PlayerFeed.install(port, subscribe = { listener -> subscribePlayer(listener) })
+        }
+        val model = NowPlayingModel(PlayerFeed.port, NowPlayingCore.service() ?: NoService, scope)
+        // The first picture, BEFORE the collector: a snapshot that arrived while
+        // the model was being built must be the last word, not the first.
+        model.refresh()
+        scope.launch {
+            PlayerFeed.snapshot.filterNotNull().collect { snapshot ->
+                model.onSnapshot(snapshot)
+                // A podcast's rate: the show's own, applied to the engine — on
+                // this thread, never inside the Rust callback that pushed it.
+                PodcastSpeed.reconcile(PlayerFeed.port, snapshot)
+            }
+        }
+        scope.launch {
+            PlayerFeed.queueVersion.collect { model.onQueueChanged(it) }
+        }
+        model
     }
 }
+
+/** Both surfaces take this: the process's one model. */
+@Composable
+private fun rememberNowPlaying(): NowPlayingModel = NowPlayingSession.model
 
 /** A service that answers nothing, for a process without a core. */
 private object NoService : NowPlayingService {
