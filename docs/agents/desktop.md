@@ -705,6 +705,16 @@ the app keep" (`app/src/testmem.rs`).
   - **The bench must serve real cover bytes** to measure anything sleeve-shaped
     (`tools/perf_api.py --covers <jpeg>`): with Deezer unreachable every `/api/cover` is a 404
     and every screen paints a placeholder, which reads as "sleeves are free".
+  - **The frame log's build time is `RootView::render`, and a windowed list builds its rows in
+    PREPAINT** (`v_virtual_list` and `gpui::list` both render their items during layout). A page
+    whose rows move into a list therefore shows a near-zero `build_p95` and a much better
+    `interval_p95`; report BOTH, and pair them with a count (rows built per paint, sleeves
+    asked) — the counts are the assertion, the milliseconds say what the person feels.
+  - **`GET /api/releases` is capped** at 120 cards and 400 titles (`discover.RELEASES_MAX`,
+    `RELEASE_TRACKS_MAX`), so the shipped bench cannot produce the "thousands of releases" the
+    Nouveautés page is measured on. `perf_api.py --releases N` seeds N releases and lifts both
+    caps **in the bench's own process** (the route reads them at request time); the server
+    contract is untouched, so a difference measured with it is the CLIENT's.
   - **This machine is shared.** Other sessions run `pkill Xvfb` and `pkill -f perf_api`: the
     isolated display is a copy of the binary under another name (`xserv105`) kept alive by a
     loop, and the bench runs as `bench.py` for the same reason. A run whose X server dies
@@ -1544,8 +1554,9 @@ Waves that can run in parallel (disjoint files):
   against **0.25 ms** idle (the 160 ms present interval is the software rasterizer, not the app).
   One
   implementation, `widgets/page_scroll.rs` (`PageScroll::container` for the scroller,
-  `column()` for the page, `own()` for the keys): Nouveautés, le Récap, Bienvenue and the
-  search results page were built the same way and are fixed with it. The keys are app-level
+  `column()` for the page, `own()` for the keys): le Récap, Bienvenue and the search results
+  page were built the same way and are fixed with it (Nouveautés left it for the page-wide
+  windowed list — see *the rule, « Toutes les sorties »*). The keys are app-level
   interceptors that CONSUME the stroke (the shared `ListPageDown`/`ListNext` actions would
   otherwise move a row list in the same breath), so only a screen with **no text field**
   installs them: Accueil (it keeps `j`/`k` for its recomposed list), while Réglages, search,
@@ -2010,6 +2021,56 @@ Waves that can run in parallel (disjoint files):
   come from the payload's `close_to`, and a card's click costs 0 requests: `ReleaseShelf` is a
   ROUTE in the SPA and `nav.rs` is frozen after D7, so a card opens the album and a release row
   folds its titles out in the shared windowed list.
+- **The rule, « Toutes les sorties » is the DEFAULT view and the whole page is ONE windowed
+  list** (2026-11-23). The page opens UNFOLDED, and the full list is a `gpui` `List` (the
+  variable-height one, `gpui::list`): the head, the Flow, each shelf, one row per release and the
+  cards without titles are its items, and it builds only the items the window plus 600 px of
+  overdraw holds — **3–7 items per paint of 2 004** on a 2 000-release feed, measured
+  (`a_thousand_releases_build_only_the_window_and_regroup_once`), where the old page built every
+  row on every frame. Three things made the old page slow and each is a rule here:
+  - **The payload is regrouped ONCE per feed** (`Model`: the two shelves, the groups, the cards
+    without titles, an id→group index), not twice per paint as before; `groups()` and
+    `build_shelves()` indexed their cards in a `HashMap` instead of a `find` per title, which was
+    **O(n²)**. The test holds the model's `Rc` across nine paints: the same allocation is what a
+    paint reads.
+  - **The list measures what it builds, so no height is guessed.** An item that grows (a release
+    folded open, the Flow's genre picker) is re-measured alone (`remeasure_items`); `toggle_all`
+    and a fresh feed `reset_with_uniform_height(rows.len(), 130 px)` — a closed release row — so
+    the travel is right on the first frame while the head/Flow/shelf rows replace that hint with
+    their measured height. Do not hard-code per-row heights: the head wraps and the Flow is a
+    live card.
+  - **A sleeve is asked for by the paint that BUILDS its row** (`Screen::ask`: at most
+    `cover::MAX_IN_FLIGHT`), and `Covers::show` + `begin_frame` keep exactly that screenful alive
+    and free the rest: **7 sleeves over 9 paints** for 2 000 releases, not 2 000 requests. The
+    Flow's « à suivre » sleeve is asked as one more.
+  Keys: `↑`/`↓`, `Page préc./suiv.` and `Début`/`Fin` scroll the page (`App::intercept_keystrokes`),
+  but an OPENED release's rows keep them (`tracks.is_empty()` is the condition), because the
+  shared list actions own the arrows there. A folded-out release's band chains its wheel to the
+  page through `page_scroll::nested_in_list` — the rule #376 states with `nested` for a
+  `ScrollHandle` page, applied to a page that is a `gpui::list` (what the band could not take goes
+  to the list with `scroll_by`; `a_band_in_a_list_page_takes_the_wheel_and_the_list_gets_the_rest`).
+  **Measured** (release build, `Xvfb :180+`, `bench.py --screens releases --releases N` with 40
+  wheel notches in 3,2 s, `perf_api.py --serve --releases N`; the « avant » binary is master with
+  ONE line changed — `shown_all: false → true` — because master opens folded and the bench's
+  `--route` cannot click its button):
+
+  | sorties | master déplié | ce lot |
+  |---|---|---|
+  | **3 000**, 1280×800 | **0 frame en 3,2 s** | 39 frames, p50 **80 ms**, p95 **96 ms** |
+  | **3 000**, 2560×1600 | **0 frame en 3,2 s** | 22 frames, p50 **160 ms**, p95 **191 ms** |
+  | 100, 1280×800 | 3 frames, p50 **1 040 ms**, p95 **1 088 ms** | 41 frames, p50 80 ms, p95 96 ms |
+  | 300, 1280×800 | 1 frame en 3,2 s | 45 frames, p50 64 ms, p95 96 ms |
+
+  The 3 000 rows are master **28c91f74** (after #376) and this lot; the two smaller rows were taken
+  on **721cb694**, the master before #376 (#376 changes the wheel chaining inside a folded-open
+  release and the cover queue, not the cost of building a row). The Xvfb interval is the software
+  rasteriser's floor (64–192 ms at these two sizes), so what the table states is the RATE the app
+  sustains under a scroll: master's frame costs ~10 ms per release row (1 s at 100, more than the
+  whole 3,2 s window at 300 and at 3 000 — it paints nothing), this page keeps the floor at 3 000
+  because it builds a windowful. Looked at:
+  `docs/desktop/releases-windowed/nouveautes-toutes-les-sorties-{1280,2560}.png`, and with the
+  420 px queue panel open at 1280×800 (`…-panneau-1280.png`: the column reflows and keeps
+  scrolling, 33 frames, p50 **96 ms**, p95 **128 ms** at 3 000 releases).
 - **The rule, the Récap**: 2 requests cold (`/recap/years` then the latest year), 1 per year change,
   **0 per card** — the whole year is one bounded payload. `←`/`→` are APP-level keystroke
   interceptors (a screen may not take the focus, D8a's rule, and `keymap.rs` is frozen), so the deck

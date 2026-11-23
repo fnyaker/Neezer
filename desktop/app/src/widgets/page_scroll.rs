@@ -154,6 +154,25 @@ pub fn column() -> Div {
     div().flex().flex_col().flex_shrink_0().w_full()
 }
 
+/// What an inner scroller could not take of `delta`, in the PAGE's sign
+/// (negative = further down the page).
+///
+/// The one piece of arithmetic [`nested`] and [`nested_in_list`] share: the
+/// inner container has already applied `delta` (it is deeper, so GPUI ran its
+/// listener first), its PREVIOUS offset is `offset - delta`, and its bound
+/// says how much of the notch it could really take.
+fn leftover(inner: &ScrollHandle, delta: Pixels) -> Pixels {
+    let max = inner.max_offset().y.max(px(0.));
+    let before = (inner.offset().y - delta).clamp(-max, px(0.));
+    let room = if delta < px(0.) {
+        (before + max).max(px(0.))
+    } else {
+        (-before).max(px(0.))
+    };
+    let rest = (delta.abs() - room).max(px(0.));
+    if delta < px(0.) { -rest } else { rest }
+}
+
 /// A scrollable that lives INSIDE a page: the wheel moves it first, and the
 /// page only by the part it could not take.
 ///
@@ -194,21 +213,43 @@ pub fn nested(
             if delta == px(0.) {
                 return;
             }
-            // The offset is negative going down and bounded to `[-max, 0]`.
-            let max = inner.max_offset().y.max(px(0.));
-            let before = (inner.offset().y - delta).clamp(-max, px(0.));
-            let room = if delta < px(0.) {
-                (before + max).max(px(0.))
-            } else {
-                (-before).max(px(0.))
-            };
-            let leftover = (delta.abs() - room).max(px(0.));
-            if leftover > px(0.) {
+            let shift = leftover(&inner, delta);
+            if shift != px(0.) {
                 let bound = page.max_offset().y.max(px(0.));
                 let mut offset = page.offset();
-                let shift = if delta < px(0.) { -leftover } else { leftover };
                 offset.y = (offset.y + shift).clamp(-bound, px(0.));
                 page.set_offset(offset);
+                window.refresh();
+            }
+            cx.stop_propagation();
+        })
+        .child(child)
+}
+
+/// [`nested`] for a page whose scroller is a `gpui::list` (`ListState`), which
+/// has no `ScrollHandle`: the part the inner band could not take is given to
+/// the list with `scroll_by`, the same rule with the list's own arithmetic.
+pub fn nested_in_list(
+    id: impl Into<ElementId>,
+    list: &gpui_kit::ListState,
+    inner: &ScrollHandle,
+    child: impl IntoElement,
+) -> Stateful<Div> {
+    let list = list.clone();
+    let inner = inner.clone();
+    div()
+        .id(id)
+        .size_full()
+        .on_scroll_wheel(move |event, window, cx| {
+            let delta = event.delta.pixel_delta(window.line_height()).y;
+            if delta == px(0.) {
+                return;
+            }
+            let shift = leftover(&inner, delta);
+            if shift != px(0.) {
+                // `leftover` is in the PAGE's sign (negative = down); the list
+                // moves by pixels, positive going down.
+                list.scroll_by(-shift);
                 window.refresh();
             }
             cx.stop_propagation();
@@ -457,5 +498,79 @@ mod tests {
         let bottom = cx.update(|_, cx| bench.read(cx).page.offset().y);
         assert_eq!(bottom, px(-1600.), "Fin reaches the bottom");
         drop(subscription);
+    }
+
+    /// A page whose scroller is a `gpui::list` (Nouveautés), with a 300 px
+    /// band of 1 200 px of rows as its first item: the shape
+    /// [`nested_in_list`] exists for.
+    struct ListedPage {
+        list: gpui_kit::ListState,
+        inner: ScrollHandle,
+    }
+
+    impl Render for ListedPage {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let inner = self.inner.clone();
+            let list_state = self.list.clone();
+            gpui_kit::list(self.list.clone(), move |index, _window, _cx| {
+                if index != 0 {
+                    return div()
+                        .h(px(300.))
+                        .child(format!("bloc {index}"))
+                        .into_any_element();
+                }
+                let band = div()
+                    .id("listed-inner")
+                    .h(px(300.))
+                    .overflow_y_scroll()
+                    .track_scroll(&inner)
+                    .child(div().flex().flex_col().children(
+                        (0..12).map(|row| div().h(px(100.)).child(format!("ligne {row}"))),
+                    ));
+                nested_in_list("listed-band", &list_state, &inner, band).into_any_element()
+            })
+            .w_full()
+            .h(px(300.))
+        }
+    }
+
+    /// **The rule, one notch has one effect — with a LIST as the page.**
+    /// [`nested`] states it for a `ScrollHandle` page; Nouveautés' page is a
+    /// `gpui::list`, which has none. Measured: one notch over the band moves
+    /// the BAND 78 px and leaves the list at item 0 (before the wrapper GPUI
+    /// gave the notch to both), and once the band is at its bound the notches
+    /// move the list.
+    #[gpui::test]
+    async fn a_band_in_a_list_page_takes_the_wheel_and_the_list_gets_the_rest(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (page, cx) = cx.add_window_view(|_, _| ListedPage {
+            list: gpui_kit::ListState::new(10, gpui_kit::ListAlignment::Top, px(200.)),
+            inner: ScrollHandle::new(),
+        });
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        wheel(cx, px(100.));
+        let (band, top) = cx.update(|_, cx| {
+            let page = page.read(cx);
+            (page.inner.offset().y, page.list.logical_scroll_top())
+        });
+        assert!(band < px(-10.), "the band took the notch: {band:?}");
+        assert_eq!(top.item_ix, 0, "the list did not move with it");
+        assert_eq!(top.offset_in_item, px(0.), "the list did not move with it");
+
+        // Twelve more notches exhaust the band's 900 px of travel; the rest
+        // go to the list (which is how a person reaches the rows below it).
+        for _ in 0..12 {
+            wheel(cx, px(100.));
+        }
+        let top = cx.update(|_, cx| page.read(cx).list.logical_scroll_top());
+        assert!(
+            top.item_ix > 0 || top.offset_in_item > px(0.),
+            "the list took what the band could not: {top:?}"
+        );
     }
 }

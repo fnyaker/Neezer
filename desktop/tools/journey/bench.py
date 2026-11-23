@@ -155,9 +155,10 @@ def wait_http(url: str, timeout: float = 60.0) -> bool:
 class Server:
     """`tools/perf_api.py --serve`, the same bench every other lot measured on."""
 
-    def __init__(self, python: str, covers: Path | None) -> None:
+    def __init__(self, python: str, covers: Path | None, releases: int = 0) -> None:
         self.python = python
         self.covers = covers
+        self.releases = releases
         self.process: subprocess.Popen | None = None
         self.port = 0
         self.ids: dict = {}
@@ -184,6 +185,11 @@ class Server:
         ]
         if self.covers:
             command += ["--covers", str(self.covers)]
+        if self.releases:
+            # `perf_api.py --releases` seeds the feed and lifts its cap in the
+            # bench's own process: the desktop's Nouveautés page is measured on
+            # thousands of releases, not on the shipped server's 120.
+            command += ["--releases", str(self.releases)]
         self.process = subprocess.Popen(
             command,
             cwd=REPO,
@@ -767,6 +773,20 @@ def drive_phase(app: "App", screen: "Screen", window, mode: str) -> dict:
         for _ in range(40):
             screen.keys("pagedown")
             time.sleep(0.05)
+    elif mode == "wheel":
+        # 40 wheel notches over the middle of the page, 50 ms apart (the same
+        # cadence as the `Page suivante` drive below): the input keeps the app
+        # painting, so the interval between frames is the rate it SUSTAINS
+        # under a scroll — a build that cannot keep up paints nothing at all.
+        # the same input on every build, so the frames are comparable across a
+        # change that moves the rows into a list. The spacing is what lets a
+        # build that spends seconds per frame still paint a few — a page frozen
+        # for the whole window would report zero frames instead of a number.
+        geometry = window.get_geometry()
+        at = (geometry.x + geometry.width // 2, geometry.y + geometry.height // 3)
+        for _ in range(40):
+            screen.wheel(1, down=True, at=at)
+            time.sleep(0.05)
     elif mode == "viz":
         screen.keys("v")
         _wait_frames(app, 400, timeout=8.0)
@@ -865,6 +885,9 @@ def main() -> int:
     parser.add_argument("--deny", default="",
                         help="answer 404 for every request whose path starts with "
                              "this prefix: an older server that lacks a feature")
+    parser.add_argument("--releases", type=int, default=0, metavar="N",
+                        help="seed N releases (and lift perf_api's own caps) so the "
+                             "releases screen is measured on a few thousand of them")
     args = parser.parse_args()
 
     scratch = Path(args.scratch) if args.scratch else Path(tempfile.mkdtemp(prefix="nz-d17-"))
@@ -877,7 +900,7 @@ def main() -> int:
     import drive  # noqa: E402  (needs python-xlib, documented above)
 
     covers = make_cover(scratch)
-    server = Server(args.python, covers)
+    server = Server(args.python, covers, releases=args.releases)
     server.start()
     log("server", server.url(), "workdir", server.workdir)
     # ALWAYS through the proxy: on a local link it is a counting tap (0 ms,
@@ -927,6 +950,13 @@ def main() -> int:
                 mode = ""
                 if route == "library:favorites":
                     mode = "scroll"
+                elif route == "releases":
+                    # The page whose default view is the full list: 40 wheel
+                    # notches over a few thousand releases is the scroll its
+                    # frames are measured on. The wheel, not `Page suivante`,
+                    # because the OLD page had no page keys — the same input has
+                    # to scroll both builds for the two tables to compare.
+                    mode = "wheel"
                 elif route == "viz":
                     mode = "viz"
                 try:

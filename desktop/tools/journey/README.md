@@ -59,6 +59,12 @@ python desktop/tools/journey/bench.py \
 Add `--degraded` for the 300 ms / 1 Mb/s / 2 % link, and `--screens
 home,library:favorites` to re-take only a few screens.
 
+Add `--releases N` to seed N releases and lift `tools/perf_api.py`'s own cap (120 cards, 400
+titles) **in the bench's process only**, then drive Nouveautés with 40 wheel notches in 3 s: the
+page whose default view is the full list is measured on a few thousand releases, and the wheel is
+the input both a page scroller and a windowed list answer. `--screens releases` re-takes just that
+row (`tools/perf_api.py`'s note says what the cap would be on a shipped server).
+
 ## What is measured, and what is not
 
 * **Requests and bytes** are the proxy's, for the window between the session

@@ -237,6 +237,26 @@ class Screen:
 
     # -- pictures ----------------------------------------------------------
 
+    def wheel(self, notches: int = 1, down: bool = True,
+              at: tuple[int, int] | None = None) -> None:
+        """Mouse-wheel notches: X11 buttons 4 (up) and 5 (down), which GPUI
+        turns into `ScrollWheelEvent`s. What a person's fingers do on a page,
+        so a scroller is measured through the same path in every build."""
+        assert_isolated(self.display_name)
+        button = 5 if down else 4
+        if at is not None:
+            x, y = at
+            xtest.fake_input(self.display, X.MotionNotify, x=x, y=y)
+            self.display.sync()
+            time.sleep(0.01)
+        for _ in range(notches):
+            xtest.fake_input(self.display, X.ButtonPress, button)
+            self.display.sync()
+            time.sleep(0.01)
+            xtest.fake_input(self.display, X.ButtonRelease, button)
+            self.display.sync()
+            time.sleep(0.01)
+
     def screenshot(self, path: str, window=None) -> tuple[int, int]:
         """The root (or one window's box), without `import`'s grab."""
         assert_isolated(self.display_name)
