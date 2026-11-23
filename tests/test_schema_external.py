@@ -44,6 +44,8 @@ from neezer.db import (
     PodcastTranscriptLease,
     PodcastTranscriptSegment,
     SCHEMA_VERSION,
+    Track,
+    TrackShare,
     TranscribeWorker,
     User,
     db,
@@ -62,6 +64,7 @@ LOT = (
     "20261118",
     "20261121",
     "20261124",
+    "20261125",
 )
 
 EXPECTED_SHAPE = {
@@ -74,6 +77,15 @@ EXPECTED_SHAPE = {
     "playlist_folder": ("id", "user_id", "name", "position", "created"),
     "playlist_placement": ("user_id", "playlist_id", "folder_id", "position"),
     "playlist_member": ("playlist_id", "user_id", "role", "added"),
+    "track_share": (
+        "id",
+        "track_id",
+        "user_id",
+        "created",
+        "expires",
+        "revoked",
+        "last_used",
+    ),
     "invite": (
         "id",
         "token_hash",
@@ -411,6 +423,11 @@ def _strip_to_20261123():
     ):
         _drop_table(table)
     _drop_column("user", "lan_serial")
+
+
+def _strip_to_20261124():
+    """The track-share table (20261125) is the only thing a 20261124 server lacks."""
+    _drop_table("track_share")
 
 
 def _seed_lan_device(alice):
@@ -978,6 +995,40 @@ class CascadeTestCase(_ExternalDatabaseTestCase):
             self.assertEqual(model.select().count(), 0)
         self.assertEqual(PodcastChannel.select().count(), 1)
 
+    def test_track_shares_follow_their_track_and_account(self):
+        """track_share is held by the engine's own foreign keys: a deleted track
+        or account takes its public links with it (the 20261125 shape)."""
+        import tempfile
+
+        from neezer.deezer import library
+
+        alice, bob = _seed_users()
+        root = library.get_root_folder(tempfile.mkdtemp())
+        raw = {
+            "SNG_ID": "770001",
+            "SNG_TITLE": "Partagée",
+            "ART_NAME": "A",
+            "ART_ID": "770002",
+            "ALB_TITLE": "B",
+            "ALB_ID": "770003",
+            "DURATION": "10",
+            "TRACK_NUMBER": "1",
+            "DISK_NUMBER": "1",
+        }
+        track = library.upsert_track(raw, root)
+        TrackShare.create(id="share-one", track=track, user=alice)
+        self.assertEqual(TrackShare.select().count(), 1)
+        track.delete_instance()
+        self.assertEqual(TrackShare.select().count(), 0)
+
+        raw["SNG_ID"] = "770004"
+        raw["SNG_TITLE"] = "Encore"
+        track = library.upsert_track(raw, root)
+        TrackShare.create(id="share-two", track=track, user=bob)
+        bob.delete_instance()
+        self.assertEqual(TrackShare.select().count(), 0)
+        self.assertEqual(Track.select().count(), 1)
+
     def test_lan_rows_follow_their_account_device_and_playlist(self):
         """The four LAN tables are held by the engine's own foreign keys: a
         deleted playlist drops the grant, a deleted device drops its keys, and a
@@ -1002,6 +1053,49 @@ class CascadeTestCase(_ExternalDatabaseTestCase):
         self.assertEqual(LanFriend.select().count(), 0)
         self.assertEqual(LanFriendPlaylist.select().count(), 0)
         self.assertEqual(Playlist.select().count(), 1)
+
+
+class UpgradeFrom20261124TestCase(_ExternalDatabaseTestCase):
+    """A 20261124 server has everything but the track-share table. The migration
+    is additive and idempotent, and it must keep every existing row intact."""
+
+    def test_an_upgraded_server_gains_track_share_and_keeps_its_rows(self):
+        alice, bob = _seed_users()
+        playlist = Playlist.create(user=alice, name="Mix")
+        PlaylistMember.create(playlist=playlist, user=alice, role="owner")
+        channel, episode = _seed_show(alice)
+        users_before = {
+            u.name: (u.password, u.salt, u.admin, u.mail, u.name_key)
+            for u in User.select()
+        }
+
+        _strip_to_20261124()
+        _rewind("20261124")
+        release_database()
+        init_database(URI)
+
+        self.assertEqual(Meta["schema_version"].value, SCHEMA_VERSION)
+        self.assertEqual(dbmod._missing_columns(), [])
+        _assert_shape(self)
+        self.assertEqual(Playlist.select().count(), 1)
+        self.assertEqual(PlaylistMember.select().count(), 1)
+        self.assertEqual(PodcastEpisode.select().count(), 1)
+        self.assertEqual(
+            {
+                u.name: (u.password, u.salt, u.admin, u.mail, u.name_key)
+                for u in User.select()
+            },
+            users_before,
+        )
+        self.assertEqual(TrackShare.select().count(), 0)
+        # Replaying the migration on a database that already has it changes
+        # nothing.
+        for _ in range(2):
+            _replay("20261125")
+        self.assertEqual(dbmod._missing_columns(), [])
+        self.assertEqual(Meta["schema_version"].value, SCHEMA_VERSION)
+        self.assertEqual(Playlist.select().count(), 1)
+        self.assertEqual(User.select().count(), 2)
 
 
 class RepairPathTestCase(_ExternalDatabaseTestCase):

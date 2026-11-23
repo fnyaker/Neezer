@@ -223,6 +223,20 @@ CREATE TABLE IF NOT EXISTS playlist_share (
     INDEX index_playlist_share_user_id_fk (user_id)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS track_share (
+    id VARCHAR(24) PRIMARY KEY,
+    track_id CHAR(32) NOT NULL,
+    user_id CHAR(32) NOT NULL,
+    created DATETIME NOT NULL,
+    expires DATETIME,
+    revoked DATETIME,
+    last_used DATETIME,
+    CONSTRAINT track_share_track_fk FOREIGN KEY (track_id) REFERENCES track(id) ON DELETE CASCADE,
+    CONSTRAINT track_share_user_fk FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE,
+    INDEX index_track_share_user_revoked (user_id, revoked),
+    INDEX index_track_share_track_id_fk (track_id)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS playlist_member (
     playlist_id CHAR(32) NOT NULL,
     user_id CHAR(32) NOT NULL,

@@ -38,7 +38,7 @@ from .media_types import transcode_mimetype
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "20261124"
+SCHEMA_VERSION = "20261125"
 
 
 def now():
@@ -1189,6 +1189,31 @@ class PlaylistShare(_Model):
         table_name = "playlist_share"
 
 
+class TrackShare(_Model):
+    """A public read-only link to ONE track.
+
+    The holder — no account, no session — gets a page and an Opus stream for
+    that track only. The row is the capability's IDENTITY, never the capability
+    itself: the token handed out is ``id`` plus an HMAC of it under the app's
+    secret key (see neezer/webui/trackshare.py), so a copy of this table opens
+    nothing and a secret change kills every link. One live link per track is
+    enough; ``revoked`` stamps the owner's cut, which the next public request
+    honours. ``last_used`` is written at most once a minute per link.
+    """
+
+    id = CharField(24, primary_key=True)
+    track = ForeignKeyField(Track, backref="+", on_delete="CASCADE")
+    user = ForeignKeyField(User, backref="+", on_delete="CASCADE")
+    created = DateTimeField(default=now)
+    expires = DateTimeField(null=True)
+    revoked = DateTimeField(null=True)
+    last_used = DateTimeField(null=True)
+
+    class Meta:
+        table_name = "track_share"
+        indexes = ((("user", "revoked"), False),)
+
+
 class PlaylistMember(_Model):
     """One person's role on one playlist. The owner also has a row (backfilled
     on upgrade, inserted by the web/Subsonic create paths); authorization trusts
@@ -2244,6 +2269,7 @@ def _migration_order():
         StarredPlaylist,  # after Playlist and User
         PlaylistTrack,
         PlaylistShare,  # after Playlist and User: it references both
+        TrackShare,  # after Track and User: it references both
         PlaylistMember,  # after Playlist and User: it references both
         PlaylistFolder,  # after User
         PlaylistPlacement,  # after Playlist, User and PlaylistFolder

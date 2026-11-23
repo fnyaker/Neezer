@@ -597,7 +597,7 @@ class AdminUsersTestCase(unittest.TestCase):
             UserManager.delete_guarded(self.alice.id, self.bob)
         self.assertTrue(User.get_or_none(User.id == self.alice.id).admin)
 
-    def test_delete_costs_fifty_one_statements_for_a_small_account(self):
+    def test_delete_costs_sixty_six_statements_for_a_small_account(self):
         self._upload(self.bob)
         Playlist.create(user=self.bob, name="Bob's")
         Invite.create(
@@ -621,11 +621,12 @@ class AdminUsersTestCase(unittest.TestCase):
         # lan_friend_playlist (owner AND friend) — and Peewee's recursive delete
         # emits one DELETE for each of those five relations, exactly like the
         # podcast and transcript tables above. Measured: 58 -> 65 (+7), nothing
-        # per-row.
+        # per-row. 66 since 20261125: track_share names an account too, one more
+        # DELETE (measured 65 -> 66), still nothing per-row.
         with count_statements() as counts:
             response = self._delete("bob")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(sum(counts.values()), 65, dict(counts))
+        self.assertEqual(sum(counts.values()), 66, dict(counts))
 
     # -- the legacy /user routes use the same guards --------------------------
 

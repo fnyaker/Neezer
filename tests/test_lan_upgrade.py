@@ -12,8 +12,8 @@ gets it late) must be a no-op; and a database marked current but missing a table
 must be repaired at boot instead of answering 500 on every LAN request.
 
 The same lot runs on a REAL PostgreSQL and MySQL in `tests.yaml`'s database job
-(`tests/test_schema_external.py`, which carries 20261124 in its replay list and
-the four tables in its expected shape).
+(`tests/test_schema_external.py`, which carries the 20261124 and 20261125 lots in
+its replay list and the four tables in its expected shape).
 """
 
 import importlib
@@ -120,7 +120,7 @@ class UpgradeFromThePreviousVersionTestCase(LanUpgradeCase):
         init_database(self.uri)
 
         self.assertEqual(Meta["schema_version"].value, SCHEMA_VERSION)
-        self.assertEqual(SCHEMA_VERSION, "20261124")
+        self.assertEqual(SCHEMA_VERSION, "20261125")
         self.assertEqual(dbmod._missing_columns(), [])
         for table in LAN_TABLES:
             self.assertIn(table, self._tables())

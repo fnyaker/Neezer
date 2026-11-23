@@ -472,8 +472,11 @@ impl Core {
     ///
     /// - `playlist`: the public read-only page, minted on the first ask and
     ///   reused afterwards (the server's one-link-per-playlist rule);
-    /// - `track` / `episode`: `GET /api/share/file/<id>` on this server — the
-    ///   whole archived file, what the SPA's share sheet hands out.
+    /// - `track`: the public page of ONE track (a player and a rich preview),
+    ///   minted on the first ask from the title's row and reused afterwards;
+    /// - `episode`: `GET /api/share/file/<id>` on this server — the archived
+    ///   file, since a podcast episode is not a `Track` row and the public page
+    ///   names a track only.
     pub async fn share_link(&self, kind: &str, id: &str) -> Result<String, CoreError> {
         let origin = self.origin().ok_or_else(|| CoreError::Invalid {
             detail: "Aucun serveur n'est configuré".to_owned(),
@@ -489,7 +492,17 @@ impl Core {
                 .await?;
             return Ok(absolute(&origin, &link));
         }
-        // A title: the file route, named by what the server resolves.
+        if kind == "track" {
+            let reference = reference_of(id).to_owned();
+            let link = self
+                .spend(|api| {
+                    let reference = reference.clone();
+                    async move { wire::track_share_link(&api, &reference).await }
+                })
+                .await?;
+            return Ok(absolute(&origin, &link));
+        }
+        // A podcast episode: the file route, named by what the server resolves.
         Ok(format!(
             "{}/api/share/file/{}",
             origin.trim_end_matches('/'),
@@ -1024,16 +1037,22 @@ mod tests {
         );
     }
 
-    /// A title's share address costs no request: it is the file route of the
-    /// server this app already speaks to.
+    /// A title's share address is the PUBLIC TRACK PAGE, minted on the first
+    /// ask (one GET, then one POST) and reused afterwards; an episode keeps the
+    /// file route and costs no request.
     #[tokio::test]
-    async fn a_titles_share_address_is_built_without_a_request() {
+    async fn a_titles_share_address_is_its_public_page() {
         let (server, _dir, core) = testing::configured().await;
         let link = core
             .share_link("track", "deezer:9001")
             .await
             .expect("a link");
-        assert_eq!(link, format!("{}/api/share/file/9001", server.base()));
+        assert_eq!(link, format!("{}/t/track-token", server.base()));
+        assert_eq!(
+            server.routes(),
+            ["GET /api/track/9001/share", "POST /api/track/9001/share",]
+        );
+        server.forget();
         let episode = core
             .share_link("episode", "66666666-6666-4666-8666-666666666666")
             .await

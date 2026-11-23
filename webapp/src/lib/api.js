@@ -896,6 +896,18 @@ export const api = {
     }),
   revokePlaylistShare: (id) => req("/playlist/" + id + "/share", { method: "DELETE" }),
   sharedPlaylist: (token) => req("/shared/playlist/" + encodeURIComponent(token)),
+  // A public link to ONE track: the public page is server-rendered (a preview
+  // bot reads its Open Graph tags) and the link is a revocable capability.
+  trackShare: (ref) => req("/track/" + encodeURIComponent(ref) + "/share"),
+  createTrackShare: (ref) => req("/track/" + encodeURIComponent(ref) + "/share", {
+    method: "POST",
+    body: body({}),
+  }),
+  revokeTrackShare: (ref) =>
+    req("/track/" + encodeURIComponent(ref) + "/share", { method: "DELETE" }),
+  trackShares: () => req("/track-shares"),
+  revokeTrackShareById: (id) =>
+    req("/track-shares/" + encodeURIComponent(id), { method: "DELETE" }),
   // `why` says what this archive request IS, so the server can order its queue:
   // "prefetch" is the track about to play, "bulk" (the default) is "archive
   // this playlist/artist, whenever". Never a number — every caller would claim

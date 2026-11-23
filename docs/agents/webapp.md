@@ -370,9 +370,15 @@ playlists / albums / artists), not track shelves. Podcasts have their own pages
 `/api/podcasts`, `/api/podcast/<id>` and streaming episodes through `/api/stream/<episode-uuid>`
 (an episode is shaped like a track whose `deezer_id` is its UUID, so the existing queue/player
 plays it unchanged). Sharing goes through `components/ShareSheet.svelte` (global modal, opened via
-`openShare(track)` from stores.js): whole file or an excerpt selected on a zoomable canvas waveform
-(peaks from `/api/share/waveform`), cut server-side by `/api/share/clip` and handed to the Web Share
-API (download fallback). Podcast markers live in `lib/markers.js`.
+`openShare(track)` from stores.js): it opens on **Lien** — a public page rendered by the server
+(`neezer/webui/trackshare.py`: Open Graph/oEmbed preview, an Opus player, nothing downloaded until
+play) handed to `navigator.share`/the clipboard; the whole file or an excerpt selected on a zoomable
+canvas waveform (peaks from `/api/share/waveform`) remain the secondary tabs, cut server-side by
+`/api/share/clip` and handed to the Web Share API (download fallback). The waveform is **not**
+requested while the link tab is open (measured: one `GET /api/track/<id>/share`, 0 waveform),
+because that decode is only worth it when somebody opens Extrait. Réglages → Compte →
+`components/SharedLinks.svelte` lists the caller's live links and revokes them. Podcast markers live
+in `lib/markers.js`.
 
 **A show opens by its UUID or by Deezer's id** (`/api/podcast/<x>`, lot D): a catalogue card has no row, and a UUID cannot be turned back into the provider's id, so the page takes both forms; anything else is a 404 (`tests/test_multi_d.py`).
 

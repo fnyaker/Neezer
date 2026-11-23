@@ -315,6 +315,31 @@ pub struct PersonRole {
     pub count: u32,
 }
 
+/// The public link of one track (`/api/track/<id>/share`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackShareLink {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub token: String,
+    /// The relative page path (`/t/<token>`).
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub created: Option<String>,
+    #[serde(default)]
+    pub expires: Option<String>,
+    #[serde(default)]
+    pub last_used: Option<String>,
+}
+
+/// `/api/track/<id>/share` — `{"link": … | null}`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackShare {
+    #[serde(default)]
+    pub link: Option<TrackShareLink>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

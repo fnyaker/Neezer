@@ -47,6 +47,7 @@
   import DiscoverySlider from "../components/DiscoverySlider.svelte";
   import DislikedTracks from "../components/DislikedTracks.svelte";
   import LanSettings from "../components/LanSettings.svelte";
+  import SharedLinks from "../components/SharedLinks.svelte";
 
 
   const QUALITIES = [
@@ -896,6 +897,7 @@
   </div>
 </section>
 <ServicesSettings />
+<SharedLinks />
 {/if}
 {/if}
 

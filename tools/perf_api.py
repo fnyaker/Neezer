@@ -1119,7 +1119,7 @@ def seed_covers(app, jpeg_path):
     JPEG as every album's folder cover (``library.save_album_cover``, the same
     path the archiver uses) and reports how many albums got one.
     """
-    from neezer.db import Album, Folder
+    from neezer.db import Album, Folder, Track
     from neezer.deezer import library
 
     with open(jpeg_path, "rb") as fh:
@@ -1133,6 +1133,10 @@ def seed_covers(app, jpeg_path):
             folder = Folder[first.folder]
             if library.save_album_cover(folder, data):
                 written += 1
+                # The archive stamps has_art when it writes the sleeve; a
+                # hand-seeded bench must say the same or the public share page
+                # (and every "is there art?" read) would answer no.
+                Track.update(has_art=True).where(Track.album == album).execute()
     print(f"  {written} albums carry a real cover.jpg ({len(data)} B)", file=sys.stderr)
     return written
 
@@ -1298,7 +1302,21 @@ def main():
                 path = os.path.splitext(t.path)[0] + ".wav"
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 shutil.copyfile(args.audio, path)
-                Track.update(path=path).where(Track.id == t.id).execute()
+                # It is an ARCHIVE now: the search's "on disk" rule reads this
+                # column, and a bench that only wrote the file was invisible.
+                Track.update(path=path, last_modification=1700000000).where(
+                    Track.id == t.id
+                ).execute()
+            # A browser bench needs to FIND one of those titles in the UI; the
+            # generated names repeat, so it gets the first one's exact facts.
+            first = Track[dzids.track_uuid(ids["ids"][0])]
+            ids["share"] = {
+                "ref": str(first.deezer_id),
+                "id": str(first.id),
+                "title": first.title,
+                "artist": first.artist.name,
+                "duration": first.duration,
+            }
     if args.archived:
         make_archived(app)
     if args.onboarding:

@@ -1,9 +1,10 @@
 <script>
-  // Share sheet: share the playing file whole, or cut an excerpt on a zoomable
-  // waveform timeline. The waveform peaks come pre-computed from the server
-  // (/api/share/waveform); the cut itself is done server-side by ffmpeg, so
-  // what leaves the device is a small, ready-to-send audio file. Sharing uses
-  // the Web Share API (with files) when available, else a plain download.
+  // Share sheet: a LINK to the track is the default — a small public page with
+  // an integrated player and a rich preview (Open Graph/oEmbed) — because
+  // sending an audio file to a chat is heavy and often blocked. The file modes
+  // (whole file, or an excerpt cut on a zoomable waveform) remain available as
+  // the secondary choice. The link is a revocable capability; the public page
+  // and the Opus stream live in neezer/webui/trackshare.py.
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import { onDestroy, tick } from "svelte";
   import { get } from "svelte/store";
@@ -37,8 +38,9 @@
   let duration = 0;
   let loadingWave = false;
   let waveError = false;
+  let waveRequested = false;
 
-  let mode = "clip"; // "full" | "clip" — the waveform is the star, open on it
+  let mode = "link"; // "link" | "clip" | "full" — the link is the default
   let selStart = 0;
   let selEnd = 30;
   let zoom = 1;
@@ -46,6 +48,14 @@
   let clipFmt = "mp3";
   let fullFmt = "orig";
   let busy = false;
+
+  // The public link (tracks only): read when the sheet opens, created on the
+  // first "Partager", revoked here. A revocation is dead on the next request.
+  let link = null;
+  let linkLoading = false;
+  let linkBusy = false;
+  let linkError = "";
+  let confirmRevoke = false;
 
   let canvas = null;
   let overviewCanvas = null;
@@ -69,12 +79,21 @@
     duration = t.duration || 0;
     zoom = 1;
     viewStart = 0;
-    mode = "clip";
+    mode = t.podcast ? "clip" : "link";
     // Reset the format choice so a hidden option (e.g. MP3 for a podcast) can't
     // linger from a previously-shared track with no radio button selected.
     clipFmt = "mp3";
     fullFmt = "orig";
     busy = false;
+    peaks = null;
+    loadingWave = false;
+    waveError = false;
+    waveRequested = false;
+    link = null;
+    linkLoading = !t.podcast;
+    linkBusy = false;
+    linkError = "";
+    confirmRevoke = false;
     stopPreview();
     // Sharing another track while the sheet is already open: the preview
     // element still holds the previous track's source — drop it (and detach it
@@ -93,9 +112,24 @@
     // Seed the preview's normalization from this track's ReplayGain (backfilled
     // if unknown) so the pre-listen matches the pipeline's per-track loudness.
     setPreviewGain(typeof t.gain === "number" ? t.gain : null);
-    ensurePreviewGain(t);
+    if (mode !== "link") ensurePreviewGain(t);
     defaultSelection();
     if (t.podcast) loadEpisodeMarkers(id);
+    if (!t.podcast) loadLink();
+    if (mode !== "link") loadWave();
+    await tick();
+    requestDraw();
+  }
+
+  // The waveform costs one request and an ffmpeg decode on the server: it is
+  // loaded only when the person actually opens the excerpt/file tab. The link
+  // tab (the default) never asks for it.
+  async function loadWave() {
+    if (waveRequested || !ref) return;
+    waveRequested = true;
+    const mine = initSeq;
+    loadingWave = true;
+    waveError = false;
     try {
       const r = await api.waveform(ref);
       if (mine !== initSeq) return;
@@ -106,9 +140,19 @@
       waveError = true;
     }
     loadingWave = false;
-    defaultSelection();
     await tick();
     requestDraw();
+  }
+
+  function setMode(m) {
+    mode = m;
+    if (m === "link") {
+      stopPreview();
+    } else {
+      ensurePreviewGain(track);
+      loadWave();
+      tick().then(requestDraw);
+    }
   }
 
   function teardown() {
@@ -128,9 +172,143 @@
     id = null;
     ref = null;
     peaks = null;
+    waveRequested = false;
+    link = null;
+    linkLoading = false;
+    linkBusy = false;
+    linkError = "";
+    confirmRevoke = false;
   }
 
   onDestroy(teardown);
+
+  // -- the public link --------------------------------------------------------
+
+  $: linkUrl = link ? window.location.origin + link.url : "";
+
+  function linkFailure(e) {
+    if (e?.status === 404) return "Ce titre ne vous est plus accessible.";
+    if (e?.status === 409) return "Ce titre n'est pas encore archivé : lancez-le une fois, puis réessayez.";
+    if (e?.status === 429) return "Trop de demandes — réessayez dans un instant.";
+    if (e?.status >= 500) return "Le serveur n'a pas pu préparer le titre. Réessayez plus tard.";
+    return e?.message || "Lien de partage indisponible.";
+  }
+
+  async function loadLink() {
+    if (!ref || track?.podcast) return;
+    linkLoading = true;
+    linkError = "";
+    try {
+      const r = await api.trackShare(ref);
+      link = r.link || null;
+      confirmRevoke = false;
+    } catch (e) {
+      link = null;
+      linkError = linkFailure(e);
+    }
+    linkLoading = false;
+  }
+
+  async function createLink() {
+    if (linkBusy || !ref) return null;
+    linkBusy = true;
+    linkError = "";
+    try {
+      const r = await api.createTrackShare(ref);
+      link = r.link;
+      return link;
+    } catch (e) {
+      linkError = linkFailure(e);
+      toasts.push(linkError, "error");
+      return null;
+    } finally {
+      linkBusy = false;
+    }
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  async function copyUrl(url = linkUrl) {
+    if (!url) return;
+    if (await copyText(url)) toasts.push("Lien copié");
+    else toasts.push("Copie impossible", "error");
+  }
+
+  async function shareLink() {
+    if (linkBusy || linkLoading) return;
+    const target = link || (await createLink());
+    if (!target) return;
+    const url = window.location.origin + target.url;
+    const data = {
+      title: track.title || "Un titre sur Neezer",
+      text: artistLine(track) ? `${track.title} — ${artistLine(track)}` : track.title,
+      url,
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(data);
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+    }
+    await copyUrl(url);
+  }
+
+  async function revokeLink() {
+    if (linkBusy || !link) return;
+    linkBusy = true;
+    try {
+      await api.revokeTrackShare(ref);
+      link = null;
+      confirmRevoke = false;
+      toasts.push("Lien révoqué");
+    } catch (e) {
+      toasts.push(linkFailure(e), "error");
+    }
+    linkBusy = false;
+  }
+
+  function linkExpiry(l) {
+    if (!l?.expires) return "Sans expiration";
+    try {
+      return `Expire le ${new Date(l.expires).toLocaleDateString("fr-FR", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })}`;
+    } catch {
+      return "Expire bientôt";
+    }
+  }
+
+  function lastUsed(l) {
+    if (!l?.last_used) return "Pas encore écouté";
+    try {
+      return `Dernière écoute le ${new Date(l.last_used).toLocaleDateString("fr-FR")}`;
+    } catch {
+      return "Déjà écouté";
+    }
+  }
 
   // Default selection: 30 s around the playhead when sharing the track that's
   // playing (the most likely "share this bit"), else the first 30 s.
@@ -838,113 +1016,186 @@
       </header>
 
       <div class="modes" role="tablist">
-        <button role="tab" aria-selected={mode === "clip"} class:on={mode === "clip"} on:click={() => (mode = "clip")}>
+        {#if !track.podcast}
+          <button role="tab" aria-selected={mode === "link"} class:on={mode === "link"} on:click={() => setMode("link")}>
+            <Icon name="link" size={15} /> Lien
+          </button>
+        {/if}
+        <button role="tab" aria-selected={mode === "clip"} class:on={mode === "clip"} on:click={() => setMode("clip")}>
           <Icon name="scissors" size={15} /> Extrait
         </button>
-        <button role="tab" aria-selected={mode === "full"} class:on={mode === "full"} on:click={() => (mode = "full")}>
+        <button role="tab" aria-selected={mode === "full"} class:on={mode === "full"} on:click={() => setMode("full")}>
           <Icon name="music" size={15} /> Fichier complet
         </button>
       </div>
 
-      <div class="wave-wrap" bind:this={wrapEl}>
-        {#if loadingWave}
-          <div class="wave-loading">
-            <span class="shimmer"></span>
-            <span class="muted">Analyse de l'audio…</span>
+      {#if mode === "link"}
+        <div class="linkpane" in:fadeIn>
+          {#if linkLoading}
+            <div class="linkloading">
+              <span class="spinner" data-motion="status" aria-hidden="true"></span>
+              <span class="muted">Lecture du lien…</span>
+            </div>
+          {:else}
+            <p class="linklede">
+              Un lien public, sans compte : la page s'ouvre dans le navigateur et
+              joue ce titre en Opus. Rien n'est téléchargé.
+            </p>
+            {#if link}
+              <div class="linkbox">
+                <Icon name="link" size={17} />
+                <input
+                  class="linkurl"
+                  readonly
+                  value={linkUrl}
+                  on:focus={(e) => e.currentTarget.select()}
+                  aria-label="Lien de partage"
+                />
+              </div>
+              <p class="linkmeta muted">
+                {linkExpiry(link)} · {lastUsed(link)}
+              </p>
+              {#if confirmRevoke}
+                <div class="revoke">
+                  <span class="muted">Révoquer ce lien ? Il cessera de fonctionner immédiatement.</span>
+                  <div class="revoke-actions">
+                    <button class="ghost" on:click={() => (confirmRevoke = false)} disabled={linkBusy}>Annuler</button>
+                    <button class="danger" on:click={revokeLink} disabled={linkBusy}>Révoquer</button>
+                  </div>
+                </div>
+              {:else}
+                <button class="revoke-open" on:click={() => (confirmRevoke = true)} disabled={linkBusy}>
+                  <Icon name="trash" size={15} /> Révoquer ce lien
+                </button>
+              {/if}
+            {:else}
+              <p class="linknone muted">Ce titre n'a pas encore de lien public.</p>
+            {/if}
+            {#if linkError}<p class="linkerr" role="alert">{linkError}</p>{/if}
+            <p class="hint muted">
+              Toute personne qui détient le lien peut écouter ce titre. Vous pouvez
+              le révoquer à tout moment, ici ou dans Réglages → Compte.
+            </p>
+          {/if}
+        </div>
+      {:else}
+        <div class="wave-wrap" bind:this={wrapEl}>
+          {#if loadingWave}
+            <div class="wave-loading">
+              <span class="shimmer"></span>
+              <span class="muted">Analyse de l'audio…</span>
+            </div>
+          {:else if waveError}
+            <div class="wave-loading">
+              <span class="muted">Forme d'onde indisponible — la sélection reste utilisable.</span>
+            </div>
+          {/if}
+          <canvas
+            class="wave"
+            class:dim={loadingWave}
+            bind:this={canvas}
+            on:pointerdown={onPointerDown}
+            on:pointermove={onPointerMove}
+            on:pointerup={onPointerUp}
+            on:pointercancel={onPointerUp}
+            on:wheel={onWheel}
+            style="touch-action: none;"
+          ></canvas>
+          <canvas
+            class="overview"
+            bind:this={overviewCanvas}
+            on:pointerdown={onOvDown}
+            on:pointermove={onOvMove}
+            on:pointerup={onOvUp}
+            on:pointercancel={onOvUp}
+            style="touch-action: none;"
+          ></canvas>
+          <div class="wave-tools">
+            <button class="ic" on:click={togglePreview} aria-label="Pré-écoute" title={mode === "clip" ? "Écouter l'extrait" : "Écouter"}>
+              <Icon name={previewPlaying ? "pause" : "play"} size={16} />
+            </button>
+            <span class="ptime muted">{fmtDuration(Math.round(previewTime))}</span>
+            <span class="spacer"></span>
+            <button class="ic" on:click={zoomOut} disabled={zoom <= 1.001} aria-label="Zoom arrière"><Icon name="zoomOut" size={16} /></button>
+            <button class="ic" on:click={zoomIn} disabled={zoom >= maxZoom - 0.001} aria-label="Zoom avant"><Icon name="zoomIn" size={16} /></button>
+            {#if mode === "clip"}
+              <button class="fit" on:click={zoomToSelection}>Ajuster à la sélection</button>
+            {/if}
           </div>
-        {:else if waveError}
-          <div class="wave-loading">
-            <span class="muted">Forme d'onde indisponible — la sélection reste utilisable.</span>
+        </div>
+
+        {#if mode === "clip"}
+          <div class="cliprow" in:fadeIn>
+            <div class="bounds">
+              <button class="bound" on:click={() => setEdgeToPlayhead("start")} title="Début = position de pré-écoute">
+                <span class="bl muted">Début</span>
+                <span class="bv">{fmtDuration(Math.round(selStart))}</span>
+              </button>
+              <span class="len">
+                <span class="bl muted">Durée</span>
+                <span class="bv accent">{fmtDuration(Math.round(clipLen))}</span>
+              </span>
+              <button class="bound" on:click={() => setEdgeToPlayhead("end")} title="Fin = position de pré-écoute">
+                <span class="bl muted">Fin</span>
+                <span class="bv">{fmtDuration(Math.round(selEnd))}</span>
+              </button>
+            </div>
+            <div class="fmt" role="radiogroup" aria-label="Format">
+              <button role="radio" aria-checked={clipFmt === "mp3"} class:on={clipFmt === "mp3"} on:click={() => (clipFmt = "mp3")}>MP3 320</button>
+              <button role="radio" aria-checked={clipFmt === "m4a"} class:on={clipFmt === "m4a"} on:click={() => (clipFmt = "m4a")}>AAC</button>
+              <button role="radio" aria-checked={clipFmt === "flac"} class:on={clipFmt === "flac"} on:click={() => (clipFmt = "flac")}>FLAC</button>
+            </div>
+          </div>
+          <p class="hint muted">
+            Glissez les poignées pour choisir l'extrait — molette ou pincement pour zoomer.
+          </p>
+        {:else}
+          <div class="cliprow" in:fadeIn>
+            <span class="fullinfo muted">
+              {track.podcast ? "Épisode complet" : "Titre complet"} · {fmtDuration(Math.round(duration))}
+            </span>
+            <div class="fmt" role="radiogroup" aria-label="Format">
+              <button role="radio" aria-checked={fullFmt === "orig"} class:on={fullFmt === "orig"} on:click={() => (fullFmt = "orig")}>
+                {track.podcast ? "MP3 d'origine" : "Original"}
+              </button>
+              {#if !track.podcast}
+                <button role="radio" aria-checked={fullFmt === "mp3"} class:on={fullFmt === "mp3"} on:click={() => (fullFmt = "mp3")}>MP3 320</button>
+              {/if}
+              <button role="radio" aria-checked={fullFmt === "m4a"} class:on={fullFmt === "m4a"} on:click={() => (fullFmt = "m4a")}>AAC</button>
+            </div>
           </div>
         {/if}
-        <canvas
-          class="wave"
-          class:dim={loadingWave}
-          bind:this={canvas}
-          on:pointerdown={onPointerDown}
-          on:pointermove={onPointerMove}
-          on:pointerup={onPointerUp}
-          on:pointercancel={onPointerUp}
-          on:wheel={onWheel}
-          style="touch-action: none;"
-        ></canvas>
-        <canvas
-          class="overview"
-          bind:this={overviewCanvas}
-          on:pointerdown={onOvDown}
-          on:pointermove={onOvMove}
-          on:pointerup={onOvUp}
-          on:pointercancel={onOvUp}
-          style="touch-action: none;"
-        ></canvas>
-        <div class="wave-tools">
-          <button class="ic" on:click={togglePreview} aria-label="Pré-écoute" title={mode === "clip" ? "Écouter l'extrait" : "Écouter"}>
-            <Icon name={previewPlaying ? "pause" : "play"} size={16} />
-          </button>
-          <span class="ptime muted">{fmtDuration(Math.round(previewTime))}</span>
-          <span class="spacer"></span>
-          <button class="ic" on:click={zoomOut} disabled={zoom <= 1.001} aria-label="Zoom arrière"><Icon name="zoomOut" size={16} /></button>
-          <button class="ic" on:click={zoomIn} disabled={zoom >= maxZoom - 0.001} aria-label="Zoom avant"><Icon name="zoomIn" size={16} /></button>
-          {#if mode === "clip"}
-            <button class="fit" on:click={zoomToSelection}>Ajuster à la sélection</button>
-          {/if}
-        </div>
-      </div>
-
-      {#if mode === "clip"}
-        <div class="cliprow" in:fadeIn>
-          <div class="bounds">
-            <button class="bound" on:click={() => setEdgeToPlayhead("start")} title="Début = position de pré-écoute">
-              <span class="bl muted">Début</span>
-              <span class="bv">{fmtDuration(Math.round(selStart))}</span>
-            </button>
-            <span class="len">
-              <span class="bl muted">Durée</span>
-              <span class="bv accent">{fmtDuration(Math.round(clipLen))}</span>
-            </span>
-            <button class="bound" on:click={() => setEdgeToPlayhead("end")} title="Fin = position de pré-écoute">
-              <span class="bl muted">Fin</span>
-              <span class="bv">{fmtDuration(Math.round(selEnd))}</span>
-            </button>
-          </div>
-          <div class="fmt" role="radiogroup" aria-label="Format">
-            <button role="radio" aria-checked={clipFmt === "mp3"} class:on={clipFmt === "mp3"} on:click={() => (clipFmt = "mp3")}>MP3 320</button>
-            <button role="radio" aria-checked={clipFmt === "m4a"} class:on={clipFmt === "m4a"} on:click={() => (clipFmt = "m4a")}>AAC</button>
-            <button role="radio" aria-checked={clipFmt === "flac"} class:on={clipFmt === "flac"} on:click={() => (clipFmt = "flac")}>FLAC</button>
-          </div>
-        </div>
-        <p class="hint muted">
-          Glissez les poignées pour choisir l'extrait — molette ou pincement pour zoomer.
-        </p>
-      {:else}
-        <div class="cliprow" in:fadeIn>
-          <span class="fullinfo muted">
-            {track.podcast ? "Épisode complet" : "Titre complet"} · {fmtDuration(Math.round(duration))}
-          </span>
-          <div class="fmt" role="radiogroup" aria-label="Format">
-            <button role="radio" aria-checked={fullFmt === "orig"} class:on={fullFmt === "orig"} on:click={() => (fullFmt = "orig")}>
-              {track.podcast ? "MP3 d'origine" : "Original"}
-            </button>
-            {#if !track.podcast}
-              <button role="radio" aria-checked={fullFmt === "mp3"} class:on={fullFmt === "mp3"} on:click={() => (fullFmt = "mp3")}>MP3 320</button>
-            {/if}
-            <button role="radio" aria-checked={fullFmt === "m4a"} class:on={fullFmt === "m4a"} on:click={() => (fullFmt = "m4a")}>AAC</button>
-          </div>
-        </div>
       {/if}
 
-      <footer>
-        <button class="ghost" on:click={download} disabled={busy}>
-          <Icon name="download" size={17} /> Télécharger
-        </button>
-        <button class="primary" on:click={share} disabled={busy}>
-          {#if busy}
-            <span class="spin"></span> Préparation…
-          {:else}
-            <Icon name="share" size={17} /> Partager
+      {#if mode === "link"}
+        <footer>
+          {#if link}
+            <button class="ghost" on:click={() => copyUrl()} disabled={linkBusy || linkLoading}>
+              <Icon name="copy" size={17} /> Copier
+            </button>
           {/if}
-        </button>
-      </footer>
+          <button class="primary" on:click={shareLink} disabled={linkBusy || linkLoading}>
+            {#if linkBusy}
+              <span class="spin"></span> Préparation…
+            {:else}
+              <Icon name="share" size={17} /> Partager le lien
+            {/if}
+          </button>
+        </footer>
+      {:else}
+        <footer>
+          <button class="ghost" on:click={download} disabled={busy}>
+            <Icon name="download" size={17} /> Télécharger
+          </button>
+          <button class="primary" on:click={share} disabled={busy}>
+            {#if busy}
+              <span class="spin"></span> Préparation…
+            {:else}
+              <Icon name="share" size={17} /> Partager
+            {/if}
+          </button>
+        </footer>
+      {/if}
     </div>
   </div>
 {/if}
@@ -1183,6 +1434,110 @@
   .hint {
     font-size: 0.78rem;
     margin: -4px 0 0;
+  }
+
+  .linkpane {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 152px;
+    justify-content: center;
+  }
+  .linkloading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 120px;
+  }
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-hover);
+    border-top-color: var(--accent);
+    animation: spin 0.7s linear infinite;
+  }
+  .linklede {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+  .linkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 4px 12px;
+    border: 1px solid var(--bg-hover);
+    background: var(--bg-card);
+    border-radius: 12px;
+    color: var(--text-dim);
+  }
+  .linkurl {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.82rem;
+  }
+  .linkurl:focus {
+    outline: none;
+  }
+  .linkmeta {
+    margin: -4px 0 0;
+    font-size: 0.78rem;
+  }
+  .linknone {
+    margin: 0;
+    font-size: 0.9rem;
+  }
+  .linkerr {
+    margin: 0;
+    color: #ff9a8d;
+    font-size: 0.85rem;
+  }
+  .revoke {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(255, 120, 100, 0.32);
+    background: rgba(255, 120, 100, 0.06);
+    border-radius: 12px;
+    font-size: 0.86rem;
+  }
+  .revoke-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .revoke-open {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 2px;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .revoke-open:hover {
+    color: #ff9a8d;
+  }
+  .danger {
+    padding: 8px 14px;
+    border: 1px solid rgba(255, 120, 100, 0.4);
+    border-radius: 999px;
+    color: #ffb4a8;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+  .danger:hover:not(:disabled) {
+    background: rgba(255, 120, 100, 0.12);
   }
 
   footer {
