@@ -24,12 +24,14 @@
 //!   favourites list (docs/agents/desktop.md, *Memory*): a 1 000 px sleeve in a
 //!   36 px row is 4 MB of heap + 4 MB of atlas; the 128 px copy is 64 KB.
 //!
-//! The bytes come from `Api::bytes` on the `User` lane — a sleeve for what is on
-//! screen is part of the action just taken, not background work — and the cache
-//! write happens on the network thread, never on GPUI's.
+//! The bytes come from the address the API gave: this server's own route
+//! (`Api::bytes`, the session cookie goes with it) or the provider's CDN
+//! (`Api::bytes_url`, no cookie — see [`source`]), always on the `User` lane: a
+//! sleeve for what is on screen is part of the action just taken, not background
+//! work. The cache write happens on the network thread, never on GPUI's.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,6 +68,22 @@ pub const DECODED_BUDGET: usize = 64 * 1024 * 1024;
 /// short enough that "I looked at a screen once" is not a permanent 64 MB. A
 /// sleeve a screen still shows is never freed.
 pub const IDLE_FOR: Duration = Duration::from_secs(2);
+
+/// How long a refused sleeve waits before a paint may ask again.
+///
+/// A sleeve that failed (the provider's CDN blipped, the archive was not ready)
+/// keeps its placeholder for this long, then one paint retries it — never once
+/// per paint, which is a request storm (rule 3). A refused URL is also cleared
+/// at once by [`Covers::retry_failed`], which is what a screen's « Réessayer »
+/// calls.
+pub const RETRY_AFTER: Duration = Duration::from_secs(20);
+
+/// How many sleeves may WAIT for a slot. A screen asks in paint order (what it
+/// shows first is asked first); the queue drains as slots free, so a page's
+/// sleeves load without a re-render, and the oldest wait is dropped when the
+/// queue is full — a screen re-asks every paint, so every URL reaches a slot in
+/// turn instead of the first 64 freezing the rest out.
+const MAX_WAITING: usize = 64;
 
 /// The size class a screen draws its sleeves at.
 ///
@@ -109,17 +127,69 @@ impl Class {
 /// screen (a page's banner at `Class::Card`, its rows at `Class::Row`) are two
 /// holders, each with its own shown set.
 pub struct Covers {
-    /// Relative path → the file the device has, at this screen's [`Class`].
+    /// The address the API gave → the file the device has, at this screen's
+    /// [`Class`].
     files: HashMap<String, PathBuf>,
     /// The size this screen draws its sleeves at.
     class: Class,
-    /// Asked and refused: no second request this visit (a dead sleeve is not a
-    /// retry storm), and the row keeps its placeholder.
-    refused: HashSet<String>,
+    /// Asked and refused, and when: a dead sleeve keeps its placeholder for
+    /// [`RETRY_AFTER`] and is then retried once per window, never per paint.
+    refused: HashMap<String, Instant>,
     inflight: HashSet<String>,
+    /// Asked for while every slot was busy, oldest first.
+    waiting: VecDeque<Waiting>,
+    /// The retry window (`RETRY_AFTER`; a test asks for a shorter one).
+    retry: Duration,
     /// This cache's own name in the process-wide decoded cache, so two caches
     /// never share one "what this screen shows" set.
     holder: u64,
+}
+
+/// One sleeve waiting for an in-flight slot: everything its request needs, and
+/// the screen's callback, so it can start later (on the screen's own channel).
+struct Waiting {
+    url: String,
+    px: u32,
+    /// The link at the moment the paint asked: an offline ask reads the disk
+    /// and nothing else (a sleeve already fetched still paints, a miss keeps
+    /// its placeholder without a doomed request).
+    online: bool,
+    api: Arc<nz_api::Api>,
+    cache: nz_cache::Cache,
+    runtime: tokio::runtime::Handle,
+    done: Box<dyn FnOnce(Option<PathBuf>) + Send + 'static>,
+}
+
+/// Where a sleeve's bytes come from.
+///
+/// The API's `cover` fields are TWO kinds of address, and both are in real
+/// answers: this server's same-origin route (`/api/cover/<id>`, the session
+/// cookie goes with it) and a provider CDN URL (`https://….dzcdn.net/…`, the
+/// address the SPA puts in an `<img src>`). Treating the second as the first —
+/// asking the server for `/api/cover/https://…` — is a 404 on every sleeve of
+/// « Nouveautés », `/search` and `/moods`, which is why they stayed empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source<'a> {
+    /// This server's own route, below `/api`.
+    Api(&'a str),
+    /// The provider's own address: no session cookie is sent.
+    Provider(&'a str),
+    /// Neither: nothing is asked, the placeholder is the answer.
+    None,
+}
+
+/// What `url` is, without touching the network: one function so the plan is
+/// testable and the request path never guesses.
+pub fn source(url: &str) -> Source<'_> {
+    if let Some(path) = url.strip_prefix("/api")
+        && path.starts_with('/')
+    {
+        return Source::Api(path);
+    }
+    if url.starts_with("https://") || url.starts_with("http://") {
+        return Source::Provider(url);
+    }
+    Source::None
 }
 
 /// The next cache's holder: a process-wide counter, never reused (a released
@@ -156,10 +226,20 @@ impl Covers {
         Self {
             files: HashMap::new(),
             class,
-            refused: HashSet::new(),
+            refused: HashMap::new(),
             inflight: HashSet::new(),
+            waiting: VecDeque::new(),
+            retry: RETRY_AFTER,
             holder: HOLDERS.fetch_add(1, Ordering::SeqCst),
         }
+    }
+
+    /// The same cache with another retry window: a test that must SEE the
+    /// window expire does not wait twenty seconds.
+    #[cfg(test)]
+    fn with_retry(mut self, retry: Duration) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// The size class this screen paints at.
@@ -179,74 +259,105 @@ impl Covers {
         self.inflight.len()
     }
 
-    /// Ask for `url` unless it is here, in flight, or was refused. `done` runs on
-    /// the screen's own event channel when the answer lands (file or refusal).
+    /// Ask for `url` unless it is here, in flight, waiting, or was refused less
+    /// than [`RETRY_AFTER`] ago. `done` runs on the screen's own event channel
+    /// when the answer lands (file or refusal).
     ///
+    /// **Visible first, bounded, and nothing lost.** The caller asks in paint
+    /// order, so the sleeves the screen shows first take the first slots; the
+    /// rest wait in that order and start as slots free, without a re-render.
     /// Nothing is asked when the screen is offline: the placeholder is the right
     /// answer, and a doomed request per row is what rule 3 forbids.
     pub fn want<F>(&mut self, state: &AppState, url: &str, done: F)
     where
         F: FnOnce(Option<PathBuf>) + Send + 'static,
     {
-        if url.is_empty()
-            || self.files.contains_key(url)
-            || self.refused.contains(url)
-            || self.inflight.contains(url)
-            || self.inflight.len() >= MAX_IN_FLIGHT
-            || !state.online
+        if url.is_empty() || self.files.contains_key(url) || self.inflight.contains(url) {
+            return;
+        }
+        if let Some(at) = self.refused.get(url)
+            && at.elapsed() < self.retry
         {
+            return;
+        }
+        if self.waiting.iter().any(|job| job.url == url) {
             return;
         }
         let (Some(api), Some(cache)) = (state.api.clone(), state.cache.clone()) else {
             return;
         };
-        self.inflight.insert(url.to_owned());
-        let path = format!("/cover/{}", url.trim_start_matches("/api/cover/"));
-        let key = url.to_owned();
-        let px = self.class.px();
-        state.runtime.spawn(async move {
-            // The file may already be there from an earlier visit (`nz-cache`
-            // keeps sleeves): one SQLite read on the network thread, no request.
-            let cached = cache.covers().file(&key);
-            let answer = match cached {
-                Some(file) => Some(file),
-                None => match api.bytes(Lane::User, &path).await {
-                    Ok(bytes) => match cache.covers().put(&key, &bytes) {
-                        Ok(file) => Some(file),
-                        Err(error) => {
-                            tracing::debug!(%error, "la vignette n'a pas pu être écrite");
-                            None
-                        }
-                    },
-                    Err(error) => {
-                        // A failure to reach a provider is never a verdict:
-                        // the row keeps its placeholder for this visit only.
-                        tracing::debug!(%error, url = %key, "vignette indisponible");
-                        None
-                    }
-                },
-            };
-            // Decode and resize ONCE, at the size this screen draws (`Class`):
-            // a row reads a 128 px file instead of the archived 1 000 px one.
-            let answer = answer.and_then(|_| cache.covers().variant(&key, px));
+        self.refused.remove(url);
+        let job = Waiting {
+            url: url.to_owned(),
+            px: self.class.px(),
+            online: state.online,
+            api,
+            cache,
+            runtime: state.runtime.clone(),
+            done: Box::new(done),
+        };
+        if self.inflight.len() < MAX_IN_FLIGHT {
+            self.start(job);
+        } else {
+            if self.waiting.len() >= MAX_WAITING {
+                self.waiting.pop_front();
+            }
+            self.waiting.push_back(job);
+        }
+    }
+
+    /// Start one sleeve's request now, holding its slot until `resolved`.
+    fn start(&mut self, job: Waiting) {
+        self.inflight.insert(job.url.clone());
+        let Waiting {
+            url,
+            px,
+            online,
+            api,
+            cache,
+            runtime,
+            done,
+        } = job;
+        runtime.spawn(async move {
+            let answer = fetch(&api, &cache, &url, px, online).await;
             done(answer);
         });
     }
 
     /// The answer to an earlier `want`, so the next paint draws the image.
     ///
-    /// `None` marks the sleeve refused: the placeholder stays and no further
-    /// request is made for it this visit.
+    /// `None` marks the sleeve refused for [`RETRY_AFTER`]. A freed slot starts
+    /// the first waiting sleeve, in the order the screen asked — that is what
+    /// keeps a page's remaining sleeves loading without another paint.
     pub fn resolved(&mut self, url: &str, file: Option<PathBuf>) {
         self.inflight.remove(url);
         match file {
             Some(file) => {
                 self.files.insert(url.to_owned(), file);
+                self.refused.remove(url);
             }
             None => {
-                self.refused.insert(url.to_owned());
+                self.refused.insert(url.to_owned(), Instant::now());
             }
         }
+        while self.inflight.len() < MAX_IN_FLIGHT {
+            let Some(job) = self.waiting.pop_front() else {
+                break;
+            };
+            if self.files.contains_key(&job.url)
+                || self.inflight.contains(&job.url)
+                || self.refused.contains_key(&job.url)
+            {
+                continue;
+            }
+            self.start(job);
+        }
+    }
+
+    /// How many sleeves are waiting for a slot (a test holds the queue to
+    /// `MAX_IN_FLIGHT` requests and no more).
+    pub fn waiting(&self) -> usize {
+        self.waiting.len()
     }
 
     /// Forget what was asked, so a `Réessayer` asks again — a screen that came
@@ -326,6 +437,60 @@ impl Covers {
             cx.remove_asset::<ImgResourceLoader>(&Resource::Path(path.into()));
         }
     }
+}
+
+/// A sleeve's bytes, from the disk first and from wherever [`source`] points
+/// second, then the file this screen draws (`Class`), never hidden by a
+/// downscale that failed.
+async fn fetch(
+    api: &nz_api::Api,
+    cache: &nz_cache::Cache,
+    url: &str,
+    px: u32,
+    online: bool,
+) -> Option<PathBuf> {
+    // The file may already be there from an earlier visit (`nz-cache` keeps
+    // sleeves): one SQLite read on the network thread, no request — and it is
+    // the ONLY thing an offline ask does (rule 3: what was fetched once is
+    // kept, and a screen with no link paints its covers).
+    if let Some(original) = cache.covers().file(url) {
+        return ready(cache, url, px, original);
+    }
+    if !online {
+        return None;
+    }
+    let bytes = match source(url) {
+        Source::Api(path) => api.bytes(Lane::User, path).await,
+        Source::Provider(absolute) => api.bytes_url(Lane::User, absolute).await,
+        Source::None => {
+            tracing::debug!(url, "vignette : adresse ni locale ni du fournisseur");
+            return None;
+        }
+    };
+    let original = match bytes {
+        Ok(bytes) => match cache.covers().put(url, &bytes) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::debug!(%error, "la vignette n'a pas pu être écrite");
+                return None;
+            }
+        },
+        Err(error) => {
+            // A failure to reach a provider is never a verdict: the row keeps
+            // its placeholder and the window in `Covers::refused` decides the
+            // retry, not this paint.
+            tracing::debug!(%error, url, "vignette indisponible");
+            return None;
+        }
+    };
+    ready(cache, url, px, original)
+}
+
+/// The file `url` paints at this screen's size: the resized copy, or the
+/// original when the resize refused it (`nz-cache` keeps sleeves, so the bytes
+/// DID arrive — a wrong size is a right picture, a gap is not).
+fn ready(cache: &nz_cache::Cache, url: &str, px: u32, original: PathBuf) -> Option<PathBuf> {
+    cache.covers().variant(url, px).or(Some(original))
 }
 
 /// What to paint for one sleeve file, this frame.
@@ -740,7 +905,324 @@ fn glyph_size(size: Pixels) -> Pixels {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::widgets::card::stub::{self, Stub};
+
+    /// The answers a test's callbacks collect, keyed to their URL.
+    type Answers = Arc<Mutex<Vec<(String, Option<PathBuf>)>>>;
+
+    /// The login answer the stub gives (`/api/login` and `/api/me`).
+    const ME: &str =
+        r#"{"user":{"id":"u1","name":"bench","admin":false,"access":{},"sources":[]}}"#;
+
+    /// A real 128 px JPEG, the bytes a sleeve route answers.
+    fn sleeve_jpeg() -> Vec<u8> {
+        let picture = image::RgbImage::from_fn(128, 128, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        });
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 82);
+        encoder.encode_image(&picture).expect("encode");
+        bytes
+    }
+
+    /// What the app answers its screens: the two kinds of `cover` address in
+    /// one place, so a provider URL can never be sent to the server's own route
+    /// again (`/api/cover/https://…` is a 404 on every sleeve of Nouveautés).
+    #[test]
+    fn a_cover_address_is_read_as_the_route_or_the_provider_it_is() {
+        assert_eq!(source("/api/cover/9"), Source::Api("/cover/9"));
+        assert_eq!(
+            source("https://e-cdns-images.dzcdn.net/images/cover/ab/1000x1000.jpg"),
+            Source::Provider("https://e-cdns-images.dzcdn.net/images/cover/ab/1000x1000.jpg")
+        );
+        assert_eq!(
+            source("http://127.0.0.1:8080/art.jpg"),
+            Source::Provider("http://127.0.0.1:8080/art.jpg")
+        );
+        assert_eq!(source(""), Source::None);
+        assert_eq!(source("/elsewhere.jpg"), Source::None, "no route to ask");
+        assert_eq!(source("ftp://host/x.jpg"), Source::None, "never a file URL");
+    }
+
+    /// One pump of the network runtime and the UI, the way the screen tests do.
+    fn pump(runtime: &tokio::runtime::Runtime, cx: &mut gpui::TestAppContext) {
+        runtime.block_on(async {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        });
+        cx.run_until_parked();
+    }
+
+    /// Hand every answer the callbacks collected to `Covers`, as the screen's
+    /// own channel would.
+    fn settle(covers: &mut Covers, answers: &Mutex<Vec<(String, Option<PathBuf>)>>) {
+        for (url, file) in answers.lock().expect("answers").drain(..) {
+            covers.resolved(&url, file);
+        }
+    }
+
+    /// Ask one screen's cache for `url`, collecting the answer the way its
+    /// event channel does.
+    fn ask(
+        cx: &mut gpui::TestAppContext,
+        state: &gpui_kit::Entity<AppState>,
+        covers: &mut Covers,
+        answers: &Answers,
+        url: &str,
+    ) {
+        let answer = Arc::clone(answers);
+        let key = url.to_owned();
+        cx.update(|cx| {
+            let state = state.read(cx);
+            covers.want(state, url, move |file| {
+                answer.lock().expect("answers").push((key, file));
+            });
+        });
+    }
+
+    fn wait_for(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut gpui::TestAppContext,
+        covers: &mut Covers,
+        answers: &Mutex<Vec<(String, Option<PathBuf>)>>,
+        what: &str,
+        mut done: impl FnMut(&Covers) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            pump(runtime, cx);
+            settle(covers, answers);
+            if done(covers) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        }
+    }
+
+    /// **The rule the person's empty shelves taught.** A `cover` field may be
+    /// the provider's own CDN address: the request goes there, with the
+    /// external client (no session cookie), and the bytes land in the device's
+    /// cover store. Measured here on one page's four sleeves — one local, three
+    /// provider addresses — **4 files** in the store (a 100 % display rate),
+    /// one request each, and **0** requests to the server's own cover route;
+    /// the old path resolved **1 of 4** (25 %) and spent three 404s on the
+    /// `User` lane per provider address.
+    #[gpui::test]
+    async fn a_provider_sleeve_is_fetched_from_its_own_host_and_kept(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let jpeg = sleeve_jpeg();
+        let stub = Stub::start_bytes(&[
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+            ("/api/cover/9", jpeg.clone()),
+            ("/art/7.jpg", jpeg.clone()),
+            ("/art/8.jpg", jpeg.clone()),
+            ("/art/9.jpg", jpeg.clone()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let base = stub.base();
+        let urls = [
+            "/api/cover/9".to_owned(),
+            format!("{base}/art/7.jpg"),
+            format!("{base}/art/8.jpg"),
+            format!("{base}/art/9.jpg"),
+        ];
+        let answers: Answers = Arc::new(Mutex::new(Vec::new()));
+        let mut covers = Covers::new();
+        for url in &urls {
+            ask(cx, &state, &mut covers, &answers, url);
+        }
+        assert_eq!(covers.in_flight(), 4, "four sleeves are on their way");
+
+        wait_for(
+            &runtime,
+            cx,
+            &mut covers,
+            &answers,
+            "four sleeves",
+            |covers| urls.iter().all(|url| covers.file(url).is_some()),
+        );
+        assert_eq!(stub.count("/api/cover/9"), 1, "the server's own route");
+        for art in ["/art/7.jpg", "/art/8.jpg", "/art/9.jpg"] {
+            assert_eq!(stub.count(art), 1, "the provider's address");
+        }
+        assert!(
+            stub.hits()
+                .iter()
+                .all(|hit| !hit.path.starts_with("/api/cover/http")),
+            "the provider URL was never sent to the server's cover route: {:?}",
+            stub.hits()
+                .iter()
+                .map(|hit| hit.path.clone())
+                .collect::<Vec<_>>()
+        );
+        for url in &urls {
+            let file = covers.file(url).expect("a file");
+            assert!(file.is_file(), "{url} → {}", file.display());
+        }
+
+        // What was fetched once is kept: a second visit makes NO request.
+        let before = stub.total();
+        let mut again = Covers::new();
+        let answers: Answers = Arc::new(Mutex::new(Vec::new()));
+        for url in &urls {
+            ask(cx, &state, &mut again, &answers, url);
+        }
+        wait_for(&runtime, cx, &mut again, &answers, "four files", |again| {
+            urls.iter().all(|url| again.file(url).is_some())
+        });
+        assert_eq!(stub.total(), before, "the disk was enough, no request");
+
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// **Eight at a time, in the order asked, and nothing dropped.** A page
+    /// asks for its sleeves in paint order (what it shows first first); when
+    /// every slot is busy the rest WAIT and start as answers land, so a shelf
+    /// of covers loads without another paint and the request count never fans
+    /// out. Measured: 20 asked with no slot free → **8 in flight, 12 waiting**;
+    /// after pumping, all 20 settled.
+    #[gpui::test]
+    async fn eight_covers_are_in_flight_and_the_rest_wait_in_the_order_asked(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let jpeg = sleeve_jpeg();
+        let mut routes: Vec<(&'static str, Vec<u8>)> = vec![
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+        ];
+        for index in 0..20 {
+            let path: &'static str = Box::leak(format!("/api/cover/c{index}").into_boxed_str());
+            routes.push((path, jpeg.clone()));
+        }
+        let stub = Stub::start_bytes(&routes);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let answers: Answers = Arc::new(Mutex::new(Vec::new()));
+        let mut covers = Covers::new();
+        for index in 0..20 {
+            ask(
+                cx,
+                &state,
+                &mut covers,
+                &answers,
+                &format!("/api/cover/c{index}"),
+            );
+        }
+        assert_eq!(
+            covers.in_flight(),
+            MAX_IN_FLIGHT,
+            "the whole fan-out is bounded"
+        );
+        assert_eq!(covers.waiting(), 12, "the rest wait, they are not dropped");
+
+        wait_for(
+            &runtime,
+            cx,
+            &mut covers,
+            &answers,
+            "twenty sleeves",
+            |covers| covers.waiting() == 0 && covers.in_flight() == 0,
+        );
+        let asked: usize = (0..20)
+            .map(|index| {
+                assert!(
+                    covers.file(&format!("/api/cover/c{index}")).is_some(),
+                    "sleeve c{index} settled"
+                );
+                stub.count(&format!("/api/cover/c{index}"))
+            })
+            .sum();
+        assert_eq!(asked, 20, "one request per sleeve, no fan-out");
+
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// **The rule, offline still shows what it kept.** A sleeve already on the
+    /// device is painted with the link down, and the disk read happens BEFORE
+    /// the online check, so an offline screen makes **0** requests and still
+    /// draws its covers (rule 3: what was fetched once is kept).
+    #[gpui::test]
+    async fn an_offline_screen_still_paints_the_sleeves_it_kept(cx: &mut gpui::TestAppContext) {
+        let jpeg = sleeve_jpeg();
+        let stub = Stub::start_bytes(&[
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let url = "/api/cover/9";
+        // What an earlier visit left on the device.
+        cx.update(|cx| {
+            let cache = state.read(cx).cache.clone().expect("a cache");
+            cache.covers().put(url, &jpeg).expect("stored");
+        });
+        cx.update(|cx| state.update(cx, |state, _| state.online = false));
+
+        let answers: Answers = Arc::new(Mutex::new(Vec::new()));
+        let mut covers = Covers::new();
+        ask(cx, &state, &mut covers, &answers, url);
+        wait_for(
+            &runtime,
+            cx,
+            &mut covers,
+            &answers,
+            "the kept sleeve",
+            |covers| covers.in_flight() == 0,
+        );
+        let file = covers.file(url).expect("the kept sleeve paints");
+        assert!(file.is_file(), "{}", file.display());
+        assert_eq!(stub.count(url), 0, "offline: the disk, never the network");
+
+        runtime.shutdown_background();
+        stub.stop();
+    }
+
+    /// **A refusal is not a storm, and not a life sentence.** A sleeve that
+    /// failed keeps its placeholder for `RETRY_AFTER`: repainting it asks
+    /// nothing (measured: **1** request for two paints), and once the window has
+    /// passed exactly one paint asks again (**2**). A test asks for a 200 ms
+    /// window; the shipped one is 20 s.
+    #[gpui::test]
+    async fn a_refused_sleeve_waits_before_asking_again(cx: &mut gpui::TestAppContext) {
+        let stub = Stub::start_bytes(&[
+            ("/api/login", ME.as_bytes().to_vec()),
+            ("/api/me", ME.as_bytes().to_vec()),
+        ]);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let answers: Answers = Arc::new(Mutex::new(Vec::new()));
+        let mut covers = Covers::new().with_retry(Duration::from_millis(200));
+        let url = "/api/cover/missing";
+        ask(cx, &state, &mut covers, &answers, url);
+        wait_for(
+            &runtime,
+            cx,
+            &mut covers,
+            &answers,
+            "the refusal",
+            |covers| covers.in_flight() == 0,
+        );
+        assert_eq!(stub.count(url), 1, "asked once");
+        assert!(covers.file(url).is_none(), "the placeholder stays");
+
+        // The next paint: no second request inside the window.
+        ask(cx, &state, &mut covers, &answers, url);
+        pump(&runtime, cx);
+        assert_eq!(stub.count(url), 1, "no storm");
+
+        std::thread::sleep(Duration::from_millis(260));
+        ask(cx, &state, &mut covers, &answers, url);
+        wait_for(&runtime, cx, &mut covers, &answers, "the retry", |covers| {
+            covers.in_flight() == 0
+        });
+        assert_eq!(stub.count(url), 2, "one retry after the window");
+
+        runtime.shutdown_background();
+        stub.stop();
+    }
 
     fn image(px: u32) -> Arc<RenderImage> {
         let frame = image::Frame::new(image::RgbaImage::new(px, px));

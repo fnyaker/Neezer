@@ -128,6 +128,43 @@ fn pinned_client(https_only: bool) -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
+/// Whether `url` names THIS machine (`localhost`, `127.0.0.0/8`, `::1`).
+///
+/// The one place a plaintext sleeve is allowed ([`Api::bytes_url`]): a test's
+/// stub or a local server on this computer. It cannot reach the LAN or the
+/// internet, which is what the https rule exists to prevent.
+fn is_loopback_url(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    })
+}
+
+/// The client of a LOOPBACK `http` sleeve (a test's stub, a server on this
+/// machine): the same timeouts, no cookie jar, and a redirect policy that only
+/// follows an `https` hop or another loopback one — a provider URL must never
+/// become a way to read the LAN or the public internet in clear.
+fn loopback_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= MAX_REDIRECTS {
+                return attempt.error("trop de redirections");
+            }
+            let url = attempt.url();
+            if url.scheme() == "https" || (url.scheme() == "http" && is_loopback_url(url)) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+}
+
 /// How long a connection may take to establish (`docs/agents/desktop.md`).
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long an API answer may take, headers and body included. A stream is
@@ -298,6 +335,10 @@ pub struct Api {
     /// leave this server), redirects followed (a pinned host answers `302` to its
     /// CDN), same `User-Agent`.
     external: reqwest::Client,
+    /// The same for a LOOPBACK `http` sleeve ([`Api::bytes_url`]): no cookie
+    /// jar, no `https_only`, and a redirect policy that never leaves `https`
+    /// except for this machine.
+    external_plain: reqwest::Client,
     jar: Arc<SessionJar>,
     gates: Arc<Gates>,
     cache: Arc<dyn ResponseCache>,
@@ -734,6 +775,119 @@ impl Api {
         self.fetch_want(Want::Bytes, lane, Method::GET, path, None, was_online, None)
             .await?
             .into_body()
+    }
+
+    /// A GET of an ABSOLUTE sleeve URL that a provider's answer carried
+    /// (`https://e-cdns-images.dzcdn.net/…`): the address the SPA puts in an
+    /// `<img src>`.
+    ///
+    /// The `cover` fields of `/releases`, `/search`, `/moods` and their like
+    /// are the PROVIDER's own CDN addresses, not this server's
+    /// `/api/cover/<id>`; asking the server for `/api/cover/https://…` is a
+    /// 404 on every one of them, which is why those screens painted
+    /// placeholders. [`Api::bytes`] stays for the same-origin routes.
+    ///
+    /// The rules of [`Api::download_url_to`] apply, because the host is nobody
+    /// here administers: **https only** (an `http` URL on a LOOPBACK host is
+    /// the one exception — that is this machine, not a way to scan the LAN), no
+    /// URL credentials, and the `external` client with **no cookie jar**, so a
+    /// neezer session never leaves its server. The lane gate, the `User` lane's
+    /// three tries and the counters are the API ones: a shelf of sleeves still
+    /// yields to the track the person just tapped (rule 1).
+    pub async fn bytes_url(&self, lane: Lane, url: &str) -> Result<Vec<u8>, ApiError> {
+        let parsed = reqwest::Url::parse(url).map_err(|error| ApiError::Http {
+            status: 0,
+            message: format!("adresse de vignette invalide ({url}) : {error}"),
+            code: Some("bad_url".to_owned()),
+        })?;
+        if parsed.scheme() != "https" && !(parsed.scheme() == "http" && is_loopback_url(&parsed)) {
+            return Err(ApiError::Http {
+                status: 0,
+                message: format!(
+                    "adresse de vignette refusée ({url}) : HTTPS seulement, jamais {}",
+                    parsed.scheme()
+                ),
+                code: Some("insecure_url".to_owned()),
+            });
+        }
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(ApiError::Http {
+                status: 0,
+                message: "adresse de vignette refusée : identifiants dans l’URL".to_owned(),
+                code: Some("credentialed_url".to_owned()),
+            });
+        }
+        let attempts = match lane {
+            Lane::User => MAX_GET_ATTEMPTS,
+            Lane::Prefetch | Lane::Bulk => 2,
+        };
+        let _guard = self.gates.acquire(lane).await;
+        let client = if parsed.scheme() == "https" {
+            &self.external
+        } else {
+            &self.external_plain
+        };
+        let mut last = ApiError::Offline;
+        for attempt in 0..attempts {
+            let request = client
+                .get(parsed.clone())
+                .header(reqwest::header::ACCEPT, Want::Bytes.accept())
+                .timeout(ANSWER_TIMEOUT);
+            self.stats.request(&self.tag, 0);
+            let answer = match request.send().await {
+                Ok(mut response) => {
+                    let status = response.status().as_u16();
+                    if (200..300).contains(&status) {
+                        response.bytes().await.map_err(|error| {
+                            if is_network_failure(&error) {
+                                ApiError::Offline
+                            } else {
+                                ApiError::Http {
+                                    status,
+                                    message: error.to_string(),
+                                    code: None,
+                                }
+                            }
+                        })
+                    } else {
+                        // At most 512 bytes of a refusal: the message a person
+                        // may see, never a body of unknown size from a host
+                        // nobody here administers.
+                        let mut body = Vec::new();
+                        while let Ok(Some(chunk)) = response.chunk().await {
+                            body.extend_from_slice(&chunk);
+                            if body.len() >= 512 {
+                                break;
+                            }
+                        }
+                        let text = String::from_utf8_lossy(&body[..body.len().min(512)]);
+                        Err(external_error(status, &text))
+                    }
+                }
+                Err(error) => {
+                    if is_network_failure(&error) {
+                        Err(ApiError::Offline)
+                    } else {
+                        Err(ApiError::Http {
+                            status: 0,
+                            message: error.to_string(),
+                            code: None,
+                        })
+                    }
+                }
+            };
+            match answer {
+                Ok(bytes) => return Ok(bytes.to_vec()),
+                Err(error) => {
+                    last = error;
+                    if attempt + 1 >= attempts || lane != Lane::User || !is_transient(&last) {
+                        return Err(last);
+                    }
+                }
+            }
+            tokio::time::sleep(backoff(attempt, self.jitter())).await;
+        }
+        Err(last)
     }
 
     /// Whether the SERVER has this route at all: what an older server is
@@ -1614,6 +1768,13 @@ impl ApiBuilder {
             message: format!("client HTTP impossible : {err}"),
             code: None,
         })?;
+        // The loopback one (`Api::bytes_url`): plaintext is allowed only to
+        // this machine, and only the policy below can follow it.
+        let external_plain = loopback_client().map_err(|err| ApiError::Http {
+            status: 0,
+            message: format!("client HTTP impossible : {err}"),
+            code: None,
+        })?;
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() as u64)
@@ -1624,6 +1785,7 @@ impl ApiBuilder {
             base_url,
             http,
             external,
+            external_plain,
             jar,
             gates: Arc::new(Gates::new()),
             cache: self.cache.unwrap_or_else(|| Arc::new(NoCache)),

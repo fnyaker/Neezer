@@ -20,8 +20,9 @@
 //! friends) do not move a row list at the same time — `j`/`k` stay the list's.
 
 use gpui_kit::{
-    App, Context, Div, ElementId, InteractiveElement as _, Pixels, Point, Render, ScrollHandle,
-    Stateful, StatefulInteractiveElement as _, Styled, Subscription, Window, div, px, rems,
+    App, Context, Div, ElementId, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+    Point, Render, ScrollHandle, Stateful, StatefulInteractiveElement as _, Styled, Subscription,
+    Window, div, px, rems,
 };
 
 /// What a keystroke asks the page to do.
@@ -65,6 +66,12 @@ impl PageScroll {
             .flex_col()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+    }
+
+    /// This page's own handle, for a nested scrollable that must chain its
+    /// wheel to the page ([`nested`]).
+    pub fn handle(&self) -> ScrollHandle {
+        self.scroll.clone()
     }
 
     /// Where the page is, in pixels below the top (0 at the top, negative and
@@ -147,6 +154,68 @@ pub fn column() -> Div {
     div().flex().flex_col().flex_shrink_0().w_full()
 }
 
+/// A scrollable that lives INSIDE a page: the wheel moves it first, and the
+/// page only by the part it could not take.
+///
+/// **The rule, one wheel notch has one effect.** GPUI hands a wheel event to
+/// EVERY scroll container whose hitbox is under the pointer, not only the
+/// innermost (`Hitbox::should_handle_scroll` tests the whole hit-test stack,
+/// `gpui-pre` 0.3.9 `window.rs`), so a bounded list inside a page scroller
+/// scrolled BOTH by the same notch: two bars, twice the travel, or a list that
+/// looks stuck because the page moved underneath it. Every browser chains the
+/// scroll instead — the inner container consumes it and what is left goes to
+/// the ancestor once the boundary is reached (MDN, *Scroll chaining*; the CSS
+/// `overscroll-behavior` property). GPUI has no `overscroll-behavior`; this
+/// wrapper is it, in the bubble phase:
+///
+/// - the inner scroll container's own listener has already applied `delta`
+///   (it is deeper, so GPUI runs it first), and it is clamped to its bound on
+///   the next prepaint, so its PREVIOUS offset is `offset - delta`;
+/// - whatever its remaining travel could not take is applied to `page`;
+/// - the event is stopped there, so the page's own listener never applies the
+///   same notch a second time.
+///
+/// `inner` is the handle the list scrolls with (`TrackList::scroll_handle`,
+/// a `VirtualListScrollHandle`'s base handle, …). The wrapper must be a direct
+/// child of a bounded box: it is `size_full`, so give it the list's height.
+pub fn nested(
+    id: impl Into<ElementId>,
+    page: &ScrollHandle,
+    inner: &ScrollHandle,
+    child: impl IntoElement,
+) -> Stateful<Div> {
+    let page = page.clone();
+    let inner = inner.clone();
+    div()
+        .id(id)
+        .size_full()
+        .on_scroll_wheel(move |event, window, cx| {
+            let delta = event.delta.pixel_delta(window.line_height()).y;
+            if delta == px(0.) {
+                return;
+            }
+            // The offset is negative going down and bounded to `[-max, 0]`.
+            let max = inner.max_offset().y.max(px(0.));
+            let before = (inner.offset().y - delta).clamp(-max, px(0.));
+            let room = if delta < px(0.) {
+                (before + max).max(px(0.))
+            } else {
+                (-before).max(px(0.))
+            };
+            let leftover = (delta.abs() - room).max(px(0.));
+            if leftover > px(0.) {
+                let bound = page.max_offset().y.max(px(0.));
+                let mut offset = page.offset();
+                let shift = if delta < px(0.) { -leftover } else { leftover };
+                offset.y = (offset.y + shift).clamp(-bound, px(0.));
+                page.set_offset(offset);
+                window.refresh();
+            }
+            cx.stop_propagation();
+        })
+        .child(child)
+}
+
 #[cfg(test)]
 mod tests {
     use gpui_kit::{
@@ -209,6 +278,145 @@ mod tests {
             range,
             px(0.),
             "a flex_1 page column is one viewport tall: the bug, pinned"
+        );
+    }
+
+    /// A page with a bounded, scrollable list at its top: the shape of
+    /// l'Accueil's « Pour toi » band, de Nouveautés' unfolded titles, du panneau
+    /// de lecture. The list is 300 px tall and holds 1 200 px of rows (900 px of
+    /// travel), and the page holds 1 200 px more below it.
+    struct Nested {
+        page: PageScroll,
+        inner: ScrollHandle,
+        /// The bug, reproduced on demand: the list placed in the page with no
+        /// chaining wrapper (what every nested list looked like before).
+        bare: bool,
+    }
+
+    impl Render for Nested {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let list = div()
+                .id("nested-inner")
+                .h(px(300.))
+                .overflow_y_scroll()
+                .track_scroll(&self.inner)
+                .child(div().flex().flex_col().children(
+                    (0..12).map(|index| div().h(px(100.)).child(format!("ligne {index}"))),
+                ));
+            let list: gpui_kit::AnyElement = if self.bare {
+                list.into_any_element()
+            } else {
+                nested("nested-list", &self.page.handle(), &self.inner, list).into_any_element()
+            };
+            // The list's height is the page's (`nested` is `size_full`).
+            let mut page = column().child(div().h(px(300.)).child(list));
+            for index in 0..12 {
+                page = page.child(div().h(px(100.)).child(format!("bloc {index}")));
+            }
+            self.page.container("nested-page").child(page)
+        }
+    }
+
+    fn open_nested(
+        cx: &mut gpui::TestAppContext,
+        bare: bool,
+    ) -> (gpui_kit::Entity<Nested>, &mut gpui::VisualTestContext) {
+        let (bench, cx) = cx.add_window_view(move |_, _| Nested {
+            page: PageScroll::new(),
+            inner: ScrollHandle::new(),
+            bare,
+        });
+        cx.simulate_resize(size(px(1280.), px(800.)));
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        (bench, cx)
+    }
+
+    fn wheel(cx: &mut gpui::VisualTestContext, y: Pixels) {
+        cx.simulate_mouse_move(point(px(100.), y), None, Modifiers::default());
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(100.), y),
+            delta: ScrollDelta::Lines(point(0., -3.)),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    fn wheel_up(cx: &mut gpui::VisualTestContext, y: Pixels) {
+        cx.simulate_mouse_move(point(px(100.), y), None, Modifiers::default());
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(100.), y),
+            delta: ScrollDelta::Lines(point(0., 3.)),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    /// **The rule, one notch has one effect.** GPUI applies a wheel event to
+    /// EVERY scroll container under the pointer, so before this rule the list
+    /// and the page both moved by the same 78 px notch: the page's `range` is
+    /// 1 200+ px and the list's 900, so a person scrolling the « Pour toi » band
+    /// watched the whole page slide with it, or the list looked stuck while the
+    /// page moved. Measured here: over the list, one notch moves the list
+    /// **78 px** and the page **0** (it moved 78 before); the list stops at its
+    /// **900 px** bound and the notch then moves the page. Over the page below
+    /// the list, one notch moves the page and leaves the list alone.
+    #[gpui::test]
+    async fn the_inner_list_takes_the_wheel_and_the_page_gets_the_rest(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // The bug, pinned: without the wrapper GPUI gives the notch to BOTH
+        // containers, exactly what a person saw (page and list at 78 px).
+        let (bare, bare_cx) = open_nested(cx, true);
+        wheel(bare_cx, px(100.));
+        let (page, inner) = bare_cx.update(|_, cx| {
+            let bare = bare.read(cx);
+            (bare.page.offset().y, bare.inner.offset().y)
+        });
+        assert_eq!(page, inner, "both scrollers took the same notch: the bug");
+        assert!(page < px(-10.), "and both really moved: {page:?}");
+
+        let (bench, cx) = open_nested(cx, false);
+        let offsets = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| {
+                let bench = bench.read(cx);
+                (bench.page.offset().y, bench.inner.offset().y)
+            })
+        };
+
+        // The list is at the top of the page: y = 100 is inside it.
+        wheel(cx, px(100.));
+        let (page, inner) = offsets(cx);
+        assert!(inner < px(-10.), "the list took the notch: {inner:?}");
+        assert_eq!(page, px(0.), "the page did not take it too: {page:?}");
+
+        // The list reaches its 900 px bound; the next notches belong to the page.
+        for _ in 0..20 {
+            wheel(cx, px(100.));
+        }
+        let (page, inner) = offsets(cx);
+        assert_eq!(inner, px(-900.), "the list stopped at its own bound");
+        assert!(
+            page < px(-100.),
+            "the page got what the list could not take: {page:?}"
+        );
+
+        // And over the page itself the list does not move at all. The page is
+        // at its bottom here, so the notch is upward.
+        let (_, before) = offsets(cx);
+        wheel_up(cx, px(500.));
+        let (page_after, inner_after) = offsets(cx);
+        assert_eq!(inner_after, before, "the page's notch left the list alone");
+        assert!(
+            page_after > page,
+            "the page moved: {page_after:?} from {page:?}"
         );
     }
 

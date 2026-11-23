@@ -31,8 +31,8 @@ use std::rc::Rc;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription, Window, div, px,
-    rems,
+    Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    Window, div, px, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, button, icon};
 use nz_api::ApiError;
@@ -274,6 +274,9 @@ pub struct Screen {
     shown_all: bool,
     /// The release whose titles are folded out.
     opened: Option<String>,
+    /// The page's own scroll position, so the unfolded titles' band can chain
+    /// its wheel to the page (`page_scroll::nested`).
+    scroll: ScrollHandle,
     list: List,
     /// A paint asked for the page again (the failure's « Réessayer »).
     reload: bool,
@@ -297,6 +300,7 @@ impl Screen {
             unseen: 0,
             shown_all: false,
             opened: None,
+            scroll: ScrollHandle::new(),
             // The folded-out titles are a release's own order: a number, no
             // sleeve (the release's sleeve is right above them).
             list: List::new().numbered(true).show_cover(false),
@@ -555,6 +559,7 @@ impl Render for Screen {
             .id("releases-scroll")
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .flex()
             .flex_col()
             .min_w(px(0.))
@@ -1047,7 +1052,17 @@ impl Screen {
                 |_: &mut Self, _: crate::widgets::context_menu::Item, _: &mut Context<Self>| {},
                 |_: &mut Self, _: &mut Context<Self>| {},
             );
-            row = row.child(div().h(rems(3.5 * count.min(8) as f32 + 1.)).child(element));
+            // A bounded band inside the page: the wheel over the titles moves
+            // THEM, and the page only by what they could not take, instead of
+            // both by the same notch (`page_scroll::nested`).
+            row = row.child(div().h(rems(3.5 * count.min(8) as f32 + 1.)).child(
+                page_scroll::nested(
+                    "releases-tracks-nested",
+                    &self.scroll,
+                    self.list.scroll_handle(),
+                    element,
+                ),
+            ));
         }
         page.child(row)
     }

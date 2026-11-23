@@ -315,6 +315,12 @@ impl LyricsView {
         self.active
     }
 
+    /// The handle the lines scroll with, for a page this panel is nested in
+    /// (`page_scroll::nested`).
+    pub fn scroll_handle(&self) -> &gpui_kit::ScrollHandle {
+        self.scroll.base_handle()
+    }
+
     /// Retry the current track's words — what « Réessayer » on a failed panel
     /// does (rule 3: a cause, and the gesture that repeats it).
     pub fn retry(&mut self, cx: &mut Context<Self>) {
@@ -435,6 +441,7 @@ impl Render for LyricsView {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
                         .p(rems(0.5))
                         .text_size(rems(0.875))
                         .line_height(rems(1.4))

@@ -39,8 +39,8 @@ use std::rc::Rc;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
-    px, rems,
+    Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    Window, div, px, rems,
 };
 use gpui_omarchy::{ButtonVariant, IconName, icon, icon_button, tab as tab_button, tabs};
 use nz_player::Repeat;
@@ -54,6 +54,7 @@ use crate::state::AppState;
 use crate::theme;
 use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::lyrics::LyricsView;
+use crate::widgets::page_scroll;
 use crate::widgets::quality_menu::QualityMenu;
 use crate::widgets::sleep_timer::SleepControl;
 use crate::widgets::speed::SpeedChip;
@@ -82,6 +83,9 @@ pub struct Screen {
     sleep: Entity<SleepControl>,
     queue: Entity<queue::Screen>,
     tab: Tab,
+    /// The stage's own scroll, so the card's list or lyrics chain their wheel
+    /// to it at narrow widths (`page_scroll::nested`).
+    stage: ScrollHandle,
     /// The stage's sleeve: the page-size copy of the archive's art, decoded off
     /// the paint thread and freed with the screen (`Covers::pages`, D17).
     covers: Rc<RefCell<Covers>>,
@@ -107,6 +111,7 @@ impl Screen {
             sleep,
             queue,
             tab: Tab::Queue,
+            stage: ScrollHandle::new(),
             covers: Rc::new(RefCell::new(Covers::pages())),
             events: tx,
             _subscription: subscription,
@@ -455,10 +460,27 @@ impl Render for Screen {
                     })
                     .into_any_element()
             })
-            .child(div().flex_1().min_h_0().child(if card_lyrics {
-                self.lyrics.clone().into_any_element()
-            } else {
-                self.queue.clone().into_any_element()
+            .child(div().flex_1().min_h_0().child({
+                // At narrow widths the card sits INSIDE the stage's scroller:
+                // its list or its lyrics must take the wheel first and chain
+                // the rest to the stage, or both slide by the same notch
+                // (`page_scroll::nested`).
+                let inner: gpui_kit::AnyElement = if card_lyrics {
+                    self.lyrics.clone().into_any_element()
+                } else {
+                    self.queue.clone().into_any_element()
+                };
+                if layout.columns {
+                    inner
+                } else {
+                    let handle = if card_lyrics {
+                        self.lyrics.read(cx).scroll_handle().clone()
+                    } else {
+                        self.queue.read(cx).scroll_handle().clone()
+                    };
+                    page_scroll::nested("np-card-nested", &self.stage, &handle, inner)
+                        .into_any_element()
+                }
             }))
             .when(panel_open && !layout.wide, |card| {
                 // No tab strip under the panel either: the card shows the words.
@@ -519,6 +541,7 @@ impl Render for Screen {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&self.stage)
                 .px(rems(1.25))
                 .pb(rems(1.25))
                 .child(
