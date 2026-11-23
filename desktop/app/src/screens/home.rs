@@ -779,7 +779,22 @@ impl Render for Screen {
                                 .on_click(cx.listener(|this, _, _, cx| this.refresh_reco(cx))),
                             ),
                     )
-                    .child(div().h(rems(15.)).child(element)),
+                    // The band is a bounded list inside the page: the wheel
+                    // over it moves the BAND and only hands the page what the
+                    // band could not take (`page_scroll::nested`), instead of
+                    // both sliding by the same notch (GPUI applies one wheel
+                    // event to every scroll container under the pointer).
+                    .child(
+                        div()
+                            .h(rems(15.))
+                            .debug_selector(|| "home-reco-band".to_owned())
+                            .child(page_scroll::nested(
+                                "home-reco-nested",
+                                &self.page.handle(),
+                                self.list.scroll_handle(),
+                                element,
+                            )),
+                    ),
             );
         }
 
@@ -1116,6 +1131,81 @@ mod tests {
                 .to_string(),
             ),
         ]
+    }
+
+    /// The double scroll the person reported: the wheel over the « Pour toi »
+    /// band moved the band AND the page, because GPUI gives one wheel event to
+    /// every scroll container under the pointer. `page_scroll::nested` chains
+    /// it: the band takes the notch and the page gets what the band could not.
+    /// Measured here: over the band, one notch moves the band **78 px** and the
+    /// page **0**; without the wrapper both read **-78** (the generic test in
+    /// `page_scroll` pins that).
+    #[gpui::test]
+    async fn the_wheel_over_pour_toi_leaves_the_page_alone(cx: &mut gpui::TestAppContext) {
+        use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px, size};
+
+        let bodies = tall_home();
+        let mut routes: Vec<(&str, &str)> = vec![
+            ("/api/login", ME),
+            ("/api/me", ME),
+            ("/api/discover/prefs", PREFS),
+        ];
+        routes.extend(bodies.iter().map(|(path, body)| (*path, body.as_str())));
+        let stub = stub::Stub::start(&routes);
+        let (state, runtime) = stub::logged_in(cx, &stub);
+        let (screen, vcx) = cx.add_window_view({
+            let state = state.clone();
+            move |_window, cx| Screen::new(Route::Home, state, cx)
+        });
+        stub::until(&runtime, vcx, "the home's answers", |cx| {
+            screen.read(cx).list.len() == 6
+        });
+        vcx.simulate_resize(size(px(1280.), px(800.)));
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+
+        // The band sits below the releases, the artists and the moods on this
+        // home: bring it into the window first, exactly like a person would.
+        let mut at = None;
+        for _ in 0..12 {
+            let band = vcx
+                .debug_bounds("home-reco-band")
+                .expect("the « Pour toi » band is painted");
+            let centre = band.center();
+            if centre.y > px(40.) && centre.y < px(760.) {
+                at = Some(centre);
+                break;
+            }
+            vcx.simulate_keystrokes("pagedown");
+            vcx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+        }
+        let at = at.expect("the « Pour toi » band reached the window");
+        let page_before = vcx.update(|_, cx| screen.read(cx).page.offset().y);
+        vcx.simulate_mouse_move(at, None, Modifiers::default());
+        vcx.simulate_event(ScrollWheelEvent {
+            position: at,
+            delta: ScrollDelta::Lines(point(0., -3.)),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        vcx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let (page, list) = vcx.update(|_, cx| {
+            let screen = screen.read(cx);
+            (screen.page.offset().y, screen.list.scroll_y())
+        });
+        assert!(list < px(-10.), "the band took the notch: {list:?}");
+        assert_eq!(
+            page, page_before,
+            "the page did not take the band's notch: {page:?} from {page_before:?}"
+        );
+
+        runtime.shutdown_background();
+        stub.stop();
     }
 
     /// The bug: the page could not be scrolled AT ALL, by the wheel or the

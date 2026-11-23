@@ -29,8 +29,8 @@ use gpui_kit::base::VirtualListScrollHandle;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, BorrowAppContext as _, Context, Div, ElementId, Entity, FontWeight, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement, Pixels, Render, ScrollStrategy, Size,
-    StatefulInteractiveElement as _, Styled, Window, div, px, rems, size,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, Render, ScrollHandle,
+    ScrollStrategy, Size, StatefulInteractiveElement as _, Styled, Window, div, px, rems, size,
 };
 use gpui_omarchy::{ButtonVariant, IconName, icon_button, scrollbar, virtual_list};
 use nz_model::Track;
@@ -375,6 +375,13 @@ impl TrackList {
     /// How far the list is scrolled, for a menu that must sit on its row.
     pub fn scroll_y(&self) -> Pixels {
         self.scroll.base_handle().offset().y
+    }
+
+    /// The handle this list scrolls with, for a page it is nested in: the wheel
+    /// over the list must move the LIST and only hand the page what the list
+    /// could not take (`page_scroll::nested`).
+    pub fn scroll_handle(&self) -> &ScrollHandle {
+        self.scroll.base_handle()
     }
 
     /// The `NZ_FRAME_LOG=1` summary (p50, p95, max, count), for a measurement or

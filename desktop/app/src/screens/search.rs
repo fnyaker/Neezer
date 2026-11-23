@@ -31,8 +31,8 @@ use std::time::Duration;
 use gpui_kit::base::input::{InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, Entity, FocusHandle, FontWeight, IntoElement, ParentElement, Render, Styled,
-    Subscription, Task, Window, div, px, rems,
+    Context, Entity, FocusHandle, FontWeight, IntoElement, ParentElement, Render, ScrollHandle,
+    Styled, Subscription, Task, Window, div, px, rems,
 };
 use gpui_omarchy::IconName;
 use nz_api::ApiError;
@@ -50,6 +50,7 @@ use crate::widgets::card;
 use crate::widgets::context_menu::{self, Item, Menu};
 use crate::widgets::cover::{self, Covers, Kind};
 use crate::widgets::download_control::{self, Watch};
+use crate::widgets::page_scroll;
 use crate::widgets::track_list::{self, Intent, TrackList as List};
 use crate::wiring::events::{self, Sender};
 use gpui_kit::SharedString;
@@ -171,6 +172,9 @@ pub struct Screen {
     pending_value: Option<String>,
     /// The next paint moves the keyboard from the field to the results.
     focus_results: bool,
+    /// The results page's own scroll, so the 10-row title band can chain its
+    /// wheel to the page (`page_scroll::nested`).
+    scroll: ScrollHandle,
     list: List,
     covers: Rc<RefCell<Covers>>,
     /// The downloads worker, as this screen reads it (lot D18).
@@ -229,6 +233,7 @@ impl Screen {
             queued: None,
             fallback_in_flight: false,
             passages_in_flight: false,
+            scroll: ScrollHandle::new(),
             list: List::new(),
             covers: Rc::new(RefCell::new(Covers::rows())),
             downloads: Watch::attach(&state, cx),
@@ -1231,10 +1236,17 @@ impl Render for Screen {
                     div().flex_1().min_h_0().child(element).into_any_element()
                 } else {
                     // Ten rows on the `Tout` tab: the shelf above it stays in view
-                    // and the whole page scrolls, one scroller at a time.
+                    // and the whole page scrolls. The band is bounded, so its own
+                    // wheel chains to the page instead of moving both
+                    // (`page_scroll::nested`).
                     div()
                         .h(rems(3.5 * tracks_shown as f32))
-                        .child(element)
+                        .child(page_scroll::nested(
+                            "search-tracks-nested",
+                            &self.scroll,
+                            self.list.scroll_handle(),
+                            element,
+                        ))
                         .into_any_element()
                 });
         }
@@ -1374,6 +1386,7 @@ impl Render for Screen {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&self.scroll)
                 .child(page)
                 .into_any_element()
         };

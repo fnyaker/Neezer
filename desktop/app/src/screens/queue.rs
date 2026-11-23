@@ -227,6 +227,13 @@ impl Screen {
         self.focus.clone()
     }
 
+    /// The handle the rows scroll with, for a page this queue is nested in: the
+    /// now-playing card sits inside the stage's scroller at narrow widths
+    /// (`page_scroll::nested`).
+    pub fn scroll_handle(&self) -> &gpui_kit::ScrollHandle {
+        self.scroll.base_handle()
+    }
+
     fn len(&self, cx: &AppState) -> usize {
         cx.player.len()
     }

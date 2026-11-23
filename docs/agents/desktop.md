@@ -645,6 +645,42 @@ the app keep" (`app/src/testmem.rs`).
   `docs/desktop/neezer-62/`: the Bibliothèque's 60 playlist cards, the 4 000-row favourites
   before and after 1 000 `PageDown`, the queue in the 420 px panel at 1280×800 and 2560×1600, the
   favourites at 2560×1600, and a playlist's banner, rows and “Titres recommandés” strip.
+- **The rule, a `cover` field is TWO addresses, and the device must read which**
+  (v1.6.2). The API answers same-origin routes (`/api/cover/<id>`, the session
+  cookie goes with it) for library rows, and the PROVIDER's own CDN address
+  (`https://e-cdns-images.dzcdn.net/…`) for what a provider supplied: the
+  `cover` of `/releases` (an `ArtistRelease.cover` is `cover_url()`), of
+  `/search` (`_pic`), of `/moods`, and the `picture` of a provider artist. The
+  player had one path for both — `format!("/cover/{}",
+  url.trim_start_matches("/api/cover/"))` — so an absolute URL became
+  `/api/cover/https://…`, which Flask's `<cid>` route cannot even match: a 404
+  on every sleeve of « Nouveautés », of search results and of the release cards,
+  which is the person's « les pochettes ne se chargent que très peu ».
+  `widgets/cover.rs#source` is the one decision (tested, no network), and
+  `Api::bytes_url` fetches the provider address with the `external` client: NO
+  cookie jar (a session never leaves its server), `https` only, and the one
+  plaintext exception is a LOOPBACK host (this machine, a test's stub) through a
+  client whose redirect policy never leaves `https` except for loopback.
+  Measured on one page's four sleeves (one local, three provider addresses):
+  **4 files, 100 % displayed, 1 request each, 0** requests reach
+  `/api/cover/http…`; the old path displayed **1 of 4 (25 %)** and spent three
+  404s per provider address. `a_provider_sleeve_is_fetched_from_its_own_host_and_kept`
+  holds it, and the second visit makes **0** requests (the device's cover store
+  answers).
+- **The rule, a sleeve queue loses nothing and refuses without a storm**
+  (v1.6.2). `Covers::want` used to return as soon as `MAX_IN_FLIGHT` was full,
+  so a page asked 8 sleeves and the rest only existed if another paint happened
+  to ask again — and a sleeve whose bytes ARRIVED but whose downscale failed was
+  recorded as refused, hiding a perfectly good picture. Now a request past the
+  cap WAITS in ask order (a screen asks in paint order, so what it shows comes
+  first), a freed slot starts the next one without a re-render (queue bounded at
+  64), a fresh sleeve falls back to the original file when `Covers::variant`
+  refuses to resize it, and a refusal keeps its placeholder for `RETRY_AFTER`
+  (20 s) then gets ONE more try — never one per paint. Measured: 20 asked with
+  no slot free → **8 in flight, 12 waiting**, then all 20 answered with **20**
+  requests; two paints inside the window cost **1** request, one after it **2**
+  (`eight_covers_are_in_flight_and_the_rest_wait_in_the_order_asked`,
+  `a_refused_sleeve_waits_before_asking_again`).
 - **The rule, one decode per screenful and no decode for what is below the fold.** A visible row
   asks for exactly one sleeve (`want`, at most `MAX_IN_FLIGHT` = 8 requests in flight), the file
   it gets is the 128 px copy (`Covers::rows`), and the journey test counts it: 18 visible rows
@@ -1526,6 +1562,29 @@ Waves that can run in parallel (disjoint files):
   under Xvfb, `Page suivante` ×3 on a 14-title album changes **26 491 px** of the window.
   `.track_scroll` belongs to the widget, never to its callers: a list built without it looks
   right and scrolls never.
+- **The rule, one wheel notch has one effect** (v1.6.2). GPUI hands a wheel
+  event to EVERY scroll container whose hitbox is under the pointer, not only
+  the innermost (`Hitbox::should_handle_scroll` tests the whole hit-test stack,
+  `gpui-pre` 0.3.9 `window.rs`), so a bounded list inside a page scroller moved
+  BOTH by the same notch — two bars, twice the travel, or a band that looked
+  stuck while the page slid under it. That was l'Accueil's « Pour toi » band
+  (15 rem), Nouveautés' unfolded titles (8 rows), la recherche's 10-row band and
+  the now-playing card at narrow widths. Every browser CHAINS the scroll
+  instead: the inner container consumes the notch and only the remainder
+  reaches the ancestor at the boundary (MDN, *Scroll chaining*; the CSS
+  `overscroll-behavior` property). GPUI has no `overscroll-behavior`, so
+  `widgets/page_scroll::nested(id, page, inner, child)` is it, once: it reads
+  the inner's previous offset (`offset - delta`, its own listener already ran
+  deeper), applies what its travel could not take to the page's handle, and
+  `stop_propagation`s so the page's listener never applies the notch twice.
+  Measured: over the band one notch moves the list **78 px** and the page **0**
+  (without the wrapper both read **-78**); the list stops at its **900 px**
+  bound and the next notch moves the page; over the page alone the list does not
+  move. `the_inner_list_takes_the_wheel_and_the_page_gets_the_rest`
+  (`widgets::page_scroll`) pins both halves, and
+  `the_wheel_over_pour_toi_leaves_the_page_alone` (`screens::home`) pins it on
+  the screen the person reported. **A bounded list placed in a page must be
+  wrapped**; the wrapper is `size_full`, so give it the band's height.
 - **The rule, a page's TAIL is bounded and its list keeps the window** (v1.6.1). A tail is a
   second list at the bottom of a page: the provider's half under an album's tracks (« Disponible
   sur Deezer ») and the suggestions under a playlist (« Titres recommandés »). Unbounded, the
