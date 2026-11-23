@@ -3611,6 +3611,15 @@ renderer string (a 1 × 1 pbuffer) and holds **50.6 ms — the shell's floor —
 regression taking the bars from 28 to 50 ms still fails CI. The oscilloscope keeps its 33.4 ms floor
 (30 fps) on every device; it never crossed it.
 
+**One emulator takes one instrumentation at a time** (2026-11-23). The failures above were not only
+the budget: `org.gradle.parallel=true` ran every module's `connectedDebugAndroidTest` at once on the
+one device, and the logs of run 45253172024 show `:feature:viz`, `:feature:trackactions` and
+`:playback` starting their tests inside each other — the suites measured the machine, the counts came
+out as "Tests 16/10 completed (8 skipped)", and the next rerun failed `PartyDeviceTest`'s card on a
+request count of 0 instead of 1. `mobile/tools/ci-emulator.sh` now passes `--no-parallel` to the
+instrumented step: Gradle may still build the modules in parallel, only the device work is serialised
+(there is one device, so parallel device work is contention by construction).
+
 **Deliberate deviations from the plan paragraph, and why.**
 
 - **`VizFrame` grew** past MB0's `bars`/`scope`/`palette`: a `Vec<f32>` of heights cannot draw the

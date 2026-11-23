@@ -471,9 +471,18 @@ else
     for module in "${test_modules[@]}"; do
         tasks+=("$module:connectedDebugAndroidTest")
     done
+    # ONE INSTRUMENTATION AT A TIME. `org.gradle.parallel=true` (gradle.properties)
+    # makes those tasks run at once, and they all drive the SAME emulator: the logs
+    # of run 45253172024 show `:feature:viz`, `:feature:trackactions` and
+    # `:playback` starting tests inside each other, and the suites then measure the
+    # machine instead of themselves — `theBarsSceneFitsInOneFrame` read p95 28.52 ms
+    # while it reads 2.14 ms alone (MB21), `PartyDeviceTest`'s card counted 0 request
+    # instead of 1 on the rerun of 28c91f74, and the counts themselves came out as
+    # "Tests 16/10 completed (8 skipped)". Gradle may still build the modules in
+    # parallel; only the device work is serialised, because there is one device.
     # Only OUR device: a connected task otherwise installs and runs on every
     # emulator adb sees, including another lot's.
-    ANDROID_SERIAL="$serial" nz_gradle_android "${tasks[@]}" "${gradle_args[@]}"
+    ANDROID_SERIAL="$serial" nz_gradle_android --no-parallel "${tasks[@]}" "${gradle_args[@]}"
 fi
 
 step "done"
