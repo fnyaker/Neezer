@@ -44,4 +44,21 @@ interface NzNavigator {
      * modules n'ont pas à l'implémenter.
      */
     fun openHomeAfterSignIn() {}
+
+    /**
+     * La session est finie (ou la personne s'est déconnectée) : la connexion,
+     * le serveur conservé, la pile vidée.
+     *
+     * Une méthode par DÉFAUT, comme [openViz] : les doublures de test des autres
+     * modules n'ont pas à l'implémenter.
+     */
+    fun openLogin() {}
+
+    /**
+     * « Changer de serveur » : l'écran serveur, sans rien effacer avant que la
+     * personne ait validé une nouvelle adresse.
+     *
+     * Une méthode par DÉFAUT, comme [openViz].
+     */
+    fun openSetup() {}
 }
