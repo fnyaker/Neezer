@@ -412,7 +412,7 @@ pub struct AndroidRelease {
     /// The NATIVE app's own channel (`fr.neezer.mobile`). A server that predates
     /// it sends no key at all: the native app then has no update to offer and
     /// must never fall back to the WebView `apk` above.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<AndroidNativeRelease>,
 }
 
