@@ -3745,7 +3745,7 @@ change), `app/.../AppGraph.kt` (its override, one route), `feature/settings/.../
   rasterisation is MQ2's `FrameTimingMetric` on the journey (see above).
 - **`NzSwitch`'s `toggleableState`** (MB1): TalkBack says "interrupteur" without on/off on every
   switch in the app. One line in `Buttons.kt`'s `NzSwitch` semantics.
-- **`viz.flash` / `viz.flash.ack` in the local whitelist** (MB16/MB22) — the warning's gate.
+- **`viz.flash` in the local whitelist** (MB22) — the warning's level (`viz.flash.ack`, its gate, landed with M12).
 - **The player's strip**: `VizSurface(layout = "strip")` exists and is measured (one flat colour, no
   post pass); MB11's reserved place above the transport can now host it.
 
@@ -6571,3 +6571,45 @@ ceux committés — Skia de l'hôte ≠ celui qui les a produits), donc les ré�
 aurait changé 38 images d'un autre lot ; ils ont été restaurés. Reste prouvé par la CI :
 `testDebugUnitTest` (les deux feuilles sont composées ET cliquées par `LibraryPlaylistDoorTest`),
 `lintDebug`, `assembleRelease` et `Emulator smoke`.
+
+### M12 — Avertissement photosensibilité du visualiseur (delivered 2026-11-24)
+
+**La règle.** Le visualiseur demande un consentement éclairé, une seule fois par appareil, avant de
+dessiner quoi que ce soit : `VizEntry` lit `viz.flash.ack` (noyau, disque seul) et, tant que la clé
+manque, ne compose QUE `FlashWarningSheet` — « Activer » reste inerte jusqu'à l'interrupteur, « Annuler »
+et « Fermer » referment l'écran (`nav.back()`), et l'acceptation écrit l'horodatage puis ouvre la
+scène sans reposer la question. Un appareil migré du SPA garde sa réponse : la clé est la sienne
+(`lib/stores.js:253`), pas une nouvelle.
+
+**Pourquoi.** MB21 avait livré `FlashWarningSheet` sans appelant : la feuille et sa règle existaient,
+le visualiseur s'ouvrait sans rien demander. Une feuille de consentement jamais montrée est une
+fonctionnalité morte, et le seul écran de l'app qui fait pulser toute la dalle était celui qui n'en
+demandait pas l'accord.
+
+**Ce qui a changé, et ce que ça a coûté.** `viz.flash.ack` entre dans `KNOWN` (`settings/local.rs`) avec
+sa validation : un entier de millisecondes, toute autre forme refusée avant écriture (le test Rust
+`the_flash_ack_accepts_an_epoch_and_refuses_a_word` la relit par `setting_json`, la même voie que
+l'API `SettingsApi::get` qu'utilise Android). `FlashWarningSheet` prend `subtitle`/`body` en
+paramètres par défaut — les appelants existants ne changent pas — et M12 lui passe les deux phrases
+du produit (`FLASH_VIZ_*`) : les `FLASH_*` d'origine décrivent le niveau « Débridé » du SPA (dix
+éclats par seconde), que ce téléphone n'a pas. `VizService` gagne `flashAck()`/`ackFlash()` avec des
+défauts (`null`/rien), donc `VizFixtures` et `VizDeviceTest` ne changent pas ; `NzVizService` les
+implémente par `NzBridge.core.settings()` (`get` synchrone, `set` suspend).
+
+**Le coût réseau est nul, et c'est structurel.** Le diff n'ajoute aucun appel FFI de réseau :
+`viz.flash.ack` se lit et s'écrit dans le `kv` du noyau (une lecture indexée, ~200 µs pour l'ensemble
+des réglages, MB16) — **+0 requête, +0 octet**, prouvé par le diff (aucun `Api`/`Screens` touché).
+`VizConsentTest` (Robolectric) ajoute 2 tests : la copie du visualiseur est affichée et « Activer »
+est inerte (0 acceptation), puis cocher la phrase et cliquer « Activer » accepte **une** fois.
+
+**Une réserve sur le critère 2 du plan.** Il demande `viz.flash.ack` « présent dans le rapport de
+Réglages → Assistance ». La clé est bien dans `KNOWN`, donc `SettingsApi::all()` (le vidage des
+réglages en force) la rend dès qu'elle est écrite ; mais la ligne `réglages : thème …, éco …, qualité …`
+du rapport (`settings/mod.rs::diagnostic_report`) nomme un ensemble fixe et ne l'inclut pas. L'ajouter
+serait une ligne hors de la liste `Fichiers` de ce lot : signalé, pas fait.
+
+**Ce que la CI prouve, et ce qu'un appareil doit encore montrer.** `mobile.yaml` (Rust, APK,
+émulateur) et `security.yaml` ; les **deux captures** du plan (feuille au premier « Ouvrir le
+visualiseur », puis plus de feuille) restent à faire sur un appareil : l'image du worker n'a ni JDK,
+ni SDK Android, ni émulateur — même limite que M1, M2 et M11, écrites de la même façon. Le test
+instrumenté qui les produirait n'existe pas encore.

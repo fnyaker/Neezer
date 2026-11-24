@@ -18,8 +18,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -95,6 +98,39 @@ fun VizEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
     // track on the card. The player is read here and on a track change, never per
     // frame (the visualiser draws the sound, not the clock).
     LaunchedEffect(model) { model.refresh() }
+    // L'avertissement photosensibilité, une fois par appareil : le SPA le pose
+    // devant le niveau « Débridé » (`VisualizerSettings.svelte:83`), le téléphone
+    // devant SON visualiseur, qui est ce qui fait clignoter l'écran.
+    var ack by remember(model) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(model) { ack = service?.flashAck() != null }
+    when (ack) {
+        // La lecture de la clé n'a pas encore répondu : le fond, pas un écran
+        // qui aurait l'air de fonctionner.
+        null -> {
+            Box(Modifier.fillMaxSize().background(Sillon.colors.bg))
+            return
+        }
+        false -> if (!state.eco) {
+            Box(Modifier.fillMaxSize().background(Sillon.colors.bg))
+            FlashWarningSheet(
+                visible = true,
+                subtitle = VizCopy.FLASH_VIZ_SUBTITLE,
+                body = VizCopy.FLASH_VIZ_BODY,
+                // L'éco ne clignote pas et l'écran le dit déjà (`VizNotice(ECO_*)`).
+                reduced = false,
+                onAccept = {
+                    scope.launch {
+                        service?.ackFlash()
+                        ack = true
+                    }
+                },
+                // Refuser referme l'écran : il n'y a pas de visualiseur derrière.
+                onDismiss = { nav.back() },
+            )
+            return
+        }
+        true -> Unit
+    }
     VizScreen(state = state, model = model, modifier = modifier, service = service)
 }
 

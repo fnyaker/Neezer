@@ -41,8 +41,9 @@ import fr.neezer.mobile.designsystem.Sillon
 
 /**
  * The photosensitivity warning in front of « Débridé » —
- * `components/FlashWarning.svelte`, ported whole: the same sentences, the same
- * condition, the same refusal to be clicked through.
+ * `components/FlashWarning.svelte`, ported whole: the same sentences when no
+ * caller overrides them, the same condition, the same refusal to be clicked
+ * through.
  *
  * It is the only flash level that goes past the WCAG general-flash threshold
  * (three a second), so it is the only one that asks first — and it asks for a
@@ -56,9 +57,11 @@ import fr.neezer.mobile.designsystem.Sillon
  * sentence stays a separate, readable line (a label inside a row squeezes the
  * row — MB16's measured lesson).
  *
- * **Who calls it.** The flash level itself (`viz.flash`) is consumed by the
- * worlds' renderer (MB22): the bars and the oscilloscope do not strobe, so this
- * lot delivers the component and its rule and no screen of its own opens it.
+ * **Who calls it.** The visualiseur itself: on the phone the screen that pulses
+ * is this product's full-screen scene, so `VizEntry` poses the warning before
+ * its first fill and passes the product's own sentences (`VizCopy.FLASH_VIZ_*`,
+ * M12) — the `FLASH_*` defaults below say « Débridé »'s ten flashes a second,
+ * which the phone does not have (the worlds are MB22's and paused).
  */
 @Composable
 fun FlashWarningSheet(
@@ -66,6 +69,8 @@ fun FlashWarningSheet(
     reduced: Boolean,
     onAccept: () -> Unit,
     onDismiss: () -> Unit,
+    subtitle: String = VizCopy.FLASH_SUBTITLE,
+    body: String = VizCopy.FLASH_BODY,
 ) {
     val colours = Sillon.colors
     var agreed by remember(visible) { mutableStateOf(false) }
@@ -89,7 +94,7 @@ fun FlashWarningSheet(
                 Spacer(Modifier.width(NzSpacing.m))
                 Column(Modifier.weight(1f)) {
                     Text(VizCopy.FLASH_TITLE, style = Sillon.type.titleSmall, color = colours.tx)
-                    Text(VizCopy.FLASH_SUBTITLE, style = Sillon.type.bodySmall, color = colours.dim)
+                    Text(subtitle, style = Sillon.type.bodySmall, color = colours.dim)
                 }
                 fr.neezer.mobile.designsystem.NzIconButton(
                     glyph = NzGlyph.Close,
@@ -105,7 +110,7 @@ fun FlashWarningSheet(
                     .padding(vertical = NzSpacing.m),
                 verticalArrangement = Arrangement.spacedBy(NzSpacing.l),
             ) {
-                Text(VizCopy.FLASH_BODY, style = Sillon.type.body, color = colours.tx)
+                Text(body, style = Sillon.type.body, color = colours.tx)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

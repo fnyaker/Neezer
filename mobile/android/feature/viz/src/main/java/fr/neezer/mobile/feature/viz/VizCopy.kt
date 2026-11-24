@@ -115,6 +115,17 @@ internal object VizCopy {
     const val FLASH_ACCEPT = "Activer"
     const val FLASH_CLOSE = "Fermer"
 
+    /**
+     * L'avertissement du visualiseur : les phrases `FLASH_*` décrivent le niveau
+     * « Débridé » du SPA (dix éclats par seconde), que ce téléphone n'a pas — les
+     * mondes sont en pause. Ces deux phrases disent ce que l'écran FAIT.
+     */
+    const val FLASH_VIZ_SUBTITLE = "Des lumières qui suivent la musique, parfois par éclats."
+    const val FLASH_VIZ_BODY =
+        "Le visualiseur fait varier la lumière au rythme du morceau : des éclats suivent les " +
+            "frappes, plus forts sur les grosses caisses. Rien n'est réglé au-delà de trois " +
+            "éclats par seconde, mais un écran plein cadre reste une lumière qui pulse."
+
     /** A field of a picker: the id Rust stores, the word the person reads. */
     data class Choice(val id: String, val label: String, val hint: String, val index: Int)
 

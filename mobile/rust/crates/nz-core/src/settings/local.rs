@@ -11,8 +11,9 @@
 //! # One rule a measurement taught (recorded in the note's MB16 section)
 //!
 //! A setting is a PREFERENCE, never a request: [`LocalSettings::read`] answers
-//! in one `SELECT` per key on an indexed column — **197.6 µs for all 17 of
-//! them** (measured 2026-11-18, this machine, debug build, 200 runs) — and
+//! in one `SELECT` per key on an indexed column — **197.6 µs for the 17 keys of
+//! MB16** (measured 2026-11-18, this machine, debug build, 200 runs; a key added
+//! since is one more `SELECT` on the same column) — and
 //! never touches the network, which is what lets the first frame of a launch
 //! already be Papier when the person chose Papier
 //! (`webapp/src/public/theme-boot.js`'s rule, ported to a launch).
@@ -35,6 +36,7 @@ pub const KNOWN: &[&str] = &[
     "viz.intensity",
     "viz.fps",
     "viz.beat",
+    "viz.flash.ack",
     "viz.scope.orientation",
     "viz.scope.colour",
     "player.quality",
@@ -286,6 +288,14 @@ fn check(key: &str, value: &Value) -> Result<Value, CoreError> {
             }
             Ok(Value::from(fps))
         }
+        // `lib/stores.js:253`'s `viz.flash.ack`: the moment the photosensitivity
+        // warning was accepted. A positive epoch-ms; `0`/absent means "never".
+        "viz.flash.ack" => {
+            let stamp = value
+                .as_u64()
+                .ok_or_else(|| invalid("une date en millisecondes était attendue"))?;
+            Ok(Value::from(stamp))
+        }
         "player.quality" | "offline.quality" => {
             let rate = value
                 .as_str()
@@ -436,6 +446,30 @@ mod tests {
         core.set_local_setting("ui.accent", Value::Null)
             .expect("a reset");
         assert_eq!(core.local_settings().accent, None);
+    }
+
+    /// M12's key: the photosensitivity warning's acceptance is an epoch in
+    /// milliseconds, and a word is refused before it is stored.
+    #[test]
+    fn the_flash_ack_accepts_an_epoch_and_refuses_a_word() {
+        assert_eq!(
+            check("viz.flash.ack", &Value::from(1_720_000_000_000_u64)).expect("un horodatage"),
+            Value::from(1_720_000_000_000_u64)
+        );
+        assert!(matches!(
+            check("viz.flash.ack", &Value::from("oui")),
+            Err(CoreError::Invalid { .. })
+        ));
+
+        // The device's store takes it, and the FFI's own getter reads it back.
+        let dir = TempDir::new("local-flash-ack");
+        let core = dir.core();
+        core.set_local_setting("viz.flash.ack", Value::from(1_720_000_000_000_u64))
+            .expect("un horodatage");
+        assert_eq!(
+            core.setting_json("viz.flash.ack").as_deref(),
+            Some("1720000000000")
+        );
     }
 
     /// A stored value this build no longer accepts (a theme renamed, a quality
