@@ -112,9 +112,9 @@ class _Channel:
             return f"{self.cache_stem}-{abi}.apk"
         return self.asset
 
-    def cache_name(self, version: str, abi: str | None = None) -> str:
-        if abi:
-            return f"{self.cache_stem}-{version}-{abi}.apk"
+    def cache_name(self, version: str) -> str:
+        # The native channel's per-ABI names are `_native_cache_path`'s: a
+        # literal per ABI, never the request's text (CodeQL finding 720).
         return f"{self.cache_stem}-{version}.apk"
 
     def owns_cache_entry(self, entry: str) -> bool:
@@ -218,7 +218,23 @@ def _cache_path(cfg: dict, version: str) -> str:
 
 
 def _native_cache_path(cfg: dict, version: str, abi: str | None = None) -> str:
-    return os.path.join(_cache_dir(cfg), NATIVE.cache_name(version, abi))
+    """The cache file of one native APK — a LITERAL name per ABI.
+
+    ``abi`` comes from ``?abi=`` (a client), so it never reaches the path as
+    text: it only chooses between fixed names (CodeQL's *Uncontrolled data used
+    in path expression*, finding 720, flagged an f-string that interpolated the
+    whitelisted value). ``version`` is the server's own declaration, already
+    matched against :data:`_VERSION_RE`.
+    """
+    if abi == "arm64-v8a":
+        name = f"neezer-native-{version}-arm64-v8a.apk"
+    elif abi == "armeabi-v7a":
+        name = f"neezer-native-{version}-armeabi-v7a.apk"
+    elif abi == "x86_64":
+        name = f"neezer-native-{version}-x86_64.apk"
+    else:
+        name = f"neezer-native-{version}.apk"
+    return os.path.join(_cache_dir(cfg), name)
 
 
 def _apk_problem(path: str, deep: bool = False) -> str | None:
