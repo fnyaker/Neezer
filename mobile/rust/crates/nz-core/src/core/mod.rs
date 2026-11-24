@@ -157,6 +157,10 @@ pub struct Core {
     /// change: the store lives in `nz-core::player`, and `memory()` is where the
     /// app's own total is read (worker rule 4).
     queue_bytes: AtomicU64,
+    /// How many times the player had to WAIT for its source (a `SeekDeferred`,
+    /// never an underrun): published by the player and drawn by `Assistance`, so
+    /// the report a person shares carries a counted number instead of "none".
+    player_rebuffers: AtomicU64,
 }
 
 impl std::fmt::Debug for Core {
@@ -199,6 +203,7 @@ impl Core {
             meter: Meter::new(),
             lists: Registry::new(),
             queue_bytes: AtomicU64::new(0),
+            player_rebuffers: AtomicU64::new(0),
         };
 
         // The server the person configured survives a restart (rule 7): the
@@ -369,6 +374,20 @@ impl Core {
         self.queue_bytes.store(bytes, Ordering::SeqCst);
     }
 
+    /// Publishes ONE rebuffer of the player: the source starved while the engine
+    /// was asked to move (`EngineEvent::SeekDeferred`), which is not an underrun
+    /// (the mixer did not starve). `Assistance` draws the count.
+    pub fn note_rebuffer(&self) {
+        self.player_rebuffers.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// How many times the player had to wait for its source, since the process
+    /// started. `Player::output_stats().rebuffers` is the same number read from
+    /// the player; this one lets the settings report answer without a player.
+    pub fn rebuffers(&self) -> u64 {
+        self.player_rebuffers.load(Ordering::SeqCst)
+    }
+
     /// Counted bytes of what the core itself holds in memory, never a process
     /// RSS (worker rule 4). The queue is the player's (published through
     /// [`Core::set_queue_bytes`]) and the API cache lives in SQLite, so it reads
@@ -486,6 +505,18 @@ mod tests {
         );
         drop(list);
         assert_eq!(core.memory().lists_bytes, 0, "a dropped list keeps nothing");
+    }
+
+    /// A rebuffer is COUNTED, once per publication: the number `Assistance`
+    /// shows is the player's own, never a guess from the queue's state.
+    #[test]
+    fn a_rebuffer_is_counted_once_per_publication() {
+        let dir = testing::TempDir::new("rebuffers");
+        let core = dir.core("test");
+        assert_eq!(core.rebuffers(), 0, "a fresh process never waited");
+        core.note_rebuffer();
+        core.note_rebuffer();
+        assert_eq!(core.rebuffers(), 2);
     }
 
     /// `stats()` is the meter's own answer, in tag order, with no invention.

@@ -538,15 +538,15 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 
 ### Measures (every lot that touches what they measure writes them in its PR)
 
-| Measure | How | Measured (emulator-5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, 2026-11-24; no real phone was attached — `adb devices` empty — so no real-phone column exists yet) |
+| Measure | How | Measured (emulator-5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, 2026-11-24; the MQ2 follow-up rows below were re-run on **emulator-5640**, same image; no real phone was attached — `adb devices` empty — so no real-phone column exists yet) |
 |---|---|---|
-| Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID **p50 633,1 ms / p95 1 247 / p99 1 247 ms** without a profile; **p50 687,3 / p95 1 046 / p99 1 046 ms** with `UseIfAvailable` on an APK that carries none (the profile is still owed, see MQ2). **TTFD: not measured** — the shell never calls `reportFullyDrawn()`; the target was ≤ 900 ms. |
+| Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID **p50 633,1 ms / p95 1 247 / p99 1 247 ms** without a profile; **p50 687,3 / p95 1 046 / p99 1 046 ms** with `UseIfAvailable` on an APK that carries none (the profile is still owed, see MQ2). **TTFD p50 1 071,7 ms / p95 1 256,5 ms** (10 cold starts, one seeded account: `HomeEntry` calls `reportFullyDrawn()` once the home's DATA is Ready and the frame drawing it has passed; before, the shell never called it, so the metric had no `timeToFullDisplayMs` at all). **The ≤ 900 ms target is MISSED**: the home's first `cached_home()` runs before the background `restore()` has named the account, so it misses the snapshot and the first content is the seven-request fresh answer. Same run's TTID p50 588,0 / p95 650,5 ms. |
 | Tap → sound | `PlayerApi.output_stats()` carries `tap_ns` (Kotlin's tap instant passed in the command) and `first_audible_ns`; the journey measures tap → the bar's « Pause » state (`SystemClock.uptimeMillis`), an upper bound of the engine's own pair | album « Lire » → bar **323 ms** (bar showed « Pause »; AAudio opened in the same millisecond as the `load`); the 4 000-track playlist's « Lire » (first title transcoded by the server) **1 417 ms**, then **122 ms** on a warm second run. Targets were 150 / 800 / 1 500 ms. |
-| RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). The counted bytes are **not measured**: `Assistance` builds its report only when « Partager le rapport » is tapped, so the screen never draws `mémoire comptée` (follow-up: build it on open). The 30-minute flat-growth check is therefore also owed. |
+| RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). **Counted bytes**, now that `Assistance` builds its report at open: **3 462 806 o** — `file 6 472 o`, `listes 3 456 334 o` — after the 8 000 favourites and the 4 000-row playlist. The 4 000-title QUEUE itself did not load in that run (its first title's transcode exceeded the harness's 20 s on a loaded machine), so `file` holds only the album's two titles; the queue's own count is owed a quieter run. The 30-minute flat-growth check is still owed. |
 | CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`); 10 minutes for the ExoPlayer comparison, 31 minutes for the final app; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | **Après MQ2-follow-up** : app **64 200 ms / 1 865 s = 3,442 % of one core**, **42 titres distincts, 0 rechargement**, cache audio **vidé** avant le run (43 spools créés pendant → tout streamé), service de premier plan tenu 31 min (`SOAK` line in the section). MQ2's reference app run **14 110 ms / 601 s = 2,348 %** (14 titles, the queue then looped — the defect MQ2-follow-up fixed ; 10 min, service non-premier-plan, session média déjà détruite, `media_descriptions: 0`) ; ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,63× the baseline**, under the **1,3×** threshold that reopens the engine decision (**7,12 %**). MB3c's own 30-minute streamed run measured 52 420 ms / 1 755 s = 2,99 % (test app, no notification/UI) : le phone réel est à **1,15×** — le prix du premier plan. Les sondes événements/spool à 10 ms sont gardées (le fil d'événements pesait 0,8 %) ; le back-pressure du décodeur reste à 2 ms parce que 5 ms casse la listen party (**−1 770 ms**). |
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
-| Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open: **p50 14,6 / p95 562,5 ms**, 0 frozen frames (> 700 ms). The scroll budgets (p95 ≤ 16,7, p99 ≤ 25) are MET on the emulator; the player's first frame is NOT (the 512 px sleeve is decoded in the frame) — follow-up: decode it off the frame. |
-| Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. The app's own counters are not in `Assistance` (same follow-up as RAM), and **rebuffers have no external source**. The throttled `gsm`/`edge` profile was not run. |
+| Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open **before p50 24,5 / p95 775,0 ms**, **after p50 19,7 / p95 161,4 ms** (3 iterations; MQ2's first record was p50 14,6 / p95 562,5). The cause was NOT a decoded sleeve — no `NzCoverLoader` is wired in this tree, every cover is its deterministic groove — but the full-screen `Modifier.blur` of the player's backdrop: a `RenderEffect` renders the subtree into an offscreen layer, and SwiftShader then compiled five programs (`CircleOp`, `FillRectOp`, `EllipseOp`, `TextureOp`) in the frame: **676 ms `DrawFrames`, of which 511 ms `flush commands`**. Without the blur the first frame still pays SwiftShader's first-use `FillRectOp` program (61 ms) and `eglSwapBuffers` (41 ms); it is the software rasteriser, not the app, so **16,7 ms stays the phone budget and is owed a device run**. Scroll budgets p95 ≤ 16,7 / p99 ≤ 25 remain MET on the emulator. |
+| Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. **rebuffers: 0** during the journey's playback, read from the report's `rebuffers : N` — the app's own `Core::rebuffers` (one increment per `SeekDeferred`: the SOURCE starved, never the mixer) is now counted and drawn by `Assistance` with no tap. The run's playback was the archived album, so 0 is the expected value for it. The throttled `gsm`/`edge` profile was not run. |
 | APK | `apkanalyzer`/`measure.sh apk` on the release build | **universal 54 580 998 B (52,1 MB)** for three ABIs, **arm64-v8a 21 473 481 B (20,5 MB)**, armeabi-v7a 16 574 985, x86_64 25 841 660 — the 45 MB target is a *download's* and every per-ABI APK meets it with room (the universal keeps all three ABIs for sideloading: see *MQ2 — la taille*). `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **16 322 520 B**, armeabi-v7a 11 473 160, x86_64 20 739 864 — the 9 MB target is MISSED by 1,8×, and cannot be met: **4 571 020 B (23 %) are the `panic = "unwind"` tables UniFFI's error contract requires** and the rest is the 1:1 feature code (*MQ2 — la taille* measures every step and names the refused levers). The CI ceiling is `mobile/tools/size-guard.sh`. |
 | Worlds | — | **non livré — MB22/MB23 en pause à la demande de l'utilisateur (2026-11-23)**. |
 
@@ -3459,6 +3459,12 @@ badge, a podcast's rate — and the data behind them, in Rust.
 - **A Compose test cannot wait for idle while a `withFrameNanos` loop writes state every frame.**
   The player's rail does exactly that, so its device test drives `mainClock.advanceTimeByFrame()`
   with `autoAdvance = false`, set BEFORE `setContent` (which itself waits for idle).
+- **A full-screen `Modifier.blur` backdrop is a GPU program factory.** The first version blurred the
+  sleeve's whole layer; SwiftShader then compiled FIVE programs for the frame (`CircleOp`,
+  `FillRectOp`, `EllipseOp`, `TextureOp`, the blur's texture pass) and the player's first frame cost
+  p95 775 ms. Removed (the gradient already dims it): p95 161,4 ms, the rest being the software
+  rasteriser's first `FillRectOp` + swap. A phone's GPU is not the emulator, but the rule stands:
+  nothing full-screen is blurred on the frame that OPENS a surface.
 
 **Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, NDK 30.0.16248370; the
 emulator API 35 x86_64 `-no-window -no-audio` on this lot's own port 5660):
@@ -3980,6 +3986,11 @@ makes a theme a property of the APP instead of a screen.
   `pair.surface` as a « Lire » pill gives a lemon button on cream — the highlighter MB1 forbids
   (`--btn` is ink there). The preview paints the THEME's button pair when no custom accent is set,
   and the accent's own pair when one is (which is what `theme.js#apply` really does).
+- **A report only the share button builds is a report nobody reads.** *Assistance* built
+  `diagnostic_report()` on the « Partager » tap, so the counted memory and the per-tag requests were
+  never on screen (MQ2's journey could not measure them). The section opens a `scope.launch {
+  buildReport() }` now: the text lands off the first frame, the screen DRAWS it, and the share
+  sheet reuses it. `SettingsModelTest` holds both halves (built at open; the open returns before it).
 
 **The checklist against `routes/Settings.svelte`** (every user setting, where it lives now):
 
@@ -5742,9 +5753,10 @@ release.
   8 000, playlist 4 000, ouverture du lecteur — les trois chiffres du tableau), `JourneyLongTest.kt`
   (50 titres téléchargés pendant qu'un disque joue, mode avion, les téléchargements joués, puis le
   soak écran éteint + Doze), `JourneyProfileGenerator.kt` et `JourneyCapture.kt` (les captures).
-- `docs/agents/screenshots/mobile/MQ2/` — dix captures du VRAI écran (accueil, recherche, album,
+- `docs/agents/screenshots/mobile/MQ2/` — onze captures du VRAI écran (accueil, recherche, album,
   favoris 8 000, playlist 4 000, lecteur, rapport d'aide, visualiseur, playlist à télécharger,
-  rapport de diagnostic), prises par le test sur l'émulateur sans affichage.
+  rapport de diagnostic, et le lecteur ouvert PAR LA MINI-BARRE), prises par le test sur
+  l'émulateur sans affichage.
 
 **Les deux défauts que le parcours a trouvés avant de pouvoir mesurer** (corrigés par la PR #380,
 fusionnée avant celle-ci) : rien ne démarrait `NzMediaService` (un tap chargeait la file et
@@ -5758,7 +5770,37 @@ mode d'emploi. En clair : démarrage à froid **633 ms p50** (TTID) sans profil 
 **323 ms** sur un album archivé ; **2,348 %** d'un cœur pendant la lecture écran éteint contre
 **5,476 %** pour l'ExoPlayer de référence (**0,43×**, le seuil de 1,3× n'est pas approché) ;
 **36 requêtes** pour tout un parcours, une par écran, aucune en éventail ; les deux grandes listes
-tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non (p95 562,5 ms).
+tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non (p95 562,5 ms —
+cause trouvée et corrigée par la suite ci-dessous).
+
+**Suites de MQ2 (même jour, 2026-11-24).** Quatre trous du parcours fermés (et le harnais rendu
+robuste), chacun mesuré sur le même émulateur (5640, même image, même serveur, session semée) :
+
+- **La mini-barre ouvre le lecteur.** `NavGraph.kt` montait `MiniPlayer()` sans `onClick` (défaut
+  no-op) ; le shell passe `graph.openPlayer()`. Aucun balayage n'est prévu sur la barre (le SPA n'a
+  que `cardTap`), le balayage de titre vit sur la pochette (`CoverStage`, déjà en place). Preuve :
+  `JourneyCapture#theMiniBarOpensThePlayer` (attente de « Réduire le lecteur ») et la capture 11.
+- **Le premier cadre du lecteur** : le coût n'était pas une pochette décodée — **aucun chargeur
+  `NzCoverLoader` n'est câblé dans l'arbre**, toutes les pochettes sont les grooves déterministes —
+  mais le `Modifier.blur` plein écran du fond, qui rend le sous-arbre dans un calque hors écran et a
+  fait compiler cinq programmes SwiftShader dans la frame (511 ms de `flush commands`). Sans lui :
+  **p50 24,5 → 19,7 ms, p95 775,0 → 161,4 ms** (3 itérations, machine chargée). Le reste est le
+  premier `FillRectOp` (61 ms) + `eglSwapBuffers` (41 ms) du rasteriseur logiciel : **16,7 ms reste
+  le budget téléphone**, dû à un vrai appareil. La taille demandée d'une pochette est désormais la
+  taille dessinée (`roundToPx`, plus le `× 3` deviné), tenu par `CoverSizeTest` (44 dp = 88 px,
+  420 dp = 840 px à xhdpi) — le jour où un chargeur est câblé.
+- **`Assistance` construit son rapport à l'OUVERTURE** de l'écran, hors du fil UI
+  (`withContext(io)`), et l'AFFICHE ; le texte est réutilisé par « Partager ». Le rapport porte
+  maintenant `rebuffers` (`Core::rebuffers`, un incrément par `SeekDeferred`), ce qui remplit les
+  deux trous du tableau. `SettingsModelTest` tient les deux règles (construit à l'ouverture ; pas
+  sur la frame).
+- **TTFD** : `HomeEntry` appelle `reportFullyDrawn()` une fois que l'Accueil a ses DONNÉES et que la
+  frame qui les dessine est passée. Mesure au tableau : p50 **1 071,7 ms** / p95 1 256,5 ms — la
+  cible ≤ 900 ms est manquée parce que le premier `cached_home()` court avant le `restore()` qui
+  nomme le compte ; à corriger côté session/cache (MB2/MB5), pas dans le shell.
+- **Le harnais ne meurt plus sur un nœud périmé** : `tapFirstCardBelow` relit les bornes sous
+  `runCatching`/retry ; une machine chargée faisait échouer tout le parcours sur un
+  `StaleObjectException` d'un titre de recherche.
 
 **Règles qu'une mesure a apprises** (chacune a coûté une exécution) :
 
@@ -5784,9 +5826,10 @@ tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non 
 - **Un filtre montre sa propre requête** : chercher la carte « Playlist 0 » trouve d'abord le champ
   qui contient « Playlist 0 » ; exclure `android.widget.EditText` est la différence entre ouvrir la
   playlist et taper dans le vide.
-- **Le tap de la mini-barre ne fait rien dans cette version** : `NavGraph.kt` monte `MiniPlayer()`
-  sans `onClick` (son défaut est un no-op). Le parcours passe par « Reprendre » ; le câblage est un
-  suivi (`:app`, fichier d'un autre lot).
+- **Le tap de la mini-barre ne faisait rien** : `NavGraph.kt` montait `MiniPlayer()` sans `onClick`
+  (défaut no-op) ; le shell passe désormais `graph.openPlayer()` et la capture 11 le prouve. Aucun
+  balayage n'est prévu sur la barre (le SPA n'a que `cardTap`) : le balayage de titre vit sur la
+  pochette (`CoverStage`).
 - **Un fichier plus court que sa durée déclarée fait rejouer le même titre** : avec 90–420 s de
   métadonnées pour un FLAC de 45 s, le lecteur recharge le même titre à 43,5 s en boucle. La fixture
   ne doit pas mentir sur ce qu'elle sert.
@@ -5798,20 +5841,29 @@ tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non 
   la session et relâchait le wake lock. La cause, le correctif et le soak de 40 titres sont dans
   *MQ2-follow-up* ci-dessous ; la mesure CPU de MQ2 (10 min) reste la référence de la ligne
   *CPU / battery*.
-- **`Assistance` ne construit son rapport qu'au tap de « Partager le rapport »** : la mémoire
-  comptée, les requêtes et les octets par étiquette ne sont jamais dessinés. D'où deux trous dans le
-  tableau (mémoire comptée, rebuffers) et un suivi : construire le rapport à l'ouverture de l'écran.
+- **`Assistance` ne construisait son rapport qu'au tap de « Partager le rapport »** : la mémoire
+  comptée, les requêtes/octets par étiquette et les rebuffers n'étaient jamais dessinés. Le rapport
+  est maintenant construit à l'OUVERTURE de l'écran, hors du fil UI, et affiché ; `Core::rebuffers`
+  y entre.
+- **`Modifier.blur` plein écran n'est pas un décor, c'est un programme GPU** : le fond du lecteur
+  rendait le sous-arbre dans un calque hors écran, et SwiftShader compilait cinq programmes dans la
+  frame (511 ms de `flush commands`, p95 775 ms). Sans le flou, p95 161,4 ms ; le reste est la
+  compilation `FillRectOp`/swap du rasteriseur logiciel. Mesure :
+  `JourneyListsBenchmark#playerOpen`.
 
 **Ce qui reste dû, et à qui** : le Baseline Profile — `JourneyProfileGenerator` existe et compile,
 mais `BaselineProfileRule` **saute l'émulateur** (« Skipping test because it's running on emulator
 and `skipOnEmulator` is enabled », le garde de MQ1, toujours vrai avec `benchmark` 1.5.0 et
 `skipBenchmarksOnEmulator=false`) : un `.txt` complet pour ce parcours demande un téléphone branché,
-et aucun ne l'était. TTFD (aucun `reportFullyDrawn`) ; le premier cadre du lecteur ; les rebuffers ; le
-profil réseau `gsm`/`edge` ; le câblage de la mini-barre. L'enchaînement de la file écran éteint est
-livré par *MQ2-follow-up*.
+et aucun ne l'était. La taille de l'APK est traitée par *MQ2 — la taille* (ci-dessous) ; le profil
+réseau `gsm`/`edge` ; et **TTFD sous la cible** : il est mesuré (p50 1 071,7 / p95 1 256,5 ms) mais
+≤ 900 ms est manqué, le premier `cached_home()` courant avant le `restore()` qui nomme le compte
+(MB2/MB5 : session ou clé de cache). L'enchaînement de la file écran éteint est livré par
+*MQ2-follow-up*. Les trous « mémoire comptée » et « rebuffers » sont remplis au tableau ; le premier
+cadre du lecteur et le câblage de la mini-barre sont corrigés et mesurés.
 
 **Files.** `baselineprofile/src/main/java/fr/neezer/mobile/baselineprofile/Journey*.kt` (six files),
-`docs/agents/screenshots/mobile/MQ2/` (ten PNG), this section and the *Measures* table. **No**
+`docs/agents/screenshots/mobile/MQ2/` (eleven PNG), this section and the *Measures* table. **No**
 `app/src/main/baseline-prof.txt`: the generator above cannot run without a device, and committing a
 profile nobody generated would be a lie the next release ships.
 

@@ -168,7 +168,17 @@ class SettingsModel(
                 loadDislikes()
                 state = state.copy(discoveryLevel = readDiscoveryLevel())
             }
-            "help" -> state = state.copy(versions = service.versions())
+            "help" -> {
+                state = state.copy(versions = service.versions())
+                // The report is built when the screen OPENS, off the frame: it is
+                // a handful of the core's own counters (`NzCore::stats()`,
+                // `memory()`, the player's rebuffers), not a request, but reading
+                // them on the UI thread would still cost the first frame and a
+                // person (and MQ2's journey) must be able to READ it — the share
+                // button is not the only door. `buildReport` keeps the text for
+                // the share sheet too.
+                scope.launch { buildReport() }
+            }
         }
     }
 
@@ -586,8 +596,13 @@ class SettingsModel(
 
     // --- Assistance -------------------------------------------------------
 
-    /** *Partager le diagnostic*: the report is built ONCE, then handed to a share sheet. */
+    /**
+     * The diagnostic text: built when « Assistance » opens, reused by the share
+     * sheet (the SPA's card builds once and hands the same text over). A
+     * `null` report (the core refused) is retried here rather than returned.
+     */
     suspend fun buildReport(): String? {
+        state.report?.let { return it }
         val report = withContext(io) { runCatching { service.diagnosticReport() } }
         report.exceptionOrNull()?.let { toast(NzErrors.text(it)) }
         val text = report.getOrNull()

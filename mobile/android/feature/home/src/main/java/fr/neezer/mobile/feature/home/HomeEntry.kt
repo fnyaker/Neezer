@@ -1,5 +1,8 @@
 package fr.neezer.mobile.feature.home
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
@@ -10,7 +13,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.EmptyState
@@ -54,6 +59,24 @@ fun HomeEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
     LaunchedEffect(model) { model.load() }
 
     val state by model.state.collectAsState()
+
+    // TTFD (docs/agents/mobile.md, *Measures*): `reportFullyDrawn()` marks the
+    // launch only once the FIRST screen has what it draws — the home's data, not
+    // a skeleton. It is the Home's fact, not the Activity's: the shell composes
+    // in `onCreate`, and reporting there would time the skeleton's first frame
+    // (the defect MQ2 measured as "TTFD: not measured"). One report per Activity:
+    // a retry that re-enters Ready must not move the mark.
+    val activity = LocalContext.current.findActivity()
+    val reported = remember(activity) { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val painted = state.data != null
+    LaunchedEffect(activity, painted) {
+        if (activity == null || !painted) return@LaunchedEffect
+        if (!reported.compareAndSet(false, true)) return@LaunchedEffect
+        // The next frame is the one that DRAWS the data's composition.
+        withFrameNanos { }
+        activity.reportFullyDrawn()
+    }
+
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         HomeScreen(
             state = state,
@@ -84,4 +107,19 @@ fun HomeEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
             ),
         )
     }
+}
+
+/**
+ * The hosting Activity, through any `ContextWrapper` a preview or a test host
+ * puts in front of it (`LocalContext` is not guaranteed to be one in a Compose
+ * host). `null` in a host with no Activity: reporting is a diagnostic, never a
+ * condition of drawing.
+ */
+private fun Context.findActivity(): Activity? {
+    var context: Context? = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return context as? Activity
 }

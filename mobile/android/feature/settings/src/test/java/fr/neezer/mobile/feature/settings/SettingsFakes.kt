@@ -243,7 +243,12 @@ class FakeSettingsService(
 
     override fun versions(): Versions = SettingsFixtures.versions()
 
-    override fun diagnosticReport(): String = "Neezer — diagnostic\napplication : 0.1.0\n"
+    override fun diagnosticReport(): String {
+        record("diagnosticReport")
+        return "Neezer — diagnostic\napplication : 0.1.0\n" +
+            "mémoire comptée : file 0 o, listes 0 o\nrebuffers : 0\n" +
+            "requêtes par écran :\n"
+    }
 
     override fun cachedSources(): SourcesData? = sourcesCache
 

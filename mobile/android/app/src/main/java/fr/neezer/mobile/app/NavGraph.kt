@@ -207,7 +207,13 @@ fun NzApp(graph: AppGraph) {
                 },
                 bottomBar = {
                     Column {
-                        MiniPlayer()
+                        // The bar IS the door to the full-screen player on a
+                        // phone (the SPA's `PlayerBar#cardTap`): `MiniPlayer`'s
+                        // default `onClick` is a no-op, so mounting it bare left
+                        // the player unreachable from the bar (measured by MQ2,
+                        // 2026-11-24). `AppGraph.openPlayer()` is the shell's
+                        // one navigator, shared with a deep link.
+                        MiniPlayer(onClick = { graph.openPlayer() })
                         NavigationBar {
                             for (tab in Tab.entries) {
                                 NavigationBarItem(
