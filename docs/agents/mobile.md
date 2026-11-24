@@ -5863,6 +5863,24 @@ et `measure.sh` préfèrent `app-universal-release.apk`. `classes.dex` reste 8 2
 liaisons UniFFI générées + Compose, UniFFI 0.32 n'a pas de mode sans JNA et R8 fait déjà le reste —
 suivi, pas de coupe.
 
+**Le fichier qui sera publié.** `release.yaml` ne parle d'aucun APK mobile et `android.yaml` publie
+encore l'ANCIENNE app (`android/app/build/outputs/apk/release/app-release.apk` → `neezer.apk`), donc
+rien de la chaîne de distribution ne change aujourd'hui. Ce que MB-SWAP devra attacher sous le nom
+`neezer.apk` est **`app-universal-release.apk`** : `neezer/webui/androidapk.py` sert UN fichier
+(`APK_NAME`, fichier local via `[webapp] android_apk` ou asset GitHub) et `Updater.kt` refuse un
+`versionCode` qui n'est pas supérieur — un nom par ABI n'installerait que sur certaines machines. Les
+quatre APK portent le même `versionCode` (2 000 000 + le numéro de run), et `mobile.yaml` le vérifie
+désormais pour que la bascule ne puisse pas livrer un mélange incohérent.
+
+**Et pour descendre plus bas** (aucun n'est gratuit; le lot qui les voudrait devrait rouvrir *Measures*):
+`panic = "abort"` rendrait ~4,6 MB de tables mais tue le processus sur un panic (perte de la règle 3,
+c'est un changement de contrat, pas une optimisation); `h2` (−327 908 B) suppose que le serveur ne soit
+jamais derrière un proxy HTTP/2 exigeant; les décodeurs symphonia mp3/aac/isomp4 (−271 012 B) couvrent
+les fichiers locaux, donc leur retrait est une perte de fonction; `--no-eh-frame-hdr` (−718 116 B) paie
+une recherche linéaire à chaque panic. Côté Kotlin, `classes.dex` (8 293 956 B) est fait de JNA et des
+liaisons générées: UniFFI 0.32 n'a pas de mode sans JNA, ce qui ferait un lot à part entière
+(`nz-ffi` + `:bridge` + la génération).
+
 **La garde.** `mobile/tools/size-guard.sh`, appelé par `mobile.yaml` après la vérification de
 signature, refuse un `.so` ou un APK au-dessus de son plafond (= mesuré + 5 %) et nomme l'artefact,
 la mesure, le plafond et le dépassement. C'est ce qui manquait: le doublement MB3a → MQ2 compilait,
@@ -5944,7 +5962,12 @@ switching the release asset — it changes every user's app).
 `android/README.md`, `docs/agents/android.md` (becomes the history of the retired app + the rules the
 native app kept), the `CLAUDE.md`/`AGENTS.md` table row for `android/`.
 **Contract.** `mobile.yaml` attaches the release APK to `v*` tags as `neezer.apk` (the asset name
-`neezer/webui/androidapk.py` fetches) with the stable signing secrets; `android.yaml` keeps only the
+`neezer/webui/androidapk.py` fetches) with the stable signing secrets — and that file is
+**`app-universal-release.apk`**, never a split: since « MQ2 — la taille » `assembleRelease` writes four
+APKs, the updater serves ONE (`androidapk.py`'s `APK_NAME = "neezer.apk"`, a local file or a GitHub
+asset, and `Updater.kt` refuses a `versionCode` that is not higher), and a per-ABI name would install
+on some devices only. The splits are extra assets with explicit names
+(`neezer-<abi>.apk`), and `ci-emulator.sh`/`measure.sh` already prefer the universal one; `android.yaml` keeps only the
 `nscore` jobs (renamed `nscore`), or is folded into `mobile.yaml`; no server change: `/api/android/apk`,
 `/api/version`'s `android.*` and `[webapp] android_*` keep their meaning (rule 7: an old server serves
 the new app as it served the old one). The updater offered by the OLD app installs the new one over it
