@@ -2,9 +2,16 @@
 <!-- The app's own strings. Screen copy lives in the Compose modules (French,
      no emoji, tokens of the design system), never here. -->
 <resources>
-    <string name="app_name">Neezer</string>
+    <!-- The OLD app is already labelled « Neezer » and cannot be renamed by
+         this release (it keeps shipping untouched). This one carries a suffix
+         so a person with both icons can tell them apart; the word is the one
+         the release notes use, and it disappears when MB-SWAP retires the old
+         app. -->
+    <string name="app_name">Neezer (native)</string>
     <string name="car_mode">Mode voiture</string>
-    <string name="car_tile">Mode voiture</string>
+    <!-- The quick-settings panel shows the tiles of BOTH apps at once: the
+         suffix is what says which one this tile drives. -->
+    <string name="car_tile">Mode voiture (native)</string>
     <string name="deezer_login_title">Compte Deezer</string>
     <string name="notification_channel_playback">Lecture</string>
 </resources>

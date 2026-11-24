@@ -18,7 +18,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SERIAL=""
 OUT=""
 APK=""
-PKG="org.nsupysonic.app"
+PKG="fr.neezer.mobile"
 while [ $# -gt 0 ]; do
     case "$1" in
         --serial) SERIAL="$2"; shift ;;

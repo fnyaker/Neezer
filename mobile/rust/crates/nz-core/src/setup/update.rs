@@ -1,11 +1,18 @@
 //! The app's own update, fetched from ITS server (lot MB4; `Updater.kt` and
 //! `android.md`'s *Updating itself from the server*).
 //!
-//! `GET /api/android/apk` serves the APK, or answers `202` + `Retry-After` while
-//! its one worker fetches the release (a 10 MB download never happens in a
-//! request thread). That `202` body is `{"state":"fetching"}` — a JSON object,
-//! not an application — and saving it as an APK is the reported "Le fichier reçu
-//! n'est pas une application valide" the first tap after a release used to get.
+//! `GET /api/android/native-apk` serves THIS app's APK (the native app,
+//! `fr.neezer.mobile`), or answers `202` + `Retry-After` while its one worker
+//! fetches the release (a 10 MB download never happens in a request thread).
+//!
+//! **The native channel is the only one this file may read.** `android.apk` is
+//! the WebView app's file, for another package and another key; a server that
+//! predates `android.native` makes this app answer "mise à jour indisponible",
+//! never fetch the old APK (docs/agents/mobile.md, "Deux apps Android").
+//!
+//! That `202` body is `{"state":"fetching"}` — a JSON object, not an
+//! application — and saving it as an APK is the reported "Le fichier reçu n'est
+//! pas une application valide" the first tap after a release used to get.
 //!
 //! So this file fetches it the only way that can be trusted:
 //!
@@ -48,21 +55,69 @@ const ATTEMPTS: u32 = 3;
 /// What landed on the disk, for the installer's `FileProvider` URI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateFile {
-    /// `cacheDir/update/neezer.apk`, an absolute path the app owns.
+    /// `cacheDir/update/neezer-native.apk`, an absolute path the app owns.
     pub path: PathBuf,
     /// Its length, counted as it arrived.
     pub bytes: u64,
 }
 
+/// The Android ABI this build runs on, spelled as `mobile.yaml` names its
+/// splits. `None` (an architecture this app has no split for) asks for the
+/// universal APK, which installs anywhere.
+fn release_abi() -> Option<&'static str> {
+    match std::env::consts::ARCH {
+        "aarch64" => Some("arm64-v8a"),
+        "arm" => Some("armeabi-v7a"),
+        "x86_64" => Some("x86_64"),
+        _ => None,
+    }
+}
+
 impl Core {
-    /// Fetches the server's APK into `destination` (a directory this app owns,
-    /// `cacheDir/update`), on the `Bulk` lane.
+    /// What the server publishes for the NATIVE app, if anything.
+    ///
+    /// One `GET /api/version`, on the `Bulk` lane: an update check is never
+    /// what the person just asked for. `Ok(None)` means the server has no
+    /// native channel at all (it predates it) — the caller says "mise à jour
+    /// indisponible" and stops there.
+    pub async fn native_update_version(&self) -> Result<Option<String>, CoreError> {
+        let api = self.api()?;
+        let body = api.bytes(nz_api::Lane::Bulk, "/version").await?;
+        let version: nz_model::Version =
+            serde_json::from_slice(&body).map_err(|error| CoreError::Internal {
+                detail: format!("version illisible : {error}"),
+            })?;
+        let Some(native) = version.android.native else {
+            return Ok(None);
+        };
+        if !native.apk {
+            return Ok(None);
+        }
+        Ok(native.version.filter(|value| !value.trim().is_empty()))
+    }
+
+    /// Fetches the server's NATIVE APK into `destination` (a directory this app
+    /// owns, `cacheDir/update`), on the `Bulk` lane.
     pub async fn fetch_update(&self, destination: &Path) -> Result<UpdateFile, CoreError> {
         let api = self.api()?;
+        // The channel check FIRST: an old server's `/android/apk` is the WebView
+        // app, and downloading 10 MB of another package before refusing it is
+        // exactly what this check removes. It is also the sentence the person
+        // reads, instead of a 404.
+        if self.native_update_version().await?.is_none() {
+            return Err(CoreError::Invalid {
+                detail: "Mise à jour indisponible : ce serveur ne publie pas l'application Android native"
+                    .to_owned(),
+            });
+        }
         std::fs::create_dir_all(destination).map_err(|error| CoreError::Internal {
             detail: format!("{} : {error}", destination.display()),
         })?;
-        let path = destination.join("neezer.apk");
+        let path = destination.join("neezer-native.apk");
+        let route = match release_abi() {
+            Some(abi) => format!("/android/native-apk?abi={abi}"),
+            None => "/android/native-apk".to_owned(),
+        };
         let mut preparing = 0u32;
 
         for attempt in 0..ATTEMPTS {
@@ -75,7 +130,7 @@ impl Core {
             let report = api
                 .download_to(
                     nz_api::Lane::Bulk,
-                    "/android/apk",
+                    &route,
                     &path,
                     |_written, total| {
                         if total.is_some() {
@@ -206,7 +261,19 @@ mod tests {
         Hop {
             status: 200,
             content_type: "application/json",
-            body: br#"{"version":"0.1.0"}"#.to_vec(),
+            body: br#"{"version":"0.1.0","android":{"native":{"version":"1.6.3","apk":true}}}"#
+                .to_vec(),
+            cut_after: None,
+        }
+    }
+
+    /// A server that predates the native channel: it publishes the WebView app
+    /// (`android.apk`) and nothing under `android.native`.
+    fn version_old_server() -> Hop {
+        Hop {
+            status: 200,
+            content_type: "application/json",
+            body: br#"{"version":"0.1.0","android":{"version":"1.5.0","apk":true}}"#.to_vec(),
             cut_after: None,
         }
     }
@@ -263,20 +330,52 @@ mod tests {
         core.fetch_update(&dir.path().join("update")).await
     }
 
-    /// The happy path: the bytes land in `update/neezer.apk`, counted, and the
+    /// The happy path: the bytes land in `update/neezer-native.apk`, counted, and the
     /// file on disk IS the APK (a zip's own header first).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_apk_is_fetched_written_and_counted() {
-        let (base, seen, server) = server(vec![version(), apk(80 * 1024)]);
+        let (base, seen, server) = server(vec![version(), version(), apk(80 * 1024)]);
         let dir = TempDir::new("update-ok");
         let file = fetch(&base, &dir).await.expect("the APK");
         assert_eq!(file.bytes, 80 * 1024);
-        assert_eq!(file.path, dir.path().join("update").join("neezer.apk"));
+        assert_eq!(
+            file.path,
+            dir.path().join("update").join("neezer-native.apk")
+        );
         let written = std::fs::read(&file.path).expect("on disk");
         assert_eq!(written.len() as u64, file.bytes);
         assert!(written.starts_with(b"PK\x03\x04"));
-        let _version = seen.recv().expect("the version answer");
+        let _version = seen.recv().expect("the set_server version answer");
+        let _channel = seen.recv().expect("the update-channel version answer");
         assert_eq!(seen.recv().expect("the APK answer"), 80 * 1024);
+        server.join().expect("the server thread");
+    }
+
+    /// A server that predates the native channel answers "mise à jour
+    /// indisponible", and its WebView `android.apk` is never requested: the
+    /// channel check is the first thing this fetch does, before any 10 MB.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_old_server_is_unavailable_and_its_webview_apk_is_never_fetched() {
+        let (base, seen, server) = server(vec![version(), version_old_server()]);
+        let dir = TempDir::new("update-old-server");
+        let error = fetch(&base, &dir).await.expect_err("no native channel");
+        match &error {
+            CoreError::Invalid { detail } => {
+                assert!(detail.contains("indisponible"), "{detail}");
+                assert!(detail.contains("native"), "{detail}");
+            }
+            other => panic!("a server without the native channel said {other:?}"),
+        }
+        assert!(
+            !dir.path().join("update").join("neezer-native.apk").exists(),
+            "nothing was left for an installer"
+        );
+        let _first = seen.recv().expect("set_server's version answer");
+        let _second = seen.recv().expect("the channel check's version answer");
+        assert!(
+            seen.try_recv().is_err(),
+            "the APK route was asked although the native channel does not exist"
+        );
         server.join().expect("the server thread");
     }
 
@@ -284,7 +383,7 @@ mod tests {
     /// as an APK, the fetch waits, and the next answer's bytes are the file.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_202_is_waited_out_and_its_json_never_saved() {
-        let (base, seen, server) = server(vec![version(), preparing(), apk(70 * 1024)]);
+        let (base, seen, server) = server(vec![version(), version(), preparing(), apk(70 * 1024)]);
         let dir = TempDir::new("update-202");
         let file = fetch(&base, &dir).await.expect("the APK after the wait");
         assert_eq!(file.bytes, 70 * 1024);
@@ -294,7 +393,8 @@ mod tests {
                 .starts_with(b"PK\x03\x04"),
             "the JSON of the 202 was replaced by the real archive"
         );
-        let _version = seen.recv().expect("the version answer");
+        let _version = seen.recv().expect("the set_server version answer");
+        let _channel = seen.recv().expect("the update-channel version answer");
         assert_eq!(
             seen.recv().expect("the 202 answer"),
             br#"{"state":"fetching"}"#.len() as u64,
@@ -307,7 +407,13 @@ mod tests {
     /// a cause the UI can name and retry, not a file.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_server_that_keeps_preparing_answers_not_ready() {
-        let (base, _seen, server) = server(vec![version(), preparing(), preparing(), preparing()]);
+        let (base, _seen, server) = server(vec![
+            version(),
+            version(),
+            preparing(),
+            preparing(),
+            preparing(),
+        ]);
         let dir = TempDir::new("update-preparing");
         let error = fetch(&base, &dir).await.expect_err("never an APK");
         assert_eq!(
@@ -317,7 +423,7 @@ mod tests {
             }
         );
         assert!(
-            !dir.path().join("update").join("neezer.apk").exists(),
+            !dir.path().join("update").join("neezer-native.apk").exists(),
             "nothing was left for an installer"
         );
         server.join().expect("the server thread");
@@ -331,7 +437,8 @@ mod tests {
     async fn a_body_too_short_to_be_an_apk_is_refused_and_removed() {
         let mut hop = apk(8 * 1024);
         hop.cut_after = Some(8 * 1024);
-        let (base, _seen, server) = server(vec![version(), hop.clone(), hop.clone(), hop]);
+        let (base, _seen, server) =
+            server(vec![version(), version(), hop.clone(), hop.clone(), hop]);
         let dir = TempDir::new("update-short");
         let error = fetch(&base, &dir).await.expect_err("not an APK");
         assert_eq!(
@@ -341,7 +448,7 @@ mod tests {
             },
             "a short body is retried, then named as a wait, never installed"
         );
-        assert!(!dir.path().join("update").join("neezer.apk").exists());
+        assert!(!dir.path().join("update").join("neezer-native.apk").exists());
         server.join().expect("the server thread");
     }
 
@@ -351,11 +458,11 @@ mod tests {
     async fn a_body_that_dies_mid_transfer_is_a_cause() {
         let mut hop = apk(80 * 1024);
         hop.cut_after = Some(8 * 1024);
-        let (base, _seen, server) = server(vec![version(), hop]);
+        let (base, _seen, server) = server(vec![version(), version(), hop]);
         let dir = TempDir::new("update-truncated");
         let error = fetch(&base, &dir).await.expect_err("truncated");
         assert_eq!(error, CoreError::Offline);
-        assert!(!dir.path().join("update").join("neezer.apk").exists());
+        assert!(!dir.path().join("update").join("neezer-native.apk").exists());
         server.join().expect("the server thread");
     }
 }

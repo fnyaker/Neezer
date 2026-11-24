@@ -341,8 +341,10 @@ private fun CertificateCard(probe: ProbeResult, onAccept: () -> Unit) {
 }
 
 /**
- * What the one-shot migration took over, or the cause of what it could not
- * (rule 2: say it, and name each failure — never just a count).
+ * What the one-shot check of the old app found, or the cause that stopped it
+ * (rule 2: say it, and name each failure — never just a count). With the two
+ * apps on separate ids this is where the "Android ne permet pas…" sentence is
+ * read, so the title is about the OLD app, never "données reprises".
  */
 @Composable
 fun MigrationNotice(state: MigrationRunner.State, modifier: Modifier = Modifier) {
@@ -356,7 +358,7 @@ fun MigrationNotice(state: MigrationRunner.State, modifier: Modifier = Modifier)
                 )
                 Spacer(Modifier.width(NzSpacing.s))
                 Text(
-                    "Reprise des données de l'ancienne application…",
+                    "Vérification de l'ancienne application…",
                     style = Sillon.type.bodySmall,
                 )
             }
@@ -369,7 +371,7 @@ fun MigrationNotice(state: MigrationRunner.State, modifier: Modifier = Modifier)
     NzCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
             Text(
-                if (cause != null) "Reprise impossible" else "Données reprises",
+                if (cause != null) "Ancienne application : vérification impossible" else "Ancienne application",
                 style = Sillon.type.titleSmall,
             )
             Text(cause ?: notice.orEmpty(), style = Sillon.type.bodySmall)

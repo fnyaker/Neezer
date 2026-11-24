@@ -154,8 +154,8 @@ fi
 }
 note "installing $apk ($(stat -c %s "$apk") bytes)"
 adb_dev install -r -g "$apk" 2>&1 | tail -2
-nz_launcher_component "$serial" | grep -q "org.nsupysonic.app/" || {
-    note "org.nsupysonic.app does not resolve its launcher after the install"
+nz_launcher_component "$serial" | grep -q "fr.neezer.mobile/" || {
+    note "fr.neezer.mobile does not resolve its launcher after the install"
     exit 1
 }
 
@@ -240,7 +240,7 @@ scroll_to_text() {
 # The app's own process, or nothing: a `am start` that returns 0 proves a task was
 # created, never that the app is still alive two seconds later.
 app_pid() {
-    adb_dev shell pidof org.nsupysonic.app 2>/dev/null | tr -d '\r'
+    adb_dev shell pidof fr.neezer.mobile 2>/dev/null | tr -d '\r'
 }
 
 # WHY the app is not there. A native library that cannot be resolved, or a Kotlin
@@ -262,14 +262,14 @@ app_crash_cause() {
         return 0
     fi
     if [[ -z "$(app_pid)" ]]; then
-        printf 'le processus org.nsupysonic.app ne tourne pas et le tampon de plantage est vide'
+        printf 'le processus fr.neezer.mobile ne tourne pas et le tampon de plantage est vide'
     fi
 }
 
 launch_app() {
     local attempt
     for attempt in 1 2 3; do
-        adb_dev shell am force-stop org.nsupysonic.app >/dev/null 2>&1 || true
+        adb_dev shell am force-stop fr.neezer.mobile >/dev/null 2>&1 || true
         adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null 2>&1 || true
         if await_text_timeout "Accueil" 30; then
             return 0
@@ -465,13 +465,14 @@ else
     fi
 
     # The APK the workflow handed over is the RELEASE build, whose versionCode is
-    # `2 000 000 + the apk job's run number` (2 000 037 on the run that found
-    # this); the DEBUG build `connectedDebugAndroidTest` installs is 2 000 001,
-    # because VERSION_CODE is not set in this job — so Android refused it:
-    # "INSTALL_FAILED_VERSION_DOWNGRADE: Update version code 2000001 is older than
-    # current 2000037". The smoke has already run against the release APK, so the
-    # app is removed here and the instrumented step installs its own.
-    adb_dev uninstall org.nsupysonic.app >/dev/null 2>&1 || true
+    # its run number (the native line no longer carries an offset: the old app's
+    # code belongs to another package); the DEBUG build
+    # `connectedDebugAndroidTest` installs has versionCode 1, because VERSION_CODE
+    # is not set in this job — so Android refuses it over the release one with
+    # "INSTALL_FAILED_VERSION_DOWNGRADE". The smoke has already run against the
+    # release APK, so the app is removed here and the instrumented step installs
+    # its own.
+    adb_dev uninstall fr.neezer.mobile >/dev/null 2>&1 || true
 
     tasks=()
     for module in "${test_modules[@]}"; do

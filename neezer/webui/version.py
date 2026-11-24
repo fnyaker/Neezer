@@ -72,20 +72,44 @@ def spa_build() -> dict:
 
 
 def android_release(webapp_config: dict) -> dict:
-    """The Android build this server expects clients to be running.
+    """The Android builds this server expects clients to be running.
+
+    Two apps, two channels (``docs/agents/mobile.md``, *Deux apps Android*) —
+    and the historical object keeps exactly its shape, because the WebView app
+    parses it and a phone that cannot update must still work:
+
+    - ``version`` / ``url`` / ``apk``: the WebView app (`neezer.apk`);
+    - ``native``: the native app (`fr.neezer.mobile`), read ONLY by that app.
+      A server that predates this key sends nothing here, and the native app
+      says "mise à jour indisponible" instead of ever touching the old APK.
 
     ``version`` is None unless the deployment declares one ([webapp]
-    android_version, or ANDROID_VERSION_NAME / APP_VERSION in the container) —
-    the app must never claim an update exists on a guess.
+    android_version / android_native_version, or ANDROID_VERSION_NAME /
+    ANDROID_NATIVE_VERSION_NAME / APP_VERSION in the container) — an app must
+    never claim an update exists on a guess.
     """
     version = (webapp_config.get("android_version") or "").strip() or None
     url = (webapp_config.get("android_url") or "").strip() or DEFAULT_ANDROID_URL
     # Only ever hand the client an http(s) link: this ends up in an anchor.
     if not url.startswith(("http://", "https://")):
         url = DEFAULT_ANDROID_URL
-    from .androidapk import apk_source
+    from .androidapk import NATIVE_ABIS, apk_source, native_apk_source, native_version
 
     # ``apk``: the app can fetch the update from this server (/api/android/apk)
     # and install it in place, instead of sending the user to ``url``.
     apk = version is not None and apk_source(webapp_config) is not None
-    return {"version": version, "url": url, "apk": apk}
+    native = native_version(webapp_config)
+    native_apk = native is not None and native_apk_source(webapp_config) is not None
+    return {
+        "version": version,
+        "url": url,
+        "apk": apk,
+        "native": {
+            "version": native,
+            "url": url,
+            "apk": native_apk,
+            # What the release publishes: the app asks for its own split (or
+            # for the universal one when its ABI is not here).
+            "abis": list(NATIVE_ABIS),
+        },
+    }

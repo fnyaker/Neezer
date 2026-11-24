@@ -44,16 +44,19 @@ CONF="${NEEZER_CONFIG:-/tmp/neezer.conf}"
 export NEEZER_CONFIG="$CONF"
 
 render_config() {
-    # The Android app version this image expects clients to run. Defaults to the
-    # image's own release (baked as APP_VERSION on tagged builds) since both are
-    # built from the same tag; the web player only mentions an update when this
-    # is set and newer than the installed app.
+    # The two Android apps' versions this image expects clients to run. Both
+    # default to the image's own release (baked as APP_VERSION on tagged
+    # builds), since all three are built from the same tag. They are SEPARATE
+    # channels: the WebView app only ever receives neezer.apk, the native one
+    # only neezer-native*.apk.
     ANDROID_VERSION="${ANDROID_VERSION_NAME:-$APP_VERSION}"
+    ANDROID_NATIVE_VERSION="${ANDROID_NATIVE_VERSION_NAME:-$APP_VERSION}"
 
     # Only generate when env-driven config is requested.
     [ -n "$DEEZER_ARL" ] || [ -n "$DATABASE_URI" ] \
         || [ -n "$NEEZER_PROXY_HOPS" ] || [ -n "$NEEZER_SESSION_COOKIE_SECURE" ] \
-        || [ -n "$ANDROID_VERSION" ] || [ -n "$ANDROID_DOWNLOAD_URL" ] \
+        || [ -n "$ANDROID_VERSION" ] || [ -n "$ANDROID_NATIVE_VERSION" ] \
+        || [ -n "$ANDROID_DOWNLOAD_URL" ] \
         || return 0
 
     {
@@ -63,11 +66,13 @@ render_config() {
         fi
         # Reverse-proxy / TLS hardening (off unless explicitly set).
         if [ -n "$NEEZER_PROXY_HOPS" ] || [ -n "$NEEZER_SESSION_COOKIE_SECURE" ] \
-           || [ -n "$ANDROID_VERSION" ] || [ -n "$ANDROID_DOWNLOAD_URL" ]; then
+           || [ -n "$ANDROID_VERSION" ] || [ -n "$ANDROID_NATIVE_VERSION" ] \
+           || [ -n "$ANDROID_DOWNLOAD_URL" ]; then
             printf '[webapp]\n'
             [ -n "$NEEZER_PROXY_HOPS" ] && printf 'proxy_fix_hops = %s\n' "$NEEZER_PROXY_HOPS"
             [ -n "$NEEZER_SESSION_COOKIE_SECURE" ] && printf 'session_cookie_secure = %s\n' "$NEEZER_SESSION_COOKIE_SECURE"
             [ -n "$ANDROID_VERSION" ] && printf 'android_version = %s\n' "$ANDROID_VERSION"
+            [ -n "$ANDROID_NATIVE_VERSION" ] && printf 'android_native_version = %s\n' "$ANDROID_NATIVE_VERSION"
             [ -n "$ANDROID_DOWNLOAD_URL" ] && printf 'android_url = %s\n' "$ANDROID_DOWNLOAD_URL"
             printf '\n'
         fi

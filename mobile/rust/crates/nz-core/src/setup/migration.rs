@@ -1,11 +1,23 @@
-//! The one-shot migration from the WebView app (lot MB4, rule 7).
+//! The one-shot migration from the WebView app (lot MB4, revised for the
+//! coexistence release, rule 7).
 //!
-//! The new app keeps the old one's `applicationId`, signing key and data
-//! directory, so an update installs OVER it and everything it wrote is still
-//! there. This file takes it over — **and never deletes anything of it**:
+//! **The new app has its own `applicationId` (`fr.neezer.mobile`) and is
+//! installed BESIDE the old one.** Android gives a different package no access
+//! to another app's private preferences, files, cookies or WebView storage, so
+//! the takeover this file was written for cannot be fed by the Android side any
+//! more: `OldAppData.kt` now passes an EMPTY [`MigrationInput`] and the single
+//! fact it can know, [`MigrationInput::old_app_installed`]. The report says, in
+//! French, what that means (reconnect here; nothing of the old app was touched).
+//!
+//! The takeover machinery below is kept, tested and unchanged: it is what a
+//! future explicit export/import would call, and removing it would also remove
+//! the proof that a takeover never deletes anything. It is never fed private
+//! paths by this app today.
+//!
+//! When it does run with data, it **never deletes anything of the old app**:
 //! downloads are RENAMED (same filesystem), the old WebView's own directory is
-//! left exactly where it is (cleaning it is a later release's decision), and a
-//! step that fails records its CAUSE while the rest carries on.
+//! left exactly where it is, and a step that fails records its CAUSE while the
+//! rest carries on.
 //!
 //! The five steps, in the order `docs/agents/mobile.md` (MB4) names them:
 //!
@@ -109,6 +121,11 @@ pub struct MigrationInput {
     /// has a deadline and a WebView that may refuse to open at all: a settings
     /// step that fails must name its cause (rule 2), never just count 0.
     pub settings_cause: Option<String>,
+    /// The OLD app's package is installed on this device (`PackageManager`),
+    /// which is the only fact this app may still learn about it. It decides
+    /// between "nothing to take over" and the sentence that says WHY nothing
+    /// could be taken over (Android forbids reading another package's data).
+    pub old_app_installed: bool,
 }
 
 /// One step that could not be taken, with the cause the screen prints (rule 2:
@@ -142,6 +159,12 @@ pub struct MigrationReport {
     /// keeps per-track records and no set table: the page counts distinct
     /// `track.album.id`s).
     pub offline_sets: u32,
+    /// The old app was found installed; the notice explains that its private
+    /// data is unreadable from this package and that it was left untouched.
+    /// `serde(default)` so a report written by the install-over MB4 (which had
+    /// no such field) still parses after an upgrade.
+    #[serde(default)]
+    pub old_app_installed: bool,
     pub failures: Vec<MigrationFailure>,
     /// The sentence the notice shows: what was taken over, or the cause of each
     /// failure. French, no count without a reason.
@@ -277,7 +300,10 @@ impl Core {
     /// On the `Bulk` lane's side of rule 1: the only request it may make is the
     /// server probe, which is short and happens before any screen exists.
     pub async fn run_migration(&self, input: MigrationInput) -> Result<MigrationReport, CoreError> {
-        let mut report = MigrationReport::default();
+        let mut report = MigrationReport {
+            old_app_installed: input.old_app_installed,
+            ..MigrationReport::default()
+        };
         let mut failures: Vec<MigrationFailure> = Vec::new();
 
         // 1. The pin FIRST: the old app trusted this leaf on first use, and the
@@ -638,10 +664,19 @@ fn notice(report: &MigrationReport) -> String {
     if report.session > 0 {
         taken.push("la session".to_owned());
     }
-    let mut text = if taken.is_empty() {
-        "Rien à reprendre de l'ancienne application.".to_owned()
-    } else {
+    let mut text = if !taken.is_empty() {
         format!("Repris : {}.", taken.join(", "))
+    } else if report.old_app_installed {
+        // The one sentence this release owes: two apps, two packages, and
+        // Android's rule that neither reads the other's private data. Saying
+        // "rien à reprendre" alone would look like the old app was empty.
+        "L'ancienne application est installée sur cet appareil. Android ne permet pas à \
+         une autre application de lire ses réglages ni ses téléchargements : rien n'a été \
+         repris. Saisissez votre serveur et connectez-vous ici ; l'ancienne application \
+         n'a pas été modifiée et vous pouvez la garder ou la désinstaller."
+            .to_owned()
+    } else {
+        "Rien à reprendre de l'ancienne application.".to_owned()
     };
     // A server that is simply not reachable from here (a home LAN server, a
     // train) is NOT a failure: the origin is stored and the next connection
@@ -1004,6 +1039,36 @@ mod tests {
             "{}",
             report.notice
         );
+    }
+
+    /// The coexistence release's own case: the old app IS installed, and this
+    /// app may know only that. The notice explains the Android rule, says
+    /// nothing was taken, and promises the old app is untouched — no failure
+    /// is invented, no file is read.
+    #[tokio::test]
+    async fn an_installed_old_app_is_explained_and_nothing_is_read() {
+        let dir = TempDir::new("migrate-installed");
+        let core = dir.core("test");
+        let report = core
+            .run_migration(MigrationInput {
+                old_app_installed: true,
+                ..MigrationInput::default()
+            })
+            .await
+            .expect("the check runs");
+        assert!(report.old_app_installed);
+        assert_eq!(report.tracks, 0);
+        assert_eq!(report.session, 0);
+        assert!(report.failures.is_empty(), "{report:?}");
+        assert!(report.notice.contains("installée"), "{}", report.notice);
+        assert!(report.notice.contains("ne permet pas"), "{}", report.notice);
+        assert!(
+            report.notice.contains("n'a pas été modifiée"),
+            "{}",
+            report.notice
+        );
+        // The flag is set, so the person is not asked again on every launch.
+        assert!(core.migration_status().done);
     }
 
     /// Every cause a step can fail with is a French sentence, never a code and

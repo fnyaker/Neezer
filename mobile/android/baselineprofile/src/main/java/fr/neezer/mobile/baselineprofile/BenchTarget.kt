@@ -26,8 +26,8 @@ import androidx.test.uiautomator.Until
  */
 object BenchTarget {
 
-    /** `applicationId`, the old app's (docs/agents/mobile.md, "Pitfalls"). */
-    const val PACKAGE_NAME = "org.nsupysonic.app"
+    /** This app's `applicationId` (docs/agents/mobile.md, "Coexistence"). */
+    const val PACKAGE_NAME = "fr.neezer.mobile"
 
     /** The worst realistic library: the SPA's own 8 000-track bench. */
     const val LIBRARY_ROWS = 8_000

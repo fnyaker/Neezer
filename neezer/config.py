@@ -83,6 +83,12 @@ class DefaultConfig:
         # the GitHub release of android_version on the repository android_url
         # points at.
         "android_apk": None,
+        # The NATIVE app (`fr.neezer.mobile`), installed beside the WebView one:
+        # its own version and its own local file. Empty = this server does not
+        # publish the native channel, and the native app says so ("mise à jour
+        # indisponible") instead of ever receiving android_apk's file.
+        "android_native_version": None,
+        "android_native_apk": None,
     }
     DAEMON = {
         "socket": (

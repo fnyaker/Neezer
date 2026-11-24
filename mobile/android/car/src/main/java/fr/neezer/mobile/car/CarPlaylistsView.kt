@@ -1,0 +1,866 @@
+package fr.neezer.mobile.car
+
+import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.text.TextUtils
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import java.net.SocketTimeoutException
+import javax.net.ssl.SSLException
+import kotlin.math.max
+
+/**
+ * The car overlay's playlist panel: the built-in "Favoris" tile first, then the
+ * pinned playlists, six 84 dp tiles to a page, two columns, pagination, and a
+ * dashed "pin more" tile that opens the settings.
+ *
+ * The list itself is the SERVER's (`/api/me/playlists`), fetched natively with
+ * the WebView's own session cookie through [Net] — the same origin rule, pin
+ * and redirect discipline as every other native fetch. The favourites count
+ * comes from the light `/api/me/favorite-ids` (never the whole
+ * `/api/me/favorites`), read on the same worker and kept in the same 60 s
+ * cache. The pinned order and titles live in [CarPrefs], so the panel still
+ * paints the last known tiles with no network, no session or no server: it says
+ * which of those it is, and never invents a playlist.
+ *
+ * Nothing here plays anything: a tap is [CarHost.launch], the only door to the
+ * SPA's own `__nsCarPlay`, and the player remains the page's.
+ *
+ * [prefs] is the car's own [CarPrefs]; the catalogue is the CORE's (see
+ * [CarPlaylistSource]), so nothing here holds a server object any more: the
+ * configured origin comes from `NzCore.server()` and the session from the core's
+ * own jar, which is the one place the cookie lives now.
+ */
+class CarPlaylistsView @JvmOverloads constructor(
+    context: Context,
+    private val host: CarHost,
+    private val prefs: CarPrefs = host.prefs,
+) : LinearLayout(context) {
+
+    private enum class Load {
+        IDLE,
+        LOADING,
+        READY,
+        NO_SERVER,
+        NO_SESSION,
+        OFFLINE,
+        TIMEOUT,
+        TLS,
+        SERVER,
+        UNEXPECTED,
+    }
+
+    private inner class Cell(
+        val id: String,
+        val title: String,
+        val count: Int,
+        val favorites: Boolean,
+        val cover: String,
+    ) {
+        val countLabel: String
+            get() = when {
+                // -1 is "the star count is not known (yet)": say what the tile
+                // is instead of inventing a number.
+                favorites -> when {
+                    count < 0 -> "tes titres aimés"
+                    count == 0 -> "aucun titre aimé"
+                    count == 1 -> "1 titre aimé"
+                    else -> "$count titres aimés"
+                }
+                count <= 0 -> "playlist"
+                count == 1 -> "1 titre"
+                else -> "$count titres"
+            }
+
+        val coverSeed: String get() = if (favorites) FAVORITES_SEED else id
+    }
+
+    private val main = Handler(Looper.getMainLooper())
+    private val grid = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private lateinit var subtitle: TextView
+    private lateinit var pageLabel: TextView
+    private lateinit var previous: FrameLayout
+    private lateinit var next: FrameLayout
+
+    private var state = Load.IDLE
+    private var items: List<CarPlaylistSource.Item> = emptyList()
+    /** The person's starred tracks; -1 = asked and unknown (offline, old server). */
+    private var favoriteCount = -1
+    private var page = 0
+    private var loadSeq = 0
+    private var lastRefreshAt = 0L
+    private var lastSuccessAt = 0L
+    private var fromCache = false
+
+    private val subColor = 0xFFD5D2C8.toInt()
+    private val white10 = 0x1AFFFFFF
+    private val white12 = 0x1FFFFFFF
+    private val white22 = 0x38FFFFFF
+    private val white35 = 0x59FFFFFF
+
+    init {
+        orientation = LinearLayout.VERTICAL
+        clipToPadding = false
+        setPadding(d(12), d(12), d(12), d(14))
+        addView(buildHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(
+            grid,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = d(10)
+            }
+        )
+        render()
+    }
+
+    // -- public contract -----------------------------------------------------
+
+    /**
+     * Repaint from the pins already known, then refresh the server list.
+     * Called when the panel opens; a second call within 400 ms (attach and
+     * visibility often both fire) is coalesced.
+     */
+    fun refresh() = refresh(false)
+
+    /** Repaint the current pins/pages without a network round-trip. */
+    fun render() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            post { render() }
+            return
+        }
+        val cells = buildCells()
+        val pages = pageCount(cells.size)
+        page = page.coerceIn(0, pages - 1)
+        pageLabel.text = "${page + 1}/$pages"
+        pageLabel.contentDescription = "Page ${page + 1} sur $pages"
+        val many = pages > 1
+        previous.isEnabled = many
+        next.isEnabled = many
+        previous.alpha = if (many) 1f else 0.35f
+        next.alpha = if (many) 1f else 0.35f
+        updateSubtitle()
+
+        val slice = cells.drop(page * PAGE_SIZE).take(PAGE_SIZE)
+        val shown = mutableListOf<Cell?>()
+        shown.addAll(slice)
+        if (shown.size < PAGE_SIZE) shown.add(null) // the dashed "pin more" tile
+        grid.removeAllViews()
+        var row = 0
+        while (row * 2 < shown.size) {
+            val line = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            for (column in 0..1) {
+                val at = row * 2 + column
+                val cell = shown.getOrNull(at)
+                val lp = LinearLayout.LayoutParams(0, d(84), 1f).apply {
+                    rightMargin = if (column == 0) d(8) else 0
+                }
+                if (cell != null) line.addView(tile(cell), lp)
+                else if (at < shown.size) line.addView(ghostTile(), lp)
+                else line.addView(View(context), lp)
+            }
+            grid.addView(
+                line,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, d(84)).apply {
+                    if (row > 0) topMargin = d(8)
+                }
+            )
+            row++
+        }
+    }
+
+    // -- header --------------------------------------------------------------
+
+    private fun buildHeader(): View {
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val titles = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val title = CarStyle.text(context, "Playlists", 24f, CarStyle.TX, display = true).apply {
+            typeface = Typeface.create(CarType.display(context), Typeface.BOLD)
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        }
+        titles.addView(title, wrap())
+
+        val sub = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val glyph = CarIconView(context).apply {
+            name = "pin"
+            sizeDp = 11
+            color = subColor
+            filled = true
+        }
+        sub.addView(glyph)
+        subtitle = CarStyle.monoText(context, "épinglées", 11f, subColor).apply {
+            setPadding(d(4), 0, 0, 0)
+            maxLines = 2
+        }
+        sub.addView(subtitle, wrap())
+        titles.addView(sub, wrap().apply { topMargin = d(2) })
+        header.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        previous = roundButton(56, white12, Color.TRANSPARENT, "chevronLeft", "Page précédente") {
+            turn(-1)
+        }
+        header.addView(previous, circleParams(56))
+
+        pageLabel = CarStyle.monoText(context, "1/1", 14f, subColor).apply {
+            gravity = Gravity.CENTER
+        }
+        header.addView(
+            pageLabel,
+            LinearLayout.LayoutParams(d(36), ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = d(8) }
+        )
+
+        next = roundButton(56, white12, Color.TRANSPARENT, "chevronRight", "Page suivante") {
+            turn(1)
+        }
+        header.addView(next, circleParams(56))
+
+        val close = roundButton(56, Color.TRANSPARENT, white35, "close", "Fermer") {
+            host.setScreen(CarScreen.PLAYER)
+        }
+        header.addView(close, circleParams(56))
+        return header
+    }
+
+    private fun updateSubtitle() {
+        val retry = state != Load.IDLE && state != Load.LOADING && state != Load.READY
+        val (text, color) = when (state) {
+            Load.IDLE -> "épinglées" to subColor
+            Load.LOADING -> "épinglées · chargement du catalogue" to subColor
+            Load.READY -> when {
+                items.isEmpty() -> "épinglées · catalogue vide" to subColor
+                fromCache -> "épinglées · catalogue mémorisé" to subColor
+                else -> "épinglées · catalogue à jour" to subColor
+            }
+            Load.NO_SERVER -> "épinglées · serveur non configuré" to CarStyle.WARN
+            Load.NO_SESSION -> "épinglées · session absente" to CarStyle.WARN
+            Load.OFFLINE -> "épinglées · hors ligne" to CarStyle.WARN
+            Load.TIMEOUT -> "épinglées · serveur muet" to CarStyle.WARN
+            Load.TLS -> "épinglées · certificat refusé" to CarStyle.WARN
+            Load.SERVER -> "épinglées · serveur en erreur" to CarStyle.WARN
+            Load.UNEXPECTED -> "épinglées · réponse inattendue" to CarStyle.WARN
+        }
+        subtitle.text = text
+        subtitle.setTextColor(color)
+        subtitle.isClickable = retry
+        subtitle.isFocusable = retry
+        subtitle.foreground = if (retry) ripple(6f) else null
+        subtitle.setOnClickListener(if (retry) View.OnClickListener { refresh(true) } else null)
+        subtitle.contentDescription =
+            if (retry) "$text — toucher pour réessayer" else null
+    }
+
+    // -- tiles ---------------------------------------------------------------
+
+    private fun buildCells(): List<Cell> {
+        // "Favoris" is the panel's one built-in tile: it belongs to no server
+        // playlist, is never stored in CarPrefs.pins, and cannot be removed or
+        // reordered. It stays first — the place "Mon Flow" used to hold; the
+        // auto Flow tile is deliberately gone, the `flow` launch kind stays in
+        // the bridge for older pages.
+        val cells = mutableListOf(
+            Cell(FAVORITES_CELL, "Favoris", favoriteCount, true, "")
+        )
+        for (pin in prefs.pins) {
+            // A pin may be stored under the playlist's UUID or its Deezer id
+            // (the page's own id): the catalogue answers both, and the tile
+            // must find the same playlist either way.
+            val fresh = CarPlaylistSource.find(items, pin.id)
+            cells.add(
+                Cell(
+                    pin.id,
+                    fresh?.title?.takeIf { it.isNotBlank() } ?: pin.title.ifBlank { "Playlist" },
+                    fresh?.nbTracks ?: pin.nbTracks,
+                    false,
+                    CarCovers.resolve(CarServer.origin(), fresh?.cover),
+                )
+            )
+        }
+        return cells
+    }
+
+    private fun pageCount(size: Int): Int = max(1, (size + PAGE_SIZE - 1) / PAGE_SIZE)
+
+    private fun tile(cell: Cell): View {
+        val accent = cell.favorites
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(d(10), 0, d(10), 0)
+            background = CarStyle.roundRect(
+                context,
+                if (accent) CarStyle.AC else white10,
+                if (accent) Color.TRANSPARENT else white22,
+                18f,
+                if (accent) 0f else 1f,
+            )
+            foreground = ripple(18f, if (accent) 0x33000000 else 0x33FFFFFF)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "${cell.title}, ${cell.countLabel}"
+            setOnClickListener { pick(cell) }
+        }
+
+        val cover = CarCoverView(context).apply {
+            seed = cell.coverSeed
+            sizeDp = 52
+            coverUrl = cell.cover
+        }
+        box.addView(cover, LinearLayout.LayoutParams(d(52), d(52)))
+
+        val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val name = CarStyle.text(
+            context,
+            cell.title,
+            18f,
+            if (accent) CarStyle.ONAC else CarStyle.TX,
+        ).apply {
+            typeface = Typeface.create(CarType.body(context), Typeface.BOLD)
+            gravity = Gravity.START
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            setLineSpacing(0f, 1.08f)
+        }
+        column.addView(name, wrap())
+        val count = CarStyle.monoText(
+            context,
+            cell.countLabel,
+            12f,
+            if (accent) CarStyle.ONAC else CarStyle.TX,
+        ).apply {
+            alpha = 0.8f
+        }
+        column.addView(count, wrap().apply { topMargin = d(1) })
+        box.addView(
+            column,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = d(10) }
+        )
+        return box
+    }
+
+    private fun ghostTile(): View {
+        val box = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(d(10), 0, d(10), 0)
+            background = dashed(white35, 18f, 1.5f)
+            foreground = ripple(18f)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Épingle-en d'autres, dans les réglages"
+            setOnClickListener { host.openSettings() }
+        }
+        val placeholder = View(context).apply { background = dashed(0x80FFFFFF.toInt(), 12f, 1.5f) }
+        box.addView(placeholder, LinearLayout.LayoutParams(d(52), d(52)))
+
+        val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val name = CarStyle.text(context, "Épingle-en d'autres", 18f, subColor).apply {
+            typeface = Typeface.create(CarType.body(context), Typeface.BOLD)
+            gravity = Gravity.START
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        column.addView(name, wrap())
+        column.addView(
+            CarStyle.monoText(context, "dans les réglages", 12f, CarStyle.DIM),
+            wrap().apply { topMargin = d(1) }
+        )
+        box.addView(
+            column,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = d(10) }
+        )
+        return box
+    }
+
+    private fun pick(cell: Cell) {
+        // With no session every request answers 401: saying so beats a launch
+        // that dies in the API and a toast claiming a playlist started.
+        if (state == Load.NO_SESSION) {
+            host.toast("Connecte-toi dans l'app pour lancer une playlist")
+            return
+        }
+        // One toast, and only after the page said it started: CarHost.launch
+        // changes the screen and announces "Lecture : X". A failed launch
+        // leaves the panel where it is. For "favorites" the page fetches
+        // /api/me/favorites (asynchronous) and owns the wording ("Chargement
+        // des favoris…" then "Lecture des favoris"); the service stays silent
+        // for that kind so there is never a second toast.
+        if (cell.favorites) {
+            host.launch("favorites", FAVORITES_LAUNCH_ID, "Favoris")
+        } else {
+            host.launch("playlist", cell.id, cell.title)
+        }
+    }
+
+    private fun turn(delta: Int) {
+        // Favoris + the pins.
+        val pages = pageCount(prefs.pins.size + 1)
+        if (pages <= 1) return
+        page = ((page + delta) % pages + pages) % pages
+        render()
+    }
+
+    // -- the server list -----------------------------------------------------
+
+    private fun refresh(force: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            post { refresh(force) }
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastRefreshAt < 400L) return
+        // A list read a minute ago is still true enough, and the tiles are
+        // repainted from the pins below: opening the panel twice does not cost
+        // two requests (the route counts every playlist's tracks).
+        if (!force && state == Load.READY && lastSuccessAt != 0L && now - lastSuccessAt < 60_000L) {
+            render()
+            return
+        }
+        if (state == Load.LOADING) return
+        // The overlay is detached and recreated each time the settings screen
+        // or a size change drops it: this instance's fields start empty, but
+        // the process-wide read may still be fresh. Reuse it instead of
+        // asking /api/me/playlists on every attach. A cached list with no star
+        // count (the settings read the catalogue alone) does not qualify: the
+        // Favoris tile would stay "tes titres aimés" for a minute.
+        if (!force && state == Load.IDLE) {
+            val cached = CarPlaylistSource.fresh(now)
+            if (cached != null && cached.favorites != null) {
+                items = cached.items
+                favoriteCount = cached.favorites
+                state = Load.READY
+                fromCache = true
+                lastSuccessAt = cached.at
+                render()
+                return
+            }
+        }
+        if (!CarServer.configured()) {
+            state = Load.NO_SERVER
+            render()
+            return
+        }
+        lastRefreshAt = now
+        val seq = ++loadSeq
+
+        state = Load.LOADING
+        updateSubtitle()
+        CarPlaylistSource.IO.execute {
+            val outcome = carSnapshotOutcome { CarPlaylistSource.load() }
+            main.post {
+                if (seq != loadSeq || !isAttachedToWindow) return@post
+                when (val result = outcome) {
+                    is CarListOutcome.Ok -> {
+                        items = result.items
+                        favoriteCount = result.favorites ?: -1
+                        CarPlaylistSource.remember(result.items, favoriteCount)
+                        remember(result.items)
+                        fromCache = false
+                        lastSuccessAt = SystemClock.elapsedRealtime()
+                        state = Load.READY
+                    }
+                    is CarListOutcome.Fail -> {
+                        if (result.failure is CarListFailure.NoSession) {
+                            CarPlaylistSource.forget()
+                        }
+                        // Keep what we already had: a refresh failure does not
+                        // erase a list that was read a minute ago, and the pins
+                        // below still paint.
+                        state = when (result.failure) {
+                            is CarListFailure.NoSession -> Load.NO_SESSION
+                            is CarListFailure.Timeout -> Load.TIMEOUT
+                            is CarListFailure.Tls -> Load.TLS
+                            is CarListFailure.Http -> Load.SERVER
+                            is CarListFailure.Unexpected -> Load.UNEXPECTED
+                            else -> Load.OFFLINE
+                        }
+                    }
+                }
+                render()
+            }
+        }
+    }
+
+    /** Keep the pinned titles/counts current after a successful list read. */
+    private fun remember(list: List<CarPlaylistSource.Item>) {
+        var changed = false
+        val next = prefs.pins.map { pin ->
+            val fresh = CarPlaylistSource.find(list, pin.id) ?: return@map pin
+            if (fresh.title == pin.title && fresh.nbTracks == pin.nbTracks) pin
+            else {
+                changed = true
+                PinnedPlaylist(pin.id, fresh.title, fresh.nbTracks)
+            }
+        }
+        if (changed) prefs.pins = next
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        refresh()
+    }
+
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (changedView === this && visibility == View.VISIBLE && isAttachedToWindow) refresh()
+    }
+
+    override fun onDetachedFromWindow() {
+        loadSeq++ // an answer in flight is about a panel that is gone
+        if (state == Load.LOADING) state = Load.IDLE
+        lastRefreshAt = 0L
+        super.onDetachedFromWindow()
+    }
+
+    // -- small factories -----------------------------------------------------
+
+    private fun roundButton(
+        sizeDp: Int,
+        fill: Int,
+        stroke: Int,
+        icon: String,
+        description: String,
+        onClick: () -> Unit,
+    ): FrameLayout {
+        val box = FrameLayout(context).apply {
+            background = CarStyle.roundRect(
+                context,
+                fill,
+                stroke,
+                sizeDp / 2f,
+                if (stroke != Color.TRANSPARENT) 1.5f else 0f,
+            )
+            foreground = ripple(sizeDp / 2f)
+            isClickable = true
+            isFocusable = true
+            contentDescription = description
+            setOnClickListener { onClick() }
+        }
+        val glyph = CarIconView(context).apply {
+            name = icon
+            this.sizeDp = if (sizeDp >= 56) 24 else 22
+            color = CarStyle.TX
+        }
+        box.addView(
+            glyph,
+            FrameLayout.LayoutParams(d(glyph.sizeDp), d(glyph.sizeDp), Gravity.CENTER)
+        )
+        return box
+    }
+
+    private fun circleParams(sizeDp: Int): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(d(sizeDp), d(sizeDp)).apply { leftMargin = d(8) }
+
+    private fun wrap(): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
+    private fun d(value: Int): Int = CarStyle.dp(context, value.toFloat())
+    private fun d(value: Float): Int = CarStyle.dp(context, value)
+
+    private fun ripple(radiusDp: Float, color: Int = 0x33FFFFFF): RippleDrawable {
+        val mask = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = d(radiusDp).toFloat()
+            setColor(Color.WHITE)
+        }
+        return RippleDrawable(ColorStateList.valueOf(color), null, mask)
+    }
+
+    private fun dashed(stroke: Int, radiusDp: Float, widthDp: Float): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = d(radiusDp).toFloat()
+            setColor(Color.TRANSPARENT)
+            setStroke(d(widthDp), stroke, d(5f).toFloat(), d(4f).toFloat())
+        }
+
+    companion object {
+        private const val PAGE_SIZE = 6
+
+        /**
+         * The built-in Favoris cell's stable identity. It is not a playlist id
+         * and is never written to CarPrefs.pins; the launch itself needs no id.
+         */
+        const val FAVORITES_CELL = "@favorites"
+        const val FAVORITES_SEED = "favorites"
+        const val FAVORITES_LAUNCH_ID = ""
+    }
+}
+
+/**
+ * Why the car could not read `/api/me/playlists`. The panel and the settings
+ * say different French sentences, but they must not disagree on the cause:
+ * a 401 is "log in", a timeout is "the server is silent", a 403/5xx is "the
+ * server answered", and an HTML body is "unexpected answer".
+ */
+internal sealed class CarListFailure : Exception() {
+    object NoSession : CarListFailure()
+    object Offline : CarListFailure()
+    object Timeout : CarListFailure()
+    object Tls : CarListFailure()
+    object Unexpected : CarListFailure()
+    data class Http(val code: Int) : CarListFailure()
+}
+
+/** The result of one catalogue read, as both car screens consume it. */
+internal sealed class CarListOutcome {
+    class Ok(
+        val items: List<CarPlaylistSource.Item>,
+        /** The star count when the read asked for it; null = unknown. */
+        val favorites: Int? = null,
+    ) : CarListOutcome()
+
+    class Fail(val failure: CarListFailure) : CarListOutcome()
+}
+
+/** Run one read and classify its failure; never throws. */
+internal inline fun carListOutcome(read: () -> List<CarPlaylistSource.Item>): CarListOutcome = try {
+    CarListOutcome.Ok(read())
+} catch (failure: CarListFailure) {
+    CarListOutcome.Fail(failure)
+} catch (error: Exception) {
+    CarListOutcome.Fail(carListFailureOf(error))
+}
+
+/** The overlay's read also brings the Favoris count; same failure mapping. */
+internal inline fun carSnapshotOutcome(read: () -> CarPlaylistSource.Snapshot): CarListOutcome =
+    try {
+        val snapshot = read()
+        CarListOutcome.Ok(snapshot.items, snapshot.favorites)
+    } catch (failure: CarListFailure) {
+        CarListOutcome.Fail(failure)
+    } catch (error: Exception) {
+        CarListOutcome.Fail(carListFailureOf(error))
+    }
+
+private val HTTP_CODE = Regex("""\bHTTP (\d{3})\b""")
+
+/**
+ * Every failure the car's catalogue can hit, in the states a person sees (log in
+ * / offline / timed out / certificate refused / server answered). Two registers
+ * map onto the same causes, because the seam changed and the wording must not
+ * have:
+ *
+ * - **`NzException`** — what the CORE answers now (`nz-core`'s own errors, one
+ *   class per variant), which is what `NzBridge` hands the screens;
+ * - a **`Throwable`** carrying the old `Net` habit (`IOException("HTTP 401")`),
+ *   which the JVM test still drives: the mapping stays total, and a path that
+ *   produced that message yesterday cannot start reading as "offline" today.
+ *
+ * Pure on purpose: the three states the person sees are held by a test, not by a
+ * guess at each call site.
+ */
+internal fun carListFailureOf(error: Throwable): CarListFailure {
+    if (error is CarListFailure) return error
+    when (error) {
+        is uniffi.nz_ffi.NzException.Offline -> return CarListFailure.Offline
+        is uniffi.nz_ffi.NzException.Timeout -> return CarListFailure.Timeout
+        is uniffi.nz_ffi.NzException.Session -> return CarListFailure.NoSession
+        is uniffi.nz_ffi.NzException.Certificate -> return CarListFailure.Tls
+        is uniffi.nz_ffi.NzException.Server -> return CarListFailure.Http(error.status.toInt())
+        is uniffi.nz_ffi.NzException.Provider -> return CarListFailure.Http(error.status.toInt())
+        is uniffi.nz_ffi.NzException -> return CarListFailure.Unexpected
+        else -> Unit
+    }
+    val code = HTTP_CODE.find(error.message ?: "")?.groupValues?.get(1)?.toIntOrNull()
+    if (code != null) {
+        return if (code == 401) CarListFailure.NoSession else CarListFailure.Http(code)
+    }
+    if (error is java.net.SocketTimeoutException) return CarListFailure.Timeout
+    if (error is javax.net.ssl.SSLException) return CarListFailure.Tls
+    return CarListFailure.Offline
+}
+
+/**
+ * The one reader of the car's catalogue (the overlay and the settings screen),
+ * now on the CORE: `NzCore.car_catalogue` reads `GET /api/me/playlists` and the
+ * light `GET /api/me/favorite-ids` with the core's own session jar, inside
+ * `nz-core::library` (`docs/agents/mobile.md`, MB24's second seam).
+ *
+ * What that replaced, and why the rest stayed:
+ *
+ * - the **URL builder** (`/app` stripping, the origin check) is the core's now:
+ *   `Api` is built from an `Origin`, and `Origin::parse` refuses a path, so
+ *   `/api/me/playlists` can never sit under the SPA's `/app`;
+ * - the **cookie** is the core's `SessionJar`, not the WebView's `CookieManager`
+ *   (there is no WebView any more) — one place holds the session, and the car
+ *   cannot read it for another host by construction;
+ * - the **60-second process-wide cache**, the pin matching, the star count and
+ *   the failure causes are unchanged: the overlay is destroyed and recreated on
+ *   every drop/reattach, and returning from the settings must not cost a second
+ *   request.
+ */
+internal object CarPlaylistSource {
+    private const val MAX_ITEMS = 500
+
+    data class Item(
+        val id: String,
+        val title: String,
+        val nbTracks: Int,
+        val cover: String? = null,
+        val deezerId: String? = null,
+    )
+
+    /** One catalogue read and the star count it could get (null = unknown). */
+    data class Snapshot(val items: List<Item>, val favorites: Int?)
+
+    /** A cached read, with the instant it was taken (elapsedRealtime). */
+    data class Cached(val items: List<Item>, val at: Long, val favorites: Int? = null)
+
+    /** How long a successful read serves every panel without a new request. */
+    private const val CACHE_MS = 60_000L
+    private var cached: List<Item>? = null
+    private var cachedAt = 0L
+    private var cachedFavorites: Int? = null
+
+    /** The last good list if it is younger than a minute, else null. */
+    @Synchronized
+    fun fresh(now: Long): Cached? {
+        val list = cached ?: return null
+        return if (now - cachedAt in 0 until CACHE_MS) {
+            Cached(list, cachedAt, cachedFavorites)
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Keep a successful read for the next panel instance (attach/reattach).
+     * `favorites` null means "not asked here" (the settings screen reads the
+     * catalogue alone): the last known star count is kept rather than erased.
+     * The overlay passes -1 when the count route failed, so a reattach within
+     * the minute does not ask again.
+     */
+    @Synchronized
+    fun remember(items: List<Item>, favorites: Int? = null) {
+        val now = SystemClock.elapsedRealtime()
+        if (favorites != null) {
+            cachedFavorites = favorites
+        } else if (cached != null && now - cachedAt >= CACHE_MS) {
+            // The previous entry (and its count) is beyond the 60 s window:
+            // keeping the count would resurrect a number the policy expired.
+            cachedFavorites = null
+        }
+        cached = items
+        cachedAt = now
+    }
+
+    /** The session is gone: never serve that list to a reattached panel. */
+    @Synchronized
+    fun forget() {
+        cached = null
+        cachedAt = 0L
+        cachedFavorites = null
+    }
+
+    /** One daemon thread for both screens; a hung read never blocks the UI. */
+    val IO = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "car-playlists").apply { isDaemon = true }
+    }
+
+    /**
+     * The server root: the configured base without a trailing `/app`.
+     *
+     * The core never hands a path in its origin (it refuses one), so this only
+     * keeps `resolveCoverUrl` total for any string a cover row or a stored
+     * preference might carry — the JVM test holds it, because a relative path is
+     * the one thing that must become another ROUTE and never another HOST.
+     */
+    fun rootOf(baseUrl: String): String? {
+        var text = baseUrl.trim()
+        if (text.isEmpty() || !text.contains("://")) return null
+        while (text.endsWith("/")) text = text.dropLast(1)
+        if (text.endsWith("/app", ignoreCase = true)) text = text.dropLast(4)
+        val uri = try {
+            java.net.URI(text)
+        } catch (_: Exception) {
+            return null
+        }
+        val scheme = uri.scheme?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        if (uri.host.isNullOrEmpty()) return null
+        return text
+    }
+
+    /**
+     * One catalogue read, on the calling worker: the core's own two requests, on
+     * its `User` lane, with its session and its counters. A failure is thrown as
+     * the [CarListFailure] both screens already switch on.
+     *
+     * The core's call is `suspend`; every caller here is a View or a Service
+     * that already owns a worker thread ([IO]), so it is awaited there — one
+     * thread, no second scheduler, and nothing on the main looper. A core that
+     * could not be built reads as "offline", never as a crash while driving.
+     */
+    fun load(): Snapshot = try {
+        val core = fr.neezer.mobile.bridge.NzBridge.core ?: throw CarListFailure.Offline
+        val answer = kotlinx.coroutines.runBlocking { core.carCatalogue() }
+        Snapshot(itemsOf(answer), answer.favorites?.toInt())
+    } catch (failure: CarListFailure) {
+        throw failure
+    } catch (error: Exception) {
+        throw carListFailureOf(error)
+    }
+
+    /** The core's rows in the shape both screens draw (bounded, deduped). */
+    fun itemsOf(answer: uniffi.nz_ffi.CarCatalogue): List<Item> {
+        val out = ArrayList<Item>(answer.playlists.size.coerceAtMost(MAX_ITEMS))
+        val seen = HashSet<String>()
+        for (row in answer.playlists) {
+            if (out.size >= MAX_ITEMS) break
+            val id = row.id.trim()
+            if (id.isEmpty() || !seen.add(id)) continue
+            out.add(
+                Item(
+                    id = id,
+                    title = row.title.trim().take(200).ifEmpty { "Playlist" },
+                    nbTracks = row.nbTracks.toInt().coerceAtLeast(0),
+                    cover = optionalText(row.cover)?.take(2_048),
+                    deezerId = optionalText(row.deezerId),
+                )
+            )
+        }
+        return out
+    }
+
+    /** `null` and the word "null" are the same absence on this wire. */
+    private fun optionalText(value: String?): String? {
+        val text = value?.trim().orEmpty()
+        return text.takeIf { it.isNotEmpty() && it != "null" }
+    }
+
+    /**
+     * The catalogue row for a pin. A pin is stored under whatever id the page
+     * had — a playlist UUID, or the Deezer id for a Deezer playlist — while the
+     * list carries both: match either, UUID case-insensitively.
+     */
+    fun find(items: List<Item>, pinId: String): Item? {
+        val key = pinId.trim()
+        if (key.isEmpty()) return null
+        for (item in items) if (sameId(item.id, key)) return item
+        for (item in items) {
+            val dz = item.deezerId ?: continue
+            if (sameId(dz, key)) return item
+        }
+        return null
+    }
+
+    private fun sameId(a: String, b: String): Boolean =
+        a == b || (a.length == b.length && a.equals(b, ignoreCase = true))
+
+}

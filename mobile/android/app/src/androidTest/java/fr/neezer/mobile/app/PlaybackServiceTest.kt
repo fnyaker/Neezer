@@ -32,8 +32,12 @@ class PlaybackServiceTest {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         assertNull("the device output is opened by a play, not by a launch", NzMediaService.outputHandle)
 
-        // The launcher's own component (the old app's name is the alias).
-        device.executeShellCommand("am start -W -n org.nsupysonic.app/org.nsupysonic.app.SetupActivity")
+        // The launcher's own component: this app's package and the activity's
+        // FULL class (`namespace` is `fr.neezer.mobile.app`, so `.MainActivity`
+        // relative to the package would name a class that does not exist).
+        device.executeShellCommand(
+            "am start -W -n fr.neezer.mobile/fr.neezer.mobile.app.MainActivity",
+        )
 
         val deadline = System.currentTimeMillis() + TIMEOUT_MS
         while (!NzMediaService.started && System.currentTimeMillis() < deadline) {

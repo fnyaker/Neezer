@@ -143,15 +143,15 @@ resolve_launcher() {
     [[ -n "$APP_COMPONENT" ]] && return 0
     local line
     line="$(nz_launcher_component "$serial")"
-    if [[ "$line" != *"org.nsupysonic.app/"* ]]; then
+    if [[ "$line" != *"fr.neezer.mobile/"* ]]; then
         # A fresh boot of the read-only emulator has no app on it: install the
         # one this worktree built, so a measure is never "not installed".
         local apk
-        apk="$(find_apk)" || die "org.nsupysonic.app is not installed on $serial and no APK is built (gradle :app:assembleRelease, or pass --apk)"
+        apk="$(find_apk)" || die "fr.neezer.mobile is not installed on $serial and no APK is built (gradle :app:assembleRelease, or pass --apk)"
         note "installing $apk on $serial"
         adb_dev install -r -g "$apk" >/dev/null 2>&1 || die "installing $apk on $serial failed"
         line="$(nz_launcher_component "$serial")"
-        [[ "$line" == *"org.nsupysonic.app/"* ]] || die "org.nsupysonic.app does not resolve its launcher after installing $apk"
+        [[ "$line" == *"fr.neezer.mobile/"* ]] || die "fr.neezer.mobile does not resolve its launcher after installing $apk"
     fi
     APP_COMPONENT="$line"
 }
@@ -181,7 +181,7 @@ launch_app() {
 }
 
 app_pid() {
-    adb_dev shell pidof org.nsupysonic.app 2>/dev/null | tr -d '\r' | awk '{print $1}'
+    adb_dev shell pidof fr.neezer.mobile 2>/dev/null | tr -d '\r' | awk '{print $1}'
 }
 
 # --- the Macrobenchmark half --------------------------------------------
@@ -282,7 +282,7 @@ measure_cpu() {
     launch_app
     local pid
     pid="$(app_pid)"
-    [[ -n "$pid" ]] || die "org.nsupysonic.app has no PID after launching it"
+    [[ -n "$pid" ]] || die "fr.neezer.mobile has no PID after launching it"
 
     # The screen off is what the measured case IS (playing behind a locked
     # screen); Doze is forced only when asked, because forcing it needs the
@@ -342,7 +342,7 @@ measure_memory() {
     local mode out
     mode="$(emulator_mode)"
     local raw="$out_dir/memory-$stamp-meminfo.txt"
-    adb_dev shell dumpsys meminfo org.nsupysonic.app >"$raw" 2>&1 || die "dumpsys meminfo failed"
+    adb_dev shell dumpsys meminfo fr.neezer.mobile >"$raw" 2>&1 || die "dumpsys meminfo failed"
     python3 - "$json" "$serial" "$mode" "$raw" <<'PY'
 import json, re, sys
 from datetime import datetime, timezone
@@ -364,13 +364,13 @@ payload = {
     "tool": "measure.sh", "what": "memory",
     "utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "serial": serial, "emulator_mode": mode,
-    "process": "org.nsupysonic.app",
+    "process": "fr.neezer.mobile",
     "pss_bytes": pss_kb * 1024,
     "pss_kb": pss_kb,
     "source": raw,
 }
 open(out, "w").write(json.dumps(payload, indent=2) + "\n")
-print(f"memory: PSS {pss_kb * 1024} bytes ({pss_kb} kB) for org.nsupysonic.app")
+print(f"memory: PSS {pss_kb * 1024} bytes ({pss_kb} kB) for fr.neezer.mobile")
 print(f"json: {out}")
 PY
     cp "$json" "$out_dir/latest-memory.json"

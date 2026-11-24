@@ -209,6 +209,9 @@ class Updater(
     private fun causeOf(error: Throwable): String {
         val text = error.message.orEmpty()
         return when {
+            // The server has no native channel (it predates this release): a
+            // cause of its own, never the WebView APK and never a bare 404.
+            text.contains("indisponible", ignoreCase = true) -> "unavailable"
             text.contains("prépar", ignoreCase = true) -> "preparing"
             text.contains("incomplet", ignoreCase = true) -> "truncated"
             text.contains("application valide", ignoreCase = true) -> "archive"
@@ -243,6 +246,9 @@ typealias UpdateFile = uniffi.nz_ffi.UpdateFileRecord
 
 /** The French cause an [UpdateEvent.Error] prints, never a code. */
 fun updateCauseText(reason: String): String = when (reason) {
+    "unavailable" ->
+        "Mise à jour indisponible : ce serveur ne publie pas l'application Android native. " +
+            "Mettez le serveur à jour, ou installez l'APK natif publié avec la version du serveur."
     "network" -> "Le serveur n'a pas pu envoyer la mise à jour"
     "preparing" -> "Le serveur prépare la mise à jour"
     "truncated" -> "Le fichier reçu est incomplet"

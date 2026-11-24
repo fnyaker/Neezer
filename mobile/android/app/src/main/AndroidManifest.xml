@@ -7,9 +7,10 @@
   user-initiated data transfer the download queue uses) and
   FOREGROUND_SERVICE_DATA_SYNC (its older WorkManager sibling below A14).
 
-  applicationId and signing key are the old app's, so this APK installs as an
-  UPDATE: the icon stays, the data directory stays, and the migration has
-  something to read (rule 7).
+  `applicationId` is `fr.neezer.mobile`, NOT the WebView app's
+  `org.nsupysonic.app`: the two apps are installed side by side, each with its
+  own icon, its own data directory and its own update channel (rule 7 for the
+  old app, which keeps receiving `neezer.apk` untouched).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -71,6 +72,10 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
         </intent>
+        <!-- Android 11 package visibility: the first-run notice tells the person
+             when the old WebView app is still installed beside this one, and
+             `getPackageInfo` sees nothing without this line. -->
+        <package android:name="org.nsupysonic.app" />
     </queries>
 
     <application
@@ -98,11 +103,18 @@
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|fontScale|density|locale|layoutDirection|keyboard|navigation|touchscreen">
-            <!-- NO MAIN/LAUNCHER here on purpose: the launcher entry is the
-                 `SetupActivity` ALIAS below, because that is the name the old
-                 app's icon and pinned shortcuts point at. Two filters would put
-                 two icons in the launcher. -->
-            <!-- A shared link (ACTION_SEND text/plain) and the app's own scheme. -->
+            <!-- ONE launcher entry, on this activity: with its own
+                 `applicationId` there is no old icon or pinned shortcut to keep
+                 alive, and the `org.nsupysonic.app.*` aliases the update-over
+                 plan needed would only add a second, dead name to this app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A shared link (ACTION_SEND text/plain) and the app's own scheme.
+                 The OLD app declares neither, so `neezer://` cannot be stolen
+                 from it; should a future app handle it too, Android 12+ shows
+                 the chooser instead of opening one by default. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -115,24 +127,5 @@
                 <data android:scheme="neezer" />
             </intent-filter>
         </activity>
-
-        <!-- The OLD app's launcher activity name. A person's home-screen icon and
-             pinned shortcut point at `org.nsupysonic.app.SetupActivity`; without
-             this alias they would be broken by the update. -->
-        <activity-alias
-            android:name="org.nsupysonic.app.SetupActivity"
-            android:targetActivity=".MainActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:icon="@mipmap/ic_launcher">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-        <activity-alias
-            android:name="org.nsupysonic.app.MainActivity"
-            android:targetActivity=".MainActivity"
-            android:exported="false" />
     </application>
 </manifest>

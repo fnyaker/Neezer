@@ -3,6 +3,14 @@
 Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.md) first: its process and rules apply here. Other areas: [docs/agents/](./).
 
 
+**This app keeps shipping.** Since 2026-11-24 the native app (`mobile/`, `fr.neezer.mobile`) is a
+SEPARATE package installed beside this one, not an update that replaces it
+([mobile.md](mobile.md), *Deux apps Android*). This tree is unchanged by that release: same
+`applicationId` (`org.nsupysonic.app`), same `neezer.apk` asset, same `/api/android/apk` channel,
+same signing key. Its private data is readable by itself alone — Android forbids the native app to
+inherit it — so the native app detects this package and tells the person to sign in there instead of
+pretending to migrate anything.
+
 `android/` is a native Kotlin app: a fullscreen WebView hosts the SPA (`<server>/app/`,
 configured at first launch: URL + optional port + SSL-verify toggle for self-signed certs)
 while `PlayerService` (foreground service + MediaSessionCompat) keeps the process alive in
@@ -54,7 +62,9 @@ doing it is also the only moment the app offers the battery-optimization exempti
 fetches its update from ITS server, never from a page it sends the user to: `GET /api/android/apk` (login) serves
 `[webapp] android_apk` (an operator's own build) or the GitHub release asset `neezer.apk` of the declared
 `android_version` on the repository `android_url` points at, downloaded once into `<cache_dir>/android/` (only
-https to GitHub's hosts, a zip or nothing, 200 MB cap). `/api/version`'s `android.apk` says it can. The native side
+https to GitHub's hosts, a zip or nothing, 200 MB cap). `/api/version`'s `android.apk` says it can.
+`/api/version` also carries `android.native`, the OTHER app's channel (`fr.neezer.mobile`); this app
+never reads it, and the server never serves the native APK on `/api/android/apk`. The native side
 checks the APK BEFORE asking Android — same package, higher versionCode, signed with the installed key (lineage
 included) — so the page can say "signature différente" (a CI build without the signing secrets has a throwaway key)
 instead of an installer error; then the "install unknown apps" permission (settings opened, resumed on return) and

@@ -1,13 +1,14 @@
 // :car — the car overlay, the quick-settings tile and the triggers, ported from
 // `android/` (docs/agents/mobile.md, lot MB24).
 //
-// MB0 created the module, its manifest and the component classes under their OLD
-// fully-qualified names (`org.nsupysonic.app.CarModeService`, `CarTileService`,
-// `CarSettingsActivity`, the receivers, the job service): a quick-settings tile a
-// person already added points at those names, and an update must not orphan it.
-// MB24 filled them; the two seams it changed are named in the note (a Media3
-// `MediaController` instead of `PlayerService.transport/state`, and `NzCore`
-// calls instead of `__nsCarPlay`/`__nsCarFav`).
+// The components live in `fr.neezer.mobile.car`, like the rest of this app: the
+// old `org.nsupysonic.app.*` names existed only because the first plan installed
+// this APK OVER the WebView app and had to keep its tile and pinned shortcuts
+// alive. With its own `applicationId` there is nothing to preserve, and a native
+// app that never spells the old package is one a person (and a reviewer) can tell
+// apart at a glance. MB24's two seams are unchanged: a Media3 `MediaController`
+// instead of `PlayerService.transport/state`, and `NzCore` calls instead of
+// `__nsCarPlay`/`__nsCarFav`.
 
 plugins {
     alias(libs.plugins.android.library)
@@ -15,9 +16,8 @@ plugins {
 }
 
 android {
-    // The MODULE's namespace stays MB0's; the CLASSES keep the old app's package
-    // (`org.nsupysonic.app`), which is what the manifest's component names, the
-    // person's quick-settings tile and the `car` preferences file name.
+    // The module's namespace, the classes and the manifest's component names
+    // are all this app's: no `org.nsupysonic.app` survives in the native APK.
     namespace = "fr.neezer.mobile.car"
     compileSdk = libs.versions.compileSdk.get().toInt()
 

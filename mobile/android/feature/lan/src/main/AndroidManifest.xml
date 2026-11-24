@@ -34,9 +34,13 @@
          reach the bench server at `10.0.2.2` — a library test APK merges only its
          module's manifest, and cleartext is refused by default from API 28. -->
     <application android:usesCleartextTraffic="true">
+        <!-- The authority is derived from `applicationId`, as every provider
+             authority must be: a fixed string would collide with the debug
+             variant (and with any other package that copied it) at install
+             time — `INSTALL_FAILED_CONFLICTING_PROVIDER`. -->
         <provider
             android:name="fr.neezer.mobile.feature.lan.LanInitProvider"
-            android:authorities="fr.neezer.mobile.feature.lan.init"
+            android:authorities="${applicationId}.lan-init"
             android:exported="false"
             android:multiprocess="false"
             android:directBootAware="false" />
