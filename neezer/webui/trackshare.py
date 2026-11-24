@@ -695,11 +695,8 @@ def oembed():
         "author_name": artist,
         "width": width,
         "height": height,
-        "html": _OEMBED_IFRAME.substitute(
-            width=width,
-            height=height,
-            src=html.escape(embed_url, quote=True),
-            title=html.escape(title, quote=True),
+        "html": _render(
+            _OEMBED_IFRAME, width=width, height=height, src=embed_url, title=title
         ),
     }
     if _cover_available(track):
@@ -719,19 +716,19 @@ def oembed():
 
 
 def _track_title(track):
-    return (track.title or "Titre").strip()
+    return _CONTROL_CHARS.sub("", track.title or "Titre").strip()
 
 
 def _artist_name(track):
     try:
-        return (track.artist.name or "").strip()
+        return _CONTROL_CHARS.sub("", track.artist.name or "").strip()
     except Exception:
         return ""
 
 
 def _album_name(track):
     try:
-        return (track.album.name or "").strip()
+        return _CONTROL_CHARS.sub("", track.album.name or "").strip()
     except Exception:
         return ""
 
@@ -746,10 +743,46 @@ def _mmss(seconds):
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
-# One page for a live link and one for a dead one: a string.Template inserts
-# every value ONCE, escaped at the page boundary, so a client-chosen title can
-# never inject markup. No inline script is emitted without the response's own
-# nonce, and no third-party resource is allowed by the CSP.
+#: The C0 controls and DEL. A provider row may carry them; a page, a meta
+#: attribute or a tag must not, so every displayed name goes through this.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class _Markup(str):
+    """A fragment THIS MODULE built and already escaped.
+
+    ``_render`` escapes every value it is handed, and a ``_Markup`` is the only
+    value it inserts as is. Because ``_render`` is the only place one is made,
+    the escaping rule of this file is one sentence: a value reaches the page
+    escaped because it went through ``_render``, never because a call site
+    remembered to call ``html.escape``.
+    """
+
+
+def _render(template, /, **values):
+    """Fill ``template`` once, escaping every value.
+
+    ``string.Template.substitute`` inserts each named value exactly once — so a
+    title holding ``$home`` stays a title — and each one is HTML-escaped here,
+    quotes included, unless it is markup ``_render`` itself produced.
+    """
+    return _Markup(
+        template.substitute(
+            {
+                name: value
+                if isinstance(value, _Markup)
+                else html.escape(str(value), quote=True)
+                for name, value in values.items()
+            }
+        )
+    )
+
+
+# One page for a live link and one for a dead one, each filled by ``_render``:
+# a value reaches the markup ONCE, escaped at that boundary, so a
+# client-chosen title can never inject markup. No inline script is emitted
+# without the response's own nonce, and no third-party resource is allowed by
+# the CSP.
 _PAGE = string.Template(
     "<!doctype html><html lang=fr><head><meta charset=utf-8>"
     "<meta name=viewport content='width=device-width,initial-scale=1,viewport-fit=cover'>"
@@ -946,10 +979,68 @@ paint();
 """
 
 
+_ART = string.Template(
+    "<img src='$src' alt='' width='$w' height='$h' decoding='async' fetchpriority='high'>"
+)
+_GROOVE = "<span class=groove aria-hidden='true'></span>"
+_ARTIST_LINE = string.Template("<p class=artist>$artist</p>")
+_ALBUM_LINE = string.Template("<p class=album>$album</p>")
+_IMAGE_TAGS = string.Template(
+    "<meta property='og:image' content='$src'>"
+    "<meta property='og:image:secure_url' content='$src'>"
+    "<meta property='og:image:type' content='image/jpeg'>"
+    "<meta property='og:image:width' content='$w'>"
+    "<meta property='og:image:height' content='$w'>"
+    "<meta property='og:image:alt' content='Pochette du titre'>"
+)
+_TWITTER_IMAGE = string.Template("<meta name='twitter:image' content='$src'>")
+_AUDIO_TAGS = string.Template(
+    "<meta property='og:audio' content='$src'>"
+    "<meta property='og:audio:type' content='audio/ogg'>"
+    "<meta property='og:audio:secure_url' content='$src'>"
+)
+_BACKGROUND = string.Template(
+    "<div class=bg style=\"background-image:url('$src')\"></div>"
+)
+_NO_STREAM = (
+    "<div class=deadmsg><h1>Ce titre n’est pas disponible pour l’instant.</h1>"
+    "<p>Demandez à la personne qui vous l’a envoyé de recréer le lien.</p></div>"
+)
+
+# The card: every value it shows is a ``$name`` filled by ``_render``, and the
+# markup itself carries no value. Newlines are kept out of it — a test asserts
+# the exact byte budget and the page stays one cheap response.
+_BODY = string.Template(
+    "<div class=who><div class=art>$art</div><div class=meta>"
+    "<p class=kicker>Titre partagé</p><h1>$title</h1>$artist$album"
+    "<div class=player>"
+    "<button id=play class=play type=button aria-label='Lire'>"
+    "<svg class=triangle viewBox='0 0 24 24' aria-hidden='true'>"
+    "<path d='M8 5v14l11-7z' fill='currentColor'/></svg>"
+    "<svg class=pause viewBox='0 0 24 24' aria-hidden='true'>"
+    "<rect x='7' y='5' width='4' height='14' rx='1' fill='currentColor'/>"
+    "<rect x='14' y='5' width='4' height='14' rx='1' fill='currentColor'/></svg>"
+    "</button>"
+    "<div class=trackline><div class=times><span id=cur>0:00</span>"
+    "<span id=dur>$duration</span></div>"
+    "<div class=bar><span id=fill class=fill></span></div>"
+    "<p id=msg class=msg role=status></p></div>"
+    "</div></div></div>"
+    "<div class=actions>"
+    "<button id=copy class=ghost type=button>"
+    "<svg viewBox='0 0 24 24' aria-hidden='true' fill='none'"
+    " stroke='currentColor' stroke-width='2' stroke-linecap='round'"
+    " stroke-linejoin='round'><rect x='9' y='9' width='12' height='12'"
+    " rx='2'/><path d='M5 15V5a2 2 0 0 1 2-2h10'/></svg>"
+    "Copier le lien</button>"
+    "</div>"
+    "<p class=note>Écoute libre, sans compte. Le lien est privé et révocable&nbsp;:"
+    " celui qui le détient peut écouter ce titre.</p>"
+    "<audio id=a preload=none data-src='$stream' data-duration='$seconds'></audio>"
+)
+
+
 def _page_body(track, share):
-    title = html.escape(_track_title(track), quote=True)
-    artist = html.escape(_artist_name(track), quote=True)
-    album = html.escape(_album_name(track), quote=True)
     token = token_for(share.id)
     stream = _absolute(
         f"{request.script_root.rstrip('/')}/api/shared/track/{token}/stream"
@@ -958,53 +1049,23 @@ def _page_body(track, share):
         f"{request.script_root.rstrip('/')}/api/shared/track/{token}/cover"
         f"?w={PAGE_COVER_WIDTH}"
     )
-    has_cover = _cover_available(track)
+    title = _track_title(track)
+    artist = _artist_name(track)
+    album = _album_name(track)
     art = (
-        f"<img src='{html.escape(cover, quote=True)}' alt='' width='{PAGE_COVER_WIDTH}'"
-        f" height='{PAGE_COVER_WIDTH}' decoding='async' fetchpriority='high'>"
-        if has_cover
-        else "<span class=groove aria-hidden='true'></span>"
+        _render(_ART, src=cover, w=PAGE_COVER_WIDTH, h=PAGE_COVER_WIDTH)
+        if _cover_available(track)
+        else _GROOVE
     )
-    # Newlines are kept out of the generated markup: a test can assert the
-    # exact bytes and the page stays one cheap response.
-    return "".join(
-        [
-            "<div class=who><div class=art>",
-            art,
-            "</div><div class=meta>",
-            "<p class=kicker>Titre partagé</p>",
-            f"<h1>{title}</h1>",
-            f"<p class=artist>{artist}</p>" if artist else "",
-            f"<p class=album>{album}</p>" if album else "",
-            "<div class=player>",
-            "<button id=play class=play type=button aria-label='Lire'>",
-            "<svg class=triangle viewBox='0 0 24 24' aria-hidden='true'>"
-            "<path d='M8 5v14l11-7z' fill='currentColor'/></svg>",
-            "<svg class=pause viewBox='0 0 24 24' aria-hidden='true'>"
-            "<rect x='7' y='5' width='4' height='14' rx='1' fill='currentColor'/>"
-            "<rect x='14' y='5' width='4' height='14' rx='1' fill='currentColor'/></svg>",
-            "</button>",
-            "<div class=trackline><div class=times><span id=cur>0:00</span>",
-            f"<span id=dur>{_mmss(track.duration)}</span></div>",
-            "<div class=bar><span id=fill class=fill></span></div>",
-            "<p id=msg class=msg role=status></p></div>",
-            "</div></div></div>",
-            "<div class=actions>",
-            "<button id=copy class=ghost type=button>",
-            "<svg viewBox='0 0 24 24' aria-hidden='true' fill='none'"
-            " stroke='currentColor' stroke-width='2' stroke-linecap='round'"
-            " stroke-linejoin='round'><rect x='9' y='9' width='12' height='12'"
-            " rx='2'/><path d='M5 15V5a2 2 0 0 1 2-2h10'/></svg>",
-            "Copier le lien</button>",
-            "</div>",
-            "<p class=note>Écoute libre, sans compte. Le lien est privé et révocable&nbsp;:"
-            " celui qui le détient peut écouter ce titre.</p>",
-            "<audio id=a preload=none data-src='",
-            html.escape(stream, quote=True),
-            "' data-duration='",
-            str(int(track.duration or 0)),
-            "'></audio>",
-        ]
+    return _render(
+        _BODY,
+        art=art,
+        title=title,
+        artist=_render(_ARTIST_LINE, artist=artist) if artist else "",
+        album=_render(_ALBUM_LINE, album=album) if album else "",
+        duration=_mmss(track.duration),
+        stream=stream,
+        seconds=int(track.duration or 0),
     )
 
 
@@ -1013,13 +1074,13 @@ def track_page(token):
     expired token gets the SAME calm page and status — no oracle."""
     share = _public_share(token)
     if share is None:
-        resp = make_response(_DEAD_PAGE.substitute(style=_STYLE))
+        resp = make_response(_render(_DEAD_PAGE, style=_Markup(_STYLE)))
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         return _public_headers(resp, nonce=None, embed=False), 404
 
     allowed, retry = _page_limiter.allow(f"{share.id}:{request.remote_addr or ''}")
     if not allowed:
-        resp = make_response(_DEAD_PAGE.substitute(style=_STYLE))
+        resp = make_response(_render(_DEAD_PAGE, style=_Markup(_STYLE)))
         resp.status_code = 429
         resp.headers["Retry-After"] = str(retry)
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
@@ -1027,7 +1088,7 @@ def track_page(token):
 
     track = _public_track(share)
     if track is None:
-        resp = make_response(_DEAD_PAGE.substitute(style=_STYLE))
+        resp = make_response(_render(_DEAD_PAGE, style=_Markup(_STYLE)))
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         return _public_headers(resp, nonce=None, embed=False), 404
 
@@ -1052,64 +1113,37 @@ def track_page(token):
     image_tags = ""
     twitter_image = ""
     if has_cover:
-        image_tags = "".join(
-            [
-                f"<meta property='og:image' content='{html.escape(cover, quote=True)}'>",
-                f"<meta property='og:image:secure_url' content='{html.escape(cover, quote=True)}'>",
-                "<meta property='og:image:type' content='image/jpeg'>",
-                f"<meta property='og:image:width' content='{OG_COVER_WIDTH}'>",
-                f"<meta property='og:image:height' content='{OG_COVER_WIDTH}'>",
-                "<meta property='og:image:alt' content='Pochette du titre'>",
-            ]
-        )
-        twitter_image = (
-            f"<meta name='twitter:image' content='{html.escape(cover, quote=True)}'>"
-        )
+        image_tags = _render(_IMAGE_TAGS, src=cover, w=OG_COVER_WIDTH)
+        twitter_image = _render(_TWITTER_IMAGE, src=cover)
     stream_url = _absolute(
         f"{request.script_root.rstrip('/')}/api/shared/track/{token_url}/stream"
     )
     streamable = bool(track.path and os.path.isfile(track.path))
-    audio_tags = (
-        "".join(
-            [
-                f"<meta property='og:audio' content='{html.escape(stream_url, quote=True)}'>",
-                "<meta property='og:audio:type' content='audio/ogg'>",
-                "<meta property='og:audio:secure_url'"
-                f" content='{html.escape(stream_url, quote=True)}'>",
-            ]
-        )
-        if streamable
-        else ""
-    )
+    audio_tags = _render(_AUDIO_TAGS, src=stream_url) if streamable else ""
     oembed_url = _absolute("/api/oembed") + "?url=" + quote(page_url, safe="")
     background = (
-        f"<div class=bg style=\"background-image:url('{html.escape(cover, quote=True)}')\"></div>"
-        if has_cover
-        else "<div class=bg></div>"
+        _render(_BACKGROUND, src=cover) if has_cover else "<div class=bg></div>"
     )
     body_class = "embed" if embed else ("hasart" if has_cover else "")
-    page_title = html.escape(f"{og_title} · Neezer", quote=True)
-    body = _page_body(track, share) if streamable else (
-        "<div class=deadmsg><h1>Ce titre n’est pas disponible pour l’instant.</h1>"
-        "<p>Demandez à la personne qui vous l’a envoyé de recréer le lien.</p></div>"
-    )
-    page = _PAGE.substitute(
-        page_title=page_title,
-        desc=html.escape(desc, quote=True),
-        page_url=html.escape(page_url, quote=True),
-        og_title=html.escape(og_title, quote=True),
+    body = _page_body(track, share) if streamable else _NO_STREAM
+    page = _render(
+        _PAGE,
+        page_title=f"{og_title} · Neezer",
+        desc=desc,
+        page_url=page_url,
+        og_title=og_title,
         image_tags=image_tags,
         duration_s=int(track.duration or 0),
         audio_tags=audio_tags,
         twitter_image=twitter_image,
-        embed_url=html.escape(embed_url, quote=True),
-        oembed_url=html.escape(oembed_url, quote=True),
-        style=_STYLE,
+        embed_url=embed_url,
+        oembed_url=oembed_url,
+        style=_Markup(_STYLE),
         body_class=body_class,
         background=background,
         body=body,
         nonce=nonce,
-        script=_SCRIPT,
+        script=_Markup(_SCRIPT),
     )
     _touch_used(share)
     resp = make_response(page)
