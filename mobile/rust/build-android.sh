@@ -149,7 +149,32 @@ mkdir -p "$JNI_LIBS"
 # then refuses it — `dlopen failed: cannot locate symbol "_ZTISt12length_error"`
 # (libc++abi's `std::length_error` typeinfo), the same dead app with a different
 # sentence.
-CXXSTDLIB=c++_static RUSTFLAGS="$RUSTFLAGS -C link-arg=-lc++abi" \
+# Three link-time shrinkers ride with the Android link, all measured on
+# arm64-v8a (this lot, docs/agents/mobile.md "MQ2 — la taille"). They are set
+# HERE and not in the exported `RUSTFLAGS` above: they are ELF/Android choices,
+# and applied to the host build they break its own build scripts — measured, a
+# `RUSTFLAGS` carrying `--pack-dyn-relocs=android` made `proc-macro2` and `quote`
+# die with SIGSEGV before compiling anything (glibc's loader does not read
+# Android's APS2 relocations).
+#
+#  - `--exclude-libs=ALL` hides every symbol that comes from a static library
+#    (libc++, libopus, bundled SQLite, aws-lc): **−114 176 B**, and a shorter
+#    `.dynsym` for `dlsym` to walk.
+#  - `--pack-dyn-relocs=android` writes the relocations in Android's APS2
+#    format, which the loader has understood since API 23 (this app's minSdk is
+#    26): `.rela.dyn` 729 360 B → 106 000 B, **−624 640 B** whole. The generic
+#    `--pack-dyn-relocs=relr` was NOT used: `DT_RELR` needs a loader newer than
+#    minSdk 26.
+#  - `--icf=all` folds identical functions: **−1 066 624 B**, 5 006 sections on
+#    the build that measured it. `--icf=safe` was measured first and folded
+#    nothing at all (byte-identical output), because a Rust binary takes the
+#    address of almost everything (trait objects, `Drop` glue); `all` is what
+#    Chrome and Soong ship for release. The one thing it must never touch is a
+#    function whose ADDRESS is compared — the app compares none, the emulator
+#    smoke plays its journey on this library, and a bug that smells like folded
+#    code is this flag's to answer.
+ANDROID_LINK_FLAGS="-C link-arg=-Wl,--exclude-libs,ALL -C link-arg=-Wl,--pack-dyn-relocs=android -C link-arg=-Wl,--icf=all"
+CXXSTDLIB=c++_static RUSTFLAGS="$RUSTFLAGS -C link-arg=-lc++abi $ANDROID_LINK_FLAGS" \
     cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P "$API" -o "$JNI_LIBS" \
     build --locked --release -p nz-ffi
 

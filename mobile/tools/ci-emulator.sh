@@ -126,9 +126,15 @@ prepare_device
 # --- 2. the app ----------------------------------------------------------
 
 step "install"
+# The UNIVERSAL APK first: since « MQ2 — la taille » `assembleRelease` writes one
+# APK per ABI plus `app-universal-release.apk` (the one that installs on the
+# emulator's x86_64 as well as on a phone), and the two plain names below are
+# what a tree from before that change still has.
 if [[ -z "$apk" ]]; then
     for candidate in \
+        "$(nz_android_project)/app/build/outputs/apk/release/app-universal-release.apk" \
         "$(nz_android_project)/app/build/outputs/apk/release/app-release.apk" \
+        "$(nz_android_project)/app/build/outputs/apk/benchmark/app-universal-benchmark.apk" \
         "$(nz_android_project)/app/build/outputs/apk/benchmark/app-benchmark.apk"; do
         [[ -f "$candidate" ]] && apk="$candidate" && break
     done
@@ -140,7 +146,7 @@ if [[ -z "$apk" || ! -f "$apk" ]]; then
     else
         nz_gradle_android :app:assembleRelease >/dev/null
     fi
-    apk="$(nz_android_project)/app/build/outputs/apk/release/app-release.apk"
+    apk="$(nz_android_project)/app/build/outputs/apk/release/app-universal-release.apk"
 fi
 [[ -f "$apk" ]] || {
     note "no APK at $apk"

@@ -79,12 +79,23 @@ appcore = { path = "../../webapp/appcore" }
 rhythm = { path = "../../webapp/rhythm" }
 
 # A phone APK is judged on its download size and on how fast the cold start is
-# (docs/agents/mobile.md, "Size and cold start"): `opt-level = "s"` everywhere,
+# (docs/agents/mobile.md, "Size and cold start"): `opt-level = "z"` everywhere,
 # `opt-level = 3` for the crates whose inner loops are the audio and the
 # analysis. `panic = "unwind"` is NOT optional: UniFFI turns a panic into a
 # Kotlin exception, and `abort` would kill the process instead of a call.
+#
+# Measured on `libnz_ffi.so` arm64-v8a (the size lot, docs/agents/mobile.md
+# "MQ2 — la taille"): `"s"` → 19 828 936 B, `"z"` → 18 012 632 B, so `"z"` buys
+# **1 816 304 B (9,2 %)**. `lto = "fat"` was measured too and answered
+# **+384 B and 3 min 51 s instead of 2 min 03** (with `codegen-units = 1`, thin
+# LTO already sees the whole graph): it stays `"thin"`.
+#
+# The `opt-level = 3` overrides below cost **785 152 B (4,8 %)** of the library
+# and stay: they are the crates whose inner loops are the audio the person
+# hears, the analysis and the worlds — a size win must never cost an audio
+# deadline.
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = "thin"
 codegen-units = 1
 strip = true

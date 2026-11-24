@@ -290,39 +290,67 @@ jobs:
       # as "not a valid application", and a v2-only signature cannot update a
       # device signed with v1 (measured on the old app's v1.3.1). `--min-sdk-version
       # 23` is what makes apksigner check the JAR signature at all.
+      #
+      # EVERY APK is proven, not just the first: since « MQ2 — la taille » the
+      # `apk` job emits one APK per ABI plus the universal one, and a split whose
+      # signature or alignment is wrong is an app that installs nowhere.
       - name: Verify the APK
         run: |
           set -euo pipefail
-          APK=$(find mobile/android/app/build/outputs/apk/release -name '*.apk' | head -1)
-          echo "APK=$APK" >> "$GITHUB_ENV"
-          unzip -t "$APK" > /dev/null
           BT="$ANDROID_SDK_ROOT/build-tools/36.0.0"
-          "$BT/apksigner" verify --min-sdk-version 23 --verbose --print-certs "$APK" | tee /tmp/verify.txt
-          # `--verbose` is what MAKES apksigner print the three scheme lines at
-          # all (without it, `apksigner verify` prints nothing but "Verifies"),
-          # and the line carries the scheme's full name in parentheses
-          # (`Verified using v1 scheme (JAR signing): true`), so the check asks
-          # for the prefix and then for `true` — a literal "v1 scheme: true"
-          # never matches, which is how a correct APK failed this very check.
-          for scheme in v1 v2 v3; do
-            line=$(grep -i "Verified using $scheme scheme" /tmp/verify.txt || true)
-            case "$line" in
-              *true*) ;;
-              *) echo "::error::$scheme signature missing ($line)"; exit 1 ;;
-            esac
+          shopt -s nullglob
+          apks=(mobile/android/app/build/outputs/apk/release/*.apk)
+          (( ${#apks[@]} > 0 )) || { echo "::error::no release APK was built"; exit 1; }
+          for APK in "${apks[@]}"; do
+            echo "== $APK ($(stat -c %s "$APK") bytes)"
+            unzip -t "$APK" > /dev/null
+            "$BT/apksigner" verify --min-sdk-version 23 --verbose --print-certs "$APK" | tee /tmp/verify.txt
+            # `--verbose` is what MAKES apksigner print the three scheme lines at
+            # all (without it, `apksigner verify` prints nothing but "Verifies"),
+            # and the line carries the scheme's full name in parentheses
+            # (`Verified using v1 scheme (JAR signing): true`), so the check asks
+            # for the prefix and then for `true` — a literal "v1 scheme: true"
+            # never matches, which is how a correct APK failed this very check.
+            for scheme in v1 v2 v3; do
+              line=$(grep -i "Verified using $scheme scheme" /tmp/verify.txt || true)
+              case "$line" in
+                *true*) ;;
+                *) echo "::error::$scheme signature missing in $APK ($line)"; exit 1 ;;
+              esac
+            done
+            "$BT/zipalign" -c -p 4 "$APK"
+            "$BT/aapt2" dump badging "$APK" | grep -E "package: name='org.nsupysonic.app'" \
+              || { echo "::error::wrong package id in $APK"; exit 1; }
           done
-          "$BT/zipalign" -c -p 4 "$APK"
-          "$BT/aapt2" dump badging "$APK" | grep -E "package: name='org.nsupysonic.app'" \
-            || { echo "::error::wrong package id"; exit 1; }
+          # The universal APK is the one that installs on ANY device (the app is
+          # side-loaded), so it is the artifact the emulator job and the release
+          # read. Every split shares its versionCode — checked here because the
+          # updater refuses a code that is not higher than the one installed.
+          UNIVERSAL=mobile/android/app/build/outputs/apk/release/app-universal-release.apk
+          APK="$UNIVERSAL"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          codes=$("$BT/aapt2" dump badging "${apks[@]}" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | sort -u)
+          [[ "$(printf '%s\n' "$codes" | wc -l)" -eq 1 ]] \
+            || { echo "::error::the APKs disagree on versionCode: $codes"; exit 1; }
 
       - name: Sizes (universal APK, per ABI, and the native library)
         run: |
           set -euo pipefail
           echo "### Tailles" >> "$GITHUB_STEP_SUMMARY"
           printf '| ce qui | octets |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
-          printf '| APK universel | %s |\n' "$(stat -c %s "$APK")" >> "$GITHUB_STEP_SUMMARY"
+          for apk in mobile/android/app/build/outputs/apk/release/*.apk; do
+            printf '| %s | %s |\n' "$(basename "$apk")" "$(stat -c %s "$apk")" >> "$GITHUB_STEP_SUMMARY"
+          done
           unzip -l "$APK" | awk '/lib\/.*\/libnz_ffi\.so/ {printf "| %s | %s |\n", $4, $1}' \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # THE CEILING (lot « MQ2 — la taille »). The library doubled between MB3a
+      # (9,2 MB) and MQ2 (19,8 MB) without a single red check: it compiled, it
+      # played, and the only symptom was a download nobody measured. Every
+      # ceiling in the script is the size measured on the commit that added it,
+      # plus ~5 %.
+      - name: The shipped library and APKs stay under their ceiling
+        run: mobile/tools/size-guard.sh
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4

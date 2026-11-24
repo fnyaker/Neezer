@@ -86,6 +86,26 @@ android {
         }
     }
 
+    // ONE APK PER ABI, PLUS THE UNIVERSAL ONE (lot « MQ2 — la taille », the note's
+    // "Measures"): `libnz_ffi.so` is ~90 % of the APK and a phone runs exactly one
+    // of the three ABIs it carried, so the universal APK was paying for two the
+    // device can never load. Measured: the universal release APK carried
+    // 56 862 808 B of native libraries for a 28 MB split.
+    //
+    // The app is SIDE-LOADED (`adb install`, `/api/android/apk`), where a Play
+    // bundle does not exist: `isUniversalApk = true` keeps a single file that
+    // installs on any device, and the per-ABI APKs are what a device downloads
+    // when the updater serves its own. Losing x86_64 was the alternative and was
+    // refused: the old app shipped it and rule 7 has to keep working there.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
