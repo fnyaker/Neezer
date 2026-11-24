@@ -547,7 +547,7 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
 | Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open: **p50 14,6 / p95 562,5 ms**, 0 frozen frames (> 700 ms). The scroll budgets (p95 ≤ 16,7, p99 ≤ 25) are MET on the emulator; the player's first frame is NOT (the 512 px sleeve is decoded in the frame) — follow-up: decode it off the frame. |
 | Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. The app's own counters are not in `Assistance` (same follow-up as RAM), and **rebuffers have no external source**. The throttled `gsm`/`edge` profile was not run. |
-| APK | `apkanalyzer`/`measure.sh apk` on the release build | universal **62 884 495 B (60,0 MB)** — target ≤ 45 MB, MISSED; `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **19 830 856 B (18,9 MB)**, armeabi-v7a 13 172 328, x86_64 23 849 624 — the 9 MB target is MISSED by 2,2×. The universal APK ships three ABIs: per-ABI splits and a smaller Rust feature set are the follow-up (the lot's acceptance records the gap). |
+| APK | `apkanalyzer`/`measure.sh apk` on the release build | **universal 54 289 031 B (51,8 MB)** for three ABIs, **arm64-v8a 21 373 643 B (20,4 MB)**, armeabi-v7a 16 502 411, x86_64 25 729 918 — the 45 MB target is a *download's* and every per-ABI APK meets it with room (the universal keeps all three ABIs for sideloading: see *MQ2 — la taille*). `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **16 222 680 B**, armeabi-v7a 11 400 584, x86_64 20 628 120 — the 9 MB target is MISSED by 1,8×, and cannot be met: **4 571 020 B (23 %) are the `panic = "unwind"` tables UniFFI's error contract requires** and the rest is the 1:1 feature code (*MQ2 — la taille* measures every step and names the refused levers). The CI ceiling is `mobile/tools/size-guard.sh`. |
 | Worlds | — | **non livré — MB22/MB23 en pause à la demande de l'utilisateur (2026-11-23)**. |
 
 ## Worker rules (mandatory in every lot; each prompt repeats them)
@@ -5767,14 +5767,158 @@ tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non 
 mais `BaselineProfileRule` **saute l'émulateur** (« Skipping test because it's running on emulator
 and `skipOnEmulator` is enabled », le garde de MQ1, toujours vrai avec `benchmark` 1.5.0 et
 `skipBenchmarksOnEmulator=false`) : un `.txt` complet pour ce parcours demande un téléphone branché,
-et aucun ne l'était. TTFD (aucun `reportFullyDrawn`) ; la taille de l'APK (60 MB, .so arm64 18,9 MB
-contre 45/9 visés) ; le premier cadre du lecteur ; les rebuffers ; le profil réseau `gsm`/`edge` ; le
-câblage de la mini-barre ; l'enchaînement de la file écran éteint.
+et aucun ne l'était. TTFD (aucun `reportFullyDrawn`) ; le premier cadre du lecteur ; les rebuffers ; le
+profil réseau `gsm`/`edge` ; le câblage de la mini-barre ; l'enchaînement de la file écran éteint.
 
 **Files.** `baselineprofile/src/main/java/fr/neezer/mobile/baselineprofile/Journey*.kt` (six files),
 `docs/agents/screenshots/mobile/MQ2/` (ten PNG), this section and the *Measures* table. **No**
 `app/src/main/baseline-prof.txt`: the generator above cannot run without a device, and committing a
 profile nobody generated would be a lie the next release ships.
+
+### MQ2 — la taille (suite, 2026-11-24)
+
+**Le besoin.** MQ2 a mesuré l'APK à 60 MB et `libnz_ffi.so` arm64 à 18,9 MB contre 45 MB et 9 MB
+visés — alors que MB3a mesurait déjà le `.so` à **9,2 MB** : la bibliothèque a DOUBLÉ entre les deux
+lots sans qu'un seul contrôle rougisse. Ce lot trouve les octets avant de couper, coupe sans perdre
+une fonction, et pose le plafond qui manquait.
+
+**Où étaient les octets** (19 828 936 B, arm64-v8a, tel que livré):
+
+- **Sections** (`llvm-size -A`): `.text` **13 466 872 B (68 %)**, `.eh_frame` 2 193 996, `.rodata`
+  1 210 352, `.gcc_except_table` 1 144 692, `.rela.dyn` 710 088, `.data.rel.ro` 492 264,
+  `.eh_frame_hdr` 338 332. Soit **4 571 020 B (23 %) de métadonnées de déroulement/d'exception** :
+  c'est le prix de `panic = "unwind"`, qu'UniFFI exige pour transformer un panic en `NzError` au lieu
+  d'un processus mort (règle 3: une cause, jamais une disparition).
+- **Par crate et par fonction** (`llvm-nm --print-size --size-sort --demangle` sur la bibliothèque
+  NON strippée, 70 940 symboles, chacun imputé à la première crate de son nom): `nz_core` 1 422 164,
+  `serde_json` 1 126 792, `rustfft` 1 111 088, `uniffi_core` 828 360, `async_compat` 742 308,
+  `nz_lan` 514 580, `nz_ffi` 481 428, `tokio` 480 016, sqlite3 (C) 426 465, `rustls` 391 448,
+  `h2` 327 908, aws-lc (C) 317 416, `nz_model` 309 712, `quinn_proto` 291 740, `nz_api` 241 900,
+  `jni` 117 116, la métadonnée UniFFI (`UNIFFI_META_*`) ~205 000. Les plus grosses fonctions:
+  `sqlite3VdbeExec` 34 228, le décodeur MP3 layer3 32 360, `rhythm::Analyzer::analyse` 32 036,
+  `nz_analysis::analysis::training::prepare` 28 328, `quinn_proto` `process_payload` 25 308.
+  **Aucun coupable unique** : c'est la somme des fonctions que les lots livrés exigent (LAN/QUIC,
+  analyse client + FFT, quatre décodeurs, HTTP/2, SQLite, les écrans).
+
+**Chaque étape, mesurée sur arm64-v8a** (toutes strippées, mêmes drapeaux de lien par ailleurs; un
+`cargo ndk -t arm64-v8a -P 26 build --release` coûte ~2 min, d'où l'itération):
+
+| Étape | octets | Δ |
+|---|---|---|
+| départ (`opt-level = "s"`, `lto = "thin"`, `codegen-units = 1`, `strip`, `unwind`) | 19 828 936 | — |
+| `lto = "fat"` | 19 829 320 | **+384** (et 3 min 51 au lieu de 2 min 03) → refusé |
+| `opt-level = "z"` | 18 012 632 | **−1 816 304** (−9,2 %) |
+| + `--exclude-libs=ALL` | 17 898 456 | **−114 176** |
+| + `--pack-dyn-relocs=android` | 17 273 816 | **−624 640** (`.rela.dyn` 729 360 → ~106 000) |
+| + `--icf=all` | 16 219 736 | **−1 054 080** (seul, sur `opt-level = "z"`: −1 066 624; 5 006 sections pliées) |
+| (essai) sans les 13 `opt-level = 3` audio/DSP | 15 434 584 | **−785 152** : le prix des boucles chaudes, payé |
+| **livré** (`build-android.sh`, mêmes drapeaux) | **16 222 680** | **−3 606 256 (−18,2 %)**; +2 944 B que la chaîne ci-dessus, l'ordre des drapeaux de lien du script n'étant pas celui de l'essai |
+
+armv7 13 172 328 → **11 400 584** (−13,4 %), x86_64 23 849 624 → **20 628 120** (−13,5 %).
+`readelf -d NEEDED` = `libaaudio libdl liblog libm libc` sur les trois : rien que le système, et
+surtout **pas de `libc++_shared`** (l'incident MB3b reste couvert par `--check-libs`).
+
+**Pourquoi 9 MB est hors d'atteinte, et pourquoi le plafond est 17 MB.** Il faudrait retirer 7,2 MB
+d'un binaire dont 4,6 MB sont les tables de déroulement que le contrat d'erreur d'UniFFI impose et
+dont le reste est exactement l'inventaire que cette note exige 1:1. Les leviers RESTANTS, avec leur
+prix ou leur raison:
+
+- `panic = "abort"` — −4,6 MB de métadonnées, mais un panic cesse d'être un `NzError` et tue le
+  processus: perte de fonction (règle 3), refusé.
+- `--icf=safe` — mesuré AVANT `all`, il ne plie RIEN (sortie identique au bit près): un binaire Rust
+  prend l'adresse de presque tout (objets-trait, glu de `Drop`). C'est `all` ou rien.
+- `-Zbuild-std` + `panic_immediate_abort`, `-Zfmt-debug=none` — nightly seulement; la toolchain est
+  épinglée à 1.99.1 et le restera.
+- `--no-eh-frame-hdr` — −718 116 B, mais le dérouleur retombe sur une recherche linéaire à CHAQUE
+  panic: c'est le chemin d'erreur, refusé.
+- retirer `h2` (−327 908), les décodeurs symphonia mp3/aac/isomp4 (−271 012), `quinn` (−291 740):
+  des contrats (HTTP/2 derrière un proxy, les fichiers locaux) ou des fonctions livrées, pas de la
+  graisse.
+
+Donc la cible « 9 MB » était celle d'un binaire qui ne portait que le moteur audio (MB3a); elle est
+remplacée par la mesure: **plafond 17 000 000 B**, qui attrape un doublement et laisse passer une
+retouche. La doc n'entretient pas une cible qu'aucune fonction ne permet.
+
+**L'APK: un par ABI, l'universel gardé.** Le `.so` était 90 % de l'APK et l'universel payait trois
+ABIs qu'un appareil ne charge jamais. `splits { abi { … isUniversalApk = true } }`:
+
+| APK release | avant | après |
+|---|---|---|
+| universel (3 ABIs) | 62 884 495 | **54 289 031** (−13,7 %) |
+| arm64-v8a | — | **21 373 643** |
+| armeabi-v7a | — | 16 502 411 |
+| x86_64 | — | 25 729 918 |
+
+La cible 45 MB est celle d'un TÉLÉCHARGEMENT: chaque APK par ABI la tient largement (20,4 / 15,7 /
+24,5 MB contre 60,0 MB avant). L'universel reste produit — l'app se pose en `adb install` et par
+`/api/android/apk`, il n'y a pas de bundle Play à qui demander l'ABI — et vaut 51,8 MB; le supprimer
+pour éliminer x86_64 a été refusé (l'ancienne app le livrait: règle 7). Les quatre APK partagent le
+même `versionCode` (2 000 001 à la mesure), donc le chemin de mise à jour ne change pas; `ci-emulator.sh`
+et `measure.sh` préfèrent `app-universal-release.apk`. `classes.dex` reste 8 293 956 B: JNA + les
+liaisons UniFFI générées + Compose, UniFFI 0.32 n'a pas de mode sans JNA et R8 fait déjà le reste —
+suivi, pas de coupe.
+
+**La garde.** `mobile/tools/size-guard.sh`, appelé par `mobile.yaml` après la vérification de
+signature, refuse un `.so` ou un APK au-dessus de son plafond (= mesuré + 5 %) et nomme l'artefact,
+la mesure, le plafond et le dépassement. C'est ce qui manquait: le doublement MB3a → MQ2 compilait,
+jouait, et ne rougissait nulle part. Le même passage vérifie les **quatre** APK (signature v1/v2/v3,
+alignement, id de paquet) et qu'ils s'accordent sur `versionCode`.
+
+**Règles qu'une mesure a apprises** (chacune a coûté un build):
+
+- **Avec `codegen-units = 1`, `lto = "fat"` ne change RIEN**: +384 B et 3,5× le temps de lien. Le
+  conseil « fat LTO, le plus gros levier » ne vaut que sans CGU unique — mesurer avant de le suivre.
+- **Un drapeau de lien Android dans le `RUSTFLAGS` exporté tue le build HÔTE**: `--pack-dyn-relocs=android`
+  a fait SIGSEGV `proc-macro2` et `quote` (le chargeur glibc ne lit pas l'APS2 d'Android). Les trois
+  drapeaux sont posés sur la commande `cargo ndk` seule, comme `-lc++abi` l'était déjà.
+- **`--icf=safe` ne plie rien** dans un binaire Rust; `all` vaut 1,07 MB et ne doit toucher aucune
+  fonction dont l'ADRESSE est comparée (l'app n'en compare aucune; le parcours de l'émulateur joue
+  sur cette bibliothèque).
+- **`opt-level = "z"` global + 13 exceptions à `3`** est le bon partage: 9,2 % gagnés, 4,8 % rendus
+  aux boucles chaudes (audio, DSP, analyse, mondes).
+
+**Vérifié** (émulateur 5620, API 35 x86_64, KVM, swiftshader, `-no-audio`, allumé pour ce lot
+seulement — deux autres workers tenaient 5640 et 5660 — puis éteint par son PID):
+
+- **L'APK universel release s'installe et JOUE** : `JourneyCapture` a peint « Accueil », cherché
+  « storm », ouvert la fiche album, tapé « Lire » et vu la barre dire **« Pause » en 278 ms** (MQ2 :
+  323 ms) sur un FLAC archivé, puis glissé les 8 000 favoris. Le parcours s'arrête ensuite sur
+  `flingPlaylist` (« no card titled « Playlist 0 » within 20000ms ») : l'écran Playlists était
+  encore à « Chargement… » au bout des 20 s du harnais sur une machine à trois émulateurs, et le
+  rendu à la main juste après montre **60 playlists et la carte « Playlist 0 »** — un délai de
+  banc, pas un défaut du binaire (aucun des changements de ce lot ne touche un écran).
+- **Démarrage à froid, pas de régression** (`measure.sh startup`, `StartupBenchmark`, 10 itérations
+  sur le même émulateur) : **p50 613,2 ms / p95 et p99 640,3 ms** sans profil (MQ2 : p50 633,1 /
+  p95 1 247) et **p50 586,5 / p95 1 217,4 ms** avec `UseIfAvailable` (MQ2 : p50 687,3). Le même
+  passage a montré que `:baselineprofile:connectedBenchmarkReleaseAndroidTest` **installe et lance
+  l'app avec les splits** (« Starting 2 tests on emulator-5620 ») : le risque des splits côté
+  `InstallVariantTask` est levé.
+- **`readelf -d`** : `libaaudio libdl liblog libm libc` sur les trois ABIs, et
+  `build-android.sh --check-libs` sur les bibliothèques DÉPAQUETÉES de l'APK universel répond 0 —
+  pas de `libc++_shared` (l'incident MB3b reste couvert, sur le fichier qui part vraiment).
+- `--icf=all` ne peut pas changer un comportement ici: `grep` sur tout le Rust atteignable ne trouve
+  **aucune comparaison d'adresse de fonction** (les seuls `as *const ()` sont la table `#[used]` des
+  quatre symboles JNI de MB3a, jamais comparée).
+- `size-guard.sh` passe sur les sept artefacts et **échoue (exit 1)** sur un artefact absent ou
+  au-dessus de son plafond — les deux chemins ont été lancés.
+
+**Sources** (recherchées avant d'inventer): [The Cargo Book, *Profiles*](https://doc.rust-lang.org/cargo/reference/profiles.html)
+(`lto`, `codegen-units`, `opt-level`, `panic` — ce que chaque réglage change),
+[bitdrift, *Optimizing bitdrift's Rust mobile SDK for binary size*](https://blog.bitdrift.io/post/optimizing-rust-mobile-sdk-binary-size)
+(opt-level s/z + CGU 1, strip, fat LTO, et **la garde de taille en CI** comme pratique),
+[The Rust Performance Book, *Build configuration*](https://nnethercote.github.io/perf-book/build-configuration.html)
+(fat vs thin, ce qui est « parfois » plus petit),
+[davthecoder, *Android 16 KB page size for Rust*](https://www.davthecoder.com/blog/rust-binary-size-android-16kb-page-size)
+(le même bloc de profil pour une `.so` Android, `panic = "unwind"` conservé),
+[Android, *Reduce your app size*](https://developer.android.com/topic/performance/reduce-apk-size) et
+[ABI splits](https://developer.android.com/studio/build/configure-apk-splits) (un APK par ABI, l'universel
+pour le sideload), [`ld.lld` `--icf`, `--pack-dyn-relocs`, `--exclude-libs`](https://lld.llvm.org/ELF/lld.html)
+(APS2 est lu depuis l'API 23, `DT_RELR` non — d'où `android` et pas `relr` sur un minSdk 26).
+
+**Files.** `mobile/rust/Cargo.toml` (profil), `mobile/rust/build-android.sh` (les trois drapeaux de
+lien), `mobile/android/app/build.gradle.kts` (splits), `mobile/tools/size-guard.sh` (nouveau),
+`mobile/tools/{ci-emulator,measure}.sh` (l'APK universel), `.github/workflows/mobile.yaml` (les quatre
+APK vérifiés, la garde), cette section et la ligne *APK* du tableau *Measures*.
 
 ### MB-SWAP — The native app becomes `neezer.apk` (wave 6)
 
