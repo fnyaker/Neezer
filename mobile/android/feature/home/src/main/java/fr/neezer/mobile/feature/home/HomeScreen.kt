@@ -566,43 +566,50 @@ private fun StylePicker(state: HomeModel.State, actions: HomeActions) {
 private fun ReleasesShelf(releases: uniffi.nz_ffi.ReleasesCardData, actions: HomeActions) {
     val colors = Sillon.colors
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                Modifier.weight(1f),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
-            ) {
-                Text("Nouveautés", style = Sillon.type.title, color = colors.tx)
-                Text(
-                    if (releases.count > 1u) "${releases.count} titres" else "${releases.count} titre",
-                    style = Sillon.type.mono,
-                    color = colors.dim,
-                )
-                if (releases.unseen > 0u) {
-                    Box(
-                        Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .background(colors.ac),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            releases.unseen.toString(),
-                            style = Sillon.type.labelSmall,
-                            color = colors.onac,
-                        )
+        // The header, then « Tout afficher » on its OWN row rather than stacked
+        // under the play button in one column (`routes/Home.svelte:252` puts the
+        // link below the action): a column of the two measures as wide as the
+        // LABEL, and at 200 % that squeezed the title « Nouveautés » down to
+        // « Nouveau-/tés » with « 3 titres » one character per line (measured on
+        // the 200 % render of MB5). Both sit at the same right edge either way;
+        // only the title's width changes, and this keeps the width it had before
+        // the door existed.
+        Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xxs)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.weight(1f),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+                ) {
+                    Text("Nouveautés", style = Sillon.type.title, color = colors.tx)
+                    Text(
+                        if (releases.count > 1u) "${releases.count} titres" else "${releases.count} titre",
+                        style = Sillon.type.mono,
+                        color = colors.dim,
+                    )
+                    if (releases.unseen > 0u) {
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(colors.ac),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                releases.unseen.toString(),
+                                style = Sillon.type.labelSmall,
+                                color = colors.onac,
+                            )
+                        }
                     }
                 }
-            }
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
-            ) {
                 NzIconButton(
                     glyph = NzGlyph.Play,
                     contentDescription = "Tout lire",
                     onClick = { actions.playAllNew() },
                 )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 NzButton(
                     text = "Tout afficher",
                     onClick = { actions.openReleases() },

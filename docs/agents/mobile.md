@@ -6472,19 +6472,22 @@ cast sur `event.me` est refusé (propriété `val` d'un AUTRE module Gradle) : l
 (`DiscoveryEntries.kt`), donc une seule route pour la porte et la page, jamais un `NavController`
 dans l'écran.
 
-**Pourquoi une colonne et pas deux boutons côte à côte.** À 360 dp, l'en-tête porte déjà le titre,
-le compte (« N titres ») et la pastille des non-vus ; un troisième élément en ligne écrasait le
-titre. Le SPA empile aussi son lien sous l'action de lecture. La première rangée garde `weight(1f)`,
-donc le bouton n'est jamais mesuré à la largeur du titre et son libellé ne s'ellipse pas.
+**Pourquoi « Tout afficher » sur sa propre rangée, et pas empilé sous le bouton de lecture.** Le
+plan empilait les deux dans une `Column` de l'en-tête ; cette colonne mesure alors la largeur du
+LIBELLÉ, et à 200 % elle a pris sur le titre : « Nouveautés » s'est coupé en « Nouveau-/tés » et
+« 3 titres » est passé à un caractère par ligne (mesuré sur le rendu 200 % de MB5, refait par ce
+lot). Sur sa propre rangée, le lien est au MÊME bord droit, et le titre garde la largeur qu'il avait
+avant que la porte existe — le rendu 200 % redevient celui de MB5. Un `spacedBy(NzSpacing.xxs)`
+garde les deux actions serrées à 360 comme à 600 dp.
 
 **+0 requête, +0 octet.** La porte ne fait que naviguer : `openReleases = { nav.go(AppLink.Releases) }`
 n'ajoute aucun appel FFI et ne lit rien. `grep -n "openReleases" mobile/android/feature/home/src/main`
-→ 4 lignes (le champ de `HomeActions`, son commentaire, l'`NzButton` et le câblage), zéro appel au
-noyau. La page Nouveautés lit sa propre route (MB14 : `GET /releases` 116 835 B à froid, 0 à chaud).
+→ 3 lignes (le champ de `HomeActions`, l'`NzButton` et le câblage), zéro appel au noyau. La page
+Nouveautés lit sa propre route (MB14 : `GET /releases` 116 835 B à froid, 0 à chaud).
 
-**Mesuré par la CI, pas par un appareil.** `:feature:home:testDebugUnitTest` passe de 26 à **27**
-tests : `HomeReleasesDoorTest` (Robolectric, `w360dp-h800dp-xhdpi`) compose le VRAI `HomeScreen`
-sur `HomeFixtures` et clique `hasText("Tout afficher") and hasClickAction()` → `openReleases`
-appelé **une** fois. La capture demandée par le lot (Encre, 360 dp, la carte avec le lien) reste à
-faire : l'image de ce worker n'a ni JDK, ni SDK Android, ni émulateur. `mobile.yaml` prouve à la
-place `testDebugUnitTest`, `lintDebug`, `assembleRelease` et `Emulator smoke`.
+**Mesuré, pas supposé.** `:feature:home:testDebugUnitTest` : **27 tests, 0 échec** sur la JVM (JDK
+17, Gradle 8.14.7, Robolectric en graphismes NATIFS, en 1 min) — dont `HomeReleasesDoorTest`
+(`w360dp-h800dp-xhdpi`, `hasText("Tout afficher") and hasClickAction()` → `openReleases` appelé
+**une** fois). Les images de l'accueil de MB5 sont refaites par ce lot (le rendu de la vraie page,
+pas une maquette) : `docs/agents/screenshots/mobile/MB5/mb5-encre-360dp.png` porte le lien, et le
+200 % (`mb5-encre-360dp-font200.png`) est inchangé pour le titre.
