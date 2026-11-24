@@ -69,7 +69,15 @@ fun SettingsEntry(
     section: String?,
     nav: NzNavigator,
     modifier: Modifier = Modifier,
-    isAdmin: Boolean = false,
+    /**
+     * M7 : la carte « Studio de genres » n'est dessinée que pour un
+     * administrateur. `null` — ce que passe la coquille, qui n'a pas de `Me` en
+     * main — laisse l'écran lire la vérité qu'il calcule DÉJÀ : `state.admin`,
+     * le drapeau de la session (`/api/me`, **+0 requête**). Un test le force.
+     * Un simple `false` par défaut aurait rendu la carte morte : le seul appel
+     * de `SettingsEntry` (`NavGraph.kt`) ne passe que deux arguments.
+     */
+    isAdmin: Boolean? = null,
     // The seam a JVM test uses (`SettingsScreenshotTest`): the app passes
     // nothing and gets the core's own service; a fake renders the same screen.
     service: SettingsService? = AppSettings.service(),
@@ -100,6 +108,9 @@ fun SettingsEntry(
         }
 
         val go: (String) -> Unit = { id -> nav.go(AppLink.Settings(section = id)) }
+        // `state.admin` est déjà l'administrateur de la session (le drapeau de
+        // `/api/me`, aucun appel) : la coquille n'a rien à transmettre.
+        val admin = isAdmin ?: state.admin
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.width(200.dp).fillMaxHeight()) {
@@ -123,6 +134,9 @@ fun SettingsEntry(
                         // opens the SPA's projector. One line, declared out of MB21's
                         // file list in its PR.
                         onOpenViz = { nav.openViz() },
+                        // M7: la carte du studio de genres, réservée à un administrateur.
+                        isAdmin = admin,
+                        onGenres = { nav.openGenres() },
                         // M2's two doors out of « Compte » and « Serveur ».
                         nav = nav,
                         modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -145,6 +159,8 @@ fun SettingsEntry(
                 section = section,
                 onBack = { nav.back() },
                 onOpenViz = { nav.openViz() },
+                isAdmin = admin,
+                onGenres = { nav.openGenres() },
                 nav = nav,
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             )
@@ -340,6 +356,10 @@ private fun SettingsPane(
     onBack: (() -> Unit)?,
     /** MB21: opens the full-screen visualiser (null in a screenshot test). */
     onOpenViz: (() -> Unit)? = null,
+    /** M7: la carte « Studio de genres », pour un administrateur seulement. */
+    isAdmin: Boolean = false,
+    /** M7: ouvre le studio de genres (null dans un banc qui n'a pas de coquille). */
+    onGenres: (() -> Unit)? = null,
     /** M2: les deux portes de la carte « Compte » (null dans le banc de captures). */
     nav: NzNavigator? = null,
     modifier: Modifier = Modifier,
@@ -379,7 +399,7 @@ private fun SettingsPane(
                 when (section) {
                     "playback" -> PlaybackSection(model, state)
                     "appearance" -> AppearanceSection(model, state)
-                    "viz" -> VizSection(model, state, onOpenViz)
+                    "viz" -> VizSection(model, state, onOpenViz, isAdmin = isAdmin, onGenres = onGenres)
                     "downloads" -> DownloadsSection(model, state)
                     "discovery" -> DiscoverySection(model, state)
                     // LN14's own screen, hosted (MB16's extension point).
