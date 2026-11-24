@@ -71,6 +71,13 @@ class ShellSmokeTest {
         rule.onNodeWithContentDescription("Bibliothèque Neezer").assertIsDisplayed()
     }
 
+    /** L'onglet Podcasts ouvre l'écran MB13, plus le placeholder MB0 (audit, bloqueur 2). */
+    @Test
+    fun podcastsTabOpensTheRealScreen() {
+        rule.onNode(hasText("Podcasts") and hasClickAction()).performClick()
+        rule.onNodeWithContentDescription("Podcasts Neezer").assertIsDisplayed()
+    }
+
     /**
      * The whole chain in one assertion: Réglages › Aide prints the version the
      * RUST crate reports (`nz_version()`), read through JNA from

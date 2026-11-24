@@ -6653,3 +6653,31 @@ appareil neuf, `oui` après acceptation.
 visualiseur », puis plus de feuille) restent à faire sur un appareil : l'image du worker n'a ni JDK,
 ni SDK Android, ni émulateur — même limite que M1, M2 et M11, écrites de la même façon. Le test
 instrumenté qui les produirait n'existe pas encore.
+
+### M4 — Podcasts : supprimer les stubs MB0 (delivered 2026-11-24)
+
+**La règle.** L'onglet Podcasts et la page d'une émission composent les écrans MB13 livrés. Les deux
+`PodcastEntry`/`ShowEntry` de `PodcastEntries.kt` (les placeholders MB0) sont **supprimés**, pas
+doublés : une surcharge à paramètres par défaut ne gagne pas la résolution quand un stub de même nom
+existe dans le même paquet — le stub gagne (le moins de paramètres), donc `NavGraph.kt` composait le
+placeholder pendant que les tests du vrai écran passaient. C'est le bloqueur 2 de l'audit.
+
+**Un marqueur, jamais une phrase de l'écran.** Les deux racines portent un `contentDescription`
+stable — `PodcastsEntry.kt#PODCASTS_MARKER` (« Podcasts Neezer ») et
+`ShowScreen.kt#SHOW_MARKER` (« Podcast Neezer ») — parce qu'aucun texte de la grille ni de la page
+n'est littéral : le titre de l'émission vient du serveur, et la grille est vide, en squelette ou en
+échec selon l'état. C'est la règle de `HOME_MARKER` et `LIBRARY_MARKER`. `ci-emulator.sh` et
+`ShellSmokeTest` lisent donc le marqueur, pas une phrase du stub qui a disparu.
+
+**Preuves de forme (rejouables).** `grep -rn "PodcastEntries" mobile/` ne rend rien ;
+`grep -rn "arrivent avec le lot MB13" mobile/` ne rend rien ; `bash -n mobile/tools/ci-emulator.sh`
+passe. `NavGraph.kt` lisait déjà `PodcastsEntry` / `ShowEntry` : aucun changement de navigation, la
+route `Routes.Show` existait et `AppLink.Podcast` y menait.
+
+**Mesuré.** **+0 requête, +0 octet** : le lot ne touche ni le noyau Rust, ni une route, ni une
+requête ; les seuls ajouts sont deux `semantics` et une constante. `ShellSmokeTest` passe de 4 à 5
+tests (`podcastsTabOpensTheRealScreen`), et la sonde rend `door=Podcasts opened=1` avec le même
+`doors_expected=6`. Les captures demandées par le plan (l'onglet réel, une page d'émission) n'ont pas
+été produites : l'image du worker n'a ni JDK, ni SDK Android, ni émulateur, ni `/dev/kvm`. La preuve
+fonctionnelle est la CI (`mobile.yaml`, job *Emulator smoke*), qui ouvre la porte et affirme le
+marqueur.

@@ -218,7 +218,12 @@ fun ShowScreen(
     toast: @Composable (String) -> Unit = {},
 ) {
     val colors = Sillon.colors
-    Box(modifier.fillMaxSize().background(colors.bg)) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .semantics { contentDescription = SHOW_MARKER }
+            .background(colors.bg),
+    ) {
         when {
             state.loading && state.show == null -> {
                 Column(Modifier.padding(NzSpacing.pageX)) {
@@ -968,3 +973,11 @@ internal fun rememberPosition(player: PodcastsPlayer, active: Boolean): androidx
             delay(250)
         }
     }
+
+/**
+ * Le marqueur de la page d'une émission, pour la même raison que
+ * [PODCASTS_MARKER] : le stub MB0 supprimé par ce lot, aucun titre d'émission
+ * n'est un littéral (il vient du serveur). Posé sur la racine, il est présent
+ * dans tous les états — squelettes, page chargée, échec.
+ */
+const val SHOW_MARKER = "Podcast Neezer"
