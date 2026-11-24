@@ -538,16 +538,17 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 
 ### Measures (every lot that touches what they measure writes them in its PR)
 
-| Measure | How | Target (emulator x86_64, KVM, swiftshader; real phone numbers reported beside) |
+| Measure | How | Measured (emulator-5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, 2026-11-24; no real phone was attached — `adb devices` empty — so no real-phone column exists yet) |
 |---|---|---|
-| Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID ≤ 500 ms; TTFD (home painted from cache, `reportFullyDrawn`) ≤ 900 ms |
-| Tap → sound | `PlayerApi.output_stats()` carries `tap_ns` (Kotlin's tap instant passed in the command) and `first_audible_ns` (first rendered frame above −60 dBFS); difference read from events, not a clock poll | play cache/download ≤ 150 ms; archived track on the LAN ≤ 800 ms; first play generated server-side ≤ 1.5 s |
-| RAM | **Counted bytes** of the Rust stores (`NzCore::memory()` — queue, lists, caches in memory, decoded covers held by Coil via its `MemoryCache.size`); PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`, never a shared test process) as a secondary figure | queue of 4 000 ≤ 4 MB counted; idle on home PSS ≤ 120 MB; 30 min of playback: counted bytes flat (no growth > 1 %) |
-| CPU / battery | `/proc/<pid>/stat` utime+stime over 30 min of playback, screen off (`input keyevent KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle`); same files through a stock Media3 ExoPlayer baseline APK | ≤ 1.3× the ExoPlayer baseline; analysis thread at 0 % while no view is visible |
-| Network | `NzCore::stats()` per screen tag, cold and warm | ≤ the SPA's own count for the same screen (`webapp/test/requests/run.mjs`); warm open of a visited screen: 0 blocking requests |
-| Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | p95 frame ≤ 16.7 ms, p99 ≤ 25 ms, 0 frozen frames (> 700 ms) |
-| Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | **0** over 30 min screen off + Doze, on Wi-Fi and on the emulator's throttled `gsm`/`edge` network profile |
-| APK | `apkanalyzer apk file-size`, per ABI split and universal | universal ≤ 45 MB, arm64-v8a split ≤ 18 MB; `libnz_ffi.so` arm64 ≤ 9 MB |
+| Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID **p50 633,1 ms / p95 1 247 / p99 1 247 ms** without a profile; **p50 687,3 / p95 1 046 / p99 1 046 ms** with `UseIfAvailable` on an APK that carries none (the profile is still owed, see MQ2). **TTFD: not measured** — the shell never calls `reportFullyDrawn()`; the target was ≤ 900 ms. |
+| Tap → sound | `PlayerApi.output_stats()` carries `tap_ns` (Kotlin's tap instant passed in the command) and `first_audible_ns`; the journey measures tap → the bar's « Pause » state (`SystemClock.uptimeMillis`), an upper bound of the engine's own pair | album « Lire » → bar **323 ms** (bar showed « Pause »; AAudio opened in the same millisecond as the `load`); the 4 000-track playlist's « Lire » (first title transcoded by the server) **1 417 ms**, then **122 ms** on a warm second run. Targets were 150 / 800 / 1 500 ms. |
+| RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). The counted bytes are **not measured**: `Assistance` builds its report only when « Partager le rapport » is tapped, so the screen never draws `mémoire comptée` (follow-up: build it on open). The 30-minute flat-growth check is therefore also owed. |
+| CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`), 10 minutes; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | app **14 110 ms / 601 s = 2,348 % of one core** (14 titles, the queue then looped — see the hand-over defect below); ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,43× the baseline**, well under the **1,3×** threshold that reopens the engine decision. MB3c's own 30-minute run measured 52 420 ms / 1 755 s = 2,99 %. |
+| Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
+| Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open: **p50 14,6 / p95 562,5 ms**, 0 frozen frames (> 700 ms). The scroll budgets (p95 ≤ 16,7, p99 ≤ 25) are MET on the emulator; the player's first frame is NOT (the 512 px sleeve is decoded in the frame) — follow-up: decode it off the frame. |
+| Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. The app's own counters are not in `Assistance` (same follow-up as RAM), and **rebuffers have no external source**. The throttled `gsm`/`edge` profile was not run. |
+| APK | `apkanalyzer`/`measure.sh apk` on the release build | universal **62 884 495 B (60,0 MB)** — target ≤ 45 MB, MISSED; `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **19 830 856 B (18,9 MB)**, armeabi-v7a 13 172 328, x86_64 23 849 624 — the 9 MB target is MISSED by 2,2×. The universal APK ships three ABIs: per-ABI splits and a smaller Rust feature set are the follow-up (the lot's acceptance records the gap). |
+| Worlds | — | **non livré — MB22/MB23 en pause à la demande de l'utilisateur (2026-11-23)**. |
 
 ## Worker rules (mandatory in every lot; each prompt repeats them)
 
@@ -5688,57 +5689,92 @@ the lot's list, declared in the PR — `nz-core/src/lib.rs` (one `pub mod auto;`
 and `playback/.../NzMediaService.kt` (the tree is registered once the session
 exists, and `onSetMediaItems` recognises a node id and the tree's own titles).
 
-### MQ2 — The whole journey, measured (wave 5)
+### MQ2 — The whole journey, measured (delivered 2026-11-24)
 
-**Goal.** The desktop's D17 for the phone: one scripted journey, every measure of *Measures*, real
-numbers, and a Baseline Profile generated from it. **Depends on**: every MB lot (MB23 may lag: then
-the worlds row says so). **Exclusive files**: `baselineprofile/src/main/**/Journey*.kt`,
-`docs/agents/screenshots/mobile/MQ2/`, the generated `baseline-prof.txt` (in `:app`'s `src/main/`,
-the one file of `:app` this lot writes).
-**Journey.** Cold start on a warm cache → home → search "a" → album → play (tap→sound) → library
-favourites (8 000) fling → playlist (4 000) → full-screen player → queue drag → lock screen 30 min with
-Doze over 40 titles → unlock → download a 50-track playlist while playing → airplane mode → play the
-downloads → Réglages → back. On the emulator; on a real phone over `adb` too if one is connected
-(never required; say which).
-**Acceptance.** Every target of *Measures* met or the gap explained with its cause and a follow-up lot;
-the CPU-time comparison against the stock ExoPlayer baseline APK written (the engine decision's
-1.3× threshold); request/byte counts per screen ≤ the SPA's; the numbers written in this note's
-*Measures* table (replacing targets by measured values).
+**What landed.** One scripted journey — the desktop's D17 for the phone — every measure of
+*Measures* taken through it on the headless emulator, and the Baseline Profile's generator for the
+release.
 
-```text
-Tu es le worker du lot MQ2 (parcours complet mesuré) de la nouvelle app mobile Neezer. Lis CLAUDE.md,
-docs/agents/mobile.md EN ENTIER (« Measures » surtout), docs/agents/desktop.md (D17).
-Objectif : le parcours scripté de la section MQ2 sur l'émulateur sans affichage (et un vrai téléphone
-si branché), toutes les mesures du tableau « Measures », la comparaison CPU écran éteint avec l'APK de
-référence ExoPlayer, le Baseline Profile généré depuis ce parcours.
-Fichiers à toi seul : baselineprofile/src/main/**/Journey*.kt, baseline-prof.txt de :app,
-docs/agents/screenshots/mobile/MQ2/.
-Acceptation : chaque cible atteinte ou l'écart expliqué avec sa cause et un lot de suite ; les valeurs
-mesurées remplacent les cibles dans le tableau « Measures ».
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/mq2, PR « test(mobile): MQ2 the whole journey, measured », CI verte, rebase +
-diff --stat, merge, `ao report --done`.
-```
+- `Journey.kt` — the walk, as the steps a person takes: Accueil → recherche « storm » → onglet
+  Albums → fiche album → « Lire » → Bibliothèque · Titres (8 000 favoris, 4 flings) → Playlists →
+  la playlist de 4 000 titres (4 flings) → « Lire » → lecteur plein écran par « Reprendre » → sa
+  file (une ligne glissée) → Réglages › Assistance → le visualiseur → la playlist de 50 titres.
+  Chaque étape attend un nœud que SEUL son écran dessine et échoue en le nommant ; sans le banc
+  (`perf-server.sh` + un compte), elle est **sautée avec sa cause** (`assumeTrue`), jamais verte à
+  tort.
+- `JourneyBenchmark.kt` (le parcours en `FrameTimingMetric`), `JourneyListsBenchmark.kt` (favoris
+  8 000, playlist 4 000, ouverture du lecteur — les trois chiffres du tableau), `JourneyLongTest.kt`
+  (50 titres téléchargés pendant qu'un disque joue, mode avion, les téléchargements joués, puis le
+  soak écran éteint + Doze), `JourneyProfileGenerator.kt` et `JourneyCapture.kt` (les captures).
+- `docs/agents/screenshots/mobile/MQ2/` — dix captures du VRAI écran (accueil, recherche, album,
+  favoris 8 000, playlist 4 000, lecteur, rapport d'aide, visualiseur, playlist à télécharger,
+  rapport de diagnostic), prises par le test sur l'émulateur sans affichage.
+
+**Les deux défauts que le parcours a trouvés avant de pouvoir mesurer** (corrigés par la PR #380,
+fusionnée avant celle-ci) : rien ne démarrait `NzMediaService` (un tap chargeait la file et
+n'ouvrait ni sortie ni session), et la mini-barre ne suivait pas l'état (son modèle lisait
+`snapshot()` une fois, sans `PlayerFeed`), ce qui rendait le lecteur plein écran inatteignable.
+
+**Mesuré sur cette machine** (émulateur 5660, API 35 x86_64, KVM, swiftshader, `-no-audio`,
+`perf_api.py --serve --archived --favorites 8000 --audio tests/assets/issue133.flac`, app
+`benchmark`, session semée comme MB25) — les nombres sont dans le tableau *Measures*, avec leur
+mode d'emploi. En clair : démarrage à froid **633 ms p50** (TTID) sans profil ; tap → barre
+**323 ms** sur un album archivé ; **2,348 %** d'un cœur pendant la lecture écran éteint contre
+**5,476 %** pour l'ExoPlayer de référence (**0,43×**, le seuil de 1,3× n'est pas approché) ;
+**36 requêtes** pour tout un parcours, une par écran, aucune en éventail ; les deux grandes listes
+tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non (p95 562,5 ms).
+
+**Règles qu'une mesure a apprises** (chacune a coûté une exécution) :
+
+- **La tâche `connected…AndroidTest` désinstalle l'app à la fin** : elle efface la session semée et
+  le parcours suivant mesure une app sans compte. Le harnais lance `am instrument` sur l'app déjà
+  installée (`~/.cache/neezer-mq2/device.sh`, matériel de travail, jamais committé) : l'app garde
+  ses données d'une classe à l'autre.
+- **Un `am instrument` brut ne reçoit AUCUN argument du module** : sans
+  `-e androidx.benchmark.suppressErrors EMULATOR`, Macrobenchmark refuse l'émulateur
+  (`ERRORS (not suppressed): EMULATOR`) même quand `defaultConfig` le déclare.
+- **`println` d'un test instrumenté n'arrive pas sur la console** : il est dans logcat sous
+  `System.out` (`adb logcat -s System.out | grep MEASURE`) — c'est là que les nombres d'un run se
+  lisent, et un nombre qui n'existe qu'à l'écran n'est pas une mesure.
+- **Dans Compose, l'action de tap vit sur le parent fusionné** : le nœud `Text` du libellé répond
+  `clickable=false`, donc cliquer ses coordonnées fonctionne là où une recherche `isClickable` ne
+  trouve rien ; une carte de grille est une colonne cliquable SANS texte (on clique le premier nœud
+  cliquable sous le titre de section).
+- **L'onglet Bibliothèque RESTAURE sa pile** : revenir dessus après une playlist rouvre la playlist,
+  et attendre le marqueur de la bibliothèque attend indéfiniment ; on sort avec Retour.
+- **La section « Sans dossier » des playlists démarre PLIÉE**, et son chevron est le seul bouton :
+  taper le libellé ne déplie rien (une capture l'a montré alors que l'arbre ressemblait à une liste
+  vide).
+- **Un filtre montre sa propre requête** : chercher la carte « Playlist 0 » trouve d'abord le champ
+  qui contient « Playlist 0 » ; exclure `android.widget.EditText` est la différence entre ouvrir la
+  playlist et taper dans le vide.
+- **Le tap de la mini-barre ne fait rien dans cette version** : `NavGraph.kt` monte `MiniPlayer()`
+  sans `onClick` (son défaut est un no-op). Le parcours passe par « Reprendre » ; le câblage est un
+  suivi (`:app`, fichier d'un autre lot).
+- **Un fichier plus court que sa durée déclarée fait rejouer le même titre** : avec 90–420 s de
+  métadonnées pour un FLAC de 45 s, le lecteur recharge le même titre à 43,5 s en boucle. La fixture
+  ne doit pas mentir sur ce qu'elle sert.
+- **Derrière un écran éteint, la file cesse de s'enchaîner après quelques minutes** : mesuré deux
+  fois (22 puis 14 titres distincts sur 30 minutes, puis la même ligne rechargée à 43,5 s toutes les
+  14 s). C'est un défaut de lecture (le soak du plan « 40 titres » n'a pas pu être tenu), pas de la
+  fixture : suivi pour MB3b/MB3c — la mesure CPU a donc été faite sur les 10 premières minutes et
+  l'ExoPlayer sur la même fenêtre.
+- **`Assistance` ne construit son rapport qu'au tap de « Partager le rapport »** : la mémoire
+  comptée, les requêtes et les octets par étiquette ne sont jamais dessinés. D'où deux trous dans le
+  tableau (mémoire comptée, rebuffers) et un suivi : construire le rapport à l'ouverture de l'écran.
+
+**Ce qui reste dû, et à qui** : le Baseline Profile — `JourneyProfileGenerator` existe et compile,
+mais `BaselineProfileRule` **saute l'émulateur** (« Skipping test because it's running on emulator
+and `skipOnEmulator` is enabled », le garde de MQ1, toujours vrai avec `benchmark` 1.5.0 et
+`skipBenchmarksOnEmulator=false`) : un `.txt` complet pour ce parcours demande un téléphone branché,
+et aucun ne l'était. TTFD (aucun `reportFullyDrawn`) ; la taille de l'APK (60 MB, .so arm64 18,9 MB
+contre 45/9 visés) ; le premier cadre du lecteur ; les rebuffers ; le profil réseau `gsm`/`edge` ; le
+câblage de la mini-barre ; l'enchaînement de la file écran éteint.
+
+**Files.** `baselineprofile/src/main/java/fr/neezer/mobile/baselineprofile/Journey*.kt` (six files),
+`docs/agents/screenshots/mobile/MQ2/` (ten PNG), this section and the *Measures* table. **No**
+`app/src/main/baseline-prof.txt`: the generator above cannot run without a device, and committing a
+profile nobody generated would be a lie the next release ships.
 
 ### MB-SWAP — The native app becomes `neezer.apk` (wave 6)
 
