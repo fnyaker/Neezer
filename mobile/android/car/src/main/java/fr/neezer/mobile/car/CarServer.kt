@@ -18,9 +18,8 @@ import fr.neezer.mobile.bridge.NzBridge
  *   server" the whole app shares (session, pin, allow-lists). The car resolves
  *   the server-relative cover paths it is handed against it and nothing else;
  * - the **app is opened by its launcher intent**, not by a class: `:app` owns
- *   `MainActivity` and an activity-alias named after the OLD app's
- *   `SetupActivity`, and both are reachable through the package manager. That is
- *   also what keeps the car compiling when the shell moves.
+ *   `MainActivity`, this app's one launcher entry, and the package manager
+ *   resolves it. That is also what keeps the car compiling when the shell moves.
  */
 internal object CarServer {
     /** `scheme://host:port`, or "" when no server is configured (or no core). */
@@ -66,7 +65,7 @@ internal object CarServer {
 
     /**
      * The intent that brings the app to the person: the launcher entry the
-     * package manager knows (the `SetupActivity` alias), from a service — so it
+     * package manager knows (`MainActivity`), from a service — so it
      * carries `NEW_TASK` and clears the top, which is what the car's
      * notification and its "Ouvre Neezer…" toasts need.
      */
