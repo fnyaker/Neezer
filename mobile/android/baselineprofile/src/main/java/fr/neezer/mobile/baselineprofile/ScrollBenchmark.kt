@@ -6,6 +6,7 @@ import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Until
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -67,13 +68,18 @@ class ScrollBenchmark {
             check(inputRows == BenchTarget.LIBRARY_ROWS || inputRows == BenchTarget.QUEUE_ROWS) {
                 "unknown input size $inputRows"
             }
-            // The precondition, stated in the report rather than guessed: a
-            // scrollable container must be on screen, or there is nothing to
-            // time.
-            val list = device.findObject(By.scrollable(true))
+            // The precondition, stated in the report rather than guessed: ROWS
+            // must be on screen, or there is nothing to time. A scrollable
+            // container is not enough — on a fresh install the leaf draws an
+            // empty state (a static screen), the flings redraw nothing, and
+            // `FrameTimingMetric` fails with "Observed no renderthread slices in
+            // trace" (measured on emulator-5660, 2026-11-24; a skeleton that is
+            // still shimmering made it pass or fail with timing alone). The row's
+            // own ⋯ is the marker every long list draws.
+            val rows = device.wait(Until.findObject(By.descStartsWith("Plus d'actions pour")), 5_000)
             assumeTrue(
-                "$tab has no scrollable list yet (MB8/MB9): nothing to fling, so nothing to time",
-                list != null,
+                "$tab has no rows (no bench library): nothing to fling, so nothing to time",
+                rows != null,
             )
         },
     ) {
