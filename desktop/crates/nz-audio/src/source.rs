@@ -230,6 +230,22 @@ pub trait StreamOpener: Send + Sync {
     fn shutdown(&self) {}
 }
 
+/// The ticket that makes every source's `.part` UNIQUE.
+///
+/// The FINAL spool name is shared by (track, quality) — that is what a replay
+/// reads — but two sources can be alive for the same row at once: a seek then a
+/// jump, a retry, a prefetch and its current load. They used to share one
+/// `<final>.part`, and the loser's `Drop` removed the winner's file under the
+/// decoder: `lecture impossible : No such file or directory` and a queue that
+/// skipped (measured by `a_jump_after_a_pause_and_a_seek_renders`). The final
+/// rename is still one path; only the scratch is per source.
+static PART_TICKET: AtomicU64 = AtomicU64::new(1);
+
+fn part_path(final_path: &Path) -> PathBuf {
+    let ticket = PART_TICKET.fetch_add(1, Ordering::Relaxed);
+    final_path.with_extension(format!("part.{ticket}"))
+}
+
 /// The spool file name: a hash of (track, quality), never a path from the
 /// server (`docs/agents/desktop.md`, *Caches*).
 pub(crate) fn spool_path(dir: &Path, id: &str, quality: Quality) -> PathBuf {
@@ -411,7 +427,7 @@ impl HttpSource {
         // which serves exactly the rung that was asked for.
         let delivered = body.quality().unwrap_or(quality);
         let final_path = spool_path(dir, id, quality);
-        let path = final_path.with_extension("part");
+        let path = part_path(&final_path);
         let mut options = OpenOptions::new();
         options.create(true).write(true).truncate(true);
         #[cfg(unix)]
@@ -588,7 +604,10 @@ impl HttpSource {
             self.spoolers.abandon(ticket);
         }
 
-        let path = self.final_path.with_extension(format!("part.{target}"));
+        let ticket = PART_TICKET.fetch_add(1, Ordering::Relaxed);
+        let path = self
+            .final_path
+            .with_extension(format!("part.{ticket}.{target}"));
         self.temps.push(path.clone());
         let mut options = OpenOptions::new();
         options.create(true).write(true).truncate(true);

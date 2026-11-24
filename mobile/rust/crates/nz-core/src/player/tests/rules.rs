@@ -267,6 +267,69 @@ fn a_replaced_queue_starts_at_its_first_row() {
     player.shutdown();
 }
 
+/// The device test `NowPlayingDeviceTest#theTapToSoundDelayIsMeasuredOnOneClock`
+/// runs this exact sequence 20 times (play → pause → seek 0 → jump to the other
+/// row) and reads the engine's clock after the jump. A jump must render.
+#[test]
+fn a_jump_after_a_pause_and_a_seek_renders() {
+    let dir = TempDir::new("jump-after-pause");
+    let bench = Bench::start();
+    let cos = Fixture::Tone440.write(dir.path());
+    bench.track("9001", &cos);
+    bench.track("9002", &cos);
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+
+    let rows = vec![track_ref_of("9001", 3), track_ref_of("9002", 3)];
+    player.command(
+        Command::PlayQueue {
+            tracks: rows.clone(),
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+
+    for trial in 0..4u32 {
+        player.command(Command::Pause, 2);
+        let _ = pump_until(&mut sink, &player, 5.0, |s| {
+            matches!(
+                s.state,
+                PlayState::Paused | PlayState::Stopped | PlayState::Ended
+            )
+        });
+        player.command(Command::Seek { s: 0.0 }, 3);
+        let _ = pump_until(&mut sink, &player, 5.0, |_| {
+            player.position().position_s < 0.05
+        });
+        let index = trial % 2;
+        player.command(
+            Command::Jump {
+                index,
+                key: rows[index as usize].key.clone(),
+            },
+            4,
+        );
+        let start = player.position().position_s;
+        pump(&mut sink, 1.0);
+        let after = player.position().position_s;
+        println!(
+            "trial {trial} (jump {index}): {start:.3} s → {after:.3} s, state {:?}, index {:?}",
+            player.snapshot().state,
+            player.snapshot().index
+        );
+        assert!(
+            after > 0.05,
+            "trial {trial} never rendered (state {:?}, index {:?}, snapshot {:?})",
+            player.snapshot().state,
+            player.snapshot().index,
+            player.snapshot()
+        );
+    }
+    player.shutdown();
+}
+
 /// An empty queue stalls without inventing a row or a cause.
 #[test]
 fn an_empty_queue_plays_nothing() {

@@ -6038,6 +6038,14 @@ cause de la fixture.
    un titre qui s'arrête après ses quelques secondes. `announce_if_complete` refuse un corps vide ou
    plus court que son `Content-Length`, `nz-cache` refuse une publication de longueur nulle, et
    `local_path` ignore un fichier de 0 octet.
+5. **Deux chargements de la même ligne se marchaient dessus.** Un `seek` puis un `jump` sur la même
+   ligne ouvrent deux voix du même id : le second `Started` ressemblait à un `repeat=one` et
+   avançait la file, et les deux sources partageaient le même `<final>.part`, la perdante supprimant
+   le fichier de la gagnante (`lecture impossible : No such file or directory`, mesuré par
+   `a_jump_after_a_pause_and_a_seek_renders`). Un `load` de la même ligne au même point se replie
+   maintenant dans le `pending` ; chaque source a son propre `part` ; un `Started` de la ligne
+   suivante n'est un handover que si la voix courante du **moteur** est cette ligne. Le test
+   `NowPlayingDeviceTest` (20 taps alternés sur deux titres) repasse sur l'émulateur, 17,7 s.
 
 **Le correctif, en trois lignes de contrat** : `addSession(built)` et `follow(snapshot())` au
 `buildPlayer()` du service ; le transport appliqué sur le chemin de la commande et après chaque
@@ -6052,9 +6060,10 @@ suit le même état ; le préchargement de la ligne suivante reste sur la voie `
 - `nz-core` : ✗ `a_pause_stops_the_engine_and_a_play_resumes_it` (0,210 → 1,710 s sous PAUSED),
   ✗ `a_restored_queue_plays_when_resumed` (`Play` n'atteignait pas le moteur),
   `a_queue_whose_rows_lie_about_their_duration_still_advances` (garde la mesure de MQ2 : une durée
-  déclarée fausse n'arrête pas la file) et `a_replaced_queue_starts_at_its_first_row` (garde la
-  file neuve sur sa première ligne ; il ne reproduit pas la course sur un fichier local, la mesure
-  du défaut est celle de l'appareil — **5 lignes en 0,2 s**).
+  déclarée fausse n'arrête pas la file), `a_replaced_queue_starts_at_its_first_row` (garde la file
+  neuve sur sa première ligne ; il ne reproduit pas la course sur un fichier local, la mesure du
+  défaut est celle de l'appareil — **5 lignes en 0,2 s**) et `a_jump_after_a_pause_and_a_seek_renders`
+  (4 taps alternés : chaque jump rend un échantillon, et l'index reste celui de la ligne visée).
 - `nz-audio` : ✗ `a_short_or_empty_body_is_never_published` (4096 déclarés, 1000 lus : l'ancien
   `announce_if_complete` renommait le fichier et émettait `StreamComplete`).
 - `:baselineprofile` : ✗ `ScreenOffChainTest` — joue la playlist du banc, exige

@@ -479,6 +479,9 @@ struct Machine {
     /// The row a `load` was just issued for, so the engine's `Started` can tell
     /// a first start (or a `repeat=one` restart) from a gapless handover.
     pending_load: Option<String>,
+    /// Where the pending load starts, so a second load of the SAME row at the
+    /// SAME position collapses into it instead of stacking a second voice.
+    pending_start: f64,
     /// A fault the policy is retrying: the transport says "reprise", not
     /// "paused", and a STALL (the retry budget spent) goes back to Paused with
     /// its cause kept.
@@ -499,6 +502,7 @@ impl Machine {
             screen_on: true,
             ducked: false,
             pending_load: None,
+            pending_start: 0.0,
             retrying: false,
         }
     }
@@ -854,15 +858,32 @@ impl Player {
         let now = self.now_ms();
         self.tap_ns.store(tap_ns, Ordering::SeqCst);
         TAKEN.with(|taken| taken.set(0));
-        // A command that REPLACES the queue or the row drops the voices that
-        // belonged to the old one BEFORE the transport resumes them: a restored
-        // voice of the same id, resumed for a few milliseconds, ends and its
-        // `Ended` would be read against the new queue and eat its first rows.
-        let replacing = matches!(&cmd, Command::PlayQueue { .. } | Command::Jump { .. });
-        let (action, playing) = {
+        // A command that REPLACES the queue, or jumps to ANOTHER row, drops the
+        // voices that belonged to the old one before the transport resumes them:
+        // a restored voice of the same id, resumed for a few milliseconds, ends
+        // and its `Ended` would be read against the new queue and eat its first
+        // rows. A jump to the SAME row keeps its pending voice: a seek that is
+        // still opening at the same position is the one the jump wants, and
+        // dropping it left no voice at all (`a_jump_after_a_pause_and_a_seek_renders`).
+        let was_queue = matches!(&cmd, Command::PlayQueue { .. });
+        let was_jump = matches!(&cmd, Command::Jump { .. });
+        let engine_before = self.engine.current_id();
+        let (action, playing, replacing) = {
             let mut machine = self.lock();
             let action = machine.apply_command(cmd, now);
-            (action, machine.state.playing())
+            let new_row = machine
+                .state
+                .current()
+                .and_then(|entry| entry.reference())
+                .map(str::to_owned);
+            let replacing =
+                was_queue || (was_jump && engine_before.is_some() && engine_before != new_row);
+            if replacing {
+                // The pending load named a voice this command just dropped.
+                machine.pending_load = None;
+                machine.pending_start = 0.0;
+            }
+            (action, machine.state.playing(), replacing)
         };
         if replacing {
             self.engine.stop_current();
@@ -1337,13 +1358,26 @@ impl Player {
             start_s
         };
 
-        if same && position > 0.0 {
+        // Two loads of the SAME row at the SAME position while the first is
+        // still opening (a seek then a jump — `NowPlayingDeviceTest`'s 20 taps
+        // on two titles) must be ONE voice: two `Started`s of that id make the
+        // second look like a `repeat=one` restart and advance the queue (the
+        // device test's queue stalled on "trial 1 never rendered").
+        let collapses = {
+            let machine = self.lock();
+            machine.pending_load.as_deref() == Some(reference.as_str())
+                && (machine.pending_start - position).abs() < 0.001
+        };
+        if collapses {
+            tracing::debug!(id = %reference, position, "load collapsed into the pending one");
+        } else if same && position > 0.0 {
             self.engine.seek(position);
         } else {
             let quality = self.effective_quality();
             {
                 let mut machine = self.lock();
                 machine.pending_load = Some(reference.clone());
+                machine.pending_start = position;
             }
             if let Some(work) = work.as_deref_mut() {
                 self.prime(entry, work, true);
@@ -1766,11 +1800,19 @@ impl Player {
         // the one a load just asked for, nor the next one a gapless handover
         // owes: it is a voice of a queue that no longer exists, and letting it
         // advance skipped the new queue (the same measured cascade as `Ended`).
-        if current.as_deref() != Some(id)
-            && pending.as_deref() != Some(id)
-            && next.as_deref() != Some(id)
-        {
-            tracing::debug!(id = %id, next = ?next, "a start for a row outside the queue");
+        // The next row is only a handover when the ENGINE's current voice IS it:
+        // a stale seek's voice for the next row starts after a jump, and the
+        // engine is already on the jumped row (measured: trial 2 of
+        // `a_jump_after_a_pause_and_a_seek_renders` skipped row 0).
+        let engine_current = self.engine.current_id();
+        let next_handover = next.as_deref() == Some(id) && engine_current.as_deref() == Some(id);
+        if current.as_deref() != Some(id) && pending.as_deref() != Some(id) && !next_handover {
+            tracing::debug!(
+                id = %id,
+                next = ?next,
+                engine = ?engine_current,
+                "a start for a row outside the queue"
+            );
             return;
         }
         let pending = {
@@ -1866,6 +1908,14 @@ impl Player {
                 machine.state.repeat() == Repeat::One,
             )
         };
+        {
+            // The row's voice never opened: nothing is pending for the Started
+            // any more, or a retry would collapse into a dead load.
+            let mut machine = self.lock();
+            if machine.pending_load.as_deref() == Some(id.as_str()) {
+                machine.pending_load = None;
+            }
+        }
         let action = {
             let mut machine = self.lock();
             machine.faults.failed(Some(&resolver), has_next, repeat_one)
