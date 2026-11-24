@@ -107,8 +107,8 @@ fn two_files_play_back_to_back_with_no_gap_and_no_click() {
     while let Ok(event) = events.try_recv() {
         match event {
             EngineEvent::Started { id, .. } if id == "b" => started_b = true,
-            EngineEvent::Ended { id } if id == "a" => ended_a = true,
-            EngineEvent::Ended { id } if id == "b" => ended_b = true,
+            EngineEvent::Ended { id, .. } if id == "a" => ended_a = true,
+            EngineEvent::Ended { id, .. } if id == "b" => ended_b = true,
             _ => {}
         }
     }

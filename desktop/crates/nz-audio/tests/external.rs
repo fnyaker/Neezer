@@ -112,8 +112,8 @@ fn the_external_sink_hands_over_gaplessly_and_sample_exactly() {
     while let Ok(event) = events.try_recv() {
         match event {
             EngineEvent::Started { id, .. } if id == "b" => started_b = true,
-            EngineEvent::Ended { id } if id == "a" => ended_a = true,
-            EngineEvent::Ended { id } if id == "b" => ended_b = true,
+            EngineEvent::Ended { id, .. } if id == "a" => ended_a = true,
+            EngineEvent::Ended { id, .. } if id == "b" => ended_b = true,
             _ => {}
         }
     }

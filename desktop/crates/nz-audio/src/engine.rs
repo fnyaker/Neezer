@@ -529,6 +529,14 @@ impl Engine {
         self.inner.send(MixerCmd::InstallCurrent(None));
     }
 
+    /// The highest voice generation this engine has allocated. A caller that
+    /// stops the voices records it and ignores every `Started`/`Ended` at or
+    /// below: those are voices the stop dropped, and an event already in flight
+    /// must not advance the queue the stop prepared.
+    pub fn max_generation(&self) -> u64 {
+        self.inner.gen_seq.load(Ordering::SeqCst)
+    }
+
     /// Queue the track that follows: decoded up to 0.5 s ahead, then idle, so
     /// the handover is a ring the mixer already has.
     pub fn preload_next(&self, id: &str, quality: Quality) {

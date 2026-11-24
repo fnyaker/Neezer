@@ -6044,8 +6044,11 @@ cause de la fixture.
    le fichier de la gagnante (`lecture impossible : No such file or directory`, mesuré par
    `a_jump_after_a_pause_and_a_seek_renders`). Un `load` de la même ligne au même point se replie
    maintenant dans le `pending` ; chaque source a son propre `part` ; un `Started` de la ligne
-   suivante n'est un handover que si la voix courante du **moteur** est cette ligne. Le test
-   `NowPlayingDeviceTest` (20 taps alternés sur deux titres) repasse sur l'émulateur, 17,7 s.
+   suivante n'est un handover que si la voix courante du **moteur** est cette ligne ; et un
+   `Started`/`Ended` dont la **génération de voix** est ≤ celle du dernier `stop_current` est ignoré
+   — le mixer peut livrer l'événement d'une voix déjà lâchée, et c'est ce qui a fait échouer
+   `NowPlayingDeviceTest` au tap 11 sur la CI. Le test (20 taps alternés sur deux titres) repasse
+   sur l'émulateur, 18,9 s.
 
 **Le correctif, en trois lignes de contrat** : `addSession(built)` et `follow(snapshot())` au
 `buildPlayer()` du service ; le transport appliqué sur le chemin de la commande et après chaque

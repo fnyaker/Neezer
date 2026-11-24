@@ -452,6 +452,10 @@ pub struct Player {
     streaming: Arc<AtomicBool>,
     tap_ns: AtomicU64,
     first_audible_ns: AtomicU64,
+    /// The highest voice generation a replaced queue/row dropped. A `Started`
+    /// or `Ended` at or below is a voice the stop killed after its event was
+    /// already queued, and it must not advance the new queue.
+    stop_generation: AtomicU64,
     duration: AtomicU64,
     buffered: AtomicU64,
     playing: AtomicBool,
@@ -775,6 +779,7 @@ impl Player {
             streaming,
             tap_ns: AtomicU64::new(0),
             first_audible_ns: AtomicU64::new(0),
+            stop_generation: AtomicU64::new(0),
             duration: AtomicU64::new(0),
             buffered: AtomicU64::new(0),
             playing: AtomicBool::new(false),
@@ -886,6 +891,8 @@ impl Player {
             (action, machine.state.playing(), replacing)
         };
         if replacing {
+            self.stop_generation
+                .store(self.engine.max_generation(), Ordering::SeqCst);
             self.engine.stop_current();
         }
         self.last_command_locks
@@ -1677,6 +1684,8 @@ impl Player {
         // BEFORE the new rows open, or its end/its preloaded neighbour start is
         // read against the new queue and advances it (measured: five rows eaten
         // in 0.2 s when a restored queue was replaced by a playlist).
+        self.stop_generation
+            .store(self.engine.max_generation(), Ordering::SeqCst);
         self.engine.stop_current();
         self.perform(effects, now, Some(work));
     }
@@ -1690,7 +1699,17 @@ impl Player {
                 id,
                 position_s,
                 duration_s,
+                generation,
             } => {
+                if generation <= self.stop_generation.load(Ordering::SeqCst) {
+                    tracing::debug!(
+                        id = %id,
+                        generation,
+                        floor = self.stop_generation.load(Ordering::SeqCst),
+                        "a start from a voice a stop already dropped"
+                    );
+                    return;
+                }
                 if let Some(duration) = duration_s {
                     self.duration.store(duration.to_bits(), Ordering::SeqCst);
                 }
@@ -1699,7 +1718,16 @@ impl Player {
                 self.playing.store(true, Ordering::SeqCst);
                 self.on_started(&id, position_s, now, work);
             }
-            EngineEvent::Ended { id } => {
+            EngineEvent::Ended { id, generation } => {
+                if generation <= self.stop_generation.load(Ordering::SeqCst) {
+                    tracing::debug!(
+                        id = %id,
+                        generation,
+                        floor = self.stop_generation.load(Ordering::SeqCst),
+                        "an end from a voice a stop already dropped"
+                    );
+                    return;
+                }
                 // The end belongs to the row the MACHINE names. A voice from a
                 // queue the person just replaced (or one a seek superseded) can
                 // finish after it: advancing on it skipped the new queue's first

@@ -41,9 +41,13 @@ pub enum EngineEvent {
         id: String,
         position_s: f64,
         duration_s: Option<f64>,
+        /// The voice's own generation (the mixer's ticket). The player ignores a
+        /// start/end older than the last `Engine::stop_current`, so a stopped
+        /// voice that was already in flight cannot advance the queue.
+        generation: u64,
     },
     /// The last queued voice ended: the queue is now silent.
-    Ended { id: String },
+    Ended { id: String, generation: u64 },
     /// One or more output callbacks ran out of decoded samples. `count` is the
     /// running total since the engine started, so a listener never has to add.
     Underrun { count: u64 },
@@ -157,12 +161,16 @@ impl EventBus {
                                         id: v.id,
                                         position_s: v.start_s,
                                         duration_s: v.duration_s,
+                                        generation,
                                     });
                                 }
                             }
                             MixerNote::Ended { generation } => {
                                 if let Some(v) = info.get(generation) {
-                                    bus.emit(EngineEvent::Ended { id: v.id });
+                                    bus.emit(EngineEvent::Ended {
+                                        id: v.id,
+                                        generation,
+                                    });
                                 }
                             }
                             MixerNote::Underrun => {
