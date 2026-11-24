@@ -6426,3 +6426,44 @@ définition est `val sessions` dans `NzBridge.kt`. `AccountDoorsTest` (Robolectr
 `openSetup()` une fois et `openLogin()` zéro. Le toast d'un vrai `401` n'est pas tenable en JVM
 (aucun producteur de `Session.Ended` sans `.so`) : il se prouve à l'émulateur, en invalidant le
 cookie côté banc — l'image du worker n'a ni JDK ni émulateur, donc ce lot ne l'a pas capturé.
+
+
+### M11 — Pochettes : fournir le chargeur (delivered 2026-11-24)
+
+**La règle.** Le seam des pochettes est fourni UNE fois, à la racine de composition
+(`MainActivity`, autour de `NzApp`), et il ne l'était pas. Le design system déclare
+`LocalNzCoverLoader = staticCompositionLocalOf<NzCoverLoader?> { null }` et peint la rainure
+déterministe dessous : un `null` ne casse rien, ne journalise rien et ne fait échouer aucun test —
+chaque pochette de l'app était donc sa rainure, y compris le fond du lecteur plein écran
+(`PlayerSheet.kt` passe `CoverImage(url = cover, sizeDp = 900.dp)`), l'accueil, la bibliothèque et
+les listes (31 fichiers dessinent une `CoverImage`). **Un seam dont la valeur par défaut « marche »
+est un piège silencieux : sa fourniture doit apparaître dans le diff de production, pas seulement
+dans un test.** `grep -rn "LocalNzCoverLoader provides" mobile/` doit rendre exactement **2** lignes
+— production et banc de composants ; 1 signifie que la fonctionnalité est morte.
+
+**Le pont est dans `:app`, pas dans `:bridge` — le plan se trompait, le cycle a tranché.**
+`designsystem/build.gradle.kts` porte `api(project(":bridge"))` (ses lignes dessinent des
+`TrackRow` UniFFI), donc une interface de `:designsystem` implémentée depuis `:bridge` serait un
+cycle de modules et `:bridge:compileDebugKotlin` ne configurerait plus. La séparation qui reste est
+celle des responsabilités : `:bridge` garde tout ce qui touche Coil (`CoilCovers.Image`, sur le
+`NzCoverRequest`/keyer/fetcher de MB2), et `MainActivity` porte l'objet de six lignes qui implémente
+`NzCoverLoader` et le `CompositionLocalProvider`. Aucun fichier hors du lot n'a bougé, et
+`bridge/build.gradle.kts` ajoute `libs.coil.compose` (`implementation` : `:app` ne voit pas
+`AsyncImage`, il appelle `CoilCovers`).
+
+**Ce qui change.** `CoilCovers.Image` = `AsyncImage` sur `NzCoverRequest(url, sizePx)`, donc Coil
+passe par le `Keyer` (une pochette est clé par URL **et** taille dessinée) et par `NzCoverFetcher`,
+qui demande le fichier au noyau (`screens.coverPath`, la voie « visible d'abord » : une pochette
+sortie de l'écran annule la coroutine et Rust abandonne son futur). `diskCache(null)` reste : le
+fichier est déjà dans `nz-cache` (300 Mo, LRU) et un second cache disque doublerait les octets et
+l'éviction. `contentDescription = null` : une pochette est décorative partout (le titre est lu par
+la ligne à côté), et `CoverImage` l'est aussi.
+
+**Coût d'un branchement.** Le diff **n'ajoute aucun appel FFI** : `cover_path` existait depuis MB2,
+et aucun octet ne part tant qu'aucune `CoverImage` n'a d'URL. Ce qu'il change est le contraire d'un
+coût : la première visite d'un écran télécharge ses pochettes (une requête par pochette visible, sur
+la voie des pochettes), les visites suivantes lisent le fichier et coûtent **0 octet**. La preuve
+chiffrée (`NzCore::stats()` froid puis chaud, deux captures d'émulateur à 360 dp) reste à faire sur
+un appareil : l'image de ce worker n'a ni JDK, ni SDK Android, ni émulateur — même limite que M1 et
+M2. Ce que la CI prouve à la place : `testDebugUnitTest`, `lintDebug`, **`assembleRelease`** (R8
+garde `AsyncImage`, le fetcher et le keyer) et `Emulator smoke`.
