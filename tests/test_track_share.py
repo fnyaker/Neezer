@@ -14,6 +14,7 @@ and the stream limiter answers 429 after its window.
 """
 
 import gzip
+import html
 import io
 import os
 import re
@@ -22,6 +23,7 @@ import subprocess
 import tempfile
 import unittest
 from datetime import timedelta
+from html.parser import HTMLParser
 from unittest import mock
 
 from neezer.config import DefaultConfig
@@ -61,6 +63,41 @@ def _flac(path, seconds=2):
         check=True,
         timeout=60,
     )
+
+
+#: The C0 controls and DEL: a row may carry them, a page or a header may not.
+_CONTROLS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class _Markup(HTMLParser):
+    """A page as a browser reads it: its elements, their attributes, and the text
+    of the elements named in ``text_of``.
+
+    The XSS test asserts on THIS, not on substrings: a title that broke out of an
+    attribute would add an element or an ``on*`` handler here, and one that was
+    merely escaped would read back as the same text (``convert_charrefs``).
+    """
+
+    def __init__(self, text_of=("h1",)):
+        super().__init__(convert_charrefs=True)
+        self.tags = []
+        self.texts = {}
+        self._wanted = set(text_of)
+        self._capturing = None
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, dict(attrs)))
+        if tag in self._wanted:
+            self._capturing = tag
+            self.texts.setdefault(tag, "")
+
+    def handle_endtag(self, tag):
+        if tag == self._capturing:
+            self._capturing = None
+
+    def handle_data(self, data):
+        if self._capturing:
+            self.texts[self._capturing] += data
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required for the Opus stream")
@@ -107,7 +144,7 @@ class TrackShareTestCase(unittest.TestCase):
 
     # -- fixtures ------------------------------------------------------------
 
-    def _deezer_track(self, sng_id, title="Deezer Song", archived=True):
+    def _deezer_track(self, sng_id, title="Deezer Song", archived=True, artist=None, album=None):
         from neezer.deezer import library
 
         root = library.get_root_folder(self.archive)
@@ -115,9 +152,9 @@ class TrackShareTestCase(unittest.TestCase):
             {
                 "SNG_ID": sng_id,
                 "SNG_TITLE": title,
-                "ART_NAME": "Artiste Test",
+                "ART_NAME": "Artiste Test" if artist is None else artist,
                 "ART_ID": "400",
-                "ALB_TITLE": "Album Test",
+                "ALB_TITLE": "Album Test" if album is None else album,
                 "ALB_ID": "410",
                 "DURATION": "200",
                 "TRACK_NUMBER": "1",
@@ -324,6 +361,88 @@ class TrackShareTestCase(unittest.TestCase):
         self.assertIsNotNone(nonce)
         self.assertIn(f"<script nonce='{nonce.group(1)}'>", page)
         self.assertNotIn("script-src 'unsafe-inline'", r.headers["Content-Security-Policy"])
+
+    #: Every shape a name field can carry. The public page reads rows the
+    #: owner's library filled from a provider, so these are what a stranger must
+    #: never be able to turn into markup — the question the 12 Semgrep findings
+    #: asked of this page, answered by this test.
+    HOSTILE_NAMES = (
+        "<script>alert(1)</script>",
+        '"><img src=x onerror=alert(1)>',
+        "</title><script>alert(2)</script>",
+        "javascript:alert(3)",
+        "titre\x00\x07\x1b[31mfin",
+    )
+
+    def test_hostile_names_never_become_markup_anywhere(self):
+        """The page, its preview tags, its oEmbed and the JSON keep a hostile
+        name as TEXT.
+
+        Five shapes go through title, artist and album: a script tag, an
+        attribute breakout, a ``</title>`` close, a ``javascript:`` URL and C0
+        controls. The H1 reads the name back (so the escaping is real, not a
+        blanking), the parsed page has no element or ``on*`` attribute the name
+        could have added, the oEmbed's ``html`` carries it escaped, and the
+        owner's list stays JSON. The public page never carries an account name —
+        that is why these three fields are the whole surface.
+        """
+        public = self._public()
+        for index, name in enumerate(self.HOSTILE_NAMES):
+            t = self._deezer_track(
+                str(700 + index), title=name, artist=name, album=name
+            )
+            link = self._make_link(self.owner, t)
+            clean = _CONTROLS.sub("", name)
+            shown = html.escape(clean, quote=True)
+            for url in (link["url"], link["url"] + "?embed=1"):
+                r = public.get(url)
+                self.assertEqual(r.status_code, 200)
+                page = r.get_data(as_text=True)
+                parsed = _Markup()
+                parsed.feed(page)
+                names = [tag for tag, _ in parsed.tags]
+                self.assertEqual(names.count("script"), 1, names)  # ours, nonce'd
+                self.assertEqual(parsed.texts["h1"], clean)
+                # The page's own cover is the only image it may carry, and no
+                # element may carry an inline handler.
+                self.assertLessEqual(names.count("img"), 1, names)
+                self.assertNotIn("iframe", names)
+                for tag, attrs in parsed.tags:
+                    for attr in attrs:
+                        self.assertFalse(attr.startswith("on"), (tag, attrs))
+                self.assertEqual(page.count("</title>"), 1)
+                self.assertNotIn("</title><script", page)
+                self.assertNotIn("\x00", page)
+                self.assertNotIn("\x07", page)
+                self.assertNotIn("\x1b", page)
+                # The name is still shown, escaped — a repair, not a deletion.
+                self.assertIn(shown, page)
+                for meta in re.findall(r"<meta\b[^>]*>", page):
+                    self.assertNotIn("<", meta[5:], meta)
+            # oEmbed: the name is text inside the iframe markup, never markup.
+            r = public.get("/api/oembed", query_string={"url": link["url"]})
+            self.assertEqual(r.status_code, 200)
+            body = r.get_json()
+            self.assertEqual(body["title"], clean)
+            snippet = _Markup(text_of=())
+            snippet.feed(body["html"])
+            self.assertEqual([tag for tag, _ in snippet.tags], ["iframe"], body["html"])
+            attrs = snippet.tags[0][1]
+            self.assertEqual(attrs["title"], clean)
+            self.assertEqual(
+                set(attrs),
+                {"width", "height", "src", "title", "loading", "frameborder", "allow"},
+                attrs,
+            )
+            self.assertNotIn("<img", body["html"])
+            # The owner's list is JSON, whatever the title holds: the value is
+            # the row's text, and the wire form escapes the controls.
+            listed = self.owner.get("/api/track-shares")
+            self.assertEqual(listed.mimetype, "application/json")
+            self.assertIn(
+                name, [row["track"]["title"] for row in listed.get_json()["links"]]
+            )
+            self.assertNotIn("\x00", listed.get_data(as_text=True))
 
     def test_a_dead_link_is_the_same_calm_page_whatever_the_cause(self):
         t = self._deezer_track("109")
