@@ -467,9 +467,7 @@ fn push_all(producer: &mut VoiceProducer, samples: &[f32], status: &VoiceStatus)
         let pushed = producer.push(&samples[offset..]);
         offset += pushed;
         if offset < samples.len() {
-            // 10 ms: the ring is 0.5 s, so a frame of granularity never reaches
-            // the output; 2 ms was 500 wakeups/s on the decoder thread.
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(2));
         }
     }
     true
