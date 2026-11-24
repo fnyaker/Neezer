@@ -543,7 +543,7 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 | Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID **p50 633,1 ms / p95 1 247 / p99 1 247 ms** without a profile; **p50 687,3 / p95 1 046 / p99 1 046 ms** with `UseIfAvailable` on an APK that carries none (the profile is still owed, see MQ2). **TTFD: not measured** — the shell never calls `reportFullyDrawn()`; the target was ≤ 900 ms. |
 | Tap → sound | `PlayerApi.output_stats()` carries `tap_ns` (Kotlin's tap instant passed in the command) and `first_audible_ns`; the journey measures tap → the bar's « Pause » state (`SystemClock.uptimeMillis`), an upper bound of the engine's own pair | album « Lire » → bar **323 ms** (bar showed « Pause »; AAudio opened in the same millisecond as the `load`); the 4 000-track playlist's « Lire » (first title transcoded by the server) **1 417 ms**, then **122 ms** on a warm second run. Targets were 150 / 800 / 1 500 ms. |
 | RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). The counted bytes are **not measured**: `Assistance` builds its report only when « Partager le rapport » is tapped, so the screen never draws `mémoire comptée` (follow-up: build it on open). The 30-minute flat-growth check is therefore also owed. |
-| CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`); 10 minutes for the ExoPlayer comparison, 31 minutes for the final app; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | **Après MQ2-follow-up** : app **48 200 ms / 1 864 s = 2,586 % of one core**, **42 titres distincts, 0 rechargement**, service de premier plan tenu 31 min (`SOAK` line in the section); le correctif seul, sans le réglage des sondes, mesurait **3,290 %**. MQ2's reference app run **14 110 ms / 601 s = 2,348 %** (14 titles, the queue then looped — the defect MQ2-follow-up fixed; sa session média était déjà détruite à la fin, `media_descriptions: 0`); ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,47× the baseline**, well under the **1,3×** threshold that reopens the engine decision (**7,12 %**). MB3c's own 30-minute run measured 52 420 ms / 1 755 s = 2,99 %. Les sondes événements/spool à 10 ms rendent 0,7 point ; le back-pressure du décodeur reste à 2 ms parce que 5 ms casse la listen party (**−1 770 ms** de placement), et ce dernier quart de point attend une notification par condition variable. |
+| CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`); 10 minutes for the ExoPlayer comparison, 31 minutes for the final app; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | **Après MQ2-follow-up** : app **64 200 ms / 1 865 s = 3,442 % of one core**, **42 titres distincts, 0 rechargement**, cache audio **vidé** avant le run (43 spools créés pendant → tout streamé), service de premier plan tenu 31 min (`SOAK` line in the section). MQ2's reference app run **14 110 ms / 601 s = 2,348 %** (14 titles, the queue then looped — the defect MQ2-follow-up fixed ; 10 min, service non-premier-plan, session média déjà détruite, `media_descriptions: 0`) ; ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,63× the baseline**, under the **1,3×** threshold that reopens the engine decision (**7,12 %**). MB3c's own 30-minute streamed run measured 52 420 ms / 1 755 s = 2,99 % (test app, no notification/UI) : le phone réel est à **1,15×** — le prix du premier plan. Les sondes événements/spool à 10 ms sont gardées (le fil d'événements pesait 0,8 %) ; le back-pressure du décodeur reste à 2 ms parce que 5 ms casse la listen party (**−1 770 ms**). |
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
 | Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open: **p50 14,6 / p95 562,5 ms**, 0 frozen frames (> 700 ms). The scroll budgets (p95 ≤ 16,7, p99 ≤ 25) are MET on the emulator; the player's first frame is NOT (the 512 px sleeve is decoded in the frame) — follow-up: decode it off the frame. |
 | Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. The app's own counters are not in `Assistance` (same follow-up as RAM), and **rebuffers have no external source**. The throttled `gsm`/`edge` profile was not run. |
@@ -6079,28 +6079,36 @@ pas 90–420) : écran éteint, `battery unplug`, `deviceidle enable all`, `forc
 Le test l'a imprimé lui-même, sans arrondi :
 
 ```text
-SOAK wall_s=1864 cpu_ms=48200 cpu_pct=2.586 distinct=42 items=[1,...,42] reloads=1
+SOAK wall_s=1865 cpu_ms=64200 cpu_pct=3.442 distinct=42 items=[0,...,41] reloads=0
 ```
 
-**42 titres distincts** (1 → 42) en **31 minutes**, **0 rechargement** : 42 titres en 1 864 s font
+**42 titres distincts** (0 → 41) en **31 minutes**, **0 rechargement** : 42 titres en 1 865 s font
 **44,4 s par titre**, le temps d'un fichier de 45 s — un rechargement ajouterait 45 s et un 43e
-titre. Le détecteur a compté **1** à 806 s : l'état de session a montré l'item 18 à **0 s** pendant
-une image (la position du titre suivant servie avec l'index précédent), l'image suivante était
-**l'item 19 à 8,7 s** — aucune nouvelle requête de flux, aucun son rejoué. Le service reste
-`isForeground=true foregroundId=20058 types=0x2` pendant tout le soak, le wake lock
-`Neezer:lecture` est tenu **31 min 50 s** (`ACQ=-31m50s793ms`), `media.audio_flinger` ne compte
-**aucun underrun**, `logcat` : **aucun** `Stopping service due to app idle`, aucun crash.
+titre. **Le cache audio a été vidé avant ce run** (`cache/neezer/audio`, 0 fichier) et **43 spools
+y ont été créés pendant** : chaque titre a été **streamé**, aucun ne vient d'un run précédent. Le
+service reste `isForeground=true foregroundId=20058 types=0x2` pendant tout le soak, le wake lock
+`Neezer:lecture` est tenu **31 min 50 s**, `media.audio_flinger` ne compte **aucun underrun**,
+`logcat` : **aucun** `Stopping service due to app idle`, aucun crash.
 
-**Le CPU, et la partie du prix qu'on ne peut pas retirer.** Le correctif seul (sans toucher aux
-boucles de sondage) mesurait **61 350 ms / 1 865 s = 3,290 %** sur ce soak ; les sondes des
-**événements** (2 → 10 ms) et du **spool** (5 → 10 ms) le ramènent à **48 200 ms / 1 864 s =
-2,586 %**. Le back-pressure du **décodeur** reste à **2 ms** : 5 ms suffit à casser la listen party —
-le test `a_guest_hears_the_host_within_a_millisecond` passe de **+0,0 ms** de médiane à **−1 770 ms**
-(et 4 → 38 chunks placés), et 10 ms donne 41 chunks et −1 650 ms. C'est un contrat mesuré, pas une
-préférence. Pour situer : **MB3c, le même moteur sur 30 min, mesurait 2,99 %** ; le **2,348 % de MQ2**
-est une mesure de 10 min d'un build **sans service de premier plan**, dont la session média était
-déjà détruite à la fin (`media_descriptions: 0`) — pas une référence de lecture continue. Le seuil de
-la décision moteur (1,3× l'ExoPlayer, **5,476 %**) est à **7,12 %** : le phone est à **0,47×**.
+**La leçon de mesure : la fixture ment aussi par son cache.** Un run précédent, parti avec les 73
+spools du run d'avant, a joué 28 titres en local et affichait **2,586 %** (et les runs encore plus
+anciens 1,5 %) — un chiffre flatteur qui ne décrit pas un téléphone en train de streamer. Vider
+`cache/neezer/audio` avant un soak est la seule façon de mesurer le chemin réseau ; le chiffre publié
+est celui du run vidé.
+
+**Le CPU, et la partie du prix qu'on ne peut pas retirer.** Le run streamé mesure **64 200 ms /
+1 865 s = 3,442 %** d'un cœur. Le back-pressure du **décodeur** reste à **2 ms** : 5 ms suffit à
+casser la listen party — `a_guest_hears_the_host_within_a_millisecond` passe de **+0,0 ms** de
+médiane à **−1 770 ms** (4 → 38 chunks placés), et 10 ms donne 41 chunks et −1 650 ms. Les sondes des
+**événements** (2 → 10 ms) et du **spool** (5 → 10 ms) sont gardées : le fil d'événements seul pesait
+**0,8 %** dans le profil des fils (`top -H`), et 10 ms n'a pas touché la party. Pour situer :
+**MB3c, le même moteur, le même émulateur, 40 titres streamés sur 30 min, mesurait 2,99 %** — le
+phone est à **1,15×**, le prix du service de premier plan, de la notification et de l'UI réelle que
+MB3c n'avait pas ; le seuil de la décision moteur (1,3× l'ExoPlayer **5,476 %** = **7,12 %**) est
+tenu à **0,63×**. Le **2,348 % de MQ2 n'est pas une référence de lecture continue** : c'est une
+mesure de 10 min d'un build **sans service de premier plan**, dont la session média était déjà
+détruite à la fin (`media_descriptions: 0`) et dont la fixture (un FLAC de 4,8 s pour 90–420 s de
+métadonnées) faisait rejouer la même ligne — le défaut que ce lot corrige.
 
 **Ce que la mesure a appris** : le premier plan n'est pas un détail de notification — c'est ce qui
 empêche Android de tuer le service, et sans lui ni le wake lock ni la session ne survivent à Doze.
@@ -6108,11 +6116,11 @@ Un `Started`/`Ended` doit être jugé contre la file **de la machine**, pas cont
 voix peut porter le même id que la nouvelle). Et un corps vide est un piège qui se cache : il ne
 casse pas le téléchargement, il rend un titre instantané pour toujours. Enfin, **une boucle de
 sondage se mesure et se négocie** : 2 ms sur le fil d'événements, c'est 500 réveils par seconde pour
-des notifications d'interface — 10 ms est une image et rend **0,7 point** sur le soak (3,290 % →
-2,586 %), le fil audio n'étant pas touché. Mais 2 ms sur le **back-pressure du décodeur** est le
-contrat de la listen party : 5 ms déplace l'invité de **−1 770 ms** (mesuré), donc il reste à 2 ms et
-le dernier quart de point sous MQ2 attend une notification par condition variable, pas un délai plus
-long.
+des notifications d'interface — 10 ms est une image et n'a pas touché la party. Mais 2 ms sur le
+**back-pressure du décodeur** est le contrat de la listen party : 5 ms déplace l'invité de
+**−1 770 ms** (mesuré), donc il reste à 2 ms. Et **la fixture cache** : un soak qui part avec les
+spools du précédent mesure du local, pas du réseau — vider `cache/neezer/audio` fait partie de la
+fixture.
 
 **Files.** `mobile/android/playback/src/main/java/fr/neezer/mobile/playback/NzMediaService.kt`,
 `mobile/rust/crates/nz-core/src/player/mod.rs` (+ `tests/rules.rs`),
