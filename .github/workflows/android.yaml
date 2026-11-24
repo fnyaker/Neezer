@@ -45,6 +45,9 @@ jobs:
   apk:
     name: Build APK
     runs-on: ubuntu-latest
+    # Bounded in time, like mobile's apk (measured max 29.7 min there): this job
+    # is the other workflow that had no ceiling at all.
+    timeout-minutes: 45
     permissions:
       contents: write # attach the APK to releases on tags
     steps:
@@ -116,17 +119,62 @@ jobs:
 
       # RangeBody's contract with the WebView's own range handling (a download
       # served to the page's <audio> element), on the JVM.
+      # Each Gradle invocation below resolves its own dependencies from Maven
+      # Central, so each gets the 429-only retry loop `mobile.yaml` already runs
+      # (a runner shares its IP with the fleet; Robolectric's cold runtime
+      # download and `kotlin-reflect` both answered 429 here). The loop retries
+      # THE SAME invocation only when the log carries that 429, never a test,
+      # lint or compile failure; the tasks and flags are unchanged.
       - name: Unit tests
-        run: gradle -p android testReleaseUnitTest
+        run: |
+          attempts=0
+          while true; do
+            attempts=$((attempts + 1))
+            log="$RUNNER_TEMP/gradle-android-unit-$attempts.log"
+            if gradle -p android testReleaseUnitTest 2>&1 | tee "$log"; then
+              break
+            fi
+            if (( attempts >= 3 )) || ! grep -q "status code 429" "$log"; then
+              exit 1
+            fi
+            echo "::warning::Maven Central rate-limited a dependency download; retry $attempts/3 in 60 s"
+            sleep 60
+          done
 
       - name: Lint
-        run: gradle -p android lintDebug
+        run: |
+          attempts=0
+          while true; do
+            attempts=$((attempts + 1))
+            log="$RUNNER_TEMP/gradle-android-lint-$attempts.log"
+            if gradle -p android lintDebug 2>&1 | tee "$log"; then
+              break
+            fi
+            if (( attempts >= 3 )) || ! grep -q "status code 429" "$log"; then
+              exit 1
+            fi
+            echo "::warning::Maven Central rate-limited a dependency download; retry $attempts/3 in 60 s"
+            sleep 60
+          done
 
       - name: Build release APK
         env:
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || format('1.0.{0}', github.run_number) }}
-        run: gradle -p android assembleRelease
+        run: |
+          attempts=0
+          while true; do
+            attempts=$((attempts + 1))
+            log="$RUNNER_TEMP/gradle-android-assemble-$attempts.log"
+            if gradle -p android assembleRelease 2>&1 | tee "$log"; then
+              break
+            fi
+            if (( attempts >= 3 )) || ! grep -q "status code 429" "$log"; then
+              exit 1
+            fi
+            echo "::warning::Maven Central rate-limited a dependency download; retry $attempts/3 in 60 s"
+            sleep 60
+          done
 
       - name: Collect APK
         run: |

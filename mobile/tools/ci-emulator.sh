@@ -375,28 +375,35 @@ printf 'doors_opened=%s doors_failed=%s doors_expected=5\n' "$doors" "$doors_fai
 step "smoke: routes through an app link"
 links_probed=0
 links_opened=0
-for probe in \
-    "/app/#/artist/1#Artiste" \
-    "/app/#/album/1#Album" \
-    "/app/#/playlist/1#Playlist" \
-    "/app/#/recap#Récap" \
-    "/app/#/genres#Genres"; do
-    url="https://neezer.example${probe%%#*}"
-    needle="${probe##*#}"
-    links_probed=$((links_probed + 1))
-    launch_app >/dev/null 2>&1 || true
-    adb_dev shell am start -a android.intent.action.SEND -t text/plain \
-        --es android.intent.extra.TEXT "$url" >/dev/null 2>&1 || true
-    if await_text "$needle"; then
-        printf 'link=%s opened=1\n' "${probe%%#*}"
-        links_opened=$((links_opened + 1))
-    else
-        printf 'link=%s opened=0 expected="%s"\n' "${probe%%#*}" "$needle"
-    fi
-    check_alive "the link probe ${probe%%#*}"
-done
-printf 'links_opened=%s links_probed=%s (resolve_link is MB2 own: 0 today is expected, and a door that stops opening still fails above)\n' \
-    "$links_opened" "$links_probed"
+if [[ "${GITHUB_EVENT_NAME:-}" == pull_request ]]; then
+    # 5 × ~14.4 s measured (the `await_text` budget plus the launch), and all
+    # 5 print opened=0 by construction until MB2 writes `resolve_link`: on a PR
+    # they cost 72 s and prove nothing. Master and tags still probe them.
+    printf 'links_opened=0 links_probed=0 (app-link probes run on master and tags only: 5 × ~14 s, 0 opened until MB2)\n'
+else
+    for probe in \
+        "/app/#/artist/1#Artiste" \
+        "/app/#/album/1#Album" \
+        "/app/#/playlist/1#Playlist" \
+        "/app/#/recap#Récap" \
+        "/app/#/genres#Genres"; do
+        url="https://neezer.example${probe%%#*}"
+        needle="${probe##*#}"
+        links_probed=$((links_probed + 1))
+        launch_app >/dev/null 2>&1 || true
+        adb_dev shell am start -a android.intent.action.SEND -t text/plain \
+            --es android.intent.extra.TEXT "$url" >/dev/null 2>&1 || true
+        if await_text "$needle"; then
+            printf 'link=%s opened=1\n' "${probe%%#*}"
+            links_opened=$((links_opened + 1))
+        else
+            printf 'link=%s opened=0 expected="%s"\n' "${probe%%#*}" "$needle"
+        fi
+        check_alive "the link probe ${probe%%#*}"
+    done
+    printf 'links_opened=%s links_probed=%s (resolve_link is MB2 own: 0 today is expected, and a door that stops opening still fails above)\n' \
+        "$links_opened" "$links_probed"
+fi
 
 if (( doors_failed > 0 )); then
     note "$doors_failed door(s) of the shell did not open"
