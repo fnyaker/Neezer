@@ -845,17 +845,32 @@ impl Player {
 
     /// Enqueues a command and returns. **One lock**, and nothing that can wait:
     /// the caller is a Compose click handler.
+    ///
+    /// The machine's transport reaches the ENGINE here too, and not only through
+    /// a `Load`: a tap on pause must silence the mixer NOW even when the worker
+    /// is inside a report, and a tap on play must wake a player the restore left
+    /// paused. Both are one atomic store and a conditional notify in `nz-audio`.
     pub fn command(&self, cmd: Command, tap_ns: u64) {
         let now = self.now_ms();
         self.tap_ns.store(tap_ns, Ordering::SeqCst);
         TAKEN.with(|taken| taken.set(0));
-        let action = {
+        // A command that REPLACES the queue or the row drops the voices that
+        // belonged to the old one BEFORE the transport resumes them: a restored
+        // voice of the same id, resumed for a few milliseconds, ends and its
+        // `Ended` would be read against the new queue and eat its first rows.
+        let replacing = matches!(&cmd, Command::PlayQueue { .. } | Command::Jump { .. });
+        let (action, playing) = {
             let mut machine = self.lock();
-            machine.apply_command(cmd, now)
+            let action = machine.apply_command(cmd, now);
+            (action, machine.state.playing())
         };
+        if replacing {
+            self.engine.stop_current();
+        }
         self.last_command_locks
             .store(TAKEN.with(|taken| taken.get()), Ordering::SeqCst);
         let _ = self.jobs.send(Job::Act(action, now));
+        self.apply_transport(playing);
     }
 
     /// How many locks the last `command()` took. The acceptance holds it to 1:
@@ -1152,6 +1167,9 @@ impl Player {
                 Err(RecvTimeoutError::Timeout) => {
                     let now = self.now_ms();
                     self.tick(now, &mut work);
+                    // The sleep timer and a stall pause through the tick, and a
+                    // tick has no effect list to carry that to the mixer.
+                    self.transport_now();
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -1189,6 +1207,31 @@ impl Player {
             Job::Audio => self.apply_audio(),
             Job::Screen(on) => self.set_read_ahead(on),
         }
+        // Every job that can move the transport (an advance, an end, a stall, a
+        // sleep deadline) ends here, so the engine hears it in the same turn.
+        self.transport_now();
+    }
+
+    /// Applies the machine's transport to the ENGINE. A `Load` is not the only
+    /// way the sound starts or stops: a pause, a resume, an end of queue, a
+    /// stall and a sleep deadline all change the machine without one, and the
+    /// mixer used to keep rendering through them (PAUSED over sound, and a
+    /// restored queue that answered PLAY with silence).
+    fn transport_now(&self) {
+        let playing = {
+            let machine = self.lock();
+            machine.state.playing()
+        };
+        self.apply_transport(playing);
+    }
+
+    fn apply_transport(&self, playing: bool) {
+        if playing {
+            self.engine.play();
+        } else {
+            self.engine.pause();
+        }
+        self.playing.store(playing, Ordering::SeqCst);
     }
 
     /// Tells the screens what changed, after a job: the snapshot on every
@@ -1596,6 +1639,11 @@ impl Player {
                 now,
             )
         };
+        // The queue just changed under whatever voice was playing: drop it
+        // BEFORE the new rows open, or its end/its preloaded neighbour start is
+        // read against the new queue and advances it (measured: five rows eaten
+        // in 0.2 s when a restored queue was replaced by a playlist).
+        self.engine.stop_current();
         self.perform(effects, now, Some(work));
     }
 
@@ -1617,7 +1665,24 @@ impl Player {
                 self.playing.store(true, Ordering::SeqCst);
                 self.on_started(&id, position_s, now, work);
             }
-            EngineEvent::Ended { .. } => {
+            EngineEvent::Ended { id } => {
+                // The end belongs to the row the MACHINE names. A voice from a
+                // queue the person just replaced (or one a seek superseded) can
+                // finish after it: advancing on it skipped the new queue's first
+                // titles (measured: five rows consumed in 0.2 s on a fresh
+                // `PlayQueue`, `listened=0` on each).
+                let current = {
+                    let machine = self.lock();
+                    machine
+                        .state
+                        .current()
+                        .and_then(|entry| entry.reference())
+                        .map(str::to_owned)
+                };
+                if current.as_deref() != Some(id.as_str()) {
+                    tracing::debug!(id = %id, "an end for a row the machine no longer names");
+                    return;
+                }
                 self.playing.store(false, Ordering::SeqCst);
                 self.report_progress(now, work, true);
                 let effects = {
@@ -1678,14 +1743,38 @@ impl Player {
     /// handover, so the bar and the notification name the track being heard
     /// (`Player.svelte#adoptIncoming`).
     fn on_started(&self, id: &str, position_s: f64, now: u64, work: &mut Work) {
-        let (current, pending) = {
-            let mut machine = self.lock();
+        let (current, pending, next) = {
+            let machine = self.lock();
             let current = machine
                 .state
                 .current()
                 .and_then(|entry| entry.reference())
                 .map(str::to_owned);
-            let pending = machine.pending_load.take();
+            // NOT taken yet: a start that belongs to no row of this queue must
+            // leave the pending load alone, or the row it named later looks like
+            // a `repeat=one` restart and the queue advances by itself (measured:
+            // the first title of a fresh `PlayQueue` ended 7 ms after its load).
+            let pending = machine.pending_load.clone();
+            let next = machine
+                .state
+                .next_entry()
+                .and_then(|entry| entry.reference())
+                .map(str::to_owned);
+            (current, pending, next)
+        };
+        // A voice may start for a row that is neither the one the machine names,
+        // the one a load just asked for, nor the next one a gapless handover
+        // owes: it is a voice of a queue that no longer exists, and letting it
+        // advance skipped the new queue (the same measured cascade as `Ended`).
+        if current.as_deref() != Some(id)
+            && pending.as_deref() != Some(id)
+            && next.as_deref() != Some(id)
+        {
+            tracing::debug!(id = %id, next = ?next, "a start for a row outside the queue");
+            return;
+        }
+        let pending = {
+            let mut machine = self.lock();
             if current.as_deref() == Some(id) {
                 machine.state.set_position(position_s);
                 machine.faults.started();
@@ -1694,7 +1783,7 @@ impl Player {
                 machine.retrying = false;
                 machine.bump();
             }
-            (current, pending)
+            machine.pending_load.take()
         };
         if current.as_deref() == Some(id) {
             if pending.as_deref() != Some(id) {
@@ -1904,12 +1993,23 @@ impl Player {
 
     fn persist(&self, work: &mut Work) {
         let position = self.engine.position();
+        // The engine's clock belongs to the row IT names. At a handover the
+        // machine can already name the next row while the outgoing voice still
+        // reports its end (44.5 s of a 45 s title), and saving that pair made the
+        // next launch resume the NEXT row at the PREVIOUS row's end — a phone
+        // that reopened on "Reprendre" skipped 44 s of a title. A position from
+        // another row is no position: it is 0.
+        let engine_row = self.engine.current_id();
         let kept = {
             let mut machine = self.lock();
-            // What the person would resume at: the engine's own clock, which is
-            // the only thing that knows how far into the row the sound is.
-            if machine.state.current().is_some() {
-                machine.state.set_position(position);
+            if let Some(current) = machine.state.current() {
+                let machine_row = current.reference().map(str::to_owned);
+                let at = if engine_row.is_some() && engine_row == machine_row {
+                    position
+                } else {
+                    0.0
+                };
+                machine.state.set_position(at);
             }
             Store::new(self.core.cache()).save_queue(&machine.state)
         };

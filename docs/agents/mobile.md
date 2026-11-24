@@ -543,7 +543,7 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 | Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID **p50 633,1 ms / p95 1 247 / p99 1 247 ms** without a profile; **p50 687,3 / p95 1 046 / p99 1 046 ms** with `UseIfAvailable` on an APK that carries none (the profile is still owed, see MQ2). **TTFD: not measured** — the shell never calls `reportFullyDrawn()`; the target was ≤ 900 ms. |
 | Tap → sound | `PlayerApi.output_stats()` carries `tap_ns` (Kotlin's tap instant passed in the command) and `first_audible_ns`; the journey measures tap → the bar's « Pause » state (`SystemClock.uptimeMillis`), an upper bound of the engine's own pair | album « Lire » → bar **323 ms** (bar showed « Pause »; AAudio opened in the same millisecond as the `load`); the 4 000-track playlist's « Lire » (first title transcoded by the server) **1 417 ms**, then **122 ms** on a warm second run. Targets were 150 / 800 / 1 500 ms. |
 | RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). The counted bytes are **not measured**: `Assistance` builds its report only when « Partager le rapport » is tapped, so the screen never draws `mémoire comptée` (follow-up: build it on open). The 30-minute flat-growth check is therefore also owed. |
-| CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`), 10 minutes; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | app **14 110 ms / 601 s = 2,348 % of one core** (14 titles, the queue then looped — see the hand-over defect below); ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,43× the baseline**, well under the **1,3×** threshold that reopens the engine decision. MB3c's own 30-minute run measured 52 420 ms / 1 755 s = 2,99 %. |
+| CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`); 10 minutes for the ExoPlayer comparison, 31 minutes for the final app; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | **Après MQ2-follow-up** : app **28 060 ms / 1 864 s = 1,505 % of one core**, **42 titres distincts, 0 rechargement**, service de premier plan tenu 31 min (`SOAK` line in the section); 10-minute run **9 290 ms / 604 s = 1,538 %** (14 titres, 0 rechargement). MQ2's reference app run **14 110 ms / 601 s = 2,348 %** (14 titles, the queue then looped — the defect MQ2-follow-up fixed); ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,43× the baseline**, well under the **1,3×** threshold that reopens the engine decision. MB3c's own 30-minute run measured 52 420 ms / 1 755 s = 2,99 %. The 1,8-point gap between the first fixed build (3,290 %) and the final one is the engine's 2 ms poll loops (event bridge 0,8 %, decoder back-pressure ~0,9 %), now 10 ms. |
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
 | Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open: **p50 14,6 / p95 562,5 ms**, 0 frozen frames (> 700 ms). The scroll budgets (p95 ≤ 16,7, p99 ≤ 25) are MET on the emulator; the player's first frame is NOT (the 512 px sleeve is decoded in the frame) — follow-up: decode it off the frame. |
 | Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. The app's own counters are not in `Assistance` (same follow-up as RAM), and **rebuffers have no external source**. The throttled `gsm`/`edge` profile was not run. |
@@ -2007,6 +2007,25 @@ and `fmt --check` clean; `nz-audio`'s own suite plus its new `tests/readahead.rs
   clock instead of sleeping.
 - **`thread_local!` is the only exact lock count.** A global counter read before and after
   `command()` counts the worker's locks too (measured: 2). The per-thread counter is 1, always.
+- **A transport command that never reaches the engine is not a pause.** `engine.play()`/`pause()`
+  were only ever called from a `Load`, so `Command::Pause` left the mixer rendering: the clock went
+  **0.210 s → 1.710 s** over 1.5 s of buffers under a PAUSED snapshot, and a restored queue
+  answered `Play` with silence. Every job now ends in `transport_now()`, and `command()` applies
+  the transport in the caller's own turn (one atomic store and a notify in `nz-audio`, no wait).
+  `a_pause_stops_the_engine_and_a_play_resumes_it` and `a_restored_queue_plays_when_resumed` hold
+  it; both FAIL on the code before this lot (the first one is the number above).
+- **A `Started` for a row outside the queue must not consume the PENDING load.** A queue
+  replacement leaves the old voice's `Started` in the channel; taking `pending_load` for it made
+  the new row's own start look like a `repeat=one` restart, and the machine advanced by itself:
+  **5 rows consumed in 0.2 s** on a fresh `PlayQueue` (`listened=0` on each), and the first title
+  of the playlist ended **7 ms** after its load. The id is now checked against the current row,
+  the pending load and the next row BEFORE the take; an `Ended` for a row the machine does not name
+  is ignored, and `play_rows` drops the old voices (`Engine::stop_current`, no event) before the new
+  rows open.
+- **A position saved for another row is not a position.** `persist` read the engine clock while
+  the machine already named the next row (a gapless handover) and saved **44.5 s of the previous
+  45 s title under the next row's index**; the next launch resumed 44 s into a title. The clock is
+  stored only when the engine's `current_id` is that row, else 0.
 
 **Still owed to a later lot**: MB3a/MB3c consume `Player::take_sink()` for the device output;
 MB10 feeds `NowPlaying.liked` (the queue's own rows carry no like flag, so it is `false` until a
@@ -3180,6 +3199,23 @@ goes to `PlayerApi::command`.
 - **The engine cannot decode WAV**: `symphonia` is built without the `wav` feature
   (`desktop/Cargo.toml`: ogg, flac, mp3, isomp4, aac), so a WAV test fixture fails the probe with
   "no suitable format reader found". The benches serve/play FLAC.
+- **Media3 learns a session only when a CONTROLLER binds to it.** `onGetSession` is not enough for
+  a service the app starts itself, and this app's screens speak `PlayerApi` directly, so no
+  controller of its own ever bound: `MediaNotificationManager` never saw the session, no
+  notification was ever posted, `startForeground` was never called (`startForegroundCount=0`) and
+  `ActivityManager` stopped the service as an **idle background service** after ~2 minutes of
+  PLAYING (`Stopping service due to app idle: -2m0s840ms`), destroying the session and releasing
+  the wake lock. `addSession(built)` in `buildPlayer` is the fix; `ScreenOffChainTest` holds it
+  (`isForeground=true` while playing, 3 titles under Doze) and fails on the APK before it at that
+  exact assertion. A recreated service also primes `follow(snapshot())`, so the locks it inherits
+  are applied at once.
+- **A body shorter than its `Content-Length`, or empty, is not a track.** `HttpSource` renamed
+  any spool that reached EOF into a local file, so a 0-byte answer (a slice past the end, the
+  restore of a 44.5 s position on a 44.5 s title) became a title that ends instantly on every
+  replay, and a short body a title that ends after its dozen seconds — the "same line reloaded"
+  loop. `announce_if_complete` refuses a short/empty body, `nz-cache` refuses a 0-length
+  publication, and `local_path` ignores a 0-byte file. `a_short_or_empty_body_is_never_published`
+  (nz-audio) holds it.
 
 **Measured on this machine** (API 35 x86_64, `-no-window -no-audio`, KVM, my own port; the bench is
 `~/.cache/neezer-mb3c/tone-server.py`, one 440 Hz FLAC per track at −9.03 dBFS, reached at
@@ -5755,10 +5791,13 @@ tiennent le budget d'image (p95 9,2 et 9,5 ms), le premier cadre du lecteur non 
   métadonnées pour un FLAC de 45 s, le lecteur recharge le même titre à 43,5 s en boucle. La fixture
   ne doit pas mentir sur ce qu'elle sert.
 - **Derrière un écran éteint, la file cesse de s'enchaîner après quelques minutes** : mesuré deux
-  fois (22 puis 14 titres distincts sur 30 minutes, puis la même ligne rechargée à 43,5 s toutes les
-  14 s). C'est un défaut de lecture (le soak du plan « 40 titres » n'a pas pu être tenu), pas de la
-  fixture : suivi pour MB3b/MB3c — la mesure CPU a donc été faite sur les 10 premières minutes et
-  l'ExoPlayer sur la même fenêtre.
+  fois (22 puis 14 titres distincts sur 30 minutes, puis la même ligne rechargée à 43,5 s). C'était
+  un défaut de lecture : aucun `MediaController` ne se lie au service, Media3 n'ajoutait donc jamais
+  la session, aucune notification n'existait et `startForeground` n'était jamais appelé —
+  `ActivityManager` arrêtait le service comme service de fond inactif au bout de ~2 min, détruisait
+  la session et relâchait le wake lock. La cause, le correctif et le soak de 40 titres sont dans
+  *MQ2-follow-up* ci-dessous ; la mesure CPU de MQ2 (10 min) reste la référence de la ligne
+  *CPU / battery*.
 - **`Assistance` ne construit son rapport qu'au tap de « Partager le rapport »** : la mémoire
   comptée, les requêtes et les octets par étiquette ne sont jamais dessinés. D'où deux trous dans le
   tableau (mémoire comptée, rebuffers) et un suivi : construire le rapport à l'ouverture de l'écran.
@@ -5768,7 +5807,8 @@ mais `BaselineProfileRule` **saute l'émulateur** (« Skipping test because it's
 and `skipOnEmulator` is enabled », le garde de MQ1, toujours vrai avec `benchmark` 1.5.0 et
 `skipBenchmarksOnEmulator=false`) : un `.txt` complet pour ce parcours demande un téléphone branché,
 et aucun ne l'était. TTFD (aucun `reportFullyDrawn`) ; le premier cadre du lecteur ; les rebuffers ; le
-profil réseau `gsm`/`edge` ; le câblage de la mini-barre ; l'enchaînement de la file écran éteint.
+profil réseau `gsm`/`edge` ; le câblage de la mini-barre. L'enchaînement de la file écran éteint est
+livré par *MQ2-follow-up*.
 
 **Files.** `baselineprofile/src/main/java/fr/neezer/mobile/baselineprofile/Journey*.kt` (six files),
 `docs/agents/screenshots/mobile/MQ2/` (ten PNG), this section and the *Measures* table. **No**
@@ -5950,6 +5990,114 @@ pour le sideload), [`ld.lld` `--icf`, `--pack-dyn-relocs`, `--exclude-libs`](htt
 lien), `mobile/android/app/build.gradle.kts` (splits), `mobile/tools/size-guard.sh` (nouveau),
 `mobile/tools/{ci-emulator,measure}.sh` (l'APK universel), `.github/workflows/mobile.yaml` (les quatre
 APK vérifiés, la garde), cette section et la ligne *APK* du tableau *Measures*.
+
+### MQ2-follow-up — l'écran éteint enchaîne (delivered 2026-11-24)
+
+**Le besoin.** Écouter le téléphone en poche : écran éteint, Doze forcé, une file qui s'enchaîne
+sans s'arrêter, sans rejouer une ligne, pour le coût CPU de MQ2 (2,348 % d'un cœur) au plus.
+
+**La cause (mesurée, pas supposée).** Le service média n'était **jamais un service de premier
+plan**. Media3 n'ajoute une session à son `MediaSessionService` que quand un **contrôleur s'y lie**
+(`MediaSessionService.addSession` depuis `onGetSession`) ; les écrans de cette app parlent
+`PlayerApi` en direct, donc aucun contrôleur ne se liait, `MediaNotificationManager` ne voyait
+jamais la session, aucune notification n'était postée et `startForeground` n'était jamais appelé
+(`startForegroundCount=0`). Au bout de ~2 minutes de PLAYING, `ActivityManager` arrêtait le service
+comme service de fond inactif —
+
+```text
+W ActivityManager: Stopping service due to app idle: u0a148 -2m0s840ms \
+    org.nsupysonic.app/fr.neezer.mobile.playback.NzMediaService
+D MediaSessionService: destroySessionLocked: record=org.nsupysonic.app/androidx.media3.session.id./10
+```
+
+— ce qui détruisait la session, relâchait le wake lock (`REL Neezer:lecture`) et laissait la file
+sur sa dernière ligne. Le soak MQ2 « 40 titres » ne pouvait pas tenir pour cette raison, et non à
+cause de la fixture.
+
+**Quatre défauts de lecture trouvés en tirant ce fil** (chacun a son test, et chacun se mesurait) :
+
+1. **Le transport n'atteignait pas le moteur.** `engine.play()`/`pause()` n'étaient appelés que par
+   un `Load` : une pause laissait la mixer rendre le son (**0,210 s → 1,710 s** d'horloge sous un
+   état PAUSED), et une file restaurée répondait à `Play` par le silence. `Player::command` applique
+   maintenant le transport dans le tour de l'appelant, et chaque job du worker finit par
+   `transport_now()`.
+2. **Un `Started` hors file consommait le `pending_load`.** Remplacer la file laissait le `Started`
+   de l'ancienne voix dans le canal ; il prenait le `pending_load` de la **nouvelle** ligne, dont le
+   démarrage ressemblait alors à un `repeat=one` et avançait la file : **5 lignes mangées en 0,2 s**
+   (`listened=0` chacune) sur un `PlayQueue` frais, et le premier titre de la playlist terminé
+   **7 ms** après son chargement. L'id est vérifié (ligne courante, `pending_load`, suivante) avant
+   le take ; un `Ended` d'une ligne que la machine ne nomme plus est ignoré ; `play_rows` lâche les
+   anciennes voix par `Engine::stop_current` (aucun événement) avant d'ouvrir les nouvelles.
+3. **Une position d'une autre ligne n'est pas une position.** `persist` lisait l'horloge du moteur
+   alors que la machine nommait déjà la ligne suivante (un handover gapless) et enregistrait
+   **44,5 s du titre précédent sous l'index du suivant** ; la relance reprenait 44 s dans un titre.
+   Le couple n'est écrit que si l'`current_id` du moteur est celui de la ligne, sinon 0.
+4. **Un corps court n'est pas un titre.** `HttpSource` renommait tout spool arrivé à EOF en fichier
+   local : un corps **vide** (une tranche après la fin — la position restaurée à 44,5 s d'un titre
+   de 44,5 s) devenait un titre qui se termine instantanément à chaque relecture, et un corps court
+   un titre qui s'arrête après ses quelques secondes. `announce_if_complete` refuse un corps vide ou
+   plus court que son `Content-Length`, `nz-cache` refuse une publication de longueur nulle, et
+   `local_path` ignore un fichier de 0 octet.
+
+**Le correctif, en trois lignes de contrat** : `addSession(built)` et `follow(snapshot())` au
+`buildPlayer()` du service ; le transport appliqué sur le chemin de la commande et après chaque
+job ; les gardes ci-dessus dans `nz-core::player`, `nz-audio` et `nz-cache`. **Rien de contourné par
+un minuteur** : le premier plan suit l'état RUST (PLAYING/BUFFERING), pas une horloge ; le wake lock
+suit le même état ; le préchargement de la ligne suivante reste sur la voie `Prefetch`, devant tout
+`Bulk` (les portes de `nz-api` : 250 ms après le dernier `User` contre 1 s, `nz-api`'s
+`a_prefetch_starts_250_ms_after_the_last_user_request_and_a_bulk_1_s`).
+
+**Tests** (ceux marqués ✗ ont été exécutés sur l'ancien code et y échouent) :
+
+- `nz-core` : ✗ `a_pause_stops_the_engine_and_a_play_resumes_it` (0,210 → 1,710 s sous PAUSED),
+  ✗ `a_restored_queue_plays_when_resumed` (`Play` n'atteignait pas le moteur),
+  `a_queue_whose_rows_lie_about_their_duration_still_advances` (garde la mesure de MQ2 : une durée
+  déclarée fausse n'arrête pas la file) et `a_replaced_queue_starts_at_its_first_row` (garde la
+  file neuve sur sa première ligne ; il ne reproduit pas la course sur un fichier local, la mesure
+  du défaut est celle de l'appareil — **5 lignes en 0,2 s**).
+- `nz-audio` : ✗ `a_short_or_empty_body_is_never_published` (4096 déclarés, 1000 lus : l'ancien
+  `announce_if_complete` renommait le fichier et émettait `StreamComplete`).
+- `:baselineprofile` : ✗ `ScreenOffChainTest` — joue la playlist du banc, exige
+  `isForeground=true` **pendant** la lecture, puis écran éteint + Doze et **3 titres distincts**.
+  Sur l'APK d'avant ce lot il échoue à la première assertion avec le service sous la main :
+  `startForegroundCount=0` ; avec le correctif : `MEASURE écran éteint + Doze : 3 titres distincts
+  [2, 3, 4], pid vivant=true, service=true` (98,5 s). Il se **saute** sans banc (`Journey`), donc le
+  job émulateur de la CI reste vert sans serveur.
+
+**Le soak du plan, tenu** (émulateur 5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, app
+`benchmark`, playlist de 60 titres de **45 s réels** — un FLAC de 45 s servi, durée déclarée 45 s,
+pas 90–420) : écran éteint, `battery unplug`, `deviceidle enable all`, `force-idle` (mState=IDLE).
+Le test l'a imprimé lui-même, sans arrondi :
+
+```text
+SOAK wall_s=1864 cpu_ms=28060 cpu_pct=1.505 distinct=42 items=[0,1,...,41] reloads=0
+```
+
+**42 titres distincts** (0 → 41) en **31 minutes**, **0 rechargement** (aucun index ne revient, aucune
+position ne recule), **1,505 % d'un cœur** — sous les **2,348 %** de MQ2. Le service reste
+`isForeground=true foregroundId=20058 types=0x2` pendant tout le soak, le wake lock
+`Neezer:lecture` est tenu **31 min 50 s** (`ACQ=-31m50s793ms`), `media.audio_flinger` ne compte
+**aucun underrun**, et `logcat` ne contient **aucun** `Stopping service due to app idle`, aucun
+crash. Une première version du correctif, avant que les deux boucles de sondage du moteur ne
+passent de 2/2/5 ms à 10 ms, mesurait **61 350 ms / 1 865 s = 3,290 %** sur le même soak : le
+sondage des événements seul coûtait **0,8 %** d'un cœur et le back-pressure du décodeur ~0,9 %.
+
+**Ce que la mesure a appris** : le premier plan n'est pas un détail de notification — c'est ce qui
+empêche Android de tuer le service, et sans lui ni le wake lock ni la session ne survivent à Doze.
+Un `Started`/`Ended` doit être jugé contre la file **de la machine**, pas contre l'id seul (l'ancienne
+voix peut porter le même id que la nouvelle). Et un corps vide est un piège qui se cache : il ne
+casse pas le téléchargement, il rend un titre instantané pour toujours. Enfin, **une boucle de
+sondage se mesure** : 2 ms sur le fil d'événements et sur le back-pressure du décodeur, c'est 500
+réveils par seconde pour des notifications d'interface — **1,8 point de CPU** derrière un écran
+éteint ; 10 ms est une image, le fil audio n'est pas touché, et le soak est passé de 3,290 % à
+1,505 %.
+
+**Files.** `mobile/android/playback/src/main/java/fr/neezer/mobile/playback/NzMediaService.kt`,
+`mobile/rust/crates/nz-core/src/player/mod.rs` (+ `tests/rules.rs`),
+`desktop/crates/nz-audio/src/{engine.rs,source.rs,events.rs,decode.rs}`,
+`desktop/crates/nz-cache/src/play_cache.rs`,
+`mobile/android/baselineprofile/src/main/java/fr/neezer/mobile/baselineprofile/ScreenOffChainTest.kt`,
+this section, *Measures*.
 
 ### MB-SWAP — The native app becomes `neezer.apk` (wave 6)
 

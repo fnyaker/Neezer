@@ -513,7 +513,9 @@ impl HttpSource {
                         if stop || closed.load(Ordering::Relaxed) {
                             return;
                         }
-                        thread::sleep(Duration::from_millis(5));
+                        // 10 ms: the read-ahead cap is checked against a 0.5 s
+                        // ring, so this is a frame of slack for half the wakeups.
+                        thread::sleep(Duration::from_millis(10));
                     }
                     let read = {
                         let mut body = body.lock().expect("body poisoned");
@@ -620,13 +622,28 @@ impl HttpSource {
     }
 
     /// Rename the whole spool into place and tell the app once.
+    ///
+    /// **A body that ended short of its `Content-Length`, or empty, is not the
+    /// track**: renaming it would make the spool a local file the next play
+    /// reads as a whole title, and a 45 s file ending after 12 s (or instantly)
+    /// is the "same line reloaded" loop. The same rule applies to a 0-byte
+    /// body, which a server can answer for a slice past the end.
     fn announce_if_complete(&mut self) {
         if self.announced || !self.publish {
             return;
         }
-        let (_, eof, error) = self.logical_written();
+        let (written, eof, error) = self.logical_written();
         let base = self.spool.lock().expect("spool poisoned").base;
         if !eof || error.is_some() || base != 0 {
+            return;
+        }
+        if written == 0 || self.len.is_some_and(|len| written < len) {
+            tracing::debug!(
+                id = %self.id,
+                written,
+                declared = ?self.len,
+                "a short body is not published as a track"
+            );
             return;
         }
         self.announced = true;
@@ -877,6 +894,97 @@ mod tests {
         drop(source);
         spoolers.join_all();
         (events.try_iter().collect(), dir)
+    }
+
+    /// A body that KNOWS it is shorter than the length it declared: a connection
+    /// that died after a chunk, which is not a track.
+    struct ShortBody {
+        data: Vec<u8>,
+        pos: usize,
+        declared: u64,
+    }
+
+    impl Read for ShortBody {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let take = (self.data.len() - self.pos).min(buf.len());
+            if take == 0 {
+                return Ok(0);
+            }
+            buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+            self.pos += take;
+            Ok(take)
+        }
+    }
+
+    impl ByteStream for ShortBody {
+        fn len_hint(&self) -> Option<u64> {
+            Some(self.declared)
+        }
+    }
+
+    /// **A short body is not a track.** A connection that ends before its
+    /// `Content-Length` (or a 0-byte answer, which a slice past the end
+    /// produces) must not be renamed into the spool a later play reads as a
+    /// whole title: that is the "same line reloaded at 43.5 s" loop, a 45 s file
+    /// ending after 12 s — or instantly — forever.
+    #[test]
+    fn a_short_or_empty_body_is_never_published() {
+        for (name, data, declared) in [
+            ("short", vec![0x42; 1_000], 4_096u64),
+            ("empty", vec![], 0u64),
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("nz-audio-short-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("the spool directory");
+            let bus = EventBus::new();
+            let events = bus.subscribe();
+            let spoolers = Spoolers::default();
+            let mut source = HttpSource::new(
+                Box::new(ShortBody {
+                    data,
+                    pos: 0,
+                    declared,
+                }),
+                SourceSpec {
+                    dir: &dir,
+                    id: name,
+                    quality: Quality::Opus320,
+                    restart: None,
+                    bus: Some(Arc::clone(&bus)),
+                    ahead: 1024 * 1024,
+                    publish: true,
+                    stop: Arc::new(AtomicBool::new(false)),
+                    spoolers: spoolers.clone(),
+                },
+            )
+            .expect("a source");
+            let mut bytes = Vec::new();
+            source
+                .read_to_end(&mut bytes)
+                .expect("the body is readable");
+            drop(source);
+            spoolers.join_all();
+            let events: Vec<EngineEvent> = events.try_iter().collect();
+            let final_path = spool_path(&dir, name, Quality::Opus320);
+            println!(
+                "{name}: {declared} declared, {bytes_len} read, published={}, events={}",
+                final_path.exists(),
+                events.len(),
+                bytes_len = bytes.len()
+            );
+            assert!(
+                !final_path.exists(),
+                "a {name} body became a local track ({declared} declared, {} read)",
+                bytes.len()
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, EngineEvent::StreamComplete { .. })),
+                "a {name} body was announced as a complete track"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// **LN5, the engine's half** (`docs/agents/lan-nodes.md`, *Shared-crate

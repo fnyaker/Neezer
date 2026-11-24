@@ -13,7 +13,7 @@
 //! is awaited by polling the cheap `/ready` route — 1 s, 1.5 s while `streaming`
 //! — instead of restarting from 0.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -512,6 +512,21 @@ impl Engine {
                 }
             }
         });
+    }
+
+    /// Silences and drops every voice the mixer holds — the row it was playing,
+    /// the outgoing half of a fade and the preloaded next — and emits NO
+    /// `Started`/`Ended` for them.
+    ///
+    /// A queue REPLACEMENT needs this: the old row's voice could end (or its
+    /// preloaded neighbour start) after the new queue is in the machine, and both
+    /// events would be read against the new queue and advance it. Measured: a
+    /// fresh `PlayQueue` over a restored one consumed five rows in 0.2 s. A
+    /// manual skip does NOT use it (the preloaded next is the row being skipped
+    /// to); the player calls it for a command that replaces the queue or the row
+    /// (before the transport resumes the old voice) and again in `play_rows`.
+    pub fn stop_current(&self) {
+        self.inner.send(MixerCmd::InstallCurrent(None));
     }
 
     /// Queue the track that follows: decoded up to 0.5 s ahead, then idle, so
@@ -1249,13 +1264,21 @@ impl Inner {
 }
 
 fn local_path(inner: &Inner, id: &str, quality: Quality) -> Option<PathBuf> {
+    // A 0-byte file is not a track: an empty body (a slice past the end, a
+    // connection that died before its first byte) must never become a local
+    // source, or the title ends instantly on every replay.
+    fn usable(path: &Path) -> bool {
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file() && meta.len() > 0)
+            .unwrap_or(false)
+    }
     if let Some(path) = inner.opener.local(id, quality)
-        && path.is_file()
+        && usable(&path)
     {
         return Some(path);
     }
     let spool = spool_path(&inner.cfg.spool_dir, id, quality);
-    if spool.is_file() { Some(spool) } else { None }
+    if usable(&spool) { Some(spool) } else { None }
 }
 
 /// Open the best source for this request and prepare the decoder. `wait` makes

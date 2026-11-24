@@ -123,7 +123,10 @@ impl EventBus {
     }
 
     /// Drains the callback's notes on an ordinary thread, translating each
-    /// `generation` into the track it names. Cheap enough (2 ms poll) and it is the
+    /// `generation` into the track it names. A 10 ms poll: the event is a UI
+    /// notification (the mixer's handover happened on the audio thread), and
+    /// 2 ms was 500 wakeups a second measured at 0.8 % of a core behind a locked
+    /// screen (MQ2-follow-up, docs/agents/mobile.md).
     /// only thread that locks here.
     pub(crate) fn spawn_bridge(
         self: &Arc<Self>,
@@ -172,7 +175,7 @@ impl EventBus {
                         }
                     }
                     if !got {
-                        thread::sleep(Duration::from_millis(2));
+                        thread::sleep(Duration::from_millis(10));
                     }
                 }
             })
