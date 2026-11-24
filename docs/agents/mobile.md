@@ -5891,19 +5891,21 @@ alignement, id de paquet) et qu'ils s'accordent sur `versionCode`.
 **Vérifié** (émulateur 5620, API 35 x86_64, KVM, swiftshader, `-no-audio`, allumé pour ce lot
 seulement — deux autres workers tenaient 5640 et 5660 — puis éteint par son PID):
 
-- **L'APK universel release s'installe et JOUE** : `JourneyCapture` a peint « Accueil », cherché
-  « storm », ouvert la fiche album, tapé « Lire » et vu la barre dire **« Pause » en 278 ms** (MQ2 :
-  323 ms) sur un FLAC archivé, puis glissé les 8 000 favoris. Le parcours s'arrête ensuite sur
+- **L'APK universel release s'installe et JOUE**, sur le binaire LIVRÉ (la vérification a été
+  refaite après le retrait de `--exclude-libs,ALL`, que la CI avait pris en défaut) :
+  `JourneyCapture` a peint « Accueil », cherché « storm », ouvert la fiche album, tapé « Lire » et vu
+  la barre dire **« Pause » en 267 ms** (MQ2 : 323 ms) sur un FLAC archivé, puis glissé les 8 000
+  favoris. Le parcours s'arrête ensuite sur
   `flingPlaylist` (« no card titled « Playlist 0 » within 20000ms ») : l'écran Playlists était
   encore à « Chargement… » au bout des 20 s du harnais sur une machine à trois émulateurs, et le
   rendu à la main juste après montre **60 playlists et la carte « Playlist 0 »** — un délai de
   banc, pas un défaut du binaire (aucun des changements de ce lot ne touche un écran).
 - **Démarrage à froid, pas de régression** (`measure.sh startup`, `StartupBenchmark`, 10 itérations
-  sur le même émulateur) : **p50 613,2 ms / p95 et p99 640,3 ms** sans profil (MQ2 : p50 633,1 /
-  p95 1 247) et **p50 586,5 / p95 1 217,4 ms** avec `UseIfAvailable` (MQ2 : p50 687,3). Le même
-  passage a montré que `:baselineprofile:connectedBenchmarkReleaseAndroidTest` **installe et lance
-  l'app avec les splits** (« Starting 2 tests on emulator-5620 ») : le risque des splits côté
-  `InstallVariantTask` est levé.
+  sur le même émulateur, sur le binaire livré) : **p50 597,1 ms / p95 et p99 610,2 ms** sans profil
+  (MQ2 : p50 633,1 / p95 1 247) et **p50 549,9 / p95 612,4 ms** avec `UseIfAvailable` (MQ2 : p50
+  687,3). Le même passage a montré que `:baselineprofile:connectedBenchmarkReleaseAndroidTest`
+  **installe et lance l'app avec les splits** (« Starting 2 tests on emulator-5620 ») : le risque des
+  splits côté `InstallVariantTask` est levé.
 - **`readelf -d`** : `libaaudio libdl liblog libm libc` sur les trois ABIs, et
   `build-android.sh --check-libs` sur les bibliothèques DÉPAQUETÉES de l'APK universel répond 0 —
   pas de `libc++_shared` (l'incident MB3b reste couvert, sur le fichier qui part vraiment).
