@@ -1757,8 +1757,11 @@ impl Player {
             EngineEvent::SeekDeferred { .. } => {
                 // The plan is doing its job (the server cannot answer yet): this
                 // is a REBUFFER, the counter bridge 12 exists to tell apart from
-                // an underrun — the source starved, the mixer did not.
+                // an underrun — the source starved, the mixer did not. Published
+                // on the core too, so `Assistance`'s report carries it without a
+                // player handle.
                 self.rebuffers.fetch_add(1, Ordering::SeqCst);
+                self.core.note_rebuffer();
             }
             EngineEvent::Seeked { position_s } => {
                 let mut machine = self.lock();

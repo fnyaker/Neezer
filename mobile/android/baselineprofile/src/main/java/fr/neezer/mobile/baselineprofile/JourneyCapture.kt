@@ -40,6 +40,23 @@ class JourneyCapture {
         println("MEASURE capture $dir/$name.png")
     }
 
+    /**
+     * The mini bar's tap is the phone's door to the full-screen player
+     * (`docs/agents/mobile.md`, MQ2: `NavGraph.kt` mounted `MiniPlayer()` with its
+     * no-op default, so a person could not open the player from the bar). The
+     * journey used the home's « Reprendre » card; this test uses the bar and
+     * proves the shell's wiring, with the screenshot of the player it opened.
+     */
+    @Test
+    fun theMiniBarOpensThePlayer() {
+        Journey.restart(scope)
+        Journey.searchToAlbum(scope)
+        Journey.playAlbum(scope)
+        Journey.tapDesc(device, "Ouvrir le lecteur plein écran")
+        Journey.awaitDesc(device, "Réduire le lecteur", 30_000)
+        shot("11-barre-ouvre-lecteur")
+    }
+
     @Test
     fun captureTheJourney() {
         Journey.restart(scope)

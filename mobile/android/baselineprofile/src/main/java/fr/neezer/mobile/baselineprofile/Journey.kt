@@ -114,21 +114,41 @@ object Journey {
      * column; tapping the title does nothing, measured).
      */
     fun tapFirstCardBelow(device: UiDevice, header: String, timeoutMs: Long = SCREEN_TIMEOUT_MS) {
-        val headings = device.wait(Until.findObjects(By.text(header)), timeoutMs)
-        check(headings.isNotEmpty()) { "the screen never showed « $header »" }
-        val below = headings.maxByOrNull { it.visibleBounds.top }!!.visibleBounds.bottom
         val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var sawHeader = false
         while (SystemClock.uptimeMillis() < deadline) {
-            val card = device.findObjects(By.clickable(true))
-                .filter { it.visibleBounds.top >= below && it.visibleBounds.height() > 100 }
-                .minByOrNull { it.visibleBounds.top }
-            if (card != null) {
-                card.click()
-                device.waitForIdle()
-                return
+            // Both reads go STALE when the screen recomposes between the find and
+            // the bounds read (measured: a search result's heading went stale on
+            // a loaded machine and killed the whole benchmark with
+            // `StaleObjectException`). Re-find and re-read instead of trusting a
+            // handle held across a recomposition.
+            val headings = runCatching {
+                device.findObjects(By.text(header)).mapNotNull { node ->
+                    runCatching { node.visibleBounds }.getOrNull()
+                }
+            }.getOrDefault(emptyList())
+            if (headings.isNotEmpty()) sawHeader = true
+            val below = headings.maxByOrNull { it.top }?.bottom
+            if (below != null) {
+                val card = runCatching {
+                    device.findObjects(By.clickable(true))
+                        .mapNotNull { node ->
+                            runCatching { node.visibleBounds }.getOrNull()?.let { node to it }
+                        }
+                        .filter { (_, bounds) -> bounds.top >= below && bounds.height() > 100 }
+                        .minByOrNull { (_, bounds) -> bounds.top }
+                }.getOrNull()
+                if (card != null) {
+                    runCatching { card.first.click() }
+                        .onSuccess {
+                            device.waitForIdle()
+                            return
+                        }
+                }
             }
             device.waitForIdle()
         }
+        check(sawHeader) { "the screen never showed « $header »" }
         error("no card under « $header » within ${timeoutMs}ms")
     }
 
@@ -557,6 +577,7 @@ object Journey {
         record(device, "$label.memoire_comptee_o", diagnostic.countedBytes.toString())
         record(device, "$label.file_o", diagnostic.queueBytes.toString())
         record(device, "$label.listes_o", diagnostic.listBytes.toString())
+        record(device, "$label.rebuffers", diagnostic.rebuffers.toString())
         for ((tag, stats) in diagnostic.tags) {
             record(device, "$label.$tag.requetes", stats.requests.toString())
             record(device, "$label.$tag.octets_recus", stats.bytesIn.toString())
@@ -571,6 +592,8 @@ object Journey {
     data class Diagnostic(
         val queueBytes: Long,
         val listBytes: Long,
+        /** The player's counted rebuffers (`Core::rebuffers`, never a guess). */
+        val rebuffers: Long,
         val online: Boolean,
         val tags: Map<String, Tag>,
     ) {
@@ -579,11 +602,20 @@ object Journey {
         val countedBytes: Long get() = queueBytes + listBytes
 
         companion object {
-            /** `mémoire comptée : file N o, listes M o` + one `tag : R requêtes, …`. */
+            /**
+             * `mémoire comptée : file N o, listes M o`, `rebuffers : N` + one
+             * `tag : R requêtes, …`.
+             */
             fun parse(text: String): Diagnostic {
                 val memory = Regex("mémoire comptée : file (\\d+) o, listes (\\d+) o")
                     .find(text)
                     ?: error("the report has no counted memory:\n$text")
+                val rebuffers = Regex("(?m)^rebuffers : (\\d+)$")
+                    .find(text)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toLong()
+                    ?: error("the report has no rebuffer count:\n$text")
                 val online = !text.contains("réseau : \"hors ligne\"")
                 val tags = linkedMapOf<String, Tag>()
                 Regex(
@@ -599,6 +631,7 @@ object Journey {
                 return Diagnostic(
                     queueBytes = memory.groupValues[1].toLong(),
                     listBytes = memory.groupValues[2].toLong(),
+                    rebuffers = rebuffers,
                     online = online,
                     tags = tags,
                 )

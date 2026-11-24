@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -102,6 +103,11 @@ fun CoverImage(
     seed: String? = null,
 ) {
     val loader = LocalNzCoverLoader.current
+    // The requested pixels are the DRAWN pixels: a 3× guess decoded a sleeve
+    // larger (or smaller) than the screen on every density. The loader's Coil
+    // key includes this size, so the same sleeve in a 44 dp row and on the
+    // player's 420 dp stage are two entries, each at its own size.
+    val sizePx = with(LocalDensity.current) { sizeDp.roundToPx() }
     val (a, b) = nzGrooveFor(seed ?: url)
     Box(modifier = modifier.size(sizeDp).clip(shape)) {
         Canvas(Modifier.size(sizeDp)) {
@@ -118,7 +124,7 @@ fun CoverImage(
             }
         }
         if (url != null && loader != null) {
-            loader.Image(url, (sizeDp.value * 3).toInt())
+            loader.Image(url, sizePx)
         }
     }
 }
@@ -136,6 +142,7 @@ fun Avatar(
 ) {
     val (a, b) = nzGrooveFor(name)
     val loader = LocalNzCoverLoader.current
+    val sizePx = with(LocalDensity.current) { sizeDp.roundToPx() }
     Box(
         modifier = modifier
             .size(sizeDp)
@@ -157,7 +164,7 @@ fun Avatar(
             color = NzGrooves.ink,
         )
         if (url != null && loader != null) {
-            loader.Image(url, (sizeDp.value * 3).toInt())
+            loader.Image(url, sizePx)
         }
     }
 }

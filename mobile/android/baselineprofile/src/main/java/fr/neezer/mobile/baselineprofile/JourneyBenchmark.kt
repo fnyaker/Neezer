@@ -68,6 +68,7 @@ class JourneyBenchmark {
             "MEASURE journey mémoire comptée : ${diagnostic.countedBytes}o " +
                 "(file ${diagnostic.queueBytes}o, listes ${diagnostic.listBytes}o)",
         )
+        println("MEASURE journey rebuffers : ${diagnostic.rebuffers}")
         for ((tag, stats) in diagnostic.tags) {
             println(
                 "MEASURE journey réseau [$tag] : ${stats.requests} requêtes, " +

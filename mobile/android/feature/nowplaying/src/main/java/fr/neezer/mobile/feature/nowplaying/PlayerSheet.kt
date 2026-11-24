@@ -52,7 +52,6 @@ import androidx.lifecycle.compose.currentStateAsState
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.CoverImage
 import fr.neezer.mobile.designsystem.Icon
-import fr.neezer.mobile.designsystem.NzBlurredBackdrop
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
@@ -151,11 +150,21 @@ fun PlayerSurface(
     }
 }
 
-/** The blurred sleeve under the player (API ≥ 31; below, the ink ground alone). */
+/**
+ * The sleeve under the player, dimmed by the gradient below it.
+ *
+ * **No `Modifier.blur`**: a full-screen blurred layer made SwiftShader compile a
+ * NEW pipeline for every primitive drawn under it (`CircleOp`, `FillRectOp`,
+ * `EllipseOp`, `TextureOp`: 5 programs, 511 ms of `flush commands`) and the
+ * player's first frame cost p95 **775 ms** (MQ2's journey, 2026-11-24). The
+ * sleeve is an image drawn at 900 dp behind a 72–94 % gradient; the blur bought
+ * a softness the gradient already gives, at the price of the frame budget. A
+ * real sleeve is a texture, and the phone's GPU compiles that pipeline once.
+ */
 @Composable
 private fun PlayerBackdrop(cover: String?, seed: String?) {
     if (cover == null) return
-    NzBlurredBackdrop(modifier = Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
         CoverImage(url = cover, sizeDp = 900.dp, seed = seed)
     }
     Box(

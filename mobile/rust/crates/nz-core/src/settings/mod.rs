@@ -566,6 +566,7 @@ impl Core {
             "mémoire comptée : file {} o, listes {} o\n",
             memory.queue_bytes, memory.lists_bytes
         ));
+        out.push_str(&format!("rebuffers : {}\n", self.rebuffers()));
         out.push_str("requêtes par écran :\n");
         for stats in self.stats() {
             out.push_str(&format!(

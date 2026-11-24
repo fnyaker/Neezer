@@ -4,9 +4,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -235,16 +237,44 @@ class SettingsModelTest {
         assertEquals(10u, model.state.settings?.prefetchCount)
     }
 
-    /** « Assistance » builds the report once and keeps it for the share sheet. */
+    /**
+     * Opening « Assistance » builds the report — the screen DRAWS it, and the
+     * share sheet reuses it. Before: only the share button built it, so the
+     * counted memory and requests were never on screen (MQ2's journey could not
+     * read them).
+     */
     @Test
-    fun the_report_is_built_once() = runTest {
+    fun opening_help_builds_the_report() = runTest {
         val service = FakeSettingsService()
         val model = model(service)
         model.open("help")
-        val report = model.buildReport()
-        assertNotNull(report)
+        val report = model.state.report
+        assertNotNull("the report must exist without a tap on « Partager »", report)
         assertTrue(report!!.contains("diagnostic"))
-        assertEquals(report, model.state.report)
+        assertTrue("the report carries the counted memory", report.contains("mémoire comptée"))
+        assertEquals("one build at open", 1, service.calls.count { it == "diagnosticReport" })
+        // The share button keeps it: no second build, the same text.
+        assertEquals(report, model.buildReport())
+    }
+
+    /**
+     * The build is OFF the opening frame: `open` schedules it, and the report
+     * lands when the frame's work is done (rule 2/rule 4 — a screen never waits
+     * on work it does not need to paint). A `StandardTestDispatcher` is the
+     * point: with an unconfined one the build would run inline and the first
+     * assertion would already see the text.
+     */
+    @Test
+    fun opening_help_does_not_block_on_the_report() = runTest {
+        val service = FakeSettingsService()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = CoroutineScope(dispatcher)
+        scopes += scope
+        val model = SettingsModel(service = service, scope = scope, io = dispatcher, toast = {})
+        model.open("help")
+        assertNull("the open returned before the build ran", model.state.report)
+        advanceUntilIdle()
+        assertNotNull("the report arrived once the build ran", model.state.report)
     }
 
     /** A member's 403 is not an error: the administrator's card simply is not drawn. */
