@@ -134,6 +134,17 @@ class NzMediaService : MediaLibraryService() {
                 .setSessionActivity(launchIntent())
                 .build()
         session = built
+        // Media3 only learns about a session when a CONTROLLER binds to it —
+        // `onGetSession` is not enough for a service the app starts itself. The
+        // app's screens speak `PlayerApi` directly, so no controller of its own
+        // ever binds, and without this line the session stayed unknown to
+        // `MediaNotificationManager`: no notification, no foreground service,
+        // and Android stopped the service as an idle background service after
+        // ~2 minutes of PLAYING (measured: `Stopping service due to app idle`,
+        // `startForegroundCount=0`). Every controller outside the process (the
+        // lock screen, the car) was already served the same session through the
+        // platform.
+        addSession(built)
 
         // MB25: the car's browse tree, installed once the session exists (it is
         // what lets a node say "j'ai plus" while a head unit looks at it). The
@@ -148,6 +159,12 @@ class NzMediaService : MediaLibraryService() {
                 onScreen = { on -> playerApi.setScreenOn(on) },
                 onBecomingNoisy = ::pauseForNoise,
             ).also { it.start() }
+        // A service Android recreated over a player that is already playing
+        // adopts its locks NOW: `follow` only runs on a CHANGE, and a player
+        // that keeps playing pushes none — the recreated service then held no
+        // wake lock while the sound went on, which is a phone that sleeps
+        // mid-track (measured: REL at screen off, no ACQ before the next state).
+        follow(playerApi.snapshot())
         return true
     }
 

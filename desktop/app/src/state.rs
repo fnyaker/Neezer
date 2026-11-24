@@ -1227,6 +1227,7 @@ impl AppState {
                 id,
                 position_s,
                 duration_s,
+                ..
             } => {
                 crate::bench::started(&id);
                 self.player.set_position(position_s);

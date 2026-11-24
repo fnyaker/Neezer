@@ -86,6 +86,250 @@ fn repeat_one_never_advances_past_a_failing_title() {
     player.shutdown();
 }
 
+/// A queue whose declared durations LIE (200 s for a 2 s file) must still hand
+/// over every row: nothing in the advance may read the metadata duration.
+#[test]
+fn a_queue_whose_rows_lie_about_their_duration_still_advances() {
+    let dir = TempDir::new("lying-duration");
+    let bench = Bench::start();
+    let whole = Fixture::Whole.write(dir.path());
+    let ids: Vec<String> = (0..6).map(|index| format!("lie{index}")).collect();
+    for id in &ids {
+        bench.track(id, &whole);
+    }
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+
+    player.command(
+        Command::PlayQueue {
+            tracks: ids.iter().map(|id| track_ref(id)).collect(),
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let seen = pump_until(&mut sink, &player, 20.0, |snapshot| {
+        snapshot.index == Some((ids.len() - 1) as u32)
+    });
+    println!(
+        "6 rows of 2 s declared as 200 s: index {:?}, state {:?}",
+        seen.index, seen.state
+    );
+    assert_eq!(seen.index, Some((ids.len() - 1) as u32));
+    player.shutdown();
+}
+
+/// A pause must reach the ENGINE, not only the state machine: the snapshot said
+/// PAUSED over a mixer that kept rendering (the person's thumb on the button and
+/// the sound carrying on), and a restored queue resumed by `Play` stayed silent
+/// because `engine.play()` was only ever called from a `Load`.
+#[test]
+fn a_pause_stops_the_engine_and_a_play_resumes_it() {
+    let dir = TempDir::new("transport");
+    let bench = Bench::start();
+    let cos = Fixture::Whole.write(dir.path());
+    bench.track("a", &cos);
+    bench.track("b", &cos);
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+
+    player.command(
+        Command::PlayQueue {
+            tracks: vec![track_ref("a"), track_ref("b")],
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.2);
+    let before = player.position().position_s;
+    player.command(Command::Pause, 2);
+    pump(&mut sink, 1.5);
+    let paused = player.position().position_s;
+    println!("pause: {before:.3} s → {paused:.3} s over 1.5 s of buffers");
+    assert!(
+        paused - before < 0.1,
+        "the engine kept playing under a PAUSED state: {before:.3} → {paused:.3}"
+    );
+
+    player.command(Command::Play, 3);
+    let _ = pump_until_audio(&mut sink, &player, 5.0, paused + 0.2);
+    println!(
+        "resume: clock back to {:.3} s (was {:.3})",
+        player.position().position_s,
+        paused
+    );
+    player.shutdown();
+}
+
+/// The queue restored PAUSED at its position is resumed by `Play`: the engine was
+/// pumped by hand (a device it is not), so this is the service-recreation path a
+/// locked phone takes.
+#[test]
+fn a_restored_queue_plays_when_resumed() {
+    let dir = TempDir::new("restore-play");
+    let bench = Bench::start();
+    let cos = Fixture::Whole.write(dir.path());
+    bench.track("a", &cos);
+    {
+        let player = player_for(&dir, bench.base());
+        let (_, mut sink) = player.take_sink().expect("the sink");
+        player.command(
+            Command::PlayQueue {
+                tracks: vec![track_ref("a"), track_ref("b")],
+                start: 0,
+                context: None,
+            },
+            1,
+        );
+        let _ = pump_until_audio(&mut sink, &player, 10.0, 0.2);
+        pump(&mut sink, 0.4);
+        player.command(Command::Pause, 2);
+        player.shutdown();
+    }
+
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+    assert_eq!(player.snapshot().state, PlayState::Paused);
+    // The restore's `Load` runs on the player's worker: a couple of buffers let
+    // the engine install the voice at the stored offset (a paused clock stays
+    // there, so this is the position, not a playing one).
+    pump(&mut sink, 0.2);
+    let at = player.position().position_s;
+    assert!(at > 0.0, "the restore lost its position: {at}");
+    player.command(Command::Play, 3);
+    let _ = pump_until_audio(&mut sink, &player, 5.0, at + 0.2);
+    println!(
+        "restored at {at:.3} s, resumed to {:.3} s",
+        player.position().position_s
+    );
+    player.shutdown();
+}
+
+/// A queue REPLACED while a voice from the old one is loaded: the old voice's
+/// end and the new one's start may not advance the new queue.
+#[test]
+fn a_replaced_queue_starts_at_its_first_row() {
+    let dir = TempDir::new("replace");
+    let bench = Bench::start();
+    let cos = Fixture::Whole.write(dir.path());
+    bench.track("old0", &cos);
+    bench.track("old1", &cos);
+    bench.track("new0", &cos);
+    bench.track("new1", &cos);
+    bench.track("new2", &cos);
+    // The new queue's first row opens over a slow link: its voice cannot be
+    // installed before the old one's ring runs out, which is the window a
+    // replaced queue really has (a network load, not a local file).
+    bench.slow("new0", 1_000);
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+
+    player.command(
+        Command::PlayQueue {
+            tracks: vec![track_ref("old0"), track_ref("old1")],
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+    pump(&mut sink, 0.2);
+    // No pause here: whether `Pause` reaches the engine is another test's
+    // question, and this one must hold either way. The old voice has ~1.6 s of
+    // a 2 s file left when the queue is replaced, so its end lands inside the
+    // window below; `new0`'s header is slower than that and cannot hide it.
+    player.command(
+        Command::PlayQueue {
+            tracks: vec![track_ref("new0"), track_ref("new1"), track_ref("new2")],
+            start: 0,
+            context: None,
+        },
+        3,
+    );
+    pump(&mut sink, 2.0);
+    let snapshot = player.snapshot();
+    println!(
+        "after the replacement: index {:?}, current {:?}",
+        snapshot.index,
+        snapshot.current.as_ref().map(|now| now.id.as_str())
+    );
+    assert_eq!(
+        snapshot.index,
+        Some(0),
+        "a stale voice advanced the new queue: {:?}",
+        snapshot.current.as_ref().map(|now| now.id.as_str())
+    );
+    assert_eq!(
+        snapshot.current.as_ref().map(|now| now.id.as_str()),
+        Some("new0")
+    );
+    player.shutdown();
+}
+
+/// The device test `NowPlayingDeviceTest#theTapToSoundDelayIsMeasuredOnOneClock`
+/// runs this exact sequence 20 times (play → pause → seek 0 → jump to the other
+/// row) and reads the engine's clock after the jump. A jump must render.
+#[test]
+fn a_jump_after_a_pause_and_a_seek_renders() {
+    let dir = TempDir::new("jump-after-pause");
+    let bench = Bench::start();
+    let cos = Fixture::Tone440.write(dir.path());
+    bench.track("9001", &cos);
+    bench.track("9002", &cos);
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+
+    let rows = vec![track_ref_of("9001", 3), track_ref_of("9002", 3)];
+    player.command(
+        Command::PlayQueue {
+            tracks: rows.clone(),
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 10.0, 0.05);
+
+    for trial in 0..4u32 {
+        player.command(Command::Pause, 2);
+        let _ = pump_until(&mut sink, &player, 5.0, |s| {
+            matches!(
+                s.state,
+                PlayState::Paused | PlayState::Stopped | PlayState::Ended
+            )
+        });
+        player.command(Command::Seek { s: 0.0 }, 3);
+        let _ = pump_until(&mut sink, &player, 5.0, |_| {
+            player.position().position_s < 0.05
+        });
+        let index = trial % 2;
+        player.command(
+            Command::Jump {
+                index,
+                key: rows[index as usize].key.clone(),
+            },
+            4,
+        );
+        let start = player.position().position_s;
+        pump(&mut sink, 1.0);
+        let after = player.position().position_s;
+        println!(
+            "trial {trial} (jump {index}): {start:.3} s → {after:.3} s, state {:?}, index {:?}",
+            player.snapshot().state,
+            player.snapshot().index
+        );
+        assert!(
+            after > 0.05,
+            "trial {trial} never rendered (state {:?}, index {:?}, snapshot {:?})",
+            player.snapshot().state,
+            player.snapshot().index,
+            player.snapshot()
+        );
+    }
+    player.shutdown();
+}
+
 /// An empty queue stalls without inventing a row or a cause.
 #[test]
 fn an_empty_queue_plays_nothing() {

@@ -103,6 +103,17 @@ impl<'a> PlayCache<'a> {
         }
 
         let length = fs::metadata(&target)?.len();
+        // An empty body is not a track. Publishing it would make `lookup` answer
+        // a 0-byte file that every replay reads as a title ending at 0 s (the
+        // "same line reloaded" loop a slice past the end used to cause).
+        if length == 0 {
+            let _ = fs::remove_file(&target);
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                format!("corps vide pour {track} ({})", quality_name(quality)),
+            )
+            .into());
+        }
         if length != bytes {
             debug!(
                 track = track.as_str(),
