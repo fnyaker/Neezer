@@ -209,7 +209,15 @@ fun NzApp(graph: AppGraph) {
                     NzToasts.show("Session expirée, reconnectez-vous")
                     graph.openLogin()
                 }
-                is NzBridge.Session.MeChanged -> if (event.me == null) graph.openLogin()
+                // M3 : une personne qui change (restauration au lancement, compte
+                // invité, changement de personne) n'atterrit pas sur la coquille
+                // vide quand le serveur dit que sa préparation reste à faire.
+                // `val me =` : `event.me` est un `val` d'un autre module, un smart
+                // cast y est refusé par Kotlin.
+                is NzBridge.Session.MeChanged -> when (val me = event.me) {
+                    null -> graph.openLogin()
+                    else -> graph.openOnboardingIfNeeded(me)
+                }
             }
         }
     }
