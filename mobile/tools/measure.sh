@@ -244,8 +244,13 @@ find_apk() {
         return 0
     fi
     local candidate
+    # The UNIVERSAL APK first (« MQ2 — la taille »: `assembleRelease` now writes
+    # one per ABI plus `app-universal-release.apk`, the one that installs on any
+    # device); the plain names are what a pre-split tree still has.
     for candidate in \
+        "$(nz_android_project)/app/build/outputs/apk/release/app-universal-release.apk" \
         "$(nz_android_project)/app/build/outputs/apk/release/app-release.apk" \
+        "$(nz_android_project)/app/build/outputs/apk/benchmark/app-universal-benchmark.apk" \
         "$(nz_android_project)/app/build/outputs/apk/benchmark/app-benchmark.apk"; do
         [[ -f "$candidate" ]] && {
             printf '%s\n' "$candidate"
@@ -465,8 +470,18 @@ payload = {
     "entries": len(entries),
 }
 payload["apk_bytes"] = int(payload["apk_bytes"])
+# Every APK beside the measured one (« MQ2 — la taille »: one per ABI plus the
+# universal): the number that matters for a download is the SPLIT's, the one the
+# universal carries is three ABIs at once.
+import glob, os
+payload["apks"] = {
+    os.path.basename(p): os.path.getsize(p)
+    for p in sorted(glob.glob(os.path.join(os.path.dirname(apk) or ".", "*.apk")))
+}
 open(out, "w").write(json.dumps(payload, indent=2) + "\n")
 print(f"apk: {payload['apk_bytes']} bytes ({apk})")
+for n, s in payload["apks"].items():
+    print(f"  {n}: {s} bytes")
 for n, s in sorted(libs.items()):
     print(f"  {n}: {s} bytes")
 print(f"json: {out}")

@@ -64,6 +64,50 @@ needed_of() {
     "$readelf" -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'
 }
 
+# `nm` from binutils, or the NDK's own.
+nz_nm() {
+    if command -v nm >/dev/null 2>&1; then
+        command -v nm
+    elif [ -x "${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" ]; then
+        printf '%s\n' "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+    else
+        printf 'build-android.sh: no nm (binutils or the NDK): the JNI export guard cannot run\n' >&2
+        return 1
+    fi
+}
+
+# The four API-26 `AudioTrackPull` entry points are reached BY NAME from Kotlin
+# (`external fun`), so nothing inside Rust references them: a linker flag that
+# localizes exported symbols drops them without failing the build, and the app
+# then dies at `System.loadLibrary` on an Android 8 phone — the same dead-app
+# shape as MB3b's `libc++_shared`. Measured: `-Wl,--exclude-libs,ALL` (a 114 176 B
+# saving) localized them, because a Rust crate reaches the linker as an archive;
+# `mobile.yaml` saw it, this guard now refuses it locally.
+JNI_ENTRY_POINTS="nativeRender nativeSetLatency nativeUnderruns nativeClose"
+check_jni_exports() {
+    local dir="$1" abi so nm symbol exports missing=0
+    nm="$(nz_nm)" || return 1
+    for abi in "${TARGETS[@]}"; do
+        so="$dir/$abi/libnz_ffi.so"
+        [ -f "$so" ] || continue
+        for name in $JNI_ENTRY_POINTS; do
+            symbol="Java_fr_neezer_mobile_playback_AudioTrackPull_$name"
+            # The output is CAPTURED before grep: `nm … | grep -q` under
+            # `set -o pipefail` fails on a match, because grep exits early, nm
+            # takes SIGPIPE (141), and the pipeline's status is the 141 — measured,
+            # it made this guard report all four symbols missing on a library that
+            # exported them.
+            exports="$("$nm" -D --defined-only "$so" 2>/dev/null)" || exports=""
+            if ! grep -qE " T $symbol$" <<<"$exports"; then
+                printf 'build-android.sh: %s/libnz_ffi.so n’exporte pas %s (la sortie AudioTrack API 26 ne la trouverait pas)\n' \
+                    "$abi" "$symbol" >&2
+                missing=1
+            fi
+        done
+    done
+    return "$missing"
+}
+
 # `check_libs <dir>` where <dir>/<abi>/libnz_ffi.so are the libraries an APK
 # carries. Answers 1 and names every offender.
 check_libs() {
@@ -149,7 +193,35 @@ mkdir -p "$JNI_LIBS"
 # then refuses it — `dlopen failed: cannot locate symbol "_ZTISt12length_error"`
 # (libc++abi's `std::length_error` typeinfo), the same dead app with a different
 # sentence.
-CXXSTDLIB=c++_static RUSTFLAGS="$RUSTFLAGS -C link-arg=-lc++abi" \
+# The one link-time shrinker left after measurement, and the two that were
+# measured and REFUSED (this lot, docs/agents/mobile.md "MQ2 — la taille").
+# They are set HERE and not in the exported `RUSTFLAGS` above: they are ELF
+# choices, and applied to the host build they break its own build scripts —
+# measured, a `RUSTFLAGS` carrying `--pack-dyn-relocs=android` made `proc-macro2`
+# and `quote` die with SIGSEGV before compiling anything (glibc's loader does not
+# read Android's APS2 relocations).
+#
+#  - `--pack-dyn-relocs=android` writes the relocations in Android's APS2
+#    format, which the loader has understood since API 23 (this app's minSdk is
+#    26): `.rela.dyn` 729 360 B → ~106 000 B, **−624 640 B** on the library. The
+#    generic `--pack-dyn-relocs=relr` was NOT used: `DT_RELR` needs a loader newer
+#    than minSdk 26.
+#  - `--icf=all` folds identical functions: **−1 054 080 B**. `--icf=safe` was
+#    measured first and folded nothing at all (byte-identical output), because a
+#    Rust binary takes the address of almost everything (trait objects, `Drop`
+#    glue); `all` is what Chrome and Soong ship for release. The one thing it must
+#    never touch is a function whose ADDRESS is compared — this tree compares
+#    none (`grep` over every reachable crate: no function-pointer equality), the
+#    emulator journey plays on this library, and a bug that smells like folded
+#    code is this flag's to answer.
+#  - `--exclude-libs,ALL` was measured at **−114 176 B** and REMOVED: a Rust crate
+#    reaches the linker as an rlib, which IS an archive, so the flag localized
+#    `nz-droid-audio`'s four `#[no_mangle] Java_…AudioTrackPull_*` exports too and
+#    the API-26 output would have died at `System.loadLibrary` — caught by
+#    `mobile.yaml`'s "The API-26 JNI entry points are in libnz_ffi.so" step, and
+#    the reason `check_jni_exports` below now refuses such a library locally.
+ANDROID_LINK_FLAGS="-C link-arg=-Wl,--pack-dyn-relocs=android -C link-arg=-Wl,--icf=all"
+CXXSTDLIB=c++_static RUSTFLAGS="$RUSTFLAGS -C link-arg=-lc++abi $ANDROID_LINK_FLAGS" \
     cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P "$API" -o "$JNI_LIBS" \
     build --locked --release -p nz-ffi
 
@@ -176,6 +248,10 @@ done
 # The guard runs on every build, before anything packs these files.
 check_libs "$JNI_LIBS" || {
     echo "build-android.sh: la bibliothèque ne se chargerait pas sur l'appareil (voir ci-dessus)" >&2
+    exit 1
+}
+check_jni_exports "$JNI_LIBS" || {
+    echo "build-android.sh: la sortie AudioTrack API 26 perdrait ses points d'entrée (voir ci-dessus)" >&2
     exit 1
 }
 echo "   kotlin:      $(find "$GENERATED" -name '*.kt' | wc -l) file(s)"
