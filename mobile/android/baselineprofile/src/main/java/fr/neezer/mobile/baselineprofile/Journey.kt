@@ -250,6 +250,22 @@ object Journey {
     }
 
     /**
+     * The account the journey stands on: the home greets the person by NAME only
+     * when `restore()`/`/api/me` answered (`BONJOUR, BENCH · LUNDI`). Without it
+     * the app is a fresh install with no server, and every step below measures an
+     * empty screen — so the run is SKIPPED with its cause, which is what keeps
+     * the CI emulator job green (it has no bench server) without pretending.
+     */
+    fun requireBenchAccount(device: UiDevice) {
+        val named = device.wait(Until.findObject(By.textContains("BONJOUR,")), 10_000) != null
+        Assume.assumeTrue(
+            "the app has no signed-in bench account: MQ2's journey measures an app configured " +
+                "against mobile/tools/perf-server.sh (8 000 titles, 8 000 favourites)",
+            named,
+        )
+    }
+
+    /**
      * A cold start from a plain test: Macrobenchmark kills the app before each
      * iteration, a JUnit test does not — and resuming a task left on another
      * screen is not the journey's first step (measured: the run resumed on the
@@ -258,6 +274,7 @@ object Journey {
     fun restart(scope: MacrobenchmarkScope) {
         scope.device.executeShellCommand("am force-stop ${BenchTarget.PACKAGE_NAME}")
         launchToHome(scope)
+        requireBenchAccount(scope.device)
     }
 
     /**
