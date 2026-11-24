@@ -1,6 +1,5 @@
 package fr.neezer.mobile.app
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -21,9 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -39,7 +36,6 @@ import androidx.navigation.toRoute
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
-import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.discovery.RecapEntry
 import fr.neezer.mobile.feature.discovery.ReleaseShelfEntry
 import fr.neezer.mobile.feature.discovery.ReleasesEntry
@@ -179,15 +175,8 @@ fun NzApp(graph: AppGraph) {
     graph.attach(nav)
 
     // La destination de départ est figée à la première composition : elle est
-    // donc décidée AVANT. L'attente ne dessine que le fond du thème — aucun
-    // squelette, qui mentirait sur ce qui arrive.
-    var start by remember(graph) { mutableStateOf<Any?>(null) }
-    LaunchedEffect(graph) { start = graph.startRoute() }
-    val startRoute = start
-    if (startRoute == null) {
-        Box(Modifier.fillMaxSize().background(Sillon.colors.bg))
-        return
-    }
+    // décidée avant, à partir de l'appareil seul (aucune requête).
+    val startRoute = remember(graph) { graph.startRoute() }
 
     val backStackEntry by nav.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination

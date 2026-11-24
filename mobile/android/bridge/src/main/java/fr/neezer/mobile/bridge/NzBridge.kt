@@ -135,9 +135,6 @@ object NzBridge {
     val ready: Boolean
         get() = core != null
 
-    /** Le dernier rapport réseau disait « aucun lien » (M1 : la route de départ le lit avant `restore()`). */
-    val offline: Boolean get() = NetworkWatcher.offline
-
     /** The directories the core opened, for the diagnostic screen. */
     fun dataDir(): File? = application?.let { File(it.filesDir, "neezer") }
 

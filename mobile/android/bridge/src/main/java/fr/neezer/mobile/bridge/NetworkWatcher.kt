@@ -28,16 +28,6 @@ internal object NetworkWatcher {
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var answered = false
 
-    /**
-     * Le dernier rapport disait « aucun lien du tout ». M1 le lit AVANT la
-     * première requête : hors ligne, un `restore()` qui ne trouve pas de session
-     * n'est pas une session morte (rule 3), donc la route de départ reste
-     * l'accueil et ce qui est sur l'appareil continue de marcher.
-     */
-    @Volatile
-    var offline: Boolean = false
-        private set
-
     fun start(context: Context, core: NzCore) {
         if (callback != null) return
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: run {
@@ -54,19 +44,16 @@ internal object NetworkWatcher {
                 network: Network,
                 capabilities: NetworkCapabilities,
             ) {
-                offline = false
                 core.setNetwork(stateOf(capabilities))
                 answered = true
             }
 
             override fun onLost(network: Network) {
-                offline = true
                 core.setNetwork(NetworkState.None)
                 answered = true
             }
 
             override fun onUnavailable() {
-                offline = true
                 core.setNetwork(NetworkState.None)
                 answered = true
             }
@@ -85,7 +72,6 @@ internal object NetworkWatcher {
         callback = null
         manager = null
         answered = false
-        offline = false
     }
 
     /** Whether the callback has said anything yet (Aide's diagnostic line). */
@@ -98,7 +84,6 @@ internal object NetworkWatcher {
 
     private fun read(core: NzCore, network: Network) {
         val capabilities = manager?.getNetworkCapabilities(network)
-        offline = false
         core.setNetwork(if (capabilities == null) NetworkState.Other(metered = true) else stateOf(capabilities))
         answered = true
     }

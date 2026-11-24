@@ -285,6 +285,11 @@ impl NzCore {
         self.core.server().map(ServerInfo::from)
     }
 
+    /// A session cookie is on the device (no socket, works offline).
+    pub fn has_session(&self) -> bool {
+        self.core.has_session()
+    }
+
     /// Saves the server and checks it answers `GET /api/version`.
     pub async fn set_server(&self, url: String) -> Result<ServerInfo, NzError> {
         self.core

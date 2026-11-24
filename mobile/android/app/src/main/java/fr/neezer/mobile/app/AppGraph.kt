@@ -72,28 +72,19 @@ class AppGraph(private val application: Application) : NzNavigator {
 
     /**
      * La route sur laquelle le shell s'ouvre, décidée UNE fois, avant que le
-     * `NavHost` ne compose (sa destination de départ est figée à la première
-     * composition).
+     * `NavHost` ne compose, et SANS réseau : la première image n'attend jamais
+     * `GET /api/me` (rules 1 et 3).
      *
      * - pas de noyau : l'écran serveur (il dit pourquoi le noyau manque) ;
      * - pas de serveur enregistré : l'écran serveur ;
-     * - hors ligne : l'accueil — un `restore()` sans lien n'est pas un verdict
-     *   sur le compte (rule 3), et le collecteur de session réagira au vrai 401 ;
-     * - `/api/me` a nommé la personne : l'accueil ;
-     * - le serveur a répondu « personne » : la connexion, serveur conservé.
+     * - un cookie de session sur l'appareil : l'accueil (la restauration tourne
+     *   en fond depuis `NzApplication`) ;
+     * - un serveur sans cookie : la connexion, serveur conservé.
      */
-    suspend fun startRoute(): Any {
+    fun startRoute(): Any {
         val core = NzBridge.core ?: return Routes.Setup
         if (core.server() == null) return Routes.Setup
-        if (NzBridge.offline) return Routes.Home
-        val me = try {
-            core.restore()
-        } catch (_: Exception) {
-            // Un certificat refusé, un serveur muet : ce qui est sur l'appareil
-            // reste utilisable, et Aide dit la cause.
-            return Routes.Home
-        }
-        return if (me != null) Routes.Home else Routes.Login
+        return if (core.hasSession()) Routes.Home else Routes.Login
     }
 
     override fun openHomeAfterSignIn() = replaceStackWith(Routes.Home)
