@@ -511,7 +511,7 @@ CI: the `mobile.yaml` workflow enables KVM on the runner (udev rule, the documen
 recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator against
 `tools/perf_api.py --serve` reached at `10.0.2.2`.
 
-**Three measured rules around that CI (2026-11-18).**
+**Measured rules around that CI (2026-11-18, completed 2026-11-24).**
 
 - **`cancel-in-progress` is for pull requests only** (`${{ github.event_name == 'pull_request' }}`),
   like every other workflow here. It was `true` for every event, so a push to `master` killed the run
@@ -539,7 +539,8 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
   entries for the repository's 10 GB). `restore` + `save` are split for that reason.
 
 - **The `emulator` job never builds Rust: it receives the library and the bindings.** `apk` uploads
-  `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` (three ABIs) and `bridge/build/generated/uniffi`
+  `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` (every ABI of `NZ_ABIS`: three on `master`, x86_64
+  alone on a PR) and `bridge/build/generated/uniffi`
   as the `neezer-mobile-native` artifact; `emulator` downloads it into `mobile/android/bridge`, and
   `ci-emulator.sh` — which sees them (`native_artifacts_present`) — passes `-PskipRust` and skips
   the NDK/cargo-ndk install. Same instrumented tasks either way; a machine without the artifact
@@ -549,6 +550,19 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
   of `apk` are one invocation** (`testDebugUnitTest lintDebug assembleRelease`): `--no-daemon` pays a
   JVM and a Kotlin+AGP configuration phase per call, and run 44368850444 paid it three times
   (3.52 + 2.38 + 4.23 = 10.13 min).
+
+- **A pull request builds ONE ABI; `master`, a tag and a dispatch build all three.** One variable,
+  `NZ_ABIS` (space-separated, drawn from `arm64-v8a armeabi-v7a x86_64`, unset = all three so a
+  local build is unchanged), is read by `mobile.yaml`'s `env:` (`x86_64` on `pull_request`),
+  `mobile/rust/build-android.sh`, `app/build.gradle.kts`'s `splits`, `size-guard.sh` and
+  `ci-emulator.sh`'s `native_artifacts_present`. **Measured: `cargo ndk` is 503 s of the native
+  build's 566 s (run 45366701201), i.e. ~168 s per ABI; on this lot's one-ABI PR run 45470589762
+  the whole `Build libnz_ffi.so and the Kotlin bindings` step is 201 s (3 min 21 s) — 365 s less —
+  and its single `libnz_ffi.so` is 20 754 968 bytes.** The price is stated:
+  an ARM-only compile error (NEON, `cfg(target_arch)`) is first seen on `master`, which is why a tag
+  refuses any set but the three (`A release builds every ABI`), and why the native cache key carries
+  the set — `mobile-native-x86_64-…`/`mobile-native-all-…` — since a 3-ABI product restored by a
+  1-ABI run would ship ARM libraries that run never built or checked.
 
 ### Measures (every lot that touches what they measure writes them in its PR)
 

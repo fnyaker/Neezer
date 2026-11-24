@@ -44,16 +44,20 @@ kotlin {
 // `mobile/rust/build-android.sh` is the one documented path (docs/agents/
 // mobile.md, MB0 "Contract"): the host DEBUG library feeds `uniffi-bindgen`
 // (a stripped release `.so` has no metadata), then `cargo ndk` cross-compiles
-// the release library for the three ABIs the APK ships.
+// the release library for the ABIs of `NZ_ABIS` (all three by default).
 val rustDir = rootProject.layout.projectDirectory.dir("../rust")
 val skipRust = providers.gradleProperty("skipRust").isPresent
 
 val buildRust = tasks.register<Exec>("buildRust") {
     group = "build"
-    description = "Builds libnz_ffi.so for arm64-v8a, armeabi-v7a and x86_64 and generates the Kotlin bindings"
+    description = "Builds libnz_ffi.so for the ABIs of NZ_ABIS (default all three: arm64-v8a, armeabi-v7a, x86_64) and generates the Kotlin bindings"
     workingDir = rustDir.asFile
     commandLine("./build-android.sh")
-    // Re-run when the Rust sources or the workspace's own manifests change.
+    // Re-run when the Rust sources or the workspace's own manifests change —
+    // and when the ABI SET changes: `jniLibs/` then holds fewer (or other)
+    // libraries, and an up-to-date check that ignored `NZ_ABIS` would keep the
+    // previous run's set and pack it into the APK.
+    inputs.property("abis", providers.environmentVariable("NZ_ABIS").orElse("all"))
     inputs.files(
         rustDir.file("Cargo.toml"),
         rustDir.file("Cargo.lock"),

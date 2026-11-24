@@ -50,7 +50,8 @@ step() { printf '\n=== %s\n' "$*"; }
 # Are the native library and the generated Kotlin bindings ALREADY here?
 #
 # `mobile/rust/build-android.sh` produces exactly two things `:bridge` needs:
-# `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` for the three ABIs the app ships,
+# `bridge/src/main/jniLibs/<abi>/libnz_ffi.so` for the ABIs the run built
+# (`NZ_ABIS`: all three off a pull request, x86_64 alone on one),
 # and the UniFFI Kotlin under `bridge/build/generated/uniffi`. The workflow's
 # `apk` job builds them and hands them over as an artifact; without this test
 # this job rebuilt the whole stack from cold inside the instrumented step —
@@ -67,7 +68,7 @@ native_artifacts_present() {
     generated="$(nz_android_project)/bridge/build/generated/uniffi"
     [[ -d "$generated" ]] || return 1
     [[ -n "$(find "$generated" -name '*.kt' -print -quit 2>/dev/null)" ]] || return 1
-    for abi in arm64-v8a armeabi-v7a x86_64; do
+    for abi in ${NZ_ABIS:-arm64-v8a armeabi-v7a x86_64}; do
         [[ -f "$(nz_android_project)/bridge/src/main/jniLibs/$abi/libnz_ffi.so" ]] || return 1
     done
     return 0

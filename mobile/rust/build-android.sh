@@ -6,8 +6,15 @@
 #      library answers "No UniFFI metadata found");
 #   2. `uniffi-bindgen` over that library -> the Kotlin in
 #      `:bridge`'s generated source dir;
-#   3. `cargo ndk` for the three ABIs the app ships, into
-#      `:bridge/src/main/jniLibs/` where Gradle packs them into the APK.
+#   3. `cargo ndk` for the ABIs of `NZ_ABIS` (default: all three the app ships)
+#      into `:bridge/src/main/jniLibs/` where Gradle packs them into the APK.
+#
+# `NZ_ABIS` is the ONE switch: a space-separated list drawn from
+# `arm64-v8a armeabi-v7a x86_64`, unset meaning all three. CI sets it to
+# `x86_64` on a pull request — the emulator's own ABI, ~168 s per ABI saved on
+# `cargo ndk` (measured, run 45366701201) — and leaves the three on `master`,
+# tags and dispatch so an ARM-only compile error is still seen before a release
+# (docs/agents/mobile.md, « A pull request builds ONE ABI »).
 #
 # Needs: the Rust targets below (`rustup target add`), `cargo-ndk` 4.1 (pinned in
 # .github/workflows/mobile.yaml) and an NDK. `ANDROID_NDK_HOME` wins; otherwise
@@ -21,7 +28,26 @@ cd "$(dirname "$0")"
 
 NDK_VERSION=30.0.16248370
 API=26 # the app's minSdk
-TARGETS=(arm64-v8a armeabi-v7a x86_64)
+
+# THE ABI SET, read from `NZ_ABIS` (space-separated, unset = all three). Every
+# loop below already went through `TARGETS`; this is what makes the switch a
+# single variable instead of a hardcoded triple.
+KNOWN_ABIS="arm64-v8a armeabi-v7a x86_64"
+read -r -a TARGETS <<<"${NZ_ABIS:-$KNOWN_ABIS}"
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+    printf 'build-android.sh: NZ_ABIS is empty; allowed: %s (unset = all)\n' "$KNOWN_ABIS" >&2
+    exit 2
+fi
+for abi in "${TARGETS[@]}"; do
+    case " $KNOWN_ABIS " in
+        *" $abi "*) ;;
+        *)
+            printf 'build-android.sh: NZ_ABIS holds «%s», which is not one of: %s\n' \
+                "$abi" "$KNOWN_ABIS" >&2
+            exit 2
+            ;;
+    esac
+done
 : "${CARGO_BUILD_JOBS:=4}"
 export CARGO_BUILD_JOBS
 
@@ -177,7 +203,7 @@ cargo run --quiet --locked -p nz-bindgen -- generate \
     --config uniffi.toml \
     --out-dir "$GENERATED"
 
-echo "== build-android.sh: three ABIs (NDK $ANDROID_NDK_HOME, API $API)"
+echo "== build-android.sh: ABIs ${TARGETS[*]} (NDK $ANDROID_NDK_HOME, API $API)"
 mkdir -p "$JNI_LIBS"
 # `CXXSTDLIB=c++_static` links the C++ runtime INTO our library instead of
 # requiring `libc++_shared.so` beside it (see the link guard above). It is set
@@ -221,8 +247,12 @@ mkdir -p "$JNI_LIBS"
 #    `mobile.yaml`'s "The API-26 JNI entry points are in libnz_ffi.so" step, and
 #    the reason `check_jni_exports` below now refuses such a library locally.
 ANDROID_LINK_FLAGS="-C link-arg=-Wl,--pack-dyn-relocs=android -C link-arg=-Wl,--icf=all"
+# One `-t` per ABI of `$NZ_ABIS`, built from TARGETS rather than written out:
+# a hardcoded triple here would build all three whatever the variable said.
+NDK_TARGETS=()
+for abi in "${TARGETS[@]}"; do NDK_TARGETS+=(-t "$abi"); done
 CXXSTDLIB=c++_static RUSTFLAGS="$RUSTFLAGS -C link-arg=-lc++abi $ANDROID_LINK_FLAGS" \
-    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P "$API" -o "$JNI_LIBS" \
+    cargo ndk "${NDK_TARGETS[@]}" -P "$API" -o "$JNI_LIBS" \
     build --locked --release -p nz-ffi
 
 # cargo-ndk copies EVERY cdylib it built, and four of the shared crates are

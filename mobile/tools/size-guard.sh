@@ -4,11 +4,12 @@
 #
 #   mobile/tools/size-guard.sh [--jni <dir>] [--apk-dir <dir>]
 #
-# `apk`'s Gradle step builds `libnz_ffi.so` for three ABIs and four APKs (one per
-# ABI plus the universal one); this is the one place that says how big each may
-# be. A PR that doubles the library — which happened once, from 9,2 MB at MB3a to
-# 19,8 MB at MQ2 — passes every other check there is: it compiles, it plays, and
-# the only symptom is a download nobody measures.
+# `apk`'s Gradle step builds `libnz_ffi.so` for the ABIs of `NZ_ABIS` (three on
+# `master` and tags, x86_64 alone on a pull request) and the universal APK plus
+# one APK per ABI; this is the one place that says how big each may be. A PR
+# that doubles the library — which happened once, from 9,2 MB at MB3a to 19,8 MB
+# at MQ2 — passes every other check there is: it compiles, it plays, and the only
+# symptom is a download nobody measures.
 #
 # WHY THESE NUMBERS. Each ceiling is the size MEASURED on 2026-11-24 (the run
 # that cut the library by 18,2 %) plus ~5 %, so a real regression is caught and a
@@ -89,11 +90,17 @@ check() {
     fi
 }
 
-for abi in arm64-v8a armeabi-v7a x86_64; do
+for abi in ${NZ_ABIS:-arm64-v8a armeabi-v7a x86_64}; do
     check "libnz_ffi.so:$abi" "$jni/$abi/libnz_ffi.so" "$(ceiling_of "libnz_ffi.so:$abi")"
 done
 
-for apk in app-arm64-v8a-release.apk app-armeabi-v7a-release.apk app-x86_64-release.apk app-universal-release.apk; do
+# The universal APK is ALWAYS checked: it is the file a sideloaded device
+# downloads, and it exists whatever `NZ_ABIS` says. The per-ABI ones follow the
+# run's set — a pull request builds x86_64 alone (mobile.yaml `env.NZ_ABIS`).
+check app-universal-release.apk "$apk_dir/app-universal-release.apk" \
+    "$(ceiling_of app-universal-release.apk)"
+for abi in ${NZ_ABIS:-arm64-v8a armeabi-v7a x86_64}; do
+    apk="app-$abi-release.apk"
     check "$apk" "$apk_dir/$apk" "$(ceiling_of "$apk")"
 done
 

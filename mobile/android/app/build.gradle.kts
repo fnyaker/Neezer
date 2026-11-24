@@ -16,6 +16,21 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// WHICH ABIs THIS BUILD PACKS, from `NZ_ABIS` (space-separated, unset = all
+// three). CI sets it to `x86_64` on a pull request (a PR run's emulator is
+// x86_64, so the other two libraries were built and packed for nobody), and
+// `mobile/rust/build-android.sh` reads the same variable — the `.so` set and the
+// APK's splits cannot disagree. See docs/agents/mobile.md, « A pull request
+// builds ONE ABI » for the measured cost per ABI.
+val nzAbis =
+    providers
+        .environmentVariable("NZ_ABIS")
+        .orNull
+        ?.split(Regex("\\s+"))
+        ?.filter { it.isNotBlank() }
+        ?.takeIf { it.isNotEmpty() }
+        ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+
 android {
     namespace = "fr.neezer.mobile.app"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -108,7 +123,7 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            include(*nzAbis.toTypedArray())
             isUniversalApk = true
         }
     }
