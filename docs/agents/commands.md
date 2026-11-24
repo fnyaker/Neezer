@@ -289,7 +289,11 @@ second copy of it.
 - `desktop.yaml` — the GPUI workspace in **independent jobs** (`fmt`, `clippy`, `test`, `floor`,
   `build`, `audit`, no `needs` between them): the workflow lasts its LONGEST job, never the sum, so
   work that shares nothing with the suite gets its own job rather than a place at the end of
-  another. Two measured rules:
+  another. **`build` (release binaries) runs on `master`, dispatch and `release.yaml`, never on a
+  PR** (median 1092 s, the longest job: the workflow was its own longest job's duration), and
+  **`audit` runs on a PR only when it changes a `desktop/…/Cargo.{toml,lock}`** — the advisory-DB
+  update of 2026-11-23 turned 5 PRs red in 57 min without a dependency change; `security.yaml`'s
+  `cargo-audit` covers `master`, dispatch and a weekly run. Two measured rules:
   - **Install the system packages from a cache of their `.deb` files**
     (`.github/actions/cached-apt`, `Dir::Cache::archives` — apt-get(8), FILES). The same 116 MB came
     down at **87 and 120 kB/s** in two jobs and **12.4 MB/s** in a third of run 44278965583, so
@@ -317,6 +321,10 @@ second copy of it.
   run in flight — and **a cancelled run never reaches its cache's post-save step**, which is exactly
   why run 44278965693 logged `Cache not found for input keys: mobile-apk-…` and recompiled 8 min of
   Rust. A push to `master` is the commit a release comes from: it runs to the end.
+  **Every job is bounded in time** (`rust` 15 min for a measured median 331 s, `apk` 45 for a max
+  29.7 min and p90 24.9, `emulator` 30 for p90 908 s): without a ceiling a stuck emulator held
+  4 vCPU to GitHub's 6 h. The five app-link probes are skipped on a PR — 5 × ~14.4 s, all
+  `opened=0` until MB2's `resolve_link` — and still run on `master` and tags.
   The rest of this workflow's cost is not in this file: the repository's Actions cache budget is
   exceeded (30 entries, **16.9 GB for the 10 GB** GitHub allows, `gh api /repos/…/actions/caches`),
   so entries are evicted in LRU order and a run that asks for its cache often finds it gone. That is
@@ -334,6 +342,8 @@ second copy of it.
   only runs `lintVitalRelease`, which ignores an error-level check such as AndroidX's
   `UnsafeOptInUsageError` (a missing `@OptIn(UnstableApi::class)` on a declaration using a
   `@UnstableApi` symbol compiles and ships), so the job asks for the full debug lint explicitly.
+  Its three Gradle invocations each get 3 attempts, retried only on a `429` from Maven, and the
+  job is bounded at 45 min like `mobile.yaml`'s `apk`.
   The job then refuses to publish an APK it cannot vouch for: `unzip -t` (a truncated file is not
   an APK), `apksigner verify --min-sdk-version 23` must report the **v1, v2 and v3** schemes —
   without `--min-sdk-version` apksigner skips the JAR check whenever the APK's own minSdk is 24 or
@@ -341,5 +351,7 @@ second copy of it.
   stored entry is the other way an APK opens as "not a valid application"), `aapt2 dump badging`
   must say `org.nsupysonic.app` with a versionCode above 0, and after the upload the asset is
   downloaded again and `cmp`-ed against the built file.
-- `release.yaml` — on a `v*` tag, attaches `docker-compose.yml` (image pinned to the tag's version, since the checked-in file follows `:latest`) and `.env.example` to the GitHub release; `android.yaml` attaches the APK to the same one, and whichever runs first creates the release. The five desktop packages are built in parallel from ONE release build (`binaries`); the **Arch job compiles its own on purpose** (`makepkg` on Arch, P1) and that build was the workflow's critical path — **median 21.47 min, max 36.53 min** over 8 successful runs, from scratch every time. It is cached now: `Swatinem/rust-cache` carries `desktop/packaging/arch/src/target` (the PKGBUILD's `CARGO_TARGET_DIR`, the same path on every run), and its prefix names the `rustc` `pacman -Syu` installed (not the runner's CPU: two attempts of run 44302526625 landed on two EPYC models, so a CPU-keyed entry matched neither — 29.12 then 28.1 min, both cold; the floor stays in the prefix, and `check_cpu_floor.sh` runs on the binary extracted from the package before anything is attached). It saves only the dependencies — which is what a fresh checkout can reuse — and rebuilds the workspace's own crates.
-- `security.yaml` — advisory scanners side by side (CodeQL, Semgrep, Bandit, Trivy over every lockfile + Dockerfile, Gitleaks over the history); each job is `continue-on-error`, so a finding never gates a merge. SARIF goes to the Security tab.
+- `release.yaml` — **the same `concurrency` block as the other workflows** (three runs had waited
+  3464, 2167 and 2103 s behind superseded PR runs); tags and `master` are never cancelled. On a
+  `v*` tag, attaches `docker-compose.yml` (image pinned to the tag's version, since the checked-in file follows `:latest`) and `.env.example` to the GitHub release; `android.yaml` attaches the APK to the same one, and whichever runs first creates the release. The five desktop packages are built in parallel from ONE release build (`binaries`); the **Arch job compiles its own on purpose** (`makepkg` on Arch, P1) and that build was the workflow's critical path — **median 21.47 min, max 36.53 min** over 8 successful runs, from scratch every time. It is cached now: `Swatinem/rust-cache` carries `desktop/packaging/arch/src/target` (the PKGBUILD's `CARGO_TARGET_DIR`, the same path on every run), and its prefix names the `rustc` `pacman -Syu` installed (not the runner's CPU: two attempts of run 44302526625 landed on two EPYC models, so a CPU-keyed entry matched neither — 29.12 then 28.1 min, both cold; the floor stays in the prefix, and `check_cpu_floor.sh` runs on the binary extracted from the package before anything is attached). It saves only the dependencies — which is what a fresh checkout can reuse — and rebuilds the workspace's own crates.
+- `security.yaml` — advisory scanners side by side (CodeQL, Semgrep, Bandit, Trivy over every lockfile + Dockerfile, Gitleaks over the history); each job is `continue-on-error`, so a finding never gates a merge. SARIF goes to the Security tab. `cargo-audit` is the exception: on `master`, dispatch and weekly, and **not** `continue-on-error` (it never runs on a PR, so its red blocks no merge and must stay visible).

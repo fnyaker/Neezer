@@ -31,9 +31,9 @@ class ListenBrainzTestCase(unittest.TestCase):
 class FrontendListenBrainzCase(FrontendTestBase):
     def test_listenbrainz_link(self):
         self._login("alice", "Alic3")
-        rv = self.client.get("/user/me/listenbrainz/link", follow_redirects=True)
+        rv = self.client.post("/user/me/listenbrainz/link", follow_redirects=True)
         self.assertIn("Missing ListenBrainz auth token", rv.data)
-        rv = self.client.get(
+        rv = self.client.post(
             "/user/me/listenbrainz/link",
             query_string={"token": "abcdef"},
             follow_redirects=True,

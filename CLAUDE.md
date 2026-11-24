@@ -105,7 +105,8 @@ Nine workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `m
 **Fully green means every job of every workflow that ran, including the security scanners.** `security.yaml`
 (CodeQL, Semgrep, Bandit, Trivy, Gitleaks) is `continue-on-error`, so its check can show green with
 findings: read each job's log and fix every finding the change introduced (or mark a false positive
-with a justified inline `nosec` / `nosemgrep`). Fix a red check whatever caused it. Once fully
+with a justified inline `nosec` / `nosemgrep`). `cargo-audit` is the exception: `master`, dispatch
+and weekly only, and never `continue-on-error`. Fix a red check whatever caused it. Once fully
 green, merge without asking. No skipped or disabled test to get there.
 
 ## Area notes — read the ones you touch

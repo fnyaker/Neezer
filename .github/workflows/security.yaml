@@ -13,6 +13,12 @@ name: Security scan
 #             Gradle), committed secrets, Dockerfile and compose misconfiguration
 #   gitleaks  secrets anywhere in the git history (the ARL is a full-account
 #             credential: a commit that ever held one is a finding)
+#   cargo-audit
+#             RustSec advisories against `desktop/Cargo.lock`, on `master`, on
+#             demand, and every Monday with the rest: a new advisory is seen
+#             without waiting for a commit that touches the desktop app
+#             (`desktop.yaml` runs the same audit on a PR that changes a Cargo
+#             file, and nowhere else on a PR).
 
 on:
   push:
@@ -138,3 +144,33 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The same audit as desktop.yaml's `audit` job, on the events where it is worth
+  # paying: every push to `master`, on demand, and weekly. NOT on a PR (a PR's
+  # audit lives in desktop.yaml, gated on a changed Cargo file).
+  #
+  # No `continue-on-error` HERE, unlike every other job of this workflow: it
+  # never runs on a PR, so its red blocks no merge and must stay visible — a
+  # green check that hides a known advisory is the thing this job exists to stop.
+  cargo-audit:
+    name: cargo audit (weekly)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # This workflow's `push` trigger is `master` only, so `push` here is `master`.
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # desktop.yaml's `env.RUST_TOOLCHAIN`, inlined: this workflow defines no
+          # env and a version that drifts between the two audits would be two
+          # answers to one question.
+          toolchain: "1.99.1"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit dependencies
+        run: cargo audit

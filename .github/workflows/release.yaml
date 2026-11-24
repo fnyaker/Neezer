@@ -42,6 +42,14 @@ on:
         description: Existing tag to (re)attach the release files to
         required: true
 
+concurrency:
+  # The same block as the other seven workflows, and it was missing here: three
+  # release runs waited 3464 s, 2167 s and 2103 s behind superseded PR runs
+  # (44315499336, 44374509362, 44302526625). Tags and `master` are never
+  # cancelled — a release is the artifact a person installs.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: write
 

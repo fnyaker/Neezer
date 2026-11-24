@@ -66,6 +66,8 @@ jobs:
   rust:
     name: Rust (fmt, clippy, tests)
     runs-on: ubuntu-latest
+    # Bounded in time: measured median 331 s, p90 373 s (6.2 min).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -107,6 +109,9 @@ jobs:
   apk:
     name: APK (bindings, Gradle, lint, sizes)
     runs-on: ubuntu-latest
+    # Bounded in time: this job measured max 29.7 min and p90 24.9 min; the worst
+    # run of the sample lasted 165 min overall (run 45253172024, two attempts).
+    timeout-minutes: 45
     permissions:
       contents: write # attach the native APKs to releases on tags
     steps:
@@ -525,6 +530,9 @@ jobs:
   emulator:
     name: Emulator smoke (headless, KVM)
     runs-on: ubuntu-latest
+    # Bounded in time: measured median 704 s, p90 908 s (15.1 min) — without it a
+    # stuck emulator held 4 vCPU to GitHub's 6 h ceiling.
+    timeout-minutes: 30
     needs: apk
     steps:
       - uses: actions/checkout@v4
