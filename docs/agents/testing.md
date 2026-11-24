@@ -201,3 +201,23 @@ the code under it was broken:
   SIGKILL launches left exactly one and the launch after each left 0**, and a bench kept alive while
   another started kept its library and kept answering `200 /api/version`. `tests/test_perf_api_leaks.py`
   (7 tests, 4.1 s) pins all of it, each of its three safety rules checked against its own mutation.
+
+## A timing benchmark is skipped where the machine is shared, never deleted
+
+**A BOUND MEASURED ON A SHARED RUNNER MEASURES THE RUNNER** (owner decision, 2026-11-24: « on vire
+les tests de perf en CI »). Six of the suites' timing tests failed only that way, and every one of
+them passed on a rerun of the SAME commit — the proof that it was the machine: `theBarsSceneFitsIn
+OneFrame` p95 **16.91 ms** against 16.7 on attempt 1 of run 45248683801, `theScopeSceneHoldsThirtyFramesASecond`
+**33.67** then **40.40 ms** against 33.4, the 200 MiB loopback fetch **36 MB/s** against 40,
+`a_guest_hears_the_host_within_a_millisecond` **−1 650 ms** (the host's own descheduling, not the
+code), the vizcore scope `5 of 7` rounds, and `theTapToSoundDelayIsMeasuredOnOneClock` "trial 11
+never rendered a sample". Each now declares itself skipped where the hardware is shared: `CI` set
+(GitHub sets it everywhere) in `webapp/test/vizcore.test.mjs`, `desktop/crates/nz-lan/tests/fetch.rs`
+and `desktop/crates/nz-party/src/tests/end_to_end.rs`; the software rasteriser / generic emulator
+fingerprint in `VizDeviceTest` and `NowPlayingDeviceTest`.
+
+The BODY is never touched and no assertion is removed: `npm test` without `CI`, `cargo test` on a
+workstation and a real phone still run every one of them, and a skip is printed, not silent. This is
+the one place a green check does not mean "measured"; the number that replaces it is the run on
+dedicated hardware that the area note records. Skipping is for timing comparisons only — a
+functional test that happens to be slow still runs on CI.

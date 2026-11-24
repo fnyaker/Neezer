@@ -179,6 +179,14 @@ fn median(mut values: Vec<f64>) -> f64 {
 
 #[test]
 fn a_guest_hears_the_host_within_a_millisecond() {
+    // A benchmark, not a gate: on a shared CI runner the scheduler, not this
+    // code, decides how fast a thread wakes, and the millisecond bound is the
+    // whole assertion. Skipped there (owner decision 2026-11-24); the test stays
+    // runnable locally and on a dedicated machine.
+    if std::env::var_os("CI").is_some() {
+        eprintln!("skipped on shared CI runner (perf benchmark)");
+        return;
+    }
     let dir = std::env::temp_dir().join(format!("nz-party-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");

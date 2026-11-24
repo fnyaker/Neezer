@@ -1761,6 +1761,14 @@ do, on a device.
   scroll benches failed exactly so. Hence `ShellFramesBenchmark` (a tab tap does repaint: 150 frames
   per iteration, p95 19.4 ms) and, in the two list benches, an explicit `assumeTrue(scrollable)` precondition that
   turns itself on with MB8/MB11.
+- **A timing bound on the emulator is skipped, not widened** (owner decision 2026-11-24, « on vire les
+  tests de perf en CI »). `VizDeviceTest` read p95 **16.91 ms** against 16.7 and **33.67 / 40.40 ms**
+  against 33.4; `NowPlayingDeviceTest`'s tap-to-sound failed with "trial 11 never rendered a sample" —
+  and every one of them went green on a rerun of the SAME commit, so the number described the runner.
+  The two viz scenes now `assumeFalse` on `softwareRasteriser`, the tap-to-sound on an emulator
+  fingerprint (`Build.HARDWARE` ranchu/goldfish): body and assertion intact, so a real phone still
+  measures them, and the emulator job prints them as skipped. Functional tests (`theEcoGradeDrawsNothing`)
+  are untouched; the Rust and `node --test` halves are [testing.md](testing.md).
 - **AAudio's first callback pre-fills the whole buffer.** A 5 s probe reads ticks 1.10–1.20, a 20 s one
   1.05, a 60 s one 1.017 with `ticks_steady` 1.000 — the number to trust is
   `(frames − buffer) / (rate × elapsed)`, and a short probe lies by exactly `buffer / elapsed`.

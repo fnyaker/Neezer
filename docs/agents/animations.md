@@ -18,6 +18,11 @@ real 0.6× win takes under any load) and the **median** pair ratio is under 0.85
 faster" cannot pass on the count alone). Measured over **10 consecutive runs at loads 9.6 → 18.2** on 16
 cores: 10/10 green, Rust faster **7/7** every time, median **0.59–0.66**; the absolute numbers moved
 54.6 → 96.5 µs (JavaScript) and 32.5 → 57.8 µs (Rust) with the load while the ratio did not move at all.
+**It is nevertheless skipped when `CI` is set** (owner decision 2026-11-24, « on vire les tests de perf
+en CI »): the ratio survives a load this process imposes on itself, not a runner that deschedules it
+between the two readings — the suite ran it red there with 5 of 7 rounds (run 44179476640). The body
+is untouched: `npm test` without `CI` still runs it, and [testing.md](testing.md) says what a skip
+means for a green check.
 
 **Animations** (`webapp/src/lib/viz/`): a mode registry (`off`, `bars`, `pulse`, `scope`, `aurora`,
 `smart` — `modes.js`), a palette whose SOURCE the user picks (cover art / the spectrum itself / fixed

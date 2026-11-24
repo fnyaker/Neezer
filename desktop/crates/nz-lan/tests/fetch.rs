@@ -1298,6 +1298,15 @@ async fn a_bulk_fetch_holds_the_one_bulk_lane_and_a_play_never_waits() {
 /// of an order of magnitude without failing on a shared runner.
 #[tokio::test]
 async fn a_two_hundred_megabyte_fetch_reaches_the_notes_throughput() {
+    // A benchmark, not a gate: a shared CI runner's page cache, disk and CPU
+    // share the machine with every other job, so the MB/s figure it prints says
+    // nothing about this code. Skipped there (owner decision 2026-11-24); run
+    // it locally or on the dedicated box. `bounded` (the harness that names a
+    // stuck test) is not even entered, so nothing is left hanging.
+    if std::env::var_os("CI").is_some() {
+        eprintln!("skipped on shared CI runner (perf benchmark)");
+        return;
+    }
     bounded(
         "a_two_hundred_megabyte_fetch_reaches_the_notes_throughput",
         async {

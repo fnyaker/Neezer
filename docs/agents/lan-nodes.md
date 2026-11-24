@@ -1915,7 +1915,7 @@ unless said otherwise):
 | replica memory | **48.0 B/item** — 384 096 B for 8 000 tracks, 6 145 536 B for 16 × 8 000 | same, and `memory_is_capped_for_sixteen_peers_of_eight_thousand_tracks` |
 | a tap (decision) | **11.8 µs**, **0** requests, 16 replicas of 8 000 tracks | `cargo test -p nz-lan --test fetch memory_is_capped -- --nocapture` |
 | `decide` alone, 16 candidates | **1.45 µs** per call over 10 000 runs | `cargo test -p nz-lan --lib decide -- --nocapture` |
-| a 200 MiB fetch over loopback | **74 MB/s** debug; **450 MB/s** release | `cargo test -p nz-lan --test fetch a_two_hundred_megabyte -- --nocapture` and `--release` |
+| a 200 MiB fetch over loopback | **74 MB/s** debug; **450 MB/s** release | `cargo test -p nz-lan --test fetch a_two_hundred_megabyte -- --nocapture` and `--release` (skipped when `CI` is set: a shared runner reads 36 MB/s, run 45349175425) |
 | a `Play` fetch beside a capped `Bulk` one | **4.8 ms** for 256 KiB while 1 MiB is paced at 64 KiB/s and holds the one Bulk lane | `a_bulk_fetch_holds_the_one_bulk_lane_and_a_play_never_waits` |
 | the whole LN9 file | **11 tests**, 3.1 s debug (10.7 s with `--test-threads=1`) | `cargo test -p nz-lan --test fetch` |
 

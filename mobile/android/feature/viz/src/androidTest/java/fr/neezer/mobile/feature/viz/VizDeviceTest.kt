@@ -18,6 +18,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.math.PI
 import kotlin.math.sin
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -83,6 +84,11 @@ class VizDeviceTest {
 
     @Test
     fun theBarsSceneFitsInOneFrame() {
+        // A benchmark, not a gate (owner decision 2026-11-24): the p95 this
+        // asserts is a share of one 60 Hz frame, and a shared runner's
+        // software rasteriser cannot hold any figure that means anything.
+        // The shell's own repaint is its floor (see the class note).
+        assumeFalse("perf benchmark skipped on CI software rasteriser", softwareRasteriser)
         val durations = measureScene(mode = "bars")
         // THE ACCEPTANCE'S NUMBER, on the screen it names: « 60 fps p95 ≤ 16.7 ms
         // on the full-screen bars » (docs/agents/mobile.md, MB21's row). CI's
@@ -93,6 +99,9 @@ class VizDeviceTest {
 
     @Test
     fun theScopeSceneHoldsThirtyFramesASecond() {
+        // Same rule as the bars above: a timing benchmark, skipped where the
+        // rasteriser is the CPU (owner decision 2026-11-24).
+        assumeFalse("perf benchmark skipped on CI software rasteriser", softwareRasteriser)
         // The oscilloscope is the heavier scene — two lanes, two strokes each, a
         // 500-segment path a stroke — and on CI's shared emulator it sat just over
         // one 60 Hz frame (the bars have ~8× margin there, the scope ~2×). What this
