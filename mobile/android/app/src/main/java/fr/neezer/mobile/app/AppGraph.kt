@@ -6,6 +6,7 @@ import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState
 import uniffi.nz_ffi.AppLink
+import uniffi.nz_ffi.Me
 import uniffi.nz_ffi.resolveLink
 
 /**
@@ -77,14 +78,35 @@ class AppGraph(private val application: Application) : NzNavigator {
      *
      * - pas de noyau : l'écran serveur (il dit pourquoi le noyau manque) ;
      * - pas de serveur enregistré : l'écran serveur ;
-     * - un cookie de session sur l'appareil : l'accueil (la restauration tourne
-     *   en fond depuis `NzApplication`) ;
+     * - une personne déjà lue par `login`/`restore` : sa route (M3 : la
+     *   préparation si le serveur dit qu'elle reste à faire, sinon l'accueil) ;
+     * - un cookie de session sur l'appareil, personne pas encore lue : l'accueil
+     *   (la restauration tourne en fond depuis `NzApplication`, et son
+     *   `MeChanged` ouvre la préparation s'il en reste une — M3) ;
      * - un serveur sans cookie : la connexion, serveur conservé.
      */
     fun startRoute(): Any {
         val core = NzBridge.core ?: return Routes.Setup
         if (core.server() == null) return Routes.Setup
+        val me = core.me()
+        if (me != null) return routeFor(me)
         return if (core.hasSession()) Routes.Home else Routes.Login
+    }
+
+    /**
+     * Où va une personne connectée : la préparation, ou l'accueil.
+     * `stepFor` de `webapp/src/lib/onboarding.js:230` : tout ce qui n'est pas
+     * `"artists"` ou `"account"` est terminé.
+     */
+    private fun routeFor(me: Me): Any =
+        if (me.onboarding == "artists" || me.onboarding == "account") Routes.Onboarding else Routes.Home
+
+    /**
+     * Le collecteur de session est le seul appelant (M3) : la préparation n'est
+     * ouverte que si le serveur dit qu'elle reste à faire.
+     */
+    fun openOnboardingIfNeeded(me: Me) {
+        if (routeFor(me) == Routes.Onboarding) replaceStackWith(Routes.Onboarding)
     }
 
     override fun openHomeAfterSignIn() = replaceStackWith(Routes.Home)
@@ -94,6 +116,9 @@ class AppGraph(private val application: Application) : NzNavigator {
 
     /** M2 : « Changer de serveur » ouvre l'écran serveur, rien n'est effacé. */
     override fun openSetup() = replaceStackWith(Routes.Setup)
+
+    /** M3 : la préparation, pile vidée — « retour » ne ramène pas sur la coquille. */
+    override fun openOnboarding() = replaceStackWith(Routes.Onboarding)
 
     /** Une seule définition de « remplacer la pile » : chaque route laissée
      *  derrière est un piège à retour (M1 : la préparation ; M2 : la session). */
