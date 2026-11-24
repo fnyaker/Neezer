@@ -331,8 +331,8 @@ private fun CertificateCard(probe: ProbeResult, onAccept: () -> Unit) {
             if (probe.updateApk) {
                 Text(
                     probe.androidVersion?.let {
-                        "Le serveur publie la version $it : Réglages → Aide pour l'installer."
-                    } ?: "Le serveur publie une mise à jour : Réglages → Aide pour l'installer.",
+                        "Le serveur publie la version $it : Réglages → Assistance pour l'installer."
+                    } ?: "Le serveur publie une mise à jour : Réglages → Assistance pour l'installer.",
                     style = Sillon.type.bodySmall,
                 )
             }
