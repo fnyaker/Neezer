@@ -263,6 +263,37 @@ class RemoteModel(
         }
     }
 
+    /**
+     * « Couper » de la barre hôte (`RemoteHostChip.svelte#cut`) : révoque TOUT de
+     * suite, sans la confirmation en deux temps de la feuille — la personne voit
+     * qui la pilote, et un seul geste doit suffire à reprendre son lecteur. La
+     * feuille garde `cutAll()`, qui est son propre rituel.
+     */
+    fun cutAllNow() {
+        scope.launch {
+            try {
+                withContext(io) { service.revokeAll() }
+                _state.update { it.copy(links = emptyList(), invite = null, armedCut = false) }
+                toast("Contrôle à distance coupé", null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("Impossible de couper : ${NzErrors.text(e)}") { cutAllNow() }
+            }
+        }
+    }
+
+    /**
+     * Le lancement de l'app : un appareil prêté lors d'une session précédente
+     * doit répondre. `subscribe()` d'abord (le statut arrive ensuite, sur
+     * changement), puis la question au serveur — au plus une, et seulement si une
+     * session existe (le noyau répond `false` sinon).
+     */
+    fun resumeHostAtStart() {
+        subscribe()
+        scope.launch { runCatching { withContext(io) { service.resumeHost() } } }
+    }
+
     /** The text « Partager » and « Copier » hand out. */
     fun inviteText(row: RemoteLinkRow): String =
         "Tu peux piloter ma musique (${row.levelLabel.lowercase()}) : ${row.url}"
