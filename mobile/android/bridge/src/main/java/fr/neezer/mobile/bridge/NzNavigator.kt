@@ -34,4 +34,14 @@ interface NzNavigator {
      * `AppGraph` overrides it; every other implementation keeps compiling.
      */
     fun openViz() {}
+
+    /**
+     * L'arrivée sur l'accueil APRÈS une connexion : les écrans de préparation
+     * sortent de la pile, sinon « retour » depuis l'accueil ramène sur le
+     * formulaire de connexion.
+     *
+     * Une méthode par DÉFAUT, comme [openViz] : les doublures de test des autres
+     * modules n'ont pas à l'implémenter.
+     */
+    fun openHomeAfterSignIn() {}
 }

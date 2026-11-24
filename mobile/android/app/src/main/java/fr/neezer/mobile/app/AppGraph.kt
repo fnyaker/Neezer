@@ -2,6 +2,7 @@ package fr.neezer.mobile.app
 
 import android.app.Application
 import androidx.navigation.NavHostController
+import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState
 import uniffi.nz_ffi.AppLink
@@ -68,6 +69,44 @@ class AppGraph(private val application: Application) : NzNavigator {
     private fun graphReady(): Boolean = runCatching {
         controller?.currentBackStackEntry != null
     }.getOrDefault(false)
+
+    /**
+     * La route sur laquelle le shell s'ouvre, décidée UNE fois, avant que le
+     * `NavHost` ne compose (sa destination de départ est figée à la première
+     * composition).
+     *
+     * - pas de noyau : l'écran serveur (il dit pourquoi le noyau manque) ;
+     * - pas de serveur enregistré : l'écran serveur ;
+     * - hors ligne : l'accueil — un `restore()` sans lien n'est pas un verdict
+     *   sur le compte (rule 3), et le collecteur de session réagira au vrai 401 ;
+     * - `/api/me` a nommé la personne : l'accueil ;
+     * - le serveur a répondu « personne » : la connexion, serveur conservé.
+     */
+    suspend fun startRoute(): Any {
+        val core = NzBridge.core ?: return Routes.Setup
+        if (core.server() == null) return Routes.Setup
+        if (NzBridge.offline) return Routes.Home
+        val me = try {
+            core.restore()
+        } catch (_: Exception) {
+            // Un certificat refusé, un serveur muet : ce qui est sur l'appareil
+            // reste utilisable, et Aide dit la cause.
+            return Routes.Home
+        }
+        return if (me != null) Routes.Home else Routes.Login
+    }
+
+    override fun openHomeAfterSignIn() = replaceStackWith(Routes.Home)
+
+    /** Une seule définition de « remplacer la pile » : chaque route laissée
+     *  derrière est un piège à retour (M1 : la préparation ; M2 : la session). */
+    private fun replaceStackWith(route: Any) {
+        val nav = controller ?: return
+        nav.navigate(route) {
+            popUpTo(nav.graph.id) { inclusive = true }
+            launchSingleTop = true
+        }
+    }
 
     /** The app's version, as the launcher shows it (Aide and the diagnostic log). */
     fun appVersion(): String = runCatching {

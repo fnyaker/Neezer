@@ -18,7 +18,7 @@ import org.junit.runner.RunWith
 /**
  * The skeleton's instrumented smoke (docs/agents/mobile.md, MQ1): the app really
  * starts on a device, its shell paints, a route opens, and the Rust core answers
- * through JNA. Three facts, three tests — each one is what a lot after MB0 can
+ * through JNA. Four facts, four tests — each one is what a lot after MB0 can
  * break without noticing, and each failure names the layer it broke.
  *
  * **Semantics, never coordinates** (the note's rule): every node is found by its
@@ -45,9 +45,17 @@ class ShellSmokeTest {
     @get:Rule
     val rule = createAndroidComposeRule<MainActivity>()
 
-    /** The app starts and its shell paints the home (MB5 filled it: its own marker). */
+    /** M1 : une installation neuve n'a pas de serveur — elle ouvre l'écran serveur. */
     @Test
-    fun shellPaintsHome() {
+    fun freshInstallOpensServerSetup() {
+        rule.onNodeWithText("Adresse du serveur").assertIsDisplayed()
+        rule.onNode(hasText("Vérifier le serveur") and hasClickAction()).assertIsDisplayed()
+    }
+
+    /** La coquille reste utilisable depuis l'écran serveur (les onglets sont vivants). */
+    @Test
+    fun theHomeTabOpensFromTheSetupScreen() {
+        rule.onNode(hasText("Accueil") and hasClickAction()).performClick()
         rule.onNodeWithContentDescription("Accueil Neezer").assertIsDisplayed()
     }
 

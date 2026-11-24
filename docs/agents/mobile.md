@@ -6338,3 +6338,31 @@ mesures en octets comptés, tests sur événements, émulateur via mobile/tools/
 Fin : branche <ta-branche>/coexist, PR « feat(mobile): l'app native s'installe à côté de l'ancienne »,
 CI verte, rebase + diff --stat, merge, `ao report --done`.
 ```
+
+### M1 — La route de départ (delivered 2026-11-24)
+
+**La règle.** La destination de départ du `NavHost` est décidée UNE fois, avant sa première
+composition : pas de noyau → `Setup` (il dit pourquoi le noyau manque), pas de serveur enregistré
+→ `Setup`, hors ligne → `Home` (un `restore()` sans lien n'est pas un verdict sur le compte, rule 3),
+`/api/me` nomme la personne → `Home`, le serveur répond « personne » → `Login` avec le serveur
+conservé. Le `NavHost` fige `startDestination` à sa première composition, donc la calculer dans un
+`LaunchedEffect` qui dessinerait l'accueil d'abord mentirait sur ce qui arrive : la coquille attend
+`startRoute()` (fond `Sillon.colors.bg` seul, aucun squelette) et ne compose le graphe qu'ensuite.
+La restauration de session a quitté `NzApplication` pour `AppGraph.startRoute` : c'est elle qui
+choisit la route, et la garder aux deux endroits aurait coûté un second `GET /api/me` par lancement
+(**1 requête avant, 1 après** ; +0 appel FFI, le diff le montre).
+
+**Deux pièges payés ici.** `NetworkWatcher` est `internal` à `:bridge` : `:app` ne peut pas le lire,
+donc `NzBridge.offline` (`get() = NetworkWatcher.offline`) est la seule porte publique, et le watch
+reste `internal`. Et `SetupEntry` dessinait sa propre `NzTopBar` dans TROIS branches (noyau absent,
+serveur, connexion) quand la coquille en a désormais une seule : un écran sans noyau montrait deux
+barres. `grep -n NzTopBar mobile/android/feature/setup` doit rester vide.
+
+**Mesuré par la CI, pas par un appareil.** `ci-emulator.sh` imprime `doors_opened=6
+doors_failed=0 doors_expected=6` (la porte `Serveur` s'ajoute aux cinq onglets/Réglages), et
+`ShellSmokeTest` passe de 3 à 4 tests (`freshInstallOpensServerSetup`,
+`theHomeTabOpensFromTheSetupScreen` en plus de `libraryTabOpensItsRoute` et
+`settingsShowsTheRustVersion`). Le TTFD p50 (`StartupTimingMetric`, 10 itérations) n'a PAS été
+produit : l'image du worker n'a ni JDK ni SDK Android ni émulateur, et `mobile.yaml` ne lance pas de
+macrobenchmark. Le chiffre de référence reste MQ2 (p50 1 071,7 / p95 1 256,5 ms, mesuré pour un
+compte semé) ; ce lot déplace la restauration, il ne change pas le coût de la première frame.

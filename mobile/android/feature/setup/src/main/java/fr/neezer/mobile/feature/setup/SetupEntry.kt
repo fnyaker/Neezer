@@ -49,10 +49,8 @@ import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzSwitch
-import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
 import kotlinx.coroutines.launch
-import uniffi.nz_ffi.AppLink
 import uniffi.nz_ffi.ProbeResult
 import uniffi.nz_ffi.Screens
 
@@ -96,7 +94,6 @@ fun SetupEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
 
     if (setup == null || login == null) {
         Column(modifier.fillMaxSize()) {
-            NzTopBar(title = "Serveur", onBack = { nav.back() })
             EmptyState(
                 title = "Le noyau de l'application n'est pas disponible",
                 body = NzBridge.failure ?: "Redémarre l'application.",
@@ -108,86 +105,94 @@ fun SetupEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
     val server by setup.state.collectAsState()
     val account by login.state.collectAsState()
 
-    Column(modifier.fillMaxSize()) {
-        NzTopBar(title = if (server.saved) "Connexion" else "Serveur", onBack = { nav.back() })
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = NzSpacing.l, vertical = NzSpacing.m),
-            verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
-        ) {
-            MigrationNotice(migration)
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = NzSpacing.l, vertical = NzSpacing.m),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
+    ) {
+        MigrationNotice(migration)
 
-            if (!server.saved) {
-                NzCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
-                        Text("Adresse du serveur", style = Sillon.type.titleSmall)
-                        Text(
-                            "Le serveur Neezer qui héberge ta musique. Sur un réseau local, " +
-                                "laisse la vérification active si ton serveur a un vrai certificat.",
-                            style = Sillon.type.bodySmall,
+        // Où l'on est déjà : sans ça, « Changer de serveur » demandait de
+        // retaper une adresse sans dire laquelle on quitte.
+        val current = remember(core) { runCatching { core?.server()?.origin }.getOrNull() }
+        if (current != null && !server.saved) {
+            Text(
+                text = "Serveur actuel : $current",
+                style = Sillon.type.bodySmall,
+                color = Sillon.colors.dim,
+            )
+        }
+
+        if (!server.saved) {
+            NzCard {
+                Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                    Text("Adresse du serveur", style = Sillon.type.titleSmall)
+                    Text(
+                        "Le serveur Neezer qui héberge ta musique. Sur un réseau local, " +
+                            "laisse la vérification active si ton serveur a un vrai certificat.",
+                        style = Sillon.type.bodySmall,
+                    )
+                    NzField(
+                        value = server.host,
+                        onValueChange = setup::onHost,
+                        label = "Serveur",
+                        placeholder = "music.example.org",
+                        keyboard = KeyboardType.Uri,
+                    )
+                    NzField(
+                        value = server.port,
+                        onValueChange = setup::onPort,
+                        label = "Port (facultatif)",
+                        placeholder = "4533",
+                        keyboard = KeyboardType.Number,
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Vérifier le certificat", style = Sillon.type.label)
+                        NzSwitch(
+                            checked = server.verifySsl,
+                            onCheckedChange = setup::onVerifySsl,
+                            label = "Vérifier le certificat",
                         )
-                        NzField(
-                            value = server.host,
-                            onValueChange = setup::onHost,
-                            label = "Serveur",
-                            placeholder = "music.example.org",
-                            keyboard = KeyboardType.Uri,
+                    }
+                    server.cause?.let { cause ->
+                        Text(cause, style = Sillon.type.bodySmall, color = Sillon.colors.hrt)
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        NzButton(
+                            text = if (server.checking) "Vérification…" else "Vérifier le serveur",
+                            onClick = { setup.check() },
+                            enabled = server.canCheck,
+                            glyph = NzGlyph.Check,
                         )
-                        NzField(
-                            value = server.port,
-                            onValueChange = setup::onPort,
-                            label = "Port (facultatif)",
-                            placeholder = "4533",
-                            keyboard = KeyboardType.Number,
-                        )
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Vérifier le certificat", style = Sillon.type.label)
-                            NzSwitch(
-                                checked = server.verifySsl,
-                                onCheckedChange = setup::onVerifySsl,
-                                label = "Vérifier le certificat",
-                            )
-                        }
-                        server.cause?.let { cause ->
-                            Text(cause, style = Sillon.type.bodySmall, color = Sillon.colors.hrt)
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+                        if (server.cause != null) {
                             NzButton(
-                                text = if (server.checking) "Vérification…" else "Vérifier le serveur",
-                                onClick = { setup.check() },
-                                enabled = server.canCheck,
-                                glyph = NzGlyph.Check,
+                                text = "Continuer quand même",
+                                onClick = { setup.continueAnyway() },
+                                kind = NzButtonKind.Secondary,
                             )
-                            if (server.cause != null) {
-                                NzButton(
-                                    text = "Continuer quand même",
-                                    onClick = { setup.continueAnyway() },
-                                    kind = NzButtonKind.Secondary,
-                                )
-                            }
-                            if (server.checking) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = Sillon.colors.ac,
-                                    strokeWidth = 2.dp,
-                                )
-                            }
+                        }
+                        if (server.checking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Sillon.colors.ac,
+                                strokeWidth = 2.dp,
+                            )
                         }
                     }
                 }
-                server.probe?.let { probe -> CertificateCard(probe, onAccept = setup::acceptPin) }
-            } else {
-                LoginForm(login, nav)
             }
+            server.probe?.let { probe -> CertificateCard(probe, onAccept = setup::acceptPin) }
+        } else {
+            LoginForm(login, nav)
         }
     }
 }
@@ -209,28 +214,26 @@ fun LoginEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val login = remember(service) { service?.let { LoginModel(it, scope) } }
 
-    Column(modifier.fillMaxSize()) {
-        NzTopBar(title = "Connexion", onBack = { nav.back() })
-        if (login == null) {
-            EmptyState(
-                title = "Le noyau de l'application n'est pas disponible",
-                body = NzBridge.failure ?: "Redémarre l'application.",
-            )
-            return@Column
-        }
-        // A launch that already has a cookie restores silently: this screen is
-        // shown only when nobody is signed in.
-        LaunchedEffect(Unit) { login.restore { nav.go(AppLink.Home) } }
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = NzSpacing.l, vertical = NzSpacing.m),
-            verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
-        ) {
-            LoginForm(login, nav)
-            DeezerAccountCard()
-        }
+    if (login == null) {
+        EmptyState(
+            title = "Le noyau de l'application n'est pas disponible",
+            body = NzBridge.failure ?: "Redémarre l'application.",
+            modifier = modifier,
+        )
+        return
+    }
+    // A launch that already has a cookie restores silently: this screen is
+    // shown only when nobody is signed in.
+    LaunchedEffect(Unit) { login.restore { nav.openHomeAfterSignIn() } }
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = NzSpacing.l, vertical = NzSpacing.m),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
+    ) {
+        LoginForm(login, nav)
+        DeezerAccountCard()
     }
 }
 
@@ -260,14 +263,14 @@ private fun LoginForm(model: LoginModel, nav: NzNavigator) {
                 Text(cause, style = Sillon.type.bodySmall, color = Sillon.colors.hrt)
                 NzButton(
                     text = "Réessayer",
-                    onClick = { model.submit { nav.go(AppLink.Home) } },
+                    onClick = { model.submit { nav.openHomeAfterSignIn() } },
                     kind = NzButtonKind.Secondary,
                     enabled = state.canSubmit,
                 )
             }
             NzButton(
                 text = if (state.busy) "Connexion…" else "Se connecter",
-                onClick = { model.submit { nav.go(AppLink.Home) } },
+                onClick = { model.submit { nav.openHomeAfterSignIn() } },
                 enabled = state.canSubmit,
                 glyph = NzGlyph.User,
             )

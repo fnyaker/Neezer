@@ -1,5 +1,6 @@
 package fr.neezer.mobile.app
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -33,6 +37,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.discovery.RecapEntry
 import fr.neezer.mobile.feature.discovery.ReleaseShelfEntry
 import fr.neezer.mobile.feature.discovery.ReleasesEntry
@@ -171,6 +178,17 @@ fun NzApp(graph: AppGraph) {
     val nav = rememberNavController()
     graph.attach(nav)
 
+    // La destination de départ est figée à la première composition : elle est
+    // donc décidée AVANT. L'attente ne dessine que le fond du thème — aucun
+    // squelette, qui mentirait sur ce qui arrive.
+    var start by remember(graph) { mutableStateOf<Any?>(null) }
+    LaunchedEffect(graph) { start = graph.startRoute() }
+    val startRoute = start
+    if (startRoute == null) {
+        Box(Modifier.fillMaxSize().background(Sillon.colors.bg))
+        return
+    }
+
     val backStackEntry by nav.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination
 
@@ -192,7 +210,7 @@ fun NzApp(graph: AppGraph) {
             Row(Modifier.fillMaxSize()) {
                 WideShell(nav, destination)
                 Box(Modifier.fillMaxSize()) {
-                    NavGraph(graph, nav)
+                    NavGraph(graph, nav, startRoute)
                     Hosts(graph)
                 }
             }
@@ -203,7 +221,13 @@ fun NzApp(graph: AppGraph) {
                 // no header yet. It is what makes Aide (and its `nz_version()`)
                 // reachable from the first screen.
                 topBar = {
-                    NzTopBar(destination = destination, onSettings = { nav.navigate(Routes.Settings()) })
+                    NzTopBar(
+                        destination = destination,
+                        // Un retour seulement s'il y a quelque part où revenir :
+                        // sur l'accueil, la flèche n'aurait rien à faire.
+                        onBack = if (nav.previousBackStackEntry != null) ({ graph.back() }) else null,
+                        onSettings = { nav.navigate(Routes.Settings()) },
+                    )
                 },
                 bottomBar = {
                     Column {
@@ -229,7 +253,7 @@ fun NzApp(graph: AppGraph) {
                 containerColor = MaterialTheme.colorScheme.background,
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding)) {
-                    NavGraph(graph, nav)
+                    NavGraph(graph, nav, startRoute)
                     Hosts(graph)
                 }
             }
@@ -265,16 +289,30 @@ private fun WideShell(nav: NavHostController, destination: NavDestination?) {
 }
 
 /**
- * The shell's title bar: the screen the person is on, and the Réglages action.
+ * The shell's title bar: the screen the person is on, its way back, and the
+ * Réglages action.
  *
  * The title comes from the destination — one `when` on the route type, so a new
  * route without a title is a compile error rather than an empty bar.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NzTopBar(destination: NavDestination?, onSettings: () -> Unit) {
+private fun NzTopBar(
+    destination: NavDestination?,
+    onBack: (() -> Unit)?,
+    onSettings: () -> Unit,
+) {
     TopAppBar(
         title = { Text(destination.title()) },
+        navigationIcon = {
+            if (onBack != null) {
+                NzIconButton(
+                    glyph = NzGlyph.ChevronLeft,
+                    contentDescription = "Retour",
+                    onClick = onBack,
+                )
+            }
+        },
         actions = { TextButton(onClick = onSettings) { Text("Réglages") } },
     )
 }
@@ -312,9 +350,9 @@ private fun NavDestination?.title(): String {
  * something a person can see).
  */
 @Composable
-private fun NavGraph(graph: AppGraph, nav: NavHostController) {
+private fun NavGraph(graph: AppGraph, nav: NavHostController, startDestination: Any) {
     val navigator: NzNavigator = graph
-    NavHost(navController = nav, startDestination = Routes.Home) {
+    NavHost(navController = nav, startDestination = startDestination) {
         composable<Routes.Setup> { SetupEntry(nav = navigator) }
         composable<Routes.Login> { LoginEntry(nav = navigator) }
         composable<Routes.Invite> { entry -> InviteEntry(entry.toRoute<Routes.Invite>().code, navigator) }
