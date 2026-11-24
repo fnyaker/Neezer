@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.navigation.NavHostController
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.NzToasts
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState
 import uniffi.nz_ffi.AppLink
 import uniffi.nz_ffi.Me
@@ -148,9 +149,12 @@ class AppGraph(private val application: Application) : NzNavigator {
             is AppLink.Album -> nav.navigate(Routes.Album(link.id))
             is AppLink.Playlist -> nav.navigate(Routes.Playlist(link.id))
             is AppLink.Track -> {
-                // MB10 lands a track link on the track, inside the album the
-                // server says it belongs to. There is no route of its own in the
-                // inventory, and inventing one here would fork it.
+                // Ni le SPA ni le serveur n'ont d'écran de titre : la table de
+                // routes de `App.svelte` n'a pas `/track/:id`, et aucune lecture
+                // ne rend l'album d'un titre (`neezer/webui` n'a pas de
+                // `GET /api/track/<id>`). Un lien qui ne fait rien en silence est
+                // un bug (rule 3) : il dit ce qu'il en est, et où chercher.
+                NzToasts.show("Un lien de titre ne s'ouvre pas encore : cherche le titre dans la recherche.")
             }
             is AppLink.Podcast -> nav.navigate(Routes.Show(link.id))
             is AppLink.Credits -> nav.navigate(Routes.Credits(link.name))
