@@ -74,6 +74,9 @@ interface LibraryService {
     /** Whether the server has the folder routes (rule 7); `null` is a doubt. */
     suspend fun foldersSupported(): Boolean?
 
+    /** `POST /api/playlists` — une requête ; rend l'identifiant de la playlist créée. */
+    suspend fun createPlaylist(title: String): String
+
     suspend fun createFolder(title: String): LibraryTree
 
     suspend fun renameFolder(id: String, title: String): LibraryTree
@@ -141,6 +144,9 @@ class NzLibraryService(private val screens: Screens) : LibraryService {
     override suspend fun tree(): LibraryTree = screens.libraryPlaylists()
 
     override suspend fun foldersSupported(): Boolean? = screens.foldersSupported()
+
+    override suspend fun createPlaylist(title: String): String =
+        screens.createPlaylistFrom(title, emptyList()).id
 
     override suspend fun createFolder(title: String): LibraryTree = screens.createFolder(title)
 

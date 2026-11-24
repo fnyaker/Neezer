@@ -176,6 +176,8 @@ class LibraryModel(
         val moveTarget: MoveTarget? = null,
         /** The one mutation in flight, by key, so a second press is ignored. */
         val busy: String? = null,
+        /** La playlist qu'une création vient d'ouvrir : la coquille la suit, puis l'efface. */
+        val openPlaylist: String? = null,
     ) {
         /** The favourites' rows, when there is a list to draw. */
         val favoriteRows: LibraryRows? get() = (favorites as? ScreenState.Ready)?.data
@@ -520,6 +522,35 @@ class LibraryModel(
     }
 
     fun filterPlaylists(query: String) = _state.update { it.copy(playlistQuery = query) }
+
+    /**
+     * « Nouvelle playlist » (`routes/Library.svelte:536`). Le SPA demande le nom
+     * dans un `window.prompt` ; le téléphone n'en a pas, donc la feuille de
+     * l'écran le demande et appelle ceci. Rien d'optimiste : un nom sans playlist
+     * serait un mensonge, et c'est la réponse qui porte l'identifiant à ouvrir.
+     * La relecture de l'arbre est celle du SPA après une création
+     * (`userPlaylists(true)`) : une requête, pas une liste devinée.
+     */
+    fun newPlaylist(title: String) {
+        val name = title.trim()
+        if (name.isEmpty()) return
+        scope.launch {
+            try {
+                val (id, tree) = withContext(io) {
+                    val created = service.createPlaylist(name)
+                    created to service.tree()
+                }
+                _state.update { it.copy(tree = ScreenState.Ready(tree), openPlaylist = id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("Impossible de créer la playlist : ${NzErrors.text(e)}")
+            }
+        }
+    }
+
+    /** La coquille a suivi la playlist ouverte. */
+    fun consumeOpenPlaylist() = _state.update { it.copy(openPlaylist = null) }
 
     /** A section's heading: the chevron folds it (`toggleSection`). */
     fun toggleSection(key: String) {

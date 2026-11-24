@@ -33,6 +33,9 @@ import uniffi.nz_ffi.Screens
  * - a playlist card opens MB9's playlist route;
  * - a row's ⋯ opens **MB10's** one context menu (`TrackActions.open`);
  * - the head's magnifier opens the search;
+ * - the head's link icon opens « Importer une playlist partagée »
+ *   (`Library.svelte:611`) and the « + » menu's « Nouvelle playlist » creates one
+ *   on the server, then opens it (`Library.svelte:531`);
  * - « Je n'aime pas », « Indisponibles » and « Mes fichiers » are leaves of this
  *   same screen, as in the SPA.
  */
@@ -68,6 +71,13 @@ fun LibraryEntry(tab: String?, nav: NzNavigator, modifier: Modifier = Modifier) 
     // The history leaf reads its own page the first time it opens (and only then).
     LaunchedEffect(state.leaf) {
         if (state.leaf == LibraryLeaf.History) historyModel.load()
+    }
+
+    // Une playlist créée s'ouvre (le SPA : `push("/playlist/" + r.id)`).
+    LaunchedEffect(state.openPlaylist) {
+        val id = state.openPlaylist ?: return@LaunchedEffect
+        model.consumeOpenPlaylist()
+        nav.go(AppLink.Playlist(id))
     }
 
     LibraryScreen(
@@ -108,6 +118,8 @@ fun LibraryEntry(tab: String?, nav: NzNavigator, modifier: Modifier = Modifier) 
             closeMoveSheet = model::closeMoveSheet,
             openPlaylist = { id -> nav.go(AppLink.Playlist(id)) },
             openSearch = { nav.go(AppLink.Search(q = null)) },
+            openImport = { nav.go(AppLink.Import(url = "")) },
+            newPlaylist = model::newPlaylist,
             removeDislike = model::removeDislike,
             historyBody = {
                 HistoryScreen(
