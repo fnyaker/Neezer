@@ -169,7 +169,10 @@ class SettingsModel(
                 state = state.copy(discoveryLevel = readDiscoveryLevel())
             }
             "help" -> {
-                state = state.copy(versions = service.versions())
+                // A fresh look at the counters: the state survives a trip back to
+                // the menu, so keeping the old text would show a stale report on
+                // the second visit (`buildReport` reuses what it finds).
+                state = state.copy(versions = service.versions(), report = null)
                 // The report is built when the screen OPENS, off the frame: it is
                 // a handful of the core's own counters (`NzCore::stats()`,
                 // `memory()`, the player's rebuffers), not a request, but reading
