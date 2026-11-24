@@ -328,6 +328,15 @@ check_door() {
     fi
     check_alive "the $tab door"
 }
+# M1 : une installation neuve ouvre l'écran serveur. C'est la porte qui manquait
+# (l'audit : la route Setup était déclarée et jamais atteinte).
+if await_text "Adresse du serveur"; then
+    printf 'door=Serveur opened=1\n'
+    doors=$((doors + 1))
+else
+    printf 'door=Serveur opened=0 expected="Adresse du serveur"\n'
+    doors_failed=$((doors_failed + 1))
+fi
 # MB6 filled the search: its MB0 placeholder sentence is gone, and the screen's
 # own marker takes over (the same rule as the home below: a literal, in EVERY
 # state, independent of the query and of the clock).
@@ -364,7 +373,7 @@ else
 fi
 check_alive "the Réglages door"
 
-printf 'doors_opened=%s doors_failed=%s doors_expected=5\n' "$doors" "$doors_failed"
+printf 'doors_opened=%s doors_failed=%s doors_expected=6\n' "$doors" "$doors_failed"
 
 # The routes the shell itself has no door for yet. They are opened by an APP
 # LINK (the share sheet's text, a `neezer://` view): MB2's `resolve_link` is what

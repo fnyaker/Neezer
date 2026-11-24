@@ -2,6 +2,7 @@ package fr.neezer.mobile.app
 
 import android.app.Application
 import androidx.navigation.NavHostController
+import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState
 import uniffi.nz_ffi.AppLink
@@ -68,6 +69,35 @@ class AppGraph(private val application: Application) : NzNavigator {
     private fun graphReady(): Boolean = runCatching {
         controller?.currentBackStackEntry != null
     }.getOrDefault(false)
+
+    /**
+     * La route sur laquelle le shell s'ouvre, décidée UNE fois, avant que le
+     * `NavHost` ne compose, et SANS réseau : la première image n'attend jamais
+     * `GET /api/me` (rules 1 et 3).
+     *
+     * - pas de noyau : l'écran serveur (il dit pourquoi le noyau manque) ;
+     * - pas de serveur enregistré : l'écran serveur ;
+     * - un cookie de session sur l'appareil : l'accueil (la restauration tourne
+     *   en fond depuis `NzApplication`) ;
+     * - un serveur sans cookie : la connexion, serveur conservé.
+     */
+    fun startRoute(): Any {
+        val core = NzBridge.core ?: return Routes.Setup
+        if (core.server() == null) return Routes.Setup
+        return if (core.hasSession()) Routes.Home else Routes.Login
+    }
+
+    override fun openHomeAfterSignIn() = replaceStackWith(Routes.Home)
+
+    /** Une seule définition de « remplacer la pile » : chaque route laissée
+     *  derrière est un piège à retour (M1 : la préparation ; M2 : la session). */
+    private fun replaceStackWith(route: Any) {
+        val nav = controller ?: return
+        nav.navigate(route) {
+            popUpTo(nav.graph.id) { inclusive = true }
+            launchSingleTop = true
+        }
+    }
 
     /** The app's version, as the launcher shows it (Aide and the diagnostic log). */
     fun appVersion(): String = runCatching {

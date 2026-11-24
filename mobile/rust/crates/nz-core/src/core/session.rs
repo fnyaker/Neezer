@@ -53,6 +53,13 @@ impl Core {
         }
     }
 
+    /// A session cookie is held for the configured server: the jar only, no
+    /// socket, true even offline. M1's start route reads it before the first
+    /// frame, so a launch never waits on `GET /api/me` to paint.
+    pub fn has_session(&self) -> bool {
+        self.api_snapshot().is_some_and(|api| api.has_session())
+    }
+
     /// `GET /api/me` with the stored cookie. `None` means "nobody to restore":
     /// no server configured, no cookie, or a link that is down — in each case
     /// without inventing a person and without opening a socket.
@@ -288,6 +295,29 @@ mod tests {
                 .stats()
                 .iter()
                 .any(|s| s.tag == TAG_SESSION && s.requests > 0)
+        );
+    }
+
+    /// M1: the start route reads the jar, never the network.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn has_session_reads_the_jar_without_a_socket() {
+        let bench = Bench::start(false);
+        let dir = TempDir::new("has-session");
+        {
+            let core = dir.core("test");
+            assert!(!core.has_session(), "no server, no session");
+            core.set_server(&bench.base()).await.expect("set_server");
+            assert!(!core.has_session(), "a server without a login");
+            core.login("bench", "Bench1").await.expect("login");
+            assert!(core.has_session());
+        }
+        let again = dir.core("test");
+        again.set_network(crate::core::NetworkState::None);
+        assert!(again.has_session(), "the saved cookie, read offline");
+        assert!(
+            again.stats().iter().all(|s| s.requests == 0),
+            "has_session opened no socket: {:?}",
+            again.stats()
         );
     }
 

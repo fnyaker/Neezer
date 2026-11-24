@@ -6360,3 +6360,29 @@ mesures en octets comptés, tests sur événements, émulateur via mobile/tools/
 Fin : branche <ta-branche>/coexist, PR « feat(mobile): l'app native s'installe à côté de l'ancienne »,
 CI verte, rebase + diff --stat, merge, `ao report --done`.
 ```
+
+### M1 — La route de départ (delivered 2026-11-24)
+
+**La règle.** La destination de départ du `NavHost` est décidée UNE fois, avant sa première
+composition, à partir de l'APPAREIL SEUL : pas de noyau → `Setup` (il dit pourquoi le noyau
+manque), pas de serveur enregistré → `Setup`, un cookie de session dans le jar → `Home`, un serveur
+sans cookie → `Login` avec le serveur conservé. `AppGraph.startRoute()` lit `Core::has_session()`
+(le jar seul, aucune socket), donc la première frame n'attend AUCUNE requête : sur un lien lent ou
+instable, la route est peinte sans écran blanc (rules 1 et 3). Un cookie que le serveur n'accepte
+plus ouvre `Home` quand même ; le `401` tardif est du ressort de M2 (session expirée), pas de la
+route de départ. La restauration de session reste dans `NzApplication`, en fond dans `processScope` :
+toujours **1 `GET /api/me` par lancement**, hors du chemin critique (avant, la première frame en
+attendait 1 ; après, 0).
+
+**Un piège payé ici.** `SetupEntry` dessinait sa propre `NzTopBar` dans TROIS branches (noyau absent,
+serveur, connexion) quand la coquille en a désormais une seule : un écran sans noyau montrait deux
+barres. `grep -n NzTopBar mobile/android/feature/setup` doit rester vide.
+
+**Mesuré par la CI, pas par un appareil.** `ci-emulator.sh` imprime `doors_opened=6
+doors_failed=0 doors_expected=6` (la porte `Serveur` s'ajoute aux cinq onglets/Réglages), et
+`ShellSmokeTest` passe de 3 à 4 tests (`freshInstallOpensServerSetup`,
+`theHomeTabOpensFromTheSetupScreen` en plus de `libraryTabOpensItsRoute` et
+`settingsShowsTheRustVersion`). Le TTFD p50 (`StartupTimingMetric`, 10 itérations) n'a PAS été
+produit : l'image du worker n'a ni JDK ni SDK Android ni émulateur, et `mobile.yaml` ne lance pas de
+macrobenchmark. Le chiffre de référence reste MQ2 (p50 1 071,7 / p95 1 256,5 ms, mesuré pour un
+compte semé) ; ce lot décide la route sans requête, mais n'a pas mesuré le TTFD qui en résulte.
