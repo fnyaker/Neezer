@@ -57,6 +57,19 @@ env:
   CARGO_BUILD_JOBS: "4"
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
   NDK_VERSION: 30.0.16248370
+  # WHICH ABIs a run builds, space-separated (allowed: arm64-v8a armeabi-v7a
+  # x86_64; unset = all three, so a local `mobile/rust/build-android.sh` and a
+  # Gradle build off CI are unchanged).
+  #
+  # A PULL REQUEST BUILDS x86_64 ALONE — the emulator's own ABI, which is the
+  # only one a PR run ever loads. Measured (run 45366701201): `cargo ndk` is
+  # 503 s of the native build's 566 s, i.e. ~168 s per ABI, so a PR saves about
+  # two thirds of the one step that dominates it. `master`, a `v*` tag and a
+  # manual dispatch keep all three: a compiler error specific to ARM (NEON,
+  # `cfg(target_arch)`) must be seen before a release, never after it (owner
+  # decision 2026-11-24: "pour les tests oui, mais en release il faut tout
+  # build").
+  NZ_ABIS: ${{ github.event_name == 'pull_request' && 'x86_64' || 'arm64-v8a armeabi-v7a x86_64' }}
 
 jobs:
   # --- the Rust workspace on the host ---------------------------------------
@@ -142,12 +155,18 @@ jobs:
       # every file a new one, so all eleven `nz-*` crates, `appcore` and `rhythm`
       # are rebuilt at every run while only the registry dependencies come back.
       #
-      # So the build is cached where it actually ends: its two outputs — the three
-      # `libnz_ffi.so` and the generated UniFFI Kotlin — under a key that hashes
-      # every input of the build (`mobile/rust/**`, its three path-dependency
-      # trees, its toolchain and its config). A Kotlin-only or docs-only change
-      # hits it and the step is skipped entirely; a Rust change misses it and
-      # builds, which is the only honest answer.
+      # So the build is cached where it actually ends: its two outputs — the
+      # `libnz_ffi.so` of every ABI in `NZ_ABIS` and the generated UniFFI
+      # Kotlin — under a key that hashes every input of the build (`mobile/rust/**`,
+      # its three path-dependency trees, its toolchain and its config). A
+      # Kotlin-only or docs-only change hits it and the step is skipped entirely;
+      # a Rust change misses it and builds, which is the only honest answer.
+      #
+      # THE KEY CARRIES THE ABI SET, because the product now depends on it: a
+      # pull request builds x86_64 alone (`env.NZ_ABIS`), so without the
+      # discriminator a 3-ABI entry saved by `master` would be restored by a PR
+      # run and the ARM libraries it never built would silently be the cached
+      # ones. `hashFiles` cannot see an env var, hence the literal `x86_64`/`all`.
       #
       # NO `restore-keys` HERE, deliberately: a product is never partially
       # reusable. Restoring the `.so` of another source tree would ship that tree.
@@ -163,7 +182,7 @@ jobs:
           path: |
             mobile/android/bridge/src/main/jniLibs
             mobile/android/bridge/build/generated/uniffi
-          key: mobile-native-${{ hashFiles(
+          key: mobile-native-${{ github.event_name == 'pull_request' && 'x86_64' || 'all' }}-${{ hashFiles(
             'mobile/rust/Cargo.toml',
             'mobile/rust/Cargo.lock',
             'mobile/rust/uniffi.toml',
@@ -213,8 +232,9 @@ jobs:
           cargo ndk --version
 
       # The one documented native build: host debug library → UniFFI bindings →
-      # cargo ndk for arm64-v8a, armeabi-v7a and x86_64 (docs/agents/mobile.md,
-      # MB0 "Contract"). Skipped when no Rust input changed (`steps.native`).
+      # cargo ndk for every ABI in `NZ_ABIS` (x86_64 alone on a PR, all three
+      # elsewhere; docs/agents/mobile.md, MB0 "Contract"). Skipped when no Rust
+      # input changed (`steps.native`).
       - name: Build libnz_ffi.so and the Kotlin bindings
         if: steps.native.outputs.cache-hit != 'true'
         run: |
@@ -231,7 +251,7 @@ jobs:
           echo "native=from cache (no Rust input changed since the cached build)"
           mobile/rust/build-android.sh --check-libs \
             "$GITHUB_WORKSPACE/mobile/android/bridge/src/main/jniLibs"
-          for abi in arm64-v8a armeabi-v7a x86_64; do
+          for abi in $NZ_ABIS; do
             so="mobile/android/bridge/src/main/jniLibs/$abi/libnz_ffi.so"
             test -f "$so" || { echo "::error::$so is missing from the cache"; exit 1; }
             printf '   %-12s %8s bytes\n' "$abi" "$(stat -c %s "$so")"
@@ -248,7 +268,11 @@ jobs:
       - name: The API-26 JNI entry points are in libnz_ffi.so
         run: |
           set -euo pipefail
-          SO=mobile/android/bridge/src/main/jniLibs/arm64-v8a/libnz_ffi.so
+          # The FIRST ABI of the run's set: an export list is a property of the
+          # Rust source, not of an architecture, so one library answers for all
+          # of them — and on a PR that library is x86_64 (the only one built).
+          read -r first _ <<< "$NZ_ABIS"
+          SO=mobile/android/bridge/src/main/jniLibs/$first/libnz_ffi.so
           test -f "$SO" || { echo "::error::$SO is missing"; exit 1; }
           for name in nativeRender nativeSetLatency nativeUnderruns nativeClose; do
             symbol="Java_fr_neezer_mobile_playback_AudioTrackPull_$name"
@@ -266,7 +290,7 @@ jobs:
       # neither the `.so` nor the bindings this job had just built — while the
       # emulator's four vCPUs sat waiting, then ~2 min recompiling the Kotlin
       # debug variants. The two paths below are what `build-android.sh` produces
-      # (`jniLibs` for the three ABIs, the UniFFI Kotlin), and `-PskipRust` is
+      # (`jniLibs` for every ABI of `NZ_ABIS`, the UniFFI Kotlin), and `-PskipRust` is
       # the property `:bridge`'s build script already has for exactly this.
       #
       # 27 MB, one upload and one download: a 12-minute build it removes.
@@ -426,7 +450,7 @@ jobs:
           set -euo pipefail
           out=mobile/android/app/build/outputs/apk/release
           cp "$out/app-universal-release.apk" "$out/neezer-native.apk"
-          for abi in arm64-v8a armeabi-v7a x86_64; do
+          for abi in $NZ_ABIS; do
             cp "$out/app-$abi-release.apk" "$out/neezer-native-$abi.apk"
           done
           ls -l "$out"/neezer-native*.apk
@@ -456,6 +480,26 @@ jobs:
           name: neezer-mobile-apk
           path: mobile/android/app/build/outputs/apk/release/app-*.apk
           if-no-files-found: error
+
+      # A TAG SHIPS ALL THREE ABIs, and the check says so instead of trusting
+      # the expression above: a release built from one ABI would carry no
+      # `neezer-native-arm64-v8a.apk`, and the updater of every ARM phone would
+      # find nothing to install. A workflow edit that broke the default fails
+      # here, before an asset is attached.
+      - name: A release builds every ABI
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          wanted="arm64-v8a armeabi-v7a x86_64"
+          NZ_ABIS="${NZ_ABIS:-}"
+          read -r -a got <<< "$NZ_ABIS"
+          # `"${got[*]}"` joins with single spaces whatever the input's spacing,
+          # so the comparison is on the SET, not on how it was typed.
+          if [ "$(IFS=' '; echo "${got[*]}")" != "$wanted" ]; then
+            echo "::error::a tag must build «$wanted», this run builds «$NZ_ABIS»"
+            exit 1
+          fi
+          echo "   tag build: all three ABIs ($wanted)"
 
       # The release carries the native app under ITS OWN names, beside the
       # WebView app's `neezer.apk` (android.yaml): a person must be able to tell
@@ -574,8 +618,8 @@ jobs:
           name: neezer-mobile-apk
           path: mobile/android/app/build/outputs/apk/release
 
-      # The `apk` job's `libnz_ffi.so` (three ABIs) and its generated UniFFI
-      # Kotlin, put back where `:bridge` reads them. `ci-emulator.sh` then passes
+      # The `apk` job's `libnz_ffi.so` (every ABI of `NZ_ABIS`) and its generated
+      # UniFFI Kotlin, put back where `:bridge` reads them. `ci-emulator.sh` then passes
       # `-PskipRust` and does not install the NDK/cargo-ndk: the instrumented
       # tests still build their own debug variants, they just stop rebuilding the
       # Rust tree that was already built (12 min 30 s of run 44368850444).
@@ -598,7 +642,7 @@ jobs:
           # on this PR's first run — the guard refused to bless a copy it could
           # not read, which is the behaviour wanted from a guard).
           mobile/rust/build-android.sh --check-libs "$GITHUB_WORKSPACE/mobile/android/bridge/src/main/jniLibs"
-          for abi in arm64-v8a armeabi-v7a x86_64; do
+          for abi in $NZ_ABIS; do
             printf '   %-12s %8s bytes\n' "$abi" \
               "$(stat -c %s "mobile/android/bridge/src/main/jniLibs/$abi/libnz_ffi.so")"
           done
