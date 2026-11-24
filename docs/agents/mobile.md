@@ -6788,3 +6788,13 @@ lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les 
 avant de dessiner quand `PartyCore.service()` est nul. La preuve d'écran reste à faire sur le banc
 (`mobile/tools/tone-server.py`) ; le test Robolectric et `Emulator smoke` sont ce que la CI a
 vérifié.
+
+**La rangée ne tient pas à six portes sur 360 dp.** Mesure sur la capture MB11 committée
+(`mb11-encre-360dp-lecteur.png`, 720 px = 360 dp) : la rangée occupe 244 dp des 320 dp utiles
+(360 − 2 × 20 dp de `pageX`). Deux cibles de 48 dp et leurs deux intervalles de 4 dp demandent
+104 dp de plus, soit 348 dp pour 320 : Compose rétrécit le dernier contrôle et le chevron
+« À propos » tombe à ~20 dp de cible, sous les 48 dp de MB1 ; à 200 % (`…-font200.png`, déjà à
+~22 dp de marge) les deux portes à mot ne tiennent plus du tout. Le correctif vit dans
+`PlayerSheet.kt` — le SPA met « À propos » SOUS la rangée (`.peek`), et cinq portes tiennent alors
+en 296 dp pour 320 — un fichier hors du périmètre de ce lot : la question est posée au demandeur,
+pas devinée ici.
