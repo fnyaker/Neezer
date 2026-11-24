@@ -255,6 +255,12 @@ class SettingsModelTest {
         assertEquals("one build at open", 1, service.calls.count { it == "diagnosticReport" })
         // The share button keeps it: no second build, the same text.
         assertEquals(report, model.buildReport())
+        assertEquals("the share did not rebuild", 1, service.calls.count { it == "diagnosticReport" })
+        // Coming back to the screen reads the counters AGAIN: a stale report from
+        // the first visit would be worse than none.
+        model.open(null)
+        model.open("help")
+        assertEquals("a re-open rebuilds", 2, service.calls.count { it == "diagnosticReport" })
     }
 
     /**
