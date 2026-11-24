@@ -59,8 +59,9 @@ runs in a request thread when it can be moved: Subsonic `refreshPodcasts` and
 `downloadPodcastEpisode` answer immediately and use a single reniced worker (the download queue is
 bounded and deduplicated by episode; the first play keeps its synchronous download),
 `GET /me/accounts/<id>/library/<kind>` serves the held listing and refreshes behind it (one
-refresh per account/kind/5 min, retried 60 s after a failure), and `/api/android/apk` answers
-**202 + Retry-After** while one worker fetches the APK. The archive backfills and nightly sync call
+refresh per account/kind/5 min, retried 60 s after a failure), and `/api/android/apk` (the
+WebView app) and `/api/android/native-apk` (the native app, `?abi=`) answer **202 + Retry-After**
+while one worker fetches the APK — two channels, two cache families, never the same file. The archive backfills and nightly sync call
 `renice`/`Throttle` between items, so a person's play always wins. A 4xx from `media.deezer.com` is
 a transport failure (`DeezerError`), never a verdict that the title is unavailable.
 

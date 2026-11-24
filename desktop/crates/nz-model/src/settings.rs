@@ -409,6 +409,26 @@ pub struct AndroidRelease {
     /// An APK is published for that version.
     #[serde(default)]
     pub apk: bool,
+    /// The NATIVE app's own channel (`fr.neezer.mobile`). A server that predates
+    /// it sends no key at all: the native app then has no update to offer and
+    /// must never fall back to the WebView `apk` above.
+    #[serde(default)]
+    pub native: Option<AndroidNativeRelease>,
+}
+
+/// The native Android app's channel (`/api/version`'s `android.native`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AndroidNativeRelease {
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub url: String,
+    /// `/api/android/native-apk` serves it.
+    #[serde(default)]
+    pub apk: bool,
+    /// The ABIs the release carries a split for.
+    #[serde(default)]
+    pub abis: Vec<String>,
 }
 
 /// `/api/version` — the server's build identity.
@@ -649,6 +669,30 @@ mod tests {
             "a provider absent from the map is refused"
         );
         assert!(me.remote.is_none(), "an ordinary login is not a loan");
+    }
+
+    /// A server that predates the native channel sends no `native` key: parsing
+    /// must leave it absent so the app can say "mise à jour indisponible" —
+    /// never read the WebView `android.apk` beside it.
+    #[test]
+    fn a_version_without_the_native_channel_keeps_it_absent() {
+        let old: Version = serde_json::from_str(
+            r#"{"version":"1.5.0","android":{"version":"1.5.0","url":"https://x/","apk":true}}"#,
+        )
+        .expect("old server");
+        assert!(old.android.native.is_none());
+        assert!(old.android.apk, "the WebView channel is still there");
+
+        let new: Version = serde_json::from_str(
+            r#"{"version":"1.6.3","android":{"version":"1.6.3","url":"https://x/","apk":true,
+                "native":{"version":"1.6.3","url":"https://x/","apk":true,
+                          "abis":["arm64-v8a","x86_64"]}}}"#,
+        )
+        .expect("new server");
+        let native = new.android.native.expect("the native channel");
+        assert_eq!(native.version.as_deref(), Some("1.6.3"));
+        assert!(native.apk);
+        assert_eq!(native.abis, ["arm64-v8a", "x86_64"]);
     }
 
     #[test]

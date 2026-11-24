@@ -8,13 +8,17 @@ name: Mobile
 # `nz-api` can break the phone build), the two web-app crates it links natively,
 # the JNI core `nz-audio` uses, and this file.
 #
-# NOT attached to releases: the WebView app still ships `neezer.apk` until lot
-# MB-SWAP flips the channel (then this workflow takes `android.yaml`'s place).
+# ATTACHED to releases since v1.6.3, UNDER ITS OWN NAMES: `neezer-native.apk`
+# (universal) and `neezer-native-<abi>.apk`. The WebView app keeps
+# `neezer.apk` and `android.yaml` untouched: the two apps coexist on a device
+# and update from two channels (docs/agents/mobile.md, "Deux apps Android").
 
 on:
   push:
     branches:
       - master
+    tags:
+      - "v*"
     paths:
       - mobile/**
       - desktop/crates/**
@@ -103,6 +107,8 @@ jobs:
   apk:
     name: APK (bindings, Gradle, lint, sizes)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the native APKs to releases on tags
     steps:
       - uses: actions/checkout@v4
 
@@ -269,6 +275,45 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # THE SAME RELEASE KEY AS THE WEBVIEW APP (`android.yaml`'s secrets), and
+      # for the same reason: a native build signed with the debug key cannot be
+      # updated in place, and a per-run key cannot either. A different
+      # `applicationId` does not need a different certificate; it needs a STABLE
+      # one, and the secrets are the only place a stable one lives.
+      #
+      # A pull request keeps the old fallback (an ephemeral key, generated here)
+      # so a fork without the secrets can still build and test. A TAG may not:
+      # the check below refuses a release signed with anything but the stable
+      # key.
+      - name: Prepare the release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS="$RUNNER_TEMP/neezer-mobile-release.jks"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$KS"
+          else
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 is required to sign a release: a tag's APK must update the previous one"
+              exit 1
+            fi
+            echo "::warning::no ANDROID_KEYSTORE_BASE64: this is a TEST build signed with an ephemeral key"
+            keytool -genkeypair -keystore "$KS" -alias nsupysonic \
+              -storepass nsupysonic -keypass nsupysonic \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Neezer"
+          fi
+          {
+            echo "ANDROID_KEYSTORE_FILE=$KS"
+            echo "ANDROID_KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-nsupysonic}"
+            echo "ANDROID_KEY_ALIAS=${KEY_ALIAS:-nsupysonic}"
+            echo "ANDROID_KEY_PASSWORD=${KEY_PASSWORD:-nsupysonic}"
+          } >> "$GITHUB_ENV"
+
       # THREE TASKS, ONE GRADLE INVOCATION. `--no-daemon` pays a JVM plus the
       # whole configuration phase (Kotlin + AGP) on every call, and the three
       # steps were paying it three times: measured on run 44368850444, JVM tests
@@ -278,9 +323,13 @@ jobs:
       # error-level check (the old app's lesson, android.yaml), so the full
       # `lintDebug` is still asked for explicitly, and a red test or lint error
       # still stops the job before an APK exists.
+      #
+      # The versionName is the TAG (Gradle strips its `v`), which is what the
+      # server declares in `android.native.version`; a master build names its run.
       - name: The JVM suite, the lint and the release APK
         env:
           VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || format('2.0.{0}', github.run_number) }}
         run: |
           gradle -p mobile/android testDebugUnitTest lintDebug assembleRelease \
             -PskipRust --no-daemon
@@ -319,8 +368,22 @@ jobs:
               esac
             done
             "$BT/zipalign" -c -p 4 "$APK"
-            "$BT/aapt2" dump badging "$APK" | grep -E "package: name='org.nsupysonic.app'" \
+            # THE NATIVE PACKAGE, beside `org.nsupysonic.app`: a build that
+            # drifted back to the old id would install as an update OF the
+            # WebView app, which is exactly what this release must not do.
+            "$BT/aapt2" dump badging "$APK" | grep -E "package: name='fr.neezer.mobile'" \
               || { echo "::error::wrong package id in $APK"; exit 1; }
+            # A tag's APK must update the PREVIOUS tag's: the debug key cannot,
+            # and neither can an ephemeral one. The fallback is for pull
+            # requests only (the keystore step refuses a tag without the secret).
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              signer=$("$BT/apksigner" verify --print-certs "$APK" | grep -m1 'Signer #1 certificate DN:' || true)
+              case "$signer" in
+                *"CN=Android Debug"*) echo "::error::$APK is signed with the debug key"; exit 1 ;;
+                "") echo "::error::$APK has no readable signer"; exit 1 ;;
+              esac
+              echo "   signed by: ${signer#*DN: }"
+            fi
           done
           # The universal APK is the one that installs on ANY device (the app is
           # side-loaded), so it is the artifact the emulator job and the release
@@ -333,12 +396,25 @@ jobs:
           [[ "$(printf '%s\n' "$codes" | wc -l)" -eq 1 ]] \
             || { echo "::error::the APKs disagree on versionCode: $codes"; exit 1; }
 
+      # THE RELEASE ASSETS' OWN NAMES. `neezer.apk` belongs to the WebView app
+      # (android.yaml): a native asset must never be called that, and a person
+      # downloading from the release page must see which app each file is.
+      - name: Name the native assets
+        run: |
+          set -euo pipefail
+          out=mobile/android/app/build/outputs/apk/release
+          cp "$out/app-universal-release.apk" "$out/neezer-native.apk"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "$out/app-$abi-release.apk" "$out/neezer-native-$abi.apk"
+          done
+          ls -l "$out"/neezer-native*.apk
+
       - name: Sizes (universal APK, per ABI, and the native library)
         run: |
           set -euo pipefail
           echo "### Tailles" >> "$GITHUB_STEP_SUMMARY"
           printf '| ce qui | octets |\n|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
-          for apk in mobile/android/app/build/outputs/apk/release/*.apk; do
+          for apk in mobile/android/app/build/outputs/apk/release/app-*.apk; do
             printf '| %s | %s |\n' "$(basename "$apk")" "$(stat -c %s "$apk")" >> "$GITHUB_STEP_SUMMARY"
           done
           unzip -l "$APK" | awk '/lib\/.*\/libnz_ffi\.so/ {printf "| %s | %s |\n", $4, $1}' \
@@ -356,8 +432,56 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: neezer-mobile-apk
-          path: mobile/android/app/build/outputs/apk/release/*.apk
+          path: mobile/android/app/build/outputs/apk/release/app-*.apk
           if-no-files-found: error
+
+      # The release carries the native app under ITS OWN names, beside the
+      # WebView app's `neezer.apk` (android.yaml): a person must be able to tell
+      # which APK is which, and each app's updater asks its own route.
+      - name: Attach the native APKs to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            mobile/android/app/build/outputs/apk/release/neezer-native.apk
+            mobile/android/app/build/outputs/apk/release/neezer-native-arm64-v8a.apk
+            mobile/android/app/build/outputs/apk/release/neezer-native-armeabi-v7a.apk
+            mobile/android/app/build/outputs/apk/release/neezer-native-x86_64.apk
+
+      - name: Verify the release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          wanted="neezer-native.apk neezer-native-arm64-v8a.apk neezer-native-armeabi-v7a.apk neezer-native-x86_64.apk"
+          for _ in 1 2 3 4 5 6; do
+            names=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            missing=""
+            for name in $wanted; do
+              echo "$names" | grep -qx "$name" || missing="$missing $name"
+            done
+            [ -z "$missing" ] && break
+            sleep 5
+          done
+          echo "$names"
+          if [ -n "$missing" ]; then
+            echo "::error::missing from $TAG:$missing"
+            exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/assets" && mkdir -p "$RUNNER_TEMP/assets"
+          gh release download "$TAG" --pattern 'neezer-native*.apk' --dir "$RUNNER_TEMP/assets"
+          for name in $wanted; do
+            cmp "mobile/android/app/build/outputs/apk/release/$name" "$RUNNER_TEMP/assets/$name"
+            printf '   %-36s %s octets\n' "$name" "$(stat -c %s "$RUNNER_TEMP/assets/$name")"
+          done
+          # The WebView app's asset is android.yaml's, not this job's: its
+          # absence here proves nothing, but its presence under our names would.
+          if echo "$names" | grep -qx "neezer-native.apk" && echo "$names" | grep -qx "neezer.apk"; then
+            echo "   both apps' assets are on $TAG (neezer.apk is the WebView one)"
+          fi
 
       # `master` WRITES the cargo cache, every branch READS it. `actions/cache`
       # scopes an entry to the ref that saved it, so a save from a pull request is

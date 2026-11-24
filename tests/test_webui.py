@@ -4,6 +4,7 @@
 # Distributed under terms of the GNU AGPLv3 license.
 
 import base64
+import glob
 import io
 import os
 import shutil
@@ -2555,6 +2556,179 @@ class WebUITestCase(unittest.TestCase):
             cfg["android_apk"] = None
             os.remove(apk)
 
+    def test_android_version_declares_the_two_channels_separately(self):
+        """The WebView object keeps its exact shape, and `native` is added beside
+        it. An old server has no `native`: that is what the native app reads as
+        "mise à jour indisponible"."""
+        from neezer.webui import androidapk
+
+        cfg = self.app.config["WEBAPP"]
+        self._login()
+        body = self.client.get("/api/version").get_json()["android"]
+        self.assertIsNone(body["version"])
+        self.assertFalse(body["apk"])
+        self.assertIsNone(body["native"]["version"])
+        self.assertFalse(body["native"]["apk"])
+        self.assertEqual(body["native"]["abis"], list(androidapk.NATIVE_ABIS))
+
+        apk = os.path.join(cfg["cache_dir"], "native-local.apk")
+        with open(apk, "wb") as fh:
+            fh.write(apk_zip())
+        try:
+            cfg["android_version"] = "1.6.2"
+            cfg["android_native_version"] = "1.6.3"
+            cfg["android_native_apk"] = apk
+            body = self.client.get("/api/version").get_json()["android"]
+            # The WebView channel is untouched by the native one.
+            self.assertEqual(body["version"], "1.6.2")
+            self.assertEqual(body["native"]["version"], "1.6.3")
+            self.assertTrue(body["native"]["apk"])
+            # A native version alone never makes the WebView channel claim one,
+            # and a WebView version alone never makes the native channel claim
+            # one (that is the case tested at the top).
+            cfg["android_version"] = None
+            cfg["android_native_version"] = None
+            body = self.client.get("/api/version").get_json()["android"]
+            self.assertIsNone(body["version"])
+            self.assertFalse(body["apk"])
+            self.assertIsNone(body["native"]["version"])
+            self.assertFalse(body["native"]["apk"])
+        finally:
+            cfg["android_version"] = None
+            cfg["android_native_version"] = None
+            cfg["android_native_apk"] = None
+            os.remove(apk)
+
+    def test_android_native_apk_is_its_own_channel(self):
+        """`/api/android/native-apk` serves the native APK and never the WebView
+        one, picks the device's split, and says "unavailable" on a channel the
+        server does not publish."""
+        from neezer.webui import androidapk
+
+        cfg = self.app.config["WEBAPP"]
+        self.assertEqual(self.client.get("/api/android/native-apk").status_code, 401)
+        self._login()
+        # A WebView version is declared, but no native one: the native route
+        # must NOT fall back to neezer.apk.
+        cfg["android_version"] = "1.6.2"
+        cfg["android_url"] = None
+        with mock.patch.object(androidapk.requests, "get") as get:
+            rv = self.client.get("/api/android/native-apk?abi=arm64-v8a")
+            self.assertEqual(rv.status_code, 404)
+            self.assertIn("native", rv.get_json()["error"])
+            get.assert_not_called()
+        self.assertFalse(self.client.get("/api/version").get_json()["android"]["native"]["apk"])
+
+        apk = os.path.join(cfg["cache_dir"], "native.t.apk")
+        with open(apk, "wb") as fh:
+            fh.write(apk_zip())
+        with open(apk, "rb") as fh:
+            body = fh.read()
+
+        class Resp:
+            def __init__(self, url, data, code=200):
+                self.url, self._data, self.status_code = url, data, code
+                self.headers = {"Content-Length": str(len(data))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    error = androidapk.requests.HTTPError(str(self.status_code))
+                    error.response = self
+                    raise error
+
+            def iter_content(self, n):
+                yield self._data
+
+        cfg["android_native_version"] = "v1.6.3"
+        cfg["android_native_apk"] = apk
+        try:
+            # The operator's own universal build answers every ABI.
+            with mock.patch.object(androidapk.requests, "get") as get:
+                for abi in ("arm64-v8a", "", "made-up-abi"):
+                    rv = self.client.get(f"/api/android/native-apk?abi={abi}")
+                    self.assertEqual(rv.status_code, 200, abi)
+                    self.assertEqual(rv.data, body)
+                    self.assertEqual(rv.headers["X-NS-Version"], "v1.6.3")
+                    self.assertEqual(rv.mimetype, androidapk.APK_MIME)
+                    rv.close()
+                get.assert_not_called()
+
+            cfg["android_native_apk"] = None
+            asset = "https://objects.githubusercontent.com/native"
+            # A split is asked for by name; the universal one when the device's
+            # ABI is not one of ours.
+            for abi, wanted in (
+                ("arm64-v8a", "neezer-native-arm64-v8a.apk"),
+                ("x86_64", "neezer-native-x86_64.apk"),
+                ("mips", "neezer-native.apk"),
+            ):
+                androidapk._apk_jobs.clear()
+                with mock.patch.object(androidapk.requests, "get",
+                                       return_value=Resp(asset, body)) as get:
+                    rv = self.client.get(f"/api/android/native-apk?abi={abi}")
+                    if rv.status_code == 202:
+                        androidapk.native_apk_job(cfg, abi)["thread"].join(10)
+                        rv.close()
+                        rv = self.client.get(f"/api/android/native-apk?abi={abi}")
+                    self.assertEqual(rv.status_code, 200, abi)
+                    self.assertEqual(rv.data, body)
+                    self.assertEqual(
+                        get.call_args[0][0],
+                        "https://github.com/fnyaker/Neezer/releases/download/"
+                        f"v1.6.3/{wanted}",
+                    )
+                    rv.close()
+
+            # A release without splits answers 404 for the split: the universal
+            # APK is fetched instead, once. (The universal file cached by the
+            # `mips` probe above would otherwise answer this ABI at once — which
+            # is the behaviour proved right after this block.)
+            for stale in glob.glob(
+                os.path.join(cfg["cache_dir"], "android", "neezer-native-*.apk")
+            ):
+                os.remove(stale)
+            androidapk._apk_jobs.clear()
+            with mock.patch.object(
+                androidapk.requests,
+                "get",
+                side_effect=[Resp(asset, b"missing", code=404), Resp(asset, body)],
+            ) as get:
+                rv = self.client.get("/api/android/native-apk?abi=arm64-v8a")
+                if rv.status_code == 202:
+                    androidapk.native_apk_job(cfg, "arm64-v8a")["thread"].join(10)
+                    rv.close()
+                    rv = self.client.get("/api/android/native-apk?abi=arm64-v8a")
+                self.assertEqual(rv.status_code, 200)
+                self.assertEqual(rv.data, body)
+                urls = [call[0][0] for call in get.call_args_list]
+                self.assertTrue(urls[0].endswith("neezer-native-arm64-v8a.apk"))
+                self.assertTrue(urls[-1].endswith("neezer-native.apk"))
+                rv.close()
+
+            # The two families never delete each other's cache entry.
+            self.assertFalse(
+                androidapk.WEBVIEW.owns_cache_entry("neezer-native-v1.6.3-arm64-v8a.apk")
+            )
+            self.assertFalse(
+                androidapk.NATIVE.owns_cache_entry("neezer-v1.6.2.apk")
+            )
+            self.assertTrue(androidapk.WEBVIEW.owns_cache_entry("neezer-v1.6.2.apk"))
+            self.assertTrue(
+                androidapk.NATIVE.owns_cache_entry("neezer-native-v1.6.3-x86_64.apk")
+            )
+        finally:
+            androidapk._apk_jobs.clear()
+            cfg["android_version"] = None
+            cfg["android_native_version"] = None
+            cfg["android_native_apk"] = None
+            os.remove(apk)
+
     def test_a_corrupt_cached_apk_is_fetched_again(self):
         """The reported bug: a file already in the cache was served for ever,
         whatever it contained, so a partial or corrupted download reached the
@@ -2793,7 +2967,7 @@ class WebUITestCase(unittest.TestCase):
         }
         calls = []
 
-        def fake(url, dest):
+        def fake(url, dest, channel=None):
             calls.append(url)
             response = androidapk.requests.Response()
             response.status_code = 404

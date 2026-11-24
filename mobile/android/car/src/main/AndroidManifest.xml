@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- :car's manifest, merged into the app's (docs/agents/mobile.md, MB0 "Contract").
-     EVERY component keeps its OLD fully-qualified name: a quick-settings tile the
-     person added, a launcher shortcut and a pinned PendingIntent all point at
-     `org.nsupysonic.app.*`, and an update that renamed them would leave a dead
-     tile behind. MB24 fills the classes; this file is what makes the update
-     survivable. -->
+     The components are named in THIS app's own package (`fr.neezer.mobile.car`):
+     they were `org.nsupysonic.app.*` only for the abandoned install-over-the-old
+     -app plan, and with a distinct `applicationId` a tile, a shortcut or a
+     PendingIntent belongs to this package alone. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
@@ -38,7 +37,7 @@
         <!-- The overlay itself: a foreground service, `specialUse` being the only
              Android 14 type that fits "draw a player over the navigation app". -->
         <service
-            android:name="org.nsupysonic.app.CarModeService"
+            android:name="fr.neezer.mobile.car.CarModeService"
             android:exported="false"
             android:foregroundServiceType="specialUse|location|microphone"
             tools:targetApi="34">
@@ -50,7 +49,7 @@
         <!-- Quick-settings tile. BIND_QUICK_SETTINGS_TILE is a system-held
              signature permission, so exported=true is safe. -->
         <service
-            android:name="org.nsupysonic.app.CarTileService"
+            android:name="fr.neezer.mobile.car.CarTileService"
             android:exported="true"
             android:icon="@drawable/ic_car"
             android:label="@string/car_tile"
@@ -63,14 +62,14 @@
         <!-- The periodic look behind the car watch: no notification, and Android
              owns the schedule. -->
         <service
-            android:name="org.nsupysonic.app.CarWatchJobService"
+            android:name="fr.neezer.mobile.car.CarWatchJobService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- The car mode's full-screen settings. Never exported: no other app may
              point the person at a screen that writes car preferences. -->
         <activity
-            android:name="org.nsupysonic.app.CarSettingsActivity"
+            android:name="fr.neezer.mobile.car.CarSettingsActivity"
             android:exported="false"
             android:label="@string/car_mode"
             android:theme="@android:style/Theme.Material.NoActionBar"
@@ -78,7 +77,7 @@
 
         <!-- Boot / update: re-arm the watch, never start the service. -->
         <receiver
-            android:name="org.nsupysonic.app.CarBootReceiver"
+            android:name="fr.neezer.mobile.car.CarBootReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -88,13 +87,13 @@
 
         <!-- One rung of the watch's ladder (an explicit PendingIntent). -->
         <receiver
-            android:name="org.nsupysonic.app.CarWakeReceiver"
+            android:name="fr.neezer.mobile.car.CarWakeReceiver"
             android:exported="false" />
 
         <!-- The car radio connecting or leaving: the Bluetooth broadcasts Android
              still delivers to a manifest receiver. -->
         <receiver
-            android:name="org.nsupysonic.app.CarBluetoothReceiver"
+            android:name="fr.neezer.mobile.car.CarBluetoothReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />

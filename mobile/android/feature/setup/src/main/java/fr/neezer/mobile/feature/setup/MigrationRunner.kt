@@ -19,25 +19,29 @@ import uniffi.nz_ffi.MigrationInputRecord
 import uniffi.nz_ffi.MigrationReportRecord
 
 /**
- * Runs the one-shot migration from the old app, at most once per process, in the
- * background (lot MB4; rule 2: long work runs in the background and SAYS SO).
+ * Runs the one-shot check of the old app's presence, at most once per process,
+ * in the background (lot MB4, revised for the coexistence release; rule 2: long
+ * work runs in the background and SAYS SO).
  *
- * It is started by [SetupMigrationProvider] at process start — a provider is the
- * only place that runs without a screen, which is exactly what an update owes:
- * the person taps the icon and finds their server, their session, their
- * downloads and their settings already there.
+ * It is started by [SetupMigrationProvider] at process start, so the first
+ * screen can say what became of the old app before the person types anything.
  *
- * The order is the note's, and each step is what makes the next one possible:
+ * **What it can and cannot do now.** With its own `applicationId` this app is a
+ * different package, and Android forbids one package from reading another's
+ * private preferences, files, cookies or WebView storage. The automatic
+ * takeover MB4 shipped — server, session, downloads, settings — was only
+ * possible because that build installed OVER the old app. It is therefore gone,
+ * not silently broken: [OldApp] answers whether the old app is installed, and
+ * `nz-core` turns that into a sentence the person reads ("Android ne permet pas
+ * …, reconnectez-vous ici, rien n'a été touché"). The old app keeps every byte;
+ * uninstalling either one leaves the other alone.
  *
- * 1. the old preferences (the server), read by the platform;
- * 2. the origin normalised by `nz-core` (`serverUrl`) — never by a second URL
- *    builder in Kotlin, which is how `…/musique:5722` happened once;
- * 3. the session cookie, for THAT origin only;
- * 4. the hidden WebView, for the SPA's `localStorage` and IndexedDB;
- * 5. `Screens.runMigration`, which moves the files and writes the settings.
+ * `runMigration` itself stays — it is the tested machinery for a future
+ * explicit export — but it is fed an EMPTY input here: no private path is read,
+ * no cookie is lifted, no hidden WebView is opened.
  *
- * [state] is what the screens paint: running, then the notice (what was taken
- * over, and the CAUSE of everything that was not) or the cause that stopped it.
+ * [state] is what the screens paint: running, then the notice (what could not be
+ * taken over, and why) or the cause that stopped it.
  */
 object MigrationRunner {
     /** The journal's tag: Aide reads `neezer`'s lines, and this one says what the
@@ -100,7 +104,8 @@ object MigrationRunner {
                 }
             Log.i(
                 TAG,
-                "status: needed=${status.needed} done=${status.done} oldApp=${status.oldAppFound}",
+                "status: needed=${status.needed} done=${status.done} " +
+                    "oldApp=${status.oldAppFound} oldAppInstalled=${OldApp.installed(app)}",
             )
             if (!status.needed) {
                 _state.value = State(
@@ -134,47 +139,31 @@ object MigrationRunner {
         }
     }
 
-    /** The five steps, in the order the note names them. */
+    /**
+     * The one step that is still possible: say whether the old app is installed.
+     *
+     * Every private source the first version read is another package's now, so
+     * the input is deliberately empty. `nz-core` owns the sentence and the
+     * report; this function owns the one Android fact it needs.
+     */
     private suspend fun migrate(
         context: Context,
         screens: uniffi.nz_ffi.Screens,
     ): MigrationReportRecord {
-        val prefs = OldAppData.prefs(context)
-        // The origin is `nz-core`'s own normalisation: the same function the
-        // setup screen uses, so a reverse-proxied host keeps its path and the
-        // port never lands after it.
-        val origin = prefs?.let { screens.serverUrl(it.host, it.port) }
-        // The WebView comes first: it is what brings the cookie store up, and a
-        // `CookieManager.getCookie` asked before it answers nothing on a cold
-        // process (measured: `session=0` while the old app's cookie was there).
-        var settingsCause: String? = null
-        val found = when {
-            origin == null -> {
-                settingsCause = "aucun serveur n'est configuré pour lire ses réglages"
-                null
-            }
-            else -> runCatching { MigrationWeb.read(context, origin) }
-                .onFailure { error ->
-                    settingsCause = error.message ?: error::class.java.simpleName
-                    Log.w(TAG, "SPA storage unreadable: $settingsCause", error)
-                }
-                .getOrNull()
-        }
-        val cookie = origin?.let { OldAppData.cookie(it) }
-        val downloads = OldAppData.downloads(context, found?.owners.orEmpty())
         val input = MigrationInputRecord(
-            prefs = prefs ?: uniffi.nz_ffi.OldPrefsRecord(
+            prefs = uniffi.nz_ffi.OldPrefsRecord(
                 host = "",
                 port = "",
                 verifySsl = true,
                 pinOrigin = null,
                 pinCert = null,
             ),
-            cookie = cookie,
-            downloads = downloads,
-            settings = found?.settings.orEmpty(),
-            offlineSets = (found?.albums ?: 0).toUInt(),
-            settingsCause = settingsCause,
+            cookie = null,
+            downloads = emptyList(),
+            settings = emptyList(),
+            offlineSets = 0u,
+            settingsCause = null,
+            oldAppInstalled = OldApp.installed(context),
         )
         return screens.runMigration(input)
     }

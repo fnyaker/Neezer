@@ -60,6 +60,9 @@ dependencies {
     implementation(project(":feature:audiofx"))
     implementation(project(":feature:admin"))
     implementation(project(":feature:offline"))
+    // Assistance hosts the app's own update card (MB4's `Updater`, the native
+    // channel): the module that owns the updater exposes it, this one draws it.
+    implementation(project(":feature:setup"))
     // LN14's « Appareils à proximité »: MB16's extension point ("one entry to
     // that table plus one branch that calls its own composable"), so the module
     // that owns the screen is a dependency of the module that hosts it.

@@ -98,6 +98,17 @@ online_lyrics = off
 ; in cache_dir. Set a path here to serve your own build instead.
 ;android_apk = /srv/neezer/neezer.apk
 
+; Latest published version of the NATIVE Android app (mobile/, package
+; fr.neezer.mobile, which is installed BESIDE the one above). Its channel is
+; separate (/api/android/native-apk, assets neezer-native.apk and
+; neezer-native-<abi>.apk): a native app never receives the old APK, and the
+; WebView app never receives the native one. Empty = no native update is
+; announced, and the native app says « mise à jour indisponible ». The Docker
+; image fills this in from ANDROID_NATIVE_VERSION_NAME/APP_VERSION.
+;android_native_version =
+; The native app's own local file (the universal build; answers every ABI).
+;android_native_apk = /srv/neezer/neezer-native.apk
+
 [daemon]
 ; Socket file the daemon will listen on for incoming management commands
 ; Default: /tmp/neezer/neezer.sock

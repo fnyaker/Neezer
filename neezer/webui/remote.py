@@ -136,6 +136,7 @@ POLICY = {
     "remote_links": NEVER,
     # the device's own app update: a controller's own login updates its own
     "android_apk": NEVER,
+    "android_native_apk": NEVER,
     "remote_link_create": NEVER,
     "remote_link_revoke": NEVER,
     "remote_links_revoke": NEVER,

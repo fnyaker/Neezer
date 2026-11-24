@@ -21,9 +21,9 @@ class UpdateDecisionTest {
     private val ours = setOf("aa11")
 
     private fun decide(
-        packageName: String? = "org.nsupysonic.app",
-        versionCode: Long = 2_000_002,
-        installedVersionCode: Long = 2_000_001,
+        packageName: String? = "fr.neezer.mobile",
+        versionCode: Long = 1_235,
+        installedVersionCode: Long = 1_234,
         signers: Set<String>? = ours,
         lineage: Set<String>? = ours,
         installedSigners: Set<String> = ours,
@@ -32,7 +32,7 @@ class UpdateDecisionTest {
     ): UpdateDecision = UpdateDecisionRule.decide(
         archivePackage = packageName,
         archiveVersionCode = versionCode,
-        installedPackage = "org.nsupysonic.app",
+        installedPackage = "fr.neezer.mobile",
         installedVersionCode = installedVersionCode,
         archiveSigners = signers,
         archiveLineage = lineage,
@@ -50,7 +50,7 @@ class UpdateDecisionTest {
 
     @Test
     fun theSameOrAnOlderVersionIsNotAnError() {
-        assertEquals(UpdateDecision.UpToDate, decide(versionCode = 2_000_001))
+        assertEquals(UpdateDecision.UpToDate, decide(versionCode = 1_234))
         assertEquals(UpdateDecision.UpToDate, decide(versionCode = 1))
         assertEquals("uptodate", UpdateDecision.UpToDate.reason())
     }

@@ -232,9 +232,9 @@ class SetupModelTest {
 }
 
 /**
- * The migration's notice and its pages, on the JVM: the sentence the person
- * reads names what was taken over and the CAUSE of what was not (rule 2), and
- * the page's contract with the WebView is a sentinel, not a guess.
+ * The migration's notice, on the JVM: the sentence the person reads names what
+ * was taken over (or why nothing could be), and the coexistence release's own
+ * sentence — "Android ne permet pas…" — is the one that matters now.
  */
 class MigrationNoticeTest {
 
@@ -255,32 +255,9 @@ class MigrationNoticeTest {
     }
 
     @Test
-    fun thePageReportsThroughOneSentinel() {
-        // The Kotlin side waits for THIS prefix on the console; a page that
-        // reports otherwise would be a migration that hangs until its deadline.
-        assertEquals("NZMIGRATE:", MigrationPage.PREFIX)
-        assertTrue(MigrationPage.HTML.contains(MigrationPage.PREFIX))
-        assertTrue(MigrationPage.HTML.contains("nsupy-offline"))
-        // It references nothing external: the interceptor would refuse it, and
-        // the page must not even ask.
-        assertFalse(MigrationPage.HTML.contains("src="))
-        assertFalse(MigrationPage.HTML.contains("http"))
-    }
-
-    @Test
-    fun theInterceptedPathIsTheOneThePageIsServedAt() {
-        assertEquals("/__nsmigrate", MigrationWeb.PATH)
-        assertTrue(MigrationWeb.TIMEOUT_MS in 1_000..60_000)
-    }
-
-    @Test
-    fun settingsCrossAsTheSpaWroteThem() {
-        val json = org.json.JSONObject("""{"ui.theme":"\"papier\"","viz.fps":"60"}""")
-        val settings = settingsFrom(json)
-        assertEquals(2, settings.size)
-        assertEquals("\"papier\"", settings.first { it.key == "ui.theme" }.value)
-        assertEquals("60", settings.first { it.key == "viz.fps" }.value)
-        // A missing store is an empty answer, never an exception.
-        assertEquals(0, settingsFrom(null).size)
+    fun theOldAppPackageIsTheWebViewOne() {
+        // The check asks `PackageManager` for THIS package and no other; a typo
+        // would make the notice silently never appear.
+        assertEquals("org.nsupysonic.app", OldApp.PACKAGE)
     }
 }

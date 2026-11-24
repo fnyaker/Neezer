@@ -276,7 +276,8 @@ Two ways; pick one.
 | `DEEZER_SYNC_AT` | `04:00` | Daily sync time (HH:MM). |
 | `DEEZER_REPORT_LISTENS` | *(off)* | `yes` reports your plays to Deezer so Flow and recommendations keep learning. |
 | `DATABASE_URI` | *(bundled PostgreSQL)* | Point at an external database. |
-| `ANDROID_VERSION_NAME` | *(image release)* | The Android version clients should run; older ones are offered the update. |
+| `ANDROID_VERSION_NAME` | *(image release)* | The WebView Android app's version clients should run; older ones are offered the update. |
+| `ANDROID_NATIVE_VERSION_NAME` | *(image release)* | The native Android app's version (`fr.neezer.mobile`), its own channel; empty means the native app says « mise à jour indisponible ». |
 | `ANDROID_DOWNLOAD_URL` | *(releases page)* | Where that update is downloaded from. |
 
 Also available: `POSTGRES_PASSWORD` (the bundled database), `GUNICORN_THREADS` / `GUNICORN_TIMEOUT`

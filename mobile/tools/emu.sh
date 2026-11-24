@@ -32,7 +32,11 @@ set -euo pipefail
 readonly AVD="${NEEZER_AVD:-nz35}"
 readonly IMAGE="system-images;android-35;default;x86_64"
 readonly DEVICE_PROFILE="pixel_6"
-readonly MAX_EMULATORS=2
+# At most two by default: each is ~3.8 GB and this machine is shared.
+# `NEEZER_EMU_MAX` is the escape hatch for an Orchestrator-granted exception
+# (measured free RAM, no other lot's device touched); the MemAvailable guard
+# below still applies and is never overridden by it.
+readonly MAX_EMULATORS="${NEEZER_EMU_MAX:-2}"
 readonly MIN_MEM_KB="${NEEZER_EMU_MIN_MEM_KB:-8388608}" # 8 GB, measured headroom
 
 # Where the SDK, the AVD and the per-port state live. The order matters: a CI
@@ -103,6 +107,9 @@ Environment (all optional, read once):
                                     when the AVD is there, else ~/.android/avd)
   NEEZER_EMU_STATE                  PID files and logs (default ~/.cache/neezer-emu)
   NEEZER_EMU_MIN_MEM_KB             start refuses below this MemAvailable (8 GB)
+  NEEZER_EMU_MAX                    how many emulators may run (default 2; only an
+                                    Orchestrator-granted exception raises it — the
+                                    memory guard below is not affected)
 
 Every adb call is `adb -s emulator-<port>`: this script never talks to a device
 it did not start, and never kills a PID it did not write.

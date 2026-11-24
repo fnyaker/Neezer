@@ -537,6 +537,10 @@ internal fun HelpSection(model: SettingsModel, state: SettingsModel.State) {
             )
         }
     }
+    // The native app updates from ITS OWN server channel (`/api/android/native-apk`):
+    // a server that predates it answers "mise à jour indisponible", never the
+    // WebView APK (`docs/agents/mobile.md`, "Deux apps Android").
+    fr.neezer.mobile.feature.setup.UpdateCard()
     SettingsCard(
         title = "Diagnostic",
         subtitle = "Un rapport à joindre à un signalement : les versions, le serveur, l'appareil, ce que l'app a demandé au réseau et les réglages en force. Ni mot de passe, ni jeton, ni cookie.",

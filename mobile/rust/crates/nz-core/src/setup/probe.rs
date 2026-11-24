@@ -64,11 +64,13 @@ pub struct ServerProbe {
     /// A different leaf than the one already pinned for this origin: the screen
     /// says "le certificat a changé" and replaces it only on acceptance.
     pub pin_changed: bool,
-    /// The server publishes an APK (`/api/version`'s `android.apk`): the screen
-    /// offers "Mettre à jour", and the fetch goes through [`Core::fetch_update`].
+    /// The server publishes the NATIVE app's APK (`/api/version`'s
+    /// `android.native.apk`): the screen offers "Mettre à jour", and the fetch
+    /// goes through [`Core::fetch_update`]. False on a server that predates the
+    /// native channel, even when it publishes the WebView `android.apk`.
     pub update_apk: bool,
-    /// The Android version that server declares (`android.version`), when it
-    /// names one — what the notice says next to the action.
+    /// The native app's version that server declares (`android.native.version`),
+    /// when it names one — what the notice says next to the action.
     pub android_version: Option<String>,
 }
 
@@ -191,8 +193,21 @@ impl Core {
             system_trusted,
             pin,
             pin_changed,
-            update_apk: version.android.apk,
-            android_version: version.android.version.filter(|v| !v.trim().is_empty()),
+            // The NATIVE channel only (docs/agents/mobile.md, "Deux apps
+            // Android"): `android.apk` is the WebView app's file, and a native
+            // app that fell back to it would download an APK for another
+            // package — the installer would refuse it, after 10 MB. `None` is
+            // the honest answer on an old server: no update to offer.
+            update_apk: version
+                .android
+                .native
+                .as_ref()
+                .is_some_and(|native| native.apk),
+            android_version: version
+                .android
+                .native
+                .and_then(|native| native.version)
+                .filter(|v| !v.trim().is_empty()),
         })
     }
 }

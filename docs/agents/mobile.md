@@ -8,13 +8,15 @@ the app it REPLACES is [android.md](android.md) (read it: every hard-won rule th
 here or is made unnecessary, and this note says which); the Rust crates it shares come from the
 desktop app ([desktop.md](desktop.md)).
 
-**Status (2026-11-18): MB0 (the skeleton), MB1 (Sillon in Compose), MB2 (the core runtime,
+**Status (2026-11-24): MB0 (the skeleton), MB1 (Sillon in Compose), MB2 (the core runtime,
 session, lists, covers, links and `:bridge`), MB4 (setup, the migration from the old app, the
-updater, the Deezer login), MB11 (now playing: the player, the queue, the words, the lyric card), MB15 (offline) and MB21 (the
-visualiser: bars and oscilloscope) are delivered; the lots below are planned and follow this note in order.** Each lot,
-when it lands, replaces its plan paragraph by what was learned (rule, why, number) — a delivered lot
-is not a changelog. The old `android/` app keeps building and shipping
-until lot MB-SWAP.
+updater, the Deezer login — revised for the two-app release), MB11 (now playing: the player, the
+queue, the words, the lyric card), MB15 (offline) and MB21 (the visualiser: bars and oscilloscope)
+are delivered; the lots below are planned and follow this note in order.** Each lot, when it lands,
+replaces its plan paragraph by what was learned (rule, why, number) — a delivered lot is not a
+changelog. **MB-SWAP is no longer a bascule**: since 2026-11-24 the native app has its own
+`applicationId` and installs BESIDE the old `android/` app, which keeps building and shipping
+(`Deux apps Android`, below).
 
 ## The need
 
@@ -103,12 +105,24 @@ never committed; Rust 1.99.1):
   core's lock). Rust never holds a lock while calling Kotlin.
 - A Kotlin coroutine cancelled while awaiting a UniFFI `async fn` cancels the Rust future (drop);
   Rust code after an `.await` must therefore be cancellation-safe (no half-written cache row).
-- `versionCode` must stay ABOVE every code the old app shipped (`android.yaml` used
-  `github.run_number`): the new workflow uses `2_000_000 + run_number`, or Android refuses the update.
-- The new app keeps **`applicationId = "org.nsupysonic.app"` and the same signing key**, so it
-  installs as an UPDATE of the old one through the existing `/api/android/apk` channel and keeps its
-  data directory (where the migration reads from). A new id would be a second app and lose
-  everything (rule 7).
+- **The native app has its OWN `applicationId` (`fr.neezer.mobile`)** and installs BESIDE the
+  WebView app (`org.nsupysonic.app`), not over it: the two coexist, each updates from its own
+  channel, and uninstalling one never touches the other (the note's *Deux apps Android* section says
+  what that changed everywhere). A consequence that is easy to forget: **Android forbids one package
+  from reading another's private data**, so MB4's automatic takeover (preferences, files, cookies,
+  WebView storage) is gone by design, not by a bug — the app detects the old package and says so.
+- **`versionCode` is per package.** The `2_000_000 + run_number` offset existed only for the
+  install-over-the-old-app plan and is gone: the native APK uses its workflow's `github.run_number`,
+  and the old app's codes (also run numbers) belong to the other package and are never compared.
+- **Provider authorities are device-global**, not package-scoped: every one in this app is
+  `${applicationId}…` (`setup-migration`, `fileprovider`, `lan-init`), or a second install (a debug
+  variant, the WebView app if it ever declared it) fails with
+  `INSTALL_FAILED_CONFLICTING_PROVIDER`. Component CLASS names, notification channel ids,
+  WorkManager stores, MediaSession tokens and the `neezer://` scheme are package-scoped and do not
+  collide; a shared scheme makes Android 12+ ask which app to open, never hand it to one silently.
+- **A release is signed with the stable secrets, never the debug key.** A debug-signed APK can be
+  installed but never updated in place, and an ephemeral key cannot either; `mobile.yaml` refuses a
+  tag without `ANDROID_KEYSTORE_BASE64` and reads the signer back from the built APK.
 - AAudio on API 26 can crash after close (Oboe #40): the AudioTrack fallback there.
 - **`NzCore::player()` is ONE player per process, and that is a measured rule.** It used to build a
   fresh `PlayerApi` per call, and a `PlayerApi` owns a `Player`, an engine and the engine's one sink: the
@@ -435,7 +449,7 @@ the end — anything else missing is a bug.
 | Output naming (`AudioRoute`: Bluetooth/USB/wired/HDMI/speaker, name, connection id) and the direct/processed verdict per connection | `AudioManager` device callback → `player.set_route(...)` | MB12 |
 | Downloads in the app's storage, published once complete, Range playback, launch-time cleanup | `nz-offline` + `nz-cache` downloads; no `__nsoffline` interception needed | MB15 |
 | Download yields to the player's own hold (`YieldGate`, `LinkNeed`) | The Bulk lane + the stream throughput cap in `nz-api` — one mechanism, no lease | SC4, MB15 |
-| Updater from ITS server (`/api/android/apk`, 202 + Retry-After, APK checks before the installer: zip, binary manifest, package, versionCode, signing lineage; causes `preparing truncated archive invalid package signature permission`) | Ported to Kotlin as is (`ApkArchive`, `Updater`) + Rust fetch on Bulk | MB4 |
+| Updater from ITS server (`/api/android/native-apk`, 202 + Retry-After, APK checks before the installer: zip, binary manifest, package, versionCode, signing lineage; causes `preparing truncated archive invalid package signature permission unavailable`) | Ported to Kotlin as is (`ApkArchive`, `Updater`) + Rust fetch on Bulk; the native channel only, never the WebView `neezer.apk` | MB4 |
 | Deezer login (`DeezerLoginActivity`: Deezer's own page in a throwaway WebView, `arl` cookie read, jar wiped before and after, no bridge, SSO refused) | Ported to Kotlin as is; hands the ARL to the same server route the SPA's `lib/nativeDeezer.js` caller uses | MB4 |
 | TOFU certificate pinning (`Ssl.kt`), cleartext only to the configured origin, redirects by hand | `nz-api` (SC3) + setup screen | SC3, MB4 |
 | Renderer death rebuild, battery-optimisation offer (once, when Android actually killed us) | No renderer. The battery exemption offer stays: once, when the engine reports the process was killed during playback (a `kv` flag written at play, cleared at clean pause) | MB3c |
@@ -542,12 +556,13 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 |---|---|---|
 | Cold start | Macrobenchmark `StartupTimingMetric`, `StartupMode.COLD`, 10 iterations, Baseline Profile on vs off | TTID **p50 633,1 ms / p95 1 247 / p99 1 247 ms** without a profile; **p50 687,3 / p95 1 046 / p99 1 046 ms** with `UseIfAvailable` on an APK that carries none (the profile is still owed, see MQ2). **TTFD p50 1 071,7 ms / p95 1 256,5 ms** (10 cold starts, one seeded account: `HomeEntry` calls `reportFullyDrawn()` once the home's DATA is Ready and the frame drawing it has passed; before, the shell never called it, so the metric had no `timeToFullDisplayMs` at all). **The ≤ 900 ms target is MISSED**: the home's first `cached_home()` runs before the background `restore()` has named the account, so it misses the snapshot and the first content is the seven-request fresh answer. Same run's TTID p50 588,0 / p95 650,5 ms. |
 | Tap → sound | `PlayerApi.output_stats()` carries `tap_ns` (Kotlin's tap instant passed in the command) and `first_audible_ns`; the journey measures tap → the bar's « Pause » state (`SystemClock.uptimeMillis`), an upper bound of the engine's own pair | album « Lire » → bar **323 ms** (bar showed « Pause »; AAudio opened in the same millisecond as the `load`); the 4 000-track playlist's « Lire » (first title transcoded by the server) **1 417 ms**, then **122 ms** on a warm second run. Targets were 150 / 800 / 1 500 ms. |
-| RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo org.nsupysonic.app`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). **Counted bytes**, now that `Assistance` builds its report at open: **3 462 806 o** — `file 6 472 o`, `listes 3 456 334 o` — after the 8 000 favourites and the 4 000-row playlist. The 4 000-title QUEUE itself did not load in that run (its first title's transcode exceeded the harness's 20 s on a loaded machine), so `file` holds only the album's two titles; the queue's own count is owed a quieter run. The 30-minute flat-growth check is still owed. |
+| RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo fr.neezer.mobile`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). **Counted bytes**, now that `Assistance` builds its report at open: **3 462 806 o** — `file 6 472 o`, `listes 3 456 334 o` — after the 8 000 favourites and the 4 000-row playlist. The 4 000-title QUEUE itself did not load in that run (its first title's transcode exceeded the harness's 20 s on a loaded machine), so `file` holds only the album's two titles; the queue's own count is owed a quieter run. The 30-minute flat-growth check is still owed. |
 | CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`); 10 minutes for the ExoPlayer comparison, 31 minutes for the final app; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | **Après MQ2-follow-up** : app **64 200 ms / 1 865 s = 3,442 % of one core**, **42 titres distincts, 0 rechargement**, cache audio **vidé** avant le run (43 spools créés pendant → tout streamé), service de premier plan tenu 31 min (`SOAK` line in the section). MQ2's reference app run **14 110 ms / 601 s = 2,348 %** (14 titles, the queue then looped — the defect MQ2-follow-up fixed ; 10 min, service non-premier-plan, session média déjà détruite, `media_descriptions: 0`) ; ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,63× the baseline**, under the **1,3×** threshold that reopens the engine decision (**7,12 %**). MB3c's own 30-minute streamed run measured 52 420 ms / 1 755 s = 2,99 % (test app, no notification/UI) : le phone réel est à **1,15×** — le prix du premier plan. Les sondes événements/spool à 10 ms sont gardées (le fil d'événements pesait 0,8 %) ; le back-pressure du décodeur reste à 2 ms parce que 5 ms casse la listen party (**−1 770 ms**). |
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
 | Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open **before p50 24,5 / p95 775,0 ms**, **after p50 19,7 / p95 161,4 ms** (3 iterations; MQ2's first record was p50 14,6 / p95 562,5). The cause was NOT a decoded sleeve — no `NzCoverLoader` is wired in this tree, every cover is its deterministic groove — but the full-screen `Modifier.blur` of the player's backdrop: a `RenderEffect` renders the subtree into an offscreen layer, and SwiftShader then compiled five programs (`CircleOp`, `FillRectOp`, `EllipseOp`, `TextureOp`) in the frame: **676 ms `DrawFrames`, of which 511 ms `flush commands`**. Without the blur the first frame still pays SwiftShader's first-use `FillRectOp` program (61 ms) and `eglSwapBuffers` (41 ms); it is the software rasteriser, not the app, so **16,7 ms stays the phone budget and is owed a device run**. Scroll budgets p95 ≤ 16,7 / p99 ≤ 25 remain MET on the emulator. |
 | Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. **rebuffers: 0** during the journey's playback, read from the report's `rebuffers : N` — the app's own `Core::rebuffers` (one increment per `SeekDeferred`: the SOURCE starved, never the mixer) is now counted and drawn by `Assistance` with no tap. The run's playback was the archived album, so 0 is the expected value for it. The throttled `gsm`/`edge` profile was not run. |
 | APK | `apkanalyzer`/`measure.sh apk` on the release build | **universal 54 580 998 B (52,1 MB)** for three ABIs, **arm64-v8a 21 473 481 B (20,5 MB)**, armeabi-v7a 16 574 985, x86_64 25 841 660 — the 45 MB target is a *download's* and every per-ABI APK meets it with room (the universal keeps all three ABIs for sideloading: see *MQ2 — la taille*). `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **16 322 520 B**, armeabi-v7a 11 473 160, x86_64 20 739 864 — the 9 MB target is MISSED by 1,8×, and cannot be met: **4 571 020 B (23 %) are the `panic = "unwind"` tables UniFFI's error contract requires** and the rest is the 1:1 feature code (*MQ2 — la taille* measures every step and names the refused levers). The CI ceiling is `mobile/tools/size-guard.sh`. |
+| Coexistence | `mobile/tools/coexist.sh` on emulator-5620 (API 35 x86_64, `-no-window -no-audio`, boot **10 s**): old APK then native APK on the SAME device; packages, launchers, processes, media services; each channel downloaded from a local server (`/api/android/apk` vs `/api/android/native-apk?abi=`) and updated; uninstall one, check the other; then `NzMediaServiceTest` against `mobile/tools/tone-server.py` | **both installed** (old 7 979 817 B / native universal 54 590 843 B, data dirs `/data/user/0/{org.nsupysonic.app,fr.neezer.mobile}`), **both launched** (pids 2034 / 2072 alive together), **both media services declared**; channels: old **7 979 816 B** `org.nsupysonic.app`, native **54 590 846 B** `fr.neezer.mobile`, both byte-identical to the files served, `X-NS-Version 9.0.0 / 9.1.0`; updates **9001 → 9002** on each, the other app's `versionCode` and `lastUpdateTime` unchanged; uninstall old → native stays, uninstall native → old stays; final state both installed. **Playback: 7/7 `NzMediaServiceTest` pass** (clock moved, AAudio 48 000 Hz / 500 ms, **0 underrun**, queue advanced through 4 titles, notification title/artist/artwork, headset keys, focus/noisy). Native splits: arm64-v8a **21 481 389 B**, armeabi-v7a **16 580 729 B**, x86_64 **25 851 497 B**. |
 | Worlds | — | **non livré — MB22/MB23 en pause à la demande de l'utilisateur (2026-11-23)**. |
 
 ## Worker rules (mandatory in every lot; each prompt repeats them)
@@ -596,7 +611,7 @@ holds **at most four Rust-building lots at once** (`CARGO_BUILD_JOBS=4` each) an
 | 3 | **MB3c** media service · MB9 playlist · MB11 now playing · MB12 audio effects · MB13 podcasts · MB14 discovery · MB15 offline · MB16 Réglages (user) · MB17 Réglages (admin) · MB19 remote · MB20 party · MB21 bars + scope | wave 2 (+ SC1/SC4/SC5/SC6 where named) |
 | 4 | MB18 genre studio · **MB22** worlds renderer · **MB24** car mode · MB25 Android Auto | MB3c (MB24, MB25), MB21 (MB22) |
 | 5 | MB23 the 50 worlds (batch) · **MQ2** the whole journey, measured | MB22 (MB23), every MB lot (MQ2) |
-| 6 | **MB-SWAP** the new app becomes `neezer.apk` | MQ2 |
+| 6 | **MB-SWAP** — remplacé le 2026-11-24 par *Deux apps Android* : l'app native s'installe à côté de `neezer.apk` | MQ2 |
 
 ```mermaid
 graph LR
@@ -621,7 +636,7 @@ graph LR
   MB3b --> MB18
   MQ1 --> MQ2
   MB23 & MB24 & MB25 & MB18 & MB17 & MB9 & MB11 & MB12 & MB13 & MB14 & MB15 & MB19 & MB20 & MB4 & MB5 & MB5b & MB6 & MB7 & MB8 --> MQ2
-  MQ2 --> SWAP[MB-SWAP]
+  MQ2 --> SWAP[MB-SWAP → coexistence]
 ```
 
 **Contract first.** MB0 writes every SHARED declaration the later lots compile against, already in
@@ -677,10 +692,10 @@ finds a contract wrong stops and asks; it never forks a parallel type.
 | MB24 | `nz-ffi/src/car.rs` | `car/**` | — |
 | MB25 | `nz-core/src/auto/**`, `nz-ffi/src/auto.rs` | `playback/src/main/java/fr/neezer/mobile/playback/auto/**` | — |
 | MQ2 | — | `baselineprofile/src/main/**/Journey*.kt` | `docs/agents/screenshots/mobile/MQ2/` |
-| MB-SWAP | — | `app/build.gradle.kts` (versioning only) | `.github/workflows/{release,android,mobile}.yaml`, `android/app/**` (removed), `android/README.md`, `docs/agents/android.md`, `CLAUDE.md`/`AGENTS.md` table row |
+| MB-SWAP → coexistence (2026-11-24) | `nz-core/src/setup/**`, `nz-ffi/src/setup.rs` | `app/build.gradle.kts`, `app/src/main/**`, `car/**`, `feature/{setup,settings,lan}/**`, `baselineprofile/**` | `neezer/webui/{androidapk,version,remote}.py`, `neezer/config.py`, `config.sample`, `docker/entrypoint.sh`, `desktop/crates/nz-model/src/settings.rs`, `mobile/tools/{env,ci-emulator,measure,coexist}.sh`, `.github/workflows/mobile.yaml`, `tests/test_webui.py`, cette section (+ `android/**` NOT touched) |
 
 MB0 creates every file; once it is merged, the few `:app` files named on a later row (LG1's icons,
-MQ1's `androidTest`, MQ2's `baseline-prof.txt`, MB-SWAP's versioning block) belong to that row's lot
+MQ1's `androidTest`, MQ2's `baseline-prof.txt`, the coexistence release's versioning block) belong to that row's lot
 and to nobody else. Every lot also rewrites ITS OWN section of this note (and only that section)
 when it lands.
 
@@ -774,13 +789,16 @@ What a later lot can rely on, without editing a shared file:
   holds; the real one arrives with MB2/MB3b).
 - **Update over the old app**: the old `neezer.apk` (built from `android/` at `versionCode` 1) then
   `adb install -r` of the new one: **Success**, `versionCode=2000001`, same signature
-  (`SHA-256 f18d0699…b3d624`). Same id, same key, higher code — rule 7, proven by the installer.
+  (`SHA-256 f18d0699…b3d624`). MB4's original test: same id, same key, higher code — rule 7, proven by
+the installer. The coexistence release replaced that install-over with two packages
+(`coexist.sh`, *Deux apps Android*).
 - **The app on the emulator** (`-no-window -no-audio`, API 35 x86_64, booted in **21.9 s**):
   **24 of 24 routes** opened their stub (each one's French title found in the accessibility tree of
   the running APK), and Réglages → Aide shows **« Version du noyau (Rust) : 0.1.0 »** — read from
   `nz_version()`, not a Kotlin constant.
-- The launcher has **exactly one** entry, `org.nsupysonic.app/.SetupActivity` (`cmd package
-  resolve-activity -c LAUNCHER`): the alias is the launcher, `MainActivity` is not.
+- The launcher has **exactly one** entry, `fr.neezer.mobile/.app.MainActivity` (`cmd package
+  resolve-activity -c LAUNCHER`): the `org.nsupysonic.app.*` aliases the install-over plan needed
+  were removed with the coexistence release.
 
 **Versions pinned** (all in `mobile/rust/Cargo.toml` and `mobile/android/gradle/libs.versions.toml`):
 AGP 8.13.2, Gradle 8.14.7, Kotlin + compose plugin 2.4.21, compileSdk 36, targetSdk 35, minSdk 26,
@@ -925,8 +943,8 @@ committed screenshots. **34 JVM tests**, no emulator (worker rule 7: nothing on 
   "the caller hands the sleeve", not as a filter the design system could not honour.
 - **`nonTransitiveRClass` means the fonts must live here.** `:designsystem` cannot read
   `android/app/src/main/res/font`, so the three TTFs are COPIES (776 496 B); `SillonDriftTest` compares
-  them byte-size for byte-size against the SPA's, and deleting the old app's copy is MB-SWAP's (that
-  tree leaves with `android/app`).
+  them byte-size for byte-size against the SPA's. The old `android/app`'s own copy stays with that
+  tree, which keeps shipping; a future cleanup can drop it without touching this app.
 - **A generator must fail loud.** The glyph generator silently emitted `MNaN,NaN` twice: `points`
   values were paired wrongly (`"7 10 12 15"` is three points, not six) and the attribute regex missed
   `x1`/`y1` (no digits in the character class). Both produced a vector that only threw at the first
@@ -959,7 +977,7 @@ pairs are asserted AS forbidden. Screenshots: 720 × 4160 px at 360 dp and 720 �
 `Screens.cover_path`) — with no loader a cover is its Sillon groove and **zero requests** (rule 1: the
 design system asks for nothing). Réglages (MB16) passes the eco switch as `motion = NzMotionLevel.Off`
 and a custom accent as `accent`; Pochette's watcher passes the sleeve as `coverAccent`. The old
-`android/app`'s three TTFs are removed by MB-SWAP with that tree.
+`android/app`'s three TTFs stay with that tree, which keeps shipping.
 
 ### MB2 — Core runtime, session, lists, covers, links `:bridge` (delivered 2026-11-17)
 
@@ -1680,6 +1698,9 @@ lot copying them by hand eventually gets wrong, with the person's speakers and p
 | `mobile/tools/emu-selftest.sh` | The acceptance as a command: two full start/wait/stop cycles leave no process, no PID file, no listening port and no held lock; two ports boot side by side as two distinct guests (kernel `boot_id` compared); `stop` on a port it never started exits non-zero. |
 | `mobile/tools/env.sh` | SDK / JDK / Gradle resolution, sourced by the rest. AGP 8.13 refuses JDK 25+ with `java.lang.IllegalArgumentException: 25.0.5` and no mention of Java; this picks a 17–24 one (mise's `java@21`) or names the fix. |
 | `mobile/tools/perf-server.sh {start,status,stop}` | `tools/perf_api.py --serve` with the worst realistic input (8 000 tracks, a 4 000-track playlist), `TMPDIR` moved onto disk, prints `host=http://127.0.0.1:<port>` and `emulator=http://10.0.2.2:<port>` (the guest has no 127.0.0.1 of ours), stopped with SIGTERM (the signal perf_api deletes its library on). |
+| `mobile/tools/coexist.sh` | The two-app acceptance: boots one emulator, installs the OLD APK then the NATIVE one on the same device, proves both packages/launchers/processes/media services, downloads each channel from `coexist-channel.py`, installs each over its own app (the other app's `versionCode`/`lastUpdateTime` unchanged), then uninstalls each and proves the other survives. |
+| `mobile/tools/coexist-channel.py` | The local server `coexist.sh` asks: a real `neezer` app whose `[webapp] android_apk` / `android_native_apk` point at the test APKs, so `/api/android/apk` and `/api/android/native-apk?abi=` are exercised for real. No GitHub release is read. |
+| `mobile/tools/tone-server.py` | MB3c's tone fixture, in-tree: `/api/version`, `/api/stream/<id>` (a real FLAC, Range supported) and a 1×1 PNG cover. `NzMediaServiceTest` runs against it with `-Pandroid.testInstrumentationRunnerArguments.nzServer=http://10.0.2.2:4711`; without it the class SKIPS with the cause. |
 | `mobile/tools/measure.sh {startup,frames,cpu,memory,underruns,apk,profile}` | One measure per subcommand, JSON in `~/.cache/neezer-measure/<what>-<UTC>.json` + `latest-<what>.json`, and a printed line. Every number is COUNTED where a count exists (frames, bytes, ticks, xruns, PSS bytes). |
 | `mobile/tools/benchdata.py` | AndroidX's 200 kB `benchmarkData.json` → medians and pooled p50/p90/p95/p99, and it FAILS when a bench measured none of its metrics (the emulator's frame source is a real way to get zeros). |
 | `mobile/tools/aaudio-probe.c` | Opens one AAudio stream exactly as the app's engine will (PowerSaving, media/music, 48 kHz stereo float, 1 s buffer), writes silence from a real-time callback and prints frames/ticks/xruns. Built by `measure.sh underruns` with NDK clang for API 28, pushed to `/data/local/tmp`, removed after. |
@@ -1700,7 +1721,7 @@ said, one emulator unless said; `/dev/kvm` `crw-rw-rw-`):
 | AAudio, `-audio none` | identical: 48 000 Hz, same burst/buffer, 2 928 000 frames in 60 s, steady 1.000, **0 xruns** → **`-audio none` is not needed; `-no-audio` gives AAudio a real-time clock** |
 | Cold start TTID (10 iterations, on the MB0+MB1+MB2+SC3 tree) | no profile: **p50 633.5 / p90 755.2 / p95 840.8 ms**; profile requested but absent (`UseIfAvailable`, no `baseline-prof.txt` in the APK yet): **p50 558.4 / p95 695.6 ms**. TTFD is absent from the report: the shell does not call `reportFullyDrawn()` yet. On MB0's bare skeleton the same bench read 668.0 / 651.9 ms p50 |
 | Shell frames (tab walk, 5 iterations, **152 frames each / 745 pooled**, MB1+MB2 tree) | `frameDurationCpuMs` **p50 31.1 / p90 44.2 / p95 50.6 / p99 73.2 ms**; `frameOverrunMs` p50 22.4 / p95 51.0 / p99 80.8 ms — every frame misses the 16.7 ms budget on swiftshader. On MB0's placeholder-only shell the same bench read p50 10.1 / p95 19.4 ms: **MB1's real themed UI (surface, type, ripple, glass tokens) costs 3× the frame time of a static placeholder, and that is the number MB1/MQ2 now own** |
-| App memory (home, no player yet) | **PSS 28 768 256 B (28.1 MiB)** for `org.nsupysonic.app` |
+| App memory (home, no player yet) | **PSS 28 768 256 B (28.1 MiB)** for `fr.neezer.mobile` |
 | App CPU (screen off, Doze forced, 60 s) | **10 ms = 0.017 %** of one core — the skeleton's idle floor, not a playback figure |
 | APK | **4 962 439 B** universal, `classes.dex` 2 397 656 B, `libnz_ffi.so` **902 056 B arm64**, 944 776 B x86_64, 605 620 B armeabi-v7a |
 | `perf-server.sh` | 8 000 tracks + 4 000-track playlist seeded and serving; the guest reaches it at `10.0.2.2:<port>` (`ping` 2.65 ms, `GET /api/version` → 200); SIGTERM leaves **0** library directories |
@@ -1738,15 +1759,15 @@ do, on a device.
   mention of Java, and `gradle --version` looks fine. `env.sh` resolves a 17–24 JDK.
 - **`cmd package resolve-activity -c LAUNCHER <pkg>` is not a launcher lookup**: it prints a full
   resolution dump in which `name=` also matches the `Application` class. `--brief` answers exactly the
-  component (`org.nsupysonic.app/.SetupActivity`) and is what both scripts use.
+  component (`fr.neezer.mobile/.app.MainActivity`) and is what both scripts use.
 - **AGP's `connected…AndroidTest` runs on EVERY device adb sees.** Without `ANDROID_SERIAL`, a run of
   ours started on another lot's `emulator-5590` (observed in the log). Both tools now export
   `ANDROID_SERIAL=emulator-<port>` — a lot never drives a device it did not start.
 - **The artifact's release APK cannot be silently replaced by the debug one.** The workflow hands
-  `app-release.apk` over with `versionCode = 2 000 000 + the apk job's run number` (2 000 037 on the
-  run that found this), while the debug build the instrumented step installs is 2 000 001 — so Android
-  answers `INSTALL_FAILED_VERSION_DOWNGRADE: Update version code 2000001 is older than current
-  2000037`. The smoke runs against the release APK, then `ci-emulator.sh` uninstalls the package before
+  `app-release.apk` over with `versionCode = the apk job's run number` (the native line has no offset
+  any more: the old app's codes belong to another package), while the debug build the instrumented
+  step installs has versionCode 1 — so Android answers `INSTALL_FAILED_VERSION_DOWNGRADE`. The smoke
+  runs against the release APK, then `ci-emulator.sh` uninstalls the package before
   `connectedDebugAndroidTest`, which installs its own; a lot re-running the job on a dirty emulator
   would otherwise meet the same refusal.
 - **A `-read-only` emulator is a fresh guest every boot**: the app a previous run installed is gone,
@@ -1792,7 +1813,7 @@ the commands live here: `mobile/tools/emu.sh {start,wait,stop} --port N`,
 `cd mobile/android && gradle :baselineprofile:connectedBenchmarkReleaseAndroidTest` for the benches
 themselves.
 
-**Files.** `mobile/tools/{emu.sh,emu-selftest.sh,env.sh,perf-server.sh,measure.sh,benchdata.py,aaudio-probe.c,ci-emulator.sh}`,
+**Files.** `mobile/tools/{emu.sh,emu-selftest.sh,env.sh,perf-server.sh,measure.sh,benchdata.py,aaudio-probe.c,ci-emulator.sh,coexist.sh,coexist-channel.py,tone-server.py}`,
 `mobile/android/baselineprofile/{build.gradle.kts,src/main/java/fr/neezer/mobile/baselineprofile/*.kt}`,
 `mobile/android/app/src/androidTest/java/fr/neezer/mobile/app/ShellSmokeTest.kt`,
 `mobile/android/app/build.gradle.kts` (androidTest dependencies only),
@@ -2034,10 +2055,15 @@ like/dislike patch says otherwise); MB12 reads `AudioRoute` through `output_stat
 MB15's downloads are already the opener's first source (`nz-cache`'s `downloads().local`), and the
 worker's `pending_progress` flush is bounded to 25 rows per tick (a catch-up, never a bulk import).
 
-### MB4 — Setup, migration from the old app, updater, Deezer login (delivered 2026-11-17)
+### MB4 — Setup, migration from the old app, updater, Deezer login (delivered 2026-11-17; migration revised 2026-11-24)
 
 **What landed.** The app's first minutes and its update path, and — for a person
-updating from the WebView app — everything where they left it.
+updating from the WebView app — everything where they left it. **The takeover
+half of this section is history**: with the native app's own `applicationId`
+(2026-11-24) Android forbids reading the old app's private data, so the hidden
+WebView and the file moves are no longer fed; see *Deux apps Android* → *MB4
+révisé*. The setup, the probe, the login and the updater are unchanged, and the
+updater now reads the NATIVE channel only.
 
 - **The setup screen** (`SetupEntry`, `nz-core::setup::probe`,
   `Screens.probeServer`) does what `SetupActivity` + `Prefs.buildBaseUrl` +
@@ -2148,7 +2174,7 @@ same debug key, `adb install -r` over it):
 - **Sizes**: `libnz_ffi.so` arm64-v8a **6 356 480 B** (MB2: 6 129 152 — +227 kB
   for realtime-free setup/update/Deezer logic and `seed`), armeabi-v7a
   4 413 880 B, x86_64 6 925 840 B. Debug APK 41 524 692 B (not the shipping
-  size: a release build with R8 is MB-SWAP's).
+  size: this is the debug build; the release one has R8).
 
 **Rules a measurement taught** (each one cost a wrong build or a silent failure):
 
@@ -2217,7 +2243,7 @@ same debug key, `adb install -r` over it):
 `migrated` set and plays the renamed files (this lot proves they are in
 `nz-cache`'s store, `done`, at their exact size); MB16 hosts `DeezerAccountCard`
 in Réglages → Compte and reads the ARL state; the SHELL calls
-`NzCore.restore()` at launch (MB5/MB-SWAP) — the session is migrated and live
+`NzCore.restore()` at launch (MB5/MB4) — the session is restored and live
 (`GET /api/me` 200), but nothing shows "signed in" until a screen asks; the
 `/api/version` → `android.apk` notice is on the setup screen and its action is
 Aide's (MB16/MB17); `mobile/tools/emu.sh` was still not merged, so the flags were
@@ -2953,7 +2979,7 @@ panel, public page) plus the import job.
   read-only band, in both themes at both widths — plus **one headless-emulator capture of the real
   screen** (`mb9-emulateur-360dp.png`: the bench's own 4 000-title playlist, opened by
   `neezer://playlist/<id>` against `perf_api.py` at `10.0.2.2:5690`).
-- **Smoothness, on the emulator** (`dumpsys gfxinfo org.nsupysonic.app`, 12 scripted swipes over
+- **Smoothness, on the emulator** (`dumpsys gfxinfo fr.neezer.mobile`, 12 scripted swipes over
   the 4 000-row list): **201 frames, 3 janky (1.49 %)**, p50 **23 ms**, p90 **29 ms**, p95
   **31 ms**, p99 44 ms (GPU p50 19 ms on swiftshader). These are the SOFTWARE-GPU floor MQ1
   recorded for this machine — the static shell read p95 19.4 ms and MB1's themed UI p95 50.6 ms —
@@ -5399,7 +5425,7 @@ native graphics, no emulator):
   its self-test, and says where the file comes from.
 - **A shared model file (`/genre/share/*`) is not ported**: it is a 48 MB JSON written by a desktop,
   and the SPA's own export path is the Android host's `saveText` bridge — which this app does not
-  have (no WebView, MB-SWAP). The server-side import stays reachable from the desktop and the SPA.
+  have (no WebView). The server-side import stays reachable from the desktop and the SPA.
 - **Explorer is MB14's**, not a fifth tab (the desktop added it because the SPA puts it on Search).
 - **The studio's upkeep card (analysis plan/backfill/schedule) is MB17's**, in Réglages → Serveur;
   the *Modèle* tab's measure card runs the CLIENT pass (`lib/analysis/runner.js`), which is the
@@ -5950,19 +5976,18 @@ La cible 45 MB est celle d'un TÉLÉCHARGEMENT: chaque APK par ABI la tient larg
 24,5 MB contre 60,0 MB avant). L'universel reste produit — l'app se pose en `adb install` et par
 `/api/android/apk`, il n'y a pas de bundle Play à qui demander l'ABI — et vaut 51,8 MB; le supprimer
 pour éliminer x86_64 a été refusé (l'ancienne app le livrait: règle 7). Les quatre APK partagent le
-même `versionCode` (2 000 001 à la mesure), donc le chemin de mise à jour ne change pas; `ci-emulator.sh`
+même `versionCode` (le numéro de run à la mesure), donc le chemin de mise à jour ne change pas; `ci-emulator.sh`
 et `measure.sh` préfèrent `app-universal-release.apk`. `classes.dex` reste 8 293 956 B: JNA + les
 liaisons UniFFI générées + Compose, UniFFI 0.32 n'a pas de mode sans JNA et R8 fait déjà le reste —
 suivi, pas de coupe.
 
-**Le fichier qui sera publié.** `release.yaml` ne parle d'aucun APK mobile et `android.yaml` publie
-encore l'ANCIENNE app (`android/app/build/outputs/apk/release/app-release.apk` → `neezer.apk`), donc
-rien de la chaîne de distribution ne change aujourd'hui. Ce que MB-SWAP devra attacher sous le nom
-`neezer.apk` est **`app-universal-release.apk`** : `neezer/webui/androidapk.py` sert UN fichier
-(`APK_NAME`, fichier local via `[webapp] android_apk` ou asset GitHub) et `Updater.kt` refuse un
-`versionCode` qui n'est pas supérieur — un nom par ABI n'installerait que sur certaines machines. Les
-quatre APK portent le même `versionCode` (2 000 000 + le numéro de run), et `mobile.yaml` le vérifie
-désormais pour que la bascule ne puisse pas livrer un mélange incohérent.
+**Le fichier publié.** Depuis v1.6.3 les deux apps sont attachées au même tag, sous deux noms qui ne
+se croisent jamais : `android.yaml` publie l'ANCIENNE app en `neezer.apk` (inchangé), `mobile.yaml`
+publie l'app native en `neezer-native.apk` (l'universel, `app-universal-release.apk`) et ses splits
+`neezer-native-<abi>.apk`. `neezer/webui/androidapk.py` sert le canal demandé, jamais l'autre :
+`/api/android/apk` → `neezer.apk`, `/api/android/native-apk?abi=` → le split ou l'universel. Les
+quatre APK natifs portent le même `versionCode` (le numéro de run du workflow), et `mobile.yaml` le
+vérifie pour qu'une release ne puisse pas livrer un mélange incohérent.
 
 **Et pour descendre plus bas** (aucun n'est gratuit; le lot qui les voudrait devrait rouvrir *Measures*):
 `panic = "abort"` rendrait ~4,6 MB de tables mais tue le processus sur un panic (perte de la règle 3,
@@ -6184,62 +6209,132 @@ fixture.
 `mobile/android/baselineprofile/src/main/java/fr/neezer/mobile/baselineprofile/ScreenOffChainTest.kt`,
 this section, *Measures*.
 
-### MB-SWAP — The native app becomes `neezer.apk` (wave 6)
+### MB-SWAP — Deux apps Android qui coexistent (2026-11-24, remplace la bascule)
 
-**Goal.** Every server's updater now offers the native app; the WebView app is retired.
-**Depends on**: MQ2 (and the person's go-ahead: `ao report --needs-input` with MQ2's numbers before
-switching the release asset — it changes every user's app).
-**Exclusive files**: `.github/workflows/{release,android,mobile}.yaml`, `mobile/android/app/build.gradle.kts`
-(versioning only), `android/app/**` + `android/build.gradle.kts` + `android/settings.gradle.kts`
-(removed — **`android/nscore` stays**, the desktop's `nz-audio` depends on it by path),
-`android/README.md`, `docs/agents/android.md` (becomes the history of the retired app + the rules the
-native app kept), the `CLAUDE.md`/`AGENTS.md` table row for `android/`.
-**Contract.** `mobile.yaml` attaches the release APK to `v*` tags as `neezer.apk` (the asset name
-`neezer/webui/androidapk.py` fetches) with the stable signing secrets — and that file is
-**`app-universal-release.apk`**, never a split: since « MQ2 — la taille » `assembleRelease` writes four
-APKs, the updater serves ONE (`androidapk.py`'s `APK_NAME = "neezer.apk"`, a local file or a GitHub
-asset, and `Updater.kt` refuses a `versionCode` that is not higher), and a per-ABI name would install
-on some devices only. The splits are extra assets with explicit names
-(`neezer-<abi>.apk`), and `ci-emulator.sh`/`measure.sh` already prefer the universal one; `android.yaml` keeps only the
-`nscore` jobs (renamed `nscore`), or is folded into `mobile.yaml`; no server change: `/api/android/apk`,
-`/api/version`'s `android.*` and `[webapp] android_*` keep their meaning (rule 7: an old server serves
-the new app as it served the old one). The updater offered by the OLD app installs the new one over it
-(same id, same key, higher code) — tested once more on the release build.
-**Acceptance.** A tagged pre-release: an old app on the emulator, server pointed at the release, taps
-"Mettre à jour" → the native app installs over it and the MB4 migration runs (same checks as MB4's
-upgrade test); all workflows fully green; the desktop's `nz-audio` still builds (`android/nscore` intact).
+**Décision (demande explicite de la personne, 2026-11-24).** L'app native n'a PAS remplacé
+l'ancienne sous le même `applicationId` : l'ancienne (`android/`, `org.nsupysonic.app`, publiée par
+`android.yaml` sous `neezer.apk`) reste telle quelle et continue d'être servie à ses utilisateurs ;
+l'app native (`mobile/android`, `fr.neezer.mobile`) s'installe **à côté**, avec son propre libellé
+« Neezer (native) », son propre canal de mise à jour et sa propre icône. Un appareil peut donc
+porter les deux, et désinstaller l'une ne touche pas l'autre. Le lot `MB-SWAP` d'origine est
+**remplacé par cette section** ; il ne reste rien à faire pour une future bascule qui n'a plus lieu
+d'être.
+
+**Pourquoi un id distinct est la bonne réponse, et ce qu'il coûte.**
+[Android donne à chaque `applicationId` son propre répertoire privé, son propre identifiant
+d'installation et sa propre identité de signature](https://developer.android.com/studio/build/application-id) :
+c'est exactement ce qu'il faut pour deux apps côte à côte, et c'est aussi pourquoi **l'app native ne
+peut plus lire les réglages, les fichiers, les cookies ni le WebView de l'ancienne** — Android
+[l'interdit à toute autre app](https://developer.android.com/training/data-storage/app-specific).
+Le MB4 d'origine n'était possible que parce que l'APK s'installait PAR-DESSUS l'ancien, dans le même
+répertoire. La conséquence est assumée et dite : la reprise automatique devient un **avis explicite**
+(§ *MB4 révisé*), pas une fonction qui échoue en silence.
+
+**Le contrat de coexistence (tout ce qui dépend de l'id).**
+
+| Ce qui | Ancienne app (inchangée) | App native |
+|---|---|---|
+| `applicationId` | `org.nsupysonic.app` | `fr.neezer.mobile` |
+| Libellé du lanceur | « Neezer » | « Neezer (native) » |
+| Lanceur / activité | `.SetupActivity` | `.MainActivity` (un seul filtre MAIN/LAUNCHER) |
+| Authorities | `org.nsupysonic.app.fileprovider` | `${applicationId}.fileprovider`, `.setup-migration`, `.lan-init` |
+| Services / composants | noms `org.nsupysonic.app.*` | tous en `fr.neezer.mobile.*` (y compris `:car`, renommé) |
+| Canal de mise à jour | `neezer.apk`, `/api/android/apk`, `android.*` | `neezer-native.apk` + splits, `/api/android/native-apk`, `android.native` |
+| Clé de signature | secrets `ANDROID_KEYSTORE_*` | **les mêmes** (stable ; un id différent n'exige pas une clé différente) |
+
+Les autorités de `ContentProvider` sont les **seules** identités globales à l'appareil
+([elles doivent être uniques sur l'appareil](https://developer.android.com/guide/topics/providers/content-provider-creating)) :
+toutes sont dérivées de `${applicationId}` et le test d'installation des deux apps le prouve
+(`INSTALL_FAILED_CONFLICTING_PROVIDER` si l'une trahissait la règle). Les canaux de notification,
+les bases WorkManager, l'identité MediaSession / Android Auto, les noms de classe des services, le
+schéma `neezer://` et les règles de sauvegarde sont **scopés au paquet** : aucun ne collide. Le
+schéma `neezer://` n'est déclaré que par l'app native (l'ancienne ne le déclare pas) ; si une
+seconde app le déclarait un jour, [Android 12+ affiche le choix](https://developer.android.com/about/versions/12/behavior-changes-12#web-intent-resolution)
+au lieu de laisser une app le prendre en silence.
+
+**Deux canaux, jamais croisés.**
+
+- L'ancienne app garde **exactement** ce qu'elle recevait : `GET /api/android/apk` sert
+  `neezer.apk`, `/api/version`'s `android.version/url/apk`, les clés `[webapp] android_version`,
+  `android_url`, `android_apk`. Rien dans ce lot ne change ce que reçoit un téléphone qui ne peut pas
+  se mettre à jour (règle 7).
+- L'app native lit **uniquement** `android.native` et `GET /api/android/native-apk?abi=<abi>`. Le
+  serveur sert `neezer-native-<abi>.apk` quand la release le porte (un tiers des octets de
+  l'universel), sinon `neezer-native.apk`. Une release antérieure aux splits est donc servie quand
+  même, en un seul repli.
+- **Vieux serveur, app native** : `android.native` est absent, `fetch_update` répond
+  « Mise à jour indisponible : ce serveur ne publie pas l'application Android native » **avant tout
+  téléchargement**. Elle ne touche jamais `neezer.apk` — le paquet et la clé diffèrent, l'installateur
+  le refuserait de toute façon, mais on ne télécharge pas 10 Mo pour le découvrir.
+- Config : `[webapp] android_native_version`, `android_native_apk` ; le conteneur les remplit depuis
+  `ANDROID_NATIVE_VERSION_NAME`, sinon `APP_VERSION` (même tag). Réglages web : aucune option
+  nouvelle, l'`Assistance` de l'app native porte le bouton « Vérifier les mises à jour ».
+
+**MB4 révisé — ce qui est conservé, ce qui ne peut plus l'être, et ce qui est dit.** Le
+`ContentProvider` `SetupMigrationProvider` tourne toujours au démarrage, mais son entrée est
+**vide** : il ne lit plus ni `SharedPreferences("settings")`, ni `filesDir/offline`, ni
+`CookieManager`, ni le WebView caché (ces fichiers sont à l'autre paquet). Il ne transmet qu'un
+fait, `OldApp.installed()` (`PackageManager`, avec `<queries><package org.nsupysonic.app>` pour la
+visibilité Android 11), et `nz-core` en fait la phrase : « L'ancienne application est installée sur
+cet appareil. Android ne permet pas à une autre application de lire ses réglages ni ses
+téléchargements : rien n'a été repris. Saisissez votre serveur et connectez-vous ici ; l'ancienne
+application n'a pas été modifiée… ». Aucun fichier de l'ancienne n'est lu, déplacé ou supprimé ; sa
+désinstallation ne touche pas l'app native, et réciproquement. La machinerie de reprise testée
+(`runMigration`) reste en place pour un futur export explicite, mais rien de privé ne l'alimente
+aujourd'hui.
+
+**Signature.** `mobile.yaml` prépare la même clé stable que `android.yaml` (secrets existants),
+refuse une release (`v*`) sans `ANDROID_KEYSTORE_BASE64`, et vérifie le signataire de l'APK produit :
+une release signée debug (`CN=Android Debug`) échoue. Une clé éphémère reste permise sur une pull
+request (fork sans secrets), jamais sur un tag — [toutes les mises à jour d'une app doivent être
+signées avec la même clé](https://developer.android.com/studio/publish/app-signing).
+
+**Assets de release.** `neezer.apk` reste l'ancienne app (`android.yaml`). Le même tag porte
+`neezer-native.apk` (universel), `neezer-native-arm64-v8a.apk`, `neezer-native-armeabi-v7a.apk`,
+`neezer-native-x86_64.apk` ; `mobile.yaml` les attache et **retélécharge chacun pour le comparer
+octet pour octet** à ce qu'il a construit.
+
+**Tests.** Le canal est prouvé dans `tests/test_webui.py` (les deux objets `/api/version`, les deux
+routes, le split par ABI, le repli universel sur un 404, les deux familles de cache qui ne
+s'effacent pas) et côté Rust (`probe` lit `android.native`, `fetch_update` refuse un serveur sans
+lui, l'avis MB4). Sur l'émulateur, `mobile/tools/coexist.sh` installe l'ANCIEN APK puis le NATIF sur
+le même appareil, prouve les deux paquets, les deux lanceurs, les deux processus, les deux canaux
+(serveur local pointé sur les APK de test, chacun téléchargé, comparé, réinstallé), puis désinstalle
+l'un et vérifie que l'autre est intact — voir la ligne *Coexistence* de *Measures* pour les chiffres.
+
+**Fichiers.** `mobile/android/app/build.gradle.kts`, `mobile/android/app/src/main/AndroidManifest.xml`,
+`mobile/android/{app,car,feature/lan,feature/setup}/**`, `mobile/android/baselineprofile/**`,
+`mobile/tools/{env,ci-emulator,measure,coexist}.sh`, `mobile/rust/crates/nz-core/src/setup/**`,
+`mobile/rust/crates/nz-ffi/src/setup.rs`, `desktop/crates/nz-model/src/settings.rs`,
+`neezer/webui/{androidapk,version,remote}.py`, `neezer/config.py`, `config.sample`,
+`docker/entrypoint.sh`, `tests/test_webui.py`, `.github/workflows/mobile.yaml`, cette section et la
+ligne *Coexistence* du tableau *Measures*. `android/**` n'est **pas** modifié.
+
+**Sources.** [Set the application ID](https://developer.android.com/studio/build/application-id) ·
+[App-specific storage](https://developer.android.com/training/data-storage/app-specific) ·
+[Content provider basics / authorities](https://developer.android.com/guide/topics/providers/content-provider-creating) ·
+[FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider) ·
+[Android 12: web intent resolution](https://developer.android.com/about/versions/12/behavior-changes-12#web-intent-resolution) ·
+[Sign your app](https://developer.android.com/studio/publish/app-signing) ·
+[MediaLibraryService](https://developer.android.com/media/media3/session/serve-content) ·
+[WorkManager](https://developer.android.com/topic/libraries/architecture/workmanager) ·
+[Notification channels](https://developer.android.com/develop/ui/views/notifications/channels) ·
+[ABI splits](https://developer.android.com/studio/build/configure-apk-splits).
 
 ```text
-Tu es le worker du lot MB-SWAP (bascule) de la nouvelle app mobile Neezer. Lis CLAUDE.md (règle 7),
-docs/agents/mobile.md (« MB-SWAP », « MQ2 », « Worker rules »), docs/agents/android.md,
-neezer/webui/androidapk.py et .github/workflows/{release,android,mobile}.yaml.
-Objectif : avant tout, `ao report --needs-input` avec les mesures de MQ2 : la personne doit accepter la
-bascule. Ensuite : la release attache l'APK natif sous le nom neezer.apk, l'ancienne app android/app est
-retirée (android/nscore reste), android.md devient l'historique, selon la section MB-SWAP.
-Fichiers à toi seul : ceux de la section MB-SWAP.
-Acceptation : pré-release taguée ; ancienne app → « Mettre à jour » → app native installée par-dessus,
-migration MB4 réussie ; tous les workflows verts ; nz-audio du desktop compile toujours.
-Règles (non négociables, apprises sur l'app desktop) :
-- Git non interactif : export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true ;
-  git commit -m, git merge --no-edit, jamais rebase -i. Jamais git stash : un commit WIP.
-- Avant de fusionner : git fetch origin && git rebase origin/master, puis
-  git diff --stat origin/master...HEAD ne doit lister QUE les fichiers de ton lot (et ta section de
-  docs/agents/mobile.md) ; sinon corrige avant (un squash depuis une base périmée a déjà effacé du travail).
-- Un seul écrivain par fichier. Les fichiers partagés (Cargo.toml, lib.rs/mod.rs, NavGraph.kt, manifeste
-  de :app, settings.gradle.kts, libs.versions.toml, build.gradle.kts, mobile.yaml) sont créés une fois
-  par le lot socle : s'il faut en changer un, arrête-toi et fais ao report --needs-input.
-- Mémoire mesurée en octets comptés, jamais par le RSS d'un processus de test partagé.
-- Tout thread qui emprunte un runtime tokio est joint avant l'arrêt de ce runtime.
-- Tests sur des événements (canal, latch, boot_completed, changement d'état), jamais sur l'horloge.
-- Rien sur l'affichage ni les haut-parleurs de l'utilisateur : émulateur via mobile/tools/emu.sh
-  (avant MQ1 : mêmes drapeaux à la main, -no-window -no-audio, ton propre port), toujours
-  adb -s emulator-<port>, Xvfb pour une fenêtre desktop, ne tue que TES PID (jamais pkill/killall).
-- Rien de gros dans /tmp (tmpfs en RAM) : SDK, AVD, builds, journaux sous ~/.cache, ~/.local/share
-  ou target/. CARGO_BUILD_JOBS=4, un cargo à la fois, pas de build release inutile.
-- Interface en français, pas d'emoji, jetons Sillon seulement, chaque requête sur sa voie (règle 1) ;
-  les chiffres (requêtes, octets, ms, images) dans la PR et à côté des assertions.
-- Fini = acceptation mesurée, CI entièrement verte (chaque job de chaque workflow, journaux des
-  scanners de sécurité lus), section du lot réécrite avec ce qui a été appris, PR fusionnée.
-Fin : branche <ta-branche>/swap, PR « feat(mobile): MB-SWAP ship the native app as neezer.apk », CI verte,
-rebase + diff --stat, merge, `ao report --done`.
+Tu es le worker de la coexistence Android de Neezer. Lis CLAUDE.md (règle 7),
+docs/agents/mobile.md (« Deux apps Android », « MB4 révisé », « Worker rules »), docs/agents/android.md,
+neezer/webui/androidapk.py et .github/workflows/{android,mobile}.yaml.
+Objectif : l'app native (mobile/android, fr.neezer.mobile) s'installe À CÔTÉ de l'ancienne
+(android/, org.nsupysonic.app, neezer.apk), chacune se met à jour depuis son canal, aucune ne lit ni
+n'efface les données de l'autre ; un vieux serveur ne sert jamais l'APK ancien à l'app native.
+Fichiers à toi seul : ceux de la section « Deux apps Android ».
+Acceptation : les deux APK installés ensemble sur l'émulateur, les deux lancés, chacun mis à jour
+depuis son canal (serveur local sur des assets de test), désinstaller l'un ne touche pas l'autre ;
+tous les workflows verts ; nz-audio du desktop compile toujours.
+Règles : celles de « Worker rules » (git non interactif, jamais git stash, un écrivain par fichier,
+mesures en octets comptés, tests sur événements, émulateur via mobile/tools/emu.sh, rien de gros dans
+/tmp, CARGO_BUILD_JOBS=4, interface française et Sillon).
+Fin : branche <ta-branche>/coexist, PR « feat(mobile): l'app native s'installe à côté de l'ancienne »,
+CI verte, rebase + diff --stat, merge, `ao report --done`.
 ```

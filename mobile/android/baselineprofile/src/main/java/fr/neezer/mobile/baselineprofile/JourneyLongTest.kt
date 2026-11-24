@@ -37,7 +37,7 @@ class JourneyLongTest {
     /** The app's process, or a failure naming the step that lost it. */
     private fun appPid(): String {
         val pid = device.executeShellCommand("pidof ${BenchTarget.PACKAGE_NAME}").trim()
-        assertTrue("org.nsupysonic.app has no PID: the app is not running", pid.isNotEmpty())
+        assertTrue("${BenchTarget.PACKAGE_NAME} has no PID: the app is not running", pid.isNotEmpty())
         return pid
     }
 

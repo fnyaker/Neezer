@@ -112,10 +112,14 @@ nz_gradle_android() {
 # dump (the activity's flags, its createTimestamp, the Application class) and the
 # component is buried in it; a script that greps for `name=` then picks the wrong
 # line on the next Android version. Measured on API 35: `--brief` answers exactly
-# two lines, the second being `org.nsupysonic.app/.SetupActivity`.
-nz_launcher_component() {
-    local serial="$1"
+# two lines, the second being `fr.neezer.mobile/.app.MainActivity`.
+nz_launcher_component_of() {
+    local serial="$1" package="$2"
     "$(nz_adb)" -s "$serial" shell cmd package resolve-activity --brief \
-        -c android.intent.category.LAUNCHER org.nsupysonic.app 2>/dev/null |
+        -c android.intent.category.LAUNCHER "$package" 2>/dev/null |
         tail -1 | tr -d '\r'
+}
+
+nz_launcher_component() {
+    nz_launcher_component_of "$1" fr.neezer.mobile
 }

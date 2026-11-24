@@ -5,11 +5,11 @@
 # the MANIFEST names (it keeps manifest-referenced classes, but not the classes
 # they build by name), and the callback interfaces Rust calls back into.
 #
-# The car mode's components are declared under their OLD fully-qualified names
-# in :car's manifest, so the app's package prefix must survive too (a quick
-# settings tile the person added points at it).
+# The car mode's components are declared under this app's own names in :car's
+# manifest, so the package prefix must survive too (a quick-settings tile the
+# person added points at it).
 
--keep class org.nsupysonic.app.** { *; }
+-keep class fr.neezer.mobile.car.** { *; }
 -keep class fr.neezer.mobile.app.** { *; }
 
 # UniFFI callbacks are Kotlin objects RUST invokes: R8 must not rename or strip

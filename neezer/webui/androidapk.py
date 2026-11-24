@@ -3,23 +3,36 @@
 #
 # Distributed under terms of the GNU AGPLv3 license.
 
-"""The Android app's own update, served by this server.
+"""The Android apps' own updates, served by this server.
 
-The app used to send the user to a GitHub page: leave the app, find the asset,
-download it in a browser, open it from the notifications. Now the app asks THIS
-server for the APK (``GET /api/android/apk``), checks it is a newer build of
-itself signed with its own key, and hands it to Android's installer — one tap.
+There are TWO Android apps now, and they must never receive each other's APK:
 
-Where the file comes from, best first:
+- the WebView app (`org.nsupysonic.app`, built by ``android.yaml``), published
+  as ``neezer.apk`` and served by ``GET /api/android/apk`` — its behaviour here
+  is frozen, byte for byte, because a phone that runs it may never be able to
+  take a newer build;
+- the native app (`fr.neezer.mobile`, built by ``mobile.yaml``), installed BESIDE
+  the first one, published as ``neezer-native.apk`` (universal) and
+  ``neezer-native-<abi>.apk`` (per ABI), served by
+  ``GET /api/android/native-apk``.
 
-- ``[webapp] android_apk``: a local file the operator put there (a private or
-  fork build). Served once ``_apk_problem`` says it is an APK.
-- the GitHub release of the declared ``android_version``, on the repository
-  ``android_url`` points at (the project's by default). Fetched ONCE, by a
-  single worker: the first request for that version answers ``202`` with a
-  ``Retry-After``, the following ones serve the file as soon as it is on disk.
-  A 10 MB download never happens in a request thread, and never behind a lock
-  another device is waiting on.
+``GET /api/version`` keeps its historical ``android`` object for the WebView app
+and adds ``android.native`` beside it. An old app ignores the new key; a native
+app reads ONLY the new key and answers "mise à jour indisponible" when a server
+predates it — it never falls back to the old APK. Android itself would refuse
+that install (different package, different key), but a server that hands out the
+wrong file at all is a server that invites it.
+
+Where a channel's file comes from, best first:
+
+- ``[webapp] android_apk`` / ``android_native_apk``: a local file the operator
+  put there (a private or fork build). Served once ``_apk_problem`` says it is
+  an APK. The native path is the universal build and answers every ABI.
+- the GitHub release of the declared ``android_version`` /
+  ``android_native_version``, on the repository ``android_url`` points at (the
+  project's by default). Fetched ONCE, by a single worker: the first request for
+  that version answers ``202`` with a ``Retry-After``, the following ones serve
+  the file as soon as it is on disk.
 
 Every byte this module hands out has been checked first: a body is read whole,
 its length compared with what the response announced, and the file must open as
@@ -29,9 +42,10 @@ cached file that fails that check is deleted and fetched again, instead of being
 served to the app for ever.
 
 Nothing here is a trust decision: Android refuses to install an update that is
-not signed with the installed app's certificate, and the app checks that itself
-before asking (so it can say why rather than failing in the installer). The
-server only has to never be a way to fetch anything but that one file.
+not signed with the installed app's certificate, and each app checks the package
+and the signature itself before asking (so it can say why rather than failing in
+the installer). The server only has to never be a way to fetch anything but the
+file of the channel that was asked for.
 """
 
 from __future__ import annotations
@@ -52,8 +66,14 @@ from . import login_required, webapi
 logger = logging.getLogger(__name__)
 
 APK_NAME = "neezer.apk"
+NATIVE_APK_NAME = "neezer-native.apk"
+# The ABIs ``mobile.yaml`` publishes splits for, in the app's own order. An
+# unknown ABI is not an error: it gets the universal APK, which installs
+# anywhere (the app is side-loaded).
+NATIVE_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 APK_MIME = "application/vnd.android.package-archive"
-# A release APK is ~10 MB; anything past this is not one.
+# A release APK is ~10 MB (55 MB for the native universal one); anything past
+# this is not one.
 MAX_APK_BYTES = 200 * 1024 * 1024
 # And anything below this is not one either (a real build is a thousand times bigger).
 MIN_APK_BYTES = 64 * 1024
@@ -71,8 +91,76 @@ _ASSET_HOSTS = ("github.com", "objects.githubusercontent.com",
 DEFAULT_REPO = ("fnyaker", "Neezer")
 
 
+class _Channel:
+    """One Android app's update channel: its config keys and asset names."""
+
+    def __init__(
+        self,
+        *,
+        version_key: str,
+        local_key: str,
+        asset: str,
+        cache_stem: str,
+    ) -> None:
+        self.version_key = version_key
+        self.local_key = local_key
+        self.asset = asset
+        self.cache_stem = cache_stem
+
+    def asset_for(self, abi: str | None) -> str:
+        if abi:
+            return f"{self.cache_stem}-{abi}.apk"
+        return self.asset
+
+    def cache_name(self, version: str, abi: str | None = None) -> str:
+        if abi:
+            return f"{self.cache_stem}-{version}-{abi}.apk"
+        return f"{self.cache_stem}-{version}.apk"
+
+    def owns_cache_entry(self, entry: str) -> bool:
+        """Whether a cached file belongs to this channel (the cleanup's rule).
+
+        The two families share a prefix (``neezer-`` / ``neezer-native-``): the
+        old channel's own match must EXCLUDE the native one, or a native fetch
+        would delete the WebView app's cached update (and vice versa).
+        """
+        if not entry.endswith(".apk"):
+            return False
+        if self.cache_stem == "neezer":
+            return (
+                entry.startswith("neezer-")
+                and not entry.startswith("neezer-native-")
+            ) or entry.startswith("nsupysonic-")
+        return entry.startswith("neezer-native-")
+
+
+#: The WebView app's channel: its keys and asset name are the released contract,
+#: and nothing in this module may change what it receives.
+WEBVIEW = _Channel(
+    version_key="android_version",
+    local_key="android_apk",
+    asset=APK_NAME,
+    cache_stem="neezer",
+)
+#: The native app's channel, installed beside it.
+NATIVE = _Channel(
+    version_key="android_native_version",
+    local_key="android_native_apk",
+    asset=NATIVE_APK_NAME,
+    cache_stem="neezer-native",
+)
+
+
 def declared_version(cfg: dict) -> str | None:
-    version = (cfg.get("android_version") or "").strip()
+    return _declared_version(cfg, WEBVIEW)
+
+
+def native_version(cfg: dict) -> str | None:
+    return _declared_version(cfg, NATIVE)
+
+
+def _declared_version(cfg: dict, channel: _Channel) -> str | None:
+    version = (cfg.get(channel.version_key) or "").strip()
     return version if _VERSION_RE.match(version) else None
 
 
@@ -86,24 +174,51 @@ def _repo_of(url: str | None) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def apk_source(cfg: dict) -> tuple[str, str] | None:
-    """``("file", path)``, ``("github", url)`` or None when there is no APK to offer."""
-    local = (cfg.get("android_apk") or "").strip()
+def _source(cfg: dict, channel: _Channel, abi: str | None = None) -> tuple[str, str] | None:
+    """``("file", path)``, ``("github", url)`` or None when nothing is offered."""
+    if channel is NATIVE and abi not in NATIVE_ABIS:
+        abi = None
+    local = (cfg.get(channel.local_key) or "").strip()
     if local:
+        # A local file is the universal build for the native channel: it answers
+        # every ABI (the operator chose one file, not a release layout).
         return ("file", local) if os.path.isfile(local) else None
-    version = declared_version(cfg)
+    version = _declared_version(cfg, channel)
     repo = _repo_of((cfg.get("android_url") or "").strip() or None)
     if not version or not repo:
         return None
     owner, name = repo
     return (
         "github",
-        f"https://github.com/{owner}/{name}/releases/download/{version}/{APK_NAME}",
+        f"https://github.com/{owner}/{name}/releases/download/{version}/{channel.asset_for(abi)}",
     )
 
 
+def apk_source(cfg: dict) -> tuple[str, str] | None:
+    return _source(cfg, WEBVIEW)
+
+
+def native_apk_source(cfg: dict, abi: str | None = None) -> tuple[str, str] | None:
+    """The native channel's file for ``abi``, or the universal one.
+
+    ``abi`` is only ever one of :data:`NATIVE_ABIS`; anything else (another
+    architecture, a client that sends junk) gets the universal APK rather than a
+    404: the universal file is what installs on a device this build never heard
+    of.
+    """
+    return _source(cfg, NATIVE, abi if abi in NATIVE_ABIS else None)
+
+
+def _cache_dir(cfg: dict) -> str:
+    return os.path.join(cfg["cache_dir"], "android")
+
+
 def _cache_path(cfg: dict, version: str) -> str:
-    return os.path.join(cfg["cache_dir"], "android", f"neezer-{version}.apk")
+    return os.path.join(_cache_dir(cfg), WEBVIEW.cache_name(version))
+
+
+def _native_cache_path(cfg: dict, version: str, abi: str | None = None) -> str:
+    return os.path.join(_cache_dir(cfg), NATIVE.cache_name(version, abi))
 
 
 def _apk_problem(path: str, deep: bool = False) -> str | None:
@@ -145,7 +260,7 @@ def _discard(path: str, why: str) -> None:
         pass
 
 
-def _download(url: str, dest: str) -> None:
+def _download(url: str, dest: str, channel: _Channel = WEBVIEW) -> None:
     """Fetch the release asset into ``dest``; raises on anything but an APK."""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     part = dest + ".part"
@@ -177,14 +292,13 @@ def _download(url: str, dest: str) -> None:
     finally:
         if os.path.exists(part):
             os.remove(part)
-    # Older versions are never served again. The pre-rebrand cache prefix is
-    # cleared too, so an upgraded server does not keep 10 MB nobody serves.
+    # Older versions of THIS channel are never served again. The other channel's
+    # files are left alone: a native update must not make the WebView app
+    # download its own again (and the reverse).
     folder = os.path.dirname(dest)
     for entry in os.listdir(folder):
         path = os.path.join(folder, entry)
-        if path != dest and entry.endswith(".apk") and entry.startswith(
-            ("neezer-", "nsupysonic-")
-        ):
+        if path != dest and channel.owns_cache_entry(entry):
             try:
                 os.remove(path)
             except OSError:
@@ -192,7 +306,7 @@ def _download(url: str, dest: str) -> None:
 
 
 def fetch_apk(cfg: dict) -> str:
-    """Download the declared release into the cache, blocking.
+    """Download the declared WebView release into the cache, blocking.
 
     The worker's whole job (the route never calls it): a slow GitHub used to
     hold the request thread — and the global lock behind it, so every other
@@ -201,17 +315,32 @@ def fetch_apk(cfg: dict) -> str:
     source = apk_source(cfg)
     if source is None or source[0] != "github":
         raise OSError("no release to fetch")
-    return _fetch_asset(source[1], _cache_path(cfg, declared_version(cfg)))
+    return _fetch_asset(source[1], _cache_path(cfg, declared_version(cfg)), WEBVIEW)
 
 
-def _fetch_asset(where: str, dest: str) -> str:
+def fetch_native_apk(cfg: dict, abi: str | None = None) -> str:
+    """Download the declared native release for ``abi`` (universal when absent)."""
+    source = native_apk_source(cfg, abi)
+    if source is None or source[0] != "github":
+        raise OSError("no release to fetch")
+    wanted = abi if abi in NATIVE_ABIS else None
+    dest = _native_cache_path(cfg, native_version(cfg), wanted)
+    fallback = None
+    if wanted is not None:
+        universal = native_apk_source(cfg, None)
+        if universal is not None and universal[0] == "github":
+            fallback = (universal[1], _native_cache_path(cfg, native_version(cfg), None))
+    return _fetch_with_fallback(source[1], dest, NATIVE, fallback)
+
+
+def _fetch_asset(where: str, dest: str, channel: _Channel = WEBVIEW) -> str:
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.isfile(dest):
         problem = _apk_problem(dest)
         if problem is None:
             return dest
         _discard(dest, problem)
-    _download(where, dest)
+    _download(where, dest, channel)
     return dest
 
 
@@ -225,9 +354,8 @@ _apk_lock = threading.Lock()
 _apk_jobs = {}  # dest -> {"state": "fetching"|"ready"|"failed", "error", "at", "thread"}
 
 
-def cached_apk(cfg: dict) -> str | None:
-    """The file to serve right now, without asking anyone."""
-    source = apk_source(cfg)
+def _serve_file(cfg: dict, channel: _Channel, abi: str | None = None) -> str | None:
+    source = _source(cfg, channel, abi)
     if source is None:
         return None
     kind, where = source
@@ -237,8 +365,20 @@ def cached_apk(cfg: dict) -> str | None:
             return where
         logger.warning("Fichier de mise à jour Android inutilisable (%s) : %s", problem, where)
         return None
-    dest = _cache_path(cfg, declared_version(cfg))
+    version = _declared_version(cfg, channel)
+    wanted = abi if channel is NATIVE and abi in NATIVE_ABIS else None
+    dest = (
+        _native_cache_path(cfg, version, wanted)
+        if channel is NATIVE
+        else _cache_path(cfg, version)
+    )
     if not os.path.isfile(dest):
+        # A release cut before the per-ABI splits carried only the universal
+        # APK, and the worker cached it there: it answers this ABI too.
+        if channel is NATIVE and wanted is not None:
+            universal = _native_cache_path(cfg, version, None)
+            if os.path.isfile(universal) and _apk_problem(universal) is None:
+                return universal
         return None
     problem = _apk_problem(dest)
     if problem is None:
@@ -247,30 +387,64 @@ def cached_apk(cfg: dict) -> str | None:
     return None
 
 
-def apk_job(cfg: dict) -> dict | None:
-    """The last fetch of the declared version: its state, its cause, its thread."""
-    version = declared_version(cfg)
+def cached_apk(cfg: dict) -> str | None:
+    """The file to serve right now, without asking anyone."""
+    return _serve_file(cfg, WEBVIEW)
+
+
+def cached_native_apk(cfg: dict, abi: str | None = None) -> str | None:
+    return _serve_file(cfg, NATIVE, abi)
+
+
+def _job(cfg: dict, channel: _Channel, abi: str | None = None) -> dict | None:
+    version = _declared_version(cfg, channel)
     if version is None or not cfg.get("cache_dir"):
         return None
+    dest = (
+        _native_cache_path(cfg, version, abi if abi in NATIVE_ABIS else None)
+        if channel is NATIVE
+        else _cache_path(cfg, version)
+    )
     with _apk_lock:
-        job = _apk_jobs.get(_cache_path(cfg, version))
+        job = _apk_jobs.get(dest)
         return dict(job) if job is not None else None
 
 
-def ensure_apk(cfg: dict) -> str | None:
-    """The path to serve, or None after making sure ONE worker fetches it.
+def apk_job(cfg: dict) -> dict | None:
+    """The last fetch of the declared WebView version: state, cause, thread."""
+    return _job(cfg, WEBVIEW)
 
-    Two devices asking at once share one download; a third one arriving while
-    it runs is told to come back rather than waiting on it.
-    """
-    path = cached_apk(cfg)
+
+def native_apk_job(cfg: dict, abi: str | None = None) -> dict | None:
+    return _job(cfg, NATIVE, abi)
+
+
+def _ensure(cfg: dict, channel: _Channel, abi: str | None = None) -> str | None:
+    """The path to serve, or None after making sure ONE worker fetches it."""
+    path = _serve_file(cfg, channel, abi)
     if path is not None:
         return path
-    source = apk_source(cfg)
+    source = _source(cfg, channel, abi)
     if source is None or source[0] != "github":
         return None
-    dest = _cache_path(cfg, declared_version(cfg))
+    version = _declared_version(cfg, channel)
+    wanted = abi if channel is NATIVE and abi in NATIVE_ABIS else None
+    dest = (
+        _native_cache_path(cfg, version, wanted)
+        if channel is NATIVE
+        else _cache_path(cfg, version)
+    )
     where = source[1]
+    # A release cut before the per-ABI splits carried only the universal APK:
+    # the worker falls back to it once, and to nothing else.
+    fallback = None
+    if channel is NATIVE and wanted is not None:
+        universal = _source(cfg, NATIVE, None)
+        if universal is not None and universal[0] == "github":
+            fallback = (
+                universal[1],
+                _native_cache_path(cfg, version, None),
+            )
     with _apk_lock:
         job = _apk_jobs.get(dest)
         if job is not None:
@@ -280,20 +454,57 @@ def ensure_apk(cfg: dict) -> str | None:
                 return None
         job = {"state": "fetching", "error": None, "at": time.monotonic(), "thread": None}
         job["thread"] = threading.Thread(
-            target=_fetch, args=(where, dest), name="android-apk", daemon=True
+            target=_fetch,
+            args=(where, dest, channel, fallback),
+            name=channel.cache_stem,
+            daemon=True,
         )
         _apk_jobs[dest] = job
     job["thread"].start()
     return None
 
 
-def _fetch(where: str, dest: str) -> None:
+def ensure_apk(cfg: dict) -> str | None:
+    return _ensure(cfg, WEBVIEW)
+
+
+def ensure_native_apk(cfg: dict, abi: str | None = None) -> str | None:
+    return _ensure(cfg, NATIVE, abi)
+
+
+def _fetch_with_fallback(
+    where: str,
+    dest: str,
+    channel: _Channel,
+    fallback: tuple[str, str] | None,
+) -> str:
+    """``_fetch_asset``, with ONE universal fallback on a 404 for a split.
+
+    A release cut before the per-ABI splits existed carries only
+    ``neezer-native.apk``; a split that is simply absent from the asset list is a
+    404 from GitHub, and the universal file installs on that device too.
+    """
+    try:
+        return _fetch_asset(where, dest, channel)
+    except requests.HTTPError as error:
+        if fallback is None or error.response is None or error.response.status_code != 404:
+            raise
+        logger.info("Pas de split dans cette release : APK natif universel")
+        return _fetch_asset(fallback[0], fallback[1], channel)
+
+
+def _fetch(
+    where: str,
+    dest: str,
+    channel: _Channel = WEBVIEW,
+    fallback: tuple[str, str] | None = None,
+) -> None:
     from ..deezer import workload
 
     workload.renice(10)
     error = None
     try:
-        _fetch_asset(where, dest)
+        _fetch_with_fallback(where, dest, channel, fallback)
     except (OSError, requests.RequestException) as exc:
         error = exc
         logger.warning("Android update unavailable: %s", exc)
@@ -304,7 +515,10 @@ def _fetch(where: str, dest: str) -> None:
         job = _apk_jobs.get(dest)
         if job is not None:
             job["error"] = None if error is None else type(error).__name__
-            job["state"] = "ready" if os.path.isfile(dest) else "failed"
+            done = os.path.isfile(dest) or (
+                fallback is not None and os.path.isfile(fallback[1])
+            )
+            job["state"] = "ready" if done else "failed"
             job["at"] = time.monotonic()
 
 
@@ -354,6 +568,82 @@ def android_apk():
         return jsonify({"state": "fetching"}), 202, headers
     response = send_file(
         path, mimetype=APK_MIME, as_attachment=True, download_name=APK_NAME,
+        conditional=True,
+    )
+    if version:
+        response.headers["X-NS-Version"] = version
+    return response
+
+
+def _native_abi(requested: str | None) -> str | None:
+    return requested if requested in NATIVE_ABIS else None
+
+
+@webapi.route("/android/native-apk")
+@login_required
+def android_native_apk():
+    """The NATIVE app's channel — never the WebView APK, even when it is newer.
+
+    ``?abi=`` is the device's own ABI: the server serves that split when the
+    release carries it (a third of the bytes of the universal APK, rule 3) and
+    the universal one otherwise.
+    """
+    from flask import request
+
+    cfg = current_app.config["WEBAPP"]
+    abi = _native_abi(request.args.get("abi"))
+    version = native_version(cfg)
+    source = native_apk_source(cfg, abi)
+    path = ensure_native_apk(cfg, abi)
+    if path is None:
+        if source is None:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Ce serveur ne publie pas l'application Android native "
+                            "(mise à jour indisponible)"
+                        )
+                    }
+                ),
+                404,
+            )
+        headers = {"Retry-After": str(APK_RETRY)}
+        if version:
+            headers["X-NS-Version"] = version
+        if source[0] == "file":
+            return (
+                jsonify(
+                    {
+                        "state": "failed",
+                        "error": (
+                            "Le fichier de mise à jour Android natif configuré "
+                            "n'est pas un APK valide"
+                        ),
+                    }
+                ),
+                502,
+                headers,
+            )
+        job = native_apk_job(cfg, abi) or {}
+        failed = job.get("state") == "failed"
+        retry = (
+            max(1, int(APK_RETRY - (time.monotonic() - job.get("at", 0))) + 1)
+            if failed
+            else APK_WAIT
+        )
+        headers = {"Retry-After": str(retry)}
+        if version:
+            headers["X-NS-Version"] = version
+        if failed:
+            return (
+                jsonify({"state": "failed", "error": "Impossible de récupérer la mise à jour"}),
+                502,
+                headers,
+            )
+        return jsonify({"state": "fetching"}), 202, headers
+    response = send_file(
+        path, mimetype=APK_MIME, as_attachment=True, download_name=NATIVE_APK_NAME,
         conditional=True,
     )
     if version:

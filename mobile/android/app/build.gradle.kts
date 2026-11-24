@@ -1,10 +1,13 @@
 // :app — the application, the ONE activity, the navigation graph and the manual
 // DI graph (docs/agents/mobile.md, "Repository layout").
 //
-// applicationId stays `org.nsupysonic.app` and the signing key stays the old
-// app's: the new APK installs as an UPDATE over `neezer.apk`, keeps its data
-// directory (the migration reads from it) and keeps its home-screen icon and
-// pinned shortcuts working (rule 7).
+// `fr.neezer.mobile` is the app's OWN id, and that is a deliberate reversal of
+// the original MB-SWAP plan (docs/agents/mobile.md, "MB-SWAP — deux apps qui
+// coexistent"): the old WebView app (`org.nsupysonic.app`, published as
+// `neezer.apk`) keeps its users, and this APK installs BESIDE it instead of
+// replacing it. A distinct id is what makes that possible — and the reason the
+// MB4 takeover can no longer read the old app's private files: Android gives a
+// different package no access to them at all.
 
 plugins {
     alias(libs.plugins.android.application)
@@ -18,17 +21,21 @@ android {
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "org.nsupysonic.app"
+        // Its OWN package, beside `org.nsupysonic.app` (the WebView app): both
+        // install together, each updates from its own channel, and uninstalling
+        // one leaves the other's data alone.
+        applicationId = "fr.neezer.mobile"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
 
-        // The old app shipped `versionCode = github.run_number` (android.yaml).
-        // Android refuses an update whose code is not HIGHER, so the new line
-        // starts at 2 000 000 and adds the same run number: no release of the
-        // WebView app can ever be above it by accident (docs/agents/mobile.md,
-        // "Pitfalls known before the first line").
-        versionCode = 2_000_000 + (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = System.getenv("VERSION_NAME") ?: "2.0.0"
+        // No offset any more: the old app's `github.run_number` line belongs to
+        // ANOTHER package, and Android only compares codes inside one package.
+        // The native APK's versions are the same monotone run numbers, so a
+        // `master` build can never be installed over a release.
+        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+        // The tag arrives as `v1.6.3`; the app and `/api/version`'s
+        // `android.native.version` spell it `1.6.3`.
+        versionName = (System.getenv("VERSION_NAME") ?: "2.0.0").removePrefix("v")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

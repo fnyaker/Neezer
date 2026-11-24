@@ -143,8 +143,12 @@ impl From<OldSettingRecord> for OldSetting {
     }
 }
 
-/// Everything the Kotlin side read off the old app. An empty field means "the
-/// old app never wrote it", never an error.
+/// What the Kotlin side may hand the migration.
+///
+/// The private fields are the first MB4's contract, kept for a future explicit
+/// export; the Android side of THIS release passes them empty, because a
+/// different `applicationId` cannot read the old app's data. The one fact it
+/// does pass is [`Self::old_app_installed`].
 #[derive(uniffi::Record, Debug, Clone, Default)]
 pub struct MigrationInputRecord {
     pub prefs: OldPrefsRecord,
@@ -154,10 +158,11 @@ pub struct MigrationInputRecord {
     pub settings: Vec<OldSettingRecord>,
     /// How many albums the SPA's IndexedDB still had a downloaded track of.
     pub offline_sets: u32,
-    /// Why the SPA's own storage could not be read, when it could not: the hidden
-    /// WebView has a deadline and may refuse to open at all, and a settings step
-    /// that fails must name its cause (rule 2), never just count 0.
+    /// Why the SPA's own storage could not be read, when it could not.
     pub settings_cause: Option<String>,
+    /// The old app's package is installed beside this one (the only fact a
+    /// different package may learn from `PackageManager`).
+    pub old_app_installed: bool,
 }
 
 impl From<MigrationInputRecord> for MigrationInput {
@@ -169,6 +174,7 @@ impl From<MigrationInputRecord> for MigrationInput {
             settings: input.settings.into_iter().map(OldSetting::from).collect(),
             offline_sets: input.offline_sets,
             settings_cause: input.settings_cause,
+            old_app_installed: input.old_app_installed,
         }
     }
 }
@@ -200,6 +206,9 @@ pub struct MigrationReportRecord {
     pub settings: u32,
     /// How many albums the SPA's IndexedDB still had a downloaded track of.
     pub offline_sets: u32,
+    /// The old app was found installed; the notice says why nothing private
+    /// could be read and that it was left untouched.
+    pub old_app_installed: bool,
     pub failures: Vec<MigrationFailureRecord>,
     /// The sentence the notice shows: French, what was taken and the cause of
     /// everything that was not.
@@ -216,6 +225,7 @@ impl From<MigrationReport> for MigrationReportRecord {
             tracks: report.tracks,
             settings: report.settings,
             offline_sets: report.offline_sets,
+            old_app_installed: report.old_app_installed,
             failures: report
                 .failures
                 .into_iter()
@@ -422,6 +432,7 @@ mod tests {
             tracks: 3,
             settings: 18,
             offline_sets: 2,
+            old_app_installed: true,
             failures: vec![nz_core::setup::MigrationFailure {
                 step: "réglages".to_owned(),
                 cause: "viz.fps n'était pas une valeur lisible".to_owned(),
@@ -460,6 +471,7 @@ mod tests {
             }],
             offline_sets: 2,
             settings_cause: None,
+            old_app_installed: true,
         };
         let converted: MigrationInput = input.clone().into();
         assert_eq!(converted.prefs.port, "4533");
@@ -467,6 +479,7 @@ mod tests {
         assert_eq!(converted.downloads[0].file, "aaa.audio");
         assert_eq!(converted.settings[0].value, "\"papier\"");
         assert_eq!(converted.offline_sets, 2);
+        assert!(converted.old_app_installed);
         // The record's Debug never carries the cookie into a log line by
         // accident: only the enum's fields the caller prints itself would.
         assert!(!format!("{:?}", input.prefs).contains("abc123"));
