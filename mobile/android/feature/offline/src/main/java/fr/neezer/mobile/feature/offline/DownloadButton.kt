@@ -1,16 +1,21 @@
 package fr.neezer.mobile.feature.offline
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import fr.neezer.mobile.bridge.DevicePrompts
 import fr.neezer.mobile.designsystem.NzButton
 import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzToasts
 import uniffi.nz_ffi.SetProgress
 
 /**
@@ -49,6 +54,21 @@ fun DownloadButton(
     val model = remember { OfflineHost.model() }
     val state by model.state.collectAsState()
     LaunchedEffect(model) { model.start() }
+
+    // La demande de notifications, au premier tap qui télécharge (M13) : la
+    // déclaration du manifeste ne servait à rien tant que personne ne la
+    // demandait, et la progression restait muette hors de l'application.
+    // `asked` est une mémoire de COMPOSITION : une rotation ne repose pas la
+    // question, et le `SharedPreferences` de `DevicePrompts` retient la réponse
+    // pour les visites suivantes.
+    val ctx = LocalContext.current
+    val asked = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        DevicePrompts.noteNotificationsAnswered(ctx)
+        if (!granted) NzToasts.show(DevicePrompts.NOTIFICATIONS_LOST)
+    }
 
     val set = state.set(context)
     val pending = state.isPending(context)
@@ -93,7 +113,14 @@ fun DownloadButton(
 
         else -> NzButton(
             text = label,
-            onClick = { model.add(context, quality, title, artist) },
+            onClick = {
+                // La première fois seulement, et jamais bloquant : le
+                // téléchargement part quelle que soit la réponse.
+                if (!asked.getAndSet(true) && DevicePrompts.shouldAskNotifications(ctx)) {
+                    notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+                model.add(context, quality, title, artist)
+            },
             modifier = modifier,
             kind = NzButtonKind.Secondary,
             glyph = NzGlyph.Download,

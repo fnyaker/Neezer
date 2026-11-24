@@ -69,6 +69,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.kotlinx.coroutines.android)
+    // La demande de `POST_NOTIFICATIONS` au premier téléchargement (M13) :
+    // `rememberLauncherForActivityResult` vit dans activity-compose, que ce
+    // module n'avait pas encore (le catalogue le déclare, MB0 l'a créé).
+    implementation(libs.androidx.activity.compose)
     // Below API 34 the queue needs the process kept alive: a `dataSync`
     // foreground worker (docs/agents/mobile.md, "Background downloads"). On API
     // 34+ the same queue runs as a user-initiated data transfer JOB, which is

@@ -6463,6 +6463,7 @@ et ne doivent pas bouger). `onboarding` porte donc `#[uniffi(default = None)]` :
 exactement « le serveur ne l'a pas dit », et les constructions existantes compilent. (2) Un smart
 cast sur `event.me` est refusé (propriété `val` d'un AUTRE module Gradle) : la branche écrit
 `when (val me = event.me)`, sinon `mobile.yaml` échoue à la compilation Kotlin.
+
 ### M8 — Nouveautés : « Tout afficher » (delivered 2026-11-24)
 
 **La règle.** L'en-tête de la carte « Nouveautés » de l'accueil porte les DEUX actions du SPA
@@ -6811,3 +6812,55 @@ preuve des vraies portes reste `Emulator smoke` (`doors_opened=6 doors_failed=0`
 **+0 requête.** Le diff n'ajoute aucun appel FFI : les deux boutons sondent le serveur une fois à
 leur première composition, comme quand MB19/MB20 les ont écrits, puis vivent de leur état. Un
 lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les deux se cachent.
+
+### M13 — Notifications demandées en contexte, mode voiture dans Réglages (delivered 2026-11-24)
+
+**La règle.** `POST_NOTIFICATIONS` est déclarée depuis MB0 et n'était jamais DEMANDÉE : la
+progression d'un téléchargement et l'avis du mode voiture restaient muets jusqu'à ce que la personne
+aille les activer dans les réglages Android (audit §1). Elle est maintenant demandée là où elle
+sert — le premier « Télécharger » et la première ouverture de la carte « Mode voiture » — jamais au
+démarrage. Un refus n'empêche RIEN : le téléchargement part, le mode voiture s'ouvre, et une phrase
+dit ce qui est perdu (`DevicePrompts.NOTIFICATIONS_LOST`, mot pour mot). La réponse est retenue dans
+`SharedPreferences` (`device-prompts`, clé `notifications.asked`) : une seule question, jamais deux.
+Android 13+ exempte la session média, donc la lecture ne dépend pas de cette permission.
+
+**Pourquoi une mémoire locale et pas le `kv` du noyau.** C'est une trace d'INTERFACE (on a posé la
+question), pas une préférence migrée du SPA : même choix que `playback/BatteryExemption.kt`. Rien
+n'est renvoyé au serveur, et une réinstallation pose la question une fois de plus — ce qui est
+correct.
+
+**La porte qui manquait.** Le mode voiture n'avait aucune entrée depuis Réglages sur le téléphone :
+il fallait la tuile des réglages rapides ou le panneau lui-même (audit §9). `PlaybackSection` porte
+maintenant une carte « Mode voiture » dont le bouton appelle `CarModeService.openSettings` — la
+SEULE porte, celle qui masque le panneau avant d'ouvrir l'écran. `:feature:settings` dépend donc de
+`:car` (aucun cycle : `car` → `bridge`, `playback`, `designsystem`).
+
+**Un piège Gradle.** `rememberLauncherForActivityResult` vit dans `activity-compose`, que ni
+`:feature:offline` ni `:feature:settings` n'avaient : les deux modules l'ajoutent explicitement
+(`implementation(libs.androidx.activity.compose)`), parce qu'une dépendance `implementation` d'un
+module voisin n'est PAS sur le classpath de compilation de celui-ci — elle ne l'était que sur le
+classpath de TEST, via `ui-test-junit4`, ce qui fait d'un `./gradlew testDebugUnitTest` vert une
+preuve insuffisante.
+
+**Pourquoi lancer la demande et l'action dans le même tap.** Le dialogue système ne bloque pas
+l'appel : `notifLauncher.launch` rend la main et `model.add(...)` part derrière, donc le
+téléchargement démarre même si la personne ignore le dialogue (règle 1 : ce qu'elle vient de faire
+passe d'abord). Un `AtomicBoolean` en mémoire de composition évite de reposer la question à chaque
+recomposition ; le `SharedPreferences` la retient entre deux visites.
+
+**Hors portée, écrit ici pour le prochain lot.** Pas de demande depuis les déclencheurs PASSIFS du
+mode voiture (tuile des réglages rapides, Bluetooth) : un déclencheur passif n'a pas d'Activity pour
+porter un dialogue système, Android refuse la demande. Pas de demande au démarrage non plus : une
+permission demandée à froid est refusée par réflexe et ne revient jamais.
+
+**Mesuré.** **+0 requête, +0 octet** : `DevicePrompts` ne lit qu'`SharedPreferences` et
+`checkSelfPermission`, et la carte appelle `CarModeService.openSettings`, qui existait déjà (aucun
+appel FFI ajouté : `grep -n "NzCore\|nz_ffi" DevicePrompts.kt` est vide). `DevicePromptsTest`
+(Robolectric) ajoute 3 tests : API 32 → jamais de demande, API 34 → une demande puis plus jamais,
+API 34 + permission déjà accordée → aucune demande. `CarModeDoorTest` (Robolectric,
+`w360dp-h800dp-xhdpi`) compose la vraie `PlaybackSection` et trouve « Mode voiture » +
+« Ouvrir les réglages du mode voiture », cliquable. `grep -rn "POST_NOTIFICATIONS" mobile/android
+--include=*.kt` rend la garde de `DevicePrompts`, les deux `launch(...)` et la garde existante de
+`CarModeService.kt:183`. Les captures d'émulateur (demande système API 35, refus avec sa phrase) ne
+sont PAS produites : l'image du worker n'a ni JDK ni SDK Android ni émulateur — le dialogue système
+n'est pilotable ni en JVM ni dans `mobile.yaml`.
