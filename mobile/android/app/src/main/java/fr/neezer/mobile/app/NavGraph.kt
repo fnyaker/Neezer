@@ -33,9 +33,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzToastHost
+import fr.neezer.mobile.designsystem.NzToasts
 import fr.neezer.mobile.feature.discovery.RecapEntry
 import fr.neezer.mobile.feature.discovery.ReleaseShelfEntry
 import fr.neezer.mobile.feature.discovery.ReleasesEntry
@@ -193,6 +197,23 @@ fun NzApp(graph: AppGraph) {
             .collect { graph.openPendingLink() }
     }
 
+    // La session, une fois pour tout le process : le noyau émet sur CHANGEMENT,
+    // jamais sur un minuteur. Un 401 devient un toast et la connexion ; une
+    // personne qui change (déconnexion) prend la même porte. Avant M2 ces deux
+    // événements n'avaient aucun collecteur : un jeton mort laissait l'app
+    // afficher des écrans qui échouaient en silence (audit, bloqueur 4).
+    LaunchedEffect(graph) {
+        NzBridge.sessions.collect { event ->
+            when (event) {
+                is NzBridge.Session.Ended -> {
+                    NzToasts.show("Session expirée, reconnectez-vous")
+                    graph.openLogin()
+                }
+                is NzBridge.Session.MeChanged -> if (event.me == null) graph.openLogin()
+            }
+        }
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 640.dp
         if (wide) {
@@ -255,6 +276,12 @@ fun NzApp(graph: AppGraph) {
 private fun Hosts(graph: AppGraph) {
     NowPlayingHost(nav = graph)
     TrackActionsHost()
+    // M2 : la SEULE surface où un toast est dessiné. Il y avait quarante appels
+    // à `NzToasts.show` sur master (réglages, file, album, party…) et aucune
+    // coquille ne montait `NzToastHost` : chaque phrase partait dans une liste
+    // que personne ne dessinait. Un toast est la moitié d'une règle 3 (un échec
+    // dit pourquoi) : la session expirée est la première à en dépendre vraiment.
+    NzToastHost(modifier = Modifier.fillMaxSize(), bottomPadding = NzSpacing.m)
 }
 
 @Composable

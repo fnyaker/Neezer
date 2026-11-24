@@ -123,6 +123,8 @@ fun SettingsEntry(
                         // opens the SPA's projector. One line, declared out of MB21's
                         // file list in its PR.
                         onOpenViz = { nav.openViz() },
+                        // M2's two doors out of « Compte » and « Serveur ».
+                        nav = nav,
                         modifier = Modifier.verticalScroll(rememberScrollState()),
                     )
                 }
@@ -143,6 +145,7 @@ fun SettingsEntry(
                 section = section,
                 onBack = { nav.back() },
                 onOpenViz = { nav.openViz() },
+                nav = nav,
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             )
         }
@@ -337,6 +340,8 @@ private fun SettingsPane(
     onBack: (() -> Unit)?,
     /** MB21: opens the full-screen visualiser (null in a screenshot test). */
     onOpenViz: (() -> Unit)? = null,
+    /** M2: les deux portes de la carte « Compte » (null dans le banc de captures). */
+    nav: NzNavigator? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
@@ -380,7 +385,7 @@ private fun SettingsPane(
                     // LN14's own screen, hosted (MB16's extension point).
                     "lan" -> fr.neezer.mobile.feature.lan.LanSettingsSection()
                     "sources" -> SourcesSection(model, state)
-                    "account" -> AccountSection(model, state)
+                    "account" -> AccountSection(model, state, nav)
                     "help" -> HelpSection(model, state)
                     // MB17's two pages: its own module, its own composable. This
                     // line is the whole seam (the extension point the note names),
@@ -410,6 +415,8 @@ internal fun SettingsSection(
     section: String,
     model: SettingsModel,
     modifier: Modifier = Modifier,
+    /** M2: les deux portes de la carte « Compte » (null dans le banc de captures). */
+    nav: NzNavigator? = null,
 ) {
     Box(modifier.fillMaxWidth()) {
         Column(
@@ -424,7 +431,7 @@ internal fun SettingsSection(
                 "discovery" -> DiscoverySection(model, model.state)
                 "lan" -> fr.neezer.mobile.feature.lan.LanSettingsSection()
                 "sources" -> SourcesSection(model, model.state)
-                "account" -> AccountSection(model, model.state)
+                "account" -> AccountSection(model, model.state, nav)
                 "help" -> HelpSection(model, model.state)
                 else -> Text(
                     text = categoryOf(section)?.label ?: "Réglages",

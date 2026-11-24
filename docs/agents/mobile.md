@@ -6386,3 +6386,43 @@ doors_failed=0 doors_expected=6` (la porte `Serveur` s'ajoute aux cinq onglets/R
 produit : l'image du worker n'a ni JDK ni SDK Android ni émulateur, et `mobile.yaml` ne lance pas de
 macrobenchmark. Le chiffre de référence reste MQ2 (p50 1 071,7 / p95 1 256,5 ms, mesuré pour un
 compte semé) ; ce lot décide la route sans requête, mais n'a pas mesuré le TTFD qui en résulte.
+
+### M2 — Session expirée, déconnexion, changer de serveur (delivered 2026-11-24)
+
+**La règle.** Trois portes, une seule destination quand la session meurt. Un `401` sur n'importe quel
+écran émet `Session.Ended` : la coquille montre « Session expirée, reconnectez-vous » puis ouvre
+`Login` **serveur conservé, pile vidée**. « Déconnexion » prend la même porte, sans toast, et ne
+réussit que si le serveur a répondu. « Changer de serveur » ouvre `Setup` sans rien effacer avant que
+la nouvelle adresse soit validée. Rien de tout cela n'efface le serveur enregistré (décision 3).
+
+**Pourquoi.** `NzBridge.sessions` était un `MutableSharedFlow` **sans aucun collecteur** : `Ended` et
+`MeChanged(null)` partaient dans le vide (`replay = 0`). Un jeton mort laissait donc l'app dessiner
+des écrans dont chaque requête échouait en silence — le bloqueur 4 de l'audit. Le collecteur vit
+dans `NzApp`, une fois pour tout le process : deux collecteurs auraient ouvert deux fois la même
+porte.
+
+**Deux pièges.** (1) La porte passe par `replaceStackWith` (M1) : `popUpTo(nav.graph.id) { inclusive
+= true }` — sans cela « retour » depuis l'écran de connexion ramenait sur Réglages, où tout est déjà
+en `401`, et la personne pouvait y tourner en rond. (2) La navigation de « Déconnexion » est dans le
+`onSuccess` du `runCatching`, jamais avant : une déconnexion refusée laisse la personne sur son
+compte avec la cause en toast, au lieu de l'éjecter vers un écran de connexion mensonger.
+`NavGraph.kt` ne destructure pas `Ended.reason` : le texte du toast est fixe et français, le champ
+reste la phrase du noyau pour le journal.
+
+**Un troisième, trouvé en écrivant le lot.** `NzToasts.show` avait **quarante** appelants sur master
+(réglages, file, album, audiofx, party, LAN…) et **aucune coquille ne montait `NzToastHost`** : chaque
+phrase tombait dans une liste que rien ne dessinait. Un toast est la moitié d'une règle 3, donc le
+message d'une session expirée n'aurait jamais été vu. M2 monte le seul hôte, une fois, dans `Hosts`
+(`NavGraph.kt`), au-dessus du mini-lecteur et sous les feuilles ; les quarante appelants existants
+deviennent visibles du même coup. Preuve de forme : `grep -rn NzToastHost mobile/android` ne rend que
+la définition, l'hôte de la coquille et le banc de composants.
+
+**Mesuré.** **+0 requête, +0 octet** : le collecteur n'appelle rien (les deux événements sont émis
+par le noyau sur son propre chemin `401`), et `POST /api/logout` existait déjà. Preuve de forme :
+`grep -rn "NzBridge.sessions" mobile/android` ne rend que le collecteur (`NavGraph.kt`) — la
+définition est `val sessions` dans `NzBridge.kt`. `AccountDoorsTest` (Robolectric,
+`w360dp-h800dp-xhdpi`) ajoute 3 tests : les deux portes sont dessinées et cliquables,
+« Déconnexion » + « Confirmer » appelle `openLogin()` **une** fois, « Changer de serveur » appelle
+`openSetup()` une fois et `openLogin()` zéro. Le toast d'un vrai `401` n'est pas tenable en JVM
+(aucun producteur de `Session.Ended` sans `.so`) : il se prouve à l'émulateur, en invalidant le
+cookie côté banc — l'image du worker n'a ni JDK ni émulateur, donc ce lot ne l'a pas capturé.

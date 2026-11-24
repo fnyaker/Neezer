@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.bridge.NzBridge
+import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.LoadFailed
 import fr.neezer.mobile.designsystem.NzButton
@@ -642,8 +643,21 @@ private fun GroupsBlock(model: SettingsModel, access: uniffi.nz_ffi.AccessData) 
 
 // -- Compte --------------------------------------------------------------------
 
+/**
+ * « Compte » (la personne, la déconnexion) puis « Serveur » (changer d'adresse).
+ *
+ * Les deux portes sortent par [nav] : une déconnexion réussie ramène à la
+ * connexion (le serveur enregistré est CONSERVÉ — décision 3), et « Changer de
+ * serveur » ouvre l'écran serveur sans rien effacer avant que la nouvelle
+ * adresse soit validée. [nav] est `null` dans le banc de captures, où il n'y a
+ * pas de coquille à qui demander (même convention que `onOpenViz`).
+ */
 @Composable
-internal fun AccountSection(model: SettingsModel, state: SettingsModel.State) {
+internal fun AccountSection(
+    model: SettingsModel,
+    state: SettingsModel.State,
+    nav: NzNavigator? = null,
+) {
     val colors = Sillon.colors
     val scope = rememberCoroutineScope()
     val identity = remember { runCatching { AppSettings.api()?.identity() }.getOrNull() }
@@ -666,8 +680,13 @@ internal fun AccountSection(model: SettingsModel, state: SettingsModel.State) {
                     } else {
                         confirmLogout = false
                         scope.launch {
-                                runCatching { NzBridge.core?.logout() }
-                                .onFailure { fr.neezer.mobile.designsystem.NzToasts.show(fr.neezer.mobile.bridge.NzErrors.text(it)) }
+                            runCatching { NzBridge.core?.logout() }
+                                .onSuccess { nav?.openLogin() }
+                                .onFailure {
+                                    fr.neezer.mobile.designsystem.NzToasts.show(
+                                        fr.neezer.mobile.bridge.NzErrors.text(it),
+                                    )
+                                }
                         }
                     }
                 },
@@ -675,6 +694,18 @@ internal fun AccountSection(model: SettingsModel, state: SettingsModel.State) {
                 glyph = NzGlyph.LogOut,
             )
         }
+    }
+    SettingsCard(
+        title = "Serveur",
+        subtitle = "Changer d'adresse ne déconnecte pas avant que la nouvelle adresse soit validée. " +
+            "La déconnexion, elle, garde le serveur et ne redemande que le compte.",
+    ) {
+        NzButton(
+            text = "Changer de serveur",
+            onClick = { nav?.openSetup() },
+            glyph = NzGlyph.Server,
+            kind = NzButtonKind.Secondary,
+        )
     }
     ServicesCard(model, state)
 }

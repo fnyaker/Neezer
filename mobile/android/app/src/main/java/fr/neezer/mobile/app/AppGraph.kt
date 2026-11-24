@@ -89,6 +89,12 @@ class AppGraph(private val application: Application) : NzNavigator {
 
     override fun openHomeAfterSignIn() = replaceStackWith(Routes.Home)
 
+    /** M2 : un jeton mort ou une déconnexion ramène à la connexion, pile vidée. */
+    override fun openLogin() = replaceStackWith(Routes.Login)
+
+    /** M2 : « Changer de serveur » ouvre l'écran serveur, rien n'est effacé. */
+    override fun openSetup() = replaceStackWith(Routes.Setup)
+
     /** Une seule définition de « remplacer la pile » : chaque route laissée
      *  derrière est un piège à retour (M1 : la préparation ; M2 : la session). */
     private fun replaceStackWith(route: Any) {
