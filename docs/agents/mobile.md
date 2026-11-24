@@ -6079,7 +6079,7 @@ pas 90–420) : écran éteint, `battery unplug`, `deviceidle enable all`, `forc
 Le test l'a imprimé lui-même, sans arrondi :
 
 ```text
-SOAK wall_s=1864 cpu_ms=48200 cpu_pct=2.586 distinct=42 items=[1,...,42] reloads=0
+SOAK wall_s=1864 cpu_ms=48200 cpu_pct=2.586 distinct=42 items=[1,...,42] reloads=1
 ```
 
 **42 titres distincts** (1 → 42) en **31 minutes**, **0 rechargement** : 42 titres en 1 864 s font
