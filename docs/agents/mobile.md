@@ -547,7 +547,7 @@ recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator aga
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
 | Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open: **p50 14,6 / p95 562,5 ms**, 0 frozen frames (> 700 ms). The scroll budgets (p95 ≤ 16,7, p99 ≤ 25) are MET on the emulator; the player's first frame is NOT (the 512 px sleeve is decoded in the frame) — follow-up: decode it off the frame. |
 | Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. The app's own counters are not in `Assistance` (same follow-up as RAM), and **rebuffers have no external source**. The throttled `gsm`/`edge` profile was not run. |
-| APK | `apkanalyzer`/`measure.sh apk` on the release build | **universal 54 289 031 B (51,8 MB)** for three ABIs, **arm64-v8a 21 373 643 B (20,4 MB)**, armeabi-v7a 16 502 411, x86_64 25 729 918 — the 45 MB target is a *download's* and every per-ABI APK meets it with room (the universal keeps all three ABIs for sideloading: see *MQ2 — la taille*). `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **16 222 680 B**, armeabi-v7a 11 400 584, x86_64 20 628 120 — the 9 MB target is MISSED by 1,8×, and cannot be met: **4 571 020 B (23 %) are the `panic = "unwind"` tables UniFFI's error contract requires** and the rest is the 1:1 feature code (*MQ2 — la taille* measures every step and names the refused levers). The CI ceiling is `mobile/tools/size-guard.sh`. |
+| APK | `apkanalyzer`/`measure.sh apk` on the release build | **universal 54 580 998 B (52,1 MB)** for three ABIs, **arm64-v8a 21 473 481 B (20,5 MB)**, armeabi-v7a 16 574 985, x86_64 25 841 660 — the 45 MB target is a *download's* and every per-ABI APK meets it with room (the universal keeps all three ABIs for sideloading: see *MQ2 — la taille*). `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **16 322 520 B**, armeabi-v7a 11 473 160, x86_64 20 739 864 — the 9 MB target is MISSED by 1,8×, and cannot be met: **4 571 020 B (23 %) are the `panic = "unwind"` tables UniFFI's error contract requires** and the rest is the 1:1 feature code (*MQ2 — la taille* measures every step and names the refused levers). The CI ceiling is `mobile/tools/size-guard.sh`. |
 | Worlds | — | **non livré — MB22/MB23 en pause à la demande de l'utilisateur (2026-11-23)**. |
 
 ## Worker rules (mandatory in every lot; each prompt repeats them)
@@ -5808,17 +5808,17 @@ une fonction, et pose le plafond qui manquait.
 | départ (`opt-level = "s"`, `lto = "thin"`, `codegen-units = 1`, `strip`, `unwind`) | 19 828 936 | — |
 | `lto = "fat"` | 19 829 320 | **+384** (et 3 min 51 au lieu de 2 min 03) → refusé |
 | `opt-level = "z"` | 18 012 632 | **−1 816 304** (−9,2 %) |
-| + `--exclude-libs=ALL` | 17 898 456 | **−114 176** |
-| + `--pack-dyn-relocs=android` | 17 273 816 | **−624 640** (`.rela.dyn` 729 360 → ~106 000) |
-| + `--icf=all` | 16 219 736 | **−1 054 080** (seul, sur `opt-level = "z"`: −1 066 624; 5 006 sections pliées) |
+| + `--pack-dyn-relocs=android` | 17 380 440 | **−632 192** (`.rela.dyn` 729 360 → ~106 000) |
+| + `--icf=all` | **16 322 520** | **−1 057 920** (5 006 sections pliées) |
 | (essai) sans les 13 `opt-level = 3` audio/DSP | 15 434 584 | **−785 152** : le prix des boucles chaudes, payé |
-| **livré** (`build-android.sh`, mêmes drapeaux) | **16 222 680** | **−3 606 256 (−18,2 %)**; +2 944 B que la chaîne ci-dessus, l'ordre des drapeaux de lien du script n'étant pas celui de l'essai |
+| (essai) `--exclude-libs=ALL` | 17 898 456 | −114 176 **et REFUSÉ**: il cache aussi les exports JNI (voir ci-dessous) |
+| **livré** | **16 322 520** | **−3 506 416 (−17,7 %)** |
 
-armv7 13 172 328 → **11 400 584** (−13,4 %), x86_64 23 849 624 → **20 628 120** (−13,5 %).
+armv7 13 172 328 → **11 473 160** (−12,9 %), x86_64 23 849 624 → **20 739 864** (−13,0 %).
 `readelf -d NEEDED` = `libaaudio libdl liblog libm libc` sur les trois : rien que le système, et
 surtout **pas de `libc++_shared`** (l'incident MB3b reste couvert par `--check-libs`).
 
-**Pourquoi 9 MB est hors d'atteinte, et pourquoi le plafond est 17 MB.** Il faudrait retirer 7,2 MB
+**Pourquoi 9 MB est hors d'atteinte, et pourquoi le plafond est 17 MB.** Il faudrait retirer 7,3 MB
 d'un binaire dont 4,6 MB sont les tables de déroulement que le contrat d'erreur d'UniFFI impose et
 dont le reste est exactement l'inventaire que cette note exige 1:1. Les leviers RESTANTS, avec leur
 prix ou leur raison:
@@ -5827,6 +5827,11 @@ prix ou leur raison:
   processus: perte de fonction (règle 3), refusé.
 - `--icf=safe` — mesuré AVANT `all`, il ne plie RIEN (sortie identique au bit près): un binaire Rust
   prend l'adresse de presque tout (objets-trait, glu de `Drop`). C'est `all` ou rien.
+- `--exclude-libs,ALL` — −114 176 B, **retiré**: une crate Rust arrive à l'éditeur de liens comme une
+  rlib, qui EST une archive, donc le drapeau localise aussi les quatre `#[no_mangle]
+  Java_…AudioTrackPull_*` de `nz-droid-audio` et la sortie AudioTrack de l'API 26 mourrait à
+  `System.loadLibrary`. La CI l'a vu (`The API-26 JNI entry points are in libnz_ffi.so`),
+  `check_jni_exports` le refuse désormais localement.
 - `-Zbuild-std` + `panic_immediate_abort`, `-Zfmt-debug=none` — nightly seulement; la toolchain est
   épinglée à 1.99.1 et le restera.
 - `--no-eh-frame-hdr` — −718 116 B, mais le dérouleur retombe sur une recherche linéaire à CHAQUE
@@ -5836,7 +5841,7 @@ prix ou leur raison:
   graisse.
 
 Donc la cible « 9 MB » était celle d'un binaire qui ne portait que le moteur audio (MB3a); elle est
-remplacée par la mesure: **plafond 17 000 000 B**, qui attrape un doublement et laisse passer une
+remplacée par la mesure: **plafond 17 150 000 B**, qui attrape un doublement et laisse passer une
 retouche. La doc n'entretient pas une cible qu'aucune fonction ne permet.
 
 **L'APK: un par ABI, l'universel gardé.** Le `.so` était 90 % de l'APK et l'universel payait trois
@@ -5844,10 +5849,10 @@ ABIs qu'un appareil ne charge jamais. `splits { abi { … isUniversalApk = true 
 
 | APK release | avant | après |
 |---|---|---|
-| universel (3 ABIs) | 62 884 495 | **54 289 031** (−13,7 %) |
-| arm64-v8a | — | **21 373 643** |
-| armeabi-v7a | — | 16 502 411 |
-| x86_64 | — | 25 729 918 |
+| universel (3 ABIs) | 62 884 495 | **54 580 998** (−13,2 %) |
+| arm64-v8a | — | **21 473 481** |
+| armeabi-v7a | — | 16 574 985 |
+| x86_64 | — | 25 841 660 |
 
 La cible 45 MB est celle d'un TÉLÉCHARGEMENT: chaque APK par ABI la tient largement (20,4 / 15,7 /
 24,5 MB contre 60,0 MB avant). L'universel reste produit — l'app se pose en `adb install` et par
@@ -5876,6 +5881,12 @@ alignement, id de paquet) et qu'ils s'accordent sur `versionCode`.
   sur cette bibliothèque).
 - **`opt-level = "z"` global + 13 exceptions à `3`** est le bon partage: 9,2 % gagnés, 4,8 % rendus
   aux boucles chaudes (audio, DSP, analyse, mondes).
+- **`--exclude-libs,ALL` cache les exports de nos PROPRES crates** (une rlib est une archive): les
+  quatre symboles JNI de l'API 26 disparaissent et l'app meurt sur un téléphone Android 8 — pas sur
+  l'émulateur API 35, qui passe par AAudio. Trouvé par la CI, pas par le parcours.
+- **`nm … | grep -q` sous `set -o pipefail` échoue quand il trouve**: grep sort au premier match, nm
+  prend SIGPIPE (141) et le statut du pipeline est ce 141. Le garde a annoncé les quatre symboles
+  absents sur une bibliothèque qui les exportait; capturer la sortie avant `grep` est la correction.
 
 **Vérifié** (émulateur 5620, API 35 x86_64, KVM, swiftshader, `-no-audio`, allumé pour ce lot
 seulement — deux autres workers tenaient 5640 et 5660 — puis éteint par son PID):

@@ -19,13 +19,13 @@
 #
 # Artifact                              measured B    ceiling B
 # ------------------------------------  ----------    ---------
-# libnz_ffi.so arm64-v8a                 16 222 680   17 000 000
-# libnz_ffi.so armeabi-v7a               11 400 584   12 000 000
-# libnz_ffi.so x86_64                    20 628 120   21 700 000
-# app-arm64-v8a-release.apk              21 373 643   22 500 000
-# app-armeabi-v7a-release.apk            16 502 411   17 500 000
-# app-x86_64-release.apk                 25 729 918   27 000 000
-# app-universal-release.apk              54 289 031   57 000 000
+# libnz_ffi.so arm64-v8a                 16 322 520   17 150 000
+# libnz_ffi.so armeabi-v7a               11 473 160   12 050 000
+# libnz_ffi.so x86_64                    20 739 864   21 800 000
+# app-arm64-v8a-release.apk              21 473 481   22 550 000
+# app-armeabi-v7a-release.apk            16 574 985   17 400 000
+# app-x86_64-release.apk                 25 841 660   27 150 000
+# app-universal-release.apk              54 580 998   57 300 000
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,13 +52,13 @@ done
 
 ceiling_of() {
     case "$1" in
-        libnz_ffi.so:arm64-v8a) printf '%s\n' 17000000 ;;
-        libnz_ffi.so:armeabi-v7a) printf '%s\n' 12000000 ;;
-        libnz_ffi.so:x86_64) printf '%s\n' 21700000 ;;
-        app-arm64-v8a-release.apk) printf '%s\n' 22500000 ;;
-        app-armeabi-v7a-release.apk) printf '%s\n' 17500000 ;;
-        app-x86_64-release.apk) printf '%s\n' 27000000 ;;
-        app-universal-release.apk) printf '%s\n' 57000000 ;;
+        libnz_ffi.so:arm64-v8a) printf '%s\n' 17150000 ;;
+        libnz_ffi.so:armeabi-v7a) printf '%s\n' 12050000 ;;
+        libnz_ffi.so:x86_64) printf '%s\n' 21800000 ;;
+        app-arm64-v8a-release.apk) printf '%s\n' 22550000 ;;
+        app-armeabi-v7a-release.apk) printf '%s\n' 17400000 ;;
+        app-x86_64-release.apk) printf '%s\n' 27150000 ;;
+        app-universal-release.apk) printf '%s\n' 57300000 ;;
         *) printf '' ;;
     esac
 }
