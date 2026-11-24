@@ -93,6 +93,8 @@ data class HomeActions(
     /** A sleeve of « Nouveautés », by the index of its first title. */
     val playRelease: (Int) -> Unit = {},
     val playAllNew: () -> Unit = {},
+    /** « Tout afficher » de la carte Nouveautés (`routes/Home.svelte:252` → `#/releases`). */
+    val openReleases: () -> Unit = {},
     /** An artist portrait. */
     val openArtist: (String) -> Unit = {},
     /** A « Pour toi » row: play it, or queue it next (the swipe's gesture). */
@@ -592,11 +594,21 @@ private fun ReleasesShelf(releases: uniffi.nz_ffi.ReleasesCardData, actions: Hom
                     }
                 }
             }
-            NzIconButton(
-                glyph = NzGlyph.Play,
-                contentDescription = "Tout lire",
-                onClick = { actions.playAllNew() },
-            )
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
+            ) {
+                NzIconButton(
+                    glyph = NzGlyph.Play,
+                    contentDescription = "Tout lire",
+                    onClick = { actions.playAllNew() },
+                )
+                NzButton(
+                    text = "Tout afficher",
+                    onClick = { actions.openReleases() },
+                    kind = NzButtonKind.Ghost,
+                )
+            }
         }
         BoxWithConstraints {
             val columns = when {

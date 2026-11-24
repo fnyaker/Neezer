@@ -2440,8 +2440,8 @@ request):
   (`recent.tracks` in `localStorage`) that no core store carries yet; it needs
   MB3b's listen accounting to publish the last played rows.
 - **« Tout afficher »** (the door to Nouveautés) — `NzNavigator` speaks
-  `AppLink`s and there is no `AppLink` for the releases shelf; MB14 adds one when
-  it fills that screen (this lot may not edit `links.rs`).
+  `AppLink`s and there was no `AppLink` for the releases shelf when MB5 landed;
+  **M8 delivers it** over `AppLink.Releases` (see its section below).
 - **The discovery SLIDER** — `DiscoverySlider.svelte` is MB14's; the hero's
   tuning chip opens the four `discovery.js` stops as chips, which is the same
   value set the slider snaps to.
@@ -6463,3 +6463,28 @@ et ne doivent pas bouger). `onboarding` porte donc `#[uniffi(default = None)]` :
 exactement « le serveur ne l'a pas dit », et les constructions existantes compilent. (2) Un smart
 cast sur `event.me` est refusé (propriété `val` d'un AUTRE module Gradle) : la branche écrit
 `when (val me = event.me)`, sinon `mobile.yaml` échoue à la compilation Kotlin.
+### M8 — Nouveautés : « Tout afficher » (delivered 2026-11-24)
+
+**La règle.** L'en-tête de la carte « Nouveautés » de l'accueil porte les DEUX actions du SPA
+(`webapp/src/routes/Home.svelte:252`) : le bouton de lecture (« Tout lire », le même
+`NzIconButton(Play)` qu'avant) et, dessous, le lien fantôme « Tout afficher ». Le tap passe par
+`AppLink.Releases` — l'`AppLink` que l'écran Nouveautés utilise déjà pour son propre en-tête
+(`DiscoveryEntries.kt`), donc une seule route pour la porte et la page, jamais un `NavController`
+dans l'écran.
+
+**Pourquoi une colonne et pas deux boutons côte à côte.** À 360 dp, l'en-tête porte déjà le titre,
+le compte (« N titres ») et la pastille des non-vus ; un troisième élément en ligne écrasait le
+titre. Le SPA empile aussi son lien sous l'action de lecture. La première rangée garde `weight(1f)`,
+donc le bouton n'est jamais mesuré à la largeur du titre et son libellé ne s'ellipse pas.
+
+**+0 requête, +0 octet.** La porte ne fait que naviguer : `openReleases = { nav.go(AppLink.Releases) }`
+n'ajoute aucun appel FFI et ne lit rien. `grep -n "openReleases" mobile/android/feature/home/src/main`
+→ 4 lignes (le champ de `HomeActions`, son commentaire, l'`NzButton` et le câblage), zéro appel au
+noyau. La page Nouveautés lit sa propre route (MB14 : `GET /releases` 116 835 B à froid, 0 à chaud).
+
+**Mesuré par la CI, pas par un appareil.** `:feature:home:testDebugUnitTest` passe de 26 à **27**
+tests : `HomeReleasesDoorTest` (Robolectric, `w360dp-h800dp-xhdpi`) compose le VRAI `HomeScreen`
+sur `HomeFixtures` et clique `hasText("Tout afficher") and hasClickAction()` → `openReleases`
+appelé **une** fois. La capture demandée par le lot (Encre, 360 dp, la carte avec le lien) reste à
+faire : l'image de ce worker n'a ni JDK, ni SDK Android, ni émulateur. `mobile.yaml` prouve à la
+place `testDebugUnitTest`, `lintDebug`, `assembleRelease` et `Emulator smoke`.

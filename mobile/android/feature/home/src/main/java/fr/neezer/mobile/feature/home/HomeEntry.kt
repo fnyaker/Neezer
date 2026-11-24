@@ -89,6 +89,7 @@ fun HomeEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
                 clearStyles = model::clearStyles,
                 playRelease = model::playRelease,
                 playAllNew = model::playAllNew,
+                openReleases = { nav.go(AppLink.Releases) },
                 openArtist = { id -> nav.go(AppLink.Artist(id)) },
                 playReco = model::playReco,
                 queueReco = model::queueNext,
